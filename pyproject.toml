@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "maou"
+version = "0.1.0"
+description = "shogi ai"
+authors = ["dousu <hiroki.sudo.hs@gmail.com>"]
+license = "GPL-3.0-only"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+
+[tool.poetry.group.test.dependencies]
+black = "^22.10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
