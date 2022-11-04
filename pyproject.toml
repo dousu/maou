@@ -9,9 +9,12 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.9"
 
-
-[tool.poetry.group.test.dependencies]
+[tool.poetry.group.dev.dependencies]
 black = "^22.10.0"
+pre-commit = "^2.20.0"
+flake8 = "^5.0.4"
+yamllint = "^1.28.0"
+isort = "^5.10.1"
 
 [build-system]
 requires = ["poetry-core"]
