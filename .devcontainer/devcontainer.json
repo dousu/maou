@@ -1,6 +1,11 @@
 {
 	"name": "Debian",
-	"dockerFile": "Dockerfile",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"args": {
+			"HADOLINT_VERSION": "v2.10.0"
+		}
+	},
 	"runArgs": [
 		"--init"
 	],
