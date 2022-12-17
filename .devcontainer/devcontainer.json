@@ -6,14 +6,14 @@
 			"HADOLINT_VERSION": "v2.10.0"
 		}
 	},
-	"runArgs": [
-		"--init"
-	],
 	"features": {
 		// docker-from-dockerをいれてくれる便利なもの
 		// https://github.com/devcontainers/features/tree/main/src/docker-from-docker
-		"docker-from-docker": {
-			"version": "latest"
+		"ghcr.io/devcontainers/features/docker-from-docker:1": {},
+		// Python
+		// https://github.com/devcontainers/features/tree/main/src/python
+		"ghcr.io/devcontainers/features/python:1": {
+			"optimize": true
 		}
 	},
 	"remoteUser": "vscode"
