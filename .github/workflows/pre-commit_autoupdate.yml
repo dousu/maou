@@ -35,4 +35,3 @@ jobs:
       - name: Create PR
         run: |
           gh pr create -B ${{ steps.git_push.outputs.branch_name }} -t ${{ steps.git_push.outputs.pr_title }} -b "pre-commit autoupdate"
-  
