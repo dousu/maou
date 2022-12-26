@@ -1,0 +1,38 @@
+name: pre-commit autoupdate
+
+on:
+  schedule:
+    - cron: '0 18 * * 6'
+
+jobs:
+  create-autoupdate-pr:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install poetry
+        run: pipx install poetry
+      - uses: actions/setup-python@v4
+        with:
+          cache: 'poetry'
+      - name: Install dependencies
+        run: poetry install
+      - name: Auto-update pre-commit & git push
+        id: git_push
+        run: |
+          date_str=$(date '+%Y%m%d')
+          branch_name="${date_str}-precommit-autoupdate-github-actions"
+          pr_title="${date_str} pre-commit autoupdate"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b ${brahcn_name}
+          pre-commit autoupdate
+          git commit -am "pre-commit autoupdate"
+          git push origin ${branch_name}
+          echo "::set-output name=branch_name::${branch_name}"
+          echo "::set-output name=pr_title::${pr_title}"
+      - name: Create PR
+        run: |
+          gh pr create -B ${{ steps.git_push.outputs.branch_name }} -t ${{ steps.git_push.outputs.pr_title }} -b "pre-commit autoupdate"
+  
