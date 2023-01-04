@@ -12,9 +12,7 @@
 		"ghcr.io/devcontainers/features/docker-from-docker:1": {},
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
-		"ghcr.io/devcontainers/features/python:1": {
-			"optimize": true
-		}
+		"ghcr.io/devcontainers/features/python:1": {}
 	},
 	"remoteUser": "vscode"
 }
