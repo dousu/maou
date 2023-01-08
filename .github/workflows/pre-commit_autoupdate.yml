@@ -27,7 +27,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${branch_name}
-          pre-commit autoupdate
+          poetry run pre-commit autoupdate
           git commit -am "pre-commit autoupdate"
           git push origin ${branch_name}
           echo "::set-output name=branch_name::${branch_name}"
