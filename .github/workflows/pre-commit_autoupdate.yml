@@ -18,20 +18,24 @@ jobs:
           cache: 'poetry'
       - name: Install dependencies
         run: poetry install
-      - name: Auto-update pre-commit & git push
+      - name: Auto-update pre-commit & git diff
         id: git
+        continue-on-error: true
         run: |
           date_str=$(date '+%Y%m%d')
-          branch_name="${date_str}-precommit-autoupdate-github-actions"
+          branch_name="precommit-autoupdate-github-actions-${date_str}"
           pr_title="${date_str} pre-commit autoupdate"
+          echo "branch_name=${branch_name}" >> $GITHUB_OUTPUT
+          echo "pr_title=${pr_title}" >> $GITHUB_OUTPUT
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${branch_name}
           poetry run pre-commit autoupdate
-          git commit -am "pre-commit autoupdate"
-          git push origin ${branch_name}
-          echo "branch_name=${branch_name}" >> $GITHUB_OUTPUT
-          echo "pr_title=${pr_title}" >> $GITHUB_OUTPUT
+          git add -N .
+          git diff --name-only --exit-code
       - name: Create PR
+        if: steps.git.outcome == 'failure'
         run: |
+          git commit -am "pre-commit autoupdate" 
+          git push origin ${{ steps.git.outputs.branch_name }}
           gh pr create -B main -H ${{ steps.git.outputs.branch_name }} -t "${{ steps.git.outputs.pr_title }}" -b "pre-commit autoupdate"
