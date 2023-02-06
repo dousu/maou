@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: poetry install
       - name: Auto-update pre-commit & git push
-        id: git_push
+        id: git
         run: |
           date_str=$(date '+%Y%m%d')
           branch_name="${date_str}-precommit-autoupdate-github-actions"
@@ -30,8 +30,8 @@ jobs:
           poetry run pre-commit autoupdate
           git commit -am "pre-commit autoupdate"
           git push origin ${branch_name}
-          echo "::set-output name=branch_name::${branch_name}"
-          echo "::set-output name=pr_title::${pr_title}"
+          echo "branch_name=${branch_name}" >> $GITHUB_OUTPUT
+          echo "pr_title=${pr_title}" >> $GITHUB_OUTPUT
       - name: Create PR
         run: |
-          gh pr create -B ${{ steps.git_push.outputs.branch_name }} -t "${{ steps.git_push.outputs.pr_title }}" -b "pre-commit autoupdate"
+          gh pr create -B main -H ${{ steps.git.outputs.branch_name }} -t "${{ steps.git.outputs.pr_title }}" -b "pre-commit autoupdate"
