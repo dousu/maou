@@ -16,7 +16,9 @@ jobs:
         with:
           cache: 'poetry'
       - name: Install poetry
-        run: pipx install poetry
+        run: |
+          pipx install poetry
+          poetry config --local virtualenvs.in-project true
       - name: Install dependencies
         run: poetry install
       - name: Auto-update pre-commit & git diff
