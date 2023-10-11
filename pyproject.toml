@@ -13,7 +13,7 @@ click = "^8.1.3"
 [tool.poetry.group.dev.dependencies]
 black = "^23.9.1"
 pre-commit = "^3.4.0"
-flake8 = "^6.0.0"
+flake8 = "^6.1.0"
 yamllint = "^1.32.0"
 isort = "^5.12.0"
 commitizen = "^3.7.0"
