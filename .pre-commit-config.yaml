@@ -10,7 +10,7 @@ repos:
   - id: check-toml
   - id: check-added-large-files
 - repo: https://github.com/python-poetry/poetry
-  rev: 1.6.0
+  rev: 1.7.0
   hooks:
   - id: poetry-check
   - id: poetry-lock
@@ -19,11 +19,11 @@ repos:
   hooks:
   - id: hadolint
 - repo: https://github.com/pycqa/isort
-  rev: 5.12.0
+  rev: 5.13.2
   hooks:
   - id: isort
 - repo: https://github.com/psf/black
-  rev: 23.10.1
+  rev: 23.12.1
   hooks:
   - id: black
 - repo: https://github.com/pycqa/flake8
@@ -33,11 +33,11 @@ repos:
     # additional_dependencies:
     # - flake8-docstrings
 - repo: https://github.com/pre-commit/pre-commit
-  rev: v3.5.0
+  rev: v3.6.0
   hooks:
   - id: validate_manifest
 - repo: https://github.com/commitizen-tools/commitizen
-  rev: 3.12.0
+  rev: v3.13.0
   hooks:
   - id: commitizen
 # TODO: うまく動かなかったから外しているが将来的につける
