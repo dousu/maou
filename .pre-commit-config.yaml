@@ -27,17 +27,17 @@ repos:
   hooks:
   - id: black
 - repo: https://github.com/pycqa/flake8
-  rev: 7.0.0
+  rev: 7.1.0
   hooks:
   - id: flake8
     # additional_dependencies:
     # - flake8-docstrings
 - repo: https://github.com/pre-commit/pre-commit
-  rev: v3.7.0
+  rev: v3.7.1
   hooks:
   - id: validate_manifest
 - repo: https://github.com/commitizen-tools/commitizen
-  rev: v3.25.0
+  rev: v3.27.0
   hooks:
   - id: commitizen
 # TODO: うまく動かなかったから外しているが将来的につける
