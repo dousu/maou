@@ -1,4 +1,4 @@
-from maou.console import app
+from maou.infra.console import app
 
 
 def test_hoge():
