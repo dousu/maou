@@ -40,6 +40,6 @@ jobs:
       - name: Create PR
         if: steps.git.outcome == 'failure'
         run: |
-          git commit -am "pre-commit autoupdate" 
+          git commit -am "pre-commit autoupdate"
           git push origin ${{ steps.git.outputs.branch_name }}
           gh pr create -B main -H ${{ steps.git.outputs.branch_name }} -t "${{ steps.git.outputs.pr_title }}" -b "pre-commit autoupdate"

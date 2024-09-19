@@ -40,11 +40,10 @@ repos:
   rev: v3.28.0
   hooks:
   - id: commitizen
-# TODO: うまく動かなかったから外しているが将来的につける
-# -   repo: https://github.com/koalaman/shellcheck-precommit
-#     rev: v0.9.0
-#     hooks:
-#     -   id: shellcheck
+- repo: https://github.com/koalaman/shellcheck-precommit
+  rev: v0.10.0
+  hooks:
+  - id: shellcheck
 - repo: local
   hooks:
   - id: test
