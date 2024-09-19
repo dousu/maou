@@ -30,3 +30,13 @@ addopts = [
 
 [tool.poetry.scripts]
 maou = "maou.infra.console.app:main"
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+  "click",
+  "maou.*",
+]
+ignore_missing_imports = true
