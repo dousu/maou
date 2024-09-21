@@ -1,25 +1,25 @@
 {
-	"name": "Debian",
-	"build": {
-		"dockerfile": "Dockerfile",
-		"args": {
-			"HADOLINT_VERSION": "v2.10.0"
-		}
-	},
+	"name": "Ubuntu",
+	"image": "mcr.microsoft.com/vscode/devcontainers/universal:focal",
 	"features": {
 		// Docker
 		// https://github.com/devcontainers/features/tree/main/src/docker-in-docker
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
-		"ghcr.io/devcontainers/features/python:1": {}
+		"ghcr.io/devcontainers/features/python:1": {
+			"version": 3.11
+		}
 	},
 	"customizations": {
 		"vscode": {
 			"settings": {
-				"python.analysis.autoImportCompletions": true
-			}
+				"python.analysis.autoImportCompletions": true,
+				"python.analysis.typeCheckingMode": "basic"
+			},
+			"extensions": [
+				"esbenp.prettier-vscode"
+			]
 		}
-	},
-	"remoteUser": "vscode"
+	}
 }
