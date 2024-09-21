@@ -14,5 +14,12 @@
 		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {}
 	},
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"python.analysis.autoImportCompletions": true
+			}
+		}
+	},
 	"remoteUser": "vscode"
 }
