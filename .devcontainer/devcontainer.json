@@ -7,9 +7,9 @@
 		}
 	},
 	"features": {
-		// docker-from-dockerをいれてくれる便利なもの
-		// https://github.com/devcontainers/features/tree/main/src/docker-from-docker
-		"ghcr.io/devcontainers/features/docker-from-docker:1": {},
+		// Docker
+		// https://github.com/devcontainers/features/tree/main/src/docker-in-docker
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {}
