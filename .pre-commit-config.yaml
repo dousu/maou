@@ -58,3 +58,9 @@ repos:
   rev: v1.11.2
   hooks:
   - id: mypy
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.6.6
+  hooks:
+  - id: ruff
+    args: [ --fix ]
+  - id: ruff-format
