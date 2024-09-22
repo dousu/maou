@@ -25,6 +25,7 @@ app --> domain
 - interfaceではentityを取り扱わずに言語の組み込み型だけ使う。これにより、entityへの依存がなくなり、interfaceを読むためにentityを読む必要がなくなる。
 - 入力
     - infraを純粋な技術だけにして、appからinfraごとに必要な変換を取り除くといった上下の役割の凝集度をあげる効果がある
+      - validation系もinfraから切り離してinterfaceに書いてしまったほうがよさそう
 - 出力
     - infraは組み込みの言語の型で返せばよく、変な変換を入れることもしなくていい (変な変換とは1が返ってきたらtrueにするとか)
     - interfaceがappに返すときは、entityでラップするとかはしなくていいが、1が返ってきたらtrueにする等の抽象化は行う。
