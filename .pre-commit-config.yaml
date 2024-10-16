@@ -37,7 +37,7 @@ repos:
   hooks:
   - id: validate_manifest
 - repo: https://github.com/commitizen-tools/commitizen
-  rev: v3.29.0
+  rev: v3.29.1
   hooks:
   - id: commitizen
 # TODO: うまく動かなかったから外しているが将来的につける
