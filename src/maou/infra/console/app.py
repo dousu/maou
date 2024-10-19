@@ -20,6 +20,7 @@ def status() -> None:
     "--input-format",
     type=str,
     help='This command supports kif or csa. Input "kif" or "csa".',
+    required=True,
 )
 def hcpe_convert(file: str, input_format: str) -> None:
     try:
