@@ -15,7 +15,12 @@ def status() -> None:
 
 
 @click.command()
-@click.option("--file", type=str, required=True)
+@click.option(
+    "--file-dir",
+    help="Specify the directory where the file is located.",
+    type=str,
+    required=True,
+)
 @click.option(
     "--input-format",
     type=str,

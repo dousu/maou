@@ -15,10 +15,18 @@
 		"vscode": {
 			"settings": {
 				"python.analysis.autoImportCompletions": true,
-				"python.analysis.typeCheckingMode": "basic"
+				"python.analysis.typeCheckingMode": "basic",
+				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff",
+					"editor.codeActionsOnSave": {
+						"source.fixAll.ruff": "explicit",
+						"source.organizeImports.ruff": "explicit"
+					}
+				}
 			},
 			"extensions": [
-				"esbenp.prettier-vscode"
+				"esbenp.prettier-vscode",
+				"charliermarsh.ruff"
 			]
 		}
 	}

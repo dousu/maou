@@ -9,6 +9,9 @@ from maou.domain.parser.parser import Parser
 class HCPEConverter:
     @staticmethod
     def convert(data: str, input_format: str) -> None:
+        """HCPEファイルを作成する.
+        TODO: レーティング・手数・endgameでのフィルタリングオプションをいれる
+        """
         print("converter")
         parser: Parser
         match input_format:
