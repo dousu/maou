@@ -54,3 +54,7 @@ ignore_missing_imports = true
 
 [tool.isort]
 profile = "black"
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
