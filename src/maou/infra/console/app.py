@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import click
 
-from maou.infra import file_system
 from maou.interface import hcpe_converter_interface
 
 
@@ -16,9 +17,9 @@ def status() -> None:
 
 @click.command()
 @click.option(
-    "--file-dir",
-    help="Specify the directory where the file is located.",
-    type=str,
+    "--input-path",
+    help="Specify the file or directory where the input is located.",
+    type=click.Path(exists=True, path_type=Path),
     required=True,
 )
 @click.option(
@@ -27,12 +28,16 @@ def status() -> None:
     help='This command supports kif or csa. Input "kif" or "csa".',
     required=True,
 )
-def hcpe_convert(file: str, input_format: str) -> None:
+@click.option(
+    "--output-dir",
+    help="Specify the directory where the output files is saved.",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+def hcpe_convert(input_path: Path, input_format: str, output_dir: Path) -> None:
     try:
         click.echo(
-            hcpe_converter_interface.transform(
-                file, input_format, file_system.FileSystem()
-            )
+            hcpe_converter_interface.transform(input_path, input_format, output_dir)
         )
     except Exception as e:
         print(f"An Error Occured: {e}")
