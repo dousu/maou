@@ -2,6 +2,7 @@ from pathlib import Path
 
 import click
 
+from maou.infra.file_system import FileSystem
 from maou.interface import hcpe_converter_interface
 
 
@@ -37,7 +38,9 @@ def status() -> None:
 def hcpe_convert(input_path: Path, input_format: str, output_dir: Path) -> None:
     try:
         click.echo(
-            hcpe_converter_interface.transform(input_path, input_format, output_dir)
+            hcpe_converter_interface.transform(
+                FileSystem(), input_path, input_format, output_dir
+            )
         )
     except Exception as e:
         print(f"An Error Occured: {e}")

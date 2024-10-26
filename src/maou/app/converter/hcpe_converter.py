@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -9,15 +10,22 @@ from maou.domain.parser.parser import Parser
 
 
 class HCPEConverter:
+    @dataclass
+    class ConvertOption:
+        input_paths: list[Path]
+        input_format: str
+        output_dir: Path
+
     @staticmethod
-    def convert(input_paths: list[Path], input_format: str, output_dir: Path) -> None:
+    def convert(option: ConvertOption) -> None:
         """HCPEファイルを作成する.
         TODO: レーティング・手数・endgameでのフィルタリングオプションをいれる
         """
         print("converter")
-        for file in input_paths:
+        print(option.input_paths)
+        for file in option.input_paths:
             parser: Parser
-            match input_format:
+            match option.input_format:
                 case "csa":
                     parser = CSAParser()
                     parser.parse(file.read_text())
@@ -61,7 +69,7 @@ class HCPEConverter:
                     hcpe["gameResult"] = parser.winner()
 
                     board.push(move)
-                hcpes[:i].tofile(output_dir / file.with_suffix(".hcpe").name)
+                hcpes[:i].tofile(option.output_dir / file.with_suffix(".hcpe").name)
             except Exception as e:
                 print("Error Occured in HCPEConverter.convert")
                 raise e
