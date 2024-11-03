@@ -67,7 +67,10 @@ class HCPEConverter:
                     raise NotApplicableFormat(f"undefined format {format_str}")
             # パースした結果から一手ずつ進めていって各局面をhcpe形式で保存する
             logger.info(
-                f"棋譜:{file} 終局状況:{parser.endgame()} レーティング:{parser.ratings()} 手数:{len(parser.moves())}"
+                f"棋譜:{file} "
+                f"終局状況:{parser.endgame()} "
+                f"レーティング:{parser.ratings()} "
+                f"手数:{len(parser.moves())}"
             )
             if not game_filter(
                 parser,

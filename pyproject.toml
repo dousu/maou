@@ -48,6 +48,7 @@ disallow_untyped_defs = true
 module = [
   "click",
   "cshogi",
+  "pytest",
   "maou.*",
 ]
 ignore_missing_imports = true

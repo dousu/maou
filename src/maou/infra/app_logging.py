@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 # class JsonLogFormatter(logging.Formatter):
 #     def format(self, record):
@@ -17,7 +18,9 @@ from datetime import datetime, timedelta, timezone
 
 class CustomLogFormatter(logging.Formatter):
     # 時刻はJSTを使用する
-    def formatTime(self, record: logging.LogRecord, datefmt=None):
+    def formatTime(
+        self, record: logging.LogRecord, datefmt: Optional[str] = None
+    ) -> str:
         tz_jst = timezone(timedelta(hours=+9), "JST")
         ct = datetime.fromtimestamp(record.created, tz=tz_jst)
         s = ct.isoformat(timespec="microseconds")
@@ -30,7 +33,13 @@ handler = logging.StreamHandler()
 # handler.setFormatter(JsonLogFormatter())
 handler.setFormatter(
     CustomLogFormatter(
-        "%(asctime)s | %(levelname)-5s | %(filename)15s | %(funcName)15s | %(lineno)3d | %(threadName)s | %(message)s"
+        "%(asctime)s | "
+        "%(levelname)-5s | "
+        "%(filename)15s | "
+        "%(funcName)15s | "
+        "%(lineno)3d | "
+        "%(threadName)s | "
+        "%(message)s"
     )
 )
 logging.basicConfig(

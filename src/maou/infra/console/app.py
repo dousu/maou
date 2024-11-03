@@ -10,7 +10,7 @@ from maou.interface import hcpe_converter_interface
 
 @click.group()
 @click.option("--debug_mode", "-d", is_flag=True, help="Show debug log")
-def main(debug_mode) -> None:
+def main(debug_mode: bool) -> None:
     if debug_mode is True:
         app_logger.setLevel(logging.DEBUG)
     else:
