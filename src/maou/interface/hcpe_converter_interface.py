@@ -1,5 +1,7 @@
 import abc
 import enum
+import json
+from logging import Logger
 from pathlib import Path
 from typing import Optional
 
@@ -38,16 +40,20 @@ def output_dir_validation(output_dir: Path) -> None:
 
 
 def transform(
-    file_system: FileSystem, input_path: Path, input_format: str, output_dir: Path
+    logger: Logger,
+    file_system: FileSystem,
+    input_path: Path,
+    input_format: str,
+    output_dir: Path,
 ) -> str:
     input_format_validation(input_format)
     output_dir_validation(output_dir)
-    print(f"Input: {input_path}\nOutput: {output_dir}")
+    logger.info(f"Input: {input_path}, Output: {output_dir}")
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),
         input_format=input_format,
         output_dir=output_dir,
     )
-    HCPEConverter.convert(option)
+    conversion_result = HCPEConverter.convert(logger, option)
 
-    return "fin"
+    return json.dumps(conversion_result)

@@ -1,14 +1,20 @@
+import logging
 from pathlib import Path
 
 import click
 
+from maou.infra.app_logging import app_logger
 from maou.infra.file_system import FileSystem
 from maou.interface import hcpe_converter_interface
 
 
 @click.group()
-def main() -> None:
-    pass
+@click.option("--debug_mode", "-d", is_flag=True, help="Show debug log")
+def main(debug_mode) -> None:
+    if debug_mode is True:
+        app_logger.setLevel(logging.DEBUG)
+    else:
+        app_logger.setLevel(logging.INFO)
 
 
 @click.command()
@@ -39,16 +45,12 @@ def hcpe_convert(input_path: Path, input_format: str, output_dir: Path) -> None:
     try:
         click.echo(
             hcpe_converter_interface.transform(
-                FileSystem(), input_path, input_format, output_dir
+                app_logger, FileSystem(), input_path, input_format, output_dir
             )
         )
-    except Exception as e:
-        print(f"An Error Occured: {e}")
+    except Exception:
+        app_logger.exception("Error Occured", stack_info=True)
 
 
 main.add_command(status)
 main.add_command(hcpe_convert)
-
-
-def hoge() -> str:
-    return "hoge"

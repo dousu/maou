@@ -128,4 +128,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-2020/
+# 変換後のhcpeファイルは除外する
+*.hcpe
