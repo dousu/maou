@@ -7,13 +7,13 @@ N-gikou2_1c
 $EVENT:wdoor+floodgate-300-10F+xeP02_dlp1.1_Cortex-A53_4c+gikou2_1c+20200131100004
 $START_TIME:2020/01/31 10:00:03
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:xeP02_dlp1.1_Cortex-A53_4c+ab5facc17256617a1e957f6f71836bc7:gikou2_1c+4849c06b4665cfdb26a86eaa9439dd53
@@ -511,12 +511,12 @@ T15
 %TORYO
 'P1+RY+TO+UM * +TO * -KY-KE-OU
 'P2 *  * +NY *  * -KI * -GI-KY
-'P3 *  * +NG+UM+TO-FU * -FU * 
+'P3 *  * +NG+UM+TO-FU * -FU *
 'P4 * +OU * -FU *  * -GI * -FU
-'P5 *  *  *  *  *  *  *  *  * 
-'P6 * +KI *  * -RY *  *  *  * 
-'P7 * +FU *  *  *  * +KE+FU * 
-'P8 *  *  *  * -NG *  *  *  * 
+'P5 *  *  *  *  *  *  *  *  *
+'P6 * +KI *  * -RY *  *  *  *
+'P7 * +FU *  *  *  * +KE+FU *
+'P8 *  *  *  * -NG *  *  *  *
 'P9 *  *  *  *  *  *  *  * -NK
 'P+00FU00FU00FU00FU00FU00KI
 'P-00FU00FU00FU00FU00KE00KI00KY

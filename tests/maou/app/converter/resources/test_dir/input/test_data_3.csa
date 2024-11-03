@@ -7,13 +7,13 @@ N-Krist_483_473stb_16t_100m
 $EVENT:wdoor+floodgate-300-10F+taraco+Krist_483_473stb_16t_100m+20200130153005
 $START_TIME:2020/01/30 15:30:02
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:taraco+e0a3e922e437589b35684eee86852f64:Krist_483_473stb_16t_100m+707d4f98d9d2620cdaab58f19d02a2e4
@@ -786,15 +786,15 @@ T13
 '** -3208 -1819OU +8373OU -6768TO +6564FU -7879TO +6261NY -7989TO +8581NY -0078FU +0034KE -4243KI +0098KI -7879TO +6463TO -0095KY +0096FU -4334KI
 -0017FU
 T9
-'P1 * -FU *  *  *  *  *  *  * 
+'P1 * -FU *  *  *  *  *  *  *
 'P2 *  *  * +NY * -KI *  * +TO
-'P3+TO+OU *  *  *  *  *  *  * 
+'P3+TO+OU *  *  *  *  *  *  *
 'P4 *  * +TO *  *  *  * +UM+NK
-'P5 * +KY * +FU *  *  *  *  * 
-'P6 *  * +GI *  *  *  *  *  * 
+'P5 * +KY * +FU *  *  *  *  *
+'P6 *  * +GI *  *  *  *  *  *
 'P7 * +KI * -FU-TO * -TO-NK-FU
 'P8 *  * -FU * -NG * -UM * -OU
-'P9 *  *  *  * -RY-RY *  *  * 
+'P9 *  *  *  * -RY-RY *  *  *
 'P+00FU00FU00FU00FU00GI00GI00KE00KI00KI
 'P-00FU00FU00FU00FU00KE00KY00KY
 '+
