@@ -9,6 +9,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.9"
 click = "^8.1.7"
+cshogi = "^0.8.8"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.10.0"
@@ -18,6 +19,15 @@ yamllint = "^1.35.1"
 isort = "^5.13.2"
 commitizen = "^3.30.0"
 pytest = "^8.3.3"
+ruff = "^0.6.6"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "pep440"
+version_provider = "poetry"
+update_changelog_on_bump = true
+major_version_zero = true
 
 [build-system]
 requires = ["poetry-core"]
@@ -29,4 +39,23 @@ addopts = [
 ]
 
 [tool.poetry.scripts]
-maou = "maou.console.app:main"
+maou = "maou.infra.console.app:main"
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+  "click",
+  "cshogi",
+  "pytest",
+  "maou.*",
+]
+ignore_missing_imports = true
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 88
+indent-width = 4

@@ -1,18 +1,34 @@
 {
-	"name": "Debian",
-	"build": {
-		"dockerfile": "Dockerfile",
-		"args": {
-			"HADOLINT_VERSION": "v2.10.0"
-		}
-	},
+	"name": "Ubuntu",
+	"image": "mcr.microsoft.com/vscode/devcontainers/universal:focal",
 	"features": {
-		// docker-from-dockerをいれてくれる便利なもの
-		// https://github.com/devcontainers/features/tree/main/src/docker-from-docker
-		"ghcr.io/devcontainers/features/docker-from-docker:1": {},
+		// Docker
+		// https://github.com/devcontainers/features/tree/main/src/docker-in-docker
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
-		"ghcr.io/devcontainers/features/python:1": {}
+		"ghcr.io/devcontainers/features/python:1": {
+			"version": 3.13
+		}
 	},
-	"remoteUser": "vscode"
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"python.analysis.autoImportCompletions": true,
+				"python.analysis.typeCheckingMode": "basic",
+				"[python]": {
+					"editor.formatOnSave": true,
+					"editor.defaultFormatter": "charliermarsh.ruff",
+					"editor.codeActionsOnSave": {
+						"source.fixAll.ruff": "explicit",
+						"source.organizeImports.ruff": "explicit"
+					}
+				}
+			},
+			"extensions": [
+				"esbenp.prettier-vscode",
+				"charliermarsh.ruff"
+			]
+		}
+	}
 }
