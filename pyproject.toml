@@ -19,7 +19,7 @@ yamllint = "^1.35.1"
 isort = "^5.13.2"
 commitizen = "^3.30.0"
 pytest = "^8.3.3"
-ruff = "^0.6.6"
+ruff = "^0.7.2"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
