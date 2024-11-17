@@ -49,11 +49,12 @@ def transform(
     input_format_validation(input_format)
     output_dir_validation(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")
+    HCPEConverter.set_logger(logger)
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),
         input_format=input_format,
         output_dir=output_dir,
     )
-    conversion_result = HCPEConverter.convert(logger, option)
+    conversion_result = HCPEConverter().convert(option)
 
     return json.dumps(conversion_result)
