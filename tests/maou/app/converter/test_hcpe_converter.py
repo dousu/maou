@@ -49,6 +49,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 class TestHCPEConverter:
     @pytest.fixture
     def default_fixture(self) -> None:
+        hcpe_converter.HCPEConverter.set_logger(logger)
         self.test_class = hcpe_converter.HCPEConverter()
 
     def clean_up_dir(self, dir: Path) -> None:
@@ -77,7 +78,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         for p in input_paths:
@@ -104,7 +105,7 @@ class TestHCPEConverter:
         )
         self.clean_up_dir(output_dir)
         with pytest.raises(FileNotFoundError):
-            self.test_class.convert(logger, option)
+            self.test_class.convert(option)
 
     def test_failed_conversion_not_applicable_format(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -126,7 +127,7 @@ class TestHCPEConverter:
         )
         self.clean_up_dir(output_dir)
         with pytest.raises(hcpe_converter.NotApplicableFormat):
-            self.test_class.convert(logger, option)
+            self.test_class.convert(option)
 
     def test_failed_conversion_no_output(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -150,7 +151,7 @@ class TestHCPEConverter:
         )
         self.clean_up_dir(output_dir)
         with pytest.raises(FileNotFoundError):
-            self.test_class.convert(logger, option)
+            self.test_class.convert(option)
 
     def test_conversion_filter_min_rating(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -172,7 +173,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
@@ -198,7 +199,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
@@ -224,7 +225,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert not (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
@@ -251,7 +252,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
@@ -279,7 +280,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        self.test_class.convert(logger, option)
+        self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert not (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()

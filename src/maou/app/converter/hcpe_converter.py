@@ -16,6 +16,13 @@ class NotApplicableFormat(Exception):
 
 
 class HCPEConverter:
+    logger: Logger
+
+    @classmethod
+    def set_logger(cls, logger: Logger) -> None:
+        if not hasattr(cls, "logger"):
+            cls.logger = logger
+
     @dataclass
     class ConvertOption:
         input_paths: list[Path]
@@ -26,8 +33,7 @@ class HCPEConverter:
         max_moves: Optional[int] = None
         allowed_endgame_status: Optional[list[str]] = None
 
-    @staticmethod
-    def convert(logger: Logger, option: ConvertOption) -> Dict[str, str]:
+    def convert(self, option: ConvertOption) -> Dict[str, str]:
         """HCPEファイルを作成する."""
 
         def game_filter(
@@ -53,7 +59,7 @@ class HCPEConverter:
             return True
 
         conversion_result: Dict[str, str] = {}
-        logger.debug(f"変換対象のファイル {option.input_paths}")
+        self.logger.debug(f"変換対象のファイル {option.input_paths}")
         for file in option.input_paths:
             parser: Parser
             match option.input_format:
@@ -66,7 +72,7 @@ class HCPEConverter:
                 case format_str:
                     raise NotApplicableFormat(f"undefined format {format_str}")
             # パースした結果から一手ずつ進めていって各局面をhcpe形式で保存する
-            logger.info(
+            self.logger.info(
                 f"棋譜:{file} "
                 f"終局状況:{parser.endgame()} "
                 f"レーティング:{parser.ratings()} "
@@ -80,7 +86,7 @@ class HCPEConverter:
                 option.allowed_endgame_status,
             ):
                 conversion_result[str(file)] = "skipped"
-                logger.info(f"skip the file {file}")
+                self.logger.info(f"skip the file {file}")
                 continue
             # 1024もあれば確保しておく局面数として十分だろう
             hcpes = np.zeros(1024, HuffmanCodedPosAndEval)
@@ -90,7 +96,7 @@ class HCPEConverter:
                 for i, (move, score, comment) in enumerate(
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
-                    logger.debug(f"{move} : {score} : {comment}")
+                    self.logger.debug(f"{move} : {score} : {comment}")
 
                     hcpe = hcpes[i]
                     board.to_hcp(hcpe["hcp"])
