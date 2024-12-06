@@ -5,7 +5,7 @@ import click
 
 from maou.infra.app_logging import app_logger
 from maou.infra.file_system import FileSystem
-from maou.interface import hcpe_converter_interface
+from maou.interface import converter
 
 
 @click.group()
@@ -44,9 +44,7 @@ def status() -> None:
 def hcpe_convert(input_path: Path, input_format: str, output_dir: Path) -> None:
     try:
         click.echo(
-            hcpe_converter_interface.transform(
-                app_logger, FileSystem(), input_path, input_format, output_dir
-            )
+            converter.transform(FileSystem(), input_path, input_format, output_dir)
         )
     except Exception:
         app_logger.exception("Error Occured", stack_info=True)

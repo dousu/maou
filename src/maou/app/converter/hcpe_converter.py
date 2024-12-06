@@ -1,5 +1,5 @@
+import logging
 from dataclasses import dataclass
-from logging import Logger
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -16,14 +16,9 @@ class NotApplicableFormat(Exception):
 
 
 class HCPEConverter:
-    logger: Logger
+    logger: logging.Logger = logging.getLogger(__name__)
 
-    @classmethod
-    def set_logger(cls, logger: Logger) -> None:
-        if not hasattr(cls, "logger"):
-            cls.logger = logger
-
-    @dataclass
+    @dataclass(kw_only=True, frozen=True)
     class ConvertOption:
         input_paths: list[Path]
         input_format: str

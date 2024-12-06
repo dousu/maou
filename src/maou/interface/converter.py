@@ -1,11 +1,13 @@
 import abc
 import enum
 import json
-from logging import Logger
+import logging
 from pathlib import Path
 from typing import Optional
 
 from maou.app.converter.hcpe_converter import HCPEConverter
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # 特定の文字列しか入力されないようにする
@@ -40,7 +42,6 @@ def output_dir_validation(output_dir: Path) -> None:
 
 
 def transform(
-    logger: Logger,
     file_system: FileSystem,
     input_path: Path,
     input_format: str,
@@ -49,7 +50,6 @@ def transform(
     input_format_validation(input_format)
     output_dir_validation(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")
-    HCPEConverter.set_logger(logger)
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),
         input_format=input_format,

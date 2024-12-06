@@ -35,19 +35,16 @@ handler.setFormatter(
     CustomLogFormatter(
         "%(asctime)s | "
         "%(levelname)-5s | "
-        "%(filename)15s | "
+        "%(filename)20s | "
         "%(funcName)15s | "
         "%(lineno)3d | "
         "%(threadName)s | "
         "%(message)s"
     )
 )
-logging.basicConfig(
-    level=logging.DEBUG,
-    handlers=[
-        # logging.FileHandler("app.log"),  # ログをファイルに出力
-        handler,
-    ],
-)
+logging.basicConfig()
 
-app_logger: logging.Logger = logging.getLogger("Application Log")
+app_logger: logging.Logger = logging.getLogger("maou")
+app_logger.setLevel(logging.DEBUG)
+app_logger.addHandler(handler)
+app_logger.propagate = False

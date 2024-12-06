@@ -49,7 +49,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 class TestHCPEConverter:
     @pytest.fixture
     def default_fixture(self) -> None:
-        hcpe_converter.HCPEConverter.set_logger(logger)
         self.test_class = hcpe_converter.HCPEConverter()
 
     def clean_up_dir(self, dir: Path) -> None:
