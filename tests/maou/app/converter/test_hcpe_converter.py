@@ -22,8 +22,6 @@ class CustomLogFormatter(logging.Formatter):
 
 
 handler = logging.StreamHandler()
-# jsonにフォーマットするとトレースバックとか見えないのでいったんコメントアウトしておく
-# handler.setFormatter(JsonLogFormatter())
 handler.setFormatter(
     CustomLogFormatter(
         "%(asctime)s | "
