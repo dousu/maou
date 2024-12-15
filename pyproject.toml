@@ -41,6 +41,9 @@ build-backend = "poetry.core.masonry.api"
 addopts = [
     "--import-mode=importlib",
 ]
+log_level = "debug"
+log_file = "pytest.log"
+log_auto_indent = true
 
 [tool.poetry.scripts]
 maou = "maou.infra.console.app:main"
