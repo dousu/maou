@@ -39,7 +39,8 @@ class TestTransform:
         """
         board = cshogi.Board()
         board.set_sfen(
-            "l5B1l/4+P2G1/2n2sn2/p1pr1pkpp/7P1/P1P1R3P/1PN+p1PN2/2G2s3/L+p1K4L b 1G4P1b1g2s 99"
+            "l5B1l/4+P2G1/2n2sn2/p1pr1pkpp/7P1/P1P1R3P/1PN+p1PN2/2G2s3/L+p1K4L"
+            " b 1G4P1b1g2s 99"
         )
         features = self.test_class._Transform__make_feature(board)
         logger.info(features.shape)
@@ -354,7 +355,9 @@ class TestTransform:
         指し手をいくつか指定して想定通りの値が返ってくるかテストする
         成りや打ちも少なくとも1種類テストしておく
         moveとmove16の違いは以下を実行してみると大体わかる
-        parser = cshogi.CSA.Parser.parse_file("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa")[0]
+        parser = cshogi.CSA.Parser.parse_file(
+            "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+        )[0]
         move16s = [move16(move) for move in parser.moves]
         for i, move in enumerate(parser.moves):
             print(i, format(move, '024b'))

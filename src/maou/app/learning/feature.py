@@ -90,7 +90,7 @@ class Transform:
             ),
         )
 
-    def __make_feature(self, board: Board):
+    def __make_feature(self, board: Board) -> np.ndarray:
         features = np.empty((FEATURES_NUM, 9, 9), dtype=np.float32)
         features.fill(0)
         if board.turn == cshogi.BLACK:
