@@ -100,7 +100,8 @@ class HCPEConverter:
                     # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
                     hcpe["eval"] = eval if board.turn == BLACK else -eval
                     # moveは32bitになっているので16bitに変換する
-                    # 上位16bit削っているようだがそれで成立するのかは未検討 (たぶんCで32ビット使っているが値域的には不要だからとか？)
+                    # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
+                    # 特に動かす駒の種類の情報が抜けているので注意
                     hcpe["bestMove16"] = move16(move)
                     hcpe["gameResult"] = parser.winner()
 
