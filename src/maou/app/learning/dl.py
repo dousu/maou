@@ -30,6 +30,7 @@ class Learning:
     device: torch.device
     checkpoint_dir: Optional[Path]
     resume_from: Optional[Path]
+    model: torch.nn.Module
 
     def __init__(self, gpu: Optional[int] = None):
         if gpu is not None:
@@ -169,11 +170,11 @@ class Learning:
         )
         self.logger.info(summary(model, input_size=(batch_size, FEATURES_NUM, 9, 9)))
         compiled_model = torch.compile(model)
-        compiled_model.to(self.device)  # type: ignore
-        self.model = compiled_model
+        self.model = compiled_model  # type: ignore
+        self.model.to(self.device)
         # ヘッドが二つあるので2つ損失関数を設定する
         # 損失を単純に加算するのかどうかは議論の余地がある
-        # policyの損失関数は合法手以外を無視するような設計も考えられる
+        # policyの損失関数は合法手以外を無視して損失を計算しない設計も考えられる
         self.loss_fn_policy = GCELoss(q=gce_parameter)
         self.loss_fn_value = torch.nn.BCEWithLogitsLoss()
         # SGD+Momentum
@@ -234,7 +235,7 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            checkpoint = torch.load(self.resume_from)
+            checkpoint: dict = torch.load(self.resume_from)
             # チェックポイントはなんらかの障害で意図せず学習が止まることの保険
             # そのため，epoch_numberは引継ぎする
             epoch_number = checkpoint["epoch_number"]
