@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn.common_types import _size_2_t
 
-from maou.app.learning.feature import (
-    MOVE_LABELS_NUM,
-)
+from maou.app.learning.feature import MOVE_LABELS_NUM
 from maou.domain.network.resnet import ResNet
 
 

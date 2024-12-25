@@ -12,10 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchinfo import summary
 
 from maou.app.learning.dataset import KifDataset
-from maou.app.learning.feature import (
-    FEATURES_NUM,
-    Transform,
-)
+from maou.app.learning.feature import FEATURES_NUM, Transform
 from maou.app.learning.network import Network
 from maou.domain.loss.loss_fn import GCELoss
 from maou.domain.network.resnet import ResidualBlock
@@ -31,6 +28,8 @@ class Learning:
 
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
+    checkpoint_dir: Optional[Path]
+    resume_from: Optional[Path]
 
     def __init__(self, gpu: Optional[int] = None):
         if gpu is not None:
@@ -187,7 +186,7 @@ class Learning:
         )
         self.__train()
 
-    def __train_one_epoch(self, epoch_index, tb_writer):
+    def __train_one_epoch(self, epoch_index: int, tb_writer: SummaryWriter) -> float:
         running_loss = 0.0
         last_loss = 0.0
 
@@ -224,7 +223,7 @@ class Learning:
 
         return last_loss
 
-    def __train(self):
+    def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         writer = SummaryWriter(self.log_dir / "training_log_{}".format(timestamp))
         epoch_number = 0

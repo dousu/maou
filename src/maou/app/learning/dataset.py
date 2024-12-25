@@ -1,5 +1,4 @@
 import logging
-import typing
 from pathlib import Path
 from typing import Callable
 
@@ -31,7 +30,6 @@ class KifDataset(Dataset):
     def __len__(self) -> int:
         return len(self.hcpes)
 
-    @typing.override
     def __getitem__(
         self, idx: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
