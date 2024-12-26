@@ -4,7 +4,7 @@ from typing import Callable
 
 import numpy as np
 import torch
-from cshogi import HuffmanCodedPosAndEval
+from cshogi import HuffmanCodedPosAndEval  # type: ignore
 from torch.utils.data import Dataset
 
 

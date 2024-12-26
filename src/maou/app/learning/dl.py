@@ -8,12 +8,13 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 
 from maou.app.learning.dataset import KifDataset
-from maou.app.learning.feature import FEATURES_NUM, Transform
+from maou.app.learning.feature import FEATURES_NUM
 from maou.app.learning.network import Network
+from maou.app.learning.transform import Transform
 from maou.domain.loss.loss_fn import GCELoss
 from maou.domain.network.resnet import ResidualBlock
 
@@ -34,16 +35,20 @@ class Learning:
 
     def __init__(self, gpu: Optional[int] = None):
         if gpu is not None:
-            self.device = torch.device(f"cuda:{gpu}")
+            self.device = torch.device(gpu)
+            self.pin_memory = True
         else:
             self.device = torch.device("cpu")
+            self.pin_memory = False
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
         input_paths: list[Path]
+        compilation: Optional[bool] = None
         test_ratio: Optional[float] = None
         epoch: Optional[int] = None
         batch_size: Optional[int] = None
+        dataloader_workers: Optional[int] = None
         gce_parameter: Optional[float] = None
         policy_loss_ratio: Optional[float] = None
         value_loss_ratio: Optional[float] = None
@@ -57,6 +62,12 @@ class Learning:
     def learn(self, option: LearningOption) -> None:
         """機械学習を行う."""
 
+        # モデルをコンパイルするかどうか (デフォルトTrue)
+        if option.compilation is not None:
+            compilation = option.compilation
+        else:
+            compilation = True
+
         # テスト割合設定 (デフォルト0.25)
         if option.test_ratio is not None:
             test_ratio = option.test_ratio
@@ -69,11 +80,17 @@ class Learning:
         else:
             self.epoch = 10
 
-        # バッチサイズ設定 (デフォルト100)
+        # バッチサイズ設定 (デフォルト1000)
         if option.batch_size is not None:
             batch_size = option.batch_size
         else:
             batch_size = 1000
+
+        # DataLoaderのワーカー数設定 (デフォルト2)
+        if option.dataloader_workers is not None:
+            dataloader_workers = option.dataloader_workers
+        else:
+            dataloader_workers = 2
 
         # 損失関数のパラメータ設定 (デフォルト0.7)
         if option.gce_parameter is not None:
@@ -129,6 +146,14 @@ class Learning:
         else:
             self.model_dir = Path("./models")
 
+        # 指定されたディレクトリが存在しない場合は自動で作成する
+        if self.checkpoint_dir is not None and not self.checkpoint_dir.exists():
+            self.checkpoint_dir.mkdir()
+        if self.log_dir is not None and not self.log_dir.exists():
+            self.log_dir.mkdir()
+        if self.model_dir is not None and not self.model_dir.exists():
+            self.model_dir.mkdir()
+
         self.logger.info("start learning")
         input_train: list[Path]
         input_test: list[Path]
@@ -137,17 +162,25 @@ class Learning:
         )
 
         # datasetに特徴量と正解ラベルを作成する変換を登録する
-        feature = Transform()
+        feature = Transform(pin_memory=self.pin_memory)
         dataset_train: Dataset = KifDataset(input_train, feature)
         dataset_test: Dataset = KifDataset(input_test, feature)
 
         # dataloader
         # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
         self.training_loader = DataLoader(
-            dataset_train, batch_size=batch_size, shuffle=True, num_workers=2
+            dataset_train,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=dataloader_workers,
+            pin_memory=self.pin_memory,
         )
         self.validation_loader = DataLoader(
-            dataset_test, batch_size=batch_size, shuffle=False, num_workers=2
+            dataset_test,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=dataloader_workers,
+            pin_memory=self.pin_memory,
         )
 
         # モデル定義
@@ -168,9 +201,14 @@ class Learning:
                 channels,
             ],
         )
-        self.logger.info(summary(model, input_size=(batch_size, FEATURES_NUM, 9, 9)))
-        compiled_model = torch.compile(model)
-        self.model = compiled_model  # type: ignore
+        self.logger.info(
+            str(summary(model, input_size=(batch_size, FEATURES_NUM, 9, 9)))
+        )
+        if compilation:
+            compiled_model = torch.compile(model)
+            self.model = compiled_model  # type: ignore
+        else:
+            self.model = model
         self.model.to(self.device)
         # ヘッドが二つあるので2つ損失関数を設定する
         # 損失を単純に加算するのかどうかは議論の余地がある
@@ -196,7 +234,7 @@ class Learning:
         # index and do some intra-epoch reporting
         for i, data in enumerate(self.training_loader):
             # Every data instance is an input + label pair
-            inputs, labels_value, labels_policy = data
+            inputs, (labels_policy, labels_value) = data
 
             # Zero your gradients for every batch!
             self.optimizer.zero_grad()
@@ -217,7 +255,7 @@ class Learning:
             running_loss += loss.item()
             if i % 1000 == 999:
                 last_loss = running_loss / 1000  # loss per batch
-                print("  batch {} loss: {}".format(i + 1, last_loss))
+                self.logger.info("  batch {} loss: {}".format(i + 1, last_loss))
                 tb_x = epoch_index * len(self.training_loader) + i + 1
                 tb_writer.add_scalar("Loss/train", last_loss, tb_x)
                 running_loss = 0.0
@@ -235,15 +273,18 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
+            # 本当はdictにいろいろ保存することというか，
+            # なんでも読み込めること自体があんまりよくない
+            # https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
             checkpoint: dict = torch.load(self.resume_from)
             # チェックポイントはなんらかの障害で意図せず学習が止まることの保険
             # そのため，epoch_numberは引継ぎする
-            epoch_number = checkpoint["epoch_number"]
+            epoch_number = checkpoint["epoch_number"] + 1
             self.model.load_state_dict(checkpoint["model_state"])
             self.optimizer.load_state_dict(checkpoint["opt_state"])
 
         for epoch in range(epoch_number, EPOCHS):
-            print("EPOCH {}:".format(epoch_number + 1))
+            self.logger.info("EPOCH {}:".format(epoch_number + 1))
 
             # Make sure gradient tracking is on, and do a pass over the data
             self.model.train(True)
@@ -257,7 +298,7 @@ class Learning:
             # Disable gradient computation and reduce memory consumption.
             with torch.no_grad():
                 for i, vdata in enumerate(self.validation_loader):
-                    vinputs, vlabels_policy, vlabels_value = vdata
+                    vinputs, (vlabels_policy, vlabels_value) = vdata
                     voutputs_policy, voutputs_value = self.model(vinputs)
                     vloss = self.policy_loss_ratio * self.loss_fn_policy(
                         voutputs_policy, vlabels_policy
@@ -267,7 +308,7 @@ class Learning:
                     running_vloss += vloss
 
             avg_vloss = running_vloss / (i + 1)
-            print("LOSS train {} valid {}".format(avg_loss, avg_vloss))
+            self.logger.info("LOSS train {} valid {}".format(avg_loss, avg_vloss))
 
             # Log the running loss averaged per batch
             # for both training and validation
