@@ -130,3 +130,7 @@ dmypy.json
 
 # 変換後のhcpeファイルは除外する
 *.hcpe
+
+logs/
+models/
+checkpoints/

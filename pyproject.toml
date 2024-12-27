@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "maou"
-version = "0.1.0"
+version = "0.2.0"
 description = "shogi ai"
 authors = ["dousu <hiroki.sudo.hs@gmail.com>"]
 license = "GPL-3.0-only"
@@ -10,6 +10,12 @@ readme = "README.md"
 python = "^3.9"
 click = "^8.1.7"
 cshogi = "^0.8.8"
+scikit-learn = "^1.5.2"
+torch = "^2.5.1"
+torchvision = "^0.20.1"
+torchinfo = "^1.8.0"
+tensorboard = "^2.18.0"
+torch-tb-profiler = "^0.4.3"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.10.0"
@@ -37,6 +43,9 @@ build-backend = "poetry.core.masonry.api"
 addopts = [
     "--import-mode=importlib",
 ]
+log_level = "debug"
+log_file = "pytest.log"
+log_auto_indent = true
 
 [tool.poetry.scripts]
 maou = "maou.infra.console.app:main"
@@ -49,6 +58,8 @@ module = [
   "click",
   "cshogi",
   "pytest",
+  "sklearn.model_selection",
+  "torchinfo",
   "maou.*",
 ]
 ignore_missing_imports = true

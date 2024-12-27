@@ -1,55 +1,14 @@
-import logging
 import typing
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
 from maou.app.converter import hcpe_converter
 
 
-class CustomLogFormatter(logging.Formatter):
-    # 時刻はJSTを使用する
-    def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
-    ) -> str:
-        tz_jst = timezone(timedelta(hours=+9), "JST")
-        ct = datetime.fromtimestamp(record.created, tz=tz_jst)
-        s = ct.isoformat(timespec="microseconds")
-
-        return s
-
-
-handler = logging.StreamHandler()
-# jsonにフォーマットするとトレースバックとか見えないのでいったんコメントアウトしておく
-# handler.setFormatter(JsonLogFormatter())
-handler.setFormatter(
-    CustomLogFormatter(
-        "%(asctime)s | "
-        "%(levelname)-5s | "
-        "%(filename)15s | "
-        "%(funcName)15s | "
-        "%(lineno)3d | "
-        "%(threadName)s | "
-        "%(message)s"
-    )
-)
-logging.basicConfig(
-    level=logging.DEBUG,
-    handlers=[
-        # logging.FileHandler("app.log"),  # ログをファイルに出力
-        handler,
-    ],
-)
-
-logger: logging.Logger = logging.getLogger(__name__)
-
-
 class TestHCPEConverter:
     @pytest.fixture
     def default_fixture(self) -> None:
-        hcpe_converter.HCPEConverter.set_logger(logger)
         self.test_class = hcpe_converter.HCPEConverter()
 
     def clean_up_dir(self, dir: Path) -> None:

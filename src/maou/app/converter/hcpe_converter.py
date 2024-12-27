@@ -1,10 +1,10 @@
+import logging
 from dataclasses import dataclass
-from logging import Logger
 from pathlib import Path
 from typing import Dict, Optional
 
+import cshogi
 import numpy as np
-from cshogi import BLACK, Board, HuffmanCodedPosAndEval, move16
 
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
@@ -16,14 +16,9 @@ class NotApplicableFormat(Exception):
 
 
 class HCPEConverter:
-    logger: Logger
+    logger: logging.Logger = logging.getLogger(__name__)
 
-    @classmethod
-    def set_logger(cls, logger: Logger) -> None:
-        if not hasattr(cls, "logger"):
-            cls.logger = logger
-
-    @dataclass
+    @dataclass(kw_only=True, frozen=True)
     class ConvertOption:
         input_paths: list[Path]
         input_format: str
@@ -89,8 +84,8 @@ class HCPEConverter:
                 self.logger.info(f"skip the file {file}")
                 continue
             # 1024もあれば確保しておく局面数として十分だろう
-            hcpes = np.zeros(1024, HuffmanCodedPosAndEval)
-            board = Board()
+            hcpes = np.zeros(1024, cshogi.HuffmanCodedPosAndEval)  # type: ignore
+            board = cshogi.Board()  # type: ignore
             board.set_sfen(parser.init_pos_sfen())
             try:
                 for i, (move, score, comment) in enumerate(
@@ -103,10 +98,14 @@ class HCPEConverter:
                     # 16bitに収める
                     eval = min(32767, max(score, -32767))
                     # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
-                    hcpe["eval"] = eval if board.turn == BLACK else -eval
+                    if board.turn == cshogi.BLACK:  # type: ignore
+                        hcpe["eval"] = eval
+                    else:
+                        hcpe["eval"] = -eval
                     # moveは32bitになっているので16bitに変換する
-                    # 上位16bit削っているようだがそれで成立するのかは未検討 (たぶんCで32ビット使っているが値域的には不要だからとか？)
-                    hcpe["bestMove16"] = move16(move)
+                    # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
+                    # 特に動かす駒の種類の情報が抜けているので注意
+                    hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                     hcpe["gameResult"] = parser.winner()
 
                     board.push(move)
