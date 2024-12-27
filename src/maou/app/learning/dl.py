@@ -217,6 +217,10 @@ class Learning:
             avg_loss = self.__train_one_epoch(epoch_number, writer)
 
             running_vloss = 0.0
+
+            test_accuracy_policy = 0.0
+            test_accuracy_value = 0.0
+
             # Set the model to evaluation mode, disabling dropout and using population
             # statistics for batch normalization.
             self.model.eval()
@@ -233,8 +237,24 @@ class Learning:
                     )
                     running_vloss += vloss
 
+                    test_accuracy_policy += self.__policy_accuracy(
+                        voutputs_policy, vlabels_policy
+                    )
+                    test_accuracy_value += self.__value_accuracy(
+                        voutputs_value, vlabels_value
+                    )
+
             avg_vloss = running_vloss / (i + 1)
+
             self.logger.info("LOSS train {} valid {}".format(avg_loss, avg_vloss))
+
+            avg_accuracy_policy = test_accuracy_policy / (i + 1)
+            avg_accuracy_value = test_accuracy_value / (i + 1)
+            self.logger.info(
+                "ACCURACY policy {} value {}".format(
+                    avg_accuracy_policy, avg_accuracy_value
+                )
+            )
 
             # Log the running loss averaged per batch
             # for both training and validation
@@ -269,3 +289,13 @@ class Learning:
                 )
 
             epoch_number += 1
+
+    # 方策の正解率
+    def __policy_accuracy(self, y, t):
+        return (torch.max(y, 1)[1] == t).sum().item() / len(t)
+
+    # 価値の正解率
+    def __value_accuracy(self, y, t):
+        pred = y >= 0
+        truth = t >= 0.5
+        return pred.eq(truth).sum().item() / len(t)
