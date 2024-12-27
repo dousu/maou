@@ -291,11 +291,11 @@ class Learning:
             epoch_number += 1
 
     # 方策の正解率
-    def __policy_accuracy(self, y, t):
+    def __policy_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
         return (torch.max(y, 1)[1] == t).sum().item() / len(t)
 
     # 価値の正解率
-    def __value_accuracy(self, y, t):
+    def __value_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
         pred = y >= 0
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
