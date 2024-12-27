@@ -98,7 +98,10 @@ class HCPEConverter:
                     # 16bitに収める
                     eval = min(32767, max(score, -32767))
                     # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
-                    hcpe["eval"] = eval if board.turn == cshogi.BLACK else -eval  # type: ignore
+                    if board.turn == cshogi.BLACK:  # type: ignore
+                        hcpe["eval"] = eval
+                    else:
+                        hcpe["eval"] = -eval
                     # moveは32bitになっているので16bitに変換する
                     # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
                     # 特に動かす駒の種類の情報が抜けているので注意
