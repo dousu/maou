@@ -55,7 +55,8 @@ class HCPEConverter:
 
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
-        for file in option.input_paths:
+        for i, file in enumerate(option.input_paths):
+            self.logger.info(f"進捗: {i / len(option.input_paths) * 100}%")
             parser: Parser
             match option.input_format:
                 case "csa":
