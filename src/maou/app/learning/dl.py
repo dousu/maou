@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 from sklearn.model_selection import train_test_split
@@ -33,132 +33,43 @@ class Learning:
     resume_from: Optional[Path]
     model: torch.nn.Module
 
-    def __init__(self, gpu: Optional[int] = None):
+    def __init__(self, gpu: Optional[str] = None):
         if gpu is not None:
+            self.logger.info(f"Use GPU {gpu}")
             self.device = torch.device(gpu)
             self.pin_memory = True
         else:
+            self.logger.info("Use CPU")
             self.device = torch.device("cpu")
             self.pin_memory = False
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
         input_paths: list[Path]
-        compilation: Optional[bool] = None
-        test_ratio: Optional[float] = None
-        epoch: Optional[int] = None
-        batch_size: Optional[int] = None
-        dataloader_workers: Optional[int] = None
-        gce_parameter: Optional[float] = None
-        policy_loss_ratio: Optional[float] = None
-        value_loss_ratio: Optional[float] = None
-        learning_ratio: Optional[float] = None
-        momentum: Optional[float] = None
+        compilation: bool
+        test_ratio: float
+        epoch: int
+        batch_size: int
+        dataloader_workers: int
+        gce_parameter: float
+        policy_loss_ratio: float
+        value_loss_ratio: float
+        learning_ratio: float
+        momentum: float
         checkpoint_dir: Optional[Path] = None
         resume_from: Optional[Path] = None
-        log_dir: Optional[Path] = None
-        model_dir: Optional[Path] = None
+        log_dir: Path
+        model_dir: Path
 
-    def learn(self, option: LearningOption) -> None:
+    def learn(self, option: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
-
-        # モデルをコンパイルするかどうか (デフォルトTrue)
-        if option.compilation is not None:
-            compilation = option.compilation
-        else:
-            compilation = True
-
-        # テスト割合設定 (デフォルト0.25)
-        if option.test_ratio is not None:
-            test_ratio = option.test_ratio
-        else:
-            test_ratio = 0.25
-
-        # エポック設定 (デフォルト10)
-        if option.epoch is not None:
-            self.epoch = option.epoch
-        else:
-            self.epoch = 10
-
-        # バッチサイズ設定 (デフォルト1000)
-        if option.batch_size is not None:
-            batch_size = option.batch_size
-        else:
-            batch_size = 1000
-
-        # DataLoaderのワーカー数設定 (デフォルト2)
-        if option.dataloader_workers is not None:
-            dataloader_workers = option.dataloader_workers
-        else:
-            dataloader_workers = 2
-
-        # 損失関数のパラメータ設定 (デフォルト0.7)
-        if option.gce_parameter is not None:
-            gce_parameter = option.gce_parameter
-        else:
-            gce_parameter = 0.7
-
-        # policy損失関数のパラメータ設定 (デフォルト1)
-        if option.policy_loss_ratio is not None:
-            self.policy_loss_ratio = option.policy_loss_ratio
-        else:
-            self.policy_loss_ratio = 1
-
-        # value損失関数のパラメータ設定 (デフォルト1)
-        if option.value_loss_ratio is not None:
-            self.value_loss_ratio = option.value_loss_ratio
-        else:
-            self.value_loss_ratio = 1
-
-        # オプティマイザのパラメータ設定 (デフォルト0.01)
-        if option.learning_ratio is not None:
-            learning_ratio = option.learning_ratio
-        else:
-            learning_ratio = 0.01
-
-        # オプティマイザのパラメータ設定momemtum (デフォルト0.9)
-        if option.momentum is not None:
-            momentum = option.momentum
-        else:
-            momentum = 0.9
-
-        # チェックポイントの書き込み先設定 (デフォルトNone)
-        if option.checkpoint_dir is not None:
-            self.checkpoint_dir = option.checkpoint_dir
-        else:
-            self.checkpoint_dir = None
-
-        # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
-        if option.resume_from is not None:
-            self.resume_from = option.resume_from
-        else:
-            self.resume_from = None
-
-        # SummaryWriterの書き込み先設定 (デフォルト./logs)
-        if option.log_dir is not None:
-            self.log_dir = option.log_dir
-        else:
-            self.log_dir = Path("./logs")
-
-        # 学習後のモデルの書き込み先設定 (デフォルト./models)
-        if option.model_dir is not None:
-            self.model_dir = option.model_dir
-        else:
-            self.model_dir = Path("./models")
-
-        # 指定されたディレクトリが存在しない場合は自動で作成する
-        if self.checkpoint_dir is not None and not self.checkpoint_dir.exists():
-            self.checkpoint_dir.mkdir()
-        if self.log_dir is not None and not self.log_dir.exists():
-            self.log_dir.mkdir()
-        if self.model_dir is not None and not self.model_dir.exists():
-            self.model_dir.mkdir()
-
         self.logger.info("start learning")
+        learning_result: Dict[str, str] = {}
+
         input_train: list[Path]
         input_test: list[Path]
         input_train, input_test = train_test_split(
-            option.input_paths, test_size=test_ratio
+            option.input_paths, test_size=option.test_ratio
         )
 
         # datasetに特徴量と正解ラベルを作成する変換を登録する
@@ -170,16 +81,16 @@ class Learning:
         # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
         self.training_loader = DataLoader(
             dataset_train,
-            batch_size=batch_size,
+            batch_size=option.batch_size,
             shuffle=True,
-            num_workers=dataloader_workers,
+            num_workers=option.dataloader_workers,
             pin_memory=self.pin_memory,
         )
         self.validation_loader = DataLoader(
             dataset_test,
-            batch_size=batch_size,
+            batch_size=option.batch_size,
             shuffle=False,
-            num_workers=dataloader_workers,
+            num_workers=option.dataloader_workers,
             pin_memory=self.pin_memory,
         )
 
@@ -202,9 +113,9 @@ class Learning:
             ],
         )
         self.logger.info(
-            str(summary(model, input_size=(batch_size, FEATURES_NUM, 9, 9)))
+            str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
         )
-        if compilation:
+        if option.compilation:
             compiled_model = torch.compile(model)
             self.model = compiled_model  # type: ignore
         else:
@@ -213,17 +124,32 @@ class Learning:
         # ヘッドが二つあるので2つ損失関数を設定する
         # 損失を単純に加算するのかどうかは議論の余地がある
         # policyの損失関数は合法手以外を無視して損失を計算しない設計も考えられる
-        self.loss_fn_policy = GCELoss(q=gce_parameter)
+        self.loss_fn_policy = GCELoss(q=option.gce_parameter)
         self.loss_fn_value = torch.nn.BCEWithLogitsLoss()
         # SGD+Momentum
         # weight_decayは特に根拠なし
         self.optimizer = optim.SGD(
             model.parameters(),
-            lr=learning_ratio,
-            momentum=momentum,
+            lr=option.learning_ratio,
+            momentum=option.momentum,
             weight_decay=0.0001,
         )
+        self.policy_loss_ratio = option.policy_loss_ratio
+        self.value_loss_ratio = option.value_loss_ratio
+        self.log_dir = option.log_dir
+        self.epoch = option.epoch
+        self.model_dir = option.model_dir
+        self.resume_from = option.resume_from
+        self.checkpoint_dir = option.checkpoint_dir
         self.__train()
+
+        learning_result["Data Samples"] = (
+            f"Training: {len(dataset_train)}, Test: {len(dataset_test)}"  # type: ignore
+        )
+        learning_result["Option"] = str(option)
+        learning_result["Result"] = "Finish"
+
+        return learning_result
 
     def __train_one_epoch(self, epoch_index: int, tb_writer: SummaryWriter) -> float:
         running_loss = 0.0

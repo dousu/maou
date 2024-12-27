@@ -26,6 +26,7 @@ class KifDataset(Dataset):
         self.hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
+        self.logger.info(f"{self.__len__()} samples")
 
     def __len__(self) -> int:
         return len(self.hcpes)
