@@ -37,7 +37,7 @@ class Learning:
         if gpu is not None:
             self.logger.info(f"Use GPU {gpu}")
             self.device = torch.device(gpu)
-            self.pin_memory = True
+            self.pin_memory = False
         else:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
