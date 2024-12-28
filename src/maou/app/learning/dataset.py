@@ -19,24 +19,32 @@ class KifDataset(Dataset):
             tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
         ],
     ):
-        self.hcps: list[np.ndarray]
-        self.transform = transform
-
         # 各局面を棋譜の区別なくフラットにいれておく
-        self.hcpes = np.concatenate(
+        hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
-        self.logger.info(f"{self.__len__()} samples")
+        self.data: list[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]]
+        for path in paths:
+            try:
+                hcpes = np.fromfile(path, dtype=HuffmanCodedPosAndEval)
+                for hcpe in hcpes:
+                    self.data.append(
+                        transform(
+                            hcpe["hcp"],
+                            hcpe["bestMove16"],
+                            hcpe["gameResult"],
+                            hcpe["eval"],
+                        )
+                    )
+            except Exception as e:
+                self.logger.error(f"path: {path}")
+                raise e
+        self.logger.info(f"{len(self.data)} samples")
 
     def __len__(self) -> int:
-        return len(self.hcpes)
+        return len(self.data)
 
     def __getitem__(
         self, idx: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-        return self.transform(
-            self.hcpes[idx]["hcp"],
-            self.hcpes[idx]["bestMove16"],
-            self.hcpes[idx]["gameResult"],
-            self.hcpes[idx]["eval"],
-        )
+        return self.data[idx]
