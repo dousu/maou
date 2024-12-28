@@ -73,7 +73,7 @@ class Learning:
         )
 
         # datasetに特徴量と正解ラベルを作成する変換を登録する
-        feature = Transform(pin_memory=self.pin_memory)
+        feature = Transform(pin_memory=self.pin_memory, device=self.device)
         dataset_train: Dataset = KifDataset(input_train, feature)
         dataset_test: Dataset = KifDataset(input_test, feature)
 
