@@ -29,6 +29,7 @@ class KifDataset(Dataset):
         self.logger.info(f"{len(self.hcpes)} samples")
 
         # 最初にtransformするパターン
+        # これにするとなぜかプログラムが落ちてしまうのでデバッグ用途で残しておく
         # # 各局面を棋譜の区別なくフラットにいれておく
         # hcpes = np.concatenate(
         #     [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
