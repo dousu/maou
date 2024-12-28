@@ -23,13 +23,15 @@ class KifDataset(Dataset):
         hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
-        self.data: list[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]] = []
+        self.transformed_data: list[
+            tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
+        ] = []
         for i, path in enumerate(paths):
             if i % 100000 == 0:
                 self.logger.info(f"進捗: {i / len(paths) * 100}%")
             try:
                 hcpes = np.fromfile(path, dtype=HuffmanCodedPosAndEval)
-                self.data.extend(
+                self.transformed_data.extend(
                     [
                         transform(
                             hcpe["hcp"],
@@ -42,12 +44,12 @@ class KifDataset(Dataset):
                 )
             except Exception:
                 self.logger.error(f"path: {path}")
-        self.logger.info(f"{len(self.data)} samples")
+        self.logger.info(f"{len(self.transformed_data)} samples")
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.transformed_data)
 
     def __getitem__(
         self, idx: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-        return self.data[idx]
+        return self.transformed_data[idx]
