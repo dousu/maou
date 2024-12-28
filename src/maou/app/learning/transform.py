@@ -28,6 +28,7 @@ class Transform:
             # move label
             # この変換は必要なさそうなので行わない
             # move = move_from_move16(move16)
+            # 不正な棋譜が入っているときここは簡単にエラーになるので注意 (ratingで絞るとか？)
             move_label = make_move_label(board.turn, move16)
 
             # result value

@@ -46,6 +46,7 @@ class HCPEConverter:
                 or (max_moves is not None and moves > max_moves)
                 or (
                     allowed_endgame_status is not None
+                    and not len(allowed_endgame_status) == 0
                     and parser.endgame() not in allowed_endgame_status
                 )
             ):
