@@ -100,7 +100,7 @@ class HCPEConverter:
                         and move in option.exclude_moves
                     ):
                         self.logger.info(
-                            f"skip the move {move}. "
+                            f"skip the move {move} in {file} at {i + 1}. "
                             f"exclude moves: {option.exclude_moves}"
                         )
                         continue
