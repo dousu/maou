@@ -29,11 +29,13 @@ class Transform:
             # この変換は必要なさそうなので行わない
             # move = move_from_move16(move16)
             # 不正な棋譜が入っているときここは簡単にエラーになるので注意 (ratingで絞るとか？)
+            # endgame statusが%TIMEUPが入っていると変なmove labelになっていそう
+            # こういうどうしようもないのは学習から除外するためにエラー出たら何もしないという選択肢もある
             move_label = make_move_label(board.turn, move16)
 
             # result value
             result_value = make_result_value(board.turn, game_result)
-        except Exception as e:
+        except Exception:
             self.logger.error(
                 f"cshogi move: {move16}"
                 f", game: {game_result}"
@@ -41,7 +43,6 @@ class Transform:
                 f", sfen: {board.sfen()}"
             )
             self.logger.error(str(board))
-            raise e
 
         return (
             torch.from_numpy(features),
