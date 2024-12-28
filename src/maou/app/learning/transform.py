@@ -34,7 +34,10 @@ class Transform:
             result_value = make_result_value(board.turn, game_result)
         except Exception as e:
             self.logger.error(
-                f"cshogi move: {move16}, game: {game_result}, eval: {eval}, sfen: {board.sfen()}"
+                f"cshogi move: {move16}"
+                f", game: {game_result}"
+                f", eval: {eval}"
+                f", sfen: {board.sfen()}"
             )
             self.logger.error(str(board))
             raise e
