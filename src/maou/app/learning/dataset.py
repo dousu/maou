@@ -23,19 +23,21 @@ class KifDataset(Dataset):
         hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
-        self.data: list[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]]
+        self.data: list[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]] = []
         for path in paths:
             try:
                 hcpes = np.fromfile(path, dtype=HuffmanCodedPosAndEval)
-                for hcpe in hcpes:
-                    self.data.append(
+                self.data.extend(
+                    [
                         transform(
                             hcpe["hcp"],
                             hcpe["bestMove16"],
                             hcpe["gameResult"],
                             hcpe["eval"],
                         )
-                    )
+                        for hcpe in hcpes
+                    ]
+                )
             except Exception as e:
                 self.logger.error(f"path: {path}")
                 raise e
