@@ -46,14 +46,24 @@ def transform(
     input_path: Path,
     input_format: str,
     output_dir: Path,
+    *,
+    min_rating: Optional[int] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    allowed_endgame_status: Optional[list[str]] = None,
 ) -> str:
     input_format_validation(input_format)
     output_dir_validation(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")
+
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),
         input_format=input_format,
         output_dir=output_dir,
+        min_rating=min_rating,
+        min_moves=min_moves,
+        max_moves=max_moves,
+        allowed_endgame_status=allowed_endgame_status,
     )
     conversion_result = HCPEConverter().convert(option)
 

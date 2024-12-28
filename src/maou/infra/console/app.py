@@ -37,10 +37,52 @@ def main(debug_mode: bool) -> None:
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )
-def hcpe_convert(input_path: Path, input_format: str, output_dir: Path) -> None:
+@click.option(
+    "--min-rating",
+    help="",
+    type=int,
+    required=False,
+)
+@click.option(
+    "--min-moves",
+    help="",
+    type=int,
+    required=False,
+)
+@click.option(
+    "--max-moves",
+    help="",
+    type=int,
+    required=False,
+)
+@click.option(
+    "--allowed-endgame-status",
+    help="",
+    type=str,
+    required=False,
+    multiple=True,
+)
+def hcpe_convert(
+    input_path: Path,
+    input_format: str,
+    output_dir: Path,
+    min_rating: int,
+    min_moves: int,
+    max_moves: int,
+    allowed_endgame_status: list[str],
+) -> None:
     try:
         click.echo(
-            converter.transform(FileSystem(), input_path, input_format, output_dir)
+            converter.transform(
+                FileSystem(),
+                input_path,
+                input_format,
+                output_dir,
+                min_rating=min_rating,
+                min_moves=min_moves,
+                max_moves=max_moves,
+                allowed_endgame_status=allowed_endgame_status,
+            )
         )
     except Exception:
         app_logger.exception("Error Occured", stack_info=True)
