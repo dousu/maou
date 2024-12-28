@@ -24,7 +24,8 @@ class KifDataset(Dataset):
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
         self.data: list[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]] = []
-        for path in paths:
+        for i, path in enumerate(paths):
+            self.logger.info(f"進捗: {i / len(paths) * 100}%")
             try:
                 hcpes = np.fromfile(path, dtype=HuffmanCodedPosAndEval)
                 self.data.extend(
