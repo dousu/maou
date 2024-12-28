@@ -67,7 +67,7 @@ def learn(
 
     # DataLoaderのワーカー数設定 (デフォルト2)
     if dataloader_workers is None:
-        dataloader_workers = 2
+        dataloader_workers = 0
 
     # 損失関数のパラメータ設定 (デフォルト0.7)
     if gce_parameter is None:

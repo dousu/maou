@@ -15,7 +15,7 @@ class KifDataset(Dataset):
         self,
         paths: list[Path],
         transform: Callable[
-            [np.ndarray, int, int],
+            [np.ndarray, int, int, int],
             tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
         ],
     ):
@@ -38,4 +38,5 @@ class KifDataset(Dataset):
             self.hcpes[idx]["hcp"],
             self.hcpes[idx]["bestMove16"],
             self.hcpes[idx]["gameResult"],
+            self.hcpes[idx]["eval"],
         )

@@ -15,25 +15,29 @@ class Transform:
         self.pin_memory = pin_memory
 
     def __call__(
-        self,
-        hcp: np.ndarray,
-        move16: int,
-        game_result: int,
+        self, hcp: np.ndarray, move16: int, game_result: int, eval: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         board = cshogi.Board()  # type: ignore
         board.set_hcp(hcp)
 
-        # 入力特徴量
-        features = make_feature(board)
+        try:
+            # 入力特徴量
+            features = make_feature(board)
 
-        # 教師データ
-        # move label
-        # この変換は必要なさそうなので行わない
-        # move = move_from_move16(move16)
-        move_label = make_move_label(board.turn, move16)
+            # 教師データ
+            # move label
+            # この変換は必要なさそうなので行わない
+            # move = move_from_move16(move16)
+            move_label = make_move_label(board.turn, move16)
 
-        # result value
-        result_value = make_result_value(board.turn, game_result)
+            # result value
+            result_value = make_result_value(board.turn, game_result)
+        except Exception as e:
+            self.logger.error(
+                f"cshogi move: {move16}, game: {game_result}, eval: {eval}, sfen: {board.sfen()}"
+            )
+            self.logger.error(str(board))
+            raise e
 
         return (
             torch.from_numpy(features),
