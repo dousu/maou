@@ -35,7 +35,7 @@ class Transform:
 
             # result value
             result_value = make_result_value(board.turn, game_result)
-        except Exception:
+        except Exception as e:
             self.logger.error(
                 f"cshogi move: {move16}"
                 f", game: {game_result}"
@@ -43,6 +43,7 @@ class Transform:
                 f", sfen: {board.sfen()}"
             )
             self.logger.error(str(board))
+            raise e
 
         return (
             torch.from_numpy(features),
