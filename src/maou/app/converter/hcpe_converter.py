@@ -95,6 +95,8 @@ class HCPEConverter:
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
                     self.logger.debug(f"{move} : {score} : {comment}")
+                    if move == 0:
+                        raise Exception()
                     if (
                         option.exclude_moves is not None
                         and move in option.exclude_moves
