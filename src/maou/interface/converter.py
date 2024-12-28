@@ -51,6 +51,7 @@ def transform(
     min_moves: Optional[int] = None,
     max_moves: Optional[int] = None,
     allowed_endgame_status: Optional[list[str]] = None,
+    exclude_moves: Optional[list[int]] = None,
 ) -> str:
     input_format_validation(input_format)
     output_dir_validation(output_dir)
@@ -64,6 +65,7 @@ def transform(
         min_moves=min_moves,
         max_moves=max_moves,
         allowed_endgame_status=allowed_endgame_status,
+        exclude_moves=exclude_moves,
     )
     conversion_result = HCPEConverter().convert(option)
 

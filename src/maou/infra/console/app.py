@@ -62,6 +62,13 @@ def main(debug_mode: bool) -> None:
     required=False,
     multiple=True,
 )
+@click.option(
+    "--exclude-moves",
+    help="",
+    type=int,
+    required=False,
+    multiple=True,
+)
 def hcpe_convert(
     input_path: Path,
     input_format: str,
@@ -70,6 +77,7 @@ def hcpe_convert(
     min_moves: int,
     max_moves: int,
     allowed_endgame_status: list[str],
+    exclude_moves: list[int],
 ) -> None:
     try:
         click.echo(
@@ -82,6 +90,7 @@ def hcpe_convert(
                 min_moves=min_moves,
                 max_moves=max_moves,
                 allowed_endgame_status=allowed_endgame_status,
+                exclude_moves=exclude_moves,
             )
         )
     except Exception:

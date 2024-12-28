@@ -22,7 +22,7 @@ class KifParser(parser.Parser):
     def ratings(self) -> list[int]:
         return []
 
-    def moves(self) -> list[str]:
+    def moves(self) -> list[int]:
         return self.kif.moves  # type: ignore
 
     def scores(self) -> list[int]:

@@ -27,6 +27,7 @@ class HCPEConverter:
         min_moves: Optional[int] = None
         max_moves: Optional[int] = None
         allowed_endgame_status: Optional[list[str]] = None
+        exclude_moves: Optional[list[int]] = None
 
     def convert(self, option: ConvertOption) -> Dict[str, str]:
         """HCPEファイルを作成する."""
@@ -94,6 +95,14 @@ class HCPEConverter:
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
                     self.logger.debug(f"{move} : {score} : {comment}")
+                    if (
+                        option.exclude_moves is not None
+                        and move in option.exclude_moves
+                    ):
+                        self.logger.info(
+                            f"skip the move {move}. exclude moves: {option.exclude_moves}"
+                        )
+                        continue
 
                     hcpe = hcpes[i]
                     board.to_hcp(hcpe["hcp"])

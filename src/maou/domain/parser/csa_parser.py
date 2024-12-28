@@ -23,7 +23,7 @@ class CSAParser(parser.Parser):
     def ratings(self) -> list[int]:
         return self.kif.ratings
 
-    def moves(self) -> list[str]:
+    def moves(self) -> list[int]:
         return self.kif.moves
 
     def scores(self) -> list[int]:

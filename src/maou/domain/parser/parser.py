@@ -23,7 +23,7 @@ class Parser(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def moves(self) -> list[str]:
+    def moves(self) -> list[int]:
         pass
 
     @abc.abstractmethod
