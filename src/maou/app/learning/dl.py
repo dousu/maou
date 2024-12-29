@@ -118,6 +118,7 @@ class Learning:
         if option.compilation:
             compiled_model = torch.compile(model)
             self.model = compiled_model  # type: ignore
+            self.logger.info("Finished model compilation")
         else:
             self.model = model
         self.model.to(self.device)
@@ -159,6 +160,7 @@ class Learning:
         # iter(training_loader) so that we can track the batch
         # index and do some intra-epoch reporting
         for i, data in enumerate(self.training_loader):
+            self.logger.debug(f"loop: {i} {i/len(self.training_loader)*100}%")
             # Every data instance is an input + label pair
             inputs, (labels_policy, labels_value) = data
 
