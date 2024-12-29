@@ -57,8 +57,8 @@ class HCPEConverter:
 
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
-        for i, file in enumerate(option.input_paths):
-            progress = i / len(option.input_paths) * 100
+        for idx, file in enumerate(option.input_paths):
+            progress = idx / len(option.input_paths) * 100
             if int(progress) % 10 == 0:
                 self.logger.info(f"進捗: {progress}%")
             parser: Parser
@@ -93,23 +93,24 @@ class HCPEConverter:
             board = cshogi.Board()  # type: ignore
             board.set_sfen(parser.init_pos_sfen())
             try:
-                for i, (move, score, comment) in enumerate(
+                last_idx = 0
+                for idx, (move, score, comment) in enumerate(
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
                     self.logger.debug(f"{move} : {score} : {comment}")
-                    if move <= 0 or move > 16777215:
+                    if move < 0 or move > 16777215:
                         raise Exception(f"moveの値が想定外 path: {file}")
                     if (
                         option.exclude_moves is not None
                         and move in option.exclude_moves
                     ):
                         self.logger.info(
-                            f"skip the move {move} in {file} at {i + 1}. "
+                            f"skip the move {move} in {file} at {idx + 1}. "
                             f"exclude moves: {option.exclude_moves}"
                         )
                         continue
 
-                    hcpe = hcpes[i]
+                    hcpe = hcpes[idx]
                     board.to_hcp(hcpe["hcp"])
                     # 16bitに収める
                     eval = min(32767, max(score, -32767))
@@ -125,7 +126,11 @@ class HCPEConverter:
                     hcpe["gameResult"] = parser.winner()
 
                     board.push(move)
-                hcpes[:i].tofile(option.output_dir / file.with_suffix(".hcpe").name)
+                if idx != last_idx:
+                    hcpes[:idx].tofile(
+                        option.output_dir / file.with_suffix(".hcpe").name
+                    )
+                    last_idx = idx
                 conversion_result[str(file)] = "success"
             except Exception as e:
                 raise e
