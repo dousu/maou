@@ -252,7 +252,8 @@ class TestHCPEConverter:
         input_paths = [
             Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
             Path(
-                "tests/maou/app/converter/resources/test_dir/input/test_data_no_moves.csa"
+                "tests/maou/app/converter/resources/test_dir/input/"
+                "test_data_no_moves.csa"
             ),
         ]
         output_dir = Path("tests/maou/app/converter/resources/test_dir/output")

@@ -93,6 +93,8 @@ class Learning:
             num_workers=option.dataloader_workers,
             pin_memory=self.pin_memory,
         )
+        self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
+        self.logger.info(f"Test: {len(self.validation_loader)} batches/epoch")
 
         # モデル定義
         # チャンネル数はてきとうに256まで増やしてる

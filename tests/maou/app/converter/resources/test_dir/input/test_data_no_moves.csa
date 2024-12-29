@@ -7,13 +7,13 @@ N-22ndChild
 $EVENT:wdoor+floodgate-300-10F+LASTRAVEN84+22ndChild+20200320140012
 $START_TIME:2020/03/20 14:00:03
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:LASTRAVEN84+ca1cc2b704ea35253c0bd840c7318526:22ndChild+ba1f262f09fcb3450e8c6fa62172d1c8
@@ -21,13 +21,13 @@ P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 'white_rate:22ndChild+ba1f262f09fcb3450e8c6fa62172d1c8:2929.0
 %TORYO
 'P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-'P2 * -HI *  *  *  *  * -KA * 
+'P2 * -HI *  *  *  *  * -KA *
 'P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-'P4 *  *  *  *  *  *  *  *  * 
-'P5 *  *  *  *  *  *  *  *  * 
-'P6 *  *  *  *  *  *  *  *  * 
+'P4 *  *  *  *  *  *  *  *  *
+'P5 *  *  *  *  *  *  *  *  *
+'P6 *  *  *  *  *  *  *  *  *
 'P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-'P8 * +KA *  *  *  *  * +HI * 
+'P8 * +KA *  *  *  *  * +HI *
 'P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 '+
 'summary:toryo:LASTRAVEN84 lose:22ndChild win
