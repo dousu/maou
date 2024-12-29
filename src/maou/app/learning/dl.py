@@ -38,6 +38,7 @@ class Learning:
             self.device = torch.device(gpu)
             self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
             self.pin_memory = False
+            torch.set_float32_matmul_precision("high")
         else:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
