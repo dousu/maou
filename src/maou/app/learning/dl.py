@@ -34,7 +34,7 @@ class Learning:
     model: torch.nn.Module
 
     def __init__(self, gpu: Optional[str] = None):
-        if gpu is not None:
+        if gpu is not None and gpu != "cpu":
             self.logger.info(f"Use GPU {gpu}")
             self.device = torch.device(gpu)
             self.pin_memory = False
