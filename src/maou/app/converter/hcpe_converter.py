@@ -93,7 +93,6 @@ class HCPEConverter:
             board = cshogi.Board()  # type: ignore
             board.set_sfen(parser.init_pos_sfen())
             try:
-                last_idx = 0
                 for idx, (move, score, comment) in enumerate(
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
@@ -126,11 +125,7 @@ class HCPEConverter:
                     hcpe["gameResult"] = parser.winner()
 
                     board.push(move)
-                if idx != last_idx:
-                    hcpes[:idx].tofile(
-                        option.output_dir / file.with_suffix(".hcpe").name
-                    )
-                    last_idx = idx
+                hcpes[:idx].tofile(option.output_dir / file.with_suffix(".hcpe").name)
                 conversion_result[str(file)] = "success"
             except Exception as e:
                 raise e
