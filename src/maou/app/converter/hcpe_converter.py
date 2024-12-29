@@ -95,7 +95,7 @@ class HCPEConverter:
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
                     self.logger.debug(f"{move} : {score} : {comment}")
-                    if move < 0 or move > 16777215:
+                    if move <= 0 or move > 16777215:
                         raise Exception(f"moveの値が想定外 path: {file}")
                     if (
                         option.exclude_moves is not None
