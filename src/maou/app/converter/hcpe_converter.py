@@ -58,7 +58,9 @@ class HCPEConverter:
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
         for i, file in enumerate(option.input_paths):
-            self.logger.info(f"進捗: {i / len(option.input_paths) * 100}%")
+            progress = i / len(option.input_paths) * 100
+            if int(progress) % 10 == 0:
+                self.logger.info(f"進捗: {progress}%")
             parser: Parser
             match option.input_format:
                 case "csa":
@@ -70,7 +72,7 @@ class HCPEConverter:
                 case format_str:
                     raise NotApplicableFormat(f"undefined format {format_str}")
             # パースした結果から一手ずつ進めていって各局面をhcpe形式で保存する
-            self.logger.info(
+            self.logger.debug(
                 f"棋譜:{file} "
                 f"終局状況:{parser.endgame()} "
                 f"レーティング:{parser.ratings()} "
