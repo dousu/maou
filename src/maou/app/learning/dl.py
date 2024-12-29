@@ -160,7 +160,7 @@ class Learning:
         # iter(training_loader) so that we can track the batch
         # index and do some intra-epoch reporting
         for i, data in enumerate(self.training_loader):
-            self.logger.debug(f"loop: {i} {i/len(self.training_loader)*100}%")
+            self.logger.debug(f"loop: {i} {i / len(self.training_loader) * 100}%")
             # Every data instance is an input + label pair
             inputs, (labels_policy, labels_value) = data
 
