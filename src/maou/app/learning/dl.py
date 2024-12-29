@@ -35,8 +35,8 @@ class Learning:
 
     def __init__(self, gpu: Optional[str] = None):
         if gpu is not None and gpu != "cpu":
-            self.logger.info(f"Use GPU {gpu}")
             self.device = torch.device(gpu)
+            self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
             self.pin_memory = False
         else:
             self.logger.info("Use CPU")
