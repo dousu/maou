@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import torch
 from cshogi import HuffmanCodedPosAndEval  # type: ignore
 from torch.utils.data import Dataset
+
+from maou.app.learning.transform import Transform
 
 
 class KifDataset(Dataset):
@@ -14,22 +15,21 @@ class KifDataset(Dataset):
     def __init__(
         self,
         paths: list[Path],
-        transform: Callable[
-            [np.ndarray, int, int, int],
-            tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
-        ],
+        transform: Transform,
     ):
         # 最初にtransformしないパターン
         self.hcps: list[np.ndarray]
-        self.transform = transform
+        self.transform: Transform = transform
         # 各局面を棋譜の区別なくフラットにいれておく
         self.hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
+        self.logger.info(f"hcpes shape: {self.hcpes.shape}")
         self.logger.info(f"{len(self.hcpes)} samples")
 
         # 最初にtransformするパターン
         # これにするとなぜかプログラムが落ちてしまうのでデバッグ用途で残しておく
+        # たぶんメモリが原因
         # # 各局面を棋譜の区別なくフラットにいれておく
         # hcpes = np.concatenate(
         #     [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
@@ -69,10 +69,10 @@ class KifDataset(Dataset):
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         # 最初にtransformしないパターン
         return self.transform(
-            self.hcpes[idx]["hcp"],
-            self.hcpes[idx]["bestMove16"],
-            self.hcpes[idx]["gameResult"],
-            self.hcpes[idx]["eval"],
+            hcp=self.hcpes[idx]["hcp"],
+            move16=self.hcpes[idx]["bestMove16"],
+            game_result=self.hcpes[idx]["gameResult"],
+            eval=self.hcpes[idx]["eval"],
         )
 
         # 最初にtransformするパターン

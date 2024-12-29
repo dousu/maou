@@ -16,7 +16,7 @@ class Transform:
         self.device = device
 
     def __call__(
-        self, hcp: np.ndarray, move16: int, game_result: int, eval: int
+        self, *, hcp: np.ndarray, move16: int, game_result: int, eval: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         board = cshogi.Board()  # type: ignore
         board.set_hcp(hcp)
@@ -30,7 +30,7 @@ class Transform:
             # この変換は必要なさそうなので行わない
             # move = move_from_move16(move16)
             # 不正な棋譜が入っているときここは簡単にエラーになるので注意 (ratingで絞るとか？)
-            # endgame statusが%TIMEUPが入っていると変なmove labelになっていそう
+            # endgame statusが%TIMEUPが入っていると変なcshogi move値になっていそう
             # こういうどうしようもないのは学習から除外するためにエラー出たら何もしないという選択肢もある
             move_label = make_move_label(board.turn, move16)
 
