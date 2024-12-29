@@ -18,14 +18,20 @@ class KifDataset(Dataset):
         transform: Transform,
     ):
         # 最初にtransformしないパターン
-        self.hcps: list[np.ndarray]
         self.transform: Transform = transform
         # 各局面を棋譜の区別なくフラットにいれておく
         self.hcpes = np.concatenate(
             [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
         )
         self.logger.info(f"hcpes shape: {self.hcpes.shape}")
+        self.logger.info(f"hcpes dtype: {self.hcpes.dtype}")
         self.logger.info(f"{len(self.hcpes)} samples")
+
+        # デバッグ用のコード
+        self.paths: list[Path] = []
+        for path in paths:
+            hcpes = np.fromfile(path, dtype=HuffmanCodedPosAndEval)
+            self.paths.extend([path for i in range(len(hcpes))])
 
         # 最初にtransformするパターン
         # これにするとなぜかプログラムが落ちてしまうのでデバッグ用途で残しておく
@@ -68,12 +74,24 @@ class KifDataset(Dataset):
         self, idx: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         # 最初にtransformしないパターン
-        return self.transform(
-            hcp=self.hcpes[idx]["hcp"],
-            move16=self.hcpes[idx]["bestMove16"],
-            game_result=self.hcpes[idx]["gameResult"],
-            eval=self.hcpes[idx]["eval"],
-        )
+        # return self.transform(
+        #     hcp=self.hcpes[idx]["hcp"],
+        #     move16=self.hcpes[idx]["bestMove16"],
+        #     game_result=self.hcpes[idx]["gameResult"],
+        #     eval=self.hcpes[idx]["eval"],
+        # )
+
+        # デバッグ用のコード
+        try:
+            return self.transform(
+                hcp=self.hcpes[idx]["hcp"],
+                move16=self.hcpes[idx]["bestMove16"],
+                game_result=self.hcpes[idx]["gameResult"],
+                eval=self.hcpes[idx]["eval"],
+            )
+        except Exception as e:
+            self.logger.error(f"error: {self.paths[idx]}")
+            raise e
 
         # 最初にtransformするパターン
         # return self.transformed_data[idx]
