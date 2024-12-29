@@ -15,6 +15,10 @@ class NotApplicableFormat(Exception):
     pass
 
 
+class IllegalMove(Exception):
+    pass
+
+
 class HCPEConverter:
     logger: logging.Logger = logging.getLogger(__name__)
 
@@ -78,6 +82,8 @@ class HCPEConverter:
                 f"レーティング:{parser.ratings()} "
                 f"手数:{len(parser.moves())}"
             )
+
+            # 指定された条件を満たしたら変換をスキップ
             if not game_filter(
                 parser,
                 option.min_rating,
@@ -88,6 +94,13 @@ class HCPEConverter:
                 conversion_result[str(file)] = "skipped"
                 self.logger.info(f"skip the file {file}")
                 continue
+
+            # movesの数が0であればそもそもHCPEは作れないのでスキップ
+            if len(parser.moves()) == 0:
+                conversion_result[str(file)] = "skipped (no moves)"
+                self.logger.info(f"skip the file {file} because of no moves")
+                continue
+
             # 1024もあれば確保しておく局面数として十分だろう
             hcpes = np.zeros(1024, cshogi.HuffmanCodedPosAndEval)  # type: ignore
             board = cshogi.Board()  # type: ignore
@@ -97,8 +110,10 @@ class HCPEConverter:
                     zip(parser.moves(), parser.scores(), parser.comments())
                 ):
                     self.logger.debug(f"{move} : {score} : {comment}")
+
                     if move < 0 or move > 16777215:
-                        raise Exception(f"moveの値が想定外 path: {file}")
+                        raise IllegalMove(f"moveの値が想定外 path: {file}")
+
                     if (
                         option.exclude_moves is not None
                         and move in option.exclude_moves

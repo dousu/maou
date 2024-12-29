@@ -245,3 +245,33 @@ class TestHCPEConverter:
         assert not (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
         assert not (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
         assert not (output_dir / Path("test_data_3").with_suffix(".hcpe").name).exists()
+
+    def test_conversion_no_moves(
+        self, default_fixture: typing.Annotated[None, pytest.fixture]
+    ) -> None:
+        input_paths = [
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_no_moves.csa"
+            ),
+        ]
+        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        option: hcpe_converter.HCPEConverter.ConvertOption = (
+            hcpe_converter.HCPEConverter.ConvertOption(
+                input_paths=input_paths,
+                input_format="csa",
+                output_dir=output_dir,
+                min_rating=None,
+                min_moves=None,
+                max_moves=None,
+                allowed_endgame_status=None,
+            )
+        )
+        self.clean_up_dir(output_dir)
+        self.test_class.convert(option)
+        # 出力ファイルのチェック
+        assert output_dir.exists()
+        assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
+        assert not (
+            output_dir / Path("test_data_no_moves").with_suffix(".hcpe").name
+        ).exists()

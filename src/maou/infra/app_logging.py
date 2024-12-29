@@ -36,7 +36,7 @@ handler.setFormatter(
         "%(asctime)s | "
         "%(levelname)-5s | "
         "%(filename)20s | "
-        "%(funcName)15s | "
+        "%(funcName)20s | "
         "%(lineno)3d | "
         "%(threadName)s | "
         "%(message)s"
