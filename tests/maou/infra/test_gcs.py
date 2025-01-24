@@ -38,17 +38,17 @@ class TestGCS:
         # ハッシュ値を16進文字列で返す
         return checksum.digest().hex()
 
-    def __read_file_as_string(self, file_path: Path):
+    def __read_file_as_string(self, file_path: Path) -> str:
         try:
             with open(file_path, "r", encoding="utf-8") as file:
                 content = file.read()
-            return content
         except FileNotFoundError:
             print(f"Error: The file '{file_path}' does not exist.")
         except UnicodeDecodeError:
             print(f"Error: The file '{file_path}' could not be decoded as UTF-8.")
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
+        return content
 
     @pytest.fixture
     def default_fixture(self) -> None:

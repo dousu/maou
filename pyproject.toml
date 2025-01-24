@@ -31,6 +31,7 @@ isort = "^5.13.2"
 commitizen = "^4.0.0"
 pytest = "^8.3.3"
 ruff = "^0.8.1"
+types-tqdm = "^4.67.0.20241221"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -62,6 +63,9 @@ module = [
   "pytest",
   "sklearn.model_selection",
   "torchinfo",
+  "pyarrow.*",
+  "google_crc32c",
+  "google.cloud",
   "maou.*",
 ]
 ignore_missing_imports = true

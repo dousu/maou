@@ -58,12 +58,12 @@ class BigQuery(converter.FeatureStore):
             self.client.create_dataset(dataset=dataset)
             self.logger.debug(f"Dataset '{dataset_fqn}' has been created.")
         # バッファを初期化
-        self.__buffer = []
-        self.__buffer_size = 0
+        self.__buffer: list[pa.Table] = []
+        self.__buffer_size: int = 0
         # 最大値指定 50MB
         self.max_buffer_size = max_buffer_size
 
-    def __arrow_type_to_bigquery_type(self, arrow_type: pa.DataType):
+    def __arrow_type_to_bigquery_type(self, arrow_type: pa.DataType) -> str:
         match arrow_type:
             case t if pa.types.is_integer(t):
                 return "INTEGER"
@@ -133,7 +133,7 @@ class BigQuery(converter.FeatureStore):
         dataset_id: Optional[str] = None,
         table_name: Optional[str] = None,
         table: Optional[bigquery.Table] = None,
-    ):
+    ) -> None:
         if dataset_id is not None and table_name is not None:
             table_ref = f"{self.client.project}.{dataset_id}.{table_name}"
             table_id = table_ref
@@ -291,7 +291,7 @@ class BigQuery(converter.FeatureStore):
         except Exception as e:
             raise e
 
-    def __del__(self):
+    def __del__(self) -> None:
         """store_features用のデストラクタ処理"""
         # bufferが空のときはスキップする
         if self.last_key_columns is not None and self.__buffer_size != 0:
