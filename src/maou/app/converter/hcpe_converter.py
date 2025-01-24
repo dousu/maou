@@ -1,14 +1,25 @@
+import abc
 import logging
+import pickle
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import cshogi
 import numpy as np
+import pyarrow as pa
+from tqdm import tqdm
 
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
 from maou.domain.parser.parser import Parser
+
+
+class FeatureStore(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def store_features(self, *, key_columns: list[str], arrow_table: pa.Table) -> None:
+        pass
 
 
 class NotApplicableFormat(Exception):
@@ -21,6 +32,9 @@ class IllegalMove(Exception):
 
 class HCPEConverter:
     logger: logging.Logger = logging.getLogger(__name__)
+
+    def __init__(self, *, feature_store: Optional[FeatureStore] = None):
+        self.feature_store = feature_store
 
     @dataclass(kw_only=True, frozen=True)
     class ConvertOption:
@@ -61,10 +75,7 @@ class HCPEConverter:
 
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
-        for idx, file in enumerate(option.input_paths):
-            progress = idx / len(option.input_paths) * 100
-            if int(progress) % 10 == 0:
-                self.logger.info(f"進捗: {progress}%")
+        for file in tqdm(option.input_paths):
             parser: Parser
             match option.input_format:
                 case "csa":
@@ -105,6 +116,7 @@ class HCPEConverter:
             hcpes = np.zeros(1024, cshogi.HuffmanCodedPosAndEval)  # type: ignore
             board = cshogi.Board()  # type: ignore
             board.set_sfen(parser.init_pos_sfen())
+            arrow_features: dict[str, list[Any]] = defaultdict(list)
             try:
                 for idx, (move, score, comment) in enumerate(
                     zip(parser.moves(), parser.scores(), parser.comments())
@@ -138,9 +150,31 @@ class HCPEConverter:
                     # 特に動かす駒の種類の情報が抜けているので注意
                     hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                     hcpe["gameResult"] = parser.winner()
+                    if self.feature_store is not None:
+                        arrow_features["id"].append(
+                            f"{file.with_suffix(".hcpe").name}_{idx}"
+                        )
+                        arrow_features["hcp"].append(pickle.dumps(hcpe["hcp"]))
+                        arrow_features["eval"].append(pickle.dumps(hcpe["eval"]))
+                        arrow_features["bestMove16"].append(
+                            pickle.dumps(hcpe["bestMove16"])
+                        )
+                        arrow_features["gameResult"].append(
+                            pickle.dumps(hcpe["gameResult"])
+                        )
+                        arrow_features["ratings"].append(
+                            pickle.dumps(np.array(parser.ratings()))
+                        )
+                        arrow_features["endgameStatus"].append(parser.endgame())
+                        arrow_features["moves"].append(len(parser.moves()))
 
                     board.push(move)
                 hcpes[:idx].tofile(option.output_dir / file.with_suffix(".hcpe").name)
+                if self.feature_store is not None:
+                    self.feature_store.store_features(
+                        key_columns=["id"],
+                        arrow_table=pa.table(arrow_features),
+                    )
                 conversion_result[str(file)] = "success"
             except Exception as e:
                 raise e

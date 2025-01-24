@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.learning.dl import Learning
+from maou.app.learning.dl import CloudStorage, Learning
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ def learn(
     resume_from: Optional[Path] = None,
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
+    cloud_storage: Optional[CloudStorage] = None,
 ) -> str:
     # モデルをコンパイルするかどうか (デフォルトTrue)
     if compilation is None:
@@ -131,6 +132,7 @@ def learn(
         log_dir=log_dir,
         model_dir=model_dir,
     )
-    learning_result = Learning(gpu).learn(option)
+
+    learning_result = Learning(gpu=gpu, cloud_storage=cloud_storage).learn(option)
 
     return json.dumps(learning_result)

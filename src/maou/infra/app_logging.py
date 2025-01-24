@@ -31,17 +31,16 @@ class CustomLogFormatter(logging.Formatter):
 handler = logging.StreamHandler()
 # jsonにフォーマットするとトレースバックとか見えないのでいったんコメントアウトしておく
 # handler.setFormatter(JsonLogFormatter())
-handler.setFormatter(
-    CustomLogFormatter(
-        "%(asctime)s | "
-        "%(levelname)-5s | "
-        "%(filename)20s | "
-        "%(funcName)20s | "
-        "%(lineno)3d | "
-        "%(threadName)s | "
-        "%(message)s"
-    )
+formatter = CustomLogFormatter(
+    "%(asctime)s | "
+    "%(levelname)-5s | "
+    "%(filename)20s | "
+    "%(funcName)20s | "
+    "%(lineno)3d | "
+    "%(threadName)s | "
+    "%(message)s"
 )
+handler.setFormatter(formatter)
 logging.basicConfig()
 
 app_logger: logging.Logger = logging.getLogger("maou")

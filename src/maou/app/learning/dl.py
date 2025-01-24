@@ -1,3 +1,4 @@
+import abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,7 @@ from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
+from tqdm import tqdm
 
 from maou.app.learning.dataset import KifDataset
 from maou.app.learning.feature import FEATURES_NUM
@@ -17,6 +19,12 @@ from maou.app.learning.network import Network
 from maou.app.learning.transform import Transform
 from maou.domain.loss.loss_fn import GCELoss
 from maou.domain.network.resnet import ResidualBlock
+
+
+class CloudStorage(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def upload_from_local(self, local_path: Path, cloud_path: str) -> None:
+        pass
 
 
 class Learning:
@@ -33,7 +41,9 @@ class Learning:
     resume_from: Optional[Path]
     model: torch.nn.Module
 
-    def __init__(self, gpu: Optional[str] = None):
+    def __init__(
+        self, *, gpu: Optional[str] = None, cloud_storage: Optional[CloudStorage] = None
+    ):
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
             self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
@@ -43,6 +53,7 @@ class Learning:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
             self.pin_memory = False
+        self.cloud_storage = cloud_storage
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
@@ -162,8 +173,7 @@ class Learning:
         # Here, we use enumerate(training_loader) instead of
         # iter(training_loader) so that we can track the batch
         # index and do some intra-epoch reporting
-        for i, data in enumerate(self.training_loader):
-            self.logger.debug(f"loop: {i} {i / len(self.training_loader) * 100}%")
+        for i, data in tqdm(enumerate(self.training_loader)):
             # Every data instance is an input + label pair
             inputs, (labels_policy, labels_value) = data
 
@@ -277,6 +287,8 @@ class Learning:
                     timestamp, epoch_number
                 )
                 torch.save(self.model.state_dict(), model_path)
+                if self.cloud_storage is not None:
+                    self.cloud_storage.upload_from_local(model_path, str(model_path))
 
             # checkpoint
             if self.checkpoint_dir is not None:
@@ -292,6 +304,10 @@ class Learning:
                     },
                     checkpoint_path,
                 )
+                if self.cloud_storage is not None:
+                    self.cloud_storage.upload_from_local(
+                        checkpoint_path, str(checkpoint_path)
+                    )
 
             epoch_number += 1
 

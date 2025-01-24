@@ -16,6 +16,11 @@ torchvision = "^0.20.1"
 torchinfo = "^1.8.0"
 tensorboard = "^2.18.0"
 torch-tb-profiler = "^0.4.3"
+google-cloud-storage = "^2.19.0"
+google-cloud-bigquery = {extras = ["pandas"], version = "^3.27.0"}
+google-crc32c = "^1.6.0"
+pyarrow = "^19.0.0"
+tqdm = "^4.67.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.10.0"
@@ -43,9 +48,6 @@ build-backend = "poetry.core.masonry.api"
 addopts = [
     "--import-mode=importlib",
 ]
-log_level = "debug"
-log_file = "pytest.log"
-log_auto_indent = true
 
 [tool.poetry.scripts]
 maou = "maou.infra.console.app:main"

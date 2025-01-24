@@ -5,7 +5,9 @@ from typing import Optional
 import click
 
 from maou.infra.app_logging import app_logger
+from maou.infra.bigquery import BigQuery
 from maou.infra.file_system import FileSystem
+from maou.infra.gcs import GCS
 from maou.interface import converter, learn
 
 
@@ -39,47 +41,96 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--min-rating",
-    help="",
+    help="Specify the minimum rating of the game to include in the conversion.",
     type=int,
     required=False,
 )
 @click.option(
     "--min-moves",
-    help="",
+    help="Specify the minimum number of moves required to include the game.",
     type=int,
     required=False,
 )
 @click.option(
     "--max-moves",
-    help="",
+    help="Specify the maximum number of moves allowed to include the game.",
     type=int,
     required=False,
 )
 @click.option(
     "--allowed-endgame-status",
-    help="",
+    help=(
+        "Specify allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI')."
+        " Multiple values can be provided."
+    ),
     type=str,
     required=False,
     multiple=True,
 )
 @click.option(
     "--exclude-moves",
-    help="",
+    help=(
+        "Specify moves to exclude from the game."
+        " Provide move nuymbers as integers."
+        " Multiple values can be provided."
+    ),
     type=int,
     required=False,
     multiple=True,
+)
+@click.option(
+    "--bigquery",
+    type=bool,
+    is_flag=True,
+    help="Use BigQuery as feature store",
+    required=False,
+)
+@click.option(
+    "--dataset-id",
+    help="Specify the BigQuery dataset ID to use as the feature store.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--table-name",
+    help="Specify the BigQuery table name to use as the feature store.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--max-buffer-bytes",
+    help="max buffer bytes",
+    type=int,
+    required=False,
+    default=50 * 1024 * 1024,
 )
 def hcpe_convert(
     input_path: Path,
     input_format: str,
     output_dir: Path,
-    min_rating: int,
-    min_moves: int,
-    max_moves: int,
-    allowed_endgame_status: list[str],
-    exclude_moves: list[int],
+    min_rating: Optional[int],
+    min_moves: Optional[int],
+    max_moves: Optional[int],
+    allowed_endgame_status: Optional[list[str]],
+    exclude_moves: Optional[list[int]],
+    bigquery: Optional[bool],
+    dataset_id: Optional[str],
+    table_name: Optional[str],
+    max_buffer_bytes: int,
 ) -> None:
     try:
+        feature_store = (
+            BigQuery(
+                dataset_id=dataset_id,
+                table_name=table_name,
+                max_buffer_size=max_buffer_bytes,
+            )
+            if bigquery
+            and dataset_id is not None
+            and table_name is not None
+            and max_buffer_bytes is not None
+            else None
+        )
         click.echo(
             converter.transform(
                 FileSystem(),
@@ -91,6 +142,7 @@ def hcpe_convert(
                 max_moves=max_moves,
                 allowed_endgame_status=allowed_endgame_status,
                 exclude_moves=exclude_moves,
+                feature_store=feature_store,
             )
         )
     except Exception:
@@ -194,6 +246,25 @@ def hcpe_convert(
     help="Specify the directory where the models is saved.",
     required=False,
 )
+@click.option(
+    "--gcs",
+    type=bool,
+    is_flag=True,
+    help="Use GCS object storage to save files",
+    required=False,
+)
+@click.option(
+    "--bucket-name",
+    help="GCS bucket name",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--gcs-base-path",
+    help="base path for GCS bucket",
+    type=str,
+    required=False,
+)
 def learn_model(
     input_dir: Path,
     gpu: Optional[str],
@@ -211,8 +282,16 @@ def learn_model(
     resume_from: Optional[Path],
     log_dir: Optional[Path],
     model_dir: Optional[Path],
+    gcs: Optional[bool],
+    bucket_name: Optional[str],
+    gcs_base_path: Optional[str],
 ) -> None:
     try:
+        cloud_storage = (
+            GCS(bucket_name=bucket_name, base_path=gcs_base_path)
+            if gcs and bucket_name is not None and gcs_base_path is not None
+            else None
+        )
         click.echo(
             learn.learn(
                 FileSystem(),
@@ -232,6 +311,7 @@ def learn_model(
                 resume_from=resume_from,
                 log_dir=log_dir,
                 model_dir=model_dir,
+                cloud_storage=cloud_storage,
             )
         )
     except Exception:
