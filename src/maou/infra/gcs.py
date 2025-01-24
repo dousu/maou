@@ -36,5 +36,6 @@ class GCS(learn.CloudStorage):
         blob = self.bucket.blob(cloud_path)
         blob.upload_from_filename(local_path)
         self.logger.debug(
-            f"Uploaded {local_path} to gs://{self.bucket_name}/{self.base_path}/{cloud_path}"
+            f"Uploaded {local_path} to"
+            f" gs://{self.bucket_name}/{self.base_path}/{cloud_path}"
         )

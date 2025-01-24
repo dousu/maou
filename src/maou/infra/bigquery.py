@@ -258,7 +258,8 @@ class BigQuery(converter.FeatureStore):
                     self.logger.error(f"Failed to insert rows: {job.errors}")
                     raise BigQueryJobError(f"Failed to insert rows: {job.errors}")
             self.logger.debug(
-                f"Inserted rows to temporary table. table_id: {self.temp_table.full_table_id}"
+                "Inserted rows to temporary table."
+                f" table_id: {self.temp_table.full_table_id}"
             )
 
             # MERGEクエリ
@@ -272,8 +273,11 @@ class BigQuery(converter.FeatureStore):
             insert_columns = ", ".join(all_columns)
             insert_values = ", ".join([f"source.{col}" for col in all_columns])
             merge_query = f"""
-            MERGE `{self.client.project}.{table.dataset_id}.{table.table_id}` AS target
-            USING `{self.client.project}.{self.temp_table.dataset_id}.{self.temp_table.table_id}` AS source
+            MERGE `{self.client.project}.{table.dataset_id}.{table.table_id}`
+               AS target
+            USING
+              `{self.client.project}.{self.temp_table.dataset_id}.{self.temp_table.table_id}`
+               AS source
             ON {on_conditions}
             WHEN MATCHED THEN
               UPDATE SET {update_set_clause}
@@ -299,5 +303,6 @@ class BigQuery(converter.FeatureStore):
         # 一時テーブル削除
         self.__drop_table(table=self.temp_table)
         self.logger.debug(
-            f"Features successfully stored in BigQuery. table_id: {self.temp_table.full_table_id}"
+            "Features successfully stored in BigQuery."
+            f" table_id: {self.temp_table.full_table_id}"
         )
