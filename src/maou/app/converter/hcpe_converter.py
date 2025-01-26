@@ -155,13 +155,9 @@ class HCPEConverter:
                             f"{file.with_suffix(".hcpe").name}_{idx}"
                         )
                         arrow_features["hcp"].append(pickle.dumps(hcpe["hcp"]))
-                        arrow_features["eval"].append(pickle.dumps(hcpe["eval"]))
-                        arrow_features["bestMove16"].append(
-                            pickle.dumps(hcpe["bestMove16"])
-                        )
-                        arrow_features["gameResult"].append(
-                            pickle.dumps(hcpe["gameResult"])
-                        )
+                        arrow_features["eval"].append(hcpe["eval"])
+                        arrow_features["bestMove16"].append(hcpe["bestMove16"])
+                        arrow_features["gameResult"].append(hcpe["gameResult"])
                         arrow_features["ratings"].append(
                             pickle.dumps(np.array(parser.ratings()))
                         )
