@@ -1,5 +1,6 @@
 import typing
 from pathlib import Path
+from typing import Any, Generator
 
 import pytest
 
@@ -12,7 +13,7 @@ class TestHCPEConverter:
         self.test_class = hcpe_converter.HCPEConverter()
 
     @pytest.fixture(autouse=True)
-    def clean_up_after_test(self):
+    def clean_up_after_test(self) -> Generator[None, Any, Any]:
         output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
         yield
         self.clean_up_dir(output_dir)
