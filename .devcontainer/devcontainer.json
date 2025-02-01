@@ -1,6 +1,6 @@
 {
 	"name": "Ubuntu",
-	"image": "mcr.microsoft.com/vscode/devcontainers/universal:focal",
+	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
 	"features": {
 		// Docker
 		// https://github.com/devcontainers/features/tree/main/src/docker-in-docker
@@ -23,11 +23,17 @@
 						"source.fixAll.ruff": "explicit",
 						"source.organizeImports.ruff": "explicit"
 					}
-				}
+				},
+				"python.testing.pytestArgs": [
+        			"tests"
+    			],
+    			"python.testing.unittestEnabled": false,
+    			"python.testing.pytestEnabled": true
 			},
 			"extensions": [
 				"esbenp.prettier-vscode",
-				"charliermarsh.ruff"
+				"charliermarsh.ruff",
+				"GitHub.copilot"
 			]
 		}
 	}

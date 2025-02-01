@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 import cshogi
 import numpy as np
 import pyarrow as pa
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
@@ -34,7 +34,7 @@ class HCPEConverter:
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(self, *, feature_store: Optional[FeatureStore] = None):
-        self.feature_store = feature_store
+        self.__feature_store = feature_store
 
     @dataclass(kw_only=True, frozen=True)
     class ConvertOption:
@@ -150,7 +150,7 @@ class HCPEConverter:
                     # 特に動かす駒の種類の情報が抜けているので注意
                     hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                     hcpe["gameResult"] = parser.winner()
-                    if self.feature_store is not None:
+                    if self.__feature_store is not None:
                         arrow_features["id"].append(
                             f"{file.with_suffix(".hcpe").name}_{idx}"
                         )
@@ -165,9 +165,11 @@ class HCPEConverter:
                         arrow_features["moves"].append(len(parser.moves()))
 
                     board.push(move)
-                hcpes[:idx].tofile(option.output_dir / file.with_suffix(".hcpe").name)
-                if self.feature_store is not None:
-                    self.feature_store.store_features(
+                hcpes[: idx + 1].tofile(
+                    option.output_dir / file.with_suffix(".hcpe").name
+                )
+                if self.__feature_store is not None:
+                    self.__feature_store.store_features(
                         key_columns=["id"],
                         arrow_table=pa.table(arrow_features),
                     )

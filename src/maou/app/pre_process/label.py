@@ -133,12 +133,12 @@ def make_move_label(turn: int, move: int) -> int:
     # if turn == cshogi.WHITE:
     #     move = move_rotate(move)
 
-    if not cshogi.move_is_drop(move):  # 盤上の移動の場合
+    if not cshogi.move_is_drop(move):  # type: ignore # 盤上の移動の場合
         # 盤の座標を右上から下，左に向かって0からはじまる数字でシリアライズする
         # cshogiでは座標を直でだせないのでどちらにしろここから座標を計算する
-        to_sq = cshogi.move_to(move)
-        from_sq = cshogi.move_from(move)
-        if turn == cshogi.WHITE:
+        to_sq = cshogi.move_to(move)  # type: ignore
+        from_sq = cshogi.move_from(move)  # type: ignore
+        if turn == cshogi.WHITE:  # type: ignore
             to_sq = 80 - to_sq
             from_sq = 80 - from_sq
 
@@ -156,7 +156,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # KEIMA_LEFT
                 if to_y > 6 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("KEIMA_LEFT")
                     if to_y < 2:
                         raise IllegalMove(
@@ -185,7 +185,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # KEIMA_RIGHT
                 if to_y > 6 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("KEIMA_RIGHT")
                     if to_y < 2:
                         raise IllegalMove(
@@ -210,7 +210,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # UP
                 if to_y == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("UP")
                     return MoveCategoryStartLabel.UP + to_sq - to_x
                 else:
@@ -224,7 +224,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # DOWN
                 if to_y == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("DOWN")
                     return MoveCategoryStartLabel.DOWN + to_sq - (to_x + 1)
                 else:
@@ -234,7 +234,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # LEFT
                 if to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("LEFT")
                     return MoveCategoryStartLabel.LEFT + to_sq - 9
                 else:
@@ -248,7 +248,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # RIGHT
                 if to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("RIGHT")
                     return MoveCategoryStartLabel.RIGHT + to_sq
                 else:
@@ -262,7 +262,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # UP_LEFT
                 if to_y == 8 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("UP_LEFT")
                     return MoveCategoryStartLabel.UP_LEFT + to_sq - to_x - 8
                 else:
@@ -278,7 +278,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # UP_RIGHT
                 if to_y == 8 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("UP_RIGHT")
                     return MoveCategoryStartLabel.UP_RIGHT + to_sq - to_x
                 else:
@@ -292,7 +292,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # DOWN_LEFT
                 if to_y == 0 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("DOWN_LEFT")
                     return MoveCategoryStartLabel.DOWN_LEFT + to_sq - to_x - 9
                 else:
@@ -321,7 +321,7 @@ def make_move_label(turn: int, move: int) -> int:
                 # DOWN_RIGHT
                 if to_y == 0 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
-                if not cshogi.move_is_promotion(move):
+                if not cshogi.move_is_promotion(move):  # type: ignore
                     logger.debug("DOWN_RIGHT")
                     return MoveCategoryStartLabel.DOWN_RIGHT + to_sq - (to_x + 1)
                 else:
@@ -347,16 +347,16 @@ def make_move_label(turn: int, move: int) -> int:
                 raise IllegalMove("Can not transform illegal move to move label.")
 
     else:  # 駒打ちの場合
-        to_sq = cshogi.move_to(move)
+        to_sq = cshogi.move_to(move)  # type: ignore
 
-        if turn == cshogi.WHITE:
+        if turn == cshogi.WHITE:  # type: ignore
             to_sq = 80 - to_sq
         # 打てない領域だけラベリングをずらすので右上からの座標を計算しておく
         # 座標を計算しておくと簡単
         to_x, to_y = divmod(to_sq, 9)
         logger.debug(f"DROP to:{to_sq} ({to_x}, {to_y})")
 
-        match cshogi.move_drop_hand_piece(move):
+        match cshogi.move_drop_hand_piece(move):  # type: ignore
             case HandPiece.FU:
                 logger.debug("DROP FU")
                 if to_y == 0:
@@ -390,13 +390,13 @@ def make_move_label(turn: int, move: int) -> int:
 
 def make_result_value(turn: int, game_result: int) -> float:
     match (turn, game_result):
-        case (cshogi.BLACK, cshogi.BLACK_WIN):
+        case (cshogi.BLACK, cshogi.BLACK_WIN):  # type: ignore
             return 1
-        case (cshogi.BLACK, cshogi.WHITE_WIN):
-            return 0
-        case (cshogi.WHITE, cshogi.BLACK_WIN):
-            return 0
-        case (cshogi.WHITE, cshogi.WHITE_WIN):
+        case (cshogi.BLACK, cshogi.WHITE_WIN):  # type: ignore
+            return 0.0
+        case (cshogi.WHITE, cshogi.BLACK_WIN):  # type: ignore
+            return 0.0
+        case (cshogi.WHITE, cshogi.WHITE_WIN):  # type: ignore
             return 1
         case _:
             return 0.5

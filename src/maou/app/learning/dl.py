@@ -11,12 +11,12 @@ from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from maou.app.learning.dataset import KifDataset
-from maou.app.learning.feature import FEATURES_NUM
 from maou.app.learning.network import Network
-from maou.app.learning.transform import Transform
+from maou.app.pre_process.feature import FEATURES_NUM
+from maou.app.pre_process.transform import Transform
 from maou.domain.loss.loss_fn import GCELoss
 from maou.domain.network.resnet import ResidualBlock
 
@@ -53,7 +53,7 @@ class Learning:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
             self.pin_memory = False
-        self.cloud_storage = cloud_storage
+        self.__cloud_storage = cloud_storage
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
@@ -85,9 +85,19 @@ class Learning:
         )
 
         # datasetに特徴量と正解ラベルを作成する変換を登録する
-        feature = Transform(pin_memory=self.pin_memory, device=self.device)
-        dataset_train: Dataset = KifDataset(input_train, feature)
-        dataset_test: Dataset = KifDataset(input_test, feature)
+        feature = Transform()
+        dataset_train: Dataset = KifDataset(
+            paths=input_train,
+            transform=feature,
+            pin_memory=self.pin_memory,
+            device=self.device,
+        )
+        dataset_test: Dataset = KifDataset(
+            paths=input_test,
+            transform=feature,
+            pin_memory=self.pin_memory,
+            device=self.device,
+        )
 
         # dataloader
         # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
@@ -287,8 +297,8 @@ class Learning:
                     timestamp, epoch_number
                 )
                 torch.save(self.model.state_dict(), model_path)
-                if self.cloud_storage is not None:
-                    self.cloud_storage.upload_from_local(model_path, str(model_path))
+                if self.__cloud_storage is not None:
+                    self.__cloud_storage.upload_from_local(model_path, str(model_path))
 
             # checkpoint
             if self.checkpoint_dir is not None:
@@ -304,8 +314,8 @@ class Learning:
                     },
                     checkpoint_path,
                 )
-                if self.cloud_storage is not None:
-                    self.cloud_storage.upload_from_local(
+                if self.__cloud_storage is not None:
+                    self.__cloud_storage.upload_from_local(
                         checkpoint_path, str(checkpoint_path)
                     )
 

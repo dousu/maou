@@ -134,3 +134,6 @@ dmypy.json
 logs/
 models/
 checkpoints/
+
+# pickleで保存したファイルは除外する
+*.pickle

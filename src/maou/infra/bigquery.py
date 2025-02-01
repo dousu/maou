@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import bigquery
 
-from maou.interface import converter
+from maou.interface import converter, preprocess
 
 
 class SchemaConflictError(Exception):
@@ -27,7 +27,7 @@ class BigQueryJobError(Exception):
     pass
 
 
-class BigQuery(converter.FeatureStore):
+class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
     logger: logging.Logger = logging.getLogger(__name__)
     last_key_columns: Optional[list[str]] = None
     temp_table: bigquery.Table

@@ -2,7 +2,7 @@ import logging
 
 import cshogi
 
-from maou.app.learning import label
+from maou.app.pre_process import label
 
 logger: logging.Logger = logging.getLogger("TEST")
 

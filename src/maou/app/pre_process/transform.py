@@ -2,22 +2,17 @@ import logging
 
 import cshogi
 import numpy as np
-import torch
 
-from maou.app.learning.feature import make_feature
-from maou.app.learning.label import make_move_label, make_result_value
+from maou.app.pre_process.feature import make_feature
+from maou.app.pre_process.label import make_move_label, make_result_value
 
 
 class Transform:
     logger: logging.Logger = logging.getLogger(__name__)
 
-    def __init__(self, pin_memory: bool, device: torch.device):
-        self.pin_memory = pin_memory
-        self.device = device
-
     def __call__(
         self, *, hcp: np.ndarray, move16: int, game_result: int, eval: int
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    ) -> tuple[np.ndarray, int, float]:
         board = cshogi.Board()  # type: ignore
         board.set_hcp(hcp)
 
@@ -50,15 +45,7 @@ class Transform:
             raise e
 
         return (
-            torch.from_numpy(features).to(self.device),
-            (
-                torch.tensor(
-                    move_label, dtype=torch.long, pin_memory=self.pin_memory
-                ).to(self.device),
-                torch.tensor(
-                    result_value, dtype=torch.float32, pin_memory=self.pin_memory
-                )
-                .reshape((1))
-                .to(self.device),
-            ),
+            features,
+            move_label,
+            result_value,
         )

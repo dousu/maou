@@ -8,11 +8,11 @@ from maou.infra.app_logging import app_logger
 from maou.infra.bigquery import BigQuery
 from maou.infra.file_system import FileSystem
 from maou.infra.gcs import GCS
-from maou.interface import converter, learn
+from maou.interface import converter, learn, preprocess
 
 
 @click.group()
-@click.option("--debug_mode", "-d", is_flag=True, help="Show debug log")
+@click.option("--debug_mode", "-d", is_flag=True, help="Enable debug logging.")
 def main(debug_mode: bool) -> None:
     if debug_mode is True:
         app_logger.setLevel(logging.DEBUG)
@@ -23,45 +23,45 @@ def main(debug_mode: bool) -> None:
 @click.command()
 @click.option(
     "--input-path",
-    help="Specify the file or directory where the input is located.",
+    help="Path to the input file or directory.",
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )
 @click.option(
     "--input-format",
     type=str,
-    help='This command supports kif or csa. Input "kif" or "csa".',
+    help='Specify the input format. Supported formats: "kif" or "csa".',
     required=True,
 )
 @click.option(
     "--output-dir",
-    help="Specify the directory where the output files is saved.",
+    help="Directory to save the output files.",
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )
 @click.option(
     "--min-rating",
-    help="Specify the minimum rating of the game to include in the conversion.",
+    help="Minimum rating of games to include.",
     type=int,
     required=False,
 )
 @click.option(
     "--min-moves",
-    help="Specify the minimum number of moves required to include the game.",
+    help="Minimum number of moves required for a game to be included.",
     type=int,
     required=False,
 )
 @click.option(
     "--max-moves",
-    help="Specify the maximum number of moves allowed to include the game.",
+    help="Maximum number of moves allowed for a game to be included.",
     type=int,
     required=False,
 )
 @click.option(
     "--allowed-endgame-status",
     help=(
-        "Specify allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI')."
-        " Multiple values can be provided."
+        "Allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI')."
+        " Can be specified multiple times."
     ),
     type=str,
     required=False,
@@ -70,9 +70,8 @@ def main(debug_mode: bool) -> None:
 @click.option(
     "--exclude-moves",
     help=(
-        "Specify moves to exclude from the game."
-        " Provide move nuymbers as integers."
-        " Multiple values can be provided."
+        "Moves to exclude from the game (integer move numbers)."
+        " Can be specified multiple times."
     ),
     type=int,
     required=False,
@@ -82,24 +81,24 @@ def main(debug_mode: bool) -> None:
     "--bigquery",
     type=bool,
     is_flag=True,
-    help="Use BigQuery as feature store",
+    help="Store features in BigQuery.",
     required=False,
 )
 @click.option(
     "--dataset-id",
-    help="Specify the BigQuery dataset ID to use as the feature store.",
+    help="BigQuery dataset ID for storing features.",
     type=str,
     required=False,
 )
 @click.option(
     "--table-name",
-    help="Specify the BigQuery table name to use as the feature store.",
+    help="BigQuery table name for storing features.",
     type=str,
     required=False,
 )
 @click.option(
     "--max-buffer-bytes",
-    help="max buffer bytes",
+    help="Maximum buffer size in bytes (default: 50MB).",
     type=int,
     required=False,
     default=50 * 1024 * 1024,
@@ -151,6 +150,78 @@ def hcpe_convert(
 
 @click.command()
 @click.option(
+    "--input-path",
+    help="Path to the input file or directory.",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+@click.option(
+    "--output-dir",
+    help="Directory to save the output files.",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+@click.option(
+    "--bigquery",
+    type=bool,
+    is_flag=True,
+    help="Use BigQuery as feature store",
+    required=False,
+)
+@click.option(
+    "--dataset-id",
+    help="BigQuery dataset ID for storing features.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--table-name",
+    help="BigQuery table name for storing features.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--max-buffer-bytes",
+    help="Maximum buffer size in bytes (default: 50MB).",
+    type=int,
+    required=False,
+    default=50 * 1024 * 1024,
+)
+def pre_process(
+    input_path: Path,
+    output_dir: Path,
+    bigquery: Optional[bool],
+    dataset_id: Optional[str],
+    table_name: Optional[str],
+    max_buffer_bytes: int,
+) -> None:
+    try:
+        feature_store = (
+            BigQuery(
+                dataset_id=dataset_id,
+                table_name=table_name,
+                max_buffer_size=max_buffer_bytes,
+            )
+            if bigquery
+            and dataset_id is not None
+            and table_name is not None
+            and max_buffer_bytes is not None
+            else None
+        )
+        click.echo(
+            preprocess.transform(
+                file_system=FileSystem(),
+                input_path=input_path,
+                output_dir=output_dir,
+                feature_store=feature_store,
+            )
+        )
+    except Exception:
+        app_logger.exception("Error Occured", stack_info=True)
+
+
+@click.command()
+@click.option(
     "--input-dir",
     help="Specify the directory where the input data is located.",
     type=click.Path(exists=True, path_type=Path),
@@ -159,109 +230,109 @@ def hcpe_convert(
 @click.option(
     "--gpu",
     type=str,
-    help="Configure pytorch device",
+    help='Specify the PyTorch device (e.g., "cuda:0" or "cpu").',
     required=False,
 )
 @click.option(
     "--compilation",
     type=bool,
-    help="Configure pytorch device",
+    help="Enable PyTorch compilation (True/False).",
     required=False,
 )
 @click.option(
     "--test-ratio",
     type=float,
-    help="test_size in train_test_split",
+    help="Ratio of test data in train-test split.",
     required=False,
 )
 @click.option(
     "--epoch",
     type=int,
-    help="number of epochs",
+    help="Number of training epochs.",
     required=False,
 )
 @click.option(
     "--batch-size",
     type=int,
-    help="batch size",
+    help="Batch size for training.",
     required=False,
 )
 @click.option(
     "--dataloader-workers",
     type=int,
-    help="number of workers for DataLoader",
+    help="Number of workers for DataLoader.",
     required=False,
 )
 @click.option(
     "--gce-parameter",
     type=float,
-    help="Hyper parameter for GCE loss",
+    help="Hyperparameter for GCE loss.",
     required=False,
 )
 @click.option(
     "--policy-loss-ratio",
     type=float,
-    help="Coefficient value for loss of policy",
+    help="Loss coefficient for policy loss.",
     required=False,
 )
 @click.option(
     "--value-loss-ratio",
     type=float,
-    help="Coefficient value for loss of value",
+    help="Loss coefficient for value loss.",
     required=False,
 )
 @click.option(
     "--learning-ratio",
     type=float,
-    help="learning ratio for optimizer",
+    help="Learning rate for optimizer.",
     required=False,
 )
 @click.option(
     "--momentum",
     type=float,
-    help="momentum value for optimizer",
+    help="Momentum parameter for optimizer.",
     required=False,
 )
 @click.option(
     "--checkpoint-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Specify the directory where the checkpoint files is saved.",
+    help="Directory to save model checkpoints.",
     required=False,
 )
 @click.option(
     "--resume-from",
     type=click.Path(exists=True, path_type=Path),
-    help="Specify the checkpoint file. Learning will start at checkpoint's epoch",
+    help="Path to a checkpoint file to resume training.",
     required=False,
 )
 @click.option(
     "--log-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Specify the directory where the log files for SummeryaWriter is saved.",
+    help="Directory to save log files for SummaryWriter.",
     required=False,
 )
 @click.option(
     "--model-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Specify the directory where the models is saved.",
+    help="Directory to save trained models.",
     required=False,
 )
 @click.option(
     "--gcs",
     type=bool,
     is_flag=True,
-    help="Use GCS object storage to save files",
+    help="Save files to Google Cloud Storage (GCS).",
     required=False,
 )
 @click.option(
     "--bucket-name",
-    help="GCS bucket name",
+    help="Google Cloud Storage bucket name.",
     type=str,
     required=False,
 )
 @click.option(
     "--gcs-base-path",
-    help="base path for GCS bucket",
+    help="Base path within the GCS bucket.",
     type=str,
     required=False,
 )
@@ -319,4 +390,5 @@ def learn_model(
 
 
 main.add_command(hcpe_convert)
+main.add_command(pre_process)
 main.add_command(learn_model)
