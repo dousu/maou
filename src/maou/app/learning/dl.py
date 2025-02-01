@@ -331,10 +331,9 @@ class Learning:
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
 
-    def __train_test_split(self, data, test_size=0.25, seed=None):
+    def __train_test_split(self, data: list, test_size=0.25, seed=None) -> tuple:
         if seed is not None:
             random.seed(seed)
-        data = list(data)  # 万が一イテラブルの場合に備えてリスト化
         random.shuffle(data)
         split_idx = int(len(data) * (1 - test_size))
         return data[:split_idx], data[split_idx:]
