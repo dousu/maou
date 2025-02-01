@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import torch
 from torch import optim
@@ -331,7 +331,12 @@ class Learning:
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
 
-    def __train_test_split(self, data: list, test_size=0.25, seed=None) -> tuple:
+    def __train_test_split(
+        self,
+        data: list,
+        test_size: float = 0.25,
+        seed: Optional[Union[int, float, str, bytes, bytearray]] = None,
+    ) -> tuple:
         if seed is not None:
             random.seed(seed)
         random.shuffle(data)
