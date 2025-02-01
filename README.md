@@ -11,9 +11,9 @@
 # bash scripts/devcontainer.sh
 bash scripts/dev-init.sh
 # ここで確認できるpythonのパスをVScodeのインタプリタとして設定する
-poetry env info
+poetry env info --path
 # pre-commit系の設定
-bash scripts/pre-commit.sh
+poetry run bash scripts/pre-commit.sh
 ```
 
 ここでシェルスクリプトを実行するような構成になっているのは，

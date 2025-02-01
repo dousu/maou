@@ -11,4 +11,4 @@ source ~/.bashrc
 
 poetry env activate
 
-poetry cache clear --all .
+poetry cache clear --all -q .

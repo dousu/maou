@@ -11,10 +11,17 @@ class TestHCPEConverter:
     def default_fixture(self) -> None:
         self.test_class = hcpe_converter.HCPEConverter()
 
+    @pytest.fixture(autouse=True)
+    def clean_up_after_test(self):
+        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        yield
+        self.clean_up_dir(output_dir)
+
     def clean_up_dir(self, dir: Path) -> None:
         if dir.exists() and dir.is_dir():
             for f in dir.glob("**/*"):
-                f.unlink()
+                if f.name != ".gitkeep":
+                    f.unlink()
 
     def test_successfull_conversion(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -36,7 +43,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -62,7 +69,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         with pytest.raises(FileNotFoundError):
             self.test_class.convert(option)
 
@@ -84,7 +91,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         with pytest.raises(hcpe_converter.NotApplicableFormat):
             self.test_class.convert(option)
 
@@ -108,7 +115,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         with pytest.raises(FileNotFoundError):
             self.test_class.convert(option)
 
@@ -131,7 +138,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -157,7 +164,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -183,7 +190,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -210,7 +217,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=["%TORYO"],
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -238,7 +245,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=["%TORYO"],
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
@@ -268,7 +275,7 @@ class TestHCPEConverter:
                 allowed_endgame_status=None,
             )
         )
-        self.clean_up_dir(output_dir)
+
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()

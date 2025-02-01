@@ -1,12 +1,12 @@
 import abc
 import logging
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
 import torch
-from sklearn.model_selection import train_test_split
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
@@ -80,7 +80,7 @@ class Learning:
 
         input_train: list[Path]
         input_test: list[Path]
-        input_train, input_test = train_test_split(
+        input_train, input_test = self.__train_test_split(
             option.input_paths, test_size=option.test_ratio
         )
 
@@ -330,3 +330,11 @@ class Learning:
         pred = y >= 0
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
+
+    def __train_test_split(self, data, test_size=0.25, seed=None):
+        if seed is not None:
+            random.seed(seed)
+        data = list(data)  # 万が一イテラブルの場合に備えてリスト化
+        random.shuffle(data)
+        split_idx = int(len(data) * (1 - test_size))
+        return data[:split_idx], data[split_idx:]

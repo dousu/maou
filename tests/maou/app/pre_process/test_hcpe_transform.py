@@ -11,10 +11,17 @@ class TestHCPEConverter:
     def default_fixture(self) -> None:
         self.test_class = hcpe_transform.PreProcess()
 
+    @pytest.fixture(autouse=True)
+    def clean_up_after_test(self):
+        output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
+        yield
+        self.clean_up_dir(output_dir)
+
     def clean_up_dir(self, dir: Path) -> None:
         if dir.exists() and dir.is_dir():
             for f in dir.glob("**/*"):
-                f.unlink()
+                if f.name != ".gitkeep":
+                    f.unlink()
 
     def test_successfull_transformation(
         self, default_fixture: typing.Annotated[None, pytest.fixture]

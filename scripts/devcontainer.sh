@@ -2,13 +2,6 @@
 
 set -eux
 
-sudo apt update
-
-# scikit-learnのインストールに必要
-sudo apt install gfortran libopenblas-dev
-
-apt-get clean && rm -rf /var/lib/apt/lists/*
-
 # gcloud CLIのインストール
 # https://cloud.google.com/sdk/docs/install?hl=ja#linux
 cd ~
