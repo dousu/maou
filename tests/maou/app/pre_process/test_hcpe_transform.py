@@ -28,15 +28,9 @@ class TestHCPEConverter:
         self, default_fixture: typing.Annotated[None, pytest.fixture]
     ) -> None:
         input_paths = [
-            Path(
-                "tests/maou/app/pre_process/resources/test_dir/input/test_data_1.hcpe"
-            ),
-            Path(
-                "tests/maou/app/pre_process/resources/test_dir/input/test_data_2.hcpe"
-            ),
-            Path(
-                "tests/maou/app/pre_process/resources/test_dir/input/test_data_3.hcpe"
-            ),
+            Path("tests/maou/app/pre_process/resources/test_dir/input/test_data_1.npy"),
+            Path("tests/maou/app/pre_process/resources/test_dir/input/test_data_2.npy"),
+            Path("tests/maou/app/pre_process/resources/test_dir/input/test_data_3.npy"),
         ]
         output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
         option: hcpe_transform.PreProcess.PreProcessOption = (
@@ -50,14 +44,14 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         for p in input_paths:
-            output_file = output_dir / p.with_suffix(".pickle").name
+            output_file = output_dir / p.with_suffix(".pre.npy").name
             assert output_file.exists()
 
     def test_failed_transformation_no_input(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/pre_process/resources/test_dir/input/not_exists.hcpe"),
+            Path("tests/maou/app/pre_process/resources/test_dir/input/not_exists.npy"),
         ]
         output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
         option: hcpe_transform.PreProcess.PreProcessOption = (

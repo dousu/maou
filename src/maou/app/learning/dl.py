@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 from tqdm.auto import tqdm
 
-from maou.app.learning.dataset import KifDataset
+from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
@@ -42,7 +42,11 @@ class Learning:
     model: torch.nn.Module
 
     def __init__(
-        self, *, gpu: Optional[str] = None, cloud_storage: Optional[CloudStorage] = None
+        self,
+        *,
+        gpu: Optional[str] = None,
+        cloud_storage: Optional[CloudStorage] = None,
+        datasource: Optional[DataSource] = None,
     ):
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
@@ -54,6 +58,7 @@ class Learning:
             self.device = torch.device("cpu")
             self.pin_memory = False
         self.__cloud_storage = cloud_storage
+        self.__datasource = datasource
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
@@ -86,17 +91,20 @@ class Learning:
 
         # datasetに特徴量と正解ラベルを作成する変換を登録する
         feature = Transform()
+        # TODO: trainとtestでdatasourceを入れ分ける
         dataset_train: Dataset = KifDataset(
             paths=input_train,
             transform=feature,
             pin_memory=self.pin_memory,
             device=self.device,
+            datasource=self.__datasource,
         )
         dataset_test: Dataset = KifDataset(
             paths=input_test,
             transform=feature,
             pin_memory=self.pin_memory,
             device=self.device,
+            datasource=self.__datasource,
         )
 
         # dataloader

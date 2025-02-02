@@ -165,15 +165,17 @@ class HCPEConverter:
                         arrow_features["moves"].append(len(parser.moves()))
 
                     board.push(move)
-                hcpes[: idx + 1].tofile(
-                    option.output_dir / file.with_suffix(".hcpe").name
+                # np.saveで保存することでメタデータをつけておく
+                # HCPEの形式から逸脱するのでCPUパフォーマンスは悪くなる
+                np.save(
+                    option.output_dir / file.with_suffix(".npy").name, hcpes[: idx + 1]
                 )
                 if self.__feature_store is not None:
                     self.__feature_store.store_features(
                         key_columns=["id"],
                         arrow_table=pa.table(arrow_features),
                     )
-                conversion_result[str(file)] = "success"
+                conversion_result[str(file)] = f"success {idx + 1} rows"
             except Exception as e:
                 raise e
 

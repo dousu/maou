@@ -49,7 +49,7 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         for p in input_paths:
-            output_file = output_dir / p.with_suffix(".hcpe").name
+            output_file = output_dir / p.with_suffix(".npy").name
             assert output_file.exists()
 
     def test_failed_conversion_no_input(
@@ -143,8 +143,8 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
-        assert not (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
+        assert (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
+        assert not (output_dir / Path("test_data_2").with_suffix(".npy").name).exists()
 
     def test_conversion_filter_min_moves(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -169,8 +169,8 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
-        assert not (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
+        assert (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
+        assert not (output_dir / Path("test_data_2").with_suffix(".npy").name).exists()
 
     def test_conversion_filter_max_moves(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -195,8 +195,8 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert not (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
-        assert (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
+        assert not (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
+        assert (output_dir / Path("test_data_2").with_suffix(".npy").name).exists()
 
     def test_conversion_filter_allowed_endgame_status(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -222,9 +222,9 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
-        assert (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
-        assert not (output_dir / Path("test_data_3").with_suffix(".hcpe").name).exists()
+        assert (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
+        assert (output_dir / Path("test_data_2").with_suffix(".npy").name).exists()
+        assert not (output_dir / Path("test_data_3").with_suffix(".npy").name).exists()
 
     def test_conversion_composite_filter_(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -250,9 +250,9 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert not (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
-        assert not (output_dir / Path("test_data_2").with_suffix(".hcpe").name).exists()
-        assert not (output_dir / Path("test_data_3").with_suffix(".hcpe").name).exists()
+        assert not (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
+        assert not (output_dir / Path("test_data_2").with_suffix(".npy").name).exists()
+        assert not (output_dir / Path("test_data_3").with_suffix(".npy").name).exists()
 
     def test_conversion_no_moves(
         self, default_fixture: typing.Annotated[None, pytest.fixture]
@@ -280,7 +280,7 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe").name).exists()
+        assert (output_dir / Path("test_data_1").with_suffix(".npy").name).exists()
         assert not (
-            output_dir / Path("test_data_no_moves").with_suffix(".hcpe").name
+            output_dir / Path("test_data_no_moves").with_suffix(".npy").name
         ).exists()

@@ -6,7 +6,7 @@ import google_crc32c
 import pytest
 from google.cloud import storage
 
-from maou.infra.gcs import GCS
+from maou.infra.gcs.gcs import GCS
 
 logger: logging.Logger = logging.getLogger("TEST")
 
@@ -60,7 +60,7 @@ class TestGCS:
         self.bucket = client.bucket(self.bucket_name)
 
     def test_save_object(self, default_fixture: None) -> None:
-        file_path = Path("tests/maou/infra/resources/test.txt")
+        file_path = Path("tests/maou/infra/gcs/resources/test.txt")
         cloud_path = file_path.name
         self.test_class.upload_from_local(local_path=file_path, cloud_path=cloud_path)
         blob = self.bucket.blob(cloud_path)

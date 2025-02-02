@@ -1,6 +1,8 @@
+import abc
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -8,6 +10,16 @@ from cshogi import HuffmanCodedPosAndEval  # type: ignore
 from torch.utils.data import Dataset
 
 from maou.app.pre_process.transform import Transform
+
+
+class DataSource(Sequence, metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        pass
+
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        pass
 
 
 class KifDataset(Dataset):
@@ -20,7 +32,9 @@ class KifDataset(Dataset):
         transform: Optional[Transform] = None,
         pin_memory: bool,
         device: torch.device,
+        datasource: Optional[DataSource] = None,
     ):
+        self.__datasource = datasource
         self.transform: Optional[Transform] = transform
         self.device = device
         self.pin_memory = pin_memory

@@ -5,9 +5,9 @@ from typing import Optional
 import click
 
 from maou.infra.app_logging import app_logger
-from maou.infra.bigquery import BigQuery
-from maou.infra.file_system import FileSystem
-from maou.infra.gcs import GCS
+from maou.infra.bigquery.bigquery import BigQuery
+from maou.infra.file_system.file_system import FileSystem
+from maou.infra.gcs.gcs import GCS
 from maou.interface import converter, learn, preprocess
 
 

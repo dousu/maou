@@ -10,7 +10,7 @@ import pyarrow.compute as pc
 import pytest
 from google.cloud import bigquery
 
-from maou.infra.bigquery import BigQuery
+from maou.infra.bigquery.bigquery import BigQuery
 
 logger: logging.Logger = logging.getLogger("TEST")
 
