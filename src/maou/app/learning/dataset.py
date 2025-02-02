@@ -14,7 +14,7 @@ from maou.app.pre_process.transform import Transform
 
 class DataSource(Sequence, metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> Any:
         pass
 
     @abc.abstractmethod
