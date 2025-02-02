@@ -1,6 +1,5 @@
 import abc
 import logging
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,9 +11,9 @@ from torch.utils.data import Dataset
 from maou.app.pre_process.transform import Transform
 
 
-class DataSource(Sequence, metaclass=abc.ABCMeta):
+class DataSource(metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def __getitem__(self, idx: int) -> Any:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         pass
 
     @abc.abstractmethod
