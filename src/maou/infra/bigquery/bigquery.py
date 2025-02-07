@@ -54,6 +54,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             )
             dataset = bigquery.Dataset(dataset_ref=dataset_fqn)
             dataset.location = location
+            dataset.storage_billing_model = "PHYSICAL"
 
             self.client.create_dataset(dataset=dataset)
             self.logger.debug(f"Dataset '{dataset_fqn}' has been created.")
