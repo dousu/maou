@@ -1,6 +1,7 @@
+import contextlib
 import logging
 from io import BytesIO
-from typing import Iterator, Optional
+from typing import Generator, Iterator, Optional
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -165,6 +166,14 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             raise e
         return rows.to_arrow_iterable()
 
+    # context managerを使って特徴量ストア用の動作のflushを管理する
+    @contextlib.contextmanager
+    def feature_store(self) -> Generator[None]:
+        try:
+            yield
+        finally:
+            self.__cleanup()
+
     def store_features(self, *, key_columns: list[str], arrow_table: pa.Table) -> None:
         """BigQueryにデータを保存する.
         すでに同じIDが存在する場合は更新する (MERGEクエリで実装)
@@ -296,7 +305,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         except Exception as e:
             raise e
 
-    def __del__(self) -> None:
+    def __cleanup(self) -> None:
         """store_features用のデストラクタ処理"""
         # bufferが空のときはスキップする
         if self.last_key_columns is not None and self.__buffer_size != 0:
