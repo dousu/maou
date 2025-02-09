@@ -88,7 +88,11 @@ class BigQueryDataSource(learn.DataSource):
         キャッシュ全体のサイズが max_cached_bytes を超えている場合，
         古いページから順次削除する．
         """
-        while self.total_cached_bytes > self.max_cached_bytes and self.__page_cache:
+        while (
+            self.total_cached_bytes > self.max_cached_bytes
+            # どうせメモリに格納できるのだからキャッシュは最低1つ残しておく
+            and len(self.__page_cache) > 1
+        ):
             key, evicted_table = self.__page_cache.popitem(last=False)
             self.total_cached_bytes -= evicted_table.nbytes
             self.logger.debug(
@@ -141,6 +145,10 @@ class BigQueryDataSource(learn.DataSource):
         # キャッシュに追加
         self.__page_cache[page_num] = arrow_table
         self.total_cached_bytes += arrow_table.nbytes
+        self.logger.debug(
+            f"Cache for page {page_num} (nbytes: {arrow_table.nbytes}). "
+            f"New total cache size: {self.total_cached_bytes} bytes."
+        )
         self.__evict_cache_if_needed()
         return arrow_table
 
