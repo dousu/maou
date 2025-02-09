@@ -314,5 +314,6 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         self.__drop_table(table=self.temp_table)
         self.logger.debug(
             "Features successfully stored in BigQuery."
-            f" table_id: {self.temp_table.full_table_id}"
+            " table_id:"
+            f" {self.client.project}.{self.dataset_id}.{self.target_table_name}"
         )
