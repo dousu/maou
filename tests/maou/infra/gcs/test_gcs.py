@@ -52,7 +52,7 @@ class TestGCS:
 
     @pytest.fixture
     def default_fixture(self) -> None:
-        path = Path("src/maou/infra/gcs.py")
+        path = Path("src/maou/infra/gcs/gcs.py")
         self.bucket_name = "maou-test-" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test Bucket: {self.bucket_name}")
         self.test_class = GCS(bucket_name=self.bucket_name, base_path="gcs")

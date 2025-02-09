@@ -44,7 +44,7 @@ class TestBigQuery:
 
     @pytest.fixture
     def default_fixture(self) -> None:
-        path = Path("src/maou/infra/bigquery.py")
+        path = Path("src/maou/infra/bigquery/bigquery.py")
         self.dataset_id = "maou_test"
         self.table_name = "test_" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
