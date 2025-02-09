@@ -118,7 +118,8 @@ class BigQueryDataSource(learn.DataSource):
                 cluster_info = self.__cluster_info[page_num]
             except IndexError:
                 raise IndexError(
-                    f"Page number {page_num} is out of range (clusters count: {len(self.__cluster_info)})."
+                    f"Page number {page_num} is out of range "
+                    f"(clusters count: {len(self.__cluster_info)})."
                 )
             cluster_value = cluster_info["cluster"]
             # クラスタ値でフィルタしたクエリを実行
@@ -127,7 +128,11 @@ class BigQueryDataSource(learn.DataSource):
                 cluster_filter = f"{self.clustering_key} = '{cluster_value}'"
             else:
                 cluster_filter = f"{self.clustering_key} = {cluster_value}"
-            query = f"SELECT * FROM `{self.dataset_fqn}.{self.table_name}` WHERE {cluster_filter}"
+            query = f"""
+                SELECT *
+                FROM `{self.dataset_fqn}.{self.table_name}`
+                WHERE {cluster_filter}
+            """
             arrow_table = self.client.query(query).result().to_arrow().combine_chunks()
         else:
             # クラスタリングキー未指定の場合
