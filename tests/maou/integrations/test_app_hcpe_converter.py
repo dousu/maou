@@ -57,9 +57,6 @@ class TestIntegrationHcpeConverter:
         self.bq._BigQuery__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name
         )
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
-        for file in output_dir.glob("*.npy"):
-            file.unlink()
 
     @pytest.fixture(autouse=True)
     def clean_up_after_test(self) -> Generator[None, Any, Any]:
