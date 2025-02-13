@@ -1,6 +1,5 @@
 import logging
 import os
-import pickle
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -145,7 +144,7 @@ class TestIntegrationHcpeConverter:
         )
         bq_data = [
             {
-                key: data if key != "hcp" else pickle.loads(data)
+                key: data
                 for key, data in bq_datasource[i].items()
                 if key in schema.keys()
             }

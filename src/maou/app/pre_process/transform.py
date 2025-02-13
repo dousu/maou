@@ -13,6 +13,8 @@ class Transform:
     def __call__(
         self, *, hcp: np.ndarray, move16: int, game_result: int, eval: int
     ) -> tuple[np.ndarray, int, float]:
+        self.logger.debug(f"hcp shape: {hcp.shape}")
+        self.logger.debug(f"hcp dtype: {hcp.dtype}")
         board = cshogi.Board()  # type: ignore
         board.set_hcp(hcp)
 

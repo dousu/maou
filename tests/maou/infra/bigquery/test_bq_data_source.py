@@ -136,7 +136,10 @@ class TestBigQueryDataSource:
         for i in range(len(data)):
             data_source[i]
         # キャッシュサイズが max_cached_bytes より小さいことを確認
-        assert data_source.total_cached_bytes <= data_source.max_cached_bytes
+        assert (
+            data_source._BigQueryDataSource__page_manager.total_cached_bytes
+            <= data_source._BigQueryDataSource__page_manager.max_cached_bytes
+        )
 
     def test_batch_size_larger_than_record_count(self, default_fixture: None) -> None:
         # BigQueryにテストデータを投入
@@ -156,7 +159,7 @@ class TestBigQueryDataSource:
         # データを読み込む
         data_source[0]
         # キャッシュサイズが 0 より大きいことを確認
-        assert data_source.total_cached_bytes > 0
+        assert data_source._BigQueryDataSource__page_manager.total_cached_bytes > 0
 
     def test_read_from_cache(self, default_fixture: None) -> None:
         # キャッシュされている場合にbqにアクセスせずデータを返すことができる
@@ -177,10 +180,13 @@ class TestBigQueryDataSource:
         # データを読み込む
         data_source[0]
         # キャッシュサイズが 0 より大きいことを確認
-        assert data_source.total_cached_bytes > 0
+        assert data_source._BigQueryDataSource__page_manager.total_cached_bytes > 0
         # キャッシュされていることを確認するために、total_cached_bytesを保存
-        cached_bytes = data_source.total_cached_bytes
+        cached_bytes = data_source._BigQueryDataSource__page_manager.total_cached_bytes
         # もう一度データを読み込む
         data_source[0]
         # キャッシュサイズが変わらないことを確認
-        assert data_source.total_cached_bytes == cached_bytes
+        assert (
+            data_source._BigQueryDataSource__page_manager.total_cached_bytes
+            == cached_bytes
+        )

@@ -6,13 +6,15 @@ import click
 
 from maou.infra.app_logging import app_logger
 from maou.infra.bigquery.bigquery import BigQuery
+from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.file_system.file_data_source import FileDataSource
 from maou.infra.file_system.file_system import FileSystem
 from maou.infra.gcs.gcs import GCS
 from maou.interface import converter, learn, preprocess
 
 
 @click.group()
-@click.option("--debug_mode", "-d", is_flag=True, help="Enable debug logging.")
+@click.option("--debug-mode", "-d", is_flag=True, help="Enable debug logging.")
 def main(debug_mode: bool) -> None:
     if debug_mode is True:
         app_logger.setLevel(logging.DEBUG)
@@ -101,7 +103,7 @@ def main(debug_mode: bool) -> None:
     help="Maximum buffer size in bytes (default: 50MB).",
     type=int,
     required=False,
-    default=50 * 1024 * 1024,
+    default=100 * 1024 * 1024,
 )
 def hcpe_convert(
     input_path: Path,
@@ -182,10 +184,10 @@ def hcpe_convert(
 )
 @click.option(
     "--max-buffer-bytes",
-    help="Maximum buffer size in bytes (default: 50MB).",
+    help="Maximum buffer size in bytes (default: 100MB).",
     type=int,
     required=False,
-    default=50 * 1024 * 1024,
+    default=100 * 1024 * 1024,
 )
 def pre_process(
     input_path: Path,
@@ -225,7 +227,46 @@ def pre_process(
     "--input-dir",
     help="Specify the directory where the input data is located.",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
+    required=False,
+)
+@click.option(
+    "--input-dataset-id",
+    help="Specify the BigQuery dataset id where the input data is located.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-table-name",
+    help="Specify the BigQuery table name where the input data is located.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-format",
+    help='Specify the input format. Supported formats: "hcpe" or "preprocess".',
+    type=str,
+    default="hcpe",
+    required=False,
+)
+@click.option(
+    "--input-batch-size",
+    help="Specify batch size to read BigQuery table.",
+    type=int,
+    default=10000,
+    required=False,
+)
+@click.option(
+    "--input-max-cached-bytes",
+    help="Maximum buffer size in bytes (default: 100MB).",
+    type=int,
+    default=100 * 1024 * 1024,
+    required=False,
+)
+@click.option(
+    "--input-clustering-key",
+    help="Specify clustering key in the BigQuery table.",
+    type=str,
+    required=False,
 )
 @click.option(
     "--gpu",
@@ -337,7 +378,13 @@ def pre_process(
     required=False,
 )
 def learn_model(
-    input_dir: Path,
+    input_dir: Optional[Path],
+    input_dataset_id: Optional[str],
+    input_table_name: Optional[str],
+    input_format: str,
+    input_batch_size: int,
+    input_max_cached_bytes: int,
+    input_clustering_key: Optional[str],
     gpu: Optional[str],
     compilation: Optional[bool],
     test_ratio: Optional[float],
@@ -363,10 +410,48 @@ def learn_model(
             if gcs and bucket_name is not None and gcs_base_path is not None
             else None
         )
+        if input_dir is not None:
+            if input_format == "hcpe":
+                schema = {
+                    "hcp": "hcp",
+                    "bestMove16": "bestMove16",
+                    "gameResult": "gameResult",
+                    "eval": "eval",
+                }
+            elif input_format == "preprocess":
+                schema = {
+                    "id": "id",
+                    "eval": "eval",
+                    "features": "features",
+                    "moveLabel": "moveLabel",
+                    "resultValue": "resultValue",
+                }
+            else:
+                raise Exception(
+                    '有効なinput_formatを指定してください ("hcpe" or "preprocess")'
+                    f" input_format: {input_format}"
+                )
+            datasource = FileDataSource.FileDataSourceSpliter(
+                file_paths=FileSystem.collect_files(input_dir),
+                schema=schema,
+            )
+        elif input_dataset_id is not None and input_table_name is not None:
+            datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                dataset_id=input_dataset_id,
+                table_name=input_table_name,
+                batch_size=input_batch_size,
+                max_cached_bytes=input_max_cached_bytes,
+                clustering_key=input_clustering_key,
+            )
+        else:
+            raise Exception(
+                "入力ファイルが入るディレクトリまたはBigQueryテーブルを指定してください"
+                f" ファイル: {input_dir}, BigQuery: {input_dataset_id}.{input_table_name}"
+            )
         click.echo(
             learn.learn(
-                FileSystem(),
-                input_dir=input_dir,
+                datasource=datasource,
+                datasource_type=input_format,
                 gpu=gpu,
                 compilation=compilation,
                 test_ratio=test_ratio,

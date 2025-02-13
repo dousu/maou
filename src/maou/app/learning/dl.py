@@ -1,10 +1,9 @@
 import abc
 import logging
-import random
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
 import torch
 from torch import optim
@@ -27,6 +26,14 @@ class CloudStorage(metaclass=abc.ABCMeta):
         pass
 
 
+class LearningDataSource(DataSource):
+    class DataSourceSpliter(metaclass=abc.ABCMeta):
+        @abc.abstractmethod
+        def train_test_split(self, test_ratio: float) -> tuple[DataSource, DataSource]:
+            pass
+
+
+# TODO: データ規模が極端に小さいときにLOSS trainとACCURACY policyが0になっているのが気になるので調査しておく
 class Learning:
     """Learning.
     機械学習のトレーニングを行うユースケースを表現する．
@@ -46,7 +53,6 @@ class Learning:
         *,
         gpu: Optional[str] = None,
         cloud_storage: Optional[CloudStorage] = None,
-        datasource: Optional[DataSource] = None,
     ):
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
@@ -58,11 +64,11 @@ class Learning:
             self.device = torch.device("cpu")
             self.pin_memory = False
         self.__cloud_storage = cloud_storage
-        self.__datasource = datasource
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
-        input_paths: list[Path]
+        datasource: LearningDataSource.DataSourceSpliter
+        datasource_type: str
         compilation: bool
         test_ratio: float
         epoch: int
@@ -83,29 +89,39 @@ class Learning:
         self.logger.info("start learning")
         learning_result: Dict[str, str] = {}
 
-        input_train: list[Path]
-        input_test: list[Path]
-        input_train, input_test = self.__train_test_split(
-            option.input_paths, test_size=option.test_ratio
+        # 入力とテスト用のデータソース取得
+        input_datasource, test_datasource = option.datasource.train_test_split(
+            test_ratio=option.test_ratio
         )
 
-        # datasetに特徴量と正解ラベルを作成する変換を登録する
-        feature = Transform()
-        # TODO: trainとtestでdatasourceを入れ分ける
-        dataset_train: Dataset = KifDataset(
-            paths=input_train,
-            transform=feature,
-            pin_memory=self.pin_memory,
-            device=self.device,
-            datasource=self.__datasource,
-        )
-        dataset_test: Dataset = KifDataset(
-            paths=input_test,
-            transform=feature,
-            pin_memory=self.pin_memory,
-            device=self.device,
-            datasource=self.__datasource,
-        )
+        if option.datasource_type == "hcpe":
+            # datasetに特徴量と正解ラベルを作成する変換を登録する
+            feature = Transform()
+            dataset_train: Dataset = KifDataset(
+                datasource=input_datasource,
+                transform=feature,
+                pin_memory=self.pin_memory,
+                device=self.device,
+            )
+            dataset_test: Dataset = KifDataset(
+                datasource=test_datasource,
+                transform=feature,
+                pin_memory=self.pin_memory,
+                device=self.device,
+            )
+        elif option.datasource_type == "preprocess":
+            dataset_train: Dataset = KifDataset(
+                datasource=input_datasource,
+                pin_memory=self.pin_memory,
+                device=self.device,
+            )
+            dataset_test: Dataset = KifDataset(
+                datasource=test_datasource,
+                pin_memory=self.pin_memory,
+                device=self.device,
+            )
+        else:
+            raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
 
         # dataloader
         # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
@@ -177,7 +193,7 @@ class Learning:
         self.__train()
 
         learning_result["Data Samples"] = (
-            f"Training: {len(dataset_train)}, Test: {len(dataset_test)}"  # type: ignore
+            f"Training: {len(dataset_train)}, Test: {len(dataset_test)}"
         )
         learning_result["Option"] = str(option)
         learning_result["Result"] = "Finish"
@@ -212,7 +228,7 @@ class Learning:
 
             # Gather data and report
             running_loss += loss.item()
-            if i % 1000 == 999:
+            if i == 0 or i % 1000 == 999:
                 last_loss = running_loss / 1000  # loss per batch
                 self.logger.info("  batch {} loss: {}".format(i + 1, last_loss))
                 tb_x = epoch_index * len(self.training_loader) + i + 1
@@ -338,15 +354,3 @@ class Learning:
         pred = y >= 0
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
-
-    def __train_test_split(
-        self,
-        data: list,
-        test_size: float = 0.25,
-        seed: Optional[Union[int, float, str, bytes, bytearray]] = None,
-    ) -> tuple:
-        if seed is not None:
-            random.seed(seed)
-        random.shuffle(data)
-        split_idx = int(len(data) * (1 - test_size))
-        return data[:split_idx], data[split_idx:]

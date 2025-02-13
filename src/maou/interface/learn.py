@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.learning.dl import CloudStorage, DataSource, Learning
+from maou.app.learning.dl import CloudStorage, Learning, LearningDataSource
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ def dir_init(d: Path) -> None:
 
 
 def learn(
-    file_system: FileSystem,
-    input_dir: Path,
+    datasource: LearningDataSource.DataSourceSpliter,
+    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     compilation: Optional[bool] = None,
@@ -49,8 +49,11 @@ def learn(
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
-    datasource: Optional[DataSource] = None,
 ) -> str:
+    # データソースのtype確認 (hcpeかpreprocessのみ)
+    if datasource_type not in ("hcpe", "preprocess"):
+        raise ValueError(f"Data source type `{datasource_type}` is invalid.")
+
     # モデルをコンパイルするかどうか (デフォルトTrue)
     if compilation is None:
         compilation = True
@@ -114,10 +117,11 @@ def learn(
     if model_dir is not None:
         dir_init(model_dir)
     logger.info(
-        f"Input: {input_dir}, Output: {model_dir}, Checkpoint: {checkpoint_dir}"
+        f"Input: {datasource}, Output: {model_dir}, Checkpoint: {checkpoint_dir}"
     )
     option = Learning.LearningOption(
-        input_paths=file_system.collect_files(input_dir),
+        datasource=datasource,
+        datasource_type=datasource_type,
         compilation=compilation,
         test_ratio=test_ratio,
         epoch=epoch,
@@ -134,8 +138,6 @@ def learn(
         model_dir=model_dir,
     )
 
-    learning_result = Learning(
-        gpu=gpu, cloud_storage=cloud_storage, datasource=datasource
-    ).learn(option)
+    learning_result = Learning(gpu=gpu, cloud_storage=cloud_storage).learn(option)
 
     return json.dumps(learning_result)
