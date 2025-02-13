@@ -158,7 +158,7 @@ class HCPEConverter:
                         hcpe["gameResult"] = parser.winner()
                         if self.__feature_store is not None:
                             arrow_features["id"].append(
-                                f"{file.with_suffix(".hcpe").name}_{idx}"
+                                f"{file.with_suffix('.hcpe').name}_{idx}"
                             )
                             arrow_features["hcp"].append(pickle.dumps(hcpe["hcp"]))
                             arrow_features["eval"].append(hcpe["eval"])
