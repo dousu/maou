@@ -168,7 +168,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
     # context managerを使って特徴量ストア用の動作のflushを管理する
     @contextlib.contextmanager
-    def feature_store(self) -> Generator[None]:
+    def feature_store(self) -> Generator[None, None, None]:
         try:
             yield
         finally:
