@@ -94,28 +94,30 @@ class Learning:
             test_ratio=option.test_ratio
         )
 
+        dataset_train: Dataset
+        dataset_test: Dataset
         if option.datasource_type == "hcpe":
             # datasetに特徴量と正解ラベルを作成する変換を登録する
             feature = Transform()
-            dataset_train: Dataset = KifDataset(
+            dataset_train = KifDataset(
                 datasource=input_datasource,
                 transform=feature,
                 pin_memory=self.pin_memory,
                 device=self.device,
             )
-            dataset_test: Dataset = KifDataset(
+            dataset_test = KifDataset(
                 datasource=test_datasource,
                 transform=feature,
                 pin_memory=self.pin_memory,
                 device=self.device,
             )
         elif option.datasource_type == "preprocess":
-            dataset_train: Dataset = KifDataset(
+            dataset_train = KifDataset(
                 datasource=input_datasource,
                 pin_memory=self.pin_memory,
                 device=self.device,
             )
-            dataset_test: Dataset = KifDataset(
+            dataset_test = KifDataset(
                 datasource=test_datasource,
                 pin_memory=self.pin_memory,
                 device=self.device,

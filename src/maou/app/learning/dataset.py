@@ -1,6 +1,5 @@
 import abc
 import logging
-from collections.abc import Sequence
 from typing import Any, Optional
 
 import torch
@@ -9,7 +8,7 @@ from torch.utils.data import Dataset
 from maou.app.pre_process.transform import Transform
 
 
-class DataSource(Sequence):
+class DataSource:
     @abc.abstractmethod
     def __getitem__(self, idx: int) -> dict[str, Any]:
         pass
