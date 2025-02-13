@@ -100,7 +100,7 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--max-buffer-bytes",
-    help="Maximum buffer size in bytes (default: 50MB).",
+    help="Maximum buffer size in bytes (default: 100MB).",
     type=int,
     required=False,
     default=100 * 1024 * 1024,
