@@ -189,7 +189,7 @@ class HCPEConverter:
         return conversion_result
 
     @contextlib.contextmanager
-    def __context(self) -> Generator[None]:
+    def __context(self) -> Generator[None, None, None]:
         try:
             if self.__feature_store is not None:
                 with self.__feature_store.feature_store():
