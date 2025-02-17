@@ -23,7 +23,13 @@ class FeatureStore(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def store_features(self, *, key_columns: list[str], arrow_table: pa.Table) -> None:
+    def store_features(
+        self,
+        *,
+        key_columns: list[str],
+        arrow_table: pa.Table,
+        clustering_key: Optional[str] = None,
+    ) -> None:
         pass
 
 
@@ -157,13 +163,17 @@ class HCPEConverter:
                         hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                         hcpe["gameResult"] = parser.winner()
                         if self.__feature_store is not None:
-                            arrow_features["id"].append(
-                                f"{file.with_suffix('.hcpe').name}_{idx}"
-                            )
                             arrow_features["hcp"].append(pickle.dumps(hcpe["hcp"]))
                             arrow_features["eval"].append(hcpe["eval"])
                             arrow_features["bestMove16"].append(hcpe["bestMove16"])
                             arrow_features["gameResult"].append(hcpe["gameResult"])
+                            # ローカルファイルには入らない情報
+                            arrow_features["id"].append(
+                                f"{file.with_suffix('.hcpe').name}_{idx}"
+                            )
+                            arrow_features["clusteringKey"].append(
+                                parser.clustering_key_value()
+                            )
                             arrow_features["ratings"].append(
                                 pickle.dumps(np.array(parser.ratings()))
                             )
@@ -181,6 +191,7 @@ class HCPEConverter:
                         self.__feature_store.store_features(
                             key_columns=["id"],
                             arrow_table=pa.table(arrow_features),
+                            clustering_key="clusteringKey",
                         )
                     conversion_result[str(file)] = f"success {idx + 1} rows"
                 except Exception as e:

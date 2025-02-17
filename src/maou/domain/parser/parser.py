@@ -1,4 +1,5 @@
 import abc
+from typing import Optional
 
 
 class Parser(metaclass=abc.ABCMeta):
@@ -32,4 +33,8 @@ class Parser(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def comments(self) -> list[str]:
+        pass
+
+    @abc.abstractmethod
+    def clustering_key_value(self) -> Optional[str]:
         pass

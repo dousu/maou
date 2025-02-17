@@ -21,7 +21,13 @@ class FeatureStore(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def store_features(self, *, key_columns: list[str], arrow_table: pa.Table) -> None:
+    def store_features(
+        self,
+        *,
+        key_columns: list[str],
+        arrow_table: pa.Table,
+        clustering_key: Optional[str] = None,
+    ) -> None:
         pass
 
 

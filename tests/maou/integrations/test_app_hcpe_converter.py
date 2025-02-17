@@ -131,9 +131,9 @@ class TestIntegrationHcpeConverter:
             local_data,
             key=lambda x: hash(
                 x["hcp"].tobytes()
+                + x["eval"].tobytes()
                 + x["bestMove16"].tobytes()
                 + x["gameResult"].tobytes()
-                + x["eval"].tobytes()
             ),
         )
         logger.debug(sorted_local_data)
@@ -156,9 +156,9 @@ class TestIntegrationHcpeConverter:
             bq_data,
             key=lambda x: hash(
                 x["hcp"].tobytes()
+                + np.int16(x["eval"]).tobytes()
                 + np.int16(x["bestMove16"]).tobytes()
                 + np.int8(x["gameResult"]).tobytes()
-                + np.int16(x["eval"]).tobytes()
             ),
         )
         logger.debug(sorted_bq_data)

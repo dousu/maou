@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Optional
+
 from cshogi import CSA
 
 from maou.domain.parser import parser
@@ -31,3 +34,12 @@ class CSAParser(parser.Parser):
 
     def comments(self) -> list[str]:
         return self.kif.comments
+
+    def clustering_key_value(self) -> Optional[str]:
+        try:
+            datetime_str = self.kif.var_info["START_TIME"]
+            date_obj = datetime.strptime(datetime_str, "%Y/%m/%d %H:%M:%S")
+            clustering_key = date_obj.strftime("%Y-%m-%d")
+        except KeyError:
+            clustering_key = None
+        return clustering_key

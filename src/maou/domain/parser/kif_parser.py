@@ -1,3 +1,5 @@
+from typing import Optional
+
 from cshogi import KIF
 
 from maou.domain.parser import parser
@@ -30,3 +32,6 @@ class KifParser(parser.Parser):
 
     def comments(self) -> list[str]:
         return self.kif.comments  # type: ignore
+
+    def clustering_key_value(self) -> Optional[str]:
+        return None

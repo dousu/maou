@@ -96,7 +96,12 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         ]
 
     def __create_table_if_not_exists(
-        self, *, dataset_id: str, table_name: str, schema: list[bigquery.SchemaField]
+        self,
+        *,
+        dataset_id: str,
+        table_name: str,
+        schema: list[bigquery.SchemaField],
+        clustering_key: Optional[str] = None,
     ) -> bigquery.Table:
         table_id = f"{self.client.project}.{dataset_id}.{table_name}"
         try:
@@ -106,6 +111,8 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             self.logger.debug(f"Table '{table_id}' not found. Creating a new table...")
 
             table = bigquery.Table(table_ref=table_id, schema=schema)
+            if clustering_key is not None:
+                table.clustering_fields = [clustering_key]
             table = self.client.create_table(table=table)
             self.logger.debug(f"Table '{table.full_table_id}' has been created.")
 
@@ -174,7 +181,13 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         finally:
             self.__cleanup()
 
-    def store_features(self, *, key_columns: list[str], arrow_table: pa.Table) -> None:
+    def store_features(
+        self,
+        *,
+        key_columns: list[str],
+        arrow_table: pa.Table,
+        clustering_key: Optional[str] = None,
+    ) -> None:
         """BigQueryにデータを保存する.
         すでに同じIDが存在する場合は更新する (MERGEクエリで実装)
         受け取ったデータを一旦アップロードする
@@ -193,12 +206,24 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 f"キーカラムが存在しない: {key_columns}, {arrow_table.column_names}"
             )
             raise NotFoundKeyColumns("Not found key columns")
+        if (
+            clustering_key is not None
+            and clustering_key not in arrow_table.column_names
+        ):
+            self.logger.error(
+                f"クラスタリングキーが存在しない: {clustering_key}, {arrow_table.column_names}"
+            )
+            raise NotFoundKeyColumns("Not found key columns")
         if self.last_key_columns is None:
             # デストラクタの時のflush用にキーカラムを保存しておく
             self.last_key_columns = key_columns
+            self.last_clustering_key = clustering_key
         elif key_columns != self.last_key_columns:
             # キーカラムのリストがもし変わったらいままでのをフラッシュしてから更新する
-            self.flush_features(key_columns=self.last_key_columns)
+            self.flush_features(
+                key_columns=self.last_key_columns,
+                clustering_key=self.last_clustering_key,
+            )
             self.last_key_columns = key_columns
 
         # バッファに追加
@@ -208,9 +233,14 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
         # バッファが上限を超えたら一括保存
         if self.__buffer_size >= self.max_buffer_size:
-            self.flush_features(key_columns=key_columns)
+            self.flush_features(key_columns=key_columns, clustering_key=clustering_key)
 
-    def flush_features(self, *, key_columns: list[str]) -> None:
+    def flush_features(
+        self,
+        *,
+        key_columns: list[str],
+        clustering_key: Optional[str] = None,
+    ) -> None:
         """バッファのデータを一括してMERGEクエリで保存"""
         if not self.__buffer:
             self.logger.debug("Buffer is empty. Nothing to flush.")
@@ -226,7 +256,10 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         schema = self.__generate_schema(arrow_table=combined_table)
         # データ追加先のテーブルが存在しない場合は作成する
         table = self.__create_table_if_not_exists(
-            dataset_id=self.dataset_id, table_name=self.target_table_name, schema=schema
+            dataset_id=self.dataset_id,
+            table_name=self.target_table_name,
+            schema=schema,
+            clustering_key=clustering_key,
         )
         self.logger.debug(f"Target table: {table.full_table_id}")
         # 既存のテーブルのスキーマが
@@ -309,7 +342,10 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         """store_features用のデストラクタ処理"""
         # bufferが空のときはスキップする
         if self.last_key_columns is not None and self.__buffer_size != 0:
-            self.flush_features(key_columns=self.last_key_columns)
+            self.flush_features(
+                key_columns=self.last_key_columns,
+                clustering_key=self.last_clustering_key,
+            )
         # 一時テーブル削除
         self.__drop_table(table=self.temp_table)
         self.logger.debug(
