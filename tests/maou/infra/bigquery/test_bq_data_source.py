@@ -1,9 +1,14 @@
 import logging
 import os
+import pickle
+import re
+import uuid
 from collections.abc import Generator
+from datetime import date, datetime
 from pathlib import Path
 
 import google_crc32c
+import numpy as np
 import pyarrow as pa
 import pytest
 from google.cloud import bigquery
@@ -46,6 +51,75 @@ class TestBigQueryDataSource:
             [pa.field(f.name, f.type, nullable=False) for f in table.schema]
         )
         return table.cast(schema)
+
+    def insert_partitioning_test_data(self) -> None:
+        # 20MB 以下のデータを生成 (20MBが最小課金容量)
+        # 1行約116バイト (36+16+4+4+4+8+4.5+4+36) × 100,000 行 = 11MB
+        # これにオーバーヘッドがのって少し大きくなる
+        num_rows = 100000
+        partitioning_values = np.array(
+            [
+                date.fromisoformat("2019-12-04"),
+                date.fromisoformat("2019-12-05"),
+                date.fromisoformat("2019-12-07"),
+                date.fromisoformat("2019-12-30"),
+            ]
+        )
+        partitioning_keys = np.tile(
+            partitioning_values, num_rows // len(partitioning_values)
+        )
+        num_remaining = num_rows - len(partitioning_keys)
+        if num_remaining > 0:
+            partitioning_keys = np.concatenate(
+                [
+                    partitioning_keys,
+                    np.random.choice(partitioning_values, num_remaining),
+                ]
+            )
+        np.random.shuffle(partitioning_keys)
+        data = {
+            "id": [str(uuid.uuid4()) for _ in range(num_rows)],
+            "hcp": [pickle.dumps(np.zeros((2, 3))) for _ in range(num_rows)],
+            "eval": np.random.randint(-1000, 1000, num_rows),
+            "bestMove16": np.random.randint(0, 65536, num_rows),
+            "gameResult": np.random.randint(-1, 2, num_rows),
+            "ratings": [pickle.dumps(np.zeros(2)) for _ in range(num_rows)],
+            "endgameStatus": np.random.choice(
+                ["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows
+            ),
+            "moves": np.random.randint(0, 100, num_rows),
+            "partitioningKey": partitioning_keys,
+        }
+        table = pa.Table.from_pydict(
+            data,
+            schema=pa.schema(
+                [
+                    pa.field("id", pa.string(), nullable=False),
+                    pa.field("hcp", pa.binary(), nullable=False),
+                    pa.field("eval", pa.int32(), nullable=False),
+                    pa.field("bestMove16", pa.int32(), nullable=False),
+                    pa.field("gameResult", pa.int32(), nullable=False),
+                    pa.field("ratings", pa.binary(), nullable=False),
+                    pa.field("endgameStatus", pa.string(), nullable=False),
+                    pa.field("moves", pa.int32(), nullable=False),
+                    pa.field("partitioningKey", pa.date64(), nullable=False),
+                ]
+            ),
+        )
+        self.bq._BigQuery__create_or_replace_table(  # type: ignore
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            schema=(
+                self.bq._BigQuery__generate_schema(arrow_table=table)  # type: ignore
+            ),
+            clustering_key=None,
+            partitioning_key_date="partitioningKey",
+        )
+        self.bq.load_from_arrow(
+            dataset_id=self.dataset_id, table_name=self.table_name, table=table
+        )
+
+        logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
 
     @pytest.fixture()
     def default_fixture(self) -> Generator[None, None, None]:
@@ -101,8 +175,10 @@ class TestBigQueryDataSource:
                 }
             )
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
-        self.bq.flush_features(key_columns=["id"])
+        self.bq.store_features(
+            key_columns=["id"], arrow_table=data, clustering_key="cluster"
+        )
+        self.bq.flush_features(key_columns=["id"], clustering_key="cluster")
 
         # BigQueryDataSourceからデータを読み込む
         data_source = BigQueryDataSource(
@@ -121,6 +197,101 @@ class TestBigQueryDataSource:
             {"id": 3, "cluster": "A", "data": "test3"},
         ]
         assert sorted_read_data == expected_data
+
+    def test_read_data_with_partitioning_key(self, default_fixture: None) -> None:
+        # パーティショニングキーが指定されている場合にbqから正しくデータを読み込める
+        # BigQueryにテストデータを投入
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "partition_key": [
+                        date.fromisoformat("2019-12-04"),
+                        date.fromisoformat("2019-12-05"),
+                        date.fromisoformat("2019-12-07"),
+                    ],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
+        )
+        self.bq.store_features(
+            key_columns=["id"], arrow_table=data, partitioning_key_date="partition_key"
+        )
+        self.bq.flush_features(
+            key_columns=["id"], partitioning_key_date="partition_key"
+        )
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            partitioning_key_date="partition_key",
+        )
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        logger.debug(sorted_read_data)
+        # 読み込んだデータが正しいことを確認
+        expected_data = [
+            {
+                "id": 1,
+                "partition_key": date.fromisoformat("2019-12-04"),
+                "data": "test1",
+            },
+            {
+                "id": 2,
+                "partition_key": date.fromisoformat("2019-12-05"),
+                "data": "test2",
+            },
+            {
+                "id": 3,
+                "partition_key": date.fromisoformat("2019-12-07"),
+                "data": "test3",
+            },
+        ]
+        assert sorted_read_data == expected_data
+
+    def test_pruning(self, default_fixture: None) -> None:
+        # パーティショニングキーが指定されている場合にbqで最小データ量の読み込みが処理される
+        # BigQueryにテストデータを投入
+        self.insert_partitioning_test_data()
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            partitioning_key_date="partitioningKey",
+        )
+        # データを読み込む
+        start_time = datetime.now()
+        _ = data_source[0]
+        client = self.bq.client
+
+        table = client.get_table(self.table_id)
+
+        jobs = client.list_jobs(min_creation_time=start_time)
+        total_bytes_processed: int
+        for job in jobs:
+            if job.job_type == "query":
+                logger.debug(
+                    f"QueryJob id: {job.job_id}, query: {job.query},"
+                    f" time: {job.created},"
+                    f" total_bytes_processed: {job.total_bytes_processed}"
+                )
+                pattern = f"""
+                    SELECT.*
+                    .*{re.escape(self.dataset_id)}\\.{re.escape(self.table_name)}.*
+                """
+                if re.search(pattern, job.query):
+                    total_bytes_processed = job.total_bytes_processed
+        logger.debug(
+            f"target table bytes: {table.num_bytes},"
+            f" total_bytes_processed: {total_bytes_processed}"
+        )
+        assert total_bytes_processed is not None and table.num_bytes is not None
+        assert total_bytes_processed < table.num_bytes
+        # データは4等分しているので3等分よりは小さくなるはず
+        assert total_bytes_processed < table.num_bytes / 3
 
     def test_cache_eviction(self, default_fixture: None) -> None:
         # max_chached_bytesを超えたら古いページが破棄される

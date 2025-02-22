@@ -59,12 +59,6 @@ class HCPEConverter:
         allowed_endgame_status: Optional[list[str]] = None
         exclude_moves: Optional[list[int]] = None
 
-    def __cast_nullable_to_false(self, table: pa.Table) -> pa.Table:
-        schema = pa.schema(
-            [pa.field(f.name, f.type, nullable=False) for f in table.schema]
-        )
-        return table.cast(schema)
-
     def convert(self, option: ConvertOption) -> Dict[str, str]:
         """HCPEファイルを作成する."""
 
@@ -195,14 +189,29 @@ class HCPEConverter:
                         hcpes[: idx + 1],
                     )
                     if self.__feature_store is not None:
-                        # cast_nullable_to_falseをかませる構成について
-                        # dictからpyarrow tableを作るとnullable=trueになってしまうのでfalseに変更する
-                        # 一旦テーブル作ってからcastなのでちょっと効率悪そうだが，
-                        # スキーマの推測を利用したいのでこの構成になっている
-                        table = pa.table(arrow_features)
+                        table = pa.Table.from_pydict(
+                            arrow_features,
+                            schema=pa.schema(
+                                [
+                                    pa.field("id", pa.string(), nullable=False),
+                                    pa.field("hcp", pa.binary(), nullable=False),
+                                    pa.field("eval", pa.int32(), nullable=False),
+                                    pa.field("bestMove16", pa.int32(), nullable=False),
+                                    pa.field("gameResult", pa.int32(), nullable=False),
+                                    pa.field("ratings", pa.binary(), nullable=False),
+                                    pa.field(
+                                        "endgameStatus", pa.string(), nullable=False
+                                    ),
+                                    pa.field("moves", pa.int32(), nullable=False),
+                                    pa.field(
+                                        "partitioningKey", pa.date64(), nullable=False
+                                    ),
+                                ]
+                            ),
+                        )
                         self.__feature_store.store_features(
                             key_columns=["id"],
-                            arrow_table=self.__cast_nullable_to_false(table),
+                            arrow_table=table,
                             clustering_key=None,
                             partitioning_key_date="partitioningKey",
                         )

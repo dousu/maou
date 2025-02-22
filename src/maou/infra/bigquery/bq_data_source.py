@@ -29,6 +29,7 @@ class BigQueryDataSource(learn.LearningDataSource):
             batch_size: int = 10_000,
             max_cached_bytes: int = 100 * 1024 * 1024,
             clustering_key: Optional[str] = None,
+            partitioning_key_date: Optional[str] = None,
         ) -> None:
             self.__page_manager = BigQueryDataSource.PageManager(
                 dataset_id=dataset_id,
@@ -36,6 +37,7 @@ class BigQueryDataSource(learn.LearningDataSource):
                 batch_size=batch_size,
                 max_cached_bytes=max_cached_bytes,
                 clustering_key=clustering_key,
+                partitioning_key_date=partitioning_key_date,
             )
 
         def train_test_split(
@@ -80,6 +82,7 @@ class BigQueryDataSource(learn.LearningDataSource):
             batch_size: int,
             max_cached_bytes: int,
             clustering_key: Optional[str],
+            partitioning_key_date: Optional[str] = None,
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = f"{self.client.project}.{dataset_id}"
@@ -88,6 +91,8 @@ class BigQueryDataSource(learn.LearningDataSource):
             self.total_cached_bytes = 0
             self.max_cached_bytes = max_cached_bytes
             self.clustering_key = clustering_key
+            self.partitioning_key_date = partitioning_key_date
+            self.__pruning_info = []
 
             # ページ番号をキーにしたLRUキャッシュ（OrderedDict）
             self.__page_cache: OrderedDict[int, pa.Table] = OrderedDict()
@@ -96,29 +101,52 @@ class BigQueryDataSource(learn.LearningDataSource):
                 f"{self.dataset_fqn}.{self.table_name}"
             )
 
-            if self.clustering_key:
-                # クラスタリングキーが指定されている場合は，各クラスタごとに件数を取得する
+            if self.partitioning_key_date:
+                # パーティショニングキーが指定されている場合は，各クラスタごとに件数を取得する
                 # ついでに全件数もここから計算する
                 query = f"""
-                    SELECT {self.clustering_key} AS cluster, COUNT(*) AS cnt
+                    SELECT
+                      {self.partitioning_key_date} AS partition_value,
+                      COUNT(*) AS cnt
                     FROM `{self.dataset_fqn}.{self.table_name}`
-                    GROUP BY {self.clustering_key}
-                    ORDER BY cluster
+                    GROUP BY {self.partitioning_key_date}
+                    ORDER BY partition_value
                 """
                 result = self.client.query(query).result()
-                self.__cluster_info = []
                 cumulative = 0
                 for row in result:
-                    self.__cluster_info.append(
+                    self.__pruning_info.append(
                         {
-                            "cluster": row.cluster,
+                            "pruning_value": row.partition_value,
                             "cnt": row.cnt,
                             "cumulative": cumulative,
                         }
                     )
                     cumulative += row.cnt
                 self.total_rows = cumulative
-                self.total_pages = len(self.__cluster_info)
+                self.total_pages = len(self.__pruning_info)
+            elif self.clustering_key:
+                # クラスタリングキーが指定されている場合は，各クラスタごとに件数を取得する
+                # ついでに全件数もここから計算する
+                query = f"""
+                    SELECT {self.clustering_key} AS cluster_value, COUNT(*) AS cnt
+                    FROM `{self.dataset_fqn}.{self.table_name}`
+                    GROUP BY {self.clustering_key}
+                    ORDER BY cluster_value
+                """
+                result = self.client.query(query).result()
+                cumulative = 0
+                for row in result:
+                    self.__pruning_info.append(
+                        {
+                            "pruning_value": row.cluster_value,
+                            "cnt": row.cnt,
+                            "cumulative": cumulative,
+                        }
+                    )
+                    cumulative += row.cnt
+                self.total_rows = cumulative
+                self.total_pages = len(self.__pruning_info)
             else:
                 # クラスタリングキー未指定の場合はbatch_sizeごとに取得
                 self.total_rows = self.__get_total_rows()
@@ -168,26 +196,33 @@ class BigQueryDataSource(learn.LearningDataSource):
                 self.__page_cache[page_num] = page
                 return page
 
-            if self.clustering_key:
+            if bool(self.__pruning_info):
                 # page_num はクラスタグループの番号とする
                 try:
-                    cluster_info = self.__cluster_info[page_num]
+                    pruning_info = self.__pruning_info[page_num]
                 except IndexError:
                     raise IndexError(
                         f"Page number {page_num} is out of range "
-                        f"(clusters count: {len(self.__cluster_info)})."
+                        f"(clusters count: {len(self.__pruning_info)})."
                     )
-                cluster_value = cluster_info["cluster"]
-                # クラスタ値でフィルタしたクエリを実行
-                # クラスタ値が文字列の場合はシングルクォートで囲む
-                if isinstance(cluster_value, str):
-                    cluster_filter = f"{self.clustering_key} = '{cluster_value}'"
+                if self.partitioning_key_date:
+                    partition_value = pruning_info["pruning_value"]
+                    # パーティショニングの値でwhere句を作る
+                    filter = f"{self.partitioning_key_date} = DATE '{partition_value}'"
+                elif self.clustering_key:
+                    cluster_value = pruning_info["pruning_value"]
+                    # クラスタ値でフィルタしたクエリを実行
+                    # クラスタ値が文字列の場合はシングルクォートで囲む
+                    if isinstance(cluster_value, str):
+                        filter = f"{self.clustering_key} = '{cluster_value}'"
+                    else:
+                        filter = f"{self.clustering_key} = {cluster_value}"
                 else:
-                    cluster_filter = f"{self.clustering_key} = {cluster_value}"
+                    raise Exception("Not found pruning key")
                 query = f"""
                     SELECT *
                     FROM `{self.dataset_fqn}.{self.table_name}`
-                    WHERE {cluster_filter}
+                    WHERE {filter}
                 """
                 arrow_table = (
                     self.client.query(query).result().to_arrow().combine_chunks()
@@ -217,10 +252,10 @@ class BigQueryDataSource(learn.LearningDataSource):
 
         def get_item(self, idx: int) -> pa.Table:
             """特定のレコードだけが入ったPyArrow Tableを出す."""
-            if self.clustering_key:
+            if bool(self.__pruning_info):
                 # idx が属するクラスタグループを探索
                 group_idx = None
-                for i, info in enumerate(self.__cluster_info):
+                for i, info in enumerate(self.__pruning_info):
                     if info["cumulative"] <= idx < info["cumulative"] + info["cnt"]:
                         group_idx = i
                         offset_in_group = idx - info["cumulative"]
@@ -255,6 +290,7 @@ class BigQueryDataSource(learn.LearningDataSource):
         batch_size: int = 10_000,
         max_cached_bytes: int = 100 * 1024 * 1024,
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
         page_manager: Optional[PageManager] = None,
         indicies: Optional[list[int]] = None,
     ) -> None:
@@ -278,6 +314,7 @@ class BigQueryDataSource(learn.LearningDataSource):
                     batch_size=batch_size,
                     max_cached_bytes=max_cached_bytes,
                     clustering_key=clustering_key,
+                    partitioning_key_date=partitioning_key_date,
                 )
             else:
                 raise MissingBigQueryConfig(

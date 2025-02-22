@@ -122,7 +122,7 @@ class TestIntegrationHcpeConverter:
             "hcp": [np.random.bytes(16) for _ in range(num_rows)],
             "eval": np.random.randint(-1000, 1000, num_rows),
             "bestMove16": np.random.randint(0, 65536, num_rows),
-            "gameResult": np.random.randint(-1, 2, num_rows),  # -1, 0, 1 のランダム値
+            "gameResult": np.random.randint(-1, 2, num_rows),
             "ratings": [np.random.bytes(8) for _ in range(num_rows)],
             "endgameStatus": np.random.choice(
                 ["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows
@@ -146,10 +146,12 @@ class TestIntegrationHcpeConverter:
                 ]
             ),
         )
-        self.bq._BigQuery__create_or_replace_table(
+        self.bq._BigQuery__create_or_replace_table(  # type: ignore
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            schema=self.bq._BigQuery__generate_schema(arrow_table=table),
+            schema=(
+                self.bq._BigQuery__generate_schema(arrow_table=table)  # type: ignore
+            ),
             clustering_key=None,
             partitioning_key_date="partitioningKey",
         )
