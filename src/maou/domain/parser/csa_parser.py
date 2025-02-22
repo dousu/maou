@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any
 
 from cshogi import CSA
 
@@ -35,11 +35,20 @@ class CSAParser(parser.Parser):
     def comments(self) -> list[str]:
         return self.kif.comments
 
-    def clustering_key_value(self) -> Optional[str]:
+    def clustering_key_value(self) -> Any:
         try:
             datetime_str = self.kif.var_info["START_TIME"]
             date_obj = datetime.strptime(datetime_str, "%Y/%m/%d %H:%M:%S")
-            clustering_key = date_obj.strftime("%Y-%m-%d")
+            clustering_key = date_obj.date()
         except KeyError:
             clustering_key = None
         return clustering_key
+
+    def partitioning_key_value(self) -> Any:
+        try:
+            datetime_str = self.kif.var_info["START_TIME"]
+            date_obj = datetime.strptime(datetime_str, "%Y/%m/%d %H:%M:%S")
+            partitioning_key = date_obj.date()
+        except KeyError:
+            partitioning_key = None
+        return partitioning_key

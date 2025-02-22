@@ -27,6 +27,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         key_columns: list[str],
         arrow_table: pa.Table,
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> None:
         pass
 
@@ -85,6 +86,9 @@ class PreProcess:
                         arrow_features["features"].append(pickle.dumps(features))
                         arrow_features["moveLabel"].append(move_label)
                         arrow_features["resultValue"].append(result_value)
+                        # ローカルファイルには入らない情報
+                        # ローカルファイルをデータソースにした場合はこれを作れないがどうするのか
+                        arrow_features["clusteringKey"].append("")
 
                 np.save(
                     option.output_dir / file.with_suffix(".pre.npy").name,

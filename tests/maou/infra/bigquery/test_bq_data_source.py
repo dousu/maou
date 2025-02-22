@@ -41,6 +41,12 @@ class TestBigQueryDataSource:
         # ハッシュ値を16進文字列で返す
         return checksum.digest().hex()
 
+    def cast_nullable_to_false(self, table: pa.Table) -> pa.Table:
+        schema = pa.schema(
+            [pa.field(f.name, f.type, nullable=False) for f in table.schema]
+        )
+        return table.cast(schema)
+
     @pytest.fixture()
     def default_fixture(self) -> Generator[None, None, None]:
         path = Path("src/maou/infra/bigquery/bq_data_source.py")
@@ -56,14 +62,16 @@ class TestBigQueryDataSource:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
 
-    def test_read_data_without_clustering_key(self, default_fixture: None) -> None:
-        # クラスタリングキーが指定されていない場合にbqから正しくデータを読み込める
+    def test_read_data_without_pruning_key(self, default_fixture: None) -> None:
+        # パーティショニングやクラスタリングキーが指定されていない場合にbqから正しくデータを読み込める
         # BigQueryにテストデータを投入
-        data = pa.table(
-            {
-                "id": [1, 2, 3],
-                "data": ["test1", "test2", "test3"],
-            }
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
         )
         self.bq.store_features(key_columns=["id"], arrow_table=data)
         self.bq.flush_features(key_columns=["id"])
@@ -84,12 +92,14 @@ class TestBigQueryDataSource:
     def test_read_data_with_clustering_key(self, default_fixture: None) -> None:
         # クラスタリングキーが指定されている場合にbqから正しくデータを読み込める
         # BigQueryにテストデータを投入
-        data = pa.table(
-            {
-                "id": [1, 2, 3],
-                "cluster": ["A", "B", "A"],
-                "data": ["test1", "test2", "test3"],
-            }
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "cluster": ["A", "B", "A"],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
         )
         self.bq.store_features(key_columns=["id"], arrow_table=data)
         self.bq.flush_features(key_columns=["id"])
@@ -116,11 +126,13 @@ class TestBigQueryDataSource:
         # max_chached_bytesを超えたら古いページが破棄される
         # batch_sizeより大きなレコード数の場合にキャッシュされる
         # BigQueryにテストデータを投入
-        data = pa.table(
-            {
-                "id": [i for i in range(3)],
-                "data": [f"test{i}" for i in range(3)],
-            }
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [i for i in range(3)],
+                    "data": [f"test{i}" for i in range(3)],
+                }
+            )
         )
         self.bq.store_features(key_columns=["id"], arrow_table=data)
         self.bq.flush_features(key_columns=["id"])
@@ -143,11 +155,13 @@ class TestBigQueryDataSource:
 
     def test_batch_size_larger_than_record_count(self, default_fixture: None) -> None:
         # BigQueryにテストデータを投入
-        data = pa.table(
-            {
-                "id": [i for i in range(5)],
-                "data": [f"test{i}" for i in range(5)],
-            }
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [i for i in range(5)],
+                    "data": [f"test{i}" for i in range(5)],
+                }
+            )
         )
         self.bq.store_features(key_columns=["id"], arrow_table=data)
         self.bq.flush_features(key_columns=["id"])
@@ -164,11 +178,13 @@ class TestBigQueryDataSource:
     def test_read_from_cache(self, default_fixture: None) -> None:
         # キャッシュされている場合にbqにアクセスせずデータを返すことができる
         # BigQueryにテストデータを投入
-        data = pa.table(
-            {
-                "id": [1],
-                "data": ["test1"],
-            }
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1],
+                    "data": ["test1"],
+                }
+            )
         )
         self.bq.store_features(key_columns=["id"], arrow_table=data)
         self.bq.flush_features(key_columns=["id"])

@@ -1,5 +1,5 @@
 import abc
-from typing import Optional
+from typing import Any
 
 
 class Parser(metaclass=abc.ABCMeta):
@@ -36,5 +36,9 @@ class Parser(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def clustering_key_value(self) -> Optional[str]:
+    def clustering_key_value(self) -> Any:
+        pass
+
+    @abc.abstractmethod
+    def partitioning_key_value(self) -> Any:
         pass

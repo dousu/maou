@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import logging
 from io import BytesIO
 from typing import Generator, Iterator, Optional
@@ -31,6 +32,8 @@ class BigQueryJobError(Exception):
 class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
     logger: logging.Logger = logging.getLogger(__name__)
     last_key_columns: Optional[list[str]] = None
+    clustering_key: Optional[str] = None
+    partitioning_key_date: Optional[str] = None
     temp_table: bigquery.Table
 
     def __init__(
@@ -59,11 +62,16 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
             self.client.create_dataset(dataset=dataset)
             self.logger.debug(f"Dataset '{dataset_fqn}' has been created.")
+        # 特徴量書き込み周りの設定
         # バッファを初期化
         self.__buffer: list[pa.Table] = []
         self.__buffer_size: int = 0
         # 最大値指定 50MB
         self.max_buffer_size = max_buffer_size
+        # 書き込み先テーブルをプルーニングするためのクラスタリングキーの値
+        self.clustering_keys: set[str] = set()
+        # 書き込み先テーブルをプルーニングするためのパーティショニングキーの値
+        self.partitioning_date_keys: set[datetime.date] = set()
 
     def __arrow_type_to_bigquery_type(self, arrow_type: pa.DataType) -> str:
         match arrow_type:
@@ -87,10 +95,12 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 raise ValueError(f"Unsupported PyArrow type: {arrow_type}")
 
     def __generate_schema(self, arrow_table: pa.Table) -> list[bigquery.SchemaField]:
+        # REPEATEDやNULLABLEには対応していない
         return [
             bigquery.SchemaField(
                 name=field.name,
                 field_type=self.__arrow_type_to_bigquery_type(arrow_type=field.type),
+                mode="REQUIRED" if not field.nullable else "NULLABLE",
             )
             for field in arrow_table.schema
         ]
@@ -102,6 +112,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         table_name: str,
         schema: list[bigquery.SchemaField],
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> bigquery.Table:
         table_id = f"{self.client.project}.{dataset_id}.{table_name}"
         try:
@@ -113,13 +124,23 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             table = bigquery.Table(table_ref=table_id, schema=schema)
             if clustering_key is not None:
                 table.clustering_fields = [clustering_key]
+            if partitioning_key_date is not None:
+                table.time_partitioning = bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY, field=partitioning_key_date
+                )
             table = self.client.create_table(table=table)
             self.logger.debug(f"Table '{table.full_table_id}' has been created.")
 
         return table
 
     def __create_or_replace_table(
-        self, *, dataset_id: str, table_name: str, schema: list[bigquery.SchemaField]
+        self,
+        *,
+        dataset_id: str,
+        table_name: str,
+        schema: list[bigquery.SchemaField],
+        clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> bigquery.Table:
         table_id = f"{self.client.project}.{dataset_id}.{table_name}"
         try:
@@ -127,11 +148,19 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             self.logger.debug(f"Table '{table_id}' already exists.")
             self.__drop_table(dataset_id=dataset_id, table_name=table_name)
             table = self.__create_table_if_not_exists(
-                dataset_id=dataset_id, table_name=table_name, schema=schema
+                dataset_id=dataset_id,
+                table_name=table_name,
+                schema=schema,
+                clustering_key=clustering_key,
+                partitioning_key_date=partitioning_key_date,
             )
         except Exception:
             table = self.__create_table_if_not_exists(
-                dataset_id=dataset_id, table_name=table_name, schema=schema
+                dataset_id=dataset_id,
+                table_name=table_name,
+                schema=schema,
+                clustering_key=clustering_key,
+                partitioning_key_date=partitioning_key_date,
             )
 
         return table
@@ -158,6 +187,32 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             self.logger.debug(f"Deleted table. table_id: {table_id}")
         except Exception as e:
             raise e
+
+    def load_from_arrow(
+        self, *, dataset_id: str, table_name: str, table: pa.Table
+    ) -> None:
+        table_id = f"{self.client.project}.{dataset_id}.{table_name}"
+        self.logger.debug(f"Load data to {table_id}")
+        # PyArrow TableをParquet形式にシリアライズしてファイルとしてbigqueryに送る
+        # テーブルすべてをparquetにしてメモリで一旦持てないのであればPyArrow ストリームAPIを使う
+        with BytesIO() as buffer:
+            pq.write_table(table=table, where=buffer)
+            buffer.seek(0)
+
+            # job_configでParquetフォーマットを指定
+            job_config = bigquery.LoadJobConfig(
+                source_format=bigquery.SourceFormat.PARQUET
+            )
+            job = self.client.load_table_from_file(
+                file_obj=buffer,
+                destination=table_id,
+                job_config=job_config,
+                location=self.location,
+            )
+            job.result()
+            if job.errors:
+                self.logger.error(f"Failed to insert rows: {job.errors}")
+                raise BigQueryJobError(f"Failed to insert rows: {job.errors}")
 
     def select_all(
         self, *, dataset_id: str, table_name: str
@@ -187,6 +242,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         key_columns: list[str],
         arrow_table: pa.Table,
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> None:
         """BigQueryにデータを保存する.
         すでに同じIDが存在する場合は更新する (MERGEクエリで実装)
@@ -213,18 +269,46 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             self.logger.error(
                 f"クラスタリングキーが存在しない: {clustering_key}, {arrow_table.column_names}"
             )
-            raise NotFoundKeyColumns("Not found key columns")
+            raise NotFoundKeyColumns("Not found clustering key columns")
+        if (
+            partitioning_key_date is not None
+            and partitioning_key_date not in arrow_table.column_names
+        ):
+            self.logger.error(
+                "パーティショニングキーが存在しない: "
+                f"{partitioning_key_date}, {arrow_table.column_names}"
+            )
+            raise NotFoundKeyColumns("Not found clustering key columns")
         if self.last_key_columns is None:
-            # デストラクタの時のflush用にキーカラムを保存しておく
+            # flush用にキーカラムを保存しておく
             self.last_key_columns = key_columns
-            self.last_clustering_key = clustering_key
         elif key_columns != self.last_key_columns:
             # キーカラムのリストがもし変わったらいままでのをフラッシュしてから更新する
             self.flush_features(
                 key_columns=self.last_key_columns,
-                clustering_key=self.last_clustering_key,
+                clustering_key=clustering_key,
+                partitioning_key_date=partitioning_key_date,
             )
             self.last_key_columns = key_columns
+        # クラスタリングキーやパーティショニングキーは最初のものしか有効でないとみなすので
+        # バッファしているものと変わっても何もしない
+        # 他のメソッドでエラーが起きる可能性があるので
+        # このメソッドを使う側で同じように設定することが望ましい
+        if self.clustering_key is None:
+            self.clustering_key = clustering_key
+        if self.partitioning_key_date is None:
+            self.partitioning_key_date = partitioning_key_date
+
+        if clustering_key is not None:
+            # プルーニングをするためにクラスタリングキーの集合を管理する
+            # クラスタリングキーの集合をupdateする
+            self.clustering_keys.update(arrow_table.column(clustering_key).to_pylist())
+        if partitioning_key_date is not None:
+            # プルーニングをするためにパーティショニングキーの集合を管理する
+            # 日付パーティショニングキーの集合をupdateする
+            self.partitioning_date_keys.update(
+                arrow_table.column(partitioning_key_date).to_pylist()
+            )
 
         # バッファに追加
         self.__buffer.append(arrow_table)
@@ -233,13 +317,18 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
         # バッファが上限を超えたら一括保存
         if self.__buffer_size >= self.max_buffer_size:
-            self.flush_features(key_columns=key_columns, clustering_key=clustering_key)
+            self.flush_features(
+                key_columns=key_columns,
+                clustering_key=clustering_key,
+                partitioning_key_date=partitioning_key_date,
+            )
 
     def flush_features(
         self,
         *,
         key_columns: list[str],
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> None:
         """バッファのデータを一括してMERGEクエリで保存"""
         if not self.__buffer:
@@ -260,11 +349,12 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             table_name=self.target_table_name,
             schema=schema,
             clustering_key=clustering_key,
+            partitioning_key_date=partitioning_key_date,
         )
         self.logger.debug(f"Target table: {table.full_table_id}")
         # 既存のテーブルのスキーマが
         # 追加しようとしているデータのスキーマと一致しているかチェックする
-        if table.schema != schema:
+        if set(table.schema) != set(schema):
             self.logger.error(f"スキーマの不一致: {table.schema}, {schema}")
             raise SchemaConflictError(
                 f"既存のテーブル {table.table_id} と追加データのスキーマが一致しません"
@@ -276,38 +366,45 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             dataset_id=self.dataset_id,
             table_name=f"{self.target_table_name}_temp",
             schema=schema,
+            clustering_key=clustering_key,
+            partitioning_key_date=partitioning_key_date,
         )
         self.logger.debug(f"Temp table: {self.temp_table.full_table_id}")
 
         try:
-            # PyArrow TableをParquet形式にシリアライズしてファイルとしてbigqueryに送る
-            # テーブルすべてをparquetにしてメモリで一旦持てないのであればPyArrow ストリームAPIを使う
-            with BytesIO() as buffer:
-                pq.write_table(table=combined_table, where=buffer)
-                buffer.seek(0)
-
-                # job_configでParquetフォーマットを指定
-                job_config = bigquery.LoadJobConfig(
-                    source_format=bigquery.SourceFormat.PARQUET
-                )
-                job = self.client.load_table_from_file(
-                    file_obj=buffer,
-                    destination=self.temp_table,
-                    job_config=job_config,
-                    location=self.location,
-                )
-                job.result()
-                if job.errors:
-                    self.logger.error(f"Failed to insert rows: {job.errors}")
-                    raise BigQueryJobError(f"Failed to insert rows: {job.errors}")
+            self.load_from_arrow(
+                dataset_id=self.temp_table.dataset_id,
+                table_name=self.temp_table.table_id,
+                table=combined_table,
+            )
             self.logger.debug(
                 "Inserted rows to temporary table."
                 f" table_id: {self.temp_table.full_table_id}"
             )
 
             # MERGEクエリ
+            # クラスタリングキーはなるべく明示的に指定するようにしている
+            if clustering_key is None or not bool(self.clustering_keys):
+                clustering_key_condition = []
+            else:
+                clustering_key_condition = [
+                    f"target.{clustering_key} in "
+                    f"({", ".join([f"'{value}'" for value in self.clustering_keys])})"
+                ]
+            # パーティショニングキーはなるべく明示的に指定するようにしている
+            if partitioning_key_date is None or not bool(self.partitioning_date_keys):
+                partitioning_key_condition = []
+            else:
+                dates = ", ".join(
+                    [f"DATE '{value}'" for value in self.partitioning_date_keys]
+                )
+                partitioning_key_condition = [
+                    f"target.{partitioning_key_date} in " f"({dates})"
+                ]
             on_conditions = " AND ".join(
                 [f"target.{col} = source.{col}" for col in key_columns]
+                + clustering_key_condition
+                + partitioning_key_condition
             )
             all_columns = [field.name for field in schema]
             update_set_clause = ", ".join(
@@ -315,16 +412,31 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             )
             insert_columns = ", ".join(all_columns)
             insert_values = ", ".join([f"source.{col}" for col in all_columns])
+            if bool(clustering_key_condition):
+                when_matched_clustering_condition = "AND " + " AND ".join(
+                    clustering_key_condition
+                )
+            else:
+                when_matched_clustering_condition = ""
+            if bool(partitioning_key_condition):
+                when_matched_partitioning_condition = "AND " + " AND ".join(
+                    partitioning_key_condition
+                )
+            else:
+                when_matched_partitioning_condition = ""
             merge_query = f"""
-            MERGE `{self.client.project}.{table.dataset_id}.{table.table_id}`
-               AS target
+            MERGE `{str(table.full_table_id).replace(":", ".")}`
+              AS target
             USING
-              `{self.client.project}.{self.temp_table.dataset_id}.{self.temp_table.table_id}`
-               AS source
+              `{str(self.temp_table.full_table_id).replace(":", ".")}`
+              AS source
             ON {on_conditions}
-            WHEN MATCHED THEN
-              UPDATE SET {update_set_clause}
-            WHEN NOT MATCHED THEN
+            WHEN MATCHED
+              {when_matched_clustering_condition}
+              {when_matched_partitioning_condition}
+              THEN
+                UPDATE SET {update_set_clause}
+            WHEN NOT MATCHED BY TARGET THEN
               INSERT ({insert_columns})
               VALUES ({insert_values})
             """
@@ -344,7 +456,8 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         if self.last_key_columns is not None and self.__buffer_size != 0:
             self.flush_features(
                 key_columns=self.last_key_columns,
-                clustering_key=self.last_clustering_key,
+                clustering_key=self.clustering_key,
+                partitioning_key_date=self.partitioning_key_date,
             )
         # 一時テーブル削除
         self.__drop_table(table=self.temp_table)

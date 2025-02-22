@@ -65,20 +65,28 @@ class TestBigQuery:
             logger.debug(sorted_indices)
             return table.take(sorted_indices)
 
+        def cast_nullable_to_false(table: pa.Table) -> pa.Table:
+            schema = pa.schema(
+                [pa.field(f.name, f.type, nullable=False) for f in table.schema]
+            )
+            return table.cast(schema)
+
         data = sort_table(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "data1": [10, 11, 21],
-                    "data2": ["20".encode(), "21".encode(), "31".encode()],
-                    "data3": [True, True, False],
-                    "data4": [0.1, 0.2, 0.00000001],
-                    "data5": [
-                        pickle.dumps(np.array([0.01, 1000, 0])),
-                        pickle.dumps(np.array([0.02, 2000, 0])),
-                        pickle.dumps(None),
-                    ],
-                }
+            cast_nullable_to_false(
+                pa.table(
+                    {
+                        "id": [1, 2, 3],
+                        "data1": [10, 11, 21],
+                        "data2": ["20".encode(), "21".encode(), "31".encode()],
+                        "data3": [True, True, False],
+                        "data4": [0.1, 0.2, 0.00000001],
+                        "data5": [
+                            pickle.dumps(np.array([0.01, 1000, 0])),
+                            pickle.dumps(np.array([0.02, 2000, 0])),
+                            pickle.dumps(None),
+                        ],
+                    }
+                )
             )
         )
 
@@ -94,8 +102,14 @@ class TestBigQuery:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
         # 取得したデータは順序が違う場合があるのでソートしてから比較する
-        bigquery_table = sort_table(pa.Table.from_batches(arrow_batches))
-        logger.debug(bigquery_table)
+        bigquery_table = sort_table(
+            cast_nullable_to_false(pa.Table.from_batches(arrow_batches))
+        )
+        logger.debug(f"Selected data from bigquery: {bigquery_table}")
+        logger.debug(
+            f"Data Schema: {data.schema},"
+            f" Selected Data Schema: {bigquery_table.schema}"
+        )
         assert data.equals(bigquery_table)
 
         # data2を取り出してdecodeできるか確認する

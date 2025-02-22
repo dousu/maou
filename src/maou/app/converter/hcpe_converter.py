@@ -29,6 +29,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         key_columns: list[str],
         arrow_table: pa.Table,
         clustering_key: Optional[str] = None,
+        partitioning_key_date: Optional[str] = None,
     ) -> None:
         pass
 
@@ -57,6 +58,12 @@ class HCPEConverter:
         max_moves: Optional[int] = None
         allowed_endgame_status: Optional[list[str]] = None
         exclude_moves: Optional[list[int]] = None
+
+    def __cast_nullable_to_false(self, table: pa.Table) -> pa.Table:
+        schema = pa.schema(
+            [pa.field(f.name, f.type, nullable=False) for f in table.schema]
+        )
+        return table.cast(schema)
 
     def convert(self, option: ConvertOption) -> Dict[str, str]:
         """HCPEファイルを作成する."""
@@ -171,8 +178,8 @@ class HCPEConverter:
                             arrow_features["id"].append(
                                 f"{file.with_suffix('.hcpe').name}_{idx}"
                             )
-                            arrow_features["clusteringKey"].append(
-                                parser.clustering_key_value()
+                            arrow_features["partitioningKey"].append(
+                                parser.partitioning_key_value()
                             )
                             arrow_features["ratings"].append(
                                 pickle.dumps(np.array(parser.ratings()))
@@ -188,10 +195,16 @@ class HCPEConverter:
                         hcpes[: idx + 1],
                     )
                     if self.__feature_store is not None:
+                        # cast_nullable_to_falseをかませる構成について
+                        # dictからpyarrow tableを作るとnullable=trueになってしまうのでfalseに変更する
+                        # 一旦テーブル作ってからcastなのでちょっと効率悪そうだが，
+                        # スキーマの推測を利用したいのでこの構成になっている
+                        table = pa.table(arrow_features)
                         self.__feature_store.store_features(
                             key_columns=["id"],
-                            arrow_table=pa.table(arrow_features),
-                            clustering_key="clusteringKey",
+                            arrow_table=self.__cast_nullable_to_false(table),
+                            clustering_key=None,
+                            partitioning_key_date="partitioningKey",
                         )
                     conversion_result[str(file)] = f"success {idx + 1} rows"
                 except Exception as e:

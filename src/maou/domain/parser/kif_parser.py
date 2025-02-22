@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any
 
 from cshogi import KIF
 
@@ -33,5 +33,8 @@ class KifParser(parser.Parser):
     def comments(self) -> list[str]:
         return self.kif.comments  # type: ignore
 
-    def clustering_key_value(self) -> Optional[str]:
+    def clustering_key_value(self) -> Any:
+        return None
+
+    def partitioning_key_value(self) -> Any:
         return None

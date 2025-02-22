@@ -1,11 +1,15 @@
 import logging
 import os
+import re
+import uuid
 from collections.abc import Generator
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import google_crc32c
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from maou.app.converter.hcpe_converter import HCPEConverter
@@ -88,6 +92,73 @@ class TestIntegrationHcpeConverter:
                 return False
         return True
 
+    def insert_partitioning_test_data(self) -> None:
+        # 20MB 以下のデータを生成 (20MBが最小課金容量)
+        # 1行約116バイト (36+16+4+4+4+8+4.5+4+36) × 100,000 行 = 11MB
+        # これにオーバーヘッドがのって少し大きくなる
+        num_rows = 100000
+        partitioning_values = np.array(
+            [
+                date.fromisoformat("2019-12-04"),
+                date.fromisoformat("2019-12-05"),
+                date.fromisoformat("2019-12-07"),
+                date.fromisoformat("2019-12-30"),
+            ]
+        )
+        partitioning_keys = np.tile(
+            partitioning_values, num_rows // len(partitioning_values)
+        )
+        num_remaining = num_rows - len(partitioning_keys)
+        if num_remaining > 0:
+            partitioning_keys = np.concatenate(
+                [
+                    partitioning_keys,
+                    np.random.choice(partitioning_values, num_remaining),
+                ]
+            )
+        np.random.shuffle(partitioning_keys)
+        data = {
+            "id": [str(uuid.uuid4()) for _ in range(num_rows)],
+            "hcp": [np.random.bytes(16) for _ in range(num_rows)],
+            "eval": np.random.randint(-1000, 1000, num_rows),
+            "bestMove16": np.random.randint(0, 65536, num_rows),
+            "gameResult": np.random.randint(-1, 2, num_rows),  # -1, 0, 1 のランダム値
+            "ratings": [np.random.bytes(8) for _ in range(num_rows)],
+            "endgameStatus": np.random.choice(
+                ["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows
+            ),
+            "moves": np.random.randint(0, 100, num_rows),
+            "partitioningKey": partitioning_keys,
+        }
+        table = pa.Table.from_pydict(
+            data,
+            schema=pa.schema(
+                [
+                    pa.field("id", pa.string(), nullable=False),
+                    pa.field("hcp", pa.binary(), nullable=False),
+                    pa.field("eval", pa.int32(), nullable=False),
+                    pa.field("bestMove16", pa.int32(), nullable=False),
+                    pa.field("gameResult", pa.int32(), nullable=False),
+                    pa.field("ratings", pa.binary(), nullable=False),
+                    pa.field("endgameStatus", pa.string(), nullable=False),
+                    pa.field("moves", pa.int32(), nullable=False),
+                    pa.field("partitioningKey", pa.date64(), nullable=False),
+                ]
+            ),
+        )
+        self.bq._BigQuery__create_or_replace_table(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            schema=self.bq._BigQuery__generate_schema(arrow_table=table),
+            clustering_key=None,
+            partitioning_key_date="partitioningKey",
+        )
+        self.bq.load_from_arrow(
+            dataset_id=self.dataset_id, table_name=self.table_name, table=table
+        )
+
+        logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
+
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
         feature_store = BigQuery(
@@ -168,3 +239,60 @@ class TestIntegrationHcpeConverter:
                 for d1, d2 in zip(sorted_local_data, sorted_bq_data)
             ]
         )
+
+    def test_partitioning_key_partitioning(self, default_fixture: None) -> None:
+        """日付パーティショニングキーを使用した場合にmergeクエリの読み込みバイト数が減少している."""
+
+        self.insert_partitioning_test_data()
+
+        start_time = datetime.now()
+
+        feature_store = BigQuery(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+        )
+        input_paths = [
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"),
+        ]
+        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        option = HCPEConverter.ConvertOption(
+            input_paths=input_paths,
+            input_format="csa",
+            output_dir=output_dir,
+        )
+        HCPEConverter(
+            feature_store=feature_store,
+        ).convert(option)
+
+        client = self.bq.client
+
+        table = client.get_table(self.table_id)
+
+        jobs = client.list_jobs(min_creation_time=start_time)
+        total_bytes_processed: int
+        for job in jobs:
+            if job.job_type == "query":
+                logger.debug(
+                    f"QueryJob id: {job.job_id}, query: {job.query},"
+                    f" time: {job.created},"
+                    f" total_bytes_processed: {job.total_bytes_processed}"
+                )
+                pattern = (
+                    f"MERGE.*"
+                    f"{re.escape(self.dataset_id)}.{re.escape(self.table_name)}.*"
+                )
+                if re.search(pattern, job.query):
+                    total_bytes_processed = job.total_bytes_processed
+        logger.debug(
+            f"target table bytes: {table.num_bytes},"
+            f" total_bytes_processed: {total_bytes_processed}"
+        )
+        assert total_bytes_processed is not None and table.num_bytes is not None
+        assert total_bytes_processed < table.num_bytes
+        # 現在はパーティショニングだがクラスタリングだとある程度多めにかかってしまう
+        # 現時点だと300kBでいいはずなのに7MBほどかかった
+        # 自動の再クラスタリングが働かないこともあるのかもしれない
+        # 現在のデータならデータソースは211.75kB程度になるのでほぼ最小であることを確認している
+        assert total_bytes_processed < 300 * 1024
