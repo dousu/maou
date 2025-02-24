@@ -94,9 +94,7 @@ class TestIntegrationHcpeConverter:
 
     def insert_partitioning_test_data(self) -> None:
         # 20MB 以下のデータを生成 (20MBが最小課金容量)
-        # 1行約116バイト (36+16+4+4+4+8+4.5+4+36) × 100,000 行 = 11MB
-        # これにオーバーヘッドがのって少し大きくなる
-        num_rows = 100000
+        num_rows = 40000
         partitioning_values = np.array(
             [
                 date.fromisoformat("2019-12-04"),

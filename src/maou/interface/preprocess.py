@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.pre_process.hcpe_transform import FeatureStore, PreProcess
+from maou.app.pre_process.hcpe_transform import DataSource, FeatureStore, PreProcess
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -23,19 +23,18 @@ def output_dir_validation(output_dir: Path) -> None:
 
 def transform(
     *,
-    file_system: FileSystem,
-    input_path: Path,
-    output_dir: Path,
+    datasource: DataSource,
+    output_dir: Optional[Path],
     feature_store: Optional[FeatureStore] = None,
 ) -> str:
-    output_dir_validation(output_dir)
-    logger.info(f"Input: {input_path}, Output: {output_dir}")
+    if output_dir is not None:
+        output_dir_validation(output_dir)
 
     option = PreProcess.PreProcessOption(
-        input_paths=file_system.collect_files(input_path),
         output_dir=output_dir,
     )
     pre_process_result = PreProcess(
+        datasource=datasource,
         feature_store=feature_store,
     ).transform(option)
 

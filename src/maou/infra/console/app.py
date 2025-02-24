@@ -152,16 +152,28 @@ def hcpe_convert(
 
 @click.command()
 @click.option(
-    "--input-path",
+    "--datasource-input-path",
     help="Path to the input file or directory.",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
+    required=False,
 )
 @click.option(
     "--output-dir",
     help="Directory to save the output files.",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
+    required=False,
+)
+@click.option(
+    "--datasource-dataset-id",
+    help="BigQuery dataset ID for storing features.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--datasource-table-name",
+    help="BigQuery table name for storing features.",
+    type=str,
+    required=False,
 )
 @click.option(
     "--bigquery",
@@ -190,30 +202,45 @@ def hcpe_convert(
     default=100 * 1024 * 1024,
 )
 def pre_process(
-    input_path: Path,
-    output_dir: Path,
+    input_path: Optional[Path],
+    output_dir: Optional[Path],
+    datasource_dataset_id: Optional[str],
+    datasource_table_name: Optional[str],
     bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
     max_buffer_bytes: int,
 ) -> None:
     try:
+        if datasource_dataset_id is not None and datasource_table_name is not None:
+            datasource = BigQueryDataSource(
+                dataset_id=datasource_dataset_id,
+                table_name=datasource_table_name,
+                max_cached_bytes=max_buffer_bytes,
+            )
+        elif input_path is not None:
+            schema_datasource = {
+                "hcp": "hcp",
+                "bestMove16": "bestMove16",
+                "gameResult": "gameResult",
+                "eval": "eval",
+            }
+            input_paths = FileSystem.collect_files(input_path)
+            datasource = FileDataSource(
+                file_paths=input_paths, schema=schema_datasource
+            )
         feature_store = (
             BigQuery(
                 dataset_id=dataset_id,
                 table_name=table_name,
                 max_buffer_size=max_buffer_bytes,
             )
-            if bigquery
-            and dataset_id is not None
-            and table_name is not None
-            and max_buffer_bytes is not None
+            if bigquery and dataset_id is not None and table_name is not None
             else None
         )
         click.echo(
             preprocess.transform(
-                file_system=FileSystem(),
-                input_path=input_path,
+                datasource=datasource,
                 output_dir=output_dir,
                 feature_store=feature_store,
             )

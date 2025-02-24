@@ -34,7 +34,6 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
     last_key_columns: Optional[list[str]] = None
     clustering_key: Optional[str] = None
     partitioning_key_date: Optional[str] = None
-    temp_table: bigquery.Table
 
     def __init__(
         self,
@@ -233,6 +232,8 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
     def feature_store(self) -> Generator[None, None, None]:
         try:
             yield
+        except Exception:
+            raise
         finally:
             self.__cleanup()
 
@@ -362,24 +363,24 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
         # 一時テーブル作成
         # 一時テーブルは既に存在してしまっている場合は削除する
-        self.temp_table = self.__create_or_replace_table(
+        temp_table = self.__create_or_replace_table(
             dataset_id=self.dataset_id,
             table_name=f"{self.target_table_name}_temp",
             schema=schema,
             clustering_key=clustering_key,
             partitioning_key_date=partitioning_key_date,
         )
-        self.logger.debug(f"Temp table: {self.temp_table.full_table_id}")
+        self.logger.debug(f"Temp table: {temp_table.full_table_id}")
 
         try:
             self.load_from_arrow(
-                dataset_id=self.temp_table.dataset_id,
-                table_name=self.temp_table.table_id,
+                dataset_id=temp_table.dataset_id,
+                table_name=temp_table.table_id,
                 table=combined_table,
             )
             self.logger.debug(
                 "Inserted rows to temporary table."
-                f" table_id: {self.temp_table.full_table_id}"
+                f" table_id: {temp_table.full_table_id}"
             )
 
             # MERGEクエリ
@@ -428,7 +429,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             MERGE `{str(table.full_table_id).replace(":", ".")}`
               AS target
             USING
-              `{str(self.temp_table.full_table_id).replace(":", ".")}`
+              `{str(temp_table.full_table_id).replace(":", ".")}`
               AS source
             ON {on_conditions}
             WHEN MATCHED
@@ -460,7 +461,10 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 partitioning_key_date=self.partitioning_key_date,
             )
         # 一時テーブル削除
-        self.__drop_table(table=self.temp_table)
+        self.__drop_table(
+            dataset_id=self.dataset_id,
+            table_name=f"{self.target_table_name}_temp",
+        )
         self.logger.debug(
             "Features successfully stored in BigQuery."
             " table_id:"

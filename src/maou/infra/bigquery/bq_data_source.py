@@ -5,17 +5,18 @@ from collections import OrderedDict
 from collections.abc import Generator
 from typing import Any, Optional, Union
 
+import numpy as np
 import pyarrow as pa
 from google.cloud import bigquery
 
-from maou.interface import learn
+from maou.interface import learn, preprocess
 
 
 class MissingBigQueryConfig(Exception):
     pass
 
 
-class BigQueryDataSource(learn.LearningDataSource):
+class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
     logger: logging.Logger = logging.getLogger(__name__)
 
     class BigQueryDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
@@ -274,13 +275,17 @@ class BigQueryDataSource(learn.LearningDataSource):
                 row_table = page_table.slice(row_offset, 1)
             return row_table
 
-        def iter_batches(self) -> Generator[pa.Table, None, None]:
+        def iter_batches(self) -> Generator[tuple[str, pa.Table], None, None]:
             """
             BigQuery のテーブル全体に対して，
             batch_size 単位のPyArrow Tableを順次取得するジェネレータ．
             """
             for page_num in range(self.total_pages):
-                yield self.get_page(page_num)
+                if bool(self.__pruning_info):
+                    name = str(self.__pruning_info[page_num]["pruning_value"])
+                else:
+                    name = f"batch_{page_num}_{self.total_pages}"
+                yield name, self.get_page(page_num)
 
     def __init__(
         self,
@@ -347,3 +352,10 @@ class BigQueryDataSource(learn.LearningDataSource):
 
     def __len__(self) -> int:
         return len(self.indicies)
+
+    def iter_batches(
+        self,
+    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+        # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
+        for name, batch in self.__page_manager.iter_batches():
+            yield name, batch

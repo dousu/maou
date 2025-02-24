@@ -1,18 +1,20 @@
 import logging
 import random
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any, Optional, Union
 
 import numpy as np
+import pyarrow as pa
 
-from maou.interface import learn
+from maou.interface import learn, preprocess
 
 
 class MissingFileDataConfig(Exception):
     pass
 
 
-class FileDataSource(learn.LearningDataSource):
+class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
     class FileDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
         logger: logging.Logger = logging.getLogger(__name__)
 
@@ -93,6 +95,11 @@ class FileDataSource(learn.LearningDataSource):
 
             raise IndexError(f"Index {idx} out of range.")
 
+        def iter_batches(self) -> Generator[tuple[str, pa.Table], None, None]:
+            for file in self.file_paths:
+                data = np.load(file, mmap_mode="r")
+                yield str(file), data
+
     def __init__(
         self,
         *,
@@ -135,3 +142,10 @@ class FileDataSource(learn.LearningDataSource):
 
     def __len__(self) -> int:
         return len(self.indicies)
+
+    def iter_batches(
+        self,
+    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+        # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
+        for name, batch in self.__file_manager.iter_batches():
+            yield name, batch

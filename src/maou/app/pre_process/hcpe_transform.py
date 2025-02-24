@@ -4,8 +4,9 @@ import logging
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, ContextManager, Dict, Generator, Optional
+from typing import Any, ContextManager, Dict, Generator, Optional, Union
 
 import numpy as np
 import pyarrow as pa
@@ -32,28 +33,49 @@ class FeatureStore(metaclass=abc.ABCMeta):
         pass
 
 
+class DataSource:
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        pass
+
+    @abc.abstractmethod
+    def iter_batches(
+        self,
+    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+        pass
+
+
 class PreProcess:
     logger: logging.Logger = logging.getLogger(__name__)
 
-    def __init__(self, *, feature_store: Optional[FeatureStore] = None):
+    def __init__(
+        self,
+        *,
+        datasource: DataSource,
+        feature_store: Optional[FeatureStore] = None,
+    ):
         self.__feature_store = feature_store
+        self.__datasource = datasource
         self.__transform_logic: Transform = Transform()
 
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
-        input_paths: list[Path]
-        output_dir: Path
+        output_dir: Optional[Path] = None
 
     def transform(self, option: PreProcessOption) -> Dict[str, str]:
         """機械学習の前処理を行う."""
 
         pre_process_result: Dict[str, str] = {}
-        self.logger.debug(f"前処理対象のファイル {option.input_paths}")
+        self.logger.debug(f"前処理対象のデータ数 {len(self.__datasource)}")
         with self.__context():
-            for file in tqdm(option.input_paths):
-                # 1024もあれば確保しておく局面数として十分だろう
+            for dataname, data in tqdm(self.__datasource.iter_batches()):
+                if isinstance(data, pa.Table):
+                    data_length = data.num_rows  # type: ignore
+                elif isinstance(data, np.ndarray):
+                    data_length = len(data)
+                self.logger.debug(f"処理対象: {dataname}, 行数: {data_length}")
                 array = np.zeros(
-                    1024,
+                    data_length,
                     dtype=[
                         ("id", "U128"),
                         ("eval", "i4"),
@@ -62,46 +84,60 @@ class PreProcess:
                         ("resultValue", "f4"),
                     ],
                 )
-                hcpes = np.load(file)
                 arrow_features: dict[str, list[Any]] = defaultdict(list)
-                for idx, hcpe in enumerate(hcpes):
-                    hcp = hcpe["hcp"]
-                    move16 = hcpe["bestMove16"]
-                    game_result = hcpe["gameResult"]
-                    eval = hcpe["eval"]
-                    features, move_label, result_value = self.__transform_logic(
-                        hcp=hcp, move16=move16, game_result=game_result, eval=eval
-                    )
-
-                    data = array[idx]
-                    data["id"] = f"{file.name}_{idx}"
-                    data["eval"] = hcpe["eval"]
-                    data["features"] = features
-                    data["moveLabel"] = move_label
-                    data["resultValue"] = result_value
+                for idx in range(data_length):
+                    if isinstance(data, pa.Table):
+                        id = data["id"][idx].as_py()
+                        hcp = pickle.loads(data["hcp"][idx].as_py())
+                        move16 = data["bestMove16"][idx].as_py()
+                        game_result = data["gameResult"][idx].as_py()
+                        eval = data["eval"][idx].as_py()
+                        features, move_label, result_value = self.__transform_logic(
+                            hcp=hcp, move16=move16, game_result=game_result, eval=eval
+                        )
+                        partitioning_key = data["partitioningKey"][idx].as_py()
+                    elif isinstance(data, np.ndarray):
+                        id = f"{dataname}_{idx}"
+                        hcp = data[idx]["hcp"]
+                        move16 = data[idx]["bestMove16"]
+                        game_result = data[idx]["gameResult"]
+                        eval = data[idx]["eval"]
+                        features, move_label, result_value = self.__transform_logic(
+                            hcp=hcp, move16=move16, game_result=game_result, eval=eval
+                        )
+                        partitioning_key = datetime.now().date()
 
                     if self.__feature_store is not None:
-                        arrow_features["id"].append(f"{file.name}_{idx}")
-                        arrow_features["eval"].append(hcpe["eval"])
+                        arrow_features["id"].append(id)
+                        arrow_features["eval"].append(eval)
                         arrow_features["features"].append(pickle.dumps(features))
                         arrow_features["moveLabel"].append(move_label)
                         arrow_features["resultValue"].append(result_value)
                         # ローカルファイルには入らない情報
-                        # ローカルファイルをデータソースにした場合はこれを作れないがどうするのか
-                        arrow_features["clusteringKey"].append("")
+                        arrow_features["partitioningKey"].append(partitioning_key)
 
-                np.save(
-                    option.output_dir / file.with_suffix(".pre.npy").name,
-                    array[: idx + 1],
-                )
+                    if option.output_dir is not None:
+                        np_data = array[idx]
+                        np_data["id"] = id
+                        np_data["eval"] = eval
+                        np_data["features"] = features
+                        np_data["moveLabel"] = move_label
+                        np_data["resultValue"] = result_value
 
                 if self.__feature_store is not None:
                     arrow_table = pa.table(arrow_features)
                     self.__feature_store.store_features(
                         key_columns=["id"],
                         arrow_table=arrow_table,
+                        partitioning_key_date="partitioningKey",
                     )
-                pre_process_result[str(file)] = f"success {idx + 1} rows"
+
+                if option.output_dir is not None:
+                    np.save(
+                        option.output_dir / Path(dataname).with_suffix(".pre.npy").name,
+                        array[: idx + 1],
+                    )
+                pre_process_result[dataname] = f"success {idx + 1} rows"
 
         return pre_process_result
 
@@ -113,5 +149,5 @@ class PreProcess:
                     yield
             else:
                 yield
-        finally:
-            pass
+        except Exception:
+            raise

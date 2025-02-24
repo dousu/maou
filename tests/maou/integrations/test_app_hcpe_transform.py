@@ -51,7 +51,6 @@ class TestIntegrationPreProcess:
         self.table_name = "test_" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
         self.bq = BigQuery(dataset_id=self.dataset_id, table_name=self.table_name)
-        self.table_id = f"{self.bq.client.project}.{self.dataset_id}.{self.table_name}"
         yield
         # clean up
         self.bq._BigQuery__drop_table(  # type: ignore
@@ -102,16 +101,23 @@ class TestIntegrationPreProcess:
         ]
         output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
         option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
-            input_paths=input_paths,
             output_dir=output_dir,
         )
+        schema_datasource = {
+            "hcp": "hcp",
+            "bestMove16": "bestMove16",
+            "gameResult": "gameResult",
+            "eval": "eval",
+        }
+        datasource = FileDataSource(file_paths=input_paths, schema=schema_datasource)
         PreProcess(
+            datasource=datasource,
             feature_store=feature_store,
         ).transform(option)
 
         # ローカル
         output_paths = [
-            option.output_dir / input_path.with_suffix(".pre.npy").name
+            output_dir / input_path.with_suffix(".pre.npy").name
             for input_path in input_paths
         ]
         schema = {

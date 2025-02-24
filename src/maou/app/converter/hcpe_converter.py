@@ -229,5 +229,5 @@ class HCPEConverter:
                     yield
             else:
                 yield
-        finally:
-            pass
+        except Exception:
+            raise
