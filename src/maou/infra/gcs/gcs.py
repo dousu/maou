@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from google.cloud import storage
+import google.cloud.storage as storage
 
 from maou.interface import learn
 

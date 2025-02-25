@@ -16,7 +16,7 @@ from maou.interface import converter, learn, preprocess
 @click.group()
 @click.option("--debug-mode", "-d", is_flag=True, help="Enable debug logging.")
 def main(debug_mode: bool) -> None:
-    if debug_mode is True:
+    if debug_mode:
         app_logger.setLevel(logging.DEBUG)
     else:
         app_logger.setLevel(logging.INFO)
@@ -25,45 +25,45 @@ def main(debug_mode: bool) -> None:
 @click.command()
 @click.option(
     "--input-path",
-    help="Path to the input file or directory.",
+    help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )
 @click.option(
     "--input-format",
     type=str,
-    help='Specify the input format. Supported formats: "kif" or "csa".',
+    help="Input format: 'kif' or 'csa'.",
     required=True,
 )
 @click.option(
     "--output-dir",
-    help="Directory to save the output files.",
+    help="Directory for output files.",
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )
 @click.option(
     "--min-rating",
-    help="Minimum rating of games to include.",
+    help="Minimum game rating.",
     type=int,
     required=False,
 )
 @click.option(
     "--min-moves",
-    help="Minimum number of moves required for a game to be included.",
+    help="Minimum moves threshold.",
     type=int,
     required=False,
 )
 @click.option(
     "--max-moves",
-    help="Maximum number of moves allowed for a game to be included.",
+    help="Maximum moves threshold.",
     type=int,
     required=False,
 )
 @click.option(
     "--allowed-endgame-status",
     help=(
-        "Allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI')."
-        " Can be specified multiple times."
+        "Allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI').",
+        " Repeatable.",
     ),
     type=str,
     required=False,
@@ -71,36 +71,33 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--exclude-moves",
-    help=(
-        "Moves to exclude from the game (integer move numbers)."
-        " Can be specified multiple times."
-    ),
+    help="Exclude specific move numbers. Repeatable.",
     type=int,
     required=False,
     multiple=True,
 )
 @click.option(
-    "--bigquery",
+    "--output-bigquery",
     type=bool,
     is_flag=True,
-    help="Store features in BigQuery.",
+    help="Output features to BigQuery.",
     required=False,
 )
 @click.option(
     "--dataset-id",
-    help="BigQuery dataset ID for storing features.",
+    help="BigQuery dataset ID for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--table-name",
-    help="BigQuery table name for storing features.",
+    help="BigQuery table name for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--max-buffer-bytes",
-    help="Maximum buffer size in bytes (default: 100MB).",
+    help="Max buffer size in bytes (default: 100MB).",
     type=int,
     required=False,
     default=100 * 1024 * 1024,
@@ -114,7 +111,7 @@ def hcpe_convert(
     max_moves: Optional[int],
     allowed_endgame_status: Optional[list[str]],
     exclude_moves: Optional[list[int]],
-    bigquery: Optional[bool],
+    output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
     max_buffer_bytes: int,
@@ -126,10 +123,7 @@ def hcpe_convert(
                 table_name=table_name,
                 max_buffer_size=max_buffer_bytes,
             )
-            if bigquery
-            and dataset_id is not None
-            and table_name is not None
-            and max_buffer_bytes is not None
+            if output_bigquery and dataset_id is not None and table_name is not None
             else None
         )
         click.echo(
@@ -147,56 +141,70 @@ def hcpe_convert(
             )
         )
     except Exception:
-        app_logger.exception("Error Occured", stack_info=True)
+        app_logger.exception("Error occurred", stack_info=True)
 
 
 @click.command()
 @click.option(
     "--datasource-input-path",
-    help="Path to the input file or directory.",
+    help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
 @click.option(
     "--output-dir",
-    help="Directory to save the output files.",
+    help="Directory for output files.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
 @click.option(
-    "--datasource-dataset-id",
-    help="BigQuery dataset ID for storing features.",
+    "--input-dataset-id",
+    help="BigQuery dataset ID for input.",
     type=str,
     required=False,
 )
 @click.option(
-    "--datasource-table-name",
-    help="BigQuery table name for storing features.",
+    "--input-table-name",
+    help="BigQuery table name for input.",
     type=str,
     required=False,
 )
 @click.option(
-    "--bigquery",
+    "--input-batch-size",
+    help="Batch size for reading from BigQuery.",
+    type=int,
+    default=10000,
+    required=False,
+)
+@click.option(
+    "--input-max-cached-bytes",
+    help="Max cache size in bytes for input (default: 100MB).",
+    type=int,
+    default=100 * 1024 * 1024,
+    required=False,
+)
+@click.option(
+    "--output-bigquery",
     type=bool,
     is_flag=True,
-    help="Use BigQuery as feature store",
+    help="Store output features in BigQuery.",
     required=False,
 )
 @click.option(
     "--dataset-id",
-    help="BigQuery dataset ID for storing features.",
+    help="BigQuery dataset ID for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--table-name",
-    help="BigQuery table name for storing features.",
+    help="BigQuery table name for output.",
     type=str,
     required=False,
 )
 @click.option(
-    "--max-buffer-bytes",
-    help="Maximum buffer size in bytes (default: 100MB).",
+    "--output-max-cached-bytes",
+    help="Max cache size in bytes for output (default: 100MB).",
     type=int,
     required=False,
     default=100 * 1024 * 1024,
@@ -204,19 +212,22 @@ def hcpe_convert(
 def pre_process(
     input_path: Optional[Path],
     output_dir: Optional[Path],
-    datasource_dataset_id: Optional[str],
-    datasource_table_name: Optional[str],
-    bigquery: Optional[bool],
+    input_dataset_id: Optional[str],
+    input_table_name: Optional[str],
+    input_batch_size: int,
+    input_max_cached_bytes: int,
+    output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
-    max_buffer_bytes: int,
+    output_max_cached_bytes: int,
 ) -> None:
     try:
-        if datasource_dataset_id is not None and datasource_table_name is not None:
+        if input_dataset_id is not None and input_table_name is not None:
             datasource = BigQueryDataSource(
-                dataset_id=datasource_dataset_id,
-                table_name=datasource_table_name,
-                max_cached_bytes=max_buffer_bytes,
+                dataset_id=input_dataset_id,
+                table_name=input_table_name,
+                batch_size=input_batch_size,
+                max_cached_bytes=input_max_cached_bytes,
             )
         elif input_path is not None:
             schema_datasource = {
@@ -233,9 +244,9 @@ def pre_process(
             BigQuery(
                 dataset_id=dataset_id,
                 table_name=table_name,
-                max_buffer_size=max_buffer_bytes,
+                max_buffer_size=output_max_cached_bytes,
             )
-            if bigquery and dataset_id is not None and table_name is not None
+            if output_bigquery and dataset_id is not None and table_name is not None
             else None
         )
         click.echo(
@@ -246,71 +257,71 @@ def pre_process(
             )
         )
     except Exception:
-        app_logger.exception("Error Occured", stack_info=True)
+        app_logger.exception("Error occurred", stack_info=True)
 
 
 @click.command()
 @click.option(
     "--input-dir",
-    help="Specify the directory where the input data is located.",
+    help="Input data directory.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
 @click.option(
     "--input-dataset-id",
-    help="Specify the BigQuery dataset id where the input data is located.",
+    help="BigQuery dataset ID for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-table-name",
-    help="Specify the BigQuery table name where the input data is located.",
+    help="BigQuery table name for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-format",
-    help='Specify the input format. Supported formats: "hcpe" or "preprocess".',
+    help="Input format: 'hcpe' or 'preprocess'.",
     type=str,
     default="hcpe",
     required=False,
 )
 @click.option(
     "--input-batch-size",
-    help="Specify batch size to read BigQuery table.",
+    help="Batch size for reading from BigQuery.",
     type=int,
     default=10000,
     required=False,
 )
 @click.option(
     "--input-max-cached-bytes",
-    help="Maximum buffer size in bytes (default: 100MB).",
+    help="Max cache size in bytes for input (default: 100MB).",
     type=int,
     default=100 * 1024 * 1024,
     required=False,
 )
 @click.option(
     "--input-clustering-key",
-    help="Specify clustering key in the BigQuery table.",
+    help="BigQuery clustering key.",
     type=str,
     required=False,
 )
 @click.option(
     "--gpu",
     type=str,
-    help='Specify the PyTorch device (e.g., "cuda:0" or "cpu").',
+    help="PyTorch device (e.g., 'cuda:0' or 'cpu').",
     required=False,
 )
 @click.option(
     "--compilation",
     type=bool,
-    help="Enable PyTorch compilation (True/False).",
+    help="Enable PyTorch compilation.",
     required=False,
 )
 @click.option(
     "--test-ratio",
     type=float,
-    help="Ratio of test data in train-test split.",
+    help="Test set ratio.",
     required=False,
 )
 @click.option(
@@ -322,85 +333,85 @@ def pre_process(
 @click.option(
     "--batch-size",
     type=int,
-    help="Batch size for training.",
+    help="Training batch size.",
     required=False,
 )
 @click.option(
     "--dataloader-workers",
     type=int,
-    help="Number of workers for DataLoader.",
+    help="Number of DataLoader workers.",
     required=False,
 )
 @click.option(
     "--gce-parameter",
     type=float,
-    help="Hyperparameter for GCE loss.",
+    help="GCE loss hyperparameter.",
     required=False,
 )
 @click.option(
     "--policy-loss-ratio",
     type=float,
-    help="Loss coefficient for policy loss.",
+    help="Policy loss weight.",
     required=False,
 )
 @click.option(
     "--value-loss-ratio",
     type=float,
-    help="Loss coefficient for value loss.",
+    help="Value loss weight.",
     required=False,
 )
 @click.option(
     "--learning-ratio",
     type=float,
-    help="Learning rate for optimizer.",
+    help="Learning rate.",
     required=False,
 )
 @click.option(
     "--momentum",
     type=float,
-    help="Momentum parameter for optimizer.",
+    help="Optimizer momentum.",
     required=False,
 )
 @click.option(
     "--checkpoint-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory to save model checkpoints.",
+    help="Checkpoint directory.",
     required=False,
 )
 @click.option(
     "--resume-from",
     type=click.Path(exists=True, path_type=Path),
-    help="Path to a checkpoint file to resume training.",
+    help="Checkpoint file to resume training.",
     required=False,
 )
 @click.option(
     "--log-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory to save log files for SummaryWriter.",
+    help="Log directory for SummaryWriter.",
     required=False,
 )
 @click.option(
     "--model-dir",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory to save trained models.",
+    help="Model output directory.",
     required=False,
 )
 @click.option(
-    "--gcs",
+    "--output-gcs",
     type=bool,
     is_flag=True,
-    help="Save files to Google Cloud Storage (GCS).",
+    help="Upload output to Google Cloud Storage.",
     required=False,
 )
 @click.option(
     "--bucket-name",
-    help="Google Cloud Storage bucket name.",
+    help="GCS bucket name.",
     type=str,
     required=False,
 )
 @click.option(
     "--gcs-base-path",
-    help="Base path within the GCS bucket.",
+    help="Base path in GCS bucket.",
     type=str,
     required=False,
 )
@@ -427,14 +438,14 @@ def learn_model(
     resume_from: Optional[Path],
     log_dir: Optional[Path],
     model_dir: Optional[Path],
-    gcs: Optional[bool],
+    output_gcs: Optional[bool],
     bucket_name: Optional[str],
     gcs_base_path: Optional[str],
 ) -> None:
     try:
         cloud_storage = (
             GCS(bucket_name=bucket_name, base_path=gcs_base_path)
-            if gcs and bucket_name is not None and gcs_base_path is not None
+            if output_gcs and bucket_name is not None and gcs_base_path is not None
             else None
         )
         if input_dir is not None:
@@ -455,8 +466,7 @@ def learn_model(
                 }
             else:
                 raise Exception(
-                    '有効なinput_formatを指定してください ("hcpe" or "preprocess")'
-                    f" input_format: {input_format}"
+                    "Please specify a valid input_format ('hcpe' or 'preprocess')."
                 )
             datasource = FileDataSource.FileDataSourceSpliter(
                 file_paths=FileSystem.collect_files(input_dir),
@@ -471,10 +481,7 @@ def learn_model(
                 clustering_key=input_clustering_key,
             )
         else:
-            raise Exception(
-                "入力ファイルが入るディレクトリまたはBigQueryテーブルを指定してください"
-                f" ファイル: {input_dir}, BigQuery: {input_dataset_id}.{input_table_name}"
-            )
+            raise Exception("Please specify an input directory or a BigQuery table.")
         click.echo(
             learn.learn(
                 datasource=datasource,
@@ -498,7 +505,7 @@ def learn_model(
             )
         )
     except Exception:
-        app_logger.exception("Error Occured", stack_info=True)
+        app_logger.exception("Error occurred", stack_info=True)
 
 
 main.add_command(hcpe_convert)

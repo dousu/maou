@@ -1,5 +1,6 @@
 import abc
 import logging
+from collections.abc import Sized
 from typing import Any, Optional
 
 import torch
@@ -18,7 +19,7 @@ class DataSource:
         pass
 
 
-class KifDataset(Dataset):
+class KifDataset(Dataset, Sized):
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(

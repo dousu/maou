@@ -2,7 +2,7 @@ import contextlib
 import datetime
 import logging
 from io import BytesIO
-from typing import Generator, Iterator, Optional
+from typing import Generator, Iterator, Optional, Union
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -171,6 +171,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         table_name: Optional[str] = None,
         table: Optional[bigquery.Table] = None,
     ) -> None:
+        table_ref: Union[bigquery.Table, str]
         if dataset_id is not None and table_name is not None:
             table_ref = f"{self.client.project}.{dataset_id}.{table_name}"
             table_id = table_ref

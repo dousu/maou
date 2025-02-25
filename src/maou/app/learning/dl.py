@@ -7,7 +7,7 @@ from typing import Dict, Optional
 
 import torch
 from torch import optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 from tqdm.auto import tqdm
@@ -94,8 +94,8 @@ class Learning:
             test_ratio=option.test_ratio
         )
 
-        dataset_train: Dataset
-        dataset_test: Dataset
+        dataset_train: KifDataset
+        dataset_test: KifDataset
         if option.datasource_type == "hcpe":
             # datasetに特徴量と正解ラベルを作成する変換を登録する
             feature = Transform()
