@@ -61,10 +61,7 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--allowed-endgame-status",
-    help=(
-        "Allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE', '%KACHI').",
-        " Repeatable.",
-    ),
+    help="Allowed endgame statuses (e.g., '%TORYO', '%SENNICHITE'). Repeatable.",
     type=str,
     required=False,
     multiple=True,
@@ -97,10 +94,10 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--max-buffer-bytes",
-    help="Max buffer size in bytes (default: 100MB).",
+    help="Max buffer size in bytes (default: 500MB).",
     type=int,
     required=False,
-    default=100 * 1024 * 1024,
+    default=500 * 1024 * 1024,
 )
 def hcpe_convert(
     input_path: Path,
@@ -146,7 +143,7 @@ def hcpe_convert(
 
 @click.command()
 @click.option(
-    "--datasource-input-path",
+    "--input-path",
     help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
@@ -178,9 +175,9 @@ def hcpe_convert(
 )
 @click.option(
     "--input-max-cached-bytes",
-    help="Max cache size in bytes for input (default: 100MB).",
+    help="Max cache size in bytes for input (default: 500MB).",
     type=int,
-    default=100 * 1024 * 1024,
+    default=500 * 1024 * 1024,
     required=False,
 )
 @click.option(
@@ -204,10 +201,10 @@ def hcpe_convert(
 )
 @click.option(
     "--output-max-cached-bytes",
-    help="Max cache size in bytes for output (default: 100MB).",
+    help="Max cache size in bytes for output (default: 500MB).",
     type=int,
     required=False,
-    default=100 * 1024 * 1024,
+    default=500 * 1024 * 1024,
 )
 def pre_process(
     input_path: Optional[Path],
@@ -295,14 +292,20 @@ def pre_process(
 )
 @click.option(
     "--input-max-cached-bytes",
-    help="Max cache size in bytes for input (default: 100MB).",
+    help="Max cache size in bytes for input (default: 500MB).",
     type=int,
-    default=100 * 1024 * 1024,
+    default=500 * 1024 * 1024,
     required=False,
 )
 @click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-partitioning-key-date",
+    help="BigQuery date partitioning key.",
     type=str,
     required=False,
 )
@@ -423,6 +426,7 @@ def learn_model(
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_clustering_key: Optional[str],
+    input_partitioning_key_date: Optional[str],
     gpu: Optional[str],
     compilation: Optional[bool],
     test_ratio: Optional[float],
@@ -479,6 +483,7 @@ def learn_model(
                 batch_size=input_batch_size,
                 max_cached_bytes=input_max_cached_bytes,
                 clustering_key=input_clustering_key,
+                partitioning_key_date=input_partitioning_key_date,
             )
         else:
             raise Exception("Please specify an input directory or a BigQuery table.")

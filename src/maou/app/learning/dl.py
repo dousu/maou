@@ -22,7 +22,7 @@ from maou.domain.network.resnet import ResidualBlock
 
 class CloudStorage(metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def upload_from_local(self, local_path: Path, cloud_path: str) -> None:
+    def upload_from_local(self, *, local_path: Path, cloud_path: str) -> None:
         pass
 
 
@@ -324,7 +324,9 @@ class Learning:
                 )
                 torch.save(self.model.state_dict(), model_path)
                 if self.__cloud_storage is not None:
-                    self.__cloud_storage.upload_from_local(model_path, str(model_path))
+                    self.__cloud_storage.upload_from_local(
+                        local_path=model_path, cloud_path=str(model_path)
+                    )
 
             # checkpoint
             if self.checkpoint_dir is not None:
@@ -342,7 +344,7 @@ class Learning:
                 )
                 if self.__cloud_storage is not None:
                     self.__cloud_storage.upload_from_local(
-                        checkpoint_path, str(checkpoint_path)
+                        local_path=checkpoint_path, cloud_path=str(checkpoint_path)
                     )
 
             epoch_number += 1

@@ -33,7 +33,7 @@ class GCS(learn.CloudStorage):
             self.logger.debug(f"Bucket '{bucket_name}' created.")
 
     def upload_from_local(self, *, local_path: Path, cloud_path: str) -> None:
-        blob = self.bucket.blob(cloud_path)
+        blob = self.bucket.blob(f"{self.base_path}/{cloud_path}")
         blob.upload_from_filename(local_path)
         self.logger.debug(
             f"Uploaded {local_path} to"
