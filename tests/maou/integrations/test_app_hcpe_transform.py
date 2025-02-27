@@ -126,6 +126,7 @@ class TestIntegrationPreProcess:
             "features": "features",
             "moveLabel": "moveLabel",
             "resultValue": "resultValue",
+            "legalMoveMask": "legalMoveMask",
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,

@@ -13,6 +13,7 @@ import pyarrow as pa
 from tqdm.auto import tqdm
 
 from maou.app.pre_process.feature import FEATURES_NUM
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 
 
@@ -82,6 +83,7 @@ class PreProcess:
                         ("features", "f4", (FEATURES_NUM, 9, 9)),
                         ("moveLabel", "i2"),
                         ("resultValue", "f4"),
+                        ("legalMoveMask", "f4", (MOVE_LABELS_NUM)),
                     ],
                 )
                 arrow_features: dict[str, list[Any]] = defaultdict(list)
@@ -92,8 +94,13 @@ class PreProcess:
                         move16 = data["bestMove16"][idx].as_py()
                         game_result = data["gameResult"][idx].as_py()
                         eval = data["eval"][idx].as_py()
-                        features, move_label, result_value = self.__transform_logic(
-                            hcp=hcp, move16=move16, game_result=game_result, eval=eval
+                        features, move_label, result_value, legal_move_mask = (
+                            self.__transform_logic(
+                                hcp=hcp,
+                                move16=move16,
+                                game_result=game_result,
+                                eval=eval,
+                            )
                         )
                         partitioning_key = data["partitioningKey"][idx].as_py()
                     elif isinstance(data, np.ndarray):
@@ -102,8 +109,13 @@ class PreProcess:
                         move16 = data[idx]["bestMove16"]
                         game_result = data[idx]["gameResult"]
                         eval = data[idx]["eval"]
-                        features, move_label, result_value = self.__transform_logic(
-                            hcp=hcp, move16=move16, game_result=game_result, eval=eval
+                        features, move_label, result_value, legal_move_mask = (
+                            self.__transform_logic(
+                                hcp=hcp,
+                                move16=move16,
+                                game_result=game_result,
+                                eval=eval,
+                            )
                         )
                         partitioning_key = datetime.now().date()
 
@@ -113,6 +125,9 @@ class PreProcess:
                         arrow_features["features"].append(pickle.dumps(features))
                         arrow_features["moveLabel"].append(move_label)
                         arrow_features["resultValue"].append(result_value)
+                        arrow_features["legalMoveMask"].append(
+                            pickle.dumps(legal_move_mask)
+                        )
                         # ローカルファイルには入らない情報
                         arrow_features["partitioningKey"].append(partitioning_key)
 
@@ -123,6 +138,7 @@ class PreProcess:
                         np_data["features"] = features
                         np_data["moveLabel"] = move_label
                         np_data["resultValue"] = result_value
+                        np_data["legalMoveMask"] = legal_move_mask
 
                 if self.__feature_store is not None:
                     arrow_table = pa.table(arrow_features)

@@ -16,7 +16,7 @@ from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
-from maou.domain.loss.loss_fn import GCELoss
+from maou.domain.loss.loss_fn import MaskedGCELoss
 from maou.domain.network.resnet import ResidualBlock
 
 
@@ -33,7 +33,6 @@ class LearningDataSource(DataSource):
             pass
 
 
-# TODO: データ規模が極端に小さいときにLOSS trainとACCURACY policyが0になっているのが気になるので調査しておく
 class Learning:
     """Learning.
     機械学習のトレーニングを行うユースケースを表現する．
@@ -47,23 +46,6 @@ class Learning:
     checkpoint_dir: Optional[Path]
     resume_from: Optional[Path]
     model: torch.nn.Module
-
-    def __init__(
-        self,
-        *,
-        gpu: Optional[str] = None,
-        cloud_storage: Optional[CloudStorage] = None,
-    ):
-        if gpu is not None and gpu != "cpu":
-            self.device = torch.device(gpu)
-            self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
-            self.pin_memory = False
-            torch.set_float32_matmul_precision("high")
-        else:
-            self.logger.info("Use CPU")
-            self.device = torch.device("cpu")
-            self.pin_memory = False
-        self.__cloud_storage = cloud_storage
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
@@ -83,6 +65,23 @@ class Learning:
         resume_from: Optional[Path] = None
         log_dir: Path
         model_dir: Path
+
+    def __init__(
+        self,
+        *,
+        gpu: Optional[str] = None,
+        cloud_storage: Optional[CloudStorage] = None,
+    ):
+        if gpu is not None and gpu != "cpu":
+            self.device = torch.device(gpu)
+            self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
+            self.pin_memory = False
+            torch.set_float32_matmul_precision("high")
+        else:
+            self.logger.info("Use CPU")
+            self.device = torch.device("cpu")
+            self.pin_memory = False
+        self.__cloud_storage = cloud_storage
 
     def learn(self, option: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
@@ -175,7 +174,7 @@ class Learning:
         # ヘッドが二つあるので2つ損失関数を設定する
         # 損失を単純に加算するのかどうかは議論の余地がある
         # policyの損失関数は合法手以外を無視して損失を計算しない設計も考えられる
-        self.loss_fn_policy = GCELoss(q=option.gce_parameter)
+        self.loss_fn_policy = MaskedGCELoss(q=option.gce_parameter)
         self.loss_fn_value = torch.nn.BCEWithLogitsLoss()
         # SGD+Momentum
         # weight_decayは特に根拠なし
@@ -211,7 +210,7 @@ class Learning:
         # index and do some intra-epoch reporting
         for i, data in tqdm(enumerate(self.training_loader)):
             # Every data instance is an input + label pair
-            inputs, (labels_policy, labels_value) = data
+            inputs, (labels_policy, labels_value, legal_move_mask) = data
 
             # Zero your gradients for every batch!
             self.optimizer.zero_grad()
@@ -221,7 +220,7 @@ class Learning:
 
             # Compute the loss and its gradients
             loss = self.policy_loss_ratio * self.loss_fn_policy(
-                outputs_policy, labels_policy
+                outputs_policy, labels_policy, legal_move_mask
             ) + self.value_loss_ratio * self.loss_fn_value(outputs_value, labels_value)
             loss.backward()
 
@@ -279,10 +278,10 @@ class Learning:
             # Disable gradient computation and reduce memory consumption.
             with torch.no_grad():
                 for i, vdata in enumerate(self.validation_loader):
-                    vinputs, (vlabels_policy, vlabels_value) = vdata
+                    vinputs, (vlabels_policy, vlabels_value, vlegal_move_mask) = vdata
                     voutputs_policy, voutputs_value = self.model(vinputs)
                     vloss = self.policy_loss_ratio * self.loss_fn_policy(
-                        voutputs_policy, vlabels_policy
+                        voutputs_policy, vlabels_policy, vlegal_move_mask
                     ) + self.value_loss_ratio * self.loss_fn_value(
                         voutputs_value, vlabels_value
                     )

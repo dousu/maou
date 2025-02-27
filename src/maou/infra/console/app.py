@@ -467,6 +467,7 @@ def learn_model(
                     "features": "features",
                     "moveLabel": "moveLabel",
                     "resultValue": "resultValue",
+                    "legalMoveMask": "legalMoveMask",
                 }
             else:
                 raise Exception(

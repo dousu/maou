@@ -41,10 +41,10 @@ class KifDataset(Dataset, Sized):
 
     def __getitem__(
         self, idx: int
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         if self.transform is not None:
             # 最初にtransformしないパターン
-            features, move_label, result_value = self.transform(
+            features, move_label, result_value, legal_move_mask = self.transform(
                 hcp=self.__datasource[idx]["hcp"],
                 move16=self.__datasource[idx]["bestMove16"],
                 game_result=self.__datasource[idx]["gameResult"],
@@ -64,6 +64,7 @@ class KifDataset(Dataset, Sized):
                     )
                     .reshape((1))
                     .to(self.device),
+                    torch.from_numpy(legal_move_mask).to(self.device),
                 ),
             )
         else:
@@ -80,5 +81,8 @@ class KifDataset(Dataset, Sized):
                     torch.tensor(self.__datasource[idx]["resultValue"])
                     .reshape((1))
                     .to(self.device),
+                    torch.from_numpy(self.__datasource[idx]["legalMoveMask"].copy()).to(
+                        self.device
+                    ),
                 ),
             )

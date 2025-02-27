@@ -160,6 +160,7 @@ class TestIntegrationConverterPreprocess:
             "features": "features",
             "moveLabel": "moveLabel",
             "resultValue": "resultValue",
+            "legalMoveMask": "legalMoveMask",
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
@@ -264,6 +265,7 @@ class TestIntegrationConverterPreprocess:
             "features": "features",
             "moveLabel": "moveLabel",
             "resultValue": "resultValue",
+            "legalMoveMask": "legalMoveMask",
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
