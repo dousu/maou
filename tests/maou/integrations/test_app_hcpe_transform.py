@@ -18,7 +18,7 @@ logger: logging.Logger = logging.getLogger("TEST")
 skip_test = os.getenv("TEST_GCP", "").lower() != "true"
 
 if skip_test:
-    logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv("TEST_GCP", "")}")
+    logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv('TEST_GCP', '')}")
 
 
 # TODO: HCPE Transformのテストにする
