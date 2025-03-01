@@ -41,7 +41,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         dataset_id: str,
         table_name: str,
         location: str = "ASIA-NORTHEAST1",
-        max_buffer_size: int = 50 * 1024 * 1024,
+        max_cached_bytes: int = 50 * 1024 * 1024,
     ):
         self.dataset_id = dataset_id
         self.target_table_name = table_name
@@ -65,8 +65,8 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         # バッファを初期化
         self.__buffer: list[pa.Table] = []
         self.__buffer_size: int = 0
-        # 最大値指定 50MB
-        self.max_buffer_size = max_buffer_size
+        # 最大値指定
+        self.max_cached_bytes = max_cached_bytes
         # 書き込み先テーブルをプルーニングするためのクラスタリングキーの値
         self.clustering_keys: set[str] = set()
         # 書き込み先テーブルをプルーニングするためのパーティショニングキーの値
@@ -318,7 +318,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         self.logger.debug(f"Buffered table size: {self.__buffer_size} bytes")
 
         # バッファが上限を超えたら一括保存
-        if self.__buffer_size >= self.max_buffer_size:
+        if self.__buffer_size >= self.max_cached_bytes:
             self.flush_features(
                 key_columns=key_columns,
                 clustering_key=clustering_key,

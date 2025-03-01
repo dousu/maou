@@ -93,8 +93,8 @@ def main(debug_mode: bool) -> None:
     required=False,
 )
 @click.option(
-    "--max-buffer-bytes",
-    help="Max buffer size in bytes (default: 500MB).",
+    "--max-cached-bytes",
+    help="Max cache size in bytes for output (default: 500MB).",
     type=int,
     required=False,
     default=500 * 1024 * 1024,
@@ -111,14 +111,14 @@ def hcpe_convert(
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
-    max_buffer_bytes: int,
+    max_cached_bytes: int,
 ) -> None:
     try:
         feature_store = (
             BigQuery(
                 dataset_id=dataset_id,
                 table_name=table_name,
-                max_buffer_size=max_buffer_bytes,
+                max_cached_bytes=max_cached_bytes,
             )
             if output_bigquery and dataset_id is not None and table_name is not None
             else None
@@ -241,7 +241,7 @@ def pre_process(
             BigQuery(
                 dataset_id=dataset_id,
                 table_name=table_name,
-                max_buffer_size=output_max_cached_bytes,
+                max_cached_bytes=output_max_cached_bytes,
             )
             if output_bigquery and dataset_id is not None and table_name is not None
             else None
