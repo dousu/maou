@@ -391,7 +391,9 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             else:
                 clustering_key_condition = [
                     f"target.{clustering_key} in "
-                    f"({", ".join([f"'{value}'" for value in self.clustering_keys])})"
+                    "("
+                    + ", ".join([f"'{value}'" for value in self.clustering_keys])
+                    + ")"
                 ]
             # パーティショニングキーはなるべく明示的に指定するようにしている
             if partitioning_key_date is None or not bool(self.partitioning_date_keys):
