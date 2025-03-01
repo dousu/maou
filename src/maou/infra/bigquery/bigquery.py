@@ -403,7 +403,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                     [f"DATE '{value}'" for value in self.partitioning_date_keys]
                 )
                 partitioning_key_condition = [
-                    f"target.{partitioning_key_date} in " f"({dates})"
+                    f"target.{partitioning_key_date} in ({dates})"
                 ]
             on_conditions = " AND ".join(
                 [f"target.{col} = source.{col}" for col in key_columns]
