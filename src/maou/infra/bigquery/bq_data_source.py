@@ -103,13 +103,19 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             )
 
             if self.partitioning_key_date:
-                # パーティショニングキーが指定されている場合は，各クラスタごとに件数を取得する
+                # パーティショニングキーが指定されている場合は
+                # 各クラスタごとに件数を取得する
                 # ついでに全件数もここから計算する
+                # ソーステーブルには「パーティション フィルタを要求」オプションを
+                # 付けている想定で当たり障りないレンジでパーティションを指定する
                 query = f"""
                     SELECT
                       {self.partitioning_key_date} AS partition_value,
                       COUNT(*) AS cnt
                     FROM `{self.dataset_fqn}.{self.table_name}`
+                    WHERE
+                      {self.partitioning_key_date}
+                        BETWEEN DATE('1970-01-01') AND DATE('2100-01-01')
                     GROUP BY {self.partitioning_key_date}
                     ORDER BY partition_value
                 """

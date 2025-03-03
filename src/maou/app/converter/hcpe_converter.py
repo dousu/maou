@@ -216,8 +216,8 @@ class HCPEConverter:
                             partitioning_key_date="partitioningKey",
                         )
                     conversion_result[str(file)] = f"success {idx + 1} rows"
-                except Exception as e:
-                    raise e
+                except Exception:
+                    raise
 
         return conversion_result
 

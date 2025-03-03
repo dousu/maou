@@ -127,6 +127,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 table.time_partitioning = bigquery.TimePartitioning(
                     type_=bigquery.TimePartitioningType.DAY, field=partitioning_key_date
                 )
+                table.require_partition_filter = True
             table = self.client.create_table(table=table)
             self.logger.debug(f"Table '{table.full_table_id}' has been created.")
 
@@ -185,12 +186,16 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
         try:
             self.client.delete_table(table=table_ref, not_found_ok=True)
             self.logger.debug(f"Deleted table. table_id: {table_id}")
-        except Exception as e:
-            raise e
+        except Exception:
+            raise
 
     def load_from_arrow(
-        self, *, dataset_id: str, table_name: str, table: pa.Table
-    ) -> None:
+        self,
+        *,
+        dataset_id: str,
+        table_name: str,
+        table: pa.Table,
+    ) -> bigquery.Table:
         table_id = f"{self.client.project}.{dataset_id}.{table_name}"
         self.logger.debug(f"Load data to {table_id}")
         # PyArrow TableをParquet形式にシリアライズしてファイルとしてbigqueryに送る
@@ -201,7 +206,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
 
             # job_configでParquetフォーマットを指定
             job_config = bigquery.LoadJobConfig(
-                source_format=bigquery.SourceFormat.PARQUET
+                source_format=bigquery.SourceFormat.PARQUET,
             )
             job = self.client.load_table_from_file(
                 file_obj=buffer,
@@ -213,6 +218,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             if job.errors:
                 self.logger.error(f"Failed to insert rows: {job.errors}")
                 raise BigQueryJobError(f"Failed to insert rows: {job.errors}")
+        return self.client.get_table(table_id)
 
     def select_all(
         self, *, dataset_id: str, table_name: str
@@ -224,8 +230,8 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             # list_rows自体はページングするので
             # この時点ではテーブルをすべてダウンロードしない
             rows = self.client.list_rows(table)
-        except Exception as e:
-            raise e
+        except Exception:
+            raise
         return rows.to_arrow_iterable()
 
     # context managerを使って特徴量ストア用の動作のflushを管理する
@@ -369,19 +375,21 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
             table_name=f"{self.target_table_name}_temp",
             schema=schema,
             clustering_key=clustering_key,
-            partitioning_key_date=partitioning_key_date,
+            partitioning_key_date=None,
         )
         self.logger.debug(f"Temp table: {temp_table.full_table_id}")
 
         try:
-            self.load_from_arrow(
+            temp_table = self.load_from_arrow(
                 dataset_id=temp_table.dataset_id,
                 table_name=temp_table.table_id,
                 table=combined_table,
             )
+            temp_table_bytes = temp_table.num_bytes
             self.logger.debug(
                 "Inserted rows to temporary table."
                 f" table_id: {temp_table.full_table_id}"
+                f" num_bytes: {temp_table_bytes}"
             )
 
             # MERGEクエリ
@@ -451,8 +459,22 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 self.logger.error(f"Failed to insert rows: {query_job.errors}")
                 raise BigQueryJobError(f"Failed to insert rows: {query_job.errors}")
 
-        except Exception as e:
-            raise e
+            # ガードレールとしてパーティショニングフィルターが働いていなければ止める
+            # 一旦仮の閾値として3倍以上のデータを処理していたら強制終了する
+            if temp_table_bytes is None or (
+                temp_table_bytes is not None
+                and query_job.total_bytes_processed > temp_table_bytes * 3
+            ):
+                self.logger.error(
+                    f"Too much processed bytes: {query_job.total_bytes_processed}"
+                    f", temp_table bytes: {temp_table.num_bytes}"
+                )
+                raise BigQueryJobError(
+                    f"Too much processed bytes: {query_job.total_bytes_processed}"
+                )
+
+        except Exception:
+            raise
 
     def __cleanup(self) -> None:
         """store_features用のデストラクタ処理"""

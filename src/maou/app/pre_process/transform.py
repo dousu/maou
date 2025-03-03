@@ -44,7 +44,7 @@ class Transform:
                 make_move_label(board.turn, m) for m in board.legal_moves
             ]
             legal_move_mask = self.__create_mask(legal_move_labels, MOVE_LABELS_NUM)
-        except Exception as e:
+        except Exception:
             move = board.move_from_move16(move16)
             self.logger.error(
                 f"cshogi move: {move} {move16}"
@@ -55,7 +55,7 @@ class Transform:
             self.logger.error(str(board))
             board.push(move)
             self.logger.error(str(board))
-            raise e
+            raise
 
         return (
             features,
