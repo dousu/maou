@@ -67,9 +67,10 @@ class PreProcess:
         """機械学習の前処理を行う."""
 
         pre_process_result: Dict[str, str] = {}
-        self.logger.debug(f"前処理対象のデータ数 {len(self.__datasource)}")
+        self.logger.info(f"前処理対象のデータ数 {len(self.__datasource)}")
         with self.__context():
             for dataname, data in tqdm(self.__datasource.iter_batches()):
+                self.logger.debug(f"target: {dataname}")
                 if isinstance(data, pa.Table):
                     data_length = data.num_rows  # type: ignore
                 elif isinstance(data, np.ndarray):
