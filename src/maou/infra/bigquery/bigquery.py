@@ -398,7 +398,7 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 clustering_key_condition = []
             else:
                 clustering_key_condition = [
-                    f"{clustering_key} in "
+                    f"target.{clustering_key} in "
                     "("
                     + ", ".join([f"'{value}'" for value in self.clustering_keys])
                     + ")"
@@ -410,33 +410,51 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 dates = ", ".join(
                     [f"DATE '{value}'" for value in self.partitioning_date_keys]
                 )
-                partitioning_key_condition = [f"{partitioning_key_date} in ({dates})"]
-            delete_condition = " AND ".join(
-                clustering_key_condition + partitioning_key_condition
-            )
-            pruning_where = (
-                "WHERE " + delete_condition if delete_condition else "WHERE TRUE"
+                partitioning_key_condition = [
+                    f"target.{partitioning_key_date} in ({dates})"
+                ]
+                # パーティションキーを取り出したらリセットしておく
+                # これを忘れるとほぼtargetテーブルの全スキャンになってしまう
+                self.partitioning_date_keys.clear()
+            on_conditions = " AND ".join(
+                [f"target.{col} = source.{col}" for col in key_columns]
+                + clustering_key_condition
+                + partitioning_key_condition
             )
             all_columns = [field.name for field in schema]
+            update_set_clause = ", ".join(
+                [f"target.{col} = source.{col}" for col in all_columns]
+            )
             insert_columns = ", ".join(all_columns)
-            insert_values = ", ".join([col for col in all_columns])
-            # ここはdelete/insertのクエリで更新している
-            # 本来はMERGEクエリで各IDの更新で最小の変更量にする想定だったが，
-            # MERGEクエリだとプルーニングが聞かないのでinsert/deleteにしている
-            # MERGEクエリでもソースデータでも無駄にプルーニングすればうまく動くかも
+            insert_values = ", ".join([f"source.{col}" for col in all_columns])
+            if bool(clustering_key_condition):
+                when_matched_clustering_condition = "AND " + " AND ".join(
+                    clustering_key_condition
+                )
+            else:
+                when_matched_clustering_condition = ""
+            if bool(partitioning_key_condition):
+                when_matched_partitioning_condition = "AND " + " AND ".join(
+                    partitioning_key_condition
+                )
+            else:
+                when_matched_partitioning_condition = ""
             query = f"""
-            DELETE FROM
+            MERGE
               `{str(table.full_table_id).replace(":", ".")}`
-            {pruning_where}
-            ;
-            INSERT INTO
-              `{str(table.full_table_id).replace(":", ".")}` ({insert_columns})
-            SELECT
-              {insert_values}
-            FROM
+              AS target
+            USING
               `{str(temp_table.full_table_id).replace(":", ".")}`
-            {pruning_where}
-            ;
+              AS source
+            ON {on_conditions}
+            WHEN MATCHED
+              {when_matched_clustering_condition}
+              {when_matched_partitioning_condition}
+              THEN
+                UPDATE SET {update_set_clause}
+            WHEN NOT MATCHED BY TARGET THEN
+              INSERT ({insert_columns})
+              VALUES ({insert_values})
             """
             self.logger.debug(f"Storing feature query: {query}")
             query_job = self.client.query(query=query, location=self.location)

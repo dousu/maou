@@ -280,7 +280,7 @@ class TestIntegrationHcpeConverter:
                     f" total_bytes_processed: {job.total_bytes_processed}"
                 )
                 pattern = (
-                    "DELETE FROM.*\\n"
+                    "MERGE.*\\n"
                     f".*{re.escape(self.dataset_id)}\\.{re.escape(self.table_name)}.*"
                 )
                 if re.search(pattern, job.query):
