@@ -181,6 +181,18 @@ def hcpe_convert(
     required=False,
 )
 @click.option(
+    "--input-clustering-key",
+    help="BigQuery clustering key.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-partitioning-key-date",
+    help="BigQuery date partitioning key.",
+    type=str,
+    required=False,
+)
+@click.option(
     "--output-bigquery",
     type=bool,
     is_flag=True,
@@ -213,6 +225,8 @@ def pre_process(
     input_table_name: Optional[str],
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_clustering_key: Optional[str],
+    input_partitioning_key_date: Optional[str],
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
@@ -225,6 +239,8 @@ def pre_process(
                 table_name=input_table_name,
                 batch_size=input_batch_size,
                 max_cached_bytes=input_max_cached_bytes,
+                clustering_key=input_clustering_key,
+                partitioning_key_date=input_partitioning_key_date,
             )
         elif input_path is not None:
             schema_datasource = {
