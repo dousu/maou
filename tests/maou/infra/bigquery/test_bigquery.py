@@ -17,7 +17,7 @@ logger: logging.Logger = logging.getLogger("TEST")
 skip_test = os.getenv("TEST_GCP", "").lower() != "true"
 
 if skip_test:
-    logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv("TEST_GCP", "")}")
+    logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv('TEST_GCP', '')}")
 
 
 @pytest.mark.skipif(
@@ -107,8 +107,7 @@ class TestBigQuery:
         )
         logger.debug(f"Selected data from bigquery: {bigquery_table}")
         logger.debug(
-            f"Data Schema: {data.schema},"
-            f" Selected Data Schema: {bigquery_table.schema}"
+            f"Data Schema: {data.schema}, Selected Data Schema: {bigquery_table.schema}"
         )
         assert data.equals(bigquery_table)
 

@@ -278,7 +278,10 @@ class TestBigQueryDataSource:
                     f" time: {job.created},"
                     f" total_bytes_processed: {job.total_bytes_processed}"
                 )
-                pattern = f"SELECT.*\\n.*{re.escape(self.dataset_id)}\\.{re.escape(self.table_name)}.*"
+                pattern = (
+                    "SELECT.*\\n"
+                    f".*{re.escape(self.dataset_id)}\\.{re.escape(self.table_name)}.*"
+                )
                 if re.search(pattern, job.query):
                     total_bytes_processed = job.total_bytes_processed
         logger.debug(
