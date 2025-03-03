@@ -160,7 +160,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 self.total_pages = (
                     self.total_rows + self.batch_size - 1
                 ) // self.batch_size
-            self.logger.info(f"BigQuery Data {self.total_rows} rows")
+            self.logger.info(
+                f"BigQuery Data {self.total_rows} rows, {self.total_pages} pages"
+            )
 
         def __get_total_rows(self) -> int:
             """テーブルの総レコード数を取得する"""
