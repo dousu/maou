@@ -392,13 +392,13 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 f" num_bytes: {temp_table_bytes}"
             )
 
-            # MERGEクエリ
+            # delete/insertクエリ
             # クラスタリングキーはなるべく明示的に指定するようにしている
             if clustering_key is None or not bool(self.clustering_keys):
                 clustering_key_condition = []
             else:
                 clustering_key_condition = [
-                    f"target.{clustering_key} in "
+                    f"{clustering_key} in "
                     "("
                     + ", ".join([f"'{value}'" for value in self.clustering_keys])
                     + ")"
@@ -410,50 +410,36 @@ class BigQuery(converter.FeatureStore, preprocess.FeatureStore):
                 dates = ", ".join(
                     [f"DATE '{value}'" for value in self.partitioning_date_keys]
                 )
-                partitioning_key_condition = [
-                    f"target.{partitioning_key_date} in ({dates})"
-                ]
-            on_conditions = " AND ".join(
-                [f"target.{col} = source.{col}" for col in key_columns]
-                + clustering_key_condition
-                + partitioning_key_condition
+                partitioning_key_condition = [f"{partitioning_key_date} in ({dates})"]
+            delete_condition = " AND ".join(
+                clustering_key_condition + partitioning_key_condition
+            )
+            pruning_where = (
+                "WHERE " + delete_condition if delete_condition else "WHERE TRUE"
             )
             all_columns = [field.name for field in schema]
-            update_set_clause = ", ".join(
-                [f"target.{col} = source.{col}" for col in all_columns]
-            )
             insert_columns = ", ".join(all_columns)
-            insert_values = ", ".join([f"source.{col}" for col in all_columns])
-            if bool(clustering_key_condition):
-                when_matched_clustering_condition = "AND " + " AND ".join(
-                    clustering_key_condition
-                )
-            else:
-                when_matched_clustering_condition = ""
-            if bool(partitioning_key_condition):
-                when_matched_partitioning_condition = "AND " + " AND ".join(
-                    partitioning_key_condition
-                )
-            else:
-                when_matched_partitioning_condition = ""
-            merge_query = f"""
-            MERGE `{str(table.full_table_id).replace(":", ".")}`
-              AS target
-            USING
+            insert_values = ", ".join([col for col in all_columns])
+            # ここはdelete/insertのクエリで更新している
+            # 本来はMERGEクエリで各IDの更新で最小の変更量にする想定だったが，
+            # MERGEクエリだとプルーニングが聞かないのでinsert/deleteにしている
+            # MERGEクエリでもソースデータでも無駄にプルーニングすればうまく動くかも
+            query = f"""
+            DELETE FROM
+              `{str(table.full_table_id).replace(":", ".")}`
+            {pruning_where}
+            ;
+            INSERT INTO
+              `{str(table.full_table_id).replace(":", ".")}` ({insert_columns})
+            SELECT
+              {insert_values}
+            FROM
               `{str(temp_table.full_table_id).replace(":", ".")}`
-              AS source
-            ON {on_conditions}
-            WHEN MATCHED
-              {when_matched_clustering_condition}
-              {when_matched_partitioning_condition}
-              THEN
-                UPDATE SET {update_set_clause}
-            WHEN NOT MATCHED BY TARGET THEN
-              INSERT ({insert_columns})
-              VALUES ({insert_values})
+            {pruning_where}
+            ;
             """
-            self.logger.debug(f"merge query: {merge_query}")
-            query_job = self.client.query(query=merge_query, location=self.location)
+            self.logger.debug(f"Storing feature query: {query}")
+            query_job = self.client.query(query=query, location=self.location)
             query_job.result()
             if query_job.errors:
                 self.logger.error(f"Failed to insert rows: {query_job.errors}")
