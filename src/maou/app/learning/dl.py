@@ -205,6 +205,10 @@ class Learning:
         running_loss = 0.0
         last_loss = 0.0
 
+        # 記録するiteration数
+        # 1/10で10回は記録する設定
+        record_num = len(self.training_loader) // 10
+
         # Here, we use enumerate(training_loader) instead of
         # iter(training_loader) so that we can track the batch
         # index and do some intra-epoch reporting
@@ -229,8 +233,8 @@ class Learning:
 
             # Gather data and report
             running_loss += loss.item()
-            if i == 0 or i % 1000 == 999:
-                last_loss = running_loss / 1000  # loss per batch
+            if i % record_num == record_num - 1:
+                last_loss = running_loss / record_num  # loss avg per batch
                 self.logger.info("  batch {} loss: {}".format(i + 1, last_loss))
                 tb_x = epoch_index * len(self.training_loader) + i + 1
                 tb_writer.add_scalar("Loss/train", last_loss, tb_x)
@@ -304,6 +308,11 @@ class Learning:
                 "ACCURACY policy {} value {}".format(
                     avg_accuracy_policy, avg_accuracy_value
                 )
+            )
+            writer.add_scalars(
+                "Accuracy",
+                {"Policy": avg_accuracy_policy, "Value": avg_accuracy_value},
+                epoch_number + 1,
             )
 
             # Log the running loss averaged per batch
