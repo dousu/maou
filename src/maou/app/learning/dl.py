@@ -289,7 +289,7 @@ class Learning:
 
             # Disable gradient computation and reduce memory consumption.
             with torch.no_grad():
-                for i, vdata in enumerate(self.validation_loader):
+                for i, vdata in tqdm(enumerate(self.validation_loader)):
                     vinputs, (vlabels_policy, vlabels_value, vlegal_move_mask) = vdata
                     voutputs_policy, voutputs_value = self.model(vinputs)
                     vloss = self.policy_loss_ratio * self.loss_fn_policy(
