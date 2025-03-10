@@ -270,6 +270,14 @@ class Learning:
             self.model.train(True)
             avg_loss = self.__train_one_epoch(epoch_number, writer)
 
+            # 学習ごとに各層のパラメータを記録
+            for name, param in self.model.named_parameters():
+                writer.add_histogram(f"parameters/{name}", param, epoch_number + 1)
+                if param.grad is not None:
+                    writer.add_histogram(
+                        f"gradients/{name}", param.grad, epoch_number + 1
+                    )
+
             running_vloss = 0.0
 
             test_accuracy_policy = 0.0
@@ -330,8 +338,10 @@ class Learning:
                 model_path = self.model_dir / "model_{}_{}.pt".format(
                     timestamp, epoch_number
                 )
+                self.logger.info("Saving model to {}".format(model_path))
                 torch.save(self.model.state_dict(), model_path)
                 if self.__cloud_storage is not None:
+                    self.logger.info("Uploading model to cloud storage")
                     self.__cloud_storage.upload_from_local(
                         local_path=model_path, cloud_path=str(model_path)
                     )
@@ -341,6 +351,7 @@ class Learning:
                 checkpoint_path = self.checkpoint_dir / "model_{}_{}.checkpoint".format(
                     timestamp, epoch_number
                 )
+                self.logger.info("Saving checkpoint to {}".format(checkpoint_path))
                 torch.save(
                     {
                         # epoch_numberはepochより1進んでいるのでそのままいれる
@@ -351,11 +362,14 @@ class Learning:
                     checkpoint_path,
                 )
                 if self.__cloud_storage is not None:
+                    self.logger.info("Uploading checkpoint to cloud storage")
                     self.__cloud_storage.upload_from_local(
                         local_path=checkpoint_path, cloud_path=str(checkpoint_path)
                     )
 
             epoch_number += 1
+
+        writer.close()
 
     # 方策の正解率
     def __policy_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
