@@ -234,7 +234,10 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     f"_{self.table_name}_{safe_value}.parquet"
                 )
             else:
-                filename = f"{self.dataset_fqn.replace('.', '_')}_{self.table_name}_page_{page_num}.parquet"
+                filename = (
+                    f"{self.dataset_fqn.replace('.', '_')}"
+                    f"_{self.table_name}_page_{page_num}.parquet"
+                )
             return self.local_cache_dir / filename
 
         def __check_local_cache_exists(self, page_num: int) -> bool:
@@ -378,7 +381,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 else:
                     # 通常はここに来ることはない（初期化時にすべてダウンロード済み）
                     self.logger.warning(
-                        f"Local cache not found for page {page_num}, fetching from BigQuery"
+                        f"Local cache not found for page {page_num}, "
+                        "fetching from BigQuery"
                     )
                     arrow_table = self.__fetch_from_bigquery(page_num)
                     self.__save_to_local(page_num, arrow_table)
