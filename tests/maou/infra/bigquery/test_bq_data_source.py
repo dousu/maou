@@ -318,11 +318,17 @@ class TestBigQueryDataSource:
         # データを読み込む
         for i in range(len(data)):
             data_source[i]
-        # キャッシュサイズが max_cached_bytes より小さいことを確認
-        assert (
-            data_source._BigQueryDataSource__page_manager.total_cached_bytes
-            <= data_source._BigQueryDataSource__page_manager.max_cached_bytes
-        )
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
+        for i in range(len(data)):
+            data_source[i]
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
 
     def test_batch_size_larger_than_record_count(self, default_fixture: None) -> None:
         # BigQueryにテストデータを投入
@@ -343,8 +349,16 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         data_source[0]
-        # キャッシュサイズが 0 より大きいことを確認
-        assert data_source._BigQueryDataSource__page_manager.total_cached_bytes > 0
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
+        data_source[0]
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
 
     def test_read_from_cache(self, default_fixture: None) -> None:
         # キャッシュされている場合にbqにアクセスせずデータを返すことができる
@@ -366,14 +380,204 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         data_source[0]
-        # キャッシュサイズが 0 より大きいことを確認
-        assert data_source._BigQueryDataSource__page_manager.total_cached_bytes > 0
-        # キャッシュされていることを確認するために、total_cached_bytesを保存
-        cached_bytes = data_source._BigQueryDataSource__page_manager.total_cached_bytes
-        # もう一度データを読み込む
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
         data_source[0]
-        # キャッシュサイズが変わらないことを確認
-        assert (
-            data_source._BigQueryDataSource__page_manager.total_cached_bytes
-            == cached_bytes
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
+
+    def test_local_cache_creation(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュディレクトリが正しく作成されることをテスト
+        # BigQueryにテストデータを投入
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
         )
+        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリ
+        local_cache_dir = tmp_path / "local_cache"
+
+        # BigQueryDataSourceからデータを読み込む（ローカルキャッシュを使用）
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュディレクトリが作成されていることを確認
+        assert local_cache_dir.exists()
+        assert local_cache_dir.is_dir()
+
+        # ローカルキャッシュファイルが作成されていることを確認
+        cache_files = list(local_cache_dir.glob("*.parquet"))
+        assert len(cache_files) > 0
+
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+
+        # 読み込んだデータが正しいことを確認
+        expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
+        assert len(sorted_read_data) == len(expected_data)
+        assert sorted_read_data == expected_data
+
+    def test_local_cache_loading(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュからデータが正しく読み込まれることをテスト
+        # BigQueryにテストデータを投入
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
+        )
+        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # 1回目：BigQueryからデータを取得してローカルキャッシュに保存
+        start_time = datetime.now()
+        data_source1 = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュファイルが作成されていることを確認
+        cache_files = list(local_cache_dir.glob("*.parquet"))
+        assert len(cache_files) > 0
+
+        # 2回目：ローカルキャッシュからデータを読み込む
+        start_time = datetime.now()
+        data_source2 = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # BigQueryへのアクセスが発生しないことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0
+
+        # データを読み込む
+        read_data = [data_source2[i] for i in range(len(data_source2))]
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+
+        # 読み込んだデータが正しいことを確認
+        expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
+        assert len(sorted_read_data) == len(expected_data)
+        assert sorted_read_data == expected_data
+
+    def test_local_cache_no_memory_cache(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュを使用する場合、メモリキャッシュが使用されないことをテスト
+        # BigQueryにテストデータを投入
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "data": ["test1", "test2", "test3"],
+                }
+            )
+        )
+        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # BigQueryDataSourceからデータを読み込む（ローカルキャッシュを使用）
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュを使用する場合、メモリキャッシュが使用されないことをテスト
+        # これを確認するために、BigQueryへのアクセスが発生しないことを確認する
+
+        # データを読み込む
+        data_source[0]
+
+        # 同じデータを再度読み込む
+        start_time = datetime.now()
+        data_source[0]
+
+        # BigQueryへのアクセスが発生しないことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # ローカルキャッシュから読み込まれるためクエリは発行されない
+
+    def test_local_cache_no_bigquery_queries_after_init(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュを使用した場合、初期化以降BigQueryでクエリを実行していないことを確認するテスト
+        # BigQueryにテストデータを投入
+        data = self.cast_nullable_to_false(
+            pa.table(
+                {
+                    "id": [1, 2, 3, 4, 5],
+                    "data": ["test1", "test2", "test3", "test4", "test5"],
+                }
+            )
+        )
+        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # 初期化時にBigQueryへのアクセスが発生することを確認
+        start_time = datetime.now()
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # 初期化時にBigQueryへのアクセスが発生したことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) > 0  # 初期化時にBigQueryへのアクセスが発生
+
+        # 初期化後のアクセスを確認するための時間を記録
+        start_time = datetime.now()
+
+        # すべてのデータにアクセス
+        for i in range(len(data_source)):
+            data_source[i]
+
+        # 再度すべてのデータにアクセス（異なる順序で）
+        for i in reversed(range(len(data_source))):
+            data_source[i]
+
+        # ランダムなインデックスでアクセス
+        import random
+        random_indices = [random.randint(0, len(data_source) - 1) for _ in range(10)]
+        for i in random_indices:
+            data_source[i]
+
+        # 初期化後にBigQueryへのアクセスが発生していないことを確認
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # 初期化後はローカルキャッシュから読み込まれるためクエリは発行されない

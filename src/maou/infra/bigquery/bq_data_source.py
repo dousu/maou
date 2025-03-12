@@ -3,10 +3,12 @@ import pickle
 import random
 from collections import OrderedDict
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
@@ -31,6 +33,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             max_cached_bytes: int = 100 * 1024 * 1024,
             clustering_key: Optional[str] = None,
             partitioning_key_date: Optional[str] = None,
+            use_local_cache: bool = False,
+            local_cache_dir: Optional[str] = None,
         ) -> None:
             self.__page_manager = BigQueryDataSource.PageManager(
                 dataset_id=dataset_id,
@@ -39,6 +43,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 max_cached_bytes=max_cached_bytes,
                 clustering_key=clustering_key,
                 partitioning_key_date=partitioning_key_date,
+                use_local_cache=use_local_cache,
+                local_cache_dir=local_cache_dir,
             )
 
         def train_test_split(
@@ -84,6 +90,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             max_cached_bytes: int,
             clustering_key: Optional[str],
             partitioning_key_date: Optional[str] = None,
+            use_local_cache: bool = False,
+            local_cache_dir: Optional[str] = None,
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = f"{self.client.project}.{dataset_id}"
@@ -95,8 +103,20 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.partitioning_key_date = partitioning_key_date
             self.__pruning_info = []
 
+            # ローカルキャッシュの設定
+            self.use_local_cache = use_local_cache
+            if self.use_local_cache:
+                if local_cache_dir is None:
+                    raise ValueError("local_cache_dir must be specified when use_local_cache is True")
+                self.local_cache_dir = Path(local_cache_dir)
+                self.local_cache_dir.mkdir(parents=True, exist_ok=True)
+                self.logger.info(f"Local cache directory: {self.local_cache_dir}")
+
             # ページ番号をキーにしたLRUキャッシュ（OrderedDict）
-            self.__page_cache: OrderedDict[int, pa.Table] = OrderedDict()
+            # ローカルキャッシュを使用する場合は不要
+            self.__page_cache: Optional[OrderedDict[int, pa.Table]] = None
+            if not self.use_local_cache:
+                self.__page_cache = OrderedDict()
 
             self.__table_ref = self.client.get_table(
                 f"{self.dataset_fqn}.{self.table_name}"
@@ -164,6 +184,10 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 f"BigQuery Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
+            # ローカルキャッシュが有効な場合、初期化時にすべてのデータをダウンロード
+            if self.use_local_cache:
+                self.__download_all_to_local()
+
         def __get_total_rows(self) -> int:
             """テーブルの総レコード数を取得する"""
             meta_num_rows = self.__table_ref.num_rows
@@ -181,6 +205,10 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             キャッシュ全体のサイズが max_cached_bytes を超えている場合，
             古いページから順次削除する．
             """
+            # ローカルキャッシュを使用する場合はメモリキャッシュを使用しない
+            if self.use_local_cache or self.__page_cache is None:
+                return
+
             while (
                 self.total_cached_bytes > self.max_cached_bytes
                 # どうせメモリに格納できるのだからキャッシュは最低1つ残しておく
@@ -193,18 +221,36 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     f"New total cache size: {self.total_cached_bytes} bytes."
                 )
 
-        def get_page(self, page_num: int) -> pa.Table:
-            """
-            指定したページ番号（0オリジン）のレコードバッチを取得する．
-            すでにキャッシュにあればそれを返して，
-            なければ list_rows() の start_index パラメータを用いて該当バッチを取得する．
-            """
-            if page_num in self.__page_cache:
-                # キャッシュがあれば順序更新
-                page = self.__page_cache.pop(page_num)
-                self.__page_cache[page_num] = page
-                return page
+        def __get_local_cache_path(self, page_num: int) -> Path:
+            """ページ番号からローカルキャッシュのパスを取得する"""
+            if bool(self.__pruning_info):
+                pruning_value = self.__pruning_info[page_num]["pruning_value"]
+                # 値をファイル名に適した形式に変換
+                safe_value = str(pruning_value).replace("/", "_").replace(":", "_")
+                filename = f"{self.dataset_fqn.replace('.', '_')}_{self.table_name}_{safe_value}.parquet"
+            else:
+                filename = f"{self.dataset_fqn.replace('.', '_')}_{self.table_name}_page_{page_num}.parquet"
+            return self.local_cache_dir / filename
 
+        def __check_local_cache_exists(self, page_num: int) -> bool:
+            """ローカルキャッシュが存在するか確認する"""
+            cache_path = self.__get_local_cache_path(page_num)
+            return cache_path.exists()
+
+        def __load_from_local(self, page_num: int) -> pa.Table:
+            """ローカルからデータを読み込む"""
+            cache_path = self.__get_local_cache_path(page_num)
+            self.logger.debug(f"Loading data from local cache: {cache_path}")
+            return pq.read_table(cache_path)
+
+        def __save_to_local(self, page_num: int, table: pa.Table) -> None:
+            """データをローカルに保存する"""
+            cache_path = self.__get_local_cache_path(page_num)
+            self.logger.debug(f"Saving data to local cache: {cache_path}")
+            pq.write_table(table, cache_path)
+
+        def __fetch_from_bigquery(self, page_num: int) -> pa.Table:
+            """BigQueryからデータを取得する"""
             if bool(self.__pruning_info):
                 # page_num はクラスタグループの番号とする
                 try:
@@ -249,14 +295,97 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 # to_arrow() で取得した PyArrow Table は複数のチャンクに分かれていることがある
                 arrow_table = rows.to_arrow().combine_chunks()
 
+            return arrow_table
+
+        def __download_all_to_local(self) -> None:
+            """すべてのデータをローカルにダウンロードする"""
+            self.logger.info(f"Downloading all data to local cache: {self.local_cache_dir}")
+
+            # すべてのページのローカルキャッシュが存在するか確認
+            all_cache_exists = True
+            for page_num in range(self.total_pages):
+                if not self.__check_local_cache_exists(page_num):
+                    all_cache_exists = False
+                    break
+
+            # すべてのローカルキャッシュが存在する場合は何もしない
+            if all_cache_exists:
+                self.logger.info("All local cache files already exist. Skipping download.")
+                return
+
+            # すべてのデータを一度に取得するクエリを実行
+            if bool(self.__pruning_info):
+                # クラスタリングキーまたはパーティショニングキーが指定されている場合は
+                # 各クラスタごとに取得
+                for page_num in range(self.total_pages):
+                    if not self.__check_local_cache_exists(page_num):
+                        # BigQueryからデータを取得してローカルに保存
+                        arrow_table = self.__fetch_from_bigquery(page_num)
+                        self.__save_to_local(page_num, arrow_table)
+            else:
+                # クラスタリングキー未指定の場合は一度にすべてのデータを取得
+                query = f"""
+                    SELECT *
+                    FROM `{self.dataset_fqn}.{self.table_name}`
+                """
+                self.logger.info(f"Executing query to fetch all data: {query}")
+                arrow_table = self.client.query(query).result().to_arrow().combine_chunks()
+
+                # バッチサイズごとに分割してローカルに保存
+                total_rows = arrow_table.num_rows
+                for page_num in range(self.total_pages):
+                    if not self.__check_local_cache_exists(page_num):
+                        start_idx = page_num * self.batch_size
+                        end_idx = min(start_idx + self.batch_size, total_rows)
+
+                        if start_idx < total_rows:
+                            page_table = arrow_table.slice(start_idx, end_idx - start_idx)
+                            self.__save_to_local(page_num, page_table)
+
+            # ローカルキャッシュファイルが正しく作成されたか確認
+            cache_files = list(self.local_cache_dir.glob("*.parquet"))
+            self.logger.info(f"Created {len(cache_files)} local cache files")
+
+            if len(cache_files) == 0:
+                self.logger.warning("No local cache files were created. This might indicate a problem.")
+
+        def get_page(self, page_num: int) -> pa.Table:
+            """
+            指定したページ番号（0オリジン）のレコードバッチを取得する．
+            ローカルキャッシュが有効な場合は、ローカルからデータを読み込む。
+            ローカルキャッシュが無効な場合は、メモリキャッシュを確認し、
+            なければBigQueryから取得する。
+            """
+            # ローカルキャッシュが有効な場合
+            if self.use_local_cache:
+                if self.__check_local_cache_exists(page_num):
+                    return self.__load_from_local(page_num)
+                else:
+                    # 通常はここに来ることはない（初期化時にすべてダウンロード済み）
+                    self.logger.warning(f"Local cache not found for page {page_num}, fetching from BigQuery")
+                    arrow_table = self.__fetch_from_bigquery(page_num)
+                    self.__save_to_local(page_num, arrow_table)
+                    return arrow_table
+
+            # ローカルキャッシュが無効な場合
+            if self.__page_cache is not None and page_num in self.__page_cache:
+                # キャッシュがあれば順序更新
+                page = self.__page_cache.pop(page_num)
+                self.__page_cache[page_num] = page
+                return page
+
+            # BigQueryからデータを取得
+            arrow_table = self.__fetch_from_bigquery(page_num)
+
             # キャッシュに追加
-            self.__page_cache[page_num] = arrow_table
-            self.total_cached_bytes += arrow_table.nbytes
-            self.logger.debug(
-                f"Cache for page {page_num} (nbytes: {arrow_table.nbytes}). "
-                f"New total cache size: {self.total_cached_bytes} bytes."
-            )
-            self.__evict_cache_if_needed()
+            if self.__page_cache is not None:
+                self.__page_cache[page_num] = arrow_table
+                self.total_cached_bytes += arrow_table.nbytes
+                self.logger.debug(
+                    f"Cache for page {page_num} (nbytes: {arrow_table.nbytes}). "
+                    f"New total cache size: {self.total_cached_bytes} bytes."
+                )
+                self.__evict_cache_if_needed()
             return arrow_table
 
         def get_item(self, idx: int) -> pa.Table:
@@ -306,6 +435,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         partitioning_key_date: Optional[str] = None,
         page_manager: Optional[PageManager] = None,
         indicies: Optional[list[int]] = None,
+        use_local_cache: bool = False,
+        local_cache_dir: Optional[str] = None,
     ) -> None:
         """
 
@@ -318,6 +449,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             clustering_key (Optional[str]): クラスタリングキーの列名 (指定されると各クラスタ単位で取得)
             page_manager (Optional[PageManager]): PageManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
+            use_local_cache (bool): ローカルキャッシュを使用するかどうか
+            local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
         """
         if page_manager is None:
             if dataset_id is not None and table_name is not None:
@@ -328,6 +461,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     max_cached_bytes=max_cached_bytes,
                     clustering_key=clustering_key,
                     partitioning_key_date=partitioning_key_date,
+                    use_local_cache=use_local_cache,
+                    local_cache_dir=local_cache_dir,
                 )
             else:
                 raise MissingBigQueryConfig(
