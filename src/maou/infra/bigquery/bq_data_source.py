@@ -229,7 +229,10 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 pruning_value = self.__pruning_info[page_num]["pruning_value"]
                 # 値をファイル名に適した形式に変換
                 safe_value = str(pruning_value).replace("/", "_").replace(":", "_")
-                filename = f"{self.dataset_fqn.replace('.', '_')}_{self.table_name}_{safe_value}.parquet"
+                filename = (
+                    f"{self.dataset_fqn.replace('.', '_')}"
+                    f"_{self.table_name}_{safe_value}.parquet"
+                )
             else:
                 filename = f"{self.dataset_fqn.replace('.', '_')}_{self.table_name}_page_{page_num}.parquet"
             return self.local_cache_dir / filename

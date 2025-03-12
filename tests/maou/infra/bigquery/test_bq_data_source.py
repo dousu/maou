@@ -452,7 +452,7 @@ class TestBigQueryDataSource:
 
         # 1回目：BigQueryからデータを取得してローカルキャッシュに保存
         start_time = datetime.now()
-        data_source1 = BigQueryDataSource(
+        BigQueryDataSource(
             dataset_id=self.dataset_id,
             table_name=self.table_name,
             use_local_cache=True,
