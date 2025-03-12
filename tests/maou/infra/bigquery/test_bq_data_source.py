@@ -487,7 +487,9 @@ class TestBigQueryDataSource:
         assert len(sorted_read_data) == len(expected_data)
         assert sorted_read_data == expected_data
 
-    def test_local_cache_no_memory_cache(self, default_fixture: None, tmp_path: Path) -> None:
+    def test_local_cache_no_memory_cache(
+        self, default_fixture: None, tmp_path: Path
+    ) -> None:
         # ローカルキャッシュを使用する場合、メモリキャッシュが使用されないことをテスト
         # BigQueryにテストデータを投入
         data = self.cast_nullable_to_false(
@@ -526,9 +528,13 @@ class TestBigQueryDataSource:
         client = self.bq.client
         jobs = client.list_jobs(min_creation_time=start_time)
         query_jobs = [job for job in jobs if job.job_type == "query"]
-        assert len(query_jobs) == 0  # ローカルキャッシュから読み込まれるためクエリは発行されない
+        assert (
+            len(query_jobs) == 0
+        )  # ローカルキャッシュから読み込まれるためクエリは発行されない
 
-    def test_local_cache_no_bigquery_queries_after_init(self, default_fixture: None, tmp_path: Path) -> None:
+    def test_local_cache_no_bigquery_queries_after_init(
+        self, default_fixture: None, tmp_path: Path
+    ) -> None:
         # ローカルキャッシュを使用した場合、初期化以降BigQueryでクエリを実行していないことを確認するテスト
         # BigQueryにテストデータを投入
         data = self.cast_nullable_to_false(
@@ -573,6 +579,7 @@ class TestBigQueryDataSource:
 
         # ランダムなインデックスでアクセス
         import random
+
         random_indices = [random.randint(0, len(data_source) - 1) for _ in range(10)]
         for i in random_indices:
             data_source[i]
@@ -580,4 +587,6 @@ class TestBigQueryDataSource:
         # 初期化後にBigQueryへのアクセスが発生していないことを確認
         jobs = client.list_jobs(min_creation_time=start_time)
         query_jobs = [job for job in jobs if job.job_type == "query"]
-        assert len(query_jobs) == 0  # 初期化後はローカルキャッシュから読み込まれるためクエリは発行されない
+        assert (
+            len(query_jobs) == 0
+        )  # 初期化後はローカルキャッシュから読み込まれるためクエリは発行されない

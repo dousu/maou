@@ -107,7 +107,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.use_local_cache = use_local_cache
             if self.use_local_cache:
                 if local_cache_dir is None:
-                    raise ValueError("local_cache_dir must be specified when use_local_cache is True")
+                    raise ValueError(
+                        "local_cache_dir must be specified when use_local_cache is True"
+                    )
                 self.local_cache_dir = Path(local_cache_dir)
                 self.local_cache_dir.mkdir(parents=True, exist_ok=True)
                 self.logger.info(f"Local cache directory: {self.local_cache_dir}")
@@ -299,7 +301,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def __download_all_to_local(self) -> None:
             """すべてのデータをローカルにダウンロードする"""
-            self.logger.info(f"Downloading all data to local cache: {self.local_cache_dir}")
+            self.logger.info(
+                f"Downloading all data to local cache: {self.local_cache_dir}"
+            )
 
             # すべてのページのローカルキャッシュが存在するか確認
             all_cache_exists = True
@@ -310,7 +314,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
             # すべてのローカルキャッシュが存在する場合は何もしない
             if all_cache_exists:
-                self.logger.info("All local cache files already exist. Skipping download.")
+                self.logger.info(
+                    "All local cache files already exist. Skipping download."
+                )
                 return
 
             # すべてのデータを一度に取得するクエリを実行
@@ -329,7 +335,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     FROM `{self.dataset_fqn}.{self.table_name}`
                 """
                 self.logger.info(f"Executing query to fetch all data: {query}")
-                arrow_table = self.client.query(query).result().to_arrow().combine_chunks()
+                arrow_table = (
+                    self.client.query(query).result().to_arrow().combine_chunks()
+                )
 
                 # バッチサイズごとに分割してローカルに保存
                 total_rows = arrow_table.num_rows
@@ -339,7 +347,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         end_idx = min(start_idx + self.batch_size, total_rows)
 
                         if start_idx < total_rows:
-                            page_table = arrow_table.slice(start_idx, end_idx - start_idx)
+                            page_table = arrow_table.slice(
+                                start_idx, end_idx - start_idx
+                            )
                             self.__save_to_local(page_num, page_table)
 
             # ローカルキャッシュファイルが正しく作成されたか確認
@@ -347,7 +357,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.logger.info(f"Created {len(cache_files)} local cache files")
 
             if len(cache_files) == 0:
-                self.logger.warning("No local cache files were created. This might indicate a problem.")
+                self.logger.warning(
+                    "No local cache files were created. This might indicate a problem."
+                )
 
         def get_page(self, page_num: int) -> pa.Table:
             """
@@ -362,7 +374,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     return self.__load_from_local(page_num)
                 else:
                     # 通常はここに来ることはない（初期化時にすべてダウンロード済み）
-                    self.logger.warning(f"Local cache not found for page {page_num}, fetching from BigQuery")
+                    self.logger.warning(
+                        f"Local cache not found for page {page_num}, fetching from BigQuery"
+                    )
                     arrow_table = self.__fetch_from_bigquery(page_num)
                     self.__save_to_local(page_num, arrow_table)
                     return arrow_table
