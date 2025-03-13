@@ -24,6 +24,15 @@ class CloudStorage(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def upload_from_local(self, *, local_path: Path, cloud_path: str) -> None:
         pass
+    @abc.abstractmethod
+    def upload_folder_from_local(
+        self,
+        *,
+        local_folder: Path,
+        cloud_folder: str,
+        extensions: Optional[list[str]] = None,
+    ) -> None:
+        pass
 
 
 class LearningDataSource(DataSource):
@@ -244,7 +253,8 @@ class Learning:
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        writer = SummaryWriter(self.log_dir / "training_log_{}".format(timestamp))
+        summary_writer_log_dir = self.log_dir / "training_log_{}".format(timestamp)
+        writer = SummaryWriter(summary_writer_log_dir)
         epoch_number = 0
 
         EPOCHS = self.epoch
@@ -366,6 +376,14 @@ class Learning:
                     self.__cloud_storage.upload_from_local(
                         local_path=checkpoint_path, cloud_path=str(checkpoint_path)
                     )
+
+            # SummaryWriterのイベントをGCSに保存する
+            if self.__cloud_storage is not None:
+                self.logger.info("Uploading tensorboard logs to cloud storage")
+                self.__cloud_storage.upload_folder_from_local(
+                    local_folder=summary_writer_log_dir,
+                    cloud_folder="tensorboard",
+                )
 
             epoch_number += 1
 
