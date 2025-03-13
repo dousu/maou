@@ -2,6 +2,7 @@ import abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from math import log
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -273,7 +274,7 @@ class Learning:
             self.model.load_state_dict(checkpoint["model_state"])
             self.optimizer.load_state_dict(checkpoint["opt_state"])
 
-        for epoch in range(epoch_number, EPOCHS):
+        for _ in range(epoch_number, EPOCHS):
             self.logger.info("EPOCH {}:".format(epoch_number + 1))
 
             # Make sure gradient tracking is on, and do a pass over the data
@@ -346,7 +347,7 @@ class Learning:
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
                 model_path = self.model_dir / "model_{}_{}.pt".format(
-                    timestamp, epoch_number
+                    timestamp, epoch_number + 1
                 )
                 self.logger.info("Saving model to {}".format(model_path))
                 torch.save(self.model.state_dict(), model_path)
@@ -359,7 +360,7 @@ class Learning:
             # checkpoint
             if self.checkpoint_dir is not None:
                 checkpoint_path = self.checkpoint_dir / "model_{}_{}.checkpoint".format(
-                    timestamp, epoch_number
+                    timestamp, epoch_number + 1
                 )
                 self.logger.info("Saving checkpoint to {}".format(checkpoint_path))
                 torch.save(
