@@ -193,6 +193,20 @@ def hcpe_convert(
     required=False,
 )
 @click.option(
+    "--input-local-cache",
+    type=bool,
+    is_flag=True,
+    help="Enable caching of the BigQuery table in the local filesystem.",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-local-cache-dir",
+    type=str,
+    help="Directory path for storing the local cache of the BigQuery table.",
+    required=False,
+)
+@click.option(
     "--output-bigquery",
     type=bool,
     is_flag=True,
@@ -227,6 +241,8 @@ def pre_process(
     input_max_cached_bytes: int,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
+    input_local_cache: bool,
+    input_local_cache_dir: Optional[str],
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
@@ -241,6 +257,8 @@ def pre_process(
                 max_cached_bytes=input_max_cached_bytes,
                 clustering_key=input_clustering_key,
                 partitioning_key_date=input_partitioning_key_date,
+                use_local_cache=input_local_cache,
+                local_cache_dir=input_local_cache_dir,
             )
         elif input_path is not None:
             schema_datasource = {
@@ -323,6 +341,20 @@ def pre_process(
     "--input-partitioning-key-date",
     help="BigQuery date partitioning key.",
     type=str,
+    required=False,
+)
+@click.option(
+    "--input-local-cache",
+    type=bool,
+    is_flag=True,
+    help="Enable caching of the BigQuery table in the local filesystem.",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-local-cache-dir",
+    type=str,
+    help="Directory path for storing the local cache of the BigQuery table.",
     required=False,
 )
 @click.option(
@@ -443,6 +475,8 @@ def learn_model(
     input_max_cached_bytes: int,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
+    input_local_cache: bool,
+    input_local_cache_dir: Optional[str],
     gpu: Optional[str],
     compilation: Optional[bool],
     test_ratio: Optional[float],
@@ -501,6 +535,8 @@ def learn_model(
                 max_cached_bytes=input_max_cached_bytes,
                 clustering_key=input_clustering_key,
                 partitioning_key_date=input_partitioning_key_date,
+                use_local_cache=input_local_cache,
+                local_cache_dir=input_local_cache_dir,
             )
         else:
             raise Exception("Please specify an input directory or a BigQuery table.")
