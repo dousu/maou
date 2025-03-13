@@ -2,7 +2,6 @@ import abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from math import log
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -25,6 +24,7 @@ class CloudStorage(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def upload_from_local(self, *, local_path: Path, cloud_path: str) -> None:
         pass
+
     @abc.abstractmethod
     def upload_folder_from_local(
         self,
