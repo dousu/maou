@@ -285,7 +285,11 @@ class Learning:
             for name, param in self.model.named_parameters():
                 try:
                     param_np = param.detach().cpu().numpy()
-                    writer.add_histogram(f"parameters/{name}", param_np, epoch_number + 1)
+                    writer.add_histogram(
+                        f"parameters/{name}",
+                        param_np,
+                        epoch_number + 1,
+                    )
                     if param.grad is not None:
                         grad_np = param.grad.detach().cpu().numpy()
                         writer.add_histogram(
