@@ -238,6 +238,9 @@ class Learning:
             ) + self.value_loss_ratio * self.loss_fn_value(outputs_value, labels_value)
             loss.backward()
 
+            # 勾配クリッピング
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
             # Adjust learning weights
             self.optimizer.step()
 
