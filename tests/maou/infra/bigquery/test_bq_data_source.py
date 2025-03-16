@@ -421,7 +421,7 @@ class TestBigQueryDataSource:
         assert local_cache_dir.is_dir()
 
         # ローカルキャッシュファイルが作成されていることを確認
-        cache_files = list(local_cache_dir.glob("*.parquet"))
+        cache_files = list(local_cache_dir.glob("*.npz"))
         assert len(cache_files) > 0
 
         # データを読み込む
@@ -460,7 +460,7 @@ class TestBigQueryDataSource:
         )
 
         # ローカルキャッシュファイルが作成されていることを確認
-        cache_files = list(local_cache_dir.glob("*.parquet"))
+        cache_files = list(local_cache_dir.glob("*.npz"))
         assert len(cache_files) > 0
 
         # 2回目：ローカルキャッシュからデータを読み込む
