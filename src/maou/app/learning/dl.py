@@ -283,11 +283,16 @@ class Learning:
 
             # 学習ごとに各層のパラメータを記録
             for name, param in self.model.named_parameters():
-                writer.add_histogram(f"parameters/{name}", param, epoch_number + 1)
-                if param.grad is not None:
-                    writer.add_histogram(
-                        f"gradients/{name}", param.grad, epoch_number + 1
-                    )
+                try:
+                    param_np = param.detach().cpu().numpy()
+                    writer.add_histogram(f"parameters/{name}", param_np, epoch_number + 1)
+                    if param.grad is not None:
+                        grad_np = param.grad.detach().cpu().numpy()
+                        writer.add_histogram(
+                            f"gradients/{name}", grad_np, epoch_number + 1
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Failed to log histogram for {name}: {e}")
 
             running_vloss = 0.0
 
