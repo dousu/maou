@@ -44,10 +44,16 @@ class MaskedGCELoss(torch.nn.Module):
     def forward(
         self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor
     ) -> torch.Tensor:
+        # 数値的安定性のためにlogitsをクリップ
+        logits = torch.clamp(logits, -100, 100)
+
         probs = torch.softmax(logits, dim=1)
+        # 小さな値を追加して0除算を防ぐ
+        probs = torch.clamp(probs, min=1e-7, max=1.0)
+
         targets_one_hot = torch.nn.functional.one_hot(
             targets, num_classes=probs.size(1)
         ).float()
-        loss = (1 - probs**self.q) / self.q
+        loss = (1 - probs**self.q) / max(self.q, 1e-5)
         masked_loss = loss * targets_one_hot * (1 + self.alpha * (1 - mask))
         return masked_loss.sum(dim=1).mean()
