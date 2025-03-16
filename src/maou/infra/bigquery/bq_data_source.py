@@ -275,7 +275,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     data_dict[col_name] = col_data
 
             # np.savezを使用して複数の配列を一つのファイルに保存
-            np.savez(cache_path, **data_dict)
+            np.savez(cache_path, **data_dict)  # type: ignore[arg-type]
 
         def __fetch_from_bigquery(self, page_num: int) -> pa.Table:
             """BigQueryからデータを取得する"""
