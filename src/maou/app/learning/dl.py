@@ -96,6 +96,7 @@ class Learning:
     def learn(self, option: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
+        torch.autograd.set_detect_anomaly(mode=True, check_nan=True)
         learning_result: Dict[str, str] = {}
 
         # 入力とテスト用のデータソース取得
