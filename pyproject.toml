@@ -20,7 +20,7 @@ torch-tb-profiler = "^0.4.3"
 [tool.poetry.group.dev.dependencies]
 black = "^24.10.0"
 pre-commit = "^4.1.0"
-flake8 = "^7.1.1"
+flake8 = "^7.1.2"
 yamllint = "^1.35.1"
 isort = "^6.0.0"
 commitizen = "^4.1.1"
