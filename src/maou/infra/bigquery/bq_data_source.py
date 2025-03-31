@@ -1,3 +1,4 @@
+import datetime
 import logging
 import pickle
 import random
@@ -7,7 +8,6 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 import numpy as np
-import pyarrow as pa
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
@@ -115,7 +115,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
             # ページ番号をキーにしたLRUキャッシュ（OrderedDict）
             # ローカルキャッシュを使用する場合は不要
-            self.__page_cache: Optional[OrderedDict[int, pa.Table]] = None
+            self.__page_cache: Optional[OrderedDict[int, np.ndarray]] = None
             if not self.use_local_cache:
                 self.__page_cache = OrderedDict()
 
@@ -230,12 +230,12 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 safe_value = str(pruning_value).replace("/", "_").replace(":", "_")
                 filename = (
                     f"{self.dataset_fqn.replace('.', '_')}"
-                    f"_{self.table_name}_{safe_value}.npz"
+                    f"_{self.table_name}_{safe_value}.npy"
                 )
             else:
                 filename = (
                     f"{self.dataset_fqn.replace('.', '_')}"
-                    f"_{self.table_name}_page_{page_num}.npz"
+                    f"_{self.table_name}_page_{page_num}.npy"
                 )
             return self.local_cache_dir / filename
 
@@ -244,41 +244,21 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             cache_path = self.__get_local_cache_path(page_num)
             return cache_path.exists()
 
-        def __load_from_local(self, page_num: int) -> Any:
+        def __load_from_local(self, page_num: int) -> np.ndarray:
             """ローカルからデータを読み込む"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(f"Loading data from local cache: {cache_path}")
             return np.load(cache_path, mmap_mode="r")
 
-        def __save_to_local(self, page_num: int, table: pa.Table) -> None:
+        def __save_to_local(self, page_num: int, npy_data: np.ndarray) -> None:
             """データをローカルに保存する"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(f"Saving data to local cache: {cache_path}")
+            np.save(cache_path, npy_data)
 
-            # PyArrow TableをNumPyに変換して辞書に格納
-            data_dict = {}
-            for col_name in table.column_names:
-                # 列データをNumPyに変換
-                col_data = table[col_name].to_numpy()
-
-                # バイト列の場合は、pickle.loadsでnumpy.ndarrayに復元
-                if col_data.dtype == np.dtype("O"):
-                    # バイト列はすべてnumpy.ndarrayをpickle.dumpsしたものと仮定
-                    unpickled_data = np.array(
-                        [
-                            pickle.loads(x) if isinstance(x, bytes) else x
-                            for x in col_data
-                        ]
-                    )
-                    data_dict[col_name] = unpickled_data
-                else:
-                    data_dict[col_name] = col_data
-
-            # np.savezを使用して複数の配列を一つのファイルに保存
-            np.savez(cache_path, **data_dict)  # type: ignore[arg-type]
-
-        def __fetch_from_bigquery(self, page_num: int) -> pa.Table:
+        def __fetch_from_bigquery(self, page_num: int) -> np.ndarray:
             """BigQueryからデータを取得する"""
+            # 一旦pandas dataframeとして取得
             if bool(self.__pruning_info):
                 # page_num はクラスタグループの番号とする
                 try:
@@ -307,9 +287,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     FROM `{self.dataset_fqn}.{self.table_name}`
                     WHERE {filter}
                 """
-                arrow_table = (
-                    self.client.query(query).result().to_arrow().combine_chunks()
-                )
+                df = self.client.query(query).result().to_dataframe()
             else:
                 # クラスタリングキー未指定の場合
                 # BigQuery の list_rows を使ってpageを実装している
@@ -319,11 +297,41 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     start_index=start_index,
                     max_results=self.batch_size,
                 )
-                # arrow_table取得
-                # to_arrow() で取得した PyArrow Table は複数のチャンクに分かれていることがある
-                arrow_table = rows.to_arrow().combine_chunks()
+                df = rows.to_dataframe()
 
-            return arrow_table
+            # dataframeをto_recordsからnumpy arrayに構築しなおす
+            # このプロセスによって行数も含めてnumpy arrayが構築しなおされる
+            records = df.to_records(index=False)
+            dtype = []
+            data = []
+            # recordsの中にバイト列が入っていた場合はpickle.loadsしておく
+            # pickle.loadsする場合は必ずnumpy arrayになるものとして扱う
+            for col in records.dtype.names:
+                if records[col].dtype == "object" and isinstance(
+                    records[col][0], bytes
+                ):
+                    unpickled_data = np.array([pickle.loads(x) for x in records[col]])
+                    data.append(unpickled_data)
+                    dtype.append((col, unpickled_data.dtype, unpickled_data.shape[1:]))
+                elif records[col].dtype == "object" and isinstance(
+                    records[col][0], str
+                ):
+                    data.append(records[col])
+                    # Unicode128バイトで固定しているが検討の余地あり
+                    # 基本的に文字列は学習データとして使わないので足りなくても問題ない
+                    dtype.append((col, "U128"))
+                elif records[col].dtype == "object" and isinstance(
+                    records[col][0], datetime.date
+                ):
+                    data.append(records[col])
+                    dtype.append((col, "datetime64[D]"))
+                else:
+                    data.append(records[col])
+                    dtype.append((col, records[col].dtype))
+            # この構築の仕方 (list(zip(...)))あまり効率よくなさそう
+            npy_data = np.array(list(zip(*data)), dtype=dtype)
+
+            return npy_data
 
         def __download_all_to_local(self) -> None:
             """すべてのデータをローカルにダウンロードする"""
@@ -346,40 +354,21 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 return
 
             # すべてのデータを一度に取得するクエリを実行
-            if bool(self.__pruning_info):
-                # クラスタリングキーまたはパーティショニングキーが指定されている場合は
-                # 各クラスタごとに取得
-                for page_num in range(self.total_pages):
-                    if not self.__check_local_cache_exists(page_num):
-                        # BigQueryからデータを取得してローカルに保存
-                        arrow_table = self.__fetch_from_bigquery(page_num)
-                        self.__save_to_local(page_num, arrow_table)
-            else:
-                # クラスタリングキー未指定の場合は一度にすべてのデータを取得
-                query = f"""
-                    SELECT *
-                    FROM `{self.dataset_fqn}.{self.table_name}`
-                """
-                self.logger.info(f"Executing query to fetch all data: {query}")
-                arrow_table = (
-                    self.client.query(query).result().to_arrow().combine_chunks()
-                )
-
-                # バッチサイズごとに分割してローカルに保存
-                total_rows = arrow_table.num_rows
-                for page_num in range(self.total_pages):
-                    if not self.__check_local_cache_exists(page_num):
-                        start_idx = page_num * self.batch_size
-                        end_idx = min(start_idx + self.batch_size, total_rows)
-
-                        if start_idx < total_rows:
-                            page_table = arrow_table.slice(
-                                start_idx, end_idx - start_idx
-                            )
-                            self.__save_to_local(page_num, page_table)
+            self.logger.info(
+                "Downloading all data to local cache. This may take a while."
+            )
+            for page_num in range(self.total_pages):
+                if not self.__check_local_cache_exists(page_num):
+                    # BigQueryからデータを取得してローカルに保存
+                    npy_data = self.__fetch_from_bigquery(page_num)
+                    self.__save_to_local(page_num, npy_data)
+                else:
+                    self.logger.info(
+                        f"Local cache already exists for page {page_num}. Skipping."
+                    )
 
             # ローカルキャッシュファイルが正しく作成されたか確認
-            cache_files = list(self.local_cache_dir.glob("*.npz"))
+            cache_files = list(self.local_cache_dir.glob("*.npy"))
             self.logger.info(f"Created {len(cache_files)} local cache files")
 
             if len(cache_files) == 0:
@@ -387,7 +376,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     "No local cache files were created. This might indicate a problem."
                 )
 
-        def get_page(self, page_num: int) -> Union[pa.Table, Any]:
+        def get_page(self, page_num: int) -> np.ndarray:
             """
             指定したページ番号（0オリジン）のレコードバッチを取得する．
             ローカルキャッシュが有効な場合は、ローカルからデータを読み込む。
@@ -398,41 +387,41 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             if self.use_local_cache:
                 if self.__check_local_cache_exists(page_num):
                     # NumPy形式のキャッシュからデータを読み込む
-                    npz_data = self.__load_from_local(page_num)
-                    return npz_data
+                    npy_data = self.__load_from_local(page_num)
+                    return npy_data
                 else:
                     # 通常はここに来ることはない（初期化時にすべてダウンロード済み）
                     self.logger.warning(
                         f"Local cache not found for page {page_num}, "
                         "fetching from BigQuery"
                     )
-                    arrow_table = self.__fetch_from_bigquery(page_num)
-                    self.__save_to_local(page_num, arrow_table)
-                    return arrow_table
+                    npy_data = self.__fetch_from_bigquery(page_num)
+                    self.__save_to_local(page_num, npy_data)
+                    return npy_data
 
             # ローカルキャッシュが無効な場合
+            # キャッシュがあれば順序更新
             if self.__page_cache is not None and page_num in self.__page_cache:
-                # キャッシュがあれば順序更新
                 page = self.__page_cache.pop(page_num)
                 self.__page_cache[page_num] = page
                 return page
 
             # BigQueryからデータを取得
-            arrow_table = self.__fetch_from_bigquery(page_num)
+            npy_data = self.__fetch_from_bigquery(page_num)
 
             # キャッシュに追加
             if self.__page_cache is not None:
-                self.__page_cache[page_num] = arrow_table
-                self.total_cached_bytes += arrow_table.nbytes
+                self.__page_cache[page_num] = npy_data
+                self.total_cached_bytes += npy_data.nbytes
                 self.logger.debug(
-                    f"Cache for page {page_num} (nbytes: {arrow_table.nbytes}). "
+                    f"Cache for page {page_num} (nbytes: {npy_data.nbytes}). "
                     f"New total cache size: {self.total_cached_bytes} bytes."
                 )
                 self.__evict_cache_if_needed()
-            return arrow_table
+            return npy_data
 
-        def get_item(self, idx: int) -> Union[pa.Table, dict[str, Any]]:
-            """特定のレコードだけが入ったPyArrow TableまたはNumPy辞書を出す."""
+        def get_item(self, idx: int) -> dict[str, Any]:
+            """特定のレコードだけが入った辞書を返す."""
             if bool(self.__pruning_info):
                 # idx が属するクラスタグループを探索
                 group_idx = None
@@ -446,41 +435,21 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         f"Index {idx} cannot be mapped to a cluster group."
                     )
                 page_data = self.get_page(group_idx)
+                names = page_data.dtype.names
 
-                # NumPy形式のキャッシュからデータを取得
-                if hasattr(page_data, "files"):  # NpzFileの特徴を使用して判定
-                    # 各列のデータを取得
-                    row_data = {}
-                    for col_name in page_data.files:
-                        col_data = page_data[col_name]
-                        if offset_in_group < len(col_data):
-                            row_data[col_name] = col_data[offset_in_group]
-                    return row_data
-                else:
-                    # PyArrow Tableからデータを取得
-                    return page_data.slice(offset_in_group, 1)
+                return {name: page_data[offset_in_group][name] for name in names}
             else:
                 page_num = idx // self.batch_size
                 row_offset = idx % self.batch_size
                 page_data = self.get_page(page_num)
+                names = page_data.dtype.names
 
-                # NumPy形式のキャッシュからデータを取得
-                if hasattr(page_data, "files"):  # NpzFileの特徴を使用して判定
-                    # 各列のデータを取得
-                    row_data = {}
-                    for col_name in page_data.files:
-                        col_data = page_data[col_name]
-                        if row_offset < len(col_data):
-                            row_data[col_name] = col_data[row_offset]
-                    return row_data
-                else:
-                    # PyArrow Tableからデータを取得
-                    return page_data.slice(row_offset, 1)
+                return {name: page_data[row_offset][name] for name in names}
 
-        def iter_batches(self) -> Generator[tuple[str, pa.Table], None, None]:
+        def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
             """
             BigQuery のテーブル全体に対して，
-            batch_size 単位のPyArrow Tableを順次取得するジェネレータ．
+            ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
             for page_num in range(self.total_pages):
                 if bool(self.__pruning_info):
@@ -550,25 +519,14 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         if idx < 0 or idx >= len(self.indicies):
             raise IndexError(f"Index {idx} out of range.")
 
-        result = self.__page_manager.get_item(self.indicies[idx])
-
-        # 既に辞書型の場合 (NumPyキャッシュからの取得)
-        if isinstance(result, dict):
-            return result
-
-        # PyArrow Tableの場合
-        row_dict = result.to_pydict()
-        return {
-            col: vals[0] if not isinstance(vals[0], bytes) else pickle.loads(vals[0])
-            for col, vals in row_dict.items()
-        }
+        return self.__page_manager.get_item(self.indicies[idx])
 
     def __len__(self) -> int:
         return len(self.indicies)
 
     def iter_batches(
         self,
-    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+    ) -> Generator[tuple[str, np.ndarray], None, None]:
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__page_manager.iter_batches():
             yield name, batch

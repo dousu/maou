@@ -421,7 +421,7 @@ class TestBigQueryDataSource:
         assert local_cache_dir.is_dir()
 
         # ローカルキャッシュファイルが作成されていることを確認
-        cache_files = list(local_cache_dir.glob("*.npz"))
+        cache_files = list(local_cache_dir.glob("*.npy"))
         assert len(cache_files) > 0
 
         # データを読み込む
@@ -460,7 +460,7 @@ class TestBigQueryDataSource:
         )
 
         # ローカルキャッシュファイルが作成されていることを確認
-        cache_files = list(local_cache_dir.glob("*.npz"))
+        cache_files = list(local_cache_dir.glob("*.npy"))
         assert len(cache_files) > 0
 
         # 2回目：ローカルキャッシュからデータを読み込む
@@ -558,6 +558,7 @@ class TestBigQueryDataSource:
             table_name=self.table_name,
             use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
+            clustering_key="id",
         )
 
         # 初期化時にBigQueryへのアクセスが発生したことを確認

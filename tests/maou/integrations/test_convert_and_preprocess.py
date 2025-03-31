@@ -134,16 +134,10 @@ class TestIntegrationConverterPreprocess:
             for input_path in input_paths
         ]
 
-        schema = {
-            "hcp": "hcp",
-            "bestMove16": "bestMove16",
-            "gameResult": "gameResult",
-            "eval": "eval",
-        }
         preprocess_option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=preprocess_output_dir,
         )
-        datasource = FileDataSource(file_paths=output_paths_hcpe, schema=schema)
+        datasource = FileDataSource(file_paths=output_paths_hcpe)
         transformer = PreProcess(
             datasource=datasource, feature_store=feature_store_preprocess
         )
@@ -164,7 +158,6 @@ class TestIntegrationConverterPreprocess:
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
-            schema=schema,
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはローカルファイルに入っているデータで行わないといけない
@@ -269,7 +262,6 @@ class TestIntegrationConverterPreprocess:
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
-            schema=schema,
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはローカルファイルに入っているデータで行わないといけない

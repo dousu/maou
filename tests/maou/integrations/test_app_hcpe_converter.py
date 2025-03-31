@@ -159,6 +159,7 @@ class TestIntegrationHcpeConverter:
 
         logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
 
+    # TEST_GCP=true pytest tests/maou/integrations/test_app_hcpe_converter.py::TestIntegrationHcpeConverter::test_compare_local_and_bq_data -v
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
         feature_store = BigQuery(
@@ -193,9 +194,16 @@ class TestIntegrationHcpeConverter:
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
-            schema=schema,
         )
-        local_data = [local_datasource[i] for i in range(len(local_datasource))]
+        # ローカルにはdummyが入っているので取り除く
+        local_data = [
+            {
+                key: data
+                for key, data in local_datasource[i].items()
+                if key in schema.keys()
+            }
+            for i in range(len(local_datasource))
+        ]
         # ソートはhcpeに入っているデータで行わないといけない
         # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
         sorted_local_data = sorted(
@@ -207,7 +215,6 @@ class TestIntegrationHcpeConverter:
                 + x["gameResult"].tobytes()
             ),
         )
-        logger.debug(sorted_local_data)
 
         # BigQuery
         bq_datasource = BigQueryDataSource(
@@ -222,7 +229,7 @@ class TestIntegrationHcpeConverter:
             for i in range(len(bq_datasource))
         ]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
-        # このときhcpeの定義を使って適切なnumpy型に変換してからbyteにする
+        # BQとローカルで型が違うのは許容している
         sorted_bq_data = sorted(
             bq_data,
             key=lambda x: hash(
@@ -232,7 +239,9 @@ class TestIntegrationHcpeConverter:
                 + np.int8(x["gameResult"]).tobytes()
             ),
         )
-        logger.debug(sorted_bq_data)
+
+        logger.debug(f"local: {sorted_local_data[:10]}")
+        logger.debug(f"bq: {sorted_bq_data[:10]}")
         assert all(
             [
                 self.compare_dicts(d1, d2)

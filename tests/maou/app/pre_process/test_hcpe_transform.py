@@ -33,13 +33,7 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        schema = {
-            "hcp": "hcp",
-            "bestMove16": "bestMove16",
-            "gameResult": "gameResult",
-            "eval": "eval",
-        }
-        datasource = FileDataSource(file_paths=input_paths, schema=schema)
+        datasource = FileDataSource(file_paths=input_paths)
         transformer = hcpe_transform.PreProcess(datasource=datasource)
         transformer.transform(option)
         # 出力ファイルのチェック
@@ -60,12 +54,6 @@ class TestHCPEConverter:
         )
         self.clean_up_dir(output_dir)
         with pytest.raises(FileNotFoundError):
-            schema = {
-                "hcp": "hcp",
-                "bestMove16": "bestMove16",
-                "gameResult": "gameResult",
-                "eval": "eval",
-            }
-            datasource = FileDataSource(file_paths=input_paths, schema=schema)
+            datasource = FileDataSource(file_paths=input_paths)
             transformer = hcpe_transform.PreProcess(datasource=datasource)
             transformer.transform(option)

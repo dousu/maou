@@ -4,7 +4,7 @@ import logging
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, ContextManager, Dict, Generator, Optional, Union
 
@@ -71,10 +71,7 @@ class PreProcess:
         with self.__context():
             for dataname, data in tqdm(self.__datasource.iter_batches()):
                 self.logger.debug(f"target: {dataname}")
-                if isinstance(data, pa.Table):
-                    data_length = data.num_rows  # type: ignore
-                elif isinstance(data, np.ndarray):
-                    data_length = len(data)
+                data_length = len(data)
                 self.logger.debug(f"処理対象: {dataname}, 行数: {data_length}")
                 array = np.zeros(
                     data_length,
@@ -88,37 +85,30 @@ class PreProcess:
                     ],
                 )
                 arrow_features: dict[str, list[Any]] = defaultdict(list)
-                for idx in range(data_length):
-                    if isinstance(data, pa.Table):
-                        id = data["id"][idx].as_py()
-                        hcp = pickle.loads(data["hcp"][idx].as_py())
-                        move16 = data["bestMove16"][idx].as_py()
-                        game_result = data["gameResult"][idx].as_py()
-                        eval = data["eval"][idx].as_py()
-                        features, move_label, result_value, legal_move_mask = (
-                            self.__transform_logic(
-                                hcp=hcp,
-                                move16=move16,
-                                game_result=game_result,
-                                eval=eval,
-                            )
+                for idx, record in enumerate(data):
+                    id = (
+                        record["id"]
+                        if "id" in record.dtype.names
+                        else f"{dataname}_{idx}"
+                    )
+                    hcp = record["hcp"]
+                    move16 = record["bestMove16"]
+                    game_result = record["gameResult"]
+                    eval = record["eval"]
+                    features, move_label, result_value, legal_move_mask = (
+                        self.__transform_logic(
+                            hcp=hcp,
+                            move16=move16,
+                            game_result=game_result,
+                            eval=eval,
                         )
-                        partitioning_key = data["partitioningKey"][idx].as_py()
-                    elif isinstance(data, np.ndarray):
-                        id = f"{dataname}_{idx}"
-                        hcp = data[idx]["hcp"]
-                        move16 = data[idx]["bestMove16"]
-                        game_result = data[idx]["gameResult"]
-                        eval = data[idx]["eval"]
-                        features, move_label, result_value, legal_move_mask = (
-                            self.__transform_logic(
-                                hcp=hcp,
-                                move16=move16,
-                                game_result=game_result,
-                                eval=eval,
-                            )
-                        )
-                        partitioning_key = datetime.now().date()
+                    )
+                    # pyarrowの自動変換に対応するためnumpy.datetime64からdatetime.dateに変換
+                    partitioning_key = (
+                        record["partitioningKey"].astype(date)
+                        if "partitioningKey" in record.dtype.names
+                        else datetime.now().date()
+                    )
 
                     if self.__feature_store is not None:
                         arrow_features["id"].append(id)

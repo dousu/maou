@@ -21,7 +21,6 @@ if skip_test:
     logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv('TEST_GCP', '')}")
 
 
-# TODO: HCPE Transformのテストにする
 @pytest.mark.skipif(
     skip_test,
     reason="GCPリソースを使ったテストはTEST_GCPが'true'の場合のみ実行されます",
@@ -103,13 +102,7 @@ class TestIntegrationPreProcess:
         option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=output_dir,
         )
-        schema_datasource = {
-            "hcp": "hcp",
-            "bestMove16": "bestMove16",
-            "gameResult": "gameResult",
-            "eval": "eval",
-        }
-        datasource = FileDataSource(file_paths=input_paths, schema=schema_datasource)
+        datasource = FileDataSource(file_paths=input_paths)
         PreProcess(
             datasource=datasource,
             feature_store=feature_store,
@@ -130,7 +123,6 @@ class TestIntegrationPreProcess:
         }
         local_datasource = FileDataSource(
             file_paths=output_paths,
-            schema=schema,
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはhcpeに入っているデータで行わないといけない

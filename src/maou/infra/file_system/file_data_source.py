@@ -18,10 +18,9 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
     class FileDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
         logger: logging.Logger = logging.getLogger(__name__)
 
-        def __init__(self, *, file_paths: list[Path], schema: dict[str, str]) -> None:
+        def __init__(self, *, file_paths: list[Path]) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
-                schema=schema,
             )
 
         def train_test_split(
@@ -58,15 +57,13 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
     class FileManager:
         logger: logging.Logger = logging.getLogger(__name__)
 
-        def __init__(self, *, file_paths: list[Path], schema: dict[str, str]) -> None:
+        def __init__(self, *, file_paths: list[Path]) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
             Args:
                 file_paths (list[Path]): npyファイルのリスト
-                schema (dict[str, str]): 各フィールドのマッピング（例: {"hcp": "hcp", "eval": "eval"}）
             """
             self.file_paths = file_paths
-            self.schema = schema
 
             self.file_row_offsets = []
             total_rows = 0
@@ -86,16 +83,14 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
 
                     # ここもメモリマップ使っているがファイルサイズはそれほどでもないので
                     # パフォーマンス上のデメリットがあるならなくしてもいい
-                    data = np.load(file, mmap_mode="r")
+                    npy_data = np.load(file, mmap_mode="r")
+                    names = npy_data.dtype.names
 
-                    return {
-                        key: data[column][relative_idx]
-                        for key, column in self.schema.items()
-                    }
+                    return {name: npy_data[relative_idx][name] for name in names}
 
             raise IndexError(f"Index {idx} out of range.")
 
-        def iter_batches(self) -> Generator[tuple[str, pa.Table], None, None]:
+        def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
             for file in self.file_paths:
                 data = np.load(file, mmap_mode="r")
                 yield str(file), data
@@ -104,7 +99,6 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
         self,
         *,
         file_paths: Optional[list[Path]] = None,
-        schema: Optional[dict[str, str]] = None,
         file_manager: Optional[FileManager] = None,
         indicies: Optional[list[int]] = None,
     ) -> None:
@@ -117,14 +111,13 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
         """
         if file_manager is None:
-            if file_paths is not None and schema is not None:
+            if file_paths is not None:
                 self.__file_manager = self.FileManager(
-                    file_paths=file_paths, schema=schema
+                    file_paths=file_paths,
                 )
             else:
                 raise MissingFileDataConfig(
-                    "ファイル名またはスキーマが未設定"
-                    f" file_paths: {file_paths}, schema: {schema}"
+                    f"ファイル名が未設定 file_paths: {file_paths}"
                 )
         else:
             self.__file_manager = file_manager
