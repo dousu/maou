@@ -302,8 +302,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             # dataframeをto_recordsからnumpy arrayに構築しなおす
             # このプロセスによって行数も含めてnumpy arrayが構築しなおされる
             records = df.to_records(index=False)
-            dtype = []
-            data = []
+            dtype: list[Any] = []
+            data: list[np.ndarray] = []
             # recordsの中にバイト列が入っていた場合はpickle.loadsしておく
             # pickle.loadsする場合は必ずnumpy arrayになるものとして扱う
             for col in records.dtype.names:

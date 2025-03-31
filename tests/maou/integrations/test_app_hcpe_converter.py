@@ -159,7 +159,6 @@ class TestIntegrationHcpeConverter:
 
         logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
 
-    # TEST_GCP=true pytest tests/maou/integrations/test_app_hcpe_converter.py::TestIntegrationHcpeConverter::test_compare_local_and_bq_data -v
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
         feature_store = BigQuery(
