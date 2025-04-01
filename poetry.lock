@@ -244,26 +244,25 @@ typing-extensions = {version = ">=4.0.1,<5.0.0", markers = "python_version < \"3
 
 [[package]]
 name = "cshogi"
-version = "0.8.8"
+version = "0.8.9"
 description = "A fast Python shogi library"
 optional = false
 python-versions = ">=3.6"
 groups = ["main"]
 files = [
-    {file = "cshogi-0.8.8-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:d814889415483641ce40e3b1d9aed8176c4df36999ab2c50e285e354bc9a1e79"},
-    {file = "cshogi-0.8.8-cp310-cp310-win_amd64.whl", hash = "sha256:379a2ccbb633f399b036debaacd0a913c65cdd03ec6b70d3dbf65b7994201215"},
-    {file = "cshogi-0.8.8-cp311-cp311-manylinux_2_24_x86_64.whl", hash = "sha256:5b301ffcbcf0eee056d05f51461f3b23a13248b626afe0ac246799d09c729ecf"},
-    {file = "cshogi-0.8.8-cp311-cp311-win_amd64.whl", hash = "sha256:039da5c50759c4d2eec9f299c452bdfc6c84912df6418b260987a6d6b4eccf53"},
-    {file = "cshogi-0.8.8-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:078fb43291da8abad0e061ba05bfcbdbab3c2c29705bbac79654948a5e77b3da"},
-    {file = "cshogi-0.8.8-cp312-cp312-win_amd64.whl", hash = "sha256:a7453822c3772b4dee5948281b4ae0c556561b6e4ff47d8eb5f1dbfa42f3cdc8"},
-    {file = "cshogi-0.8.8-cp36-cp36m-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:4b3cef926110bda5b08434be5375a5ad8997e3eb336d7aa1d4f3d404b4323058"},
-    {file = "cshogi-0.8.8-cp37-cp37m-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:ad86619e78da5f2f87f91a5eff700420a940613006750be89bdf530436695d41"},
-    {file = "cshogi-0.8.8-cp37-cp37m-win_amd64.whl", hash = "sha256:ac346b35a7a088a4f29fc2162738abdce6d8e722db1981bbec600900e241223c"},
-    {file = "cshogi-0.8.8-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:97ef88e945595878b7f6935021e8be2c130b686bf228045e8ca62da281da1cf6"},
-    {file = "cshogi-0.8.8-cp38-cp38-win_amd64.whl", hash = "sha256:d418f8e2e809c9cb6cc6bda2e490f9adaa98344861e72df9ef3c61a165ba02a8"},
-    {file = "cshogi-0.8.8-cp39-cp39-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:42440911b75dbf114ad4d423b252ed6091b8e9b6f00720113384ed7a9bad695a"},
-    {file = "cshogi-0.8.8-cp39-cp39-win_amd64.whl", hash = "sha256:070844a8d39167bfc877f3448bb4451780b51f91aa1602d6ce1958886bac8dc6"},
-    {file = "cshogi-0.8.8.tar.gz", hash = "sha256:fd5fa34c57d1eb4e9e7f709fa228e1488f906094744e1ddd0f6d5aa5b2b7e270"},
+    {file = "cshogi-0.8.9-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:173a58336cb2e6a8ff671b7fd550434acfba9a04c40c101c475cff914b5d8873"},
+    {file = "cshogi-0.8.9-cp310-cp310-win_amd64.whl", hash = "sha256:e422b0ea4cf88d1853a513549102826f612d1cd85991437901f94e6f6de22579"},
+    {file = "cshogi-0.8.9-cp311-cp311-manylinux_2_24_x86_64.whl", hash = "sha256:ac04aa9ff5379017de38fa95ce576661792d0357875d94c5def82e7fc505e4c6"},
+    {file = "cshogi-0.8.9-cp311-cp311-win_amd64.whl", hash = "sha256:bb06b493f2fb4a4c837e33aec64008dc670a637ec14a08995beaf7a99f6bb0ea"},
+    {file = "cshogi-0.8.9-cp312-cp312-win_amd64.whl", hash = "sha256:579389e62609d577bebb0b44db58c19681a2c74331ecd344ab28bb080fe80d90"},
+    {file = "cshogi-0.8.9-cp36-cp36m-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:200dbd699e9e8c26d4cc94af43a2cff3a22cd40f8ae32b6a35e8a69ccc7d9cf9"},
+    {file = "cshogi-0.8.9-cp37-cp37m-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:22b74aa3e2e530fd829efa579385ef2d2e40f024d0627addae7070e852c7ba18"},
+    {file = "cshogi-0.8.9-cp37-cp37m-win_amd64.whl", hash = "sha256:51160e5176df06e8a291ba1e8e8000cd1eb32a89f489380680401436d80c5b8e"},
+    {file = "cshogi-0.8.9-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:58d0809d27d9453712cec256fdc5d5ab67361cdbb647895732c271e15c686632"},
+    {file = "cshogi-0.8.9-cp38-cp38-win_amd64.whl", hash = "sha256:844367a93f689706ade74a031dc77ca9ba36c662e723cd2308a07af2d24979a7"},
+    {file = "cshogi-0.8.9-cp39-cp39-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:d2c45aaae52d010d5fd8b27c6e689fb0e352c9b70a411b68589a858a648f5e11"},
+    {file = "cshogi-0.8.9-cp39-cp39-win_amd64.whl", hash = "sha256:0d2f9926f6e807a8a9d87cc0ee15f3c9f7bf8819aaed52adb4b4eba8b4a548e6"},
+    {file = "cshogi-0.8.9.tar.gz", hash = "sha256:01b6351acfc605bc3f781bdaca665d690abcc64d025faf50eec1d59d0d61891a"},
 ]
 
 [package.dependencies]
@@ -2004,4 +2003,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "669449c961ae25fd576cb92e383fd736e940143ef2fd87cdf4da45d9a5b23c2d"
+content-hash = "074026afd75255c279eb3dcb1324d6eca46621c7f760981157bc62d42e40ebcf"
