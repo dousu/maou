@@ -5,4 +5,6 @@ WORKDIR /app
 
 RUN pip install poetry && poetry sync --without dev
 
+RUN mkdir -p hcpe preprocess checkpoints
+
 CMD ["poetry", "run", "maou"]
