@@ -121,11 +121,11 @@ PyTorchのCUDA版は，通常のPyPIリポジトリではなく，PyTorch公式�
 # PyTorch CUDA版のソース設定
 [[tool.poetry.source]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu118"
 priority = "explicit"
 ```
 
-この設定により，`cuda` extraを指定してインストールする際に，PyTorch公式のリポジトリからCUDA 12.1対応のバージョンがインストールされます．
+この設定により，`cuda` extraを指定してインストールする際に，PyTorch公式のリポジトリからCUDA 11.8対応のバージョンがインストールされます．
 
 ## 使用例
 

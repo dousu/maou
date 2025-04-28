@@ -1,46 +1,60 @@
-[tool.poetry]
+[project]
 name = "maou"
 version = "0.2.0"
 description = "shogi ai"
-authors = ["dousu <hiroki.sudo.hs@gmail.com>"]
-license = "GPL-3.0-only"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
 readme = "README.md"
+license = {text = "GPL-3.0-only"}
+requires-python = ">=3.9,<3.12"
+dependencies = [
+    "click>=8.1.7",
+    "cshogi>=0.8.8",
+    "tqdm>=4.67.1",
+    "pyarrow>=19.0.0",
+    "numpy>=1.19.0",
+    "google-crc32c>=1.6.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-click = "^8.1.7"
-cshogi = "^0.8.8"
-tqdm = "^4.67.1"
-pyarrow = "^19.0.0"
-numpy = "^1.24.4"
-
-# 以下のライブラリはoptionalとして定義し、extrasで管理
-# PyTorch関連（GPU依存）
-torch = {version = "^2.5.1", optional = true}
-torchinfo = {version = "^1.8.0", optional = true}
-tensorboard = {version = "^2.18.0", optional = true}
-torch-tb-profiler = {version = "^0.4.3", optional = true}
-torch-xla = {version = "^2.5.1", optional = true}
-
-# GCP関連
-google-cloud-storage = {version = "^2.19.0", optional = true}
-google-cloud-bigquery = {extras = ["pandas"], version = "^3.27.0", optional = true}
-google-crc32c = {version = "^1.6.0", optional = true}
-google-cloud-bigquery-storage = {version = "^2.28.0", optional = true}
-
-# AWS関連
-boto3 = {version = "^1.34.0", optional = true}
-
-[tool.poetry.extras]
+[project.optional-dependencies]
 # GPU種類ごとのextra
-cpu = ["torch", "torchinfo", "tensorboard", "torch-tb-profiler"]
-cuda = ["torch", "torchinfo", "tensorboard", "torch-tb-profiler"]
-mpu = ["torch", "torchinfo", "tensorboard", "torch-tb-profiler"]
-tpu = ["torch-xla", "torch", "torchinfo", "tensorboard", "torch-tb-profiler"]
-
+cpu = [
+    "torch>=2.0.0,<2.1.0",
+    "torchinfo>=1.8.0",
+    "torch-tb-profiler>=0.4.3",
+]
+cuda = [
+    "torch>=2.0.0,<2.1.0",
+    "torchinfo>=1.8.0",
+    "torch-tb-profiler>=0.4.3",
+]
+mpu = [
+    "torch>=2.0.0,<2.1.0",
+    "torchinfo>=1.8.0",
+    "torch-tb-profiler>=0.4.3",
+]
+tpu = [
+    "torch-xla>=2.0.0",
+    "torch>=2.0.0,<2.1.0",
+    "torchinfo>=1.8.0",
+    "torch-tb-profiler>=0.4.3",
+]
 # クラウドプロバイダーごとのextra
-gcp = ["google-cloud-storage", "google-cloud-bigquery", "google-crc32c", "pyarrow", "google-cloud-bigquery-storage"]
-aws = ["boto3"]
+gcp = [
+    "google-cloud-storage>=2.19.0",
+    "google-cloud-bigquery[pandas]>=3.27.0",
+    "google-cloud-bigquery-storage>=2.28.0",
+]
+aws = [
+    "boto3>=1.34.0",
+]
+
+[project.scripts]
+maou = "maou.infra.console.app:main"
+
+[tool.poetry]
+packages = [{include = "maou", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.1.0"
@@ -69,9 +83,6 @@ build-backend = "poetry.core.masonry.api"
 addopts = [
     "--import-mode=importlib",
 ]
-
-[tool.poetry.scripts]
-maou = "maou.infra.console.app:main"
 
 [tool.mypy]
 disallow_untyped_defs = true
