@@ -14,10 +14,6 @@ repos:
   hooks:
   - id: poetry-check
   - id: poetry-lock
-- repo: https://github.com/hadolint/hadolint
-  rev: v2.13.1-beta
-  hooks:
-  - id: hadolint
 - repo: https://github.com/pycqa/isort
   rev: 6.0.0
   hooks:
