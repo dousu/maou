@@ -5,12 +5,32 @@ from typing import Optional
 import click
 
 from maou.infra.app_logging import app_logger
-from maou.infra.bigquery.bigquery import BigQuery
-from maou.infra.bigquery.bq_data_source import BigQueryDataSource
 from maou.infra.file_system.file_data_source import FileDataSource
 from maou.infra.file_system.file_system import FileSystem
-from maou.infra.gcs.gcs import GCS
 from maou.interface import converter, learn, preprocess
+
+# 必要なライブラリが利用可能かどうかをチェックする変数
+HAS_BIGQUERY = False
+HAS_GCS = False
+
+# BigQuery関連のライブラリのインポートを試みる
+try:
+    from maou.infra.bigquery.bigquery import BigQuery
+    from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+
+    HAS_BIGQUERY = True
+except ImportError:
+    app_logger.debug(
+        "BigQuery dependencies not available. Some features will be disabled."
+    )
+
+# GCS関連のライブラリのインポートを試みる
+try:
+    from maou.infra.gcs.gcs import GCS
+
+    HAS_GCS = True
+except ImportError:
+    app_logger.debug("GCS dependencies not available. Some features will be disabled.")
 
 
 @click.group()
@@ -114,15 +134,23 @@ def hcpe_convert(
     max_cached_bytes: int,
 ) -> None:
     try:
-        feature_store = (
-            BigQuery(
-                dataset_id=dataset_id,
-                table_name=table_name,
-                max_cached_bytes=max_cached_bytes,
-            )
-            if output_bigquery and dataset_id is not None and table_name is not None
-            else None
-        )
+        feature_store = None
+        if output_bigquery and dataset_id is not None and table_name is not None:
+            if HAS_BIGQUERY:
+                try:
+                    feature_store = BigQuery(
+                        dataset_id=dataset_id,
+                        table_name=table_name,
+                        max_cached_bytes=max_cached_bytes,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize BigQuery: {e}")
+            else:
+                app_logger.warning(
+                    "BigQuery output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
         click.echo(
             converter.transform(
                 FileSystem(),
@@ -250,36 +278,48 @@ def pre_process(
 ) -> None:
     try:
         if input_dataset_id is not None and input_table_name is not None:
-            datasource = BigQueryDataSource(
-                dataset_id=input_dataset_id,
-                table_name=input_table_name,
-                batch_size=input_batch_size,
-                max_cached_bytes=input_max_cached_bytes,
-                clustering_key=input_clustering_key,
-                partitioning_key_date=input_partitioning_key_date,
-                use_local_cache=input_local_cache,
-                local_cache_dir=input_local_cache_dir,
-            )
+            if HAS_BIGQUERY:
+                try:
+                    datasource = BigQueryDataSource(
+                        dataset_id=input_dataset_id,
+                        table_name=input_table_name,
+                        batch_size=input_batch_size,
+                        max_cached_bytes=input_max_cached_bytes,
+                        clustering_key=input_clustering_key,
+                        partitioning_key_date=input_partitioning_key_date,
+                        use_local_cache=input_local_cache,
+                        local_cache_dir=input_local_cache_dir,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize BigQueryDataSource: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "BigQuery input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
         elif input_path is not None:
-            schema_datasource = {
-                "hcp": "hcp",
-                "bestMove16": "bestMove16",
-                "gameResult": "gameResult",
-                "eval": "eval",
-            }
             input_paths = FileSystem.collect_files(input_path)
-            datasource = FileDataSource(
-                file_paths=input_paths, schema=schema_datasource
-            )
-        feature_store = (
-            BigQuery(
-                dataset_id=dataset_id,
-                table_name=table_name,
-                max_cached_bytes=output_max_cached_bytes,
-            )
-            if output_bigquery and dataset_id is not None and table_name is not None
-            else None
-        )
+            datasource = FileDataSource(file_paths=input_paths)
+        feature_store = None
+        if output_bigquery and dataset_id is not None and table_name is not None:
+            if HAS_BIGQUERY:
+                try:
+                    feature_store = BigQuery(
+                        dataset_id=dataset_id,
+                        table_name=table_name,
+                        max_cached_bytes=output_max_cached_bytes,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize BigQuery: {e}")
+            else:
+                app_logger.warning(
+                    "BigQuery output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
         click.echo(
             preprocess.transform(
                 datasource=datasource,
@@ -497,47 +537,58 @@ def learn_model(
     gcs_base_path: Optional[str],
 ) -> None:
     try:
-        cloud_storage = (
-            GCS(bucket_name=bucket_name, base_path=gcs_base_path)
-            if output_gcs and bucket_name is not None and gcs_base_path is not None
-            else None
-        )
-        if input_dir is not None:
-            if input_format == "hcpe":
-                schema = {
-                    "hcp": "hcp",
-                    "bestMove16": "bestMove16",
-                    "gameResult": "gameResult",
-                    "eval": "eval",
-                }
-            elif input_format == "preprocess":
-                schema = {
-                    "id": "id",
-                    "eval": "eval",
-                    "features": "features",
-                    "moveLabel": "moveLabel",
-                    "resultValue": "resultValue",
-                    "legalMoveMask": "legalMoveMask",
-                }
+        cloud_storage = None
+        if output_gcs and bucket_name is not None and gcs_base_path is not None:
+            if HAS_GCS:
+                try:
+                    cloud_storage = GCS(
+                        bucket_name=bucket_name, base_path=gcs_base_path
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCS: {e}")
             else:
+                app_logger.warning(
+                    "GCS output requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+        if input_dir is not None:
+            if input_format != "hcpe" and input_format != "preprocess":
                 raise Exception(
                     "Please specify a valid input_format ('hcpe' or 'preprocess')."
                 )
             datasource = FileDataSource.FileDataSourceSpliter(
                 file_paths=FileSystem.collect_files(input_dir),
-                schema=schema,
             )
         elif input_dataset_id is not None and input_table_name is not None:
-            datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
-                dataset_id=input_dataset_id,
-                table_name=input_table_name,
-                batch_size=input_batch_size,
-                max_cached_bytes=input_max_cached_bytes,
-                clustering_key=input_clustering_key,
-                partitioning_key_date=input_partitioning_key_date,
-                use_local_cache=input_local_cache,
-                local_cache_dir=input_local_cache_dir,
-            )
+            if HAS_BIGQUERY:
+                try:
+                    # BigQueryDataSourceSpliterを使用
+                    if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
+                        datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                            dataset_id=input_dataset_id,
+                            table_name=input_table_name,
+                            batch_size=input_batch_size,
+                            max_cached_bytes=input_max_cached_bytes,
+                            clustering_key=input_clustering_key,
+                            partitioning_key_date=input_partitioning_key_date,
+                            use_local_cache=input_local_cache,
+                            local_cache_dir=input_local_cache_dir,
+                        )
+                    else:
+                        app_logger.error("BigQueryDataSourceSpliter not available")
+                        raise AttributeError("BigQueryDataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(
+                        f"Failed to initialize BigQueryDataSourceSpliter: {e}"
+                    )
+                    raise
+            else:
+                error_msg = (
+                    "BigQuery input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
         else:
             raise Exception("Please specify an input directory or a BigQuery table.")
         click.echo(

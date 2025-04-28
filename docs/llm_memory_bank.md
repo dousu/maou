@@ -14,6 +14,7 @@
 8. [よくある問題と解決方法](#8-よくある問題と解決方法)
 9. [将棋AIの評価とチューニング](#9-将棋aiの評価とチューニング)
 10. [参考資料とリソース](#10-参考資料とリソース)
+11. [日本語コメント](#11-日本語コメント)
 
 ## 1. 将棋AIの基本概念
 
@@ -618,3 +619,9 @@ class BigQueryDataSource(DataSource):
 2. [dlshogi](https://github.com/TadaoYamaoka/DeepLearningShogi)
 3. [python-shogi](https://github.com/gunyarakun/python-shogi)
 4. [cshogi](https://github.com/TadaoYamaoka/cshogi)
+
+## 11. 日本語コメント
+
+コード中に日本語を書くときは
+句点に「、」ではなく「，」を使い，
+読点に「。」ではなく「．」を使うこと．
