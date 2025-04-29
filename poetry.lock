@@ -32,10 +32,9 @@ test = ["coverage", "mypy", "pexpect", "ruff", "wheel"]
 name = "boto3"
 version = "1.38.3"
 description = "The AWS SDK for Python"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "boto3-1.38.3-py3-none-any.whl", hash = "sha256:9218f86e2164e1bddb75d435bbde4fa651aa58687213d7e3e1b50f7eb8868f66"},
     {file = "boto3-1.38.3.tar.gz", hash = "sha256:655d51abcd68a40a33c52dbaa2ca73fc63c746b894e2ae22ed8ddc1912ddd93f"},
@@ -53,10 +52,9 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 name = "botocore"
 version = "1.38.3"
 description = "Low-level, data-driven core of boto 3."
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "botocore-1.38.3-py3-none-any.whl", hash = "sha256:96f823240fe3704b99c17d1d1b2fd2d1679cf56d2a55b095f00255b76087cbf0"},
     {file = "botocore-1.38.3.tar.gz", hash = "sha256:790f8f966201781f5fcf486d48b4492e9f734446bbf9d19ef8159d08be854243"},
@@ -77,10 +75,9 @@ crt = ["awscrt (==0.23.8)"]
 name = "cachetools"
 version = "5.5.2"
 description = "Extensible memoizing collections and decorators"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "cachetools-5.5.2-py3-none-any.whl", hash = "sha256:d26a22bcc62eb95c3beabd9f1ee5e820d3d2704fe2967cbe350e20c8ffcd3f0a"},
     {file = "cachetools-5.5.2.tar.gz", hash = "sha256:1a661caa9175d26759571b2e19580f9d6393969e5dfca11fdb1f947a23e640d4"},
@@ -90,10 +87,9 @@ files = [
 name = "certifi"
 version = "2025.4.26"
 description = "Python package for providing Mozilla's CA Bundle."
-optional = true
+optional = false
 python-versions = ">=3.6"
-groups = ["main"]
-markers = "extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "certifi-2025.4.26-py3-none-any.whl", hash = "sha256:30350364dfe371162649852c63336a15c70c6510c2ad5015b21c2345311805f3"},
     {file = "certifi-2025.4.26.tar.gz", hash = "sha256:0a816057ea3cdefcef70270d2c515e4506bbc954f417fa5ade2021213bb8f0c6"},
@@ -212,7 +208,6 @@ files = [
     {file = "charset_normalizer-3.4.1-py3-none-any.whl", hash = "sha256:d98b1668f06378c6dbefec3b92299716b931cd4e6061f3c875a71ced1780ab85"},
     {file = "charset_normalizer-3.4.1.tar.gz", hash = "sha256:44251f18cd68a75b56585dd00dae26183e102cd5e0f9f1466e6df5da2ed64ea3"},
 ]
-markers = {main = "extra == \"tpu\" or extra == \"gcp\""}
 
 [[package]]
 name = "click"
@@ -301,10 +296,9 @@ web = ["flask", "portpicker"]
 name = "db-dtypes"
 version = "1.4.2"
 description = "Pandas Data Types for SQL systems (BigQuery, Spanner)"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "db_dtypes-1.4.2-py2.py3-none-any.whl", hash = "sha256:b3cd0128c8310a2e9ef249da2353e5cb07c62d8a3ce800c7990f9998eee74582"},
     {file = "db_dtypes-1.4.2.tar.gz", hash = "sha256:04348969e0d533de5f11ec3ac8fcb2dd983ac40229d042198ab9d8de51801a6e"},
@@ -436,10 +430,9 @@ tqdm = ["tqdm"]
 name = "google-api-core"
 version = "2.24.2"
 description = "Google API client core library"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_api_core-2.24.2-py3-none-any.whl", hash = "sha256:810a63ac95f3c441b7c0e43d344e372887f62ce9071ba972eacf32672e072de9"},
     {file = "google_api_core-2.24.2.tar.gz", hash = "sha256:81718493daf06d96d6bc76a91c23874dbf2fac0adbbf542831b805ee6e974696"},
@@ -470,10 +463,9 @@ grpcio-gcp = ["grpcio-gcp (>=0.2.2,<1.0.dev0)"]
 name = "google-auth"
 version = "2.39.0"
 description = "Google Authentication Library"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_auth-2.39.0-py2.py3-none-any.whl", hash = "sha256:0150b6711e97fb9f52fe599f55648950cc4540015565d8fbb31be2ad6e1548a2"},
     {file = "google_auth-2.39.0.tar.gz", hash = "sha256:73222d43cdc35a3aeacbfdcaf73142a97839f10de930550d89ebfe1d0a00cde7"},
@@ -498,10 +490,9 @@ urllib3 = ["packaging", "urllib3"]
 name = "google-auth-oauthlib"
 version = "1.2.2"
 description = "Google Authentication Library"
-optional = true
+optional = false
 python-versions = ">=3.6"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_auth_oauthlib-1.2.2-py3-none-any.whl", hash = "sha256:fd619506f4b3908b5df17b65f39ca8d66ea56986e5472eb5978fd8f3786f00a2"},
     {file = "google_auth_oauthlib-1.2.2.tar.gz", hash = "sha256:11046fb8d3348b296302dd939ace8af0a724042e8029c1b872d87fabc9f41684"},
@@ -518,10 +509,9 @@ tool = ["click (>=6.0.0)"]
 name = "google-cloud-bigquery"
 version = "3.31.0"
 description = "Google BigQuery API client library"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_cloud_bigquery-3.31.0-py3-none-any.whl", hash = "sha256:97f4a3219854ff01d6a3a57312feecb0b6e13062226b823f867e2d3619c4787b"},
     {file = "google_cloud_bigquery-3.31.0.tar.gz", hash = "sha256:b89dc716dbe4abdb7a4f873f7050100287bc98514e0614c5d54cd6a8e9fb0991"},
@@ -559,10 +549,9 @@ tqdm = ["tqdm (>=4.7.4,<5.0.0)"]
 name = "google-cloud-bigquery-storage"
 version = "2.31.0"
 description = "Google Cloud Bigquery Storage API client library"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_cloud_bigquery_storage-2.31.0-py3-none-any.whl", hash = "sha256:1721792f39f5ecb49b8503cf197ee8ab79f7deebf17fc4a4a44585959336365b"},
     {file = "google_cloud_bigquery_storage-2.31.0.tar.gz", hash = "sha256:e4b42df3374dbc9575268c89d5dec47fced075c44904c463b12aed2b01be6790"},
@@ -586,10 +575,9 @@ pyarrow = ["pyarrow (>=0.15.0)"]
 name = "google-cloud-core"
 version = "2.4.3"
 description = "Google Cloud API client core library"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_cloud_core-2.4.3-py2.py3-none-any.whl", hash = "sha256:5130f9f4c14b4fafdff75c79448f9495cfade0d8775facf1b09c3bf67e027f6e"},
     {file = "google_cloud_core-2.4.3.tar.gz", hash = "sha256:1fab62d7102844b278fe6dead3af32408b1df3eb06f5c7e8634cbd40edc4da53"},
@@ -606,10 +594,9 @@ grpc = ["grpcio (>=1.38.0,<2.0dev)", "grpcio-status (>=1.38.0,<2.0.dev0)"]
 name = "google-cloud-storage"
 version = "2.19.0"
 description = "Google Cloud Storage API client library"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_cloud_storage-2.19.0-py2.py3-none-any.whl", hash = "sha256:aeb971b5c29cf8ab98445082cbfe7b161a1f48ed275822f59ed3f1524ea54fba"},
     {file = "google_cloud_storage-2.19.0.tar.gz", hash = "sha256:cd05e9e7191ba6cb68934d8eb76054d9be4562aa89dbc4236feee4d7d51342b2"},
@@ -633,7 +620,7 @@ version = "1.7.1"
 description = "A python wrapper of the C library 'Google CRC32C'"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "google_crc32c-1.7.1-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:b07d48faf8292b4db7c3d64ab86f950c2e94e93a11fd47271c28ba458e4a0d76"},
     {file = "google_crc32c-1.7.1-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:7cc81b3a2fbd932a4313eb53cc7d9dde424088ca3a0337160f35d91826880c1d"},
@@ -678,10 +665,9 @@ testing = ["pytest"]
 name = "google-resumable-media"
 version = "2.7.2"
 description = "Utilities for Google Media Downloads and Resumable Uploads"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "google_resumable_media-2.7.2-py2.py3-none-any.whl", hash = "sha256:3ce7551e9fe6d99e9a126101d2536612bb73486721951e9562fee0f90c6ababa"},
     {file = "google_resumable_media-2.7.2.tar.gz", hash = "sha256:5280aed4629f2b60b847b0d42f9857fd4935c11af266744df33d8074cae92fe0"},
@@ -698,10 +684,9 @@ requests = ["requests (>=2.18.0,<3.0.0dev)"]
 name = "googleapis-common-protos"
 version = "1.70.0"
 description = "Common protobufs used in Google APIs"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "googleapis_common_protos-1.70.0-py3-none-any.whl", hash = "sha256:b8bfcca8c25a2bb253e0e0b0adaf8c00773e5e6af6fd92397576680b807e0fd8"},
     {file = "googleapis_common_protos-1.70.0.tar.gz", hash = "sha256:0e1b44e0ea153e6594f9f394fef15193a68aaaea2d843f83e2742717ca753257"},
@@ -717,10 +702,9 @@ grpc = ["grpcio (>=1.44.0,<2.0.0)"]
 name = "grpcio"
 version = "1.71.0"
 description = "HTTP/2-based RPC framework"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"gcp\" or extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+groups = ["main", "dev"]
 files = [
     {file = "grpcio-1.71.0-cp310-cp310-linux_armv7l.whl", hash = "sha256:c200cb6f2393468142eb50ab19613229dcc7829b5ccee8b658a36005f6669fdd"},
     {file = "grpcio-1.71.0-cp310-cp310-macosx_12_0_universal2.whl", hash = "sha256:b2266862c5ad664a380fbbcdbdb8289d71464c42a8c29053820ee78ba0119e5d"},
@@ -782,10 +766,9 @@ protobuf = ["grpcio-tools (>=1.71.0)"]
 name = "grpcio-status"
 version = "1.71.0"
 description = "Status proto mapping for gRPC"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "grpcio_status-1.71.0-py3-none-any.whl", hash = "sha256:843934ef8c09e3e858952887467f8256aac3910c55f077a359a65b2b3cde3e68"},
     {file = "grpcio_status-1.71.0.tar.gz", hash = "sha256:11405fed67b68f406b3f3c7c5ae5104a79d2d309666d10d61b152e91d28fb968"},
@@ -815,10 +798,9 @@ license = ["ukkonen"]
 name = "idna"
 version = "3.10"
 description = "Internationalized Domain Names in Applications (IDNA)"
-optional = true
+optional = false
 python-versions = ">=3.6"
-groups = ["main"]
-markers = "extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"},
     {file = "idna-3.10.tar.gz", hash = "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"},
@@ -903,10 +885,9 @@ i18n = ["Babel (>=2.7)"]
 name = "jmespath"
 version = "1.0.1"
 description = "JSON Matching Expressions"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "jmespath-1.0.1-py3-none-any.whl", hash = "sha256:02e2e4cc71b5bcab88332eebf907519190dd9e6e82107fa7f83b1003a6252980"},
     {file = "jmespath-1.0.1.tar.gz", hash = "sha256:90261b206d6defd58fdd5e85f478bf633a2901798906be2ad389150c5c60edbe"},
@@ -1160,7 +1141,7 @@ version = "1.26.4"
 description = "Fundamental package for array computing in Python"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "numpy-1.26.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9ff0f4f29c51e2803569d7a51c2304de5554655a60c5d776e35b4a41413830d0"},
     {file = "numpy-1.26.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:2e4ee3380d6de9c9ec04745830fd9e2eccb3e6cf790d39d7b98ffd19b0dd754a"},
@@ -1426,10 +1407,9 @@ files = [
 name = "oauthlib"
 version = "3.2.2"
 description = "A generic, spec-compliant, thorough implementation of the OAuth request-signing logic"
-optional = true
+optional = false
 python-versions = ">=3.6"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "oauthlib-3.2.2-py3-none-any.whl", hash = "sha256:8139f29aac13e25d502680e9e19963e83f16838d48a0d71c287fe40e7067fbca"},
     {file = "oauthlib-3.2.2.tar.gz", hash = "sha256:9859c40929662bec5d64f34d01c99e093149682a3f38915dc0655d5a633dd918"},
@@ -1451,16 +1431,14 @@ files = [
     {file = "packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484"},
     {file = "packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f"},
 ]
-markers = {main = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\""}
 
 [[package]]
 name = "pandas"
 version = "2.2.3"
 description = "Powerful data structures for data analysis, time series, and statistics"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pandas-2.2.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:1948ddde24197a0f7add2bdc4ca83bf2b1ef84a1bc8ccffd95eda17fd836ecb5"},
     {file = "pandas-2.2.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:381175499d3802cde0eabbaf6324cce0c4f5d52ca6f8c377c29ad442f50f6348"},
@@ -1544,10 +1522,9 @@ xml = ["lxml (>=4.9.2)"]
 name = "pandas-gbq"
 version = "0.28.0"
 description = "Google BigQuery connector for pandas"
-optional = true
+optional = false
 python-versions = ">=3.8"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pandas_gbq-0.28.0-py2.py3-none-any.whl", hash = "sha256:6be441dff24cde87ebf1e61ee66a3a7c51c4894aa1db0f9983a2c927f57caad3"},
     {file = "pandas_gbq-0.28.0.tar.gz", hash = "sha256:daa4ffb80c1c262185059adb4551ac0cc52013ca3b7ab72c11cec1011f242ae5"},
@@ -1654,10 +1631,9 @@ wcwidth = "*"
 name = "proto-plus"
 version = "1.26.1"
 description = "Beautiful, Pythonic protocol buffers"
-optional = true
+optional = false
 python-versions = ">=3.7"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "proto_plus-1.26.1-py3-none-any.whl", hash = "sha256:13285478c2dcf2abb829db158e1047e2f1e8d63a077d94263c2b88b043c75a66"},
     {file = "proto_plus-1.26.1.tar.gz", hash = "sha256:21a515a4c4c0088a773899e23c7bbade3d18f9c66c73edd4c7ee3816bc96a012"},
@@ -1673,10 +1649,9 @@ testing = ["google-api-core (>=1.31.5)"]
 name = "protobuf"
 version = "5.29.4"
 description = ""
-optional = true
+optional = false
 python-versions = ">=3.8"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\" or python_version == \"3.11\" and (extra == \"gcp\" or extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+groups = ["main", "dev"]
 files = [
     {file = "protobuf-5.29.4-cp310-abi3-win32.whl", hash = "sha256:13eb236f8eb9ec34e63fc8b1d6efd2777d062fa6aaa68268fb67cf77f6839ad7"},
     {file = "protobuf-5.29.4-cp310-abi3-win_amd64.whl", hash = "sha256:bcefcdf3976233f8a502d265eb65ea740c989bacc6c30a58290ed0e519eb4b8d"},
@@ -1697,7 +1672,7 @@ version = "19.0.1"
 description = "Python library for Apache Arrow"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "pyarrow-19.0.1-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:fc28912a2dc924dddc2087679cc8b7263accc71b9ff025a1362b004711661a69"},
     {file = "pyarrow-19.0.1-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:fca15aabbe9b8355800d923cc2e82c8ef514af321e18b437c3d782aa884eaeec"},
@@ -1750,10 +1725,9 @@ test = ["cffi", "hypothesis", "pandas", "pytest", "pytz"]
 name = "pyasn1"
 version = "0.6.1"
 description = "Pure-Python implementation of ASN.1 types and DER/BER/CER codecs (X.208)"
-optional = true
+optional = false
 python-versions = ">=3.8"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pyasn1-0.6.1-py3-none-any.whl", hash = "sha256:0d632f46f2ba09143da3a8afe9e33fb6f92fa2320ab7e886e2d0f7672af84629"},
     {file = "pyasn1-0.6.1.tar.gz", hash = "sha256:6f580d2bdd84365380830acf45550f2511469f673cb4a5ae3857a3170128b034"},
@@ -1763,10 +1737,9 @@ files = [
 name = "pyasn1-modules"
 version = "0.4.2"
 description = "A collection of ASN.1-based protocols modules"
-optional = true
+optional = false
 python-versions = ">=3.8"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a"},
     {file = "pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6"},
@@ -1791,10 +1764,9 @@ files = [
 name = "pydata-google-auth"
 version = "1.9.1"
 description = "PyData helpers for authenticating to Google APIs"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pydata-google-auth-1.9.1.tar.gz", hash = "sha256:0a51ce41c601ca0bc69b8795bf58bedff74b4a6a007c9106c7cbcdec00eaced2"},
     {file = "pydata_google_auth-1.9.1-py2.py3-none-any.whl", hash = "sha256:75ffce5d106e34b717b31844c1639ea505b7d9550dc23b96fb6c20d086b53fa3"},
@@ -1844,10 +1816,9 @@ dev = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "pygments
 name = "python-dateutil"
 version = "2.9.0.post0"
 description = "Extensions to the standard Python datetime module"
-optional = true
+optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\" or extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
@@ -1860,10 +1831,9 @@ six = ">=1.5"
 name = "pytz"
 version = "2025.2"
 description = "World timezone definitions, modern and historical"
-optional = true
+optional = false
 python-versions = "*"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00"},
     {file = "pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3"},
@@ -1952,10 +1922,9 @@ prompt_toolkit = ">=2.0,<4.0"
 name = "requests"
 version = "2.32.3"
 description = "Python HTTP for Humans."
-optional = true
+optional = false
 python-versions = ">=3.8"
-groups = ["main"]
-markers = "extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "requests-2.32.3-py3-none-any.whl", hash = "sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6"},
     {file = "requests-2.32.3.tar.gz", hash = "sha256:55365417734eb18255590a9ff9eb97e9e1da868d4ccd6402399eaf68af20a760"},
@@ -1975,10 +1944,9 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 name = "requests-oauthlib"
 version = "2.0.0"
 description = "OAuthlib authentication support for Requests."
-optional = true
+optional = false
 python-versions = ">=3.4"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9"},
     {file = "requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36"},
@@ -1995,10 +1963,9 @@ rsa = ["oauthlib[signedtoken] (>=3.0.0)"]
 name = "rsa"
 version = "4.9.1"
 description = "Pure-Python RSA implementation"
-optional = true
+optional = false
 python-versions = "<4,>=3.6"
-groups = ["main"]
-markers = "extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "rsa-4.9.1-py3-none-any.whl", hash = "sha256:68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762"},
     {file = "rsa-4.9.1.tar.gz", hash = "sha256:e7bdbfdb5497da4c07dfd35530e1a902659db6ff241e39d9953cad06ebd0ae75"},
@@ -2039,10 +2006,9 @@ files = [
 name = "s3transfer"
 version = "0.12.0"
 description = "An Amazon S3 Transfer Manager"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "s3transfer-0.12.0-py3-none-any.whl", hash = "sha256:35b314d7d82865756edab59f7baebc6b477189e6ab4c53050e28c1de4d9cce18"},
     {file = "s3transfer-0.12.0.tar.gz", hash = "sha256:8ac58bc1989a3fdb7c7f3ee0918a66b160d038a147c7b5db1500930a607e9a1c"},
@@ -2058,10 +2024,9 @@ crt = ["botocore[crt] (>=1.37.4,<2.0a.0)"]
 name = "setuptools"
 version = "80.0.0"
 description = "Easily download, build, install, upgrade, and uninstall Python packages"
-optional = true
+optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "setuptools-80.0.0-py3-none-any.whl", hash = "sha256:a38f898dcd6e5380f4da4381a87ec90bd0a7eec23d204a5552e80ee3cab6bd27"},
     {file = "setuptools-80.0.0.tar.gz", hash = "sha256:c40a5b3729d58dd749c0f08f1a07d134fb8a0a3d7f87dc33e7c5e1f762138650"},
@@ -2080,10 +2045,9 @@ type = ["importlib_metadata (>=7.0.2) ; python_version < \"3.10\"", "jaraco.deve
 name = "six"
 version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
-optional = true
+optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\" or extra == \"aws\""
+groups = ["main", "dev"]
 files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
@@ -2463,10 +2427,9 @@ markers = {main = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or 
 name = "tzdata"
 version = "2025.2"
 description = "Provider of IANA time zone data"
-optional = true
+optional = false
 python-versions = ">=2"
-groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"gcp\""
+groups = ["main", "dev"]
 files = [
     {file = "tzdata-2025.2-py2.py3-none-any.whl", hash = "sha256:1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8"},
     {file = "tzdata-2025.2.tar.gz", hash = "sha256:b60a638fcc0daffadf82fe0f57e53d06bdec2f36c4df66280ae79bce6bd6f2b9"},
@@ -2476,10 +2439,10 @@ files = [
 name = "urllib3"
 version = "1.26.20"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
-optional = true
+optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,>=2.7"
-groups = ["main"]
-markers = "python_version == \"3.9\" and (extra == \"aws\" or extra == \"tpu\" or extra == \"gcp\")"
+groups = ["main", "dev"]
+markers = "python_version == \"3.9\""
 files = [
     {file = "urllib3-1.26.20-py2.py3-none-any.whl", hash = "sha256:0ed14ccfbf1c30a9072c7ca157e4319b70d65f623e91e7b32fadb2853431016e"},
     {file = "urllib3-1.26.20.tar.gz", hash = "sha256:40c2dc0c681e47eb8f90e7e27bf6ff7df2e677421fd46756da1161c39ca70d32"},
@@ -2497,11 +2460,11 @@ description = "HTTP library with thread-safe connection pooling, file post, and 
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev"]
+markers = "python_version >= \"3.10\""
 files = [
     {file = "urllib3-2.4.0-py3-none-any.whl", hash = "sha256:4e16665048960a0900c702d4a66415956a584919c03361cac9f1df5c5dd7e813"},
     {file = "urllib3-2.4.0.tar.gz", hash = "sha256:414bc6535b787febd7567804cc015fee39daab8ad86268f1310a9250697de466"},
 ]
-markers = {main = "python_version >= \"3.10\" and (extra == \"aws\" or extra == \"tpu\" or extra == \"gcp\")", dev = "python_version >= \"3.10\""}
 
 [package.extras]
 brotli = ["brotli (>=1.0.9) ; platform_python_implementation == \"CPython\"", "brotlicffi (>=0.8.0) ; platform_python_implementation != \"CPython\""]
@@ -2612,4 +2575,4 @@ tpu = ["torch", "torch-tb-profiler", "torch-xla", "torchinfo"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.12"
-content-hash = "32e37a26f771d66e72049330f1347078d4c162195aef793ba5bff5bd5b97277b"
+content-hash = "a7575dd72eba32d83112c1e4342e09dc2dd80394449f5304a6c88e783fcdd2b6"
