@@ -37,7 +37,7 @@ repos:
   hooks:
   - id: validate_manifest
 - repo: https://github.com/commitizen-tools/commitizen
-  rev: v4.4.1
+  rev: v4.6.0
   hooks:
   - id: commitizen
 - repo: https://github.com/koalaman/shellcheck-precommit
@@ -59,7 +59,7 @@ repos:
   hooks:
   - id: mypy
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.11.2
+  rev: v0.11.8
   hooks:
   - id: ruff
     args: [ --fix ]
