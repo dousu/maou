@@ -185,7 +185,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 f"BigQuery Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
-            # ローカルキャッシュが有効な場合、初期化時にすべてのデータをダウンロード
+            # ローカルキャッシュが有効な場合，初期化時にすべてのデータをダウンロード
             if self.use_local_cache:
                 self.__download_all_to_local()
 
@@ -379,9 +379,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         def get_page(self, page_num: int) -> np.ndarray:
             """
             指定したページ番号（0オリジン）のレコードバッチを取得する．
-            ローカルキャッシュが有効な場合は、ローカルからデータを読み込む。
-            ローカルキャッシュが無効な場合は、メモリキャッシュを確認し、
-            なければBigQueryから取得する。
+            ローカルキャッシュが有効な場合は，ローカルからデータを読み込む．
+            ローカルキャッシュが無効な場合は，メモリキャッシュを確認し，
+            なければBigQueryから取得する．
             """
             # ローカルキャッシュが有効な場合
             if self.use_local_cache:

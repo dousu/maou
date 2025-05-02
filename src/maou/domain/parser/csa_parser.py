@@ -9,7 +9,7 @@ from maou.domain.parser import parser
 class CSAParser(parser.Parser):
     def parse(self, content: str) -> None:
         """CSAの棋譜文字列をパースして読み取れる状態にする.
-        基本的にこのクラスはcshogiの実装のラッパーでしかないが、cshogiの定義を外に出さないようにする。
+        基本的にこのクラスはcshogiの実装のラッパーでしかないが，cshogiの定義を外に出さないようにする．
         """
         # 1ファイル前提の処理
         self.kif = CSA.Parser.parse_str(content)[0]

@@ -58,3 +58,17 @@ gcloud auth application-default set-quota-project "your-project-id"
 ```bash
 TEST_GCP=true pytest
 ```
+
+### AWSを使う場合
+
+```bash
+aws configure sso --use-device-code --profile default
+# アクセストークンが切れたら以下のように再認証する
+# aws sso login --use-device-code --profile default
+```
+
+なお，AWSを使ったテストをするときは以下のように行う．
+
+```bash
+TEST_AWS=true pytest
+```

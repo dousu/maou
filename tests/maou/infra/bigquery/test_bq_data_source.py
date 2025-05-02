@@ -320,7 +320,7 @@ class TestBigQueryDataSource:
             data_source[i]
 
         # キャッシュの動作を間接的に確認する
-        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
         start_time = datetime.now()
         for i in range(len(data)):
             data_source[i]
@@ -351,7 +351,7 @@ class TestBigQueryDataSource:
         data_source[0]
 
         # キャッシュの動作を間接的に確認する
-        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
         start_time = datetime.now()
         data_source[0]
 
@@ -382,7 +382,7 @@ class TestBigQueryDataSource:
         data_source[0]
 
         # キャッシュの動作を間接的に確認する
-        # 同じデータを再度読み込んでも、BigQueryへのアクセスが発生しないことを確認
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
         start_time = datetime.now()
         data_source[0]
 
@@ -490,7 +490,7 @@ class TestBigQueryDataSource:
     def test_local_cache_no_memory_cache(
         self, default_fixture: None, tmp_path: Path
     ) -> None:
-        # ローカルキャッシュを使用する場合、メモリキャッシュが使用されないことをテスト
+        # ローカルキャッシュを使用する場合，メモリキャッシュが使用されないことをテスト
         # BigQueryにテストデータを投入
         data = self.cast_nullable_to_false(
             pa.table(
@@ -514,8 +514,8 @@ class TestBigQueryDataSource:
             local_cache_dir=str(local_cache_dir),
         )
 
-        # ローカルキャッシュを使用する場合、メモリキャッシュが使用されないことをテスト
-        # これを確認するために、BigQueryへのアクセスが発生しないことを確認する
+        # ローカルキャッシュを使用する場合，メモリキャッシュが使用されないことをテスト
+        # これを確認するために，BigQueryへのアクセスが発生しないことを確認する
 
         # データを読み込む
         data_source[0]
@@ -535,7 +535,7 @@ class TestBigQueryDataSource:
     def test_local_cache_no_bigquery_queries_after_init(
         self, default_fixture: None, tmp_path: Path
     ) -> None:
-        # ローカルキャッシュを使用した場合、初期化以降BigQueryでクエリを実行していないことを確認するテスト
+        # ローカルキャッシュを使用した場合，初期化以降BigQueryでクエリを実行していないことを確認するテスト
         # BigQueryにテストデータを投入
         data = self.cast_nullable_to_false(
             pa.table(
