@@ -4,7 +4,7 @@ set -eux
 
 pipx install poetry
 poetry completions bash >> ~/.bash_completion
-poetry sync
+poetry sync -E cpu
 
 # shellcheck source=/dev/null
 source ~/.bashrc
