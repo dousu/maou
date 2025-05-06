@@ -1,15 +1,11 @@
 import abc
 import contextlib
 import logging
-import pickle
-from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
 from pathlib import Path
-from typing import Any, ContextManager, Dict, Generator, Optional, Union
+from typing import ContextManager, Dict, Generator, Optional
 
 import numpy as np
-import pyarrow as pa
 from tqdm.auto import tqdm
 
 from maou.app.pre_process.feature import FEATURES_NUM
@@ -26,8 +22,9 @@ class FeatureStore(metaclass=abc.ABCMeta):
     def store_features(
         self,
         *,
+        name: str,
         key_columns: list[str],
-        arrow_table: pa.Table,
+        structured_array: np.ndarray,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -42,7 +39,7 @@ class DataSource:
     @abc.abstractmethod
     def iter_batches(
         self,
-    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+    ) -> Generator[tuple[str, np.ndarray], None, None]:
         pass
 
 
@@ -76,15 +73,15 @@ class PreProcess:
                 array = np.zeros(
                     data_length,
                     dtype=[
-                        ("id", "U128"),
-                        ("eval", "i4"),
-                        ("features", "f4", (FEATURES_NUM, 9, 9)),
-                        ("moveLabel", "i2"),
-                        ("resultValue", "f4"),
-                        ("legalMoveMask", "f4", (MOVE_LABELS_NUM)),
+                        ("id", (np.unicode_, 128)),
+                        ("eval", np.int16),
+                        ("features", np.float32, (FEATURES_NUM, 9, 9)),
+                        ("moveLabel", np.uint16),
+                        ("resultValue", np.float32),
+                        ("legalMoveMask", np.float32, (MOVE_LABELS_NUM)),
+                        ("partitioningKey", np.dtype('datetime64[D]')),
                     ],
                 )
-                arrow_features: dict[str, list[Any]] = defaultdict(list)
                 for idx, record in enumerate(data):
                     id = (
                         record["id"]
@@ -103,39 +100,26 @@ class PreProcess:
                             eval=eval,
                         )
                     )
-                    # pyarrowの自動変換に対応するためnumpy.datetime64からdatetime.dateに変換
                     partitioning_key = (
-                        record["partitioningKey"].astype(date)
+                        record["partitioningKey"]
                         if "partitioningKey" in record.dtype.names
-                        else datetime.now().date()
+                        else None
                     )
 
-                    if self.__feature_store is not None:
-                        arrow_features["id"].append(id)
-                        arrow_features["eval"].append(eval)
-                        arrow_features["features"].append(pickle.dumps(features))
-                        arrow_features["moveLabel"].append(move_label)
-                        arrow_features["resultValue"].append(result_value)
-                        arrow_features["legalMoveMask"].append(
-                            pickle.dumps(legal_move_mask)
-                        )
-                        # ローカルファイルには入らない情報
-                        arrow_features["partitioningKey"].append(partitioning_key)
-
-                    if option.output_dir is not None:
-                        np_data = array[idx]
-                        np_data["id"] = id
-                        np_data["eval"] = eval
-                        np_data["features"] = features
-                        np_data["moveLabel"] = move_label
-                        np_data["resultValue"] = result_value
-                        np_data["legalMoveMask"] = legal_move_mask
+                    np_data = array[idx]
+                    np_data["id"] = id
+                    np_data["eval"] = eval
+                    np_data["features"] = features
+                    np_data["moveLabel"] = move_label
+                    np_data["resultValue"] = result_value
+                    np_data["legalMoveMask"] = legal_move_mask
+                    np_data["partitioningKey"] = partitioning_key
 
                 if self.__feature_store is not None:
-                    arrow_table = pa.table(arrow_features)
                     self.__feature_store.store_features(
+                        name=dataname,
                         key_columns=["id"],
-                        arrow_table=arrow_table,
+                        structured_array=array[: idx + 1],
                         partitioning_key_date="partitioningKey",
                     )
 

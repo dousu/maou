@@ -1,15 +1,12 @@
 import abc
 import contextlib
 import logging
-import pickle
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ContextManager, Dict, Generator, Optional
+from typing import ContextManager, Dict, Generator, Optional
 
 import cshogi
 import numpy as np
-import pyarrow as pa
 from tqdm.auto import tqdm
 
 from maou.domain.parser.csa_parser import CSAParser
@@ -26,8 +23,9 @@ class FeatureStore(metaclass=abc.ABCMeta):
     def store_features(
         self,
         *,
+        name: str,
         key_columns: list[str],
-        arrow_table: pa.Table,
+        structured_array: np.ndarray,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -126,13 +124,39 @@ class HCPEConverter:
                     continue
 
                 # 1024もあれば確保しておく局面数として十分だろう
-                hcpes = np.zeros(1024, cshogi.HuffmanCodedPosAndEval)  # type: ignore
+                # これ以上ある場合は無駄な局面が大量にありそうなので枝刈りした方がよさそう
+                # HCPEと同じ部分は同じdtypeを利用しているが
+                # 実は独自データフォーマットなのでHCPEではない
+                # https://github.com/TadaoYamaoka/cshogi/blob/b13c3b248f870b218cb71e7f9c17dfae7bf0f6e9/cshogi/_cshogi.pyx#L19
+                hcpes = np.zeros(
+                    1024,
+                    dtype=[
+                        ("hcp", (np.uint8, 32)),
+                        ("eval", np.int16),
+                        ("bestMove16", np.int16),
+                        ("gameResult", np.int8),
+                        ("id", (np.unicode_, 128)),
+                        ("partitioningKey", np.dtype('datetime64[D]')),
+                        ("ratings", (np.uint16, 2)),
+                        ("endgameStatus", (np.unicode_, 16)),
+                        ("moves", np.int16),
+                    ],
+                )
                 board = cshogi.Board()  # type: ignore
                 board.set_sfen(parser.init_pos_sfen())
-                arrow_features: dict[str, list[Any]] = defaultdict(list)
                 try:
+                    # 棋譜共通情報を取得する
+                    partitioning_key_value = parser.partitioning_key_value()
+                    ratings = parser.ratings()
+                    endgame = parser.endgame()
+                    moves = len(parser.moves())
+                    # 1手毎に代わる情報を取得する
                     for idx, (move, score, comment) in enumerate(
-                        zip(parser.moves(), parser.scores(), parser.comments())
+                        zip(
+                            parser.moves(),
+                            parser.scores(),
+                            parser.comments(),
+                        )
                     ):
                         self.logger.debug(f"{move} : {score} : {comment}")
 
@@ -163,24 +187,14 @@ class HCPEConverter:
                         # 特に動かす駒の種類の情報が抜けているので注意
                         hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                         hcpe["gameResult"] = parser.winner()
-                        if self.__feature_store is not None:
-                            arrow_features["hcp"].append(pickle.dumps(hcpe["hcp"]))
-                            arrow_features["eval"].append(hcpe["eval"])
-                            arrow_features["bestMove16"].append(hcpe["bestMove16"])
-                            arrow_features["gameResult"].append(hcpe["gameResult"])
-                            # ローカルファイルには入らない情報
-                            arrow_features["id"].append(
-                                f"{file.with_suffix('.hcpe').name}_{idx}"
-                            )
-                            arrow_features["partitioningKey"].append(
-                                parser.partitioning_key_value()
-                            )
-                            arrow_features["ratings"].append(
-                                pickle.dumps(np.array(parser.ratings()))
-                            )
-                            arrow_features["endgameStatus"].append(parser.endgame())
-                            arrow_features["moves"].append(len(parser.moves()))
+                        hcpe["id"] = f"{file.with_suffix('.hcpe').name}_{idx}"
+                        # 棋譜共通情報を記録
+                        hcpe["partitioningKey"] = np.datetime64(partitioning_key_value.isoformat())
+                        hcpe["ratings"] = ratings
+                        hcpe["endgameStatus"] = endgame
+                        hcpe["moves"] = moves
 
+                        # 局面に指し手を反映させる
                         board.push(move)
                     # np.saveで保存することでメタデータをつけておく
                     # HCPEの形式から逸脱するのでCPUパフォーマンスは悪くなる
@@ -189,29 +203,10 @@ class HCPEConverter:
                         hcpes[: idx + 1],
                     )
                     if self.__feature_store is not None:
-                        table = pa.Table.from_pydict(
-                            arrow_features,
-                            schema=pa.schema(
-                                [
-                                    pa.field("id", pa.string(), nullable=False),
-                                    pa.field("hcp", pa.binary(), nullable=False),
-                                    pa.field("eval", pa.int32(), nullable=False),
-                                    pa.field("bestMove16", pa.int32(), nullable=False),
-                                    pa.field("gameResult", pa.int32(), nullable=False),
-                                    pa.field("ratings", pa.binary(), nullable=False),
-                                    pa.field(
-                                        "endgameStatus", pa.string(), nullable=False
-                                    ),
-                                    pa.field("moves", pa.int32(), nullable=False),
-                                    pa.field(
-                                        "partitioningKey", pa.date64(), nullable=False
-                                    ),
-                                ]
-                            ),
-                        )
                         self.__feature_store.store_features(
+                            name=file.with_suffix(".hcpe").name,
                             key_columns=["id"],
-                            arrow_table=table,
+                            structured_array=hcpes[: idx + 1],
                             clustering_key=None,
                             partitioning_key_date="partitioningKey",
                         )
