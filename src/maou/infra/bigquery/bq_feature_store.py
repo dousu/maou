@@ -1,8 +1,8 @@
 import contextlib
 import datetime
 import logging
-from io import BytesIO
 import pickle
+from io import BytesIO
 from typing import Any, Generator, Optional, Union
 
 import numpy as np
@@ -328,22 +328,24 @@ class BigQueryFeatureStore(converter.FeatureStore, preprocess.FeatureStore):
             <= set([name for name, _ in structured_array.dtype.fields.items()])
         ):
             self.logger.error(
-                f"キーカラムが存在しない: {key_columns}, {[name for name, _ in structured_array.dtype.fields.items()]}"
+                f"キーカラムが存在しない: {key_columns},"
+                f" {[name for name, _ in structured_array.dtype.fields.items()]}"
             )
             raise NotFoundKeyColumns("Not found key columns")
         if clustering_key is not None and clustering_key not in [
             name for name, _ in structured_array.dtype.fields.items()
         ]:
             self.logger.error(
-                f"クラスタリングキーが存在しない: {clustering_key}, {[name for name, _ in structured_array.dtype.fields.items()]}"
+                f"クラスタリングキーが存在しない: {clustering_key}, "
+                f"{[name for name, _ in structured_array.dtype.fields.items()]}"
             )
             raise NotFoundKeyColumns("Not found clustering key columns")
         if partitioning_key_date is not None and partitioning_key_date not in [
             name for name, _ in structured_array.dtype.fields.items()
         ]:
             self.logger.error(
-                "パーティショニングキーが存在しない: "
-                f"{partitioning_key_date}, {[name for name, _ in structured_array.dtype.fields.items()]}"
+                f"パーティショニングキーが存在しない: {partitioning_key_date}, "
+                f"{[name for name, _ in structured_array.dtype.fields.items()]}"
             )
             raise NotFoundKeyColumns("Not found clustering key columns")
         if self.last_key_columns is None:

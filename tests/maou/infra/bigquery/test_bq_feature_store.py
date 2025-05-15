@@ -94,7 +94,7 @@ class TestBigQueryFeatureStore:
             ],
         )
 
-        schema = self.test_class._BigQueryFeatureStore__generate_schema(data)  # type: ignore
+        schema = self.test_class._BigQueryFeatureStore__generate_schema(data)  # type: ignore # noqa: E501
         logger.debug(f"BigQueryスキーマ: {schema}")
         logger.debug(f"PyArrow Table: {data}")
         key_columns = ["id"]
@@ -114,7 +114,7 @@ class TestBigQueryFeatureStore:
         )
         # ソートしてから比較する
         # data6をpickle.dumpsしてから比較する
-        data2 = self.test_class._BigQueryFeatureStore__numpy_flatten_nested_column(data)  # type: ignore
+        data2 = self.test_class._BigQueryFeatureStore__numpy_flatten_nested_column(data)  # type: ignore # noqa: E501
         assert np.array_equal(np.sort(data2), bigquery_table)
 
         # data5を取り出して元のnumpyに戻るか確認する

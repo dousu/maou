@@ -136,7 +136,7 @@ class HCPEConverter:
                         ("bestMove16", np.int16),
                         ("gameResult", np.int8),
                         ("id", (np.unicode_, 128)),
-                        ("partitioningKey", np.dtype('datetime64[D]')),
+                        ("partitioningKey", np.dtype("datetime64[D]")),
                         ("ratings", (np.uint16, 2)),
                         ("endgameStatus", (np.unicode_, 16)),
                         ("moves", np.int16),
@@ -189,7 +189,9 @@ class HCPEConverter:
                         hcpe["gameResult"] = parser.winner()
                         hcpe["id"] = f"{file.with_suffix('.hcpe').name}_{idx}"
                         # 棋譜共通情報を記録
-                        hcpe["partitioningKey"] = np.datetime64(partitioning_key_value.isoformat())
+                        hcpe["partitioningKey"] = np.datetime64(
+                            partitioning_key_value.isoformat()
+                        )
                         hcpe["ratings"] = ratings
                         hcpe["endgameStatus"] = endgame
                         hcpe["moves"] = moves

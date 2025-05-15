@@ -81,7 +81,7 @@ class TestBigQueryDataSource:
                 moves,
                 partitioningKey,
             )
-            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(
+            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(  # noqa: E501
                 [str(uuid.uuid4()) for _ in range(num_rows)],
                 [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
                 np.random.randint(-1000, 1000, num_rows),
