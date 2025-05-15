@@ -74,7 +74,7 @@ class PreProcess:
                 array = np.zeros(
                     data_length,
                     dtype=[
-                        ("id", (np.unicode_, 128)),
+                        ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                         ("eval", np.int16),
                         ("features", np.float32, (FEATURES_NUM, 9, 9)),
                         ("moveLabel", np.uint16),

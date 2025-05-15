@@ -135,10 +135,10 @@ class HCPEConverter:
                         ("eval", np.int16),
                         ("bestMove16", np.int16),
                         ("gameResult", np.int8),
-                        ("id", (np.unicode_, 128)),
+                        ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                         ("partitioningKey", np.dtype("datetime64[D]")),
                         ("ratings", (np.uint16, 2)),
-                        ("endgameStatus", (np.unicode_, 16)),
+                        ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined]
                         ("moves", np.int16),
                     ],
                 )
