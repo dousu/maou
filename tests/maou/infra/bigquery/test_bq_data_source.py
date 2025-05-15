@@ -96,13 +96,13 @@ class TestBigQueryDataSource:
         structured_array = np.array(
             data,
             dtype=[
-                ("id", (np.unicode_, 128)),
+                ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                 ("hcp", (np.uint8, 32)),
                 ("eval", np.int16),
                 ("bestMove16", np.int16),
                 ("gameResult", np.int8),
                 ("ratings", (np.uint16, 2)),
-                ("endgameStatus", (np.unicode_, 16)),
+                ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
                 ("moves", np.int16),
                 ("partitioningKey", np.dtype("datetime64[D]")),
             ],
@@ -152,7 +152,7 @@ class TestBigQueryDataSource:
                 (2, "test2"),
                 (3, "test3"),
             ],
-            dtype=[("id", np.int16), ("data", np.unicode_, 16)],
+            dtype=[("id", np.int16), ("data", np.unicode_, 16)],  # type: ignore[attr-defined] # noqa: E501
         )
         self.bq.store_features(
             name="test_features", key_columns=["id"], structured_array=data
@@ -183,8 +183,8 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("cluster", np.unicode_, 16),
-                ("data", np.unicode_, 16),
+                ("cluster", np.unicode_, 16),  # type: ignore[attr-defined]
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -225,7 +225,7 @@ class TestBigQueryDataSource:
             dtype=[
                 ("id", np.int16),
                 ("partition_key", np.dtype("datetime64[D]")),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -322,7 +322,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -364,7 +364,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -398,7 +398,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -434,7 +434,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -481,7 +481,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -542,7 +542,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(
@@ -594,7 +594,7 @@ class TestBigQueryDataSource:
             ],
             dtype=[
                 ("id", np.int16),
-                ("data", np.unicode_, 16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
             ],
         )
         self.bq.store_features(

@@ -138,7 +138,7 @@ class HCPEConverter:
                         ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                         ("partitioningKey", np.dtype("datetime64[D]")),
                         ("ratings", (np.uint16, 2)),
-                        ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined]
+                        ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
                         ("moves", np.int16),
                     ],
                 )
