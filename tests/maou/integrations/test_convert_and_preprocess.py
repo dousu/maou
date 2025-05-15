@@ -10,8 +10,8 @@ import pytest
 
 from maou.app.converter.hcpe_converter import HCPEConverter
 from maou.app.pre_process.hcpe_transform import PreProcess
-from maou.infra.bigquery.bigquery import BigQuery
 from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 from maou.infra.file_system.file_data_source import FileDataSource
 
 logger: logging.Logger = logging.getLogger("TEST")
@@ -57,15 +57,15 @@ class TestIntegrationConverterPreprocess:
         logger.debug(
             f"Test table (Pre Process): {self.dataset_id}.{self.table_name_preprocess}"
         )
-        self.bq = BigQuery(
+        self.bq = BigQueryFeatureStore(
             dataset_id=self.dataset_id, table_name=self.table_name_preprocess
         )
         yield
         # clean up
-        self.bq._BigQuery__drop_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name_hcpe
         )
-        self.bq._BigQuery__drop_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name_preprocess
         )
 
@@ -110,7 +110,7 @@ class TestIntegrationConverterPreprocess:
         ファイルデータソースを使って変換したデータで
         ローカルファイルとBigQueryに保存されたデータが同じか確認する.
         """
-        feature_store_preprocess = BigQuery(
+        feature_store_preprocess = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name_preprocess,
         )
@@ -148,28 +148,14 @@ class TestIntegrationConverterPreprocess:
             preprocess_output_dir / input_path.with_suffix(".pre.npy").name
             for input_path in input_paths
         ]
-        schema = {
-            "id": "id",
-            "eval": "eval",
-            "features": "features",
-            "moveLabel": "moveLabel",
-            "resultValue": "resultValue",
-            "legalMoveMask": "legalMoveMask",
-        }
         local_datasource = FileDataSource(
             file_paths=output_paths,
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
-        # ソートはローカルファイルに入っているデータで行わないといけない
-        # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
+        # ソートする
         sorted_local_data = sorted(
             local_data,
-            key=lambda x: hash(
-                x["eval"].tobytes()
-                + x["moveLabel"].tobytes()
-                + x["resultValue"].tobytes()
-                + x["features"].tobytes()
-            ),
+            key=lambda x: x["id"],
         )
         logger.debug(sorted_local_data)
 
@@ -178,22 +164,13 @@ class TestIntegrationConverterPreprocess:
             dataset_id=self.dataset_id, table_name=self.table_name_preprocess
         )
         bq_data = [
-            {
-                key: data
-                for key, data in bq_datasource[i].items()
-                if key in schema.keys()
-            }
+            {key: data for key, data in bq_datasource[i].items()}
             for i in range(len(bq_datasource))
         ]
-        # BQのデータはIDで一意になるがローカルに合わせてソートする
+        # ローカルと同じようにソートする
         sorted_bq_data = sorted(
             bq_data,
-            key=lambda x: hash(
-                np.int32(x["eval"]).tobytes()
-                + np.int16(x["moveLabel"]).tobytes()
-                + np.float32(x["resultValue"]).tobytes()
-                + x["features"].tobytes()
-            ),
+            key=lambda x: x["id"],
         )
         logger.debug(sorted_bq_data)
         assert all(
@@ -208,11 +185,11 @@ class TestIntegrationConverterPreprocess:
         BigQueryデータソースを使って変換したデータで
         ローカルファイルとBigQueryに保存されたデータが同じか確認する.
         """
-        feature_store_hcpe = BigQuery(
+        feature_store_hcpe = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name_hcpe,
         )
-        feature_store_preprocess = BigQuery(
+        feature_store_preprocess = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name_preprocess,
         )
@@ -252,28 +229,14 @@ class TestIntegrationConverterPreprocess:
             preprocess_output_dir / p.with_suffix(".pre.npy").name
             for p in [Path("2020-12-03"), Path("2020-01-30"), Path("2020-01-31")]
         ]
-        schema = {
-            "id": "id",
-            "eval": "eval",
-            "features": "features",
-            "moveLabel": "moveLabel",
-            "resultValue": "resultValue",
-            "legalMoveMask": "legalMoveMask",
-        }
         local_datasource = FileDataSource(
             file_paths=output_paths,
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
-        # ソートはローカルファイルに入っているデータで行わないといけない
-        # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
+        # ソートする
         sorted_local_data = sorted(
             local_data,
-            key=lambda x: hash(
-                x["eval"].tobytes()
-                + x["moveLabel"].tobytes()
-                + x["resultValue"].tobytes()
-                + x["features"].tobytes()
-            ),
+            key=lambda x: x["id"],
         )
         logger.debug(sorted_local_data)
 
@@ -282,22 +245,13 @@ class TestIntegrationConverterPreprocess:
             dataset_id=self.dataset_id, table_name=self.table_name_preprocess
         )
         bq_data = [
-            {
-                key: data
-                for key, data in bq_datasource[i].items()
-                if key in schema.keys()
-            }
+            {key: data for key, data in bq_datasource[i].items()}
             for i in range(len(bq_datasource))
         ]
-        # BQのデータはIDで一意になるがローカルに合わせてソートする
+        # ローカルと同じようにソートする
         sorted_bq_data = sorted(
             bq_data,
-            key=lambda x: hash(
-                np.int32(x["eval"]).tobytes()
-                + np.int16(x["moveLabel"]).tobytes()
-                + np.float32(x["resultValue"]).tobytes()
-                + x["features"].tobytes()
-            ),
+            key=lambda x: x["id"],
         )
         logger.debug(sorted_bq_data)
         assert all(

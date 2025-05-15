@@ -9,12 +9,11 @@ from typing import Any
 
 import google_crc32c
 import numpy as np
-import pyarrow as pa
 import pytest
 
 from maou.app.converter.hcpe_converter import HCPEConverter
-from maou.infra.bigquery.bigquery import BigQuery
 from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 from maou.infra.file_system.file_data_source import FileDataSource
 
 logger: logging.Logger = logging.getLogger("TEST")
@@ -53,11 +52,13 @@ class TestIntegrationHcpeConverter:
         self.dataset_id = "maou_test"
         self.table_name = "test_" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
-        self.bq = BigQuery(dataset_id=self.dataset_id, table_name=self.table_name)
+        self.bq = BigQueryFeatureStore(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
         self.table_id = f"{self.bq.client.project}.{self.dataset_id}.{self.table_name}"
         yield
         # clean up
-        self.bq._BigQuery__drop_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name
         )
 
@@ -115,53 +116,66 @@ class TestIntegrationHcpeConverter:
                 ]
             )
         np.random.shuffle(partitioning_keys)
-        data = {
-            "id": [str(uuid.uuid4()) for _ in range(num_rows)],
-            "hcp": [np.random.bytes(16) for _ in range(num_rows)],
-            "eval": np.random.randint(-1000, 1000, num_rows),
-            "bestMove16": np.random.randint(0, 65536, num_rows),
-            "gameResult": np.random.randint(-1, 2, num_rows),
-            "ratings": [np.random.bytes(8) for _ in range(num_rows)],
-            "endgameStatus": np.random.choice(
-                ["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows
-            ),
-            "moves": np.random.randint(0, 100, num_rows),
-            "partitioningKey": partitioning_keys,
-        }
-        table = pa.Table.from_pydict(
+        data = [
+            (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            )
+            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(
+                [str(uuid.uuid4()) for _ in range(num_rows)],
+                [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
+                np.random.randint(-1000, 1000, num_rows),
+                np.random.randint(0, 65536, num_rows),
+                np.random.randint(-1, 2, num_rows),
+                [np.zeros(2) for _ in range(num_rows)],
+                np.random.choice(["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows),
+                np.random.randint(0, 100, num_rows),
+                partitioning_keys,
+            )
+        ]
+        structured_array = np.array(
             data,
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.string(), nullable=False),
-                    pa.field("hcp", pa.binary(), nullable=False),
-                    pa.field("eval", pa.int32(), nullable=False),
-                    pa.field("bestMove16", pa.int32(), nullable=False),
-                    pa.field("gameResult", pa.int32(), nullable=False),
-                    pa.field("ratings", pa.binary(), nullable=False),
-                    pa.field("endgameStatus", pa.string(), nullable=False),
-                    pa.field("moves", pa.int32(), nullable=False),
-                    pa.field("partitioningKey", pa.date64(), nullable=False),
-                ]
-            ),
+            dtype=[
+                ("id", (np.unicode_, 128)),
+                ("hcp", (np.uint8, 32)),
+                ("eval", np.int16),
+                ("bestMove16", np.int16),
+                ("gameResult", np.int8),
+                ("ratings", (np.uint16, 2)),
+                ("endgameStatus", (np.unicode_, 16)),
+                ("moves", np.int16),
+                ("partitioningKey", np.dtype("datetime64[D]")),
+            ],
         )
-        self.bq._BigQuery__create_or_replace_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__create_or_replace_table(  # type: ignore
             dataset_id=self.dataset_id,
             table_name=self.table_name,
             schema=(
-                self.bq._BigQuery__generate_schema(arrow_table=table)  # type: ignore
+                self.bq._BigQueryFeatureStore__generate_schema(  # type: ignore
+                    structured_array=structured_array
+                )
             ),
             clustering_key=None,
             partitioning_key_date="partitioningKey",
         )
-        self.bq.load_from_arrow(
-            dataset_id=self.dataset_id, table_name=self.table_name, table=table
+        self.bq.load_from_numpy_array(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            structured_array=structured_array,
         )
 
         logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
 
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
-        feature_store = BigQuery(
+        feature_store = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name,
         )
@@ -255,7 +269,7 @@ class TestIntegrationHcpeConverter:
 
         start_time = datetime.now()
 
-        feature_store = BigQuery(
+        feature_store = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name,
         )

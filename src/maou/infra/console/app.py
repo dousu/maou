@@ -15,8 +15,8 @@ HAS_GCS = False
 
 # BigQuery関連のライブラリのインポートを試みる
 try:
-    from maou.infra.bigquery.bigquery import BigQuery
     from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+    from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 
     HAS_BIGQUERY = True
 except ImportError:
@@ -138,7 +138,7 @@ def hcpe_convert(
         if output_bigquery and dataset_id is not None and table_name is not None:
             if HAS_BIGQUERY:
                 try:
-                    feature_store = BigQuery(
+                    feature_store = BigQueryFeatureStore(
                         dataset_id=dataset_id,
                         table_name=table_name,
                         max_cached_bytes=max_cached_bytes,
@@ -307,7 +307,7 @@ def pre_process(
         if output_bigquery and dataset_id is not None and table_name is not None:
             if HAS_BIGQUERY:
                 try:
-                    feature_store = BigQuery(
+                    feature_store = BigQueryFeatureStore(
                         dataset_id=dataset_id,
                         table_name=table_name,
                         max_cached_bytes=output_max_cached_bytes,

@@ -2,6 +2,7 @@ import abc
 import contextlib
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
 
@@ -79,7 +80,7 @@ class PreProcess:
                         ("moveLabel", np.uint16),
                         ("resultValue", np.float32),
                         ("legalMoveMask", np.float32, (MOVE_LABELS_NUM)),
-                        ("partitioningKey", np.dtype('datetime64[D]')),
+                        ("partitioningKey", np.dtype("datetime64[D]")),
                     ],
                 )
                 for idx, record in enumerate(data):
@@ -100,10 +101,12 @@ class PreProcess:
                             eval=eval,
                         )
                     )
+
                     partitioning_key = (
                         record["partitioningKey"]
                         if "partitioningKey" in record.dtype.names
-                        else None
+                        # 一応Noneにしないようにしておく
+                        else datetime.min.date()
                     )
 
                     np_data = array[idx]

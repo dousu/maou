@@ -1,6 +1,5 @@
 import logging
 import os
-import pickle
 import re
 import uuid
 from collections.abc import Generator
@@ -9,12 +8,11 @@ from pathlib import Path
 
 import google_crc32c
 import numpy as np
-import pyarrow as pa
 import pytest
 from google.cloud import bigquery
 
-from maou.infra.bigquery.bigquery import BigQuery
 from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 
 logger: logging.Logger = logging.getLogger("TEST")
 
@@ -46,12 +44,6 @@ class TestBigQueryDataSource:
         # ハッシュ値を16進文字列で返す
         return checksum.digest().hex()
 
-    def cast_nullable_to_false(self, table: pa.Table) -> pa.Table:
-        schema = pa.schema(
-            [pa.field(f.name, f.type, nullable=False) for f in table.schema]
-        )
-        return table.cast(schema)
-
     def insert_partitioning_test_data(self) -> None:
         # 20MB 以下のデータを生成 (20MBが最小課金容量)
         # 1行約116バイト (36+16+4+4+4+8+4.5+4+36) × 100,000 行 = 11MB
@@ -77,46 +69,59 @@ class TestBigQueryDataSource:
                 ]
             )
         np.random.shuffle(partitioning_keys)
-        data = {
-            "id": [str(uuid.uuid4()) for _ in range(num_rows)],
-            "hcp": [pickle.dumps(np.zeros((2, 3))) for _ in range(num_rows)],
-            "eval": np.random.randint(-1000, 1000, num_rows),
-            "bestMove16": np.random.randint(0, 65536, num_rows),
-            "gameResult": np.random.randint(-1, 2, num_rows),
-            "ratings": [pickle.dumps(np.zeros(2)) for _ in range(num_rows)],
-            "endgameStatus": np.random.choice(
-                ["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows
-            ),
-            "moves": np.random.randint(0, 100, num_rows),
-            "partitioningKey": partitioning_keys,
-        }
-        table = pa.Table.from_pydict(
+        data = [
+            (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            )
+            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(
+                [str(uuid.uuid4()) for _ in range(num_rows)],
+                [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
+                np.random.randint(-1000, 1000, num_rows),
+                np.random.randint(0, 65536, num_rows),
+                np.random.randint(-1, 2, num_rows),
+                [np.zeros(2) for _ in range(num_rows)],
+                np.random.choice(["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows),
+                np.random.randint(0, 100, num_rows),
+                partitioning_keys,
+            )
+        ]
+        structured_array = np.array(
             data,
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.string(), nullable=False),
-                    pa.field("hcp", pa.binary(), nullable=False),
-                    pa.field("eval", pa.int32(), nullable=False),
-                    pa.field("bestMove16", pa.int32(), nullable=False),
-                    pa.field("gameResult", pa.int32(), nullable=False),
-                    pa.field("ratings", pa.binary(), nullable=False),
-                    pa.field("endgameStatus", pa.string(), nullable=False),
-                    pa.field("moves", pa.int32(), nullable=False),
-                    pa.field("partitioningKey", pa.date64(), nullable=False),
-                ]
-            ),
+            dtype=[
+                ("id", (np.unicode_, 128)),
+                ("hcp", (np.uint8, 32)),
+                ("eval", np.int16),
+                ("bestMove16", np.int16),
+                ("gameResult", np.int8),
+                ("ratings", (np.uint16, 2)),
+                ("endgameStatus", (np.unicode_, 16)),
+                ("moves", np.int16),
+                ("partitioningKey", np.dtype("datetime64[D]")),
+            ],
         )
-        self.bq._BigQuery__create_or_replace_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__create_or_replace_table(  # type: ignore
             dataset_id=self.dataset_id,
             table_name=self.table_name,
             schema=(
-                self.bq._BigQuery__generate_schema(arrow_table=table)  # type: ignore
+                self.bq._BigQueryFeatureStore__generate_schema(  # type: ignore
+                    structured_array=structured_array
+                )
             ),
             clustering_key=None,
             partitioning_key_date="partitioningKey",
         )
-        self.bq.load_from_arrow(
-            dataset_id=self.dataset_id, table_name=self.table_name, table=table
+        self.bq.load_from_numpy_array(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            structured_array=structured_array,
         )
 
         logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
@@ -127,27 +132,31 @@ class TestBigQueryDataSource:
         self.dataset_id = "maou_test"
         self.table_name = "test_" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
-        self.bq = BigQuery(dataset_id=self.dataset_id, table_name=self.table_name)
+        self.bq = BigQueryFeatureStore(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
         client = bigquery.Client()
         self.table_id = f"{client.project}.{self.dataset_id}.{self.table_name}"
         yield
         # clean up
-        self.bq._BigQuery__drop_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name
         )
 
     def test_read_data_without_pruning_key(self, default_fixture: None) -> None:
         # パーティショニングやクラスタリングキーが指定されていない場合にbqから正しくデータを読み込める
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[("id", np.int16), ("data", np.unicode_, 16)],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # BigQueryDataSourceからデータを読み込む
@@ -166,17 +175,23 @@ class TestBigQueryDataSource:
     def test_read_data_with_clustering_key(self, default_fixture: None) -> None:
         # クラスタリングキーが指定されている場合にbqから正しくデータを読み込める
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "cluster": ["A", "B", "A"],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "A", "test1"),
+                (2, "B", "test2"),
+                (3, "A", "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("cluster", np.unicode_, 16),
+                ("data", np.unicode_, 16),
+            ],
         )
         self.bq.store_features(
-            key_columns=["id"], arrow_table=data, clustering_key="cluster"
+            name="test_features",
+            key_columns=["id"],
+            structured_array=data,
+            clustering_key="cluster",
         )
         self.bq.flush_features(key_columns=["id"], clustering_key="cluster")
 
@@ -201,21 +216,23 @@ class TestBigQueryDataSource:
     def test_read_data_with_partitioning_key(self, default_fixture: None) -> None:
         # パーティショニングキーが指定されている場合にbqから正しくデータを読み込める
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "partition_key": [
-                        date.fromisoformat("2019-12-04"),
-                        date.fromisoformat("2019-12-05"),
-                        date.fromisoformat("2019-12-07"),
-                    ],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, date.fromisoformat("2019-12-04"), "test1"),
+                (2, date.fromisoformat("2019-12-05"), "test2"),
+                (3, date.fromisoformat("2019-12-07"), "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("partition_key", np.dtype("datetime64[D]")),
+                ("data", np.unicode_, 16),
+            ],
         )
         self.bq.store_features(
-            key_columns=["id"], arrow_table=data, partitioning_key_date="partition_key"
+            name="test_features",
+            key_columns=["id"],
+            structured_array=data,
+            partitioning_key_date="partition_key",
         )
         self.bq.flush_features(
             key_columns=["id"], partitioning_key_date="partition_key"
@@ -297,15 +314,20 @@ class TestBigQueryDataSource:
         # max_chached_bytesを超えたら古いページが破棄される
         # batch_sizeより大きなレコード数の場合にキャッシュされる
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [i for i in range(3)],
-                    "data": [f"test{i}" for i in range(3)],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # BigQueryDataSourceからデータを読み込む
@@ -332,15 +354,22 @@ class TestBigQueryDataSource:
 
     def test_batch_size_larger_than_record_count(self, default_fixture: None) -> None:
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [i for i in range(5)],
-                    "data": [f"test{i}" for i in range(5)],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+                (4, "test4"),
+                (5, "test5"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # BigQueryDataSourceからデータを読み込む
@@ -363,15 +392,18 @@ class TestBigQueryDataSource:
     def test_read_from_cache(self, default_fixture: None) -> None:
         # キャッシュされている場合にbqにアクセスせずデータを返すことができる
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1],
-                    "data": ["test1"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # BigQueryDataSourceからデータを読み込む
@@ -394,15 +426,20 @@ class TestBigQueryDataSource:
     def test_local_cache_creation(self, default_fixture: None, tmp_path: Path) -> None:
         # ローカルキャッシュディレクトリが正しく作成されることをテスト
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # ローカルキャッシュディレクトリ
@@ -436,15 +473,20 @@ class TestBigQueryDataSource:
     def test_local_cache_loading(self, default_fixture: None, tmp_path: Path) -> None:
         # ローカルキャッシュからデータが正しく読み込まれることをテスト
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # ローカルキャッシュディレクトリを作成
@@ -492,15 +534,20 @@ class TestBigQueryDataSource:
     ) -> None:
         # ローカルキャッシュを使用する場合，メモリキャッシュが使用されないことをテスト
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3],
-                    "data": ["test1", "test2", "test3"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # ローカルキャッシュディレクトリを作成
@@ -537,15 +584,22 @@ class TestBigQueryDataSource:
     ) -> None:
         # ローカルキャッシュを使用した場合，初期化以降BigQueryでクエリを実行していないことを確認するテスト
         # BigQueryにテストデータを投入
-        data = self.cast_nullable_to_false(
-            pa.table(
-                {
-                    "id": [1, 2, 3, 4, 5],
-                    "data": ["test1", "test2", "test3", "test4", "test5"],
-                }
-            )
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+                (4, "test4"),
+                (5, "test5"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),
+            ],
         )
-        self.bq.store_features(key_columns=["id"], arrow_table=data)
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
         self.bq.flush_features(key_columns=["id"])
 
         # ローカルキャッシュディレクトリを作成

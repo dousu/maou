@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 
 from maou.app.pre_process.hcpe_transform import PreProcess
-from maou.infra.bigquery.bigquery import BigQuery
 from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 from maou.infra.file_system.file_data_source import FileDataSource
 
 logger: logging.Logger = logging.getLogger("TEST")
@@ -49,10 +49,12 @@ class TestIntegrationPreProcess:
         self.dataset_id = "maou_test"
         self.table_name = "test_" + self.__calculate_file_crc32c(path)
         logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
-        self.bq = BigQuery(dataset_id=self.dataset_id, table_name=self.table_name)
+        self.bq = BigQueryFeatureStore(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
         yield
         # clean up
-        self.bq._BigQuery__drop_table(  # type: ignore
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name
         )
 
@@ -89,7 +91,7 @@ class TestIntegrationPreProcess:
 
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
-        feature_store = BigQuery(
+        feature_store = BigQueryFeatureStore(
             dataset_id=self.dataset_id,
             table_name=self.table_name,
         )
@@ -113,14 +115,6 @@ class TestIntegrationPreProcess:
             output_dir / input_path.with_suffix(".pre.npy").name
             for input_path in input_paths
         ]
-        schema = {
-            "id": "id",
-            "eval": "eval",
-            "features": "features",
-            "moveLabel": "moveLabel",
-            "resultValue": "resultValue",
-            "legalMoveMask": "legalMoveMask",
-        }
         local_datasource = FileDataSource(
             file_paths=output_paths,
         )
@@ -138,11 +132,7 @@ class TestIntegrationPreProcess:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
         bq_data = [
-            {
-                key: data
-                for key, data in bq_datasource[i].items()
-                if key in schema.keys()
-            }
+            {key: data for key, data in bq_datasource[i].items()}
             for i in range(len(bq_datasource))
         ]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
