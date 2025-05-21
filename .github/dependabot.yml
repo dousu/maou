@@ -4,11 +4,23 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      update:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      update:
+        patterns:
+          - "*"
   - package-ecosystem: "devcontainers"
     directory: "/"
     schedule:
       interval: monthly
+    groups:
+      update:
+        patterns:
+          - "*"
