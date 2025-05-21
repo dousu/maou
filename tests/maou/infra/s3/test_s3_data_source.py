@@ -99,7 +99,7 @@ class TestS3DataSource:
         return True
 
     @pytest.fixture
-    def temp_cache_dir(self, tmp_path) -> Generator[None, None, None]:
+    def temp_cache_dir(self, tmp_path: Path) -> Path:
         """一時的なキャッシュディレクトリを提供するフィクスチャ"""
         cache_dir = tmp_path / "s3_cache"
         cache_dir.mkdir()
@@ -131,7 +131,7 @@ class TestS3DataSource:
         except ClientError as e:
             logger.error(f"Failed to clean up test bucket: {e}")
 
-    def test_init_without_pruning_key(self, default_fixture, temp_cache_dir):
+    def test_init_without_pruning_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """プルーニングキーなし"""
         data_name = f"{self.data_name}-1"
         feature_store = S3FeatureStore(
@@ -200,7 +200,7 @@ class TestS3DataSource:
             ]
         )
 
-    def test_init_with_clustering_key(self, default_fixture, temp_cache_dir):
+    def test_init_with_clustering_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """クラスタリングキーあり"""
         data_name = f"{self.data_name}-2"
         feature_store = S3FeatureStore(
@@ -277,7 +277,7 @@ class TestS3DataSource:
             ]
         )
 
-    def test_init_with_partitioning_key(self, default_fixture, temp_cache_dir):
+    def test_init_with_partitioning_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """パーティショニングキーあり"""
         data_name = f"{self.data_name}-3"
         feature_store = S3FeatureStore(
@@ -354,7 +354,7 @@ class TestS3DataSource:
             ]
         )
 
-    def test_train_test_split(self, default_fixture, temp_cache_dir):
+    def test_train_test_split(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """train_test_splitメソッドをテストする"""
         data_name = f"{self.data_name}-4"
         feature_store = S3FeatureStore(
@@ -395,7 +395,7 @@ class TestS3DataSource:
         # 一応読み込めるかテスト
         assert "id" in train_ds[0]
 
-    def test_iter_batches(self, default_fixture, temp_cache_dir):
+    def test_iter_batches(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """iter_batchesメソッドをテストする"""
         data_name = f"{self.data_name}-5"
         feature_store = S3FeatureStore(
@@ -441,7 +441,7 @@ class TestS3DataSource:
             assert len(batch) == rows
             assert "id" in batch.dtype.names
 
-    def test_missing_config(self, default_fixture, temp_cache_dir):
+    def test_missing_config(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """設定不足の場合のエラーをテストする"""
         with pytest.raises(Exception):
             S3DataSource()

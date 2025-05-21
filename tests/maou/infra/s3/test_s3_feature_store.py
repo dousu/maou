@@ -78,7 +78,7 @@ class TestS3FeatureStore:
         return data
 
     @pytest.fixture
-    def temp_cache_dir(self, tmp_path) -> Generator[None, None, None]:
+    def temp_cache_dir(self, tmp_path: Path) -> Path:
         """一時的なキャッシュディレクトリを提供するフィクスチャ"""
         cache_dir = tmp_path / "s3_cache"
         cache_dir.mkdir()
@@ -110,7 +110,7 @@ class TestS3FeatureStore:
         except ClientError as e:
             logger.error(f"Failed to clean up test bucket: {e}")
 
-    def test_store_features(self, default_fixture, temp_cache_dir):
+    def test_store_features(self, default_fixture: None, temp_cache_dir: Path) -> None:
         data_name = f"{self.data_name}-1"
         feature_store = S3FeatureStore(
             bucket_name=self.bucket,
