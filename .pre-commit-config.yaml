@@ -15,21 +15,21 @@ repos:
   - id: poetry-check
   - id: poetry-lock
 - repo: https://github.com/pycqa/isort
-  rev: 6.0.0
+  rev: 6.0.1
   hooks:
   - id: isort
 - repo: https://github.com/pycqa/flake8
-  rev: 7.1.1
+  rev: 7.2.0
   hooks:
   - id: flake8
     # additional_dependencies:
     # - flake8-docstrings
 - repo: https://github.com/pre-commit/pre-commit
-  rev: v4.1.0
+  rev: v4.2.0
   hooks:
   - id: validate_manifest
 - repo: https://github.com/commitizen-tools/commitizen
-  rev: v4.1.1
+  rev: v4.6.0
   hooks:
   - id: commitizen
 - repo: local
@@ -48,7 +48,7 @@ repos:
   - id: mypy
     additional_dependencies: [numpy]
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.9.4
+  rev: v0.11.8
   hooks:
   - id: ruff
     args: [ --fix ]
