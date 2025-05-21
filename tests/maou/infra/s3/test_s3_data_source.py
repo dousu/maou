@@ -131,7 +131,9 @@ class TestS3DataSource:
         except ClientError as e:
             logger.error(f"Failed to clean up test bucket: {e}")
 
-    def test_init_without_pruning_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
+    def test_init_without_pruning_key(
+        self, default_fixture: None, temp_cache_dir: Path
+    ) -> None:
         """プルーニングキーなし"""
         data_name = f"{self.data_name}-1"
         feature_store = S3FeatureStore(
@@ -200,7 +202,9 @@ class TestS3DataSource:
             ]
         )
 
-    def test_init_with_clustering_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
+    def test_init_with_clustering_key(
+        self, default_fixture: None, temp_cache_dir: Path
+    ) -> None:
         """クラスタリングキーあり"""
         data_name = f"{self.data_name}-2"
         feature_store = S3FeatureStore(
@@ -277,7 +281,9 @@ class TestS3DataSource:
             ]
         )
 
-    def test_init_with_partitioning_key(self, default_fixture: None, temp_cache_dir: Path) -> None:
+    def test_init_with_partitioning_key(
+        self, default_fixture: None, temp_cache_dir: Path
+    ) -> None:
         """パーティショニングキーあり"""
         data_name = f"{self.data_name}-3"
         feature_store = S3FeatureStore(
@@ -354,7 +360,9 @@ class TestS3DataSource:
             ]
         )
 
-    def test_train_test_split(self, default_fixture: None, temp_cache_dir: Path) -> None:
+    def test_train_test_split(
+        self, default_fixture: None, temp_cache_dir: Path
+    ) -> None:
         """train_test_splitメソッドをテストする"""
         data_name = f"{self.data_name}-4"
         feature_store = S3FeatureStore(
