@@ -270,13 +270,17 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                                 )
                         except FileNotFoundError:
                             continue
-                result_message = f"同期完了: {download_count}ファイルをダウンロード，{skip_count}ファイルをスキップ"
+                result_message = (
+                    f"同期完了: {download_count}ファイルをダウンロード，"
+                    f"{skip_count}ファイルをスキップ"
+                )
                 if delete:
                     result_message += f"，{delete_count}ファイルを削除"
 
             except ClientError as e:
                 self.logger.error(
-                    f"Error sync s3 object from 's3://{bucket}/{prefix}' to '{local_path}': {e}"
+                    "Error sync s3 object from "
+                    f"'s3://{bucket}/{prefix}' to '{local_path}': {e}"
                 )
                 raise
 
