@@ -15,18 +15,25 @@ from maou.app.converter.hcpe_converter import HCPEConverter
 from maou.infra.bigquery.bq_data_source import BigQueryDataSource
 from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 from maou.infra.file_system.file_data_source import FileDataSource
+from maou.infra.s3.s3_data_source import S3DataSource
+from maou.infra.s3.s3_feature_store import S3FeatureStore
 
 logger: logging.Logger = logging.getLogger("TEST")
 
-skip_test = os.getenv("TEST_GCP", "").lower() != "true"
+skip_gcp_test = os.getenv("TEST_GCP", "").lower() != "true"
 
-if skip_test:
+if skip_gcp_test:
     logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv('TEST_GCP', '')}")
+
+skip_aws_test = os.getenv("TEST_AWS", "").lower() != "true"
+
+if skip_aws_test:
+    logger.debug(f"Skip {__name__} TEST_AWS: {os.getenv('TEST_AWS', '')}")
 
 
 @pytest.mark.skipif(
-    skip_test,
-    reason="GCPリソースを使ったテストはTEST_GCPが'true'の場合のみ実行されます",
+    skip_gcp_test and skip_aws_test,
+    reason="AWSまたはGCPリソースを使ったテストはTEST_AWSまたはTEST_GCPが'true'の場合のみ実行されます",
 )
 class TestIntegrationHcpeConverter:
     def __calculate_file_crc32c(self, filepath: Path) -> str:
@@ -46,6 +53,13 @@ class TestIntegrationHcpeConverter:
         # ハッシュ値を16進文字列で返す
         return checksum.digest().hex()
 
+    @pytest.fixture
+    def temp_s3_cache_dir(self, tmp_path: Path) -> Path:
+        """一時的なキャッシュディレクトリを提供するフィクスチャ"""
+        cache_dir = tmp_path / "s3_cache"
+        cache_dir.mkdir()
+        return cache_dir
+
     @pytest.fixture()
     def default_fixture(self) -> Generator[None, None, None]:
         path = Path("src/maou/app/converter/hcpe_converter.py")
@@ -56,6 +70,9 @@ class TestIntegrationHcpeConverter:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
         self.table_id = f"{self.bq.client.project}.{self.dataset_id}.{self.table_name}"
+        self.bucket = "maou-test-bucket"
+        self.prefix = "test-integration-" + self.__calculate_file_crc32c(path)
+        self.data_name = "test_data"
         yield
         # clean up
         self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
@@ -173,6 +190,10 @@ class TestIntegrationHcpeConverter:
 
         logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
 
+    @pytest.mark.skipif(
+        skip_gcp_test,
+        reason="GCPリソースを使ったテストはTEST_GCPが'true'の場合のみ実行されます",
+    )
     def test_compare_local_and_bq_data(self, default_fixture: None) -> None:
         """ローカルファイルとBigQueryに保存されたデータが同じか確認する."""
         feature_store = BigQueryFeatureStore(
@@ -262,7 +283,11 @@ class TestIntegrationHcpeConverter:
             ]
         )
 
-    def test_partitioning_key_partitioning(self, default_fixture: None) -> None:
+    @pytest.mark.skipif(
+        skip_gcp_test,
+        reason="GCPリソースを使ったテストはTEST_GCPが'true'の場合のみ実行されます",
+    )
+    def test_partitioning_key_pruning(self, default_fixture: None) -> None:
         """日付パーティショニングキーを使用した場合にmergeクエリの読み込みバイト数が減少している."""
 
         self.insert_partitioning_test_data()
@@ -318,3 +343,80 @@ class TestIntegrationHcpeConverter:
         # 自動の再クラスタリングが働かないこともあるのかもしれない
         # 現在のデータならデータソースは211.75kB程度になるのでほぼ最小であることを確認している
         assert total_bytes_processed < 300 * 1024
+
+    @pytest.mark.skipif(
+        skip_aws_test,
+        reason="AWSリソースを使ったテストはTEST_AWSが'true'の場合のみ実行されます",
+    )
+    def test_compare_local_and_s3_data(
+        self,
+        default_fixture: None,
+        temp_s3_cache_dir: Path,
+    ) -> None:
+        """ローカルファイルとS3に保存されたデータが同じか確認する."""
+        feature_store = S3FeatureStore(
+            bucket_name=self.bucket,
+            prefix=self.prefix,
+            data_name=self.data_name,
+        )
+        input_paths = [
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
+            Path("tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"),
+        ]
+        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        option = HCPEConverter.ConvertOption(
+            input_paths=input_paths,
+            input_format="csa",
+            output_dir=output_dir,
+        )
+        HCPEConverter(
+            feature_store=feature_store,
+        ).convert(option)
+
+        # ローカル
+        output_paths = [
+            option.output_dir / input_path.with_suffix(".npy").name
+            for input_path in input_paths
+        ]
+        local_datasource = FileDataSource(
+            file_paths=output_paths,
+        )
+        # ローカルにはdummyが入っているので取り除く
+        local_data = [
+            {key: data for key, data in local_datasource[i].items()}
+            for i in range(len(local_datasource))
+        ]
+        # ソートはhcpeに入っているデータで行わないといけない
+        # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
+        sorted_local_data = sorted(
+            local_data,
+            key=lambda x: x["id"],
+        )
+
+        # S3
+        s3_datasource = S3DataSource(
+            bucket_name=self.bucket,
+            prefix=self.prefix,
+            data_name=self.data_name,
+            local_cache_dir=str(temp_s3_cache_dir),
+        )
+        s3_data = [
+            {key: data for key, data in s3_datasource[i].items()}
+            for i in range(len(s3_datasource))
+        ]
+        # s3のデータはIDで一意になるがローカルに合わせてソートする
+        # s3とローカルで型が違うのは許容している
+        sorted_s3_data = sorted(
+            s3_data,
+            key=lambda x: x["id"],
+        )
+
+        logger.debug(f"local: {sorted_local_data[:10]}")
+        logger.debug(f"s3: {sorted_s3_data[:10]}")
+        assert all(
+            [
+                self.compare_dicts(d1, d2)
+                for d1, d2 in zip(sorted_local_data, sorted_s3_data)
+            ]
+        )

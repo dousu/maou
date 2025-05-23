@@ -12,6 +12,7 @@ from maou.interface import converter, learn, preprocess
 # 必要なライブラリが利用可能かどうかをチェックする変数
 HAS_BIGQUERY = False
 HAS_GCS = False
+HAS_AWS = False
 
 # BigQuery関連のライブラリのインポートを試みる
 try:
@@ -31,6 +32,18 @@ try:
     HAS_GCS = True
 except ImportError:
     app_logger.debug("GCS dependencies not available. Some features will be disabled.")
+
+# AWS S3関連のライブラリのインポートを試みる
+try:
+    from maou.infra.s3.s3 import S3
+    from maou.infra.s3.s3_data_source import S3DataSource
+    from maou.infra.s3.s3_feature_store import S3FeatureStore
+
+    HAS_AWS = True
+except ImportError:
+    app_logger.debug(
+        "AWS S3 dependencies not available. Some features will be disabled."
+    )
 
 
 @click.group()
@@ -113,6 +126,31 @@ def main(debug_mode: bool) -> None:
     required=False,
 )
 @click.option(
+    "--output-s3",
+    type=bool,
+    is_flag=True,
+    help="Output features to AWS S3.",
+    required=False,
+)
+@click.option(
+    "--bucket-name",
+    help="S3 bucket name for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--prefix",
+    help="S3 prefix path for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--data-name",
+    help="Name to identify the data in S3.",
+    type=str,
+    required=False,
+)
+@click.option(
     "--max-cached-bytes",
     help="Max cache size in bytes for output (default: 500MB).",
     type=int,
@@ -131,10 +169,25 @@ def hcpe_convert(
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
+    output_s3: Optional[bool],
+    bucket_name: Optional[str],
+    prefix: Optional[str],
+    data_name: Optional[str],
     max_cached_bytes: int,
 ) -> None:
     try:
         feature_store = None
+
+        # Check for mixing cloud providers
+        if output_bigquery and output_s3:
+            error_msg = (
+                "Cannot use both BigQuery and S3 feature stores simultaneously. "
+                "Please choose only one cloud provider."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize BigQuery feature store if requested
         if output_bigquery and dataset_id is not None and table_name is not None:
             if HAS_BIGQUERY:
                 try:
@@ -151,6 +204,30 @@ def hcpe_convert(
                     "but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
                 )
+        # Initialize S3 feature store if requested
+        elif (
+            output_s3
+            and bucket_name is not None
+            and prefix is not None
+            and data_name is not None
+        ):
+            if HAS_AWS:
+                try:
+                    feature_store = S3FeatureStore(
+                        bucket_name=bucket_name,
+                        prefix=prefix,
+                        data_name=data_name,
+                        max_cached_bytes=max_cached_bytes,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3FeatureStore: {e}")
+            else:
+                app_logger.warning(
+                    "S3 output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
+                )
+
         click.echo(
             converter.transform(
                 FileSystem(),
@@ -224,14 +301,39 @@ def hcpe_convert(
     "--input-local-cache",
     type=bool,
     is_flag=True,
-    help="Enable caching of the BigQuery table in the local filesystem.",
+    help="Enable local caching of cloud data.",
     default=False,
     required=False,
 )
 @click.option(
     "--input-local-cache-dir",
     type=str,
-    help="Directory path for storing the local cache of the BigQuery table.",
+    help="Directory path for storing the local cache of cloud data.",
+    required=False,
+)
+@click.option(
+    "--input-s3",
+    type=bool,
+    is_flag=True,
+    help="Use S3 as input data source.",
+    required=False,
+)
+@click.option(
+    "--input-bucket-name",
+    help="S3 bucket name for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-prefix",
+    help="S3 prefix path for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-data-name",
+    help="Name to identify the data in S3 for input.",
+    type=str,
     required=False,
 )
 @click.option(
@@ -260,6 +362,31 @@ def hcpe_convert(
     required=False,
     default=500 * 1024 * 1024,
 )
+@click.option(
+    "--output-s3",
+    type=bool,
+    is_flag=True,
+    help="Output features to AWS S3.",
+    required=False,
+)
+@click.option(
+    "--output-bucket-name",
+    help="S3 bucket name for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-prefix",
+    help="S3 prefix path for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-data-name",
+    help="Name to identify the data in S3 for output.",
+    type=str,
+    required=False,
+)
 def pre_process(
     input_path: Optional[Path],
     output_dir: Optional[Path],
@@ -271,12 +398,36 @@ def pre_process(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_s3: Optional[bool],
+    input_bucket_name: Optional[str],
+    input_prefix: Optional[str],
+    input_data_name: Optional[str],
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
     output_max_cached_bytes: int,
+    output_s3: Optional[bool],
+    output_bucket_name: Optional[str],
+    output_prefix: Optional[str],
+    output_data_name: Optional[str],
 ) -> None:
     try:
+        # Check for mixing cloud providers for input
+        if (input_dataset_id is not None or input_table_name is not None) and (
+            input_s3
+            or input_bucket_name is not None
+            or input_prefix is not None
+            or input_data_name is not None
+        ):
+            error_msg = (
+                "Cannot use both BigQuery and S3 as data sources simultaneously. "
+                "Please choose only one cloud provider for input."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize datasource
+        datasource = None
         if input_dataset_id is not None and input_table_name is not None:
             if HAS_BIGQUERY:
                 try:
@@ -300,9 +451,52 @@ def pre_process(
                 )
                 app_logger.error(error_msg)
                 raise ImportError(error_msg)
+        elif (
+            input_s3
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_AWS:
+                try:
+                    datasource = S3DataSource(
+                        bucket_name=input_bucket_name,
+                        prefix=input_prefix,
+                        data_name=input_data_name,
+                        local_cache_dir=input_local_cache_dir,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3DataSource: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "S3 input requested but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
         elif input_path is not None:
             input_paths = FileSystem.collect_files(input_path)
             datasource = FileDataSource(file_paths=input_paths)
+        else:
+            error_msg = (
+                "Please specify an input source "
+                "(file path, BigQuery table, or S3 bucket)."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Check for mixing cloud providers for output
+        if output_bigquery and output_s3:
+            error_msg = (
+                "Cannot use both BigQuery and S3 feature stores simultaneously. "
+                "Please choose only one cloud provider for output."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize feature store
         feature_store = None
         if output_bigquery and dataset_id is not None and table_name is not None:
             if HAS_BIGQUERY:
@@ -319,6 +513,28 @@ def pre_process(
                     "BigQuery output requested "
                     "but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
+                )
+        elif (
+            output_s3
+            and output_bucket_name is not None
+            and output_prefix is not None
+            and output_data_name is not None
+        ):
+            if HAS_AWS:
+                try:
+                    feature_store = S3FeatureStore(
+                        bucket_name=output_bucket_name,
+                        prefix=output_prefix,
+                        data_name=output_data_name,
+                        max_cached_bytes=output_max_cached_bytes,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3FeatureStore: {e}")
+            else:
+                app_logger.warning(
+                    "S3 output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
                 )
         click.echo(
             preprocess.transform(
@@ -387,14 +603,39 @@ def pre_process(
     "--input-local-cache",
     type=bool,
     is_flag=True,
-    help="Enable caching of the BigQuery table in the local filesystem.",
+    help="Enable local caching of cloud data.",
     default=False,
     required=False,
 )
 @click.option(
     "--input-local-cache-dir",
     type=str,
-    help="Directory path for storing the local cache of the BigQuery table.",
+    help="Directory path for storing the local cache of cloud data.",
+    required=False,
+)
+@click.option(
+    "--input-s3",
+    type=bool,
+    is_flag=True,
+    help="Use S3 as input data source.",
+    required=False,
+)
+@click.option(
+    "--input-bucket-name",
+    help="S3 bucket name for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-prefix",
+    help="S3 prefix path for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-data-name",
+    help="Name to identify the data in S3 for input.",
+    type=str,
     required=False,
 )
 @click.option(
@@ -495,7 +736,7 @@ def pre_process(
     required=False,
 )
 @click.option(
-    "--bucket-name",
+    "--gcs-bucket-name",
     help="GCS bucket name.",
     type=str,
     required=False,
@@ -503,6 +744,25 @@ def pre_process(
 @click.option(
     "--gcs-base-path",
     help="Base path in GCS bucket.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-s3",
+    type=bool,
+    is_flag=True,
+    help="Upload output to AWS S3.",
+    required=False,
+)
+@click.option(
+    "--s3-bucket-name",
+    help="S3 bucket name.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--s3-base-path",
+    help="Base path in S3 bucket.",
     type=str,
     required=False,
 )
@@ -517,6 +777,10 @@ def learn_model(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_s3: Optional[bool],
+    input_bucket_name: Optional[str],
+    input_prefix: Optional[str],
+    input_data_name: Optional[str],
     gpu: Optional[str],
     compilation: Optional[bool],
     test_ratio: Optional[float],
@@ -533,16 +797,29 @@ def learn_model(
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
-    bucket_name: Optional[str],
+    gcs_bucket_name: Optional[str],
     gcs_base_path: Optional[str],
+    output_s3: Optional[bool],
+    s3_bucket_name: Optional[str],
+    s3_base_path: Optional[str],
 ) -> None:
     try:
+        # Check for mixing cloud providers for output
+        if output_gcs and output_s3:
+            error_msg = (
+                "Cannot use both GCS and S3 as cloud storage simultaneously. "
+                "Please choose only one cloud provider for output."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize cloud storage
         cloud_storage = None
-        if output_gcs and bucket_name is not None and gcs_base_path is not None:
+        if output_gcs and gcs_bucket_name is not None and gcs_base_path is not None:
             if HAS_GCS:
                 try:
                     cloud_storage = GCS(
-                        bucket_name=bucket_name, base_path=gcs_base_path
+                        bucket_name=gcs_bucket_name, base_path=gcs_base_path
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize GCS: {e}")
@@ -551,6 +828,36 @@ def learn_model(
                     "GCS output requested but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
                 )
+        elif output_s3 and s3_bucket_name is not None and s3_base_path is not None:
+            if HAS_AWS:
+                try:
+                    cloud_storage = S3(
+                        bucket_name=s3_bucket_name,
+                        base_path=s3_base_path,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3: {e}")
+            else:
+                app_logger.warning(
+                    "S3 output requested but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
+                )
+
+        # Check for mixing cloud providers for input
+        if (input_dataset_id is not None or input_table_name is not None) and (
+            input_s3
+            or input_bucket_name is not None
+            or input_prefix is not None
+            or input_data_name is not None
+        ):
+            error_msg = (
+                "Cannot use both BigQuery and S3 as data sources simultaneously. "
+                "Please choose only one cloud provider for input."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize datasource
         if input_dir is not None:
             if input_format != "hcpe" and input_format != "preprocess":
                 raise Exception(
@@ -589,8 +896,40 @@ def learn_model(
                 )
                 app_logger.error(error_msg)
                 raise ImportError(error_msg)
+        elif (
+            input_s3
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_AWS:
+                try:
+                    # S3DataSourceSpliterを使用
+                    if hasattr(S3DataSource, "S3DataSourceSpliter"):
+                        datasource = S3DataSource.S3DataSourceSpliter(
+                            bucket_name=input_bucket_name,
+                            prefix=input_prefix,
+                            data_name=input_data_name,
+                            local_cache_dir=input_local_cache_dir,
+                        )
+                    else:
+                        app_logger.error("S3DataSourceSpliter not available")
+                        raise AttributeError("S3DataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3DataSourceSpliter: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "S3 input requested but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
         else:
-            raise Exception("Please specify an input directory or a BigQuery table.")
+            raise Exception(
+                "Please specify an input directory, a BigQuery table, or an S3 bucket."
+            )
         click.echo(
             learn.learn(
                 datasource=datasource,
