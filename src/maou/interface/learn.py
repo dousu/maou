@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.learning.dl import Learning
+from maou.app.learning.dl import CloudStorage, Learning, LearningDataSource
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ def dir_init(d: Path) -> None:
 
 
 def learn(
-    file_system: FileSystem,
-    input_dir: Path,
+    datasource: LearningDataSource.DataSourceSpliter,
+    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     compilation: Optional[bool] = None,
@@ -48,7 +48,12 @@ def learn(
     resume_from: Optional[Path] = None,
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
+    cloud_storage: Optional[CloudStorage] = None,
 ) -> str:
+    # データソースのtype確認 (hcpeかpreprocessのみ)
+    if datasource_type not in ("hcpe", "preprocess"):
+        raise ValueError(f"Data source type `{datasource_type}` is invalid.")
+
     # モデルをコンパイルするかどうか (デフォルトTrue)
     if compilation is None:
         compilation = True
@@ -67,7 +72,7 @@ def learn(
 
     # DataLoaderのワーカー数設定 (デフォルト2)
     if dataloader_workers is None:
-        dataloader_workers = 2
+        dataloader_workers = 0
 
     # 損失関数のパラメータ設定 (デフォルト0.7)
     if gce_parameter is None:
@@ -112,10 +117,11 @@ def learn(
     if model_dir is not None:
         dir_init(model_dir)
     logger.info(
-        f"Input: {input_dir}, Output: {model_dir}, Checkpoint: {checkpoint_dir}"
+        f"Input: {datasource}, Output: {model_dir}, Checkpoint: {checkpoint_dir}"
     )
     option = Learning.LearningOption(
-        input_paths=file_system.collect_files(input_dir),
+        datasource=datasource,
+        datasource_type=datasource_type,
         compilation=compilation,
         test_ratio=test_ratio,
         epoch=epoch,
@@ -131,6 +137,7 @@ def learn(
         log_dir=log_dir,
         model_dir=model_dir,
     )
-    learning_result = Learning(gpu).learn(option)
+
+    learning_result = Learning(gpu=gpu, cloud_storage=cloud_storage).learn(option)
 
     return json.dumps(learning_result)

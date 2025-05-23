@@ -1,10 +1,10 @@
 from pathlib import Path
 from typing import Optional
 
-from maou.interface import converter, learn
+from maou.interface import converter, learn, preprocess
 
 
-class FileSystem(converter.FileSystem, learn.FileSystem):
+class FileSystem(converter.FileSystem, learn.FileSystem, preprocess.FileSystem):
     @staticmethod
     def get_text(file_name: str, encoding: str = "utf-8") -> str:
         with open(file_name, encoding=encoding) as f:

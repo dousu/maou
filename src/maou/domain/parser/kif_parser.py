@@ -1,3 +1,5 @@
+from typing import Any
+
 from cshogi import KIF
 
 from maou.domain.parser import parser
@@ -22,7 +24,7 @@ class KifParser(parser.Parser):
     def ratings(self) -> list[int]:
         return []
 
-    def moves(self) -> list[str]:
+    def moves(self) -> list[int]:
         return self.kif.moves  # type: ignore
 
     def scores(self) -> list[int]:
@@ -30,3 +32,9 @@ class KifParser(parser.Parser):
 
     def comments(self) -> list[str]:
         return self.kif.comments  # type: ignore
+
+    def clustering_key_value(self) -> Any:
+        return None
+
+    def partitioning_key_value(self) -> Any:
+        return None

@@ -1,4 +1,5 @@
 import abc
+from typing import Any
 
 
 class Parser(metaclass=abc.ABCMeta):
@@ -23,7 +24,7 @@ class Parser(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def moves(self) -> list[str]:
+    def moves(self) -> list[int]:
         pass
 
     @abc.abstractmethod
@@ -32,4 +33,12 @@ class Parser(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def comments(self) -> list[str]:
+        pass
+
+    @abc.abstractmethod
+    def clustering_key_value(self) -> Any:
+        pass
+
+    @abc.abstractmethod
+    def partitioning_key_value(self) -> Any:
         pass

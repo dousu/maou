@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.converter.hcpe_converter import HCPEConverter
+from maou.app.converter.hcpe_converter import FeatureStore, HCPEConverter
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -46,15 +46,30 @@ def transform(
     input_path: Path,
     input_format: str,
     output_dir: Path,
+    *,
+    min_rating: Optional[int] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    allowed_endgame_status: Optional[list[str]] = None,
+    exclude_moves: Optional[list[int]] = None,
+    feature_store: Optional[FeatureStore] = None,
 ) -> str:
     input_format_validation(input_format)
     output_dir_validation(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")
+
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),
         input_format=input_format,
         output_dir=output_dir,
+        min_rating=min_rating,
+        min_moves=min_moves,
+        max_moves=max_moves,
+        allowed_endgame_status=allowed_endgame_status,
+        exclude_moves=exclude_moves,
     )
-    conversion_result = HCPEConverter().convert(option)
+    conversion_result = HCPEConverter(
+        feature_store=feature_store,
+    ).convert(option)
 
     return json.dumps(conversion_result)
