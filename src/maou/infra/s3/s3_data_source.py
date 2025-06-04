@@ -9,6 +9,7 @@ from typing import Any, Optional, Union
 import boto3
 import numpy as np
 from botocore.exceptions import ClientError
+from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
 
@@ -200,7 +201,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 # s3に存在するオブジェクトに対応するローカルファイルパスのセット
                 s3_local_files: set[Path] = set()
 
-                for page in pages:
+                for page in tqdm(pages, desc="Downloading files from S3", leave=False):
                     if "Contents" not in page:
                         self.logger.warning("Contents not found in page")
                         continue

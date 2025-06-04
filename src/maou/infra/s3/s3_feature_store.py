@@ -6,6 +6,7 @@ from typing import Any, Dict, Generator, List, Optional
 import boto3
 import numpy as np
 from botocore.exceptions import ClientError
+from tqdm.auto import tqdm
 
 from maou.interface import converter, preprocess
 
@@ -213,7 +214,9 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         self.__buffer_size = 0
 
         try:
-            for name, folder, structured_array in arrays:
+            for name, folder, structured_array in tqdm(
+                arrays, desc="Flushing features", leave=False
+            ):
                 if folder is not None:
                     object_key = f"{self.__get_data_path()}/{folder}/{name}.npy"
                 else:
