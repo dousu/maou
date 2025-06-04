@@ -482,6 +482,7 @@ def pre_process(
                         prefix=input_prefix,
                         data_name=input_data_name,
                         local_cache_dir=input_local_cache_dir,
+                        max_workers=max_workers,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize S3DataSource: {e}")
@@ -657,6 +658,13 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--input-max-workers",
+    help="Number of parallel download threads for S3 input (default: 8).",
+    type=int,
+    required=False,
+    default=8,
+)
+@click.option(
     "--gpu",
     type=str,
     help="PyTorch device (e.g., 'cuda:0' or 'cpu').",
@@ -799,6 +807,7 @@ def learn_model(
     input_bucket_name: Optional[str],
     input_prefix: Optional[str],
     input_data_name: Optional[str],
+    input_max_workers: int,
     gpu: Optional[str],
     compilation: Optional[bool],
     test_ratio: Optional[float],
@@ -930,6 +939,7 @@ def learn_model(
                             prefix=input_prefix,
                             data_name=input_data_name,
                             local_cache_dir=input_local_cache_dir,
+                            max_workers=input_max_workers,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")

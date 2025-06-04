@@ -2,6 +2,7 @@ import logging
 import random
 from collections import defaultdict
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -31,12 +32,14 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             prefix: str,
             data_name: str,
             local_cache_dir: str,
+            max_workers: int = 8,
         ) -> None:
             self.__page_manager = S3DataSource.PageManager(
                 bucket_name=bucket_name,
                 prefix=prefix,
                 data_name=data_name,
                 local_cache_dir=local_cache_dir,
+                max_workers=max_workers,
             )
 
         def train_test_split(
@@ -90,11 +93,13 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             prefix: str,
             data_name: str,
             local_cache_dir: str,
+            max_workers: int = 8,
         ) -> None:
             self.s3_client = boto3.client("s3")
             self.bucket_name = bucket_name
             self.prefix = prefix
             self.data_name = data_name
+            self.max_workers = max_workers
             self.__pruning_info: dict[str, S3DataSource.PageManager.PruningInfo] = (
                 defaultdict(S3DataSource.PageManager.PruningInfo)
             )
@@ -194,14 +199,11 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 paginator = self.s3_client.get_paginator("list_objects_v2")
                 pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
 
-                download_count = 0
-                skip_count = 0
-                delete_count = 0
-
-                # s3に存在するオブジェクトに対応するローカルファイルパスのセット
+                # ダウンロードタスクを事前に収集
+                download_tasks = []
                 s3_local_files: set[Path] = set()
 
-                for page in tqdm(pages, desc="Downloading files from S3", leave=False):
+                for page in tqdm(pages, desc="Analyzing S3 objects", leave=False):
                     if "Contents" not in page:
                         self.logger.warning("Contents not found in page")
                         continue
@@ -215,14 +217,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                         self.logger.debug(obj["Key"][len(prefix) :])
                         self.logger.debug(local_file_path.absolute())
                         s3_local_files.add(local_file_path)
-                        # 親ディレクトリ作成 (mkdir -p)
-                        local_file_path.parent.mkdir(parents=True, exist_ok=True)
-
+                        
                         # ダウンロードするかどうかを判定する
-                        # ダウンロードする条件は
-                        # - ローカルに存在しない
-                        # - S3の方が新しい
-                        # のどちらかを満たしている
                         download_file = False
                         if not local_file_path.exists():
                             download_file = True
@@ -233,20 +229,30 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                                 download_file = True
 
                         if download_file:
-                            self.logger.debug(
-                                f"Downloading {obj['Key']} to {local_file_path}"
+                            download_tasks.append((obj["Key"], local_file_path))
+
+                # 並列ダウンロード実行
+                download_count = 0
+                skip_count = len([f for f in s3_local_files if f.exists()]) - len(download_tasks)
+                
+                if download_tasks:
+                    total_size_mb = len(download_tasks) * 0.08  # 概算サイズ (80KB/file)
+                    desc = f"Downloading {len(download_tasks)} files (~{total_size_mb:.1f}MB) [{self.max_workers} workers]"
+                    
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                        futures = []
+                        for s3_key, local_file_path in download_tasks:
+                            future = executor.submit(
+                                self._download_single_file, bucket, s3_key, local_file_path
                             )
-                            self.s3_client.download_file(
-                                Bucket=bucket,
-                                Key=obj["Key"],
-                                Filename=str(local_file_path.absolute()),
-                            )
+                            futures.append(future)
+
+                        # 完了を待つ
+                        for future in tqdm(futures, desc=desc, unit="files", leave=True):
+                            future.result()
                             download_count += 1
-                        else:
-                            self.logger.debug(
-                                f"Skipping {obj['Key']} (already exists and up to date)"
-                            )
-                            skip_count += 1
+                
+                delete_count = 0
                 if delete:
                     # まずはファイルを削除してそのあと空のディレクトリがあれば削除する
                     s3_local_paths = {str(file.resolve()) for file in s3_local_files}
@@ -277,12 +283,33 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 )
                 if delete:
                     result_message += f"，{delete_count}ファイルを削除"
+                self.logger.info(result_message)
 
             except ClientError as e:
                 self.logger.error(
                     "Error sync s3 object from "
                     f"'s3://{bucket}/{prefix}' to '{local_path}': {e}"
                 )
+                raise
+
+        def _download_single_file(
+            self, bucket: str, s3_key: str, local_file_path: Path
+        ) -> None:
+            """単一ファイルをS3からダウンロードする"""
+            try:
+                # 親ディレクトリ作成 (mkdir -p)
+                local_file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                self.logger.debug(
+                    f"Downloading {s3_key} to {local_file_path}"
+                )
+                self.s3_client.download_file(
+                    Bucket=bucket,
+                    Key=s3_key,
+                    Filename=str(local_file_path.absolute()),
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to download {s3_key}: {e}")
                 raise
 
         def get_page(self, key: str) -> np.ndarray:
@@ -333,6 +360,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         page_manager: Optional[PageManager] = None,
         indicies: Optional[list[int]] = None,
         local_cache_dir: Optional[str] = None,
+        max_workers: int = 8,
     ) -> None:
         """
         Args:
@@ -342,6 +370,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             page_manager (Optional[PageManager]): PageManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
+            max_workers (int): 並列ダウンロード数 (デフォルト: 8)
         """
         if page_manager is None:
             if (
@@ -355,6 +384,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     prefix=prefix,
                     data_name=data_name,
                     local_cache_dir=local_cache_dir,
+                    max_workers=max_workers,
                 )
             else:
                 raise MissingS3Config(
