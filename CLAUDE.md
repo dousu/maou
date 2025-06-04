@@ -103,14 +103,34 @@ The project provides a CLI with three main commands:
 
 ```bash
 # Convert Shogi game records to HCPE format
-poetry run maou hcpe_convert --input-path /path/to/records --input-format csa --output-dir /path/to/output
+poetry run maou hcpe-convert --input-path /path/to/records --input-format csa --output-dir /path/to/output
 
 # Pre-process HCPE data
-poetry run maou pre_process --input-path /path/to/hcpe --output-dir /path/to/processed
+poetry run maou pre-process --input-path /path/to/hcpe --output-dir /path/to/processed
 
 # Train model
-poetry run maou learn_model --input-dir /path/to/processed --gpu cuda:0 --epoch 10 --batch-size 256
+poetry run maou learn-model --input-dir /path/to/processed --gpu cuda:0 --epoch 10 --batch-size 256
 ```
+
+#### S3 Performance Optimization
+
+For AWS S3 operations, use `--max-workers` to control parallel upload threads:
+
+```bash
+# Default (4 parallel uploads)
+poetry run maou hcpe-convert --output-s3 --bucket-name my-bucket --prefix data --data-name features
+
+# Optimized (8 parallel uploads)
+poetry run maou hcpe-convert --output-s3 --bucket-name my-bucket --prefix data --data-name features --max-workers 8
+
+# Pre-processing with optimization
+poetry run maou pre-process --output-s3 --output-bucket-name my-bucket --output-prefix data --output-data-name processed --max-workers 8
+```
+
+**Performance improvements:**
+- Memory usage: ~90% reduction (50MB → 5MB buffer + removed buffer copying)
+- Upload speed: Improved through parallel processing
+- Read performance: Memory-mapped file access maintained
 
 Run with `--help` for detailed options for each command.
 

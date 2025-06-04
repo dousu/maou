@@ -157,6 +157,13 @@ def main(debug_mode: bool) -> None:
     required=False,
     default=500 * 1024 * 1024,
 )
+@click.option(
+    "--max-workers",
+    help="Number of parallel upload threads for S3 (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
 def hcpe_convert(
     input_path: Path,
     input_format: str,
@@ -174,6 +181,7 @@ def hcpe_convert(
     prefix: Optional[str],
     data_name: Optional[str],
     max_cached_bytes: int,
+    max_workers: int,
 ) -> None:
     try:
         feature_store = None
@@ -218,6 +226,7 @@ def hcpe_convert(
                         prefix=prefix,
                         data_name=data_name,
                         max_cached_bytes=max_cached_bytes,
+                        max_workers=max_workers,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize S3FeatureStore: {e}")
@@ -387,6 +396,13 @@ def hcpe_convert(
     type=str,
     required=False,
 )
+@click.option(
+    "--max-workers",
+    help="Number of parallel upload threads for S3 (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
 def pre_process(
     input_path: Optional[Path],
     output_dir: Optional[Path],
@@ -410,6 +426,7 @@ def pre_process(
     output_bucket_name: Optional[str],
     output_prefix: Optional[str],
     output_data_name: Optional[str],
+    max_workers: int,
 ) -> None:
     try:
         # Check for mixing cloud providers for input
@@ -527,6 +544,7 @@ def pre_process(
                         prefix=output_prefix,
                         data_name=output_data_name,
                         max_cached_bytes=output_max_cached_bytes,
+                        max_workers=max_workers,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize S3FeatureStore: {e}")

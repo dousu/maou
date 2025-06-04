@@ -1,5 +1,6 @@
 import contextlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Dict, Generator, List, Optional
 
@@ -28,7 +29,8 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         prefix: str,
         region: str = "ap-northeast-1",
         data_name: str,
-        max_cached_bytes: int = 50 * 1024 * 1024,
+        max_cached_bytes: int = 5 * 1024 * 1024,
+        max_workers: int = 4,
     ):
         self.bucket_name = bucket_name
         self.prefix = prefix
@@ -61,6 +63,8 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         self.__buffer_size: int = 0
         # 最大値指定
         self.max_cached_bytes = max_cached_bytes
+        # 並列アップロード用の設定
+        self.max_workers = max_workers
 
     def __list_objects(self, prefix: str) -> List[Dict[str, Any]]:
         """指定されたプレフィックスのオブジェクトを一覧取得する."""
@@ -208,34 +212,72 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
             self.logger.debug("Buffer is empty. Nothing to flush.")
             return
 
-        # バッファをリセットする
-        arrays = self.__buffer.copy()
-        self.__buffer.clear()
-        self.__buffer_size = 0
+        # バッファをリセットしつつin-place処理
+        upload_tasks = []
+        while self.__buffer:
+            name, folder, structured_array = self.__buffer.pop(0)
+            self.__buffer_size -= structured_array.nbytes
+
+            if folder is not None:
+                object_key = f"{self.__get_data_path()}/{folder}/{name}.npy"
+            else:
+                object_key = f"{self.__get_data_path()}/{name}.npy"
+
+            upload_tasks.append((object_key, structured_array))
 
         try:
-            for name, folder, structured_array in tqdm(
-                arrays, desc="Flushing features", leave=False
-            ):
-                if folder is not None:
-                    object_key = f"{self.__get_data_path()}/{folder}/{name}.npy"
-                else:
-                    object_key = f"{self.__get_data_path()}/{name}.npy"
+            if not upload_tasks:
+                return
 
-                with BytesIO() as buffer:
-                    # bufferに書き出してそれを送る仕組みにする (ローカルに保存しない)
-                    np.save(buffer, structured_array)
-                    buffer.seek(0)  # Reset buffer position to the beginning
+            # 総データサイズを計算
+            total_size_mb = sum(arr.nbytes for _, arr in upload_tasks) / (1024 * 1024)
 
-                    # S3にアップロード
-                    self.s3_client.put_object(
-                        Bucket=self.bucket_name, Key=object_key, Body=buffer
+            # 並列アップロード
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = []
+                for object_key, structured_array in upload_tasks:
+                    future = executor.submit(
+                        self._upload_single_array, object_key, structured_array
                     )
+                    futures.append(future)
 
-            self.logger.debug(f"Uploaded data to s3://{self.bucket_name}/{object_key}")
+                # 完了を待つ（詳細な進捗情報付き）
+                desc = (
+                    f"Uploading {len(upload_tasks)} files ({total_size_mb:.1f}MB)"
+                    f" [{self.max_workers} workers]"
+                )
+                for future in tqdm(futures, desc=desc, unit="files", leave=True):
+                    future.result()
+
+            self.logger.info(
+                f"Successfully uploaded {len(upload_tasks)} files "
+                f"to s3://{self.bucket_name}/{self.__get_data_path()}"
+            )
 
         except Exception as e:
             self.logger.error(f"Error flushing features: {e}")
+            raise
+
+    def _upload_single_array(
+        self, object_key: str, structured_array: np.ndarray
+    ) -> None:
+        """単一の配列をS3にアップロードする"""
+        try:
+            with BytesIO() as buffer:
+                # メモリマップ性能を保持するため.npy形式を使用
+                np.save(buffer, structured_array)
+                buffer.seek(0)
+
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name, Key=object_key, Body=buffer
+                )
+
+                self.logger.debug(
+                    f"Uploaded {structured_array.nbytes / (1024 * 1024):.1f}MB"
+                    f" to {object_key}"
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to upload {object_key}: {e}")
             raise
 
     def __cleanup(self) -> None:
