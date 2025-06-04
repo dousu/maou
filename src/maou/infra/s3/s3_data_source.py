@@ -217,7 +217,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                         self.logger.debug(obj["Key"][len(prefix) :])
                         self.logger.debug(local_file_path.absolute())
                         s3_local_files.add(local_file_path)
-                        
+
                         # ダウンロードするかどうかを判定する
                         download_file = False
                         if not local_file_path.exists():
@@ -233,25 +233,35 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
                 # 並列ダウンロード実行
                 download_count = 0
-                skip_count = len([f for f in s3_local_files if f.exists()]) - len(download_tasks)
-                
+                skip_count = len([f for f in s3_local_files if f.exists()]) - len(
+                    download_tasks
+                )
+
                 if download_tasks:
                     total_size_mb = len(download_tasks) * 0.08  # 概算サイズ (80KB/file)
-                    desc = f"Downloading {len(download_tasks)} files (~{total_size_mb:.1f}MB) [{self.max_workers} workers]"
-                    
+                    desc = (
+                        f"Downloading {len(download_tasks)} files "
+                        f"(~{total_size_mb:.1f}MB) [{self.max_workers} workers]"
+                    )
+
                     with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                         futures = []
                         for s3_key, local_file_path in download_tasks:
                             future = executor.submit(
-                                self._download_single_file, bucket, s3_key, local_file_path
+                                self._download_single_file,
+                                bucket,
+                                s3_key,
+                                local_file_path,
                             )
                             futures.append(future)
 
                         # 完了を待つ
-                        for future in tqdm(futures, desc=desc, unit="files", leave=True):
+                        for future in tqdm(
+                            futures, desc=desc, unit="files", leave=True
+                        ):
                             future.result()
                             download_count += 1
-                
+
                 delete_count = 0
                 if delete:
                     # まずはファイルを削除してそのあと空のディレクトリがあれば削除する
@@ -299,10 +309,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             try:
                 # 親ディレクトリ作成 (mkdir -p)
                 local_file_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                self.logger.debug(
-                    f"Downloading {s3_key} to {local_file_path}"
-                )
+
+                self.logger.debug(f"Downloading {s3_key} to {local_file_path}")
                 self.s3_client.download_file(
                     Bucket=bucket,
                     Key=s3_key,
