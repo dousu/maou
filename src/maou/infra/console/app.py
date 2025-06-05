@@ -4,7 +4,7 @@ from typing import Optional
 
 import click
 
-from maou.infra.app_logging import app_logger
+from maou.infra.app_logging import app_logger, get_log_level_from_env
 from maou.infra.file_system.file_data_source import FileDataSource
 from maou.infra.file_system.file_system import FileSystem
 from maou.interface import converter, learn, preprocess
@@ -52,7 +52,9 @@ def main(debug_mode: bool) -> None:
     if debug_mode:
         app_logger.setLevel(logging.DEBUG)
     else:
-        app_logger.setLevel(logging.INFO)
+        # 環境変数MAOU_LOG_LEVELからログレベルを取得
+        # デバッグモードが指定されていない場合のみ環境変数を参照
+        app_logger.setLevel(get_log_level_from_env())
 
 
 @click.command()
