@@ -18,6 +18,11 @@ class InputFormat(enum.Enum):
 
 
 class FileSystem(metaclass=abc.ABCMeta):
+    """Abstract interface for file system operations.
+    
+    Provides an abstraction layer for file I/O operations
+    to enable testing and different storage backends.
+    """
     @staticmethod
     @abc.abstractmethod
     def get_text(filename: str) -> str:
@@ -30,6 +35,14 @@ class FileSystem(metaclass=abc.ABCMeta):
 
 
 def input_format_validation(input_format: str) -> None:
+    """Validate input format string.
+    
+    Args:
+        input_format: Format string to validate
+        
+    Raises:
+        ValueError: If format is not 'csa' or 'kif'
+    """
     try:
         InputFormat(input_format)
     except ValueError:
@@ -37,6 +50,14 @@ def input_format_validation(input_format: str) -> None:
 
 
 def output_dir_validation(output_dir: Path) -> None:
+    """Validate output directory exists.
+    
+    Args:
+        output_dir: Directory path to validate
+        
+    Raises:
+        ValueError: If path is not a directory
+    """
     if not output_dir.is_dir():
         raise ValueError(f"Output Dir `{output_dir}` is not directory.")
 
@@ -54,6 +75,23 @@ def transform(
     exclude_moves: Optional[list[int]] = None,
     feature_store: Optional[FeatureStore] = None,
 ) -> str:
+    """Convert Shogi game records to HCPE format.
+    
+    Args:
+        file_system: File system interface for I/O operations
+        input_path: Path to input game records
+        input_format: Format of input files ('csa' or 'kif')
+        output_dir: Directory for output files
+        min_rating: Minimum player rating filter
+        min_moves: Minimum move count filter
+        max_moves: Maximum move count filter
+        allowed_endgame_status: Allowed endgame statuses
+        exclude_moves: Moves to exclude from processing
+        feature_store: Optional storage backend for features
+        
+    Returns:
+        JSON string with conversion results
+    """
     input_format_validation(input_format)
     output_dir_validation(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")

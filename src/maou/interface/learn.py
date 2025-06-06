@@ -10,6 +10,11 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class FileSystem(metaclass=abc.ABCMeta):
+    """Abstract interface for file system operations.
+    
+    Provides an abstraction layer for file I/O operations
+    for learning workflows.
+    """
     @staticmethod
     @abc.abstractmethod
     def collect_files(p: Path, ext: Optional[str] = None) -> list[Path]:
@@ -17,11 +22,27 @@ class FileSystem(metaclass=abc.ABCMeta):
 
 
 def file_validation(p: Path) -> None:
+    """Validate that path is a file.
+    
+    Args:
+        p: Path to validate
+        
+    Raises:
+        ValueError: If path is not a file
+    """
     if not p.is_file():
         raise ValueError(f"File `{p}` is not a file.")
 
 
 def dir_init(d: Path) -> None:
+    """Initialize directory, creating if it doesn't exist.
+    
+    Args:
+        d: Directory path to initialize
+        
+    Raises:
+        ValueError: If path exists but is not a directory
+    """
     if not d.exists():
         d.mkdir()
     else:
@@ -50,6 +71,31 @@ def learn(
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
 ) -> str:
+    """Train neural network model on Shogi data.
+    
+    Args:
+        datasource: Training data source
+        datasource_type: Type of data source ('hcpe' or 'preprocess')
+        gpu: GPU device to use for training
+        compilation: Whether to compile the model
+        test_ratio: Ratio of data to use for testing
+        epoch: Number of training epochs
+        batch_size: Training batch size
+        dataloader_workers: Number of data loader workers
+        gce_parameter: GCE loss function parameter
+        policy_loss_ratio: Policy loss weight
+        value_loss_ratio: Value loss weight
+        learning_ratio: Learning rate
+        momentum: SGD momentum parameter
+        checkpoint_dir: Directory for saving checkpoints
+        resume_from: Checkpoint file to resume from
+        log_dir: Directory for training logs
+        model_dir: Directory for saving trained model
+        cloud_storage: Optional cloud storage for model uploads
+        
+    Returns:
+        JSON string with training results
+    """
     # データソースのtype確認 (hcpeかpreprocessのみ)
     if datasource_type not in ("hcpe", "preprocess"):
         raise ValueError(f"Data source type `{datasource_type}` is invalid.")

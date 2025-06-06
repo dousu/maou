@@ -12,11 +12,28 @@ from maou.app.pre_process.label import (
 
 
 class Transform:
+    """Transforms HCPE position data into neural network training features.
+    
+    Converts board positions, moves, and game results into feature vectors
+    and labels for training Shogi AI models.
+    """
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __call__(
         self, *, hcp: np.ndarray, move16: int, game_result: int, eval: int
     ) -> tuple[np.ndarray, int, float, np.ndarray]:
+        """Transform HCPE data into training features.
+        
+        Args:
+            hcp: Board position in HCP format
+            move16: Move in 16-bit encoding
+            game_result: Game result (0=draw, 1=first player wins, 2=second player wins)
+            eval: Position evaluation score
+            
+        Returns:
+            Tuple of (features, move_label, result_value, legal_move_mask)
+        """
+
         self.logger.debug(f"hcp type: {type(hcp)}")
         self.logger.debug(f"hcp shape: {hcp.shape}")
         self.logger.debug(f"hcp dtype: {hcp.dtype}")
