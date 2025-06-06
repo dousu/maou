@@ -16,13 +16,13 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 def make_feature(board: cshogi.Board) -> np.ndarray:  # type: ignore
     """Create feature representation of board position.
-    
+
     Converts board state into neural network input features including
     piece positions and pieces in hand for both players.
-    
+
     Args:
         board: Current board position
-        
+
     Returns:
         Feature array with shape (FEATURES_NUM, 9, 9)
     """

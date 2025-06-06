@@ -390,13 +390,14 @@ def make_move_label(turn: int, move: int) -> int:
 
 def make_result_value(turn: int, game_result: int) -> float:
     """Convert game result to value label for the current player.
-    
+
     Args:
         turn: Current player turn (BLACK or WHITE)
         game_result: Game result (BLACK_WIN, WHITE_WIN, or DRAW)
-        
+
     Returns:
-        Value between -1 and 1 representing game outcome from current player's perspective
+        Value between -1 and 1 representing game outcome
+        from current player's perspective
     """
     match (turn, game_result):
         case (cshogi.BLACK, cshogi.BLACK_WIN):  # type: ignore

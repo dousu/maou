@@ -8,10 +8,11 @@ from maou.domain.parser import parser
 
 class CSAParser(parser.Parser):
     """Parser for CSA format Shogi game records.
-    
+
     CSA (Computer Shogi Association) is a standard format for representing
     Shogi games. This parser extracts game information using the cshogi library.
     """
+
     def parse(self, content: str) -> None:
         """CSAの棋譜文字列をパースして読み取れる状態にする.
         基本的にこのクラスはcshogiの実装のラッパーでしかないが，cshogiの定義を外に出さないようにする．
@@ -21,7 +22,7 @@ class CSAParser(parser.Parser):
 
     def init_pos_sfen(self) -> str:
         """Get initial board position in SFEN notation.
-        
+
         Returns:
             Initial position as SFEN string
         """
@@ -29,7 +30,7 @@ class CSAParser(parser.Parser):
 
     def endgame(self) -> str:
         """Get game termination reason.
-        
+
         Returns:
             Endgame reason from CSA format
         """
@@ -37,7 +38,7 @@ class CSAParser(parser.Parser):
 
     def winner(self) -> int:
         """Get game winner.
-        
+
         Returns:
             Winner player number from CSA format
         """
@@ -45,7 +46,7 @@ class CSAParser(parser.Parser):
 
     def ratings(self) -> list[int]:
         """Get player ratings.
-        
+
         Returns:
             List of player ratings from CSA format
         """
@@ -53,7 +54,7 @@ class CSAParser(parser.Parser):
 
     def moves(self) -> list[int]:
         """Get sequence of moves in the game.
-        
+
         Returns:
             List of moves encoded as integers from CSA format
         """
@@ -61,7 +62,7 @@ class CSAParser(parser.Parser):
 
     def scores(self) -> list[int]:
         """Get evaluation scores for each position.
-        
+
         Returns:
             List of position evaluation scores from CSA format
         """
@@ -69,7 +70,7 @@ class CSAParser(parser.Parser):
 
     def comments(self) -> list[str]:
         """Get comments for each move.
-        
+
         Returns:
             List of move comments from CSA format
         """
@@ -77,7 +78,7 @@ class CSAParser(parser.Parser):
 
     def clustering_key_value(self) -> Any:
         """Get clustering key based on game start date.
-        
+
         Returns:
             Date object for clustering, or None if START_TIME not available
         """
@@ -91,7 +92,7 @@ class CSAParser(parser.Parser):
 
     def partitioning_key_value(self) -> Any:
         """Get partitioning key based on game start date.
-        
+
         Returns:
             Date object for partitioning, or None if START_TIME not available
         """

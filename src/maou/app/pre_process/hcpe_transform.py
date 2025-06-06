@@ -16,10 +16,11 @@ from maou.app.pre_process.transform import Transform
 
 class FeatureStore(metaclass=abc.ABCMeta):
     """Abstract interface for storing processed features.
-    
+
     Defines the contract for storing neural network training features
     in various storage backends.
     """
+
     @abc.abstractmethod
     def feature_store(self) -> ContextManager[None]:
         pass
@@ -39,10 +40,11 @@ class FeatureStore(metaclass=abc.ABCMeta):
 
 class DataSource:
     """Abstract interface for accessing HCPE data sources.
-    
+
     Provides iteration over batches of HCPE data for processing
     into neural network training features.
     """
+
     @abc.abstractmethod
     def __len__(self) -> int:
         pass
@@ -56,10 +58,11 @@ class DataSource:
 
 class PreProcess:
     """Processes HCPE data into neural network training features.
-    
+
     Takes HCPE format game data and transforms it into feature vectors
     and labels suitable for training Shogi AI neural networks.
     """
+
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(
@@ -69,7 +72,7 @@ class PreProcess:
         feature_store: Optional[FeatureStore] = None,
     ):
         """Initialize pre-processor.
-        
+
         Args:
             datasource: Source of HCPE data to process
             feature_store: Optional storage backend for processed features

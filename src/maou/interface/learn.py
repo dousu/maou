@@ -11,10 +11,11 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class FileSystem(metaclass=abc.ABCMeta):
     """Abstract interface for file system operations.
-    
+
     Provides an abstraction layer for file I/O operations
     for learning workflows.
     """
+
     @staticmethod
     @abc.abstractmethod
     def collect_files(p: Path, ext: Optional[str] = None) -> list[Path]:
@@ -23,10 +24,10 @@ class FileSystem(metaclass=abc.ABCMeta):
 
 def file_validation(p: Path) -> None:
     """Validate that path is a file.
-    
+
     Args:
         p: Path to validate
-        
+
     Raises:
         ValueError: If path is not a file
     """
@@ -36,10 +37,10 @@ def file_validation(p: Path) -> None:
 
 def dir_init(d: Path) -> None:
     """Initialize directory, creating if it doesn't exist.
-    
+
     Args:
         d: Directory path to initialize
-        
+
     Raises:
         ValueError: If path exists but is not a directory
     """
@@ -72,7 +73,7 @@ def learn(
     cloud_storage: Optional[CloudStorage] = None,
 ) -> str:
     """Train neural network model on Shogi data.
-    
+
     Args:
         datasource: Training data source
         datasource_type: Type of data source ('hcpe' or 'preprocess')
@@ -92,7 +93,7 @@ def learn(
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
-        
+
     Returns:
         JSON string with training results
     """

@@ -16,10 +16,11 @@ from maou.domain.parser.parser import Parser
 
 class FeatureStore(metaclass=abc.ABCMeta):
     """Abstract interface for storing game features in various backends.
-    
+
     Defines the contract for storing processed Shogi game data
     in different storage systems (local files, cloud databases, etc.).
     """
+
     @abc.abstractmethod
     def feature_store(self) -> ContextManager[None]:
         pass
@@ -47,16 +48,17 @@ class IllegalMove(Exception):
 
 class HCPEConverter:
     """Converts Shogi game records to HCPE (HuffmanCodedPosAndEval) format.
-    
+
     Processes CSA and KIF format game files, extracts positions and evaluations,
     and converts them to the HCPE format used for neural network training.
     Supports quality filtering based on game ratings and move counts.
     """
+
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(self, *, feature_store: Optional[FeatureStore] = None):
         """Initialize HCPE converter.
-        
+
         Args:
             feature_store: Optional storage backend for converted features
         """
