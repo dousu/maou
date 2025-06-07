@@ -2,9 +2,9 @@ import logging
 
 import cshogi
 
-from maou.app.learning import label
+from maou.app.pre_process import label
 
-logger: logging.Logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger("TEST")
 
 
 class TestLabel:
