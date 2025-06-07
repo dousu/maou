@@ -166,6 +166,12 @@ def main(debug_mode: bool) -> None:
     required=False,
     default=4,
 )
+@click.option(
+    "--cpu-workers",
+    help="Number of parallel CPU workers for file processing (default: auto-detect).",
+    type=int,
+    required=False,
+)
 def hcpe_convert(
     input_path: Path,
     input_format: str,
@@ -184,6 +190,7 @@ def hcpe_convert(
     data_name: Optional[str],
     max_cached_bytes: int,
     max_workers: int,
+    cpu_workers: Optional[int],
 ) -> None:
     try:
         feature_store = None
@@ -251,6 +258,7 @@ def hcpe_convert(
                 allowed_endgame_status=allowed_endgame_status,
                 exclude_moves=exclude_moves,
                 feature_store=feature_store,
+                max_workers=cpu_workers,
             )
         )
     except Exception:
@@ -405,6 +413,12 @@ def hcpe_convert(
     required=False,
     default=4,
 )
+@click.option(
+    "--cpu-workers",
+    help="Number of parallel CPU workers for record processing (default: auto-detect).",
+    type=int,
+    required=False,
+)
 def pre_process(
     input_path: Optional[Path],
     output_dir: Optional[Path],
@@ -429,6 +443,7 @@ def pre_process(
     output_prefix: Optional[str],
     output_data_name: Optional[str],
     max_workers: int,
+    cpu_workers: Optional[int],
 ) -> None:
     try:
         # Check for mixing cloud providers for input
@@ -562,6 +577,7 @@ def pre_process(
                 datasource=datasource,
                 output_dir=output_dir,
                 feature_store=feature_store,
+                max_workers=cpu_workers,
             )
         )
     except Exception:

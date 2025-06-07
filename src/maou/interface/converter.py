@@ -75,6 +75,7 @@ def transform(
     allowed_endgame_status: Optional[list[str]] = None,
     exclude_moves: Optional[list[int]] = None,
     feature_store: Optional[FeatureStore] = None,
+    max_workers: Optional[int] = None,
 ) -> str:
     """Convert Shogi game records to HCPE format.
 
@@ -89,6 +90,7 @@ def transform(
         allowed_endgame_status: Allowed endgame statuses
         exclude_moves: Moves to exclude from processing
         feature_store: Optional storage backend for features
+        max_workers: Number of parallel workers for CPU processing
 
     Returns:
         JSON string with conversion results
@@ -106,6 +108,7 @@ def transform(
         max_moves=max_moves,
         allowed_endgame_status=allowed_endgame_status,
         exclude_moves=exclude_moves,
+        max_workers=max_workers,
     )
     conversion_result = HCPEConverter(
         feature_store=feature_store,

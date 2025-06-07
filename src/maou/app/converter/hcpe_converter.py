@@ -1,6 +1,8 @@
 import abc
 import contextlib
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
@@ -74,9 +76,21 @@ class HCPEConverter:
         max_moves: Optional[int] = None
         allowed_endgame_status: Optional[list[str]] = None
         exclude_moves: Optional[list[int]] = None
+        max_workers: Optional[int] = None
 
-    def convert(self, option: ConvertOption) -> Dict[str, str]:
-        """HCPEファイルを作成する."""
+    @staticmethod
+    def _process_single_file(
+        file: Path,
+        input_format: str,
+        output_dir: Path,
+        min_rating: Optional[int],
+        min_moves: Optional[int],
+        max_moves: Optional[int],
+        allowed_endgame_status: Optional[list[str]],
+        exclude_moves: Optional[list[int]],
+    ) -> tuple[str, str]:
+        """Process a single file and return (file_path, result)."""
+        logger = logging.getLogger(__name__)
 
         def game_filter(
             parser: Parser,
@@ -98,141 +112,230 @@ class HCPEConverter:
                 )
             ):
                 return False
-
             return True
 
+        try:
+            parser: Parser
+            match input_format:
+                case "csa":
+                    parser = CSAParser()
+                    parser.parse(file.read_text())
+                case "kif":
+                    parser = KifParser()
+                    parser.parse(file.read_text())
+                case format_str:
+                    raise NotApplicableFormat(f"undefined format {format_str}")
+
+            logger.debug(
+                f"棋譜:{file} "
+                f"終局状況:{parser.endgame()} "
+                f"レーティング:{parser.ratings()} "
+                f"手数:{len(parser.moves())}"
+            )
+
+            # 指定された条件を満たしたら変換をスキップ
+            if not game_filter(
+                parser,
+                min_rating,
+                min_moves,
+                max_moves,
+                allowed_endgame_status,
+            ):
+                logger.info(f"skip the file {file}")
+                return (str(file), "skipped")
+
+            # movesの数が0であればそもそもHCPEは作れないのでスキップ
+            if len(parser.moves()) == 0:
+                logger.info(f"skip the file {file} because of no moves")
+                return (str(file), "skipped (no moves)")
+
+            # HCPE配列の初期化
+            hcpes = np.zeros(
+                1024,
+                dtype=[
+                    ("hcp", (np.uint8, 32)),
+                    ("eval", np.int16),
+                    ("bestMove16", np.int16),
+                    ("gameResult", np.int8),
+                    ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
+                    ("partitioningKey", np.dtype("datetime64[D]")),
+                    ("ratings", (np.uint16, 2)),
+                    ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
+                    ("moves", np.int16),
+                ],
+            )
+            board = cshogi.Board()  # type: ignore
+            board.set_sfen(parser.init_pos_sfen())
+
+            # 棋譜共通情報を取得する
+            partitioning_key_value = parser.partitioning_key_value()
+            ratings = parser.ratings()
+            endgame = parser.endgame()
+            moves = len(parser.moves())
+
+            # 1手毎に代わる情報を取得する
+            for idx, (move, score, comment) in enumerate(
+                zip(
+                    parser.moves(),
+                    parser.scores(),
+                    parser.comments(),
+                )
+            ):
+                logger.debug(f"{move} : {score} : {comment}")
+
+                if move < 0 or move > 16777215:
+                    raise IllegalMove(f"moveの値が想定外 path: {file}")
+
+                if exclude_moves is not None and move in exclude_moves:
+                    logger.info(
+                        f"skip the move {move} in {file} at {idx + 1}. "
+                        f"exclude moves: {exclude_moves}"
+                    )
+                    continue
+
+                hcpe = hcpes[idx]
+                board.to_hcp(hcpe["hcp"])
+                # 16bitに収める
+                eval = min(32767, max(score, -32767))
+                # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
+                if board.turn == cshogi.BLACK:  # type: ignore
+                    hcpe["eval"] = eval
+                else:
+                    hcpe["eval"] = -eval
+                # moveは32bitになっているので16bitに変換する
+                # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
+                # 特に動かす駒の種類の情報が抜けているので注意
+                hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
+                hcpe["gameResult"] = parser.winner()
+                hcpe["id"] = f"{file.with_suffix('.hcpe').name}_{idx}"
+                # 棋譜共通情報を記録
+                hcpe["partitioningKey"] = np.datetime64(
+                    partitioning_key_value.isoformat()
+                )
+                hcpe["ratings"] = ratings
+                hcpe["endgameStatus"] = endgame
+                hcpe["moves"] = moves
+
+                # 局面に指し手を反映させる
+                board.push(move)
+
+            # ファイルを保存
+            np.save(
+                output_dir / file.with_suffix(".npy").name,
+                hcpes[: idx + 1],
+            )
+            return (str(file), f"success {idx + 1} rows")
+
+        except Exception as e:
+            logger.error(f"Error processing file {file}: {e}")
+            return (str(file), f"error: {str(e)}")
+
+    def convert(self, option: ConvertOption) -> Dict[str, str]:
+        """HCPEファイルを作成する（並列処理版）."""
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
+
+        # Determine number of workers
+        max_workers = option.max_workers
+        if max_workers is None:
+            max_workers = min(len(option.input_paths), os.cpu_count() or 1)
+
+        self.logger.info(f"Using {max_workers} workers for parallel processing")
+
         with self.__context():
-            for file in tqdm(option.input_paths):
-                parser: Parser
-                match option.input_format:
-                    case "csa":
-                        parser = CSAParser()
-                        parser.parse(file.read_text())
-                    case "kif":
-                        parser = KifParser()
-                        parser.parse(file.read_text())
-                    case format_str:
-                        raise NotApplicableFormat(f"undefined format {format_str}")
-                # パースした結果から一手ずつ進めていって各局面をhcpe形式で保存する
-                self.logger.debug(
-                    f"棋譜:{file} "
-                    f"終局状況:{parser.endgame()} "
-                    f"レーティング:{parser.ratings()} "
-                    f"手数:{len(parser.moves())}"
-                )
-
-                # 指定された条件を満たしたら変換をスキップ
-                if not game_filter(
-                    parser,
-                    option.min_rating,
-                    option.min_moves,
-                    option.max_moves,
-                    option.allowed_endgame_status,
-                ):
-                    conversion_result[str(file)] = "skipped"
-                    self.logger.info(f"skip the file {file}")
-                    continue
-
-                # movesの数が0であればそもそもHCPEは作れないのでスキップ
-                if len(parser.moves()) == 0:
-                    conversion_result[str(file)] = "skipped (no moves)"
-                    self.logger.info(f"skip the file {file} because of no moves")
-                    continue
-
-                # 1024もあれば確保しておく局面数として十分だろう
-                # これ以上ある場合は無駄な局面が大量にありそうなので枝刈りした方がよさそう
-                # HCPEと同じ部分は同じdtypeを利用しているが
-                # 実は独自データフォーマットなのでHCPEではない
-                # https://github.com/TadaoYamaoka/cshogi/blob/b13c3b248f870b218cb71e7f9c17dfae7bf0f6e9/cshogi/_cshogi.pyx#L19
-                hcpes = np.zeros(
-                    1024,
-                    dtype=[
-                        ("hcp", (np.uint8, 32)),
-                        ("eval", np.int16),
-                        ("bestMove16", np.int16),
-                        ("gameResult", np.int8),
-                        ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
-                        ("partitioningKey", np.dtype("datetime64[D]")),
-                        ("ratings", (np.uint16, 2)),
-                        ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
-                        ("moves", np.int16),
-                    ],
-                )
-                board = cshogi.Board()  # type: ignore
-                board.set_sfen(parser.init_pos_sfen())
-                try:
-                    # 棋譜共通情報を取得する
-                    partitioning_key_value = parser.partitioning_key_value()
-                    ratings = parser.ratings()
-                    endgame = parser.endgame()
-                    moves = len(parser.moves())
-                    # 1手毎に代わる情報を取得する
-                    for idx, (move, score, comment) in enumerate(
-                        zip(
-                            parser.moves(),
-                            parser.scores(),
-                            parser.comments(),
-                        )
-                    ):
-                        self.logger.debug(f"{move} : {score} : {comment}")
-
-                        if move < 0 or move > 16777215:
-                            raise IllegalMove(f"moveの値が想定外 path: {file}")
-
-                        if (
-                            option.exclude_moves is not None
-                            and move in option.exclude_moves
-                        ):
-                            self.logger.info(
-                                f"skip the move {move} in {file} at {idx + 1}. "
-                                f"exclude moves: {option.exclude_moves}"
-                            )
-                            continue
-
-                        hcpe = hcpes[idx]
-                        board.to_hcp(hcpe["hcp"])
-                        # 16bitに収める
-                        eval = min(32767, max(score, -32767))
-                        # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
-                        if board.turn == cshogi.BLACK:  # type: ignore
-                            hcpe["eval"] = eval
-                        else:
-                            hcpe["eval"] = -eval
-                        # moveは32bitになっているので16bitに変換する
-                        # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
-                        # 特に動かす駒の種類の情報が抜けているので注意
-                        hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
-                        hcpe["gameResult"] = parser.winner()
-                        hcpe["id"] = f"{file.with_suffix('.hcpe').name}_{idx}"
-                        # 棋譜共通情報を記録
-                        hcpe["partitioningKey"] = np.datetime64(
-                            partitioning_key_value.isoformat()
-                        )
-                        hcpe["ratings"] = ratings
-                        hcpe["endgameStatus"] = endgame
-                        hcpe["moves"] = moves
-
-                        # 局面に指し手を反映させる
-                        board.push(move)
-                    # np.saveで保存することでメタデータをつけておく
-                    # HCPEの形式から逸脱するのでCPUパフォーマンスは悪くなる
-                    np.save(
-                        option.output_dir / file.with_suffix(".npy").name,
-                        hcpes[: idx + 1],
+            if max_workers == 1 or len(option.input_paths) == 1:
+                # Sequential processing for single worker or single file
+                for file in tqdm(option.input_paths, desc="Processing files"):
+                    file_path, result = self._process_single_file(
+                        file,
+                        option.input_format,
+                        option.output_dir,
+                        option.min_rating,
+                        option.min_moves,
+                        option.max_moves,
+                        option.allowed_endgame_status,
+                        option.exclude_moves,
                     )
-                    if self.__feature_store is not None:
-                        self.__feature_store.store_features(
-                            name=file.with_suffix(".hcpe").name,
-                            key_columns=["id"],
-                            structured_array=hcpes[: idx + 1],
-                            clustering_key=None,
-                            partitioning_key_date="partitioningKey",
-                        )
-                    conversion_result[str(file)] = f"success {idx + 1} rows"
-                except Exception:
-                    raise
+
+                    # For sequential processing, re-raise exceptions for compatibility
+                    if result.startswith("error:"):
+                        error_msg = result[7:]  # Remove "error: " prefix
+                        if "No such file or directory" in error_msg:
+                            raise FileNotFoundError(error_msg)
+                        elif "undefined format" in error_msg:
+                            raise NotApplicableFormat(error_msg)
+                        else:
+                            raise Exception(error_msg)
+
+                    conversion_result[file_path] = result
+
+                    # Handle feature store for sequential processing
+                    if self.__feature_store is not None and result.startswith(
+                        "success"
+                    ):
+                        # Load the saved file and store it in feature store
+                        npy_file = option.output_dir / file.with_suffix(".npy").name
+                        if npy_file.exists():
+                            structured_array = np.load(npy_file)
+                            self.__feature_store.store_features(
+                                name=file.with_suffix(".hcpe").name,
+                                key_columns=["id"],
+                                structured_array=structured_array,
+                                clustering_key=None,
+                                partitioning_key_date="partitioningKey",
+                            )
+            else:
+                # Parallel processing
+                with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all jobs
+                    future_to_file = {
+                        executor.submit(
+                            self._process_single_file,
+                            file,
+                            option.input_format,
+                            option.output_dir,
+                            option.min_rating,
+                            option.min_moves,
+                            option.max_moves,
+                            option.allowed_endgame_status,
+                            option.exclude_moves,
+                        ): file
+                        for file in option.input_paths
+                    }
+
+                    # Process completed futures with progress bar
+                    for future in tqdm(
+                        as_completed(future_to_file),
+                        total=len(option.input_paths),
+                        desc="Processing files",
+                    ):
+                        file = future_to_file[future]
+                        try:
+                            file_path, result = future.result()
+                            conversion_result[file_path] = result
+
+                            # Handle feature store for parallel processing
+                            if self.__feature_store is not None and result.startswith(
+                                "success"
+                            ):
+                                # Load the saved file and store it in feature store
+                                npy_file = (
+                                    option.output_dir / file.with_suffix(".npy").name
+                                )
+                                if npy_file.exists():
+                                    structured_array = np.load(npy_file)
+                                    self.__feature_store.store_features(
+                                        name=file.with_suffix(".hcpe").name,
+                                        key_columns=["id"],
+                                        structured_array=structured_array,
+                                        clustering_key=None,
+                                        partitioning_key_date="partitioningKey",
+                                    )
+                        except Exception as exc:
+                            self.logger.error(
+                                f"File {file} generated an exception: {exc}"
+                            )
+                            conversion_result[str(file)] = f"error: {str(exc)}"
 
         return conversion_result
 

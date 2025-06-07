@@ -40,6 +40,7 @@ def transform(
     datasource: DataSource,
     output_dir: Optional[Path],
     feature_store: Optional[FeatureStore] = None,
+    max_workers: Optional[int] = None,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -47,6 +48,7 @@ def transform(
         datasource: Source of HCPE data to process
         output_dir: Optional directory for output files
         feature_store: Optional storage backend for features
+        max_workers: Number of parallel workers for CPU processing
 
     Returns:
         JSON string with processing results
@@ -56,6 +58,7 @@ def transform(
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,
+        max_workers=max_workers,
     )
     pre_process_result = PreProcess(
         datasource=datasource,
