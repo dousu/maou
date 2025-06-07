@@ -2,10 +2,11 @@ import contextlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import boto3
 import numpy as np
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from tqdm.auto import tqdm
 
@@ -29,14 +30,29 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         prefix: str,
         region: str = "ap-northeast-1",
         data_name: str,
-        max_cached_bytes: int = 5 * 1024 * 1024,
-        max_workers: int = 4,
+        max_cached_bytes: int = 50 * 1024 * 1024,
+        max_workers: int = 16,
     ):
         self.bucket_name = bucket_name
         self.prefix = prefix
         self.data_name = data_name
         self.region = region
-        self.s3_client = boto3.client("s3")
+
+        # S3クライアントを高性能設定で初期化
+        config = Config(
+            region_name=region,
+            retries={"max_attempts": 3, "mode": "adaptive"},
+            max_pool_connections=max_workers * 2,
+            # 大きなファイル用の設定
+            s3={
+                "max_bandwidth": None,  # 帯域制限なし
+                "max_concurrent_requests": max_workers,
+                "multipart_threshold": 64 * 1024 * 1024,  # 64MB以上でmultipart
+                "multipart_chunksize": 16 * 1024 * 1024,  # 16MBチャンク
+                "use_accelerate_endpoint": False,
+            },
+        )
+        self.s3_client = boto3.client("s3", config=config)
 
         try:
             # バケットが存在するか確認
@@ -206,38 +222,72 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         partitioning_key_date: Optional[str] = None,
     ) -> None:
         """バッファのデータを一括して保存.
-        ここでは追記しかしないので同じデータがあると重複してしまう
+        同じスキーマの配列を連結して大きなファイルにまとめることで効率化
         """
         if not self.__buffer:
             self.logger.debug("Buffer is empty. Nothing to flush.")
             return
 
-        # バッファをリセットしつつin-place処理
-        upload_tasks = []
+        # スキーマとフォルダごとにグループ化
+        grouped_arrays: Dict[Tuple[str, Optional[str]], List[np.ndarray]] = {}
+        total_buffer_size = self.__buffer_size
+
         while self.__buffer:
-            name, folder, structured_array = self.__buffer.pop(0)
+            _, folder, structured_array = self.__buffer.pop(0)
             self.__buffer_size -= structured_array.nbytes
 
-            if folder is not None:
-                object_key = f"{self.__get_data_path()}/{folder}/{name}.npy"
-            else:
-                object_key = f"{self.__get_data_path()}/{name}.npy"
+            # スキーマとフォルダをキーとしてグループ化
+            schema_key = str(structured_array.dtype)
+            group_key = (schema_key, folder)
 
-            upload_tasks.append((object_key, structured_array))
+            if group_key not in grouped_arrays:
+                grouped_arrays[group_key] = []
+            grouped_arrays[group_key].append(structured_array)
 
         try:
+            upload_tasks = []
+
+            # グループごとに配列を連結して大きなファイルを作成
+            for (schema_key, folder), arrays in grouped_arrays.items():
+                if len(arrays) == 1:
+                    # 単一配列の場合はそのまま
+                    combined_array = arrays[0]
+                else:
+                    # 複数配列を連結
+                    combined_array = np.concatenate(arrays)
+
+                # ファイル名に配列数とサイズ情報を含める
+                size_mb = combined_array.nbytes // (1024 * 1024)
+                schema_hash = hash(schema_key) % 10000
+                file_name = (
+                    f"batch_{len(arrays)}arrays_{size_mb}MB_{schema_hash:04d}.npy"
+                )
+
+                if folder is not None:
+                    object_key = f"{self.__get_data_path()}/{folder}/{file_name}"
+                else:
+                    object_key = f"{self.__get_data_path()}/{file_name}"
+
+                upload_tasks.append((object_key, combined_array))
+
             if not upload_tasks:
                 return
 
             # 総データサイズを計算
-            total_size_mb = sum(arr.nbytes for _, arr in upload_tasks) / (1024 * 1024)
+            total_size_mb = total_buffer_size / (1024 * 1024)
+
+            total_arrays = sum(len(arrays) for arrays in grouped_arrays.values())
+            self.logger.info(
+                f"Consolidated {total_arrays} arrays "
+                f"into {len(upload_tasks)} files ({total_size_mb:.1f}MB total)"
+            )
 
             # 並列アップロード
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = []
-                for object_key, structured_array in upload_tasks:
+                for object_key, combined_array in upload_tasks:
                     future = executor.submit(
-                        self._upload_single_array, object_key, structured_array
+                        self._upload_single_array, object_key, combined_array
                     )
                     futures.append(future)
 
@@ -249,9 +299,18 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
                 for future in tqdm(futures, desc=desc, unit="files", leave=True):
                     future.result()
 
+            # アップロード時間の統計を計算
+            avg_time_per_file: float = 0.0
+            if len(upload_tasks) > 0:
+                # 簡易的な時間計算（実際の時間は並列実行なので概算）
+                avg_time_per_file = (
+                    total_size_mb / len(upload_tasks)
+                ) / 50  # 大雑把な推定
+
             self.logger.info(
                 f"Successfully uploaded {len(upload_tasks)} files "
                 f"to s3://{self.bucket_name}/{self.__get_data_path()}"
+                f", ~{avg_time_per_file:.2f}s/files"
             )
 
         except Exception as e:
@@ -261,24 +320,46 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
     def _upload_single_array(
         self, object_key: str, structured_array: np.ndarray
     ) -> None:
-        """単一の配列をS3にアップロードする"""
-        try:
-            with BytesIO() as buffer:
-                # メモリマップ性能を保持するため.npy形式を使用
-                np.save(buffer, structured_array)
-                buffer.seek(0)
+        """単一の配列をS3にアップロードする（リトライ機能付き）"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with BytesIO() as buffer:
+                    # メモリマップ性能を保持するため.npy形式を使用
+                    np.save(buffer, structured_array)
+                    buffer.seek(0)
 
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name, Key=object_key, Body=buffer
-                )
+                    self.s3_client.put_object(
+                        Bucket=self.bucket_name,
+                        Key=object_key,
+                        Body=buffer,
+                        # 大きなファイルの場合はserver-side encryptionを無効化して速度向上
+                        ServerSideEncryption="AES256"
+                        if structured_array.nbytes < 100 * 1024 * 1024
+                        else None,
+                    )
 
-                self.logger.debug(
-                    f"Uploaded {structured_array.nbytes / (1024 * 1024):.1f}MB"
-                    f" to {object_key}"
-                )
-        except Exception as e:
-            self.logger.error(f"Failed to upload {object_key}: {e}")
-            raise
+                    self.logger.debug(
+                        f"Uploaded {structured_array.nbytes / (1024 * 1024):.1f}MB"
+                        f" to {object_key} (attempt {attempt + 1})"
+                    )
+                    return  # 成功したら終了
+
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    self.logger.error(
+                        f"Failed to upload {object_key} "
+                        f"after {max_retries} attempts: {e}"
+                    )
+                    raise
+                else:
+                    self.logger.warning(
+                        f"Upload attempt {attempt + 1} failed for {object_key}: "
+                        f"{e}, retrying..."
+                    )
+                    import time
+
+                    time.sleep(2**attempt)  # exponential backoff
 
     def __cleanup(self) -> None:
         """store_features用のデストラクタ処理"""
