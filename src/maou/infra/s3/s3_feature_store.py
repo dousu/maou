@@ -329,14 +329,12 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
                     np.save(buffer, structured_array)
                     buffer.seek(0)
 
+                    # セキュリティのため常にserver-side encryptionを有効化
                     self.s3_client.put_object(
                         Bucket=self.bucket_name,
                         Key=object_key,
                         Body=buffer,
-                        # 大きなファイルの場合はserver-side encryptionを無効化して速度向上
-                        ServerSideEncryption="AES256"
-                        if structured_array.nbytes < 100 * 1024 * 1024
-                        else None,
+                        ServerSideEncryption="AES256",
                     )
 
                     self.logger.debug(
