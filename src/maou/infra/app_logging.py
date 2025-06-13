@@ -31,8 +31,8 @@ class CustomLogFormatter(logging.Formatter):
 
 def get_log_level_from_env() -> int:
     """
-    環境変数MAOU_LOG_LEVELからログレベルを取得する。
-    環境変数が設定されていない場合、INFOレベルを返す。
+    環境変数MAOU_LOG_LEVELからログレベルを取得する．
+    環境変数が設定されていない場合，INFOレベルを返す．
     """
     log_level = os.getenv("MAOU_LOG_LEVEL", "INFO").upper()
 

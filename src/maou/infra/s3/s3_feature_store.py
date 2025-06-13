@@ -38,14 +38,14 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         self.data_name = data_name
         self.region = region
 
-        # S3クライアントを高性能設定で初期化
+        # S3クライアントを性能がでるように初期化
         config = Config(
             region_name=region,
             retries={"max_attempts": 3, "mode": "adaptive"},
             max_pool_connections=max_workers * 2,
             # 大きなファイル用の設定
             s3={
-                "max_bandwidth": None,  # 帯域制限なし
+                "max_bandwidth": None,
                 "max_concurrent_requests": max_workers,
                 "multipart_threshold": 64 * 1024 * 1024,  # 64MB以上でmultipart
                 "multipart_chunksize": 16 * 1024 * 1024,  # 16MBチャンク
@@ -291,7 +291,7 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
                     )
                     futures.append(future)
 
-                # 完了を待つ（詳細な進捗情報付き）
+                # 完了を待つ (詳細な進捗情報付き)
                 desc = (
                     f"Uploading {len(upload_tasks)} files ({total_size_mb:.1f}MB)"
                     f" [{self.max_workers} workers]"
@@ -302,7 +302,7 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
             # アップロード時間の統計を計算
             avg_time_per_file: float = 0.0
             if len(upload_tasks) > 0:
-                # 簡易的な時間計算（実際の時間は並列実行なので概算）
+                # 簡易的な時間計算 (実際の時間は並列実行なので概算)
                 avg_time_per_file = (
                     total_size_mb / len(upload_tasks)
                 ) / 50  # 大雑把な推定
@@ -320,7 +320,7 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
     def _upload_single_array(
         self, object_key: str, structured_array: np.ndarray
     ) -> None:
-        """単一の配列をS3にアップロードする（リトライ機能付き）"""
+        """単一の配列をS3にアップロードする (リトライ機能付き)."""
         max_retries = 3
         for attempt in range(max_retries):
             try:

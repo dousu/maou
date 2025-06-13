@@ -64,12 +64,12 @@ class S3(learn.CloudStorage):
         cloud_folder: str,
         extensions: Optional[list[str]] = None,
     ) -> None:
-        """指定されたローカルフォルダ内のファイルをS3バケットにアップロードする．
+        """指定されたローカルフォルダ内のファイルをS3バケットにアップロードする.
 
         Args:
             local_folder: アップロードするローカルフォルダのパス
             cloud_folder: アップロード先のS3フォルダパス
-            extensions: アップロードするファイルの拡張子リスト（例: ['.txt', '.csv']）
+            extensions: アップロードするファイルの拡張子リスト (例: ['.txt', '.csv'])
                        Noneの場合はすべてのファイルをアップロード
 
         ローカルフォルダの構造はS3上でも維持される．
@@ -84,7 +84,7 @@ class S3(learn.CloudStorage):
         # ファイルを収集
         files = FileSystem.collect_files(local_folder)
 
-        # 拡張子でフィルタリング（指定されている場合）
+        # 拡張子でフィルタリング (指定されている場合)
         if extensions is not None:
             files = [f for f in files if any(f.suffix == ext for ext in extensions)]
 

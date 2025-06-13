@@ -153,7 +153,7 @@ class PreProcess:
         return array, chunk_length
 
     def transform(self, option: PreProcessOption) -> Dict[str, str]:
-        """機械学習の前処理を行う（並列処理版）."""
+        """機械学習の前処理を行う (並列処理版)."""
 
         pre_process_result: Dict[str, str] = {}
         self.logger.info(f"前処理対象のデータ数 {len(self.__datasource)}")

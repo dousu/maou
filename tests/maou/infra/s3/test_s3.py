@@ -126,7 +126,7 @@ class TestS3:
         for path in expected_paths:
             assert path in object_paths
 
-        # ファイルの内容を確認（最初のファイルのみ）
+        # ファイルの内容を確認 (最初のファイルのみ)
         test_file_path = folder_path / "file1.txt"
         test_key = f"s3/{cloud_folder}/file1.txt"
 

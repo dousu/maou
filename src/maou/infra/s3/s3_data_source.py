@@ -22,17 +22,17 @@ class MissingS3Config(Exception):
 
 class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
     """
-    S3バケットからデータを効率的にダウンロードし、学習・前処理用データソースとして提供する。
+    S3バケットからデータを効率的にダウンロードし，学習・前処理用データソースとして提供する．
 
-    パフォーマンス最適化:
-    - TransferManagerによる高速ダウンロード（AWS CLI v2相当の性能）
+    パフォーマンス最適化 (AWS CLI v2相当の性能を目指す):
+    - TransferManagerによる高速ダウンロード
     - セッション再利用によるTLSハンドシェイクのオーバーヘッド削減
     - 100KB程度の小ファイル向けに最適化された並列処理設定
     - デフォルト16並列での高速データ転送
 
     Note:
-        大量の小ファイル（1M件、100KB/file程度）でのダウンロード時間を大幅短縮。
-        AWS CLI v2の`aws s3 sync`に匹敵するパフォーマンスを実現。
+        大量の小ファイル (1M件，100KB/file程度)でのダウンロード時間を大幅短縮．
+        AWS CLI v2の`aws s3 sync`に匹敵するパフォーマンスを実現．
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             session = botocore.session.get_session()
             self.s3_client = session.create_client("s3")
 
-            # TransferManagerの設定（100KB程度の小ファイル向けに最適化）
+            # TransferManagerの設定 (100KB程度の小ファイル向けに最適化)
             transfer_config = TransferConfig(
                 max_concurrency=max_workers,
                 multipart_threshold=8
@@ -209,17 +209,17 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         ) -> None:
             """S3バケットからローカルディレクトリへ高速同期を行う.
 
-            TransferManagerを使用してAWS CLI v2相当の高速ダウンロードを実現。
-            ローカルに存在しないファイルやS3側が更新されているファイルのみをダウンロードする。
+            TransferManagerを使用して高速ダウンロードを実現．
+            ローカルに存在しないファイルやS3側が更新されているファイルのみをダウンロードする．
 
             Performance:
-                - 16並列での高速ダウンロード
+                - 指定された並列数での高速ダウンロード
                 - セッション再利用によるTLSハンドシェイク削減
-                - 小ファイル（100KB程度）向けに最適化
+                - 小ファイル(100KB程度)向けに最適化
 
             Args:
                 bucket (str): S3バケット名
-                prefix (str): S3バケット内のプレフィックス（フォルダパス）
+                prefix (str): S3バケット内のプレフィックス (フォルダパス)
                 local_path (Path): ローカルの保存先ディレクトリパス
                 delete (bool): S3に存在しないローカルファイルを削除するかどうか
             """
@@ -339,10 +339,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         def _download_single_file(
             self, bucket: str, s3_key: str, local_file_path: Path
         ) -> None:
-            """TransferManagerを使用して単一ファイルを高速ダウンロードする.
-
-            AWS CLI v2相当の最適化されたダウンロード性能を提供。
-            """
+            """TransferManagerを使用して単一ファイルを高速ダウンロードする."""
             try:
                 # 親ディレクトリ作成 (mkdir -p)
                 local_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -416,7 +413,6 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
             max_workers (int): 並列ダウンロード数 (デフォルト: 16)
-                              AWS CLI v2との性能比較に基づき8から16に向上
         """
         if page_manager is None:
             if (

@@ -844,3 +844,39 @@ For critical production issues:
 - **Error Recovery**: Implement retry logic for transient cloud failures
 
 Run `poetry run maou --help` for detailed CLI options and examples.
+
+## 日本語記述規則
+
+このプロジェクトのコード内で日本語を使用する際(docstring，コメント等)は，以下の規則に従ってください:
+
+### 句読点
+- **句点**: `，`(全角コンマ)を使用
+- **読点**: `．`(全角ピリオド)を使用
+
+### 括弧
+- **括弧**: 必ず半角括弧`()`を使用
+- 全角括弧`（）`は使用しない
+
+### 適用範囲
+- Pythonファイル内のdocstring
+- コード内のコメント
+- その他プロジェクト内の日本語文書
+
+### 例
+```python
+def process_shogi_game(game_data: str) -> ProcessingResult:
+    """
+    将棋の棋譜データを処理し，HCPE形式に変換する．
+
+    Args:
+        game_data: CSA形式またはKIF形式の棋譜データ
+
+    Returns:
+        変換結果を含むProcessingResultオブジェクト
+
+    Note:
+        この関数は高レーティング(1500以上)の対局のみを処理対象とする．
+    """
+    # 棋譜の品質チェックを実行する
+    pass
+```

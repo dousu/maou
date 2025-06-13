@@ -113,7 +113,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 self.local_cache_dir.mkdir(parents=True, exist_ok=True)
                 self.logger.info(f"Local cache directory: {self.local_cache_dir}")
 
-            # ページ番号をキーにしたLRUキャッシュ（OrderedDict）
+            # ページ番号をキーにしたLRUキャッシュ (OrderedDict)
             # ローカルキャッシュを使用する場合は不要
             self.__page_cache: Optional[OrderedDict[int, np.ndarray]] = None
             if not self.use_local_cache:
@@ -378,7 +378,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def get_page(self, page_num: int) -> np.ndarray:
             """
-            指定したページ番号（0オリジン）のレコードバッチを取得する．
+            指定したページ番号 (0オリジン)のレコードバッチを取得する．
             ローカルキャッシュが有効な場合は，ローカルからデータを読み込む．
             ローカルキャッシュが無効な場合は，メモリキャッシュを確認し，
             なければBigQueryから取得する．
@@ -390,7 +390,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     npy_data = self.__load_from_local(page_num)
                     return npy_data
                 else:
-                    # 通常はここに来ることはない（初期化時にすべてダウンロード済み）
+                    # 通常はここに来ることはない (初期化時にすべてダウンロード済み)
                     self.logger.warning(
                         f"Local cache not found for page {page_num}, "
                         "fetching from BigQuery"
@@ -513,8 +513,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """
-        指定されたインデックス idx のレコード（1行）を dict として返す．
-        必要なページのみオンデマンドに取得する．
+        指定されたインデックス idx のレコード (1行)を dict として返す．
+                必要なページのみオンデマンドに取得する．
         """
         if idx < 0 or idx >= len(self.indicies):
             raise IndexError(f"Index {idx} out of range.")

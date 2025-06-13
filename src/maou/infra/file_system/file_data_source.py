@@ -106,7 +106,7 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         Args:
             file_paths (list[Path]): npyファイルのリスト
-            schema (dict[str, str]): 各フィールドのマッピング（例: {"hcp": "hcp", "eval": "eval"}）
+            schema (dict[str, str]): 各フィールドのマッピング(例: {"hcp": "hcp", "eval": "eval"})
             file_manager (Optional[FileManager]): FileManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
         """

@@ -231,7 +231,7 @@ class HCPEConverter:
             return (str(file), f"error: {str(e)}")
 
     def convert(self, option: ConvertOption) -> Dict[str, str]:
-        """HCPEファイルを作成する（並列処理版）."""
+        """HCPEファイルを作成する (並列処理版)."""
         conversion_result: Dict[str, str] = {}
         self.logger.debug(f"変換対象のファイル {option.input_paths}")
 
