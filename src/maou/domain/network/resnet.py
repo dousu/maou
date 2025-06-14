@@ -7,8 +7,8 @@ from torch.nn.common_types import _size_2_t
 
 class ResidualBlock(nn.Module):
     """残渣ブロック.
-    pre-activationの方が制度がいいらしいが一旦はpost-activationで。
-    あとWide Residual dropoutも入れた方がいいらしい。
+    pre-activationの方が制度がいいらしいが一旦はpost-activationで．
+    あとWide Residual dropoutも入れた方がいいらしい．
     """
 
     def __init__(
@@ -74,11 +74,11 @@ class ResidualBlock(nn.Module):
 
 class ResNet(nn.Module):
     """Residual Network.
-    ここではResNetのコア部分 (中間層)だけ定義する。
-    入力層や出力層は各種タスクによって、
-    必要な処理が違うのでapp層で定義することにした。
-    例えば、画像を識別するようなタスクでは入力層で
-    畳み込みやMaxPoolを使って計算量を減らすといいらしい。
+    ここではResNetのコア部分 (中間層)だけ定義する．
+    入力層や出力層は各種タスクによって，
+    必要な処理が違うのでapp層で定義することにした．
+    例えば，画像を識別するようなタスクでは入力層で
+    畳み込みやMaxPoolを使って計算量を減らすといいらしい．
     """
 
     def __init__(

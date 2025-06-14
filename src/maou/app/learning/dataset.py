@@ -1,41 +1,88 @@
+import abc
 import logging
-from pathlib import Path
-from typing import Callable
+from collections.abc import Sized
+from typing import Any, Optional
 
-import numpy as np
 import torch
-from cshogi import HuffmanCodedPosAndEval  # type: ignore
 from torch.utils.data import Dataset
 
+from maou.app.pre_process.transform import Transform
 
-class KifDataset(Dataset):
+
+class DataSource:
+    @abc.abstractmethod
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        pass
+
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        pass
+
+
+class KifDataset(Dataset, Sized):
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(
         self,
-        paths: list[Path],
-        transform: Callable[
-            [np.ndarray, int, int],
-            tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
-        ],
+        *,
+        datasource: DataSource,
+        transform: Optional[Transform] = None,
+        pin_memory: bool,
+        device: torch.device,
     ):
-        self.hcps: list[np.ndarray]
-        self.transform = transform
-
-        # 各局面を棋譜の区別なくフラットにいれておく
-        self.hcpes = np.concatenate(
-            [np.fromfile(path, dtype=HuffmanCodedPosAndEval) for path in paths]
-        )
-        self.logger.info(f"{self.__len__()} samples")
+        self.__datasource = datasource
+        self.transform: Optional[Transform] = transform
+        self.device = device
+        self.pin_memory = pin_memory
+        self.logger.info(f"{len(self.__datasource)} samples")
 
     def __len__(self) -> int:
-        return len(self.hcpes)
+        return len(self.__datasource)
 
     def __getitem__(
         self, idx: int
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-        return self.transform(
-            self.hcpes[idx]["hcp"],
-            self.hcpes[idx]["bestMove16"],
-            self.hcpes[idx]["gameResult"],
-        )
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        if self.transform is not None:
+            # 最初にtransformしないパターン
+            features, move_label, result_value, legal_move_mask = self.transform(
+                hcp=self.__datasource[idx]["hcp"],
+                move16=self.__datasource[idx]["bestMove16"],
+                game_result=self.__datasource[idx]["gameResult"],
+                eval=self.__datasource[idx]["eval"],
+            )
+            return (
+                torch.from_numpy(features).to(self.device),
+                (
+                    torch.tensor(
+                        move_label, dtype=torch.long, pin_memory=self.pin_memory
+                    )
+                    # one_hotのtargetsにいれるのでLongTEnsorに変換しておく
+                    .long()
+                    .to(self.device),
+                    torch.tensor(
+                        result_value, dtype=torch.float32, pin_memory=self.pin_memory
+                    )
+                    .reshape((1))
+                    .to(self.device),
+                    torch.from_numpy(legal_move_mask).to(self.device),
+                ),
+            )
+        else:
+            # 前処理済みのデータを使うパターン
+            return (
+                torch.from_numpy(self.__datasource[idx]["features"].copy()).to(
+                    self.device
+                ),
+                (
+                    torch.tensor(self.__datasource[idx]["moveLabel"])
+                    # one_hotのtargetsにいれるのでLongTEnsorに変換しておく
+                    .long()
+                    .to(self.device),
+                    torch.tensor(self.__datasource[idx]["resultValue"])
+                    .reshape((1))
+                    .to(self.device),
+                    torch.from_numpy(self.__datasource[idx]["legalMoveMask"].copy()).to(
+                        self.device
+                    ),
+                ),
+            )
