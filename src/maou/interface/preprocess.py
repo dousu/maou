@@ -22,16 +22,18 @@ class FileSystem(metaclass=abc.ABCMeta):
         pass
 
 
-def output_dir_validation(output_dir: Path) -> None:
-    """Validate output directory exists.
+def output_dir_init(output_dir: Path) -> None:
+    """Initialize output directory, creating if it doesn't exist.
 
     Args:
-        output_dir: Directory path to validate
+        output_dir: Directory path to initialize
 
     Raises:
-        ValueError: If path is not a directory
+        ValueError: If path exists but is not a directory
     """
-    if not output_dir.is_dir():
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+    elif not output_dir.is_dir():
         raise ValueError(f"Output Dir `{output_dir}` is not directory.")
 
 
@@ -54,7 +56,7 @@ def transform(
         JSON string with processing results
     """
     if output_dir is not None:
-        output_dir_validation(output_dir)
+        output_dir_init(output_dir)
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,

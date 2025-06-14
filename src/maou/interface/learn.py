@@ -141,7 +141,9 @@ def learn(
     if momentum is None:
         momentum = 0.9
 
-    # チェックポイントの書き込み先設定 (デフォルトNone)
+    # チェックポイントの書き込み先設定 (デフォルト./checkpoints)
+    if checkpoint_dir is None:
+        checkpoint_dir = Path("./checkpoints")
 
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 

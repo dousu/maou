@@ -73,7 +73,7 @@ def main(debug_mode: bool) -> None:
 @click.option(
     "--output-dir",
     help="Directory for output files.",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     required=True,
 )
 @click.option(
@@ -275,7 +275,7 @@ def hcpe_convert(
 @click.option(
     "--output-dir",
     help="Directory for output files.",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     required=False,
 )
 @click.option(
@@ -750,25 +750,25 @@ def pre_process(
 )
 @click.option(
     "--checkpoint-dir",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Checkpoint directory.",
     required=False,
 )
 @click.option(
     "--resume-from",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Checkpoint file to resume training.",
     required=False,
 )
 @click.option(
     "--log-dir",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
     required=False,
 )
 @click.option(
     "--model-dir",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Model output directory.",
     required=False,
 )
