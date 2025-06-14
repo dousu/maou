@@ -267,9 +267,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
                 # 並列ダウンロード実行
                 download_count = 0
-                skip_count = len([f for f in s3_local_files if f.exists()]) - len(
-                    download_tasks
-                )
+                skip_count = len(s3_local_files) - len(download_tasks)
 
                 if download_tasks:
                     total_size_mb = len(download_tasks) * 0.08  # 概算サイズ (80KB/file)
