@@ -28,6 +28,8 @@ except ImportError:
 # GCS関連のライブラリのインポートを試みる
 try:
     from maou.infra.gcs.gcs import GCS
+    from maou.infra.gcs.gcs_data_source import GCSDataSource
+    from maou.infra.gcs.gcs_feature_store import GCSFeatureStore
 
     HAS_GCS = True
 except ImportError:
@@ -128,6 +130,13 @@ def main(debug_mode: bool) -> None:
     required=False,
 )
 @click.option(
+    "--output-gcs",
+    type=bool,
+    is_flag=True,
+    help="Output features to Google Cloud Storage.",
+    required=False,
+)
+@click.option(
     "--output-s3",
     type=bool,
     is_flag=True,
@@ -136,19 +145,19 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--bucket-name",
-    help="S3 bucket name for output.",
+    help="S3/GCS bucket name for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--prefix",
-    help="S3 prefix path for output.",
+    help="S3/GCS prefix path for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--data-name",
-    help="Name to identify the data in S3.",
+    help="Name to identify the data in S3/GCS.",
     type=str,
     required=False,
 )
@@ -161,7 +170,7 @@ def main(debug_mode: bool) -> None:
 )
 @click.option(
     "--max-workers",
-    help="Number of parallel upload threads for S3 (default: 4).",
+    help="Number of parallel upload threads for S3/GCS (default: 4).",
     type=int,
     required=False,
     default=4,
@@ -184,6 +193,7 @@ def hcpe_convert(
     output_bigquery: Optional[bool],
     dataset_id: Optional[str],
     table_name: Optional[str],
+    output_gcs: Optional[bool],
     output_s3: Optional[bool],
     bucket_name: Optional[str],
     prefix: Optional[str],
@@ -196,10 +206,15 @@ def hcpe_convert(
         feature_store = None
 
         # Check for mixing cloud providers
-        if output_bigquery and output_s3:
+        cloud_provider_count = sum([
+            bool(output_bigquery),
+            bool(output_gcs),
+            bool(output_s3)
+        ])
+        if cloud_provider_count > 1:
             error_msg = (
-                "Cannot use both BigQuery and S3 feature stores simultaneously. "
-                "Please choose only one cloud provider."
+                "Cannot use multiple cloud providers simultaneously. "
+                "Please choose only one: BigQuery, GCS, or S3."
             )
             app_logger.error(error_msg)
             raise ValueError(error_msg)
@@ -218,6 +233,30 @@ def hcpe_convert(
             else:
                 app_logger.warning(
                     "BigQuery output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+        # Initialize GCS feature store if requested
+        elif (
+            output_gcs
+            and bucket_name is not None
+            and prefix is not None
+            and data_name is not None
+        ):
+            if HAS_GCS:
+                try:
+                    feature_store = GCSFeatureStore(
+                        bucket_name=bucket_name,
+                        prefix=prefix,
+                        data_name=data_name,
+                        max_cached_bytes=max_cached_bytes,
+                        max_workers=max_workers,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCSFeatureStore: {e}")
+            else:
+                app_logger.warning(
+                    "GCS output requested "
                     "but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
                 )
@@ -331,6 +370,13 @@ def hcpe_convert(
     required=False,
 )
 @click.option(
+    "--input-gcs",
+    type=bool,
+    is_flag=True,
+    help="Use GCS as input data source.",
+    required=False,
+)
+@click.option(
     "--input-s3",
     type=bool,
     is_flag=True,
@@ -339,19 +385,19 @@ def hcpe_convert(
 )
 @click.option(
     "--input-bucket-name",
-    help="S3 bucket name for input.",
+    help="S3/GCS bucket name for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-prefix",
-    help="S3 prefix path for input.",
+    help="S3/GCS prefix path for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-data-name",
-    help="Name to identify the data in S3 for input.",
+    help="Name to identify the data in S3/GCS for input.",
     type=str,
     required=False,
 )
@@ -382,6 +428,13 @@ def hcpe_convert(
     default=500 * 1024 * 1024,
 )
 @click.option(
+    "--output-gcs",
+    type=bool,
+    is_flag=True,
+    help="Output features to Google Cloud Storage.",
+    required=False,
+)
+@click.option(
     "--output-s3",
     type=bool,
     is_flag=True,
@@ -390,19 +443,19 @@ def hcpe_convert(
 )
 @click.option(
     "--output-bucket-name",
-    help="S3 bucket name for output.",
+    help="S3/GCS bucket name for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--output-prefix",
-    help="S3 prefix path for output.",
+    help="S3/GCS prefix path for output.",
     type=str,
     required=False,
 )
 @click.option(
     "--output-data-name",
-    help="Name to identify the data in S3 for output.",
+    help="Name to identify the data in S3/GCS for output.",
     type=str,
     required=False,
 )
@@ -430,6 +483,7 @@ def pre_process(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
     input_prefix: Optional[str],
@@ -438,6 +492,7 @@ def pre_process(
     dataset_id: Optional[str],
     table_name: Optional[str],
     output_max_cached_bytes: int,
+    output_gcs: Optional[bool],
     output_s3: Optional[bool],
     output_bucket_name: Optional[str],
     output_prefix: Optional[str],
@@ -447,15 +502,15 @@ def pre_process(
 ) -> None:
     try:
         # Check for mixing cloud providers for input
-        if (input_dataset_id is not None or input_table_name is not None) and (
-            input_s3
-            or input_bucket_name is not None
-            or input_prefix is not None
-            or input_data_name is not None
-        ):
+        cloud_input_count = sum([
+            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(input_gcs),
+            bool(input_s3)
+        ])
+        if cloud_input_count > 1:
             error_msg = (
-                "Cannot use both BigQuery and S3 as data sources simultaneously. "
-                "Please choose only one cloud provider for input."
+                "Cannot use multiple cloud providers for input simultaneously. "
+                "Please choose only one: BigQuery, GCS, or S3."
             )
             app_logger.error(error_msg)
             raise ValueError(error_msg)
@@ -481,6 +536,32 @@ def pre_process(
             else:
                 error_msg = (
                     "BigQuery input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
+        elif (
+            input_gcs
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_GCS:
+                try:
+                    datasource = GCSDataSource(
+                        bucket_name=input_bucket_name,
+                        prefix=input_prefix,
+                        data_name=input_data_name,
+                        local_cache_dir=input_local_cache_dir,
+                        max_workers=max_workers,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCSDataSource: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "GCS input requested but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
                 )
                 app_logger.error(error_msg)
@@ -517,16 +598,21 @@ def pre_process(
         else:
             error_msg = (
                 "Please specify an input source "
-                "(file path, BigQuery table, or S3 bucket)."
+                "(file path, BigQuery table, GCS bucket, or S3 bucket)."
             )
             app_logger.error(error_msg)
             raise ValueError(error_msg)
 
         # Check for mixing cloud providers for output
-        if output_bigquery and output_s3:
+        cloud_output_count = sum([
+            bool(output_bigquery),
+            bool(output_gcs),
+            bool(output_s3)
+        ])
+        if cloud_output_count > 1:
             error_msg = (
-                "Cannot use both BigQuery and S3 feature stores simultaneously. "
-                "Please choose only one cloud provider for output."
+                "Cannot use multiple cloud providers for output simultaneously. "
+                "Please choose only one: BigQuery, GCS, or S3."
             )
             app_logger.error(error_msg)
             raise ValueError(error_msg)
@@ -546,6 +632,29 @@ def pre_process(
             else:
                 app_logger.warning(
                     "BigQuery output requested "
+                    "but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+        elif (
+            output_gcs
+            and output_bucket_name is not None
+            and output_prefix is not None
+            and output_data_name is not None
+        ):
+            if HAS_GCS:
+                try:
+                    feature_store = GCSFeatureStore(
+                        bucket_name=output_bucket_name,
+                        prefix=output_prefix,
+                        data_name=output_data_name,
+                        max_cached_bytes=output_max_cached_bytes,
+                        max_workers=max_workers,
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCSFeatureStore: {e}")
+            else:
+                app_logger.warning(
+                    "GCS output requested "
                     "but required packages are not installed. "
                     "Install with 'poetry install -E gcp'"
                 )
@@ -651,6 +760,13 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--input-gcs",
+    type=bool,
+    is_flag=True,
+    help="Use GCS as input data source.",
+    required=False,
+)
+@click.option(
     "--input-s3",
     type=bool,
     is_flag=True,
@@ -659,25 +775,25 @@ def pre_process(
 )
 @click.option(
     "--input-bucket-name",
-    help="S3 bucket name for input.",
+    help="S3/GCS bucket name for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-prefix",
-    help="S3 prefix path for input.",
+    help="S3/GCS prefix path for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-data-name",
-    help="Name to identify the data in S3 for input.",
+    help="Name to identify the data in S3/GCS for input.",
     type=str,
     required=False,
 )
 @click.option(
     "--input-max-workers",
-    help="Number of parallel download threads for S3 input (default: 8).",
+    help="Number of parallel download threads for S3/GCS input (default: 8).",
     type=int,
     required=False,
     default=8,
@@ -824,6 +940,7 @@ def learn_model(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
     input_prefix: Optional[str],
@@ -892,15 +1009,15 @@ def learn_model(
                 )
 
         # Check for mixing cloud providers for input
-        if (input_dataset_id is not None or input_table_name is not None) and (
-            input_s3
-            or input_bucket_name is not None
-            or input_prefix is not None
-            or input_data_name is not None
-        ):
+        cloud_input_count = sum([
+            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(input_gcs),
+            bool(input_s3)
+        ])
+        if cloud_input_count > 1:
             error_msg = (
-                "Cannot use both BigQuery and S3 as data sources simultaneously. "
-                "Please choose only one cloud provider for input."
+                "Cannot use multiple cloud providers for input simultaneously. "
+                "Please choose only one: BigQuery, GCS, or S3."
             )
             app_logger.error(error_msg)
             raise ValueError(error_msg)
@@ -945,6 +1062,37 @@ def learn_model(
                 app_logger.error(error_msg)
                 raise ImportError(error_msg)
         elif (
+            input_gcs
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_GCS:
+                try:
+                    # GCSDataSourceSpliterを使用
+                    if hasattr(GCSDataSource, "GCSDataSourceSpliter"):
+                        datasource = GCSDataSource.GCSDataSourceSpliter(
+                            bucket_name=input_bucket_name,
+                            prefix=input_prefix,
+                            data_name=input_data_name,
+                            local_cache_dir=input_local_cache_dir,
+                            max_workers=input_max_workers,
+                        )
+                    else:
+                        app_logger.error("GCSDataSourceSpliter not available")
+                        raise AttributeError("GCSDataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCSDataSourceSpliter: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "GCS input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
+        elif (
             input_s3
             and input_bucket_name is not None
             and input_prefix is not None
@@ -977,7 +1125,7 @@ def learn_model(
                 raise ImportError(error_msg)
         else:
             raise Exception(
-                "Please specify an input directory, a BigQuery table, or an S3 bucket."
+                "Please specify an input directory, a BigQuery table, a GCS bucket, or an S3 bucket."
             )
         click.echo(
             learn.learn(
