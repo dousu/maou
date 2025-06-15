@@ -17,7 +17,7 @@ from maou.app.learning.network import Network
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.loss.loss_fn import MaskedGCELoss
-from maou.domain.network.resnet import ResidualBlock
+from maou.domain.network.resnet import BottleneckBlock
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -154,23 +154,28 @@ class Learning:
         self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
         self.logger.info(f"Test: {len(self.validation_loader)} batches/epoch")
 
-        # モデル定義
-        # チャンネル数はてきとうに256まで増やしてる
-        # strideは勘で設定している (2にして計算量減らす)
-        # チャンネル数も適当にちょっとずつあげてみた
-        # あんまりチャンネル数多いと計算量多くなりすぎるので少しだけ
-        channels = 256
+        # モデル定義: 将棋特化の「広く浅い」BottleneckBlock構成
+        #
+        # 将棋AIにおけるネットワーク設計の考察:
+        # 1. 盤面の空間的制約: 9x9の限られた空間での複雑なパターン認識が必要
+        # 2. 特徴の多様性: 駒の配置，攻撃ライン，王の安全性など多様な戦術要素
+        # 3. 計算効率: リアルタイム対局での高速推論が求められる
+        #
+        # 設計方針: 深さよりも幅を重視したバランス型構成
+        # - 浅いネットワーク: 過学習を防ぎ，汎化性能を向上
+        # - 広いチャンネル: 多様な戦術パターンを並列で学習
+        # - 段階的拡張: 低レベル特徴から高レベル戦術まで効率的に抽出
+
+        # 各層のボトルネック幅（3x3 convolution層のチャンネル数）
+        # expansion=4により実際の出力は4倍: [96, 192, 384, 576]
+        bottleneck_width = [24, 48, 96, 144]
+
         model = Network(
-            ResidualBlock,
-            FEATURES_NUM,
-            [2, 2, 2, 2],
-            [1, 2, 2, 2],
-            [
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15),
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15 * 3),
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15 * 7),
-                channels,
-            ],
+            BottleneckBlock,  # 効率的なBottleneckアーキテクチャを使用
+            FEATURES_NUM,  # 入力特徴量チャンネル数
+            [2, 2, 2, 1],  # 将棋特化: 広く浅い構成でパターン認識を重視
+            [1, 2, 2, 2],  # 各層のstride（2で特徴マップサイズ半減）
+            bottleneck_width,  # 幅重視: 多様な戦術要素を並列学習
         )
         self.logger.info(
             str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
