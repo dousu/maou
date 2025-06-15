@@ -256,10 +256,10 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                 skip_count = len(gcs_local_files) - len(download_tasks)
 
                 if download_tasks:
-                    total_size_mb = len(download_tasks) * 0.08  # 概算サイズ (80KB/file)
+                    total_size_mb = len(download_tasks) * 1.5  # 概算サイズ (1.5GB/file)
                     desc = (
                         f"Downloading {len(download_tasks)} files "
-                        f"(~{total_size_mb:.1f}MB) [{self.max_workers} workers]"
+                        f"(~{total_size_mb:.1f}GB) [{self.max_workers} workers]"
                     )
 
                     with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
