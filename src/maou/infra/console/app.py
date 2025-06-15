@@ -749,12 +749,6 @@ def pre_process(
     required=False,
 )
 @click.option(
-    "--checkpoint-dir",
-    type=click.Path(path_type=Path),
-    help="Checkpoint directory.",
-    required=False,
-)
-@click.option(
     "--resume-from",
     type=click.Path(path_type=Path),
     help="Checkpoint file to resume training.",
@@ -846,7 +840,6 @@ def learn_model(
     value_loss_ratio: Optional[float],
     learning_ratio: Optional[float],
     momentum: Optional[float],
-    checkpoint_dir: Optional[Path],
     resume_from: Optional[Path],
     start_epoch: Optional[int],
     log_dir: Optional[Path],
@@ -1001,7 +994,6 @@ def learn_model(
                 value_loss_ratio=value_loss_ratio,
                 learning_ratio=learning_ratio,
                 momentum=momentum,
-                checkpoint_dir=checkpoint_dir,
                 resume_from=resume_from,
                 start_epoch=start_epoch,
                 log_dir=log_dir,

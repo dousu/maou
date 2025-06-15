@@ -53,7 +53,6 @@ class Learning:
 
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
-    checkpoint_dir: Optional[Path]
     resume_from: Optional[Path]
     model: torch.nn.Module
 
@@ -71,7 +70,6 @@ class Learning:
         value_loss_ratio: float
         learning_ratio: float
         momentum: float
-        checkpoint_dir: Optional[Path] = None
         resume_from: Optional[Path] = None
         start_epoch: int = 0
         log_dir: Path
@@ -207,7 +205,6 @@ class Learning:
         self.epoch = option.epoch
         self.model_dir = option.model_dir
         self.resume_from = option.resume_from
-        self.checkpoint_dir = option.checkpoint_dir
         self.start_epoch = option.start_epoch
         self.__train()
 
@@ -370,19 +367,6 @@ class Learning:
                     self.logger.info("Uploading model to cloud storage")
                     self.__cloud_storage.upload_from_local(
                         local_path=model_path, cloud_path=str(model_path)
-                    )
-
-            # checkpoint
-            if self.checkpoint_dir is not None:
-                checkpoint_path = self.checkpoint_dir / "model_{}_{}.checkpoint".format(
-                    timestamp, epoch_number + 1
-                )
-                self.logger.info("Saving checkpoint to {}".format(checkpoint_path))
-                torch.save(self.model.state_dict(), checkpoint_path)
-                if self.__cloud_storage is not None:
-                    self.logger.info("Uploading checkpoint to cloud storage")
-                    self.__cloud_storage.upload_from_local(
-                        local_path=checkpoint_path, cloud_path=str(checkpoint_path)
                     )
 
             # SummaryWriterのイベントをGCSに保存する

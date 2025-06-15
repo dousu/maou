@@ -66,7 +66,6 @@ def learn(
     value_loss_ratio: Optional[float] = None,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
-    checkpoint_dir: Optional[Path] = None,
     resume_from: Optional[Path] = None,
     start_epoch: Optional[int] = None,
     log_dir: Optional[Path] = None,
@@ -89,7 +88,6 @@ def learn(
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
         momentum: SGD momentum parameter
-        checkpoint_dir: Directory for saving checkpoints
         resume_from: Checkpoint file to resume from
         start_epoch: Starting epoch number for training
         log_dir: Directory for training logs
@@ -143,10 +141,6 @@ def learn(
     if momentum is None:
         momentum = 0.9
 
-    # チェックポイントの書き込み先設定 (デフォルト./checkpoints)
-    if checkpoint_dir is None:
-        checkpoint_dir = Path("./checkpoints")
-
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 
     # 開始エポック数設定 (デフォルト0)
@@ -165,15 +159,11 @@ def learn(
     if resume_from is not None:
         file_validation(resume_from)
     # 指定されたディレクトリが存在しない場合は自動で作成する
-    if checkpoint_dir is not None:
-        dir_init(checkpoint_dir)
     if log_dir is not None:
         dir_init(log_dir)
     if model_dir is not None:
         dir_init(model_dir)
-    logger.info(
-        f"Input: {datasource}, Output: {model_dir}, Checkpoint: {checkpoint_dir}"
-    )
+    logger.info(f"Input: {datasource}, Output: {model_dir}")
     option = Learning.LearningOption(
         datasource=datasource,
         datasource_type=datasource_type,
@@ -187,7 +177,6 @@ def learn(
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
-        checkpoint_dir=checkpoint_dir,
         resume_from=resume_from,
         start_epoch=start_epoch,
         log_dir=log_dir,
