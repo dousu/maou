@@ -224,8 +224,8 @@ class Learning:
         last_loss = 0.0
 
         # 記録するiteration数
-        # 1/10で10回は記録する設定
-        record_num = len(self.training_loader) // 10
+        # 1/10で10回は記録する設定，最低でも1にする
+        record_num = max(1, len(self.training_loader) // 10)
 
         # Here, we use enumerate(training_loader) instead of
         # iter(training_loader) so that we can track the batch
