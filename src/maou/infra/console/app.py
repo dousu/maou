@@ -206,11 +206,9 @@ def hcpe_convert(
         feature_store = None
 
         # Check for mixing cloud providers
-        cloud_provider_count = sum([
-            bool(output_bigquery),
-            bool(output_gcs),
-            bool(output_s3)
-        ])
+        cloud_provider_count = sum(
+            [bool(output_bigquery), bool(output_gcs), bool(output_s3)]
+        )
         if cloud_provider_count > 1:
             error_msg = (
                 "Cannot use multiple cloud providers simultaneously. "
@@ -502,11 +500,13 @@ def pre_process(
 ) -> None:
     try:
         # Check for mixing cloud providers for input
-        cloud_input_count = sum([
-            bool(input_dataset_id is not None or input_table_name is not None),
-            bool(input_gcs),
-            bool(input_s3)
-        ])
+        cloud_input_count = sum(
+            [
+                bool(input_dataset_id is not None or input_table_name is not None),
+                bool(input_gcs),
+                bool(input_s3),
+            ]
+        )
         if cloud_input_count > 1:
             error_msg = (
                 "Cannot use multiple cloud providers for input simultaneously. "
@@ -604,11 +604,9 @@ def pre_process(
             raise ValueError(error_msg)
 
         # Check for mixing cloud providers for output
-        cloud_output_count = sum([
-            bool(output_bigquery),
-            bool(output_gcs),
-            bool(output_s3)
-        ])
+        cloud_output_count = sum(
+            [bool(output_bigquery), bool(output_gcs), bool(output_s3)]
+        )
         if cloud_output_count > 1:
             error_msg = (
                 "Cannot use multiple cloud providers for output simultaneously. "
@@ -1009,11 +1007,13 @@ def learn_model(
                 )
 
         # Check for mixing cloud providers for input
-        cloud_input_count = sum([
-            bool(input_dataset_id is not None or input_table_name is not None),
-            bool(input_gcs),
-            bool(input_s3)
-        ])
+        cloud_input_count = sum(
+            [
+                bool(input_dataset_id is not None or input_table_name is not None),
+                bool(input_gcs),
+                bool(input_s3),
+            ]
+        )
         if cloud_input_count > 1:
             error_msg = (
                 "Cannot use multiple cloud providers for input simultaneously. "

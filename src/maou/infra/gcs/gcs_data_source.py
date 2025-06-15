@@ -111,7 +111,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
         ) -> None:
             # GCSクライアントの初期化
             self.client = storage.Client()
-            
+
             self.bucket_name = bucket_name
             self.prefix = prefix
             self.data_name = data_name
@@ -190,7 +190,12 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             return cache_files
 
         def __sync_gcs_to_local(
-            self, *, bucket_name: str, prefix: str, local_path: Path, delete: bool = False
+            self,
+            *,
+            bucket_name: str,
+            prefix: str,
+            local_path: Path,
+            delete: bool = False,
         ) -> None:
             """GCSバケットからローカルディレクトリへ高速同期を行う.
 
@@ -213,7 +218,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             # prefixの末尾にスラッシュがない場合は追加
             if not prefix.endswith("/"):
                 prefix = prefix + "/"
-                
+
             try:
                 # GCSのlist_blobsを使用してオブジェクトを取得
                 blobs = list(self.bucket.list_blobs(prefix=prefix))
@@ -326,7 +331,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                 self.logger.debug(f"Downloading {gcs_key} to {local_file_path}")
                 blob = self.bucket.blob(gcs_key)
                 blob.download_to_filename(str(local_file_path.absolute()))
-                
+
             except Exception as e:
                 self.logger.error(f"Failed to download {gcs_key}: {e}")
                 raise

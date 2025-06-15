@@ -9,7 +9,6 @@ import google.cloud.storage as storage
 import google_crc32c
 import numpy as np
 import pytest
-from google.cloud.exceptions import NotFound
 
 from maou.infra.gcs.gcs_feature_store import GCSFeatureStore
 

@@ -70,11 +70,13 @@ class GCSFeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         # GCSのlist_blobsを使用してオブジェクトを取得
         blobs = self.bucket.list_blobs(prefix=prefix)
         for blob in blobs:
-            objects.append({
-                "Key": blob.name,
-                "Size": blob.size,
-                "LastModified": blob.time_created,
-            })
+            objects.append(
+                {
+                    "Key": blob.name,
+                    "Size": blob.size,
+                    "LastModified": blob.time_created,
+                }
+            )
 
         return objects
 
