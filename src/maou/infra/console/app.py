@@ -761,6 +761,15 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--start-epoch",
+    type=int,
+    help=(
+        "Starting epoch number (0-indexed, default: 0). "
+        "If set to 1, training starts from epoch 2."
+    ),
+    required=False,
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -839,6 +848,7 @@ def learn_model(
     momentum: Optional[float],
     checkpoint_dir: Optional[Path],
     resume_from: Optional[Path],
+    start_epoch: Optional[int],
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
@@ -993,6 +1003,7 @@ def learn_model(
                 momentum=momentum,
                 checkpoint_dir=checkpoint_dir,
                 resume_from=resume_from,
+                start_epoch=start_epoch,
                 log_dir=log_dir,
                 model_dir=model_dir,
                 cloud_storage=cloud_storage,

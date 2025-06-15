@@ -73,6 +73,7 @@ class Learning:
         momentum: float
         checkpoint_dir: Optional[Path] = None
         resume_from: Optional[Path] = None
+        start_epoch: int = 0
         log_dir: Path
         model_dir: Path
 
@@ -207,6 +208,7 @@ class Learning:
         self.model_dir = option.model_dir
         self.resume_from = option.resume_from
         self.checkpoint_dir = option.checkpoint_dir
+        self.start_epoch = option.start_epoch
         self.__train()
 
         learning_result["Data Samples"] = (
@@ -273,15 +275,10 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            # 本当はdictにいろいろ保存することというか，
-            # なんでも読み込めること自体があんまりよくない
-            # https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
-            checkpoint: dict = torch.load(self.resume_from)
-            # チェックポイントはなんらかの障害で意図せず学習が止まることの保険
-            # そのため，epoch_numberは引継ぎする
-            epoch_number = checkpoint["epoch_number"] + 1
-            self.model.load_state_dict(checkpoint["model_state"])
-            self.optimizer.load_state_dict(checkpoint["opt_state"])
+            self.model.load_state_dict(torch.load(self.resume_from))
+
+        # start epoch設定
+        epoch_number = self.start_epoch
 
         for _ in range(epoch_number, EPOCHS):
             self.logger.info("EPOCH {}:".format(epoch_number + 1))
@@ -381,15 +378,7 @@ class Learning:
                     timestamp, epoch_number + 1
                 )
                 self.logger.info("Saving checkpoint to {}".format(checkpoint_path))
-                torch.save(
-                    {
-                        # epoch_numberはepochより1進んでいるのでそのままいれる
-                        "epoch_number": epoch_number,
-                        "model_state": self.model.state_dict(),
-                        "opt_state": self.optimizer.state_dict(),
-                    },
-                    checkpoint_path,
-                )
+                torch.save(self.model.state_dict(), checkpoint_path)
                 if self.__cloud_storage is not None:
                     self.logger.info("Uploading checkpoint to cloud storage")
                     self.__cloud_storage.upload_from_local(

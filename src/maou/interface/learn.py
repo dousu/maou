@@ -68,6 +68,7 @@ def learn(
     momentum: Optional[float] = None,
     checkpoint_dir: Optional[Path] = None,
     resume_from: Optional[Path] = None,
+    start_epoch: Optional[int] = None,
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
@@ -90,6 +91,7 @@ def learn(
         momentum: SGD momentum parameter
         checkpoint_dir: Directory for saving checkpoints
         resume_from: Checkpoint file to resume from
+        start_epoch: Starting epoch number for training
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
@@ -147,6 +149,10 @@ def learn(
 
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 
+    # 開始エポック数設定 (デフォルト0)
+    if start_epoch is None:
+        start_epoch = 0
+
     # SummaryWriterの書き込み先設定 (デフォルト./logs)
     if log_dir is None:
         log_dir = Path("./logs")
@@ -183,6 +189,7 @@ def learn(
         momentum=momentum,
         checkpoint_dir=checkpoint_dir,
         resume_from=resume_from,
+        start_epoch=start_epoch,
         log_dir=log_dir,
         model_dir=model_dir,
     )
