@@ -1125,7 +1125,8 @@ def learn_model(
                 raise ImportError(error_msg)
         else:
             raise Exception(
-                "Please specify an input directory, a BigQuery table, a GCS bucket, or an S3 bucket."
+                "Please specify an input directory, a BigQuery table, "
+                "a GCS bucket, or an S3 bucket."
             )
         click.echo(
             learn.learn(
