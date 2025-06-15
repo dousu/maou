@@ -51,11 +51,15 @@ class Network(nn.Module):
         # 出力層
         # policyとvalueのネットワークはまるまる同じにしてヘッドの設定だけ変えて出しわける
         # policyとvalueにもうちょっと畳み込み層とかを挟んだ方がいい説はある
+        # BottleneckBlockの場合はexpansion factorを考慮した実際のチャンネル数を計算
+        expansion = getattr(block, "expansion", 1)
+        final_channels = list_out_channels[3] * expansion
+
         # policy head
-        self.policy_head = PolicyHead(list_out_channels[3], MOVE_LABELS_NUM)
+        self.policy_head = PolicyHead(final_channels, MOVE_LABELS_NUM)
 
         # value head
-        self.value_head = ValueHead(list_out_channels[3])
+        self.value_head = ValueHead(final_channels)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """forward.
