@@ -287,8 +287,9 @@ TEST_GCP=true pytest
 # Test AWS features (requires authentication)
 TEST_AWS=true pytest
 
-# Test specific cloud integration
-pytest tests/integrations/test_s3_integration.py
+# Test specific cloud integrations
+pytest tests/maou/infra/s3/test_s3_data_source.py
+pytest tests/maou/infra/gcs/test_gcs_data_source.py
 ```
 
 ### Test Development Guidelines
@@ -336,6 +337,15 @@ poetry run maou pre-process \
   --input-data-name hcpe \
   --input-local-cache-dir ./cache \
   --output-dir /path/to/processed
+
+# With GCS integration
+poetry run maou pre-process \
+  --input-gcs \
+  --input-bucket-name my-bucket \
+  --input-prefix data \
+  --input-data-name hcpe \
+  --input-local-cache-dir ./cache \
+  --output-dir /path/to/processed
 ```
 
 ### 3. Model Training
@@ -348,7 +358,7 @@ poetry run maou learn-model \
   --epoch 10 \
   --batch-size 256
 
-# With cloud storage for checkpoints
+# With S3 storage for checkpoints
 poetry run maou learn-model \
   --input-dir /path/to/processed \
   --gpu cuda:0 \
@@ -357,16 +367,27 @@ poetry run maou learn-model \
   --output-s3 \
   --s3-bucket-name my-bucket \
   --s3-base-path models/
+
+# With GCS input data
+poetry run maou learn-model \
+  --input-gcs \
+  --input-bucket-name my-bucket \
+  --input-prefix data \
+  --input-data-name processed \
+  --input-local-cache-dir ./cache \
+  --gpu cuda:0 \
+  --epoch 10 \
+  --batch-size 256
 ```
 
 ### Performance Optimization
 
-#### S3 Parallel Processing
+#### Cloud Storage Parallel Processing
 
-For AWS S3 operations, use `--max-workers` to control parallel threads:
+For AWS S3 and GCS operations, use `--max-workers` to control parallel threads:
 
 ```bash
-# Upload optimization (hcpe-convert)
+# S3 upload optimization (hcpe-convert)
 poetry run maou hcpe-convert \
   --output-s3 \
   --bucket-name my-bucket \
@@ -374,9 +395,26 @@ poetry run maou hcpe-convert \
   --data-name features \
   --max-workers 8
 
-# Download optimization (pre-process)
+# GCS upload optimization (hcpe-convert)
+poetry run maou hcpe-convert \
+  --output-gcs \
+  --bucket-name my-bucket \
+  --prefix data \
+  --data-name features \
+  --max-workers 8
+
+# S3 download optimization (pre-process)
 poetry run maou pre-process \
   --input-s3 \
+  --input-bucket-name my-bucket \
+  --input-prefix data \
+  --input-data-name hcpe \
+  --input-local-cache-dir ./cache \
+  --max-workers 16
+
+# GCS download optimization (pre-process)
+poetry run maou pre-process \
+  --input-gcs \
   --input-bucket-name my-bucket \
   --input-prefix data \
   --input-data-name hcpe \
@@ -435,7 +473,7 @@ infra → interface → app → domain
 - **Input**: Shogi game records in CSA or KIF format
 - **Process**: Parse, validate, and filter games based on quality metrics
 - **Output**: HCPE (HuffmanCodedPosAndEval) format for training
-- **Storage**: Local filesystem, BigQuery, or Amazon S3
+- **Storage**: Local filesystem, BigQuery, Google Cloud Storage, or Amazon S3
 
 ### 2. Feature Extraction (`pre_process`)
 - **Input**: HCPE format game data
@@ -459,7 +497,8 @@ infra → interface → app → domain
 
 ### Google Cloud Platform
 - **BigQuery**: Structured data storage for HCPE records (requires `-E gcp`)
-- **Cloud Storage**: Model checkpoints and large datasets (requires `-E gcp`)
+- **Cloud Storage (GCS)**: Object storage for all data types (requires `-E gcp`)
+- **Parallel processing**: Optimized upload/download with configurable workers
 - **Authentication**: `gcloud auth application-default login`
 
 ### Amazon Web Services
@@ -840,7 +879,7 @@ For critical production issues:
 
 ### Cloud Integration
 
-- **Efficiency**: Use parallel processing for S3 operations
+- **Efficiency**: Use parallel processing for S3 and GCS operations
 - **Caching**: Implement local caching for cloud data when appropriate
 - **Authentication**: Test authentication before long-running operations
 - **Error Recovery**: Implement retry logic for transient cloud failures
