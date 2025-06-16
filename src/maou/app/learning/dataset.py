@@ -78,12 +78,14 @@ class KifDataset(Dataset, Sized):
                     result_value, dtype=torch.float32
                 ).reshape((1))
 
+            # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
+            # GPU転送はDataLoaderが自動的に処理する
             return (
-                features_tensor.to(self.device, non_blocking=True),
+                features_tensor,
                 (
-                    move_label_tensor.to(self.device, non_blocking=True),
-                    result_value_tensor.to(self.device, non_blocking=True),
-                    legal_move_mask_tensor.to(self.device, non_blocking=True),
+                    move_label_tensor,
+                    result_value_tensor,
+                    legal_move_mask_tensor,
                 ),
             )
         else:
@@ -113,11 +115,13 @@ class KifDataset(Dataset, Sized):
                     data["resultValue"].item(), dtype=torch.float32
                 ).reshape((1))
 
+            # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
+            # GPU転送はDataLoaderが自動的に処理する
             return (
-                features_tensor.to(self.device, non_blocking=True),
+                features_tensor,
                 (
-                    move_label_tensor.to(self.device, non_blocking=True),
-                    result_value_tensor.to(self.device, non_blocking=True),
-                    legal_move_mask_tensor.to(self.device, non_blocking=True),
+                    move_label_tensor,
+                    result_value_tensor,
+                    legal_move_mask_tensor,
                 ),
             )

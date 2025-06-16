@@ -242,6 +242,12 @@ class Learning:
             # Every data instance is an input + label pair
             inputs, (labels_policy, labels_value, legal_move_mask) = data
 
+            # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
+            inputs = inputs.to(self.device, non_blocking=True)
+            labels_policy = labels_policy.to(self.device, non_blocking=True)
+            labels_value = labels_value.to(self.device, non_blocking=True)
+            legal_move_mask = legal_move_mask.to(self.device, non_blocking=True)
+
             # Zero your gradients for every batch!
             self.optimizer.zero_grad()
 
@@ -325,6 +331,15 @@ class Learning:
             with torch.no_grad():
                 for i, vdata in tqdm(enumerate(self.validation_loader)):
                     vinputs, (vlabels_policy, vlabels_value, vlegal_move_mask) = vdata
+
+                    # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
+                    vinputs = vinputs.to(self.device, non_blocking=True)
+                    vlabels_policy = vlabels_policy.to(self.device, non_blocking=True)
+                    vlabels_value = vlabels_value.to(self.device, non_blocking=True)
+                    vlegal_move_mask = vlegal_move_mask.to(
+                        self.device, non_blocking=True
+                    )
+
                     voutputs_policy, voutputs_value = self.model(vinputs)
                     vloss = self.policy_loss_ratio * self.loss_fn_policy(
                         voutputs_policy, vlabels_policy, vlegal_move_mask
