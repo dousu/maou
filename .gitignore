@@ -135,4 +135,6 @@ checkpoints/
 # pickleで保存したファイルは除外する
 *.pickle
 
+*.npy
+
 **/.claude/settings.local.json

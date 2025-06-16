@@ -81,22 +81,22 @@ class TestGCSDataSource:
     def compare_records(self, r1: np.ndarray, r2: dict) -> bool:
         """Compare numpy structured array record with dict"""
         # numpy structured arrayの場合はフィールド名を取得
-        if hasattr(r1, 'dtype') and r1.dtype.names:
+        if hasattr(r1, "dtype") and r1.dtype.names:
             r1_keys = set(r1.dtype.names)
         else:
             logger.debug(f"r1 is not a structured array: {type(r1)}")
             return False
-            
+
         r2_keys = set(r2.keys())
-        
+
         if r1_keys != r2_keys:
             logger.debug(f"keys: {r1_keys} != {r2_keys}")
             return False
-            
+
         for key in r1_keys:
             r1_val = r1[key]
             r2_val = r2[key]
-            
+
             if (
                 isinstance(r1_val, np.memmap)
                 or isinstance(r1_val, np.ndarray)
@@ -108,7 +108,7 @@ class TestGCSDataSource:
                     return False
             else:
                 # スカラー値の場合は.item()で取得
-                if hasattr(r1_val, 'item'):
+                if hasattr(r1_val, "item"):
                     r1_val = r1_val.item()
                 if r1_val != r2_val:
                     logger.debug(f"{key}: {r1_val} != {r2_val}")
@@ -415,7 +415,7 @@ class TestGCSDataSource:
         assert len(test_ds) / total_size == pytest.approx(0.2, abs=1.0 / rows / days)
         # 一応読み込めるかテスト
         sample_record = train_ds[0]
-        assert hasattr(sample_record, 'dtype') and sample_record.dtype.names
+        assert hasattr(sample_record, "dtype") and sample_record.dtype.names
         assert "id" in sample_record.dtype.names
 
     def test_iter_batches(self, default_fixture: None, temp_cache_dir: Path) -> None:

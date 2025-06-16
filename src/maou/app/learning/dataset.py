@@ -1,7 +1,7 @@
 import abc
 import logging
 from collections.abc import Sized
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ class DataSource:
     def __getitem__(self, idx: int) -> np.ndarray:
         """
         指定されたインデックスのレコードをnumpy structured arrayとして返す
-        
+
         Returns:
             np.ndarray: structured arrayの単一レコード（0次元配列）
         """
@@ -58,19 +58,26 @@ class KifDataset(Dataset, Sized):
                 game_result=data["gameResult"].item(),
                 eval=data["eval"].item(),
             )
-            
+
             # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
+            # torch.tensor()を使用してread-only numpy arrayからの警告を回避
             if self.pin_memory:
-                features_tensor = torch.from_numpy(features).pin_memory()
-                legal_move_mask_tensor = torch.from_numpy(legal_move_mask).pin_memory()
-                move_label_tensor = torch.tensor(move_label, dtype=torch.long, pin_memory=True)
-                result_value_tensor = torch.tensor(result_value, dtype=torch.float32, pin_memory=True).reshape((1))
+                features_tensor = torch.tensor(features).pin_memory()
+                legal_move_mask_tensor = torch.tensor(legal_move_mask).pin_memory()
+                move_label_tensor = torch.tensor(
+                    move_label, dtype=torch.long, pin_memory=True
+                )
+                result_value_tensor = torch.tensor(
+                    result_value, dtype=torch.float32, pin_memory=True
+                ).reshape((1))
             else:
-                features_tensor = torch.from_numpy(features)
-                legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
+                features_tensor = torch.tensor(features)
+                legal_move_mask_tensor = torch.tensor(legal_move_mask)
                 move_label_tensor = torch.tensor(move_label, dtype=torch.long)
-                result_value_tensor = torch.tensor(result_value, dtype=torch.float32).reshape((1))
-            
+                result_value_tensor = torch.tensor(
+                    result_value, dtype=torch.float32
+                ).reshape((1))
+
             return (
                 features_tensor.to(self.device, non_blocking=True),
                 (
@@ -82,19 +89,28 @@ class KifDataset(Dataset, Sized):
         else:
             # 前処理済みのデータを使うパターン（structured arrayから直接アクセス）
             data = self.__datasource[idx]  # numpy structured array (0次元)
-            
+
             # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
+            # torch.tensor()を使用してread-only numpy arrayからの警告を回避
             if self.pin_memory:
-                features_tensor = torch.from_numpy(data["features"]).pin_memory()
-                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"]).pin_memory()
-                move_label_tensor = torch.tensor(data["moveLabel"].item(), pin_memory=True).long()
-                result_value_tensor = torch.tensor(data["resultValue"].item(), pin_memory=True).reshape((1))
+                features_tensor = torch.tensor(data["features"]).pin_memory()
+                legal_move_mask_tensor = torch.tensor(
+                    data["legalMoveMask"]
+                ).pin_memory()
+                move_label_tensor = torch.tensor(
+                    data["moveLabel"].item(), pin_memory=True
+                ).long()
+                result_value_tensor = torch.tensor(
+                    data["resultValue"].item(), pin_memory=True
+                ).reshape((1))
             else:
-                features_tensor = torch.from_numpy(data["features"])
-                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"])
+                features_tensor = torch.tensor(data["features"])
+                legal_move_mask_tensor = torch.tensor(data["legalMoveMask"])
                 move_label_tensor = torch.tensor(data["moveLabel"].item()).long()
-                result_value_tensor = torch.tensor(data["resultValue"].item()).reshape((1))
-            
+                result_value_tensor = torch.tensor(data["resultValue"].item()).reshape(
+                    (1)
+                )
+
             return (
                 features_tensor.to(self.device, non_blocking=True),
                 (
