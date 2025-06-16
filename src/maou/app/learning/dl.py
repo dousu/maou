@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import torch
 from torch import optim
@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
+from maou.app.learning.prefetch_dataset import PrefetchDataset
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.loss.loss_fn import MaskedGCELoss
@@ -66,6 +67,7 @@ class Learning:
         batch_size: int
         dataloader_workers: int
         pin_memory: bool
+        enable_prefetch: bool
         gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
@@ -102,8 +104,8 @@ class Learning:
             test_ratio=option.test_ratio
         )
 
-        dataset_train: KifDataset
-        dataset_test: KifDataset
+        dataset_train: Union[KifDataset, PrefetchDataset]
+        dataset_test: Union[KifDataset, PrefetchDataset]
         if option.datasource_type == "hcpe":
             # datasetに特徴量と正解ラベルを作成する変換を登録する
             feature = Transform()
@@ -132,6 +134,16 @@ class Learning:
             )
         else:
             raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
+
+        # PrefetchDatasetでラップ（オプション）
+        if option.enable_prefetch:
+            self.logger.info("Enabling PrefetchDataset for background data loading")
+            dataset_train = PrefetchDataset(
+                base_dataset=dataset_train, prefetch_factor=4, max_workers=2
+            )
+            dataset_test = PrefetchDataset(
+                base_dataset=dataset_test, prefetch_factor=2, max_workers=1
+            )
 
         # dataloader
         # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる

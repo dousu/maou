@@ -62,6 +62,7 @@ def learn(
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
+    enable_prefetch: Optional[bool] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
@@ -85,6 +86,7 @@ def learn(
         batch_size: Training batch size
         dataloader_workers: Number of data loader workers
         pin_memory: Enable pinned memory for faster GPU transfers
+        enable_prefetch: Enable background data prefetching for improved performance
         gce_parameter: GCE loss function parameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
@@ -126,6 +128,10 @@ def learn(
     # pin_memory設定 (デフォルトFalse)
     if pin_memory is None:
         pin_memory = False
+
+    # enable_prefetch設定 (デフォルトFalse)
+    if enable_prefetch is None:
+        enable_prefetch = False
 
     # 損失関数のパラメータ設定 (デフォルト0.7)
     if gce_parameter is None:
@@ -179,6 +185,7 @@ def learn(
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
+        enable_prefetch=enable_prefetch,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,

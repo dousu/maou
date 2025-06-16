@@ -840,6 +840,13 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--enable-prefetch",
+    type=bool,
+    is_flag=True,
+    help="Enable background data prefetching for improved performance.",
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter.",
@@ -958,6 +965,7 @@ def learn_model(
     batch_size: Optional[int],
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
+    enable_prefetch: Optional[bool],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
@@ -1147,6 +1155,7 @@ def learn_model(
                 batch_size=batch_size,
                 dataloader_workers=dataloader_workers,
                 pin_memory=pin_memory,
+                enable_prefetch=enable_prefetch,
                 gce_parameter=gce_parameter,
                 policy_loss_ratio=policy_loss_ratio,
                 value_loss_ratio=value_loss_ratio,

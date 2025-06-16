@@ -106,8 +106,12 @@ class KifDataset(Dataset, Sized):
             else:
                 features_tensor = torch.from_numpy(data["features"].copy())
                 legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy())
-                move_label_tensor = torch.tensor(data["moveLabel"].item(), dtype=torch.long)
-                result_value_tensor = torch.tensor(data["resultValue"].item(), dtype=torch.float32).reshape((1))
+                move_label_tensor = torch.tensor(
+                    data["moveLabel"].item(), dtype=torch.long
+                )
+                result_value_tensor = torch.tensor(
+                    data["resultValue"].item(), dtype=torch.float32
+                ).reshape((1))
 
             return (
                 features_tensor.to(self.device, non_blocking=True),
