@@ -65,6 +65,7 @@ class Learning:
         epoch: int
         batch_size: int
         dataloader_workers: int
+        pin_memory: bool
         gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
@@ -84,12 +85,10 @@ class Learning:
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
             self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
-            self.pin_memory = False
             torch.set_float32_matmul_precision("high")
         else:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
-            self.pin_memory = False
         self.__cloud_storage = cloud_storage
 
     def learn(self, option: LearningOption) -> Dict[str, str]:
@@ -111,24 +110,24 @@ class Learning:
             dataset_train = KifDataset(
                 datasource=input_datasource,
                 transform=feature,
-                pin_memory=self.pin_memory,
+                pin_memory=option.pin_memory,
                 device=self.device,
             )
             dataset_test = KifDataset(
                 datasource=test_datasource,
                 transform=feature,
-                pin_memory=self.pin_memory,
+                pin_memory=option.pin_memory,
                 device=self.device,
             )
         elif option.datasource_type == "preprocess":
             dataset_train = KifDataset(
                 datasource=input_datasource,
-                pin_memory=self.pin_memory,
+                pin_memory=option.pin_memory,
                 device=self.device,
             )
             dataset_test = KifDataset(
                 datasource=test_datasource,
-                pin_memory=self.pin_memory,
+                pin_memory=option.pin_memory,
                 device=self.device,
             )
         else:
@@ -141,14 +140,14 @@ class Learning:
             batch_size=option.batch_size,
             shuffle=True,
             num_workers=option.dataloader_workers,
-            pin_memory=self.pin_memory,
+            pin_memory=option.pin_memory,
         )
         self.validation_loader = DataLoader(
             dataset_test,
             batch_size=option.batch_size,
             shuffle=False,
             num_workers=option.dataloader_workers,
-            pin_memory=self.pin_memory,
+            pin_memory=option.pin_memory,
         )
         self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
         self.logger.info(f"Test: {len(self.validation_loader)} batches/epoch")

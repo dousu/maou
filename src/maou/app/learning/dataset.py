@@ -59,11 +59,11 @@ class KifDataset(Dataset, Sized):
                 eval=data["eval"].item(),
             )
 
+            # torch.from_numpy()を使用してゼロコピー変換
             # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
-            # torch.tensor()を使用してread-only numpy arrayからの警告を回避
             if self.pin_memory:
-                features_tensor = torch.tensor(features).pin_memory()
-                legal_move_mask_tensor = torch.tensor(legal_move_mask).pin_memory()
+                features_tensor = torch.from_numpy(features).pin_memory()
+                legal_move_mask_tensor = torch.from_numpy(legal_move_mask).pin_memory()
                 move_label_tensor = torch.tensor(
                     move_label, dtype=torch.long, pin_memory=True
                 )
@@ -71,8 +71,8 @@ class KifDataset(Dataset, Sized):
                     result_value, dtype=torch.float32, pin_memory=True
                 ).reshape((1))
             else:
-                features_tensor = torch.tensor(features)
-                legal_move_mask_tensor = torch.tensor(legal_move_mask)
+                features_tensor = torch.from_numpy(features)
+                legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
                 move_label_tensor = torch.tensor(move_label, dtype=torch.long)
                 result_value_tensor = torch.tensor(
                     result_value, dtype=torch.float32
@@ -90,26 +90,24 @@ class KifDataset(Dataset, Sized):
             # 前処理済みのデータを使うパターン（structured arrayから直接アクセス）
             data = self.__datasource[idx]  # numpy structured array (0次元)
 
+            # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
             # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
-            # torch.tensor()を使用してread-only numpy arrayからの警告を回避
             if self.pin_memory:
-                features_tensor = torch.tensor(data["features"]).pin_memory()
-                legal_move_mask_tensor = torch.tensor(
-                    data["legalMoveMask"]
+                features_tensor = torch.from_numpy(data["features"].copy()).pin_memory()
+                legal_move_mask_tensor = torch.from_numpy(
+                    data["legalMoveMask"].copy()
                 ).pin_memory()
                 move_label_tensor = torch.tensor(
-                    data["moveLabel"].item(), pin_memory=True
-                ).long()
+                    data["moveLabel"].item(), dtype=torch.long, pin_memory=True
+                )
                 result_value_tensor = torch.tensor(
-                    data["resultValue"].item(), pin_memory=True
+                    data["resultValue"].item(), dtype=torch.float32, pin_memory=True
                 ).reshape((1))
             else:
-                features_tensor = torch.tensor(data["features"])
-                legal_move_mask_tensor = torch.tensor(data["legalMoveMask"])
-                move_label_tensor = torch.tensor(data["moveLabel"].item()).long()
-                result_value_tensor = torch.tensor(data["resultValue"].item()).reshape(
-                    (1)
-                )
+                features_tensor = torch.from_numpy(data["features"].copy())
+                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy())
+                move_label_tensor = torch.tensor(data["moveLabel"].item(), dtype=torch.long)
+                result_value_tensor = torch.tensor(data["resultValue"].item(), dtype=torch.float32).reshape((1))
 
             return (
                 features_tensor.to(self.device, non_blocking=True),

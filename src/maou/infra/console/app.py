@@ -833,6 +833,13 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--pin-memory",
+    type=bool,
+    is_flag=True,
+    help="Enable pinned memory for faster GPU transfers.",
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter.",
@@ -950,6 +957,7 @@ def learn_model(
     epoch: Optional[int],
     batch_size: Optional[int],
     dataloader_workers: Optional[int],
+    pin_memory: Optional[bool],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
@@ -1138,6 +1146,7 @@ def learn_model(
                 epoch=epoch,
                 batch_size=batch_size,
                 dataloader_workers=dataloader_workers,
+                pin_memory=pin_memory,
                 gce_parameter=gce_parameter,
                 policy_loss_ratio=policy_loss_ratio,
                 value_loss_ratio=value_loss_ratio,
