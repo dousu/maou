@@ -3,6 +3,7 @@ import logging
 from collections.abc import Sized
 from typing import Any, Optional
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -11,7 +12,13 @@ from maou.app.pre_process.transform import Transform
 
 class DataSource:
     @abc.abstractmethod
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> np.ndarray:
+        """
+        指定されたインデックスのレコードをnumpy structured arrayとして返す
+        
+        Returns:
+            np.ndarray: structured arrayの単一レコード（0次元配列）
+        """
         pass
 
     @abc.abstractmethod
@@ -43,46 +50,56 @@ class KifDataset(Dataset, Sized):
         self, idx: int
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         if self.transform is not None:
-            # 最初にtransformしないパターン
+            # transformを使用するパターン（GPU転送の最適化）
+            data = self.__datasource[idx]  # numpy structured array (0次元)
             features, move_label, result_value, legal_move_mask = self.transform(
-                hcp=self.__datasource[idx]["hcp"],
-                move16=self.__datasource[idx]["bestMove16"],
-                game_result=self.__datasource[idx]["gameResult"],
-                eval=self.__datasource[idx]["eval"],
+                hcp=data["hcp"].item(),
+                move16=data["bestMove16"].item(),
+                game_result=data["gameResult"].item(),
+                eval=data["eval"].item(),
             )
+            
+            # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
+            if self.pin_memory:
+                features_tensor = torch.from_numpy(features).pin_memory()
+                legal_move_mask_tensor = torch.from_numpy(legal_move_mask).pin_memory()
+                move_label_tensor = torch.tensor(move_label, dtype=torch.long, pin_memory=True)
+                result_value_tensor = torch.tensor(result_value, dtype=torch.float32, pin_memory=True).reshape((1))
+            else:
+                features_tensor = torch.from_numpy(features)
+                legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
+                move_label_tensor = torch.tensor(move_label, dtype=torch.long)
+                result_value_tensor = torch.tensor(result_value, dtype=torch.float32).reshape((1))
+            
             return (
-                torch.from_numpy(features).to(self.device),
+                features_tensor.to(self.device, non_blocking=True),
                 (
-                    torch.tensor(
-                        move_label, dtype=torch.long, pin_memory=self.pin_memory
-                    )
-                    # one_hotのtargetsにいれるのでLongTEnsorに変換しておく
-                    .long()
-                    .to(self.device),
-                    torch.tensor(
-                        result_value, dtype=torch.float32, pin_memory=self.pin_memory
-                    )
-                    .reshape((1))
-                    .to(self.device),
-                    torch.from_numpy(legal_move_mask).to(self.device),
+                    move_label_tensor.to(self.device, non_blocking=True),
+                    result_value_tensor.to(self.device, non_blocking=True),
+                    legal_move_mask_tensor.to(self.device, non_blocking=True),
                 ),
             )
         else:
-            # 前処理済みのデータを使うパターン
+            # 前処理済みのデータを使うパターン（structured arrayから直接アクセス）
+            data = self.__datasource[idx]  # numpy structured array (0次元)
+            
+            # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
+            if self.pin_memory:
+                features_tensor = torch.from_numpy(data["features"]).pin_memory()
+                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"]).pin_memory()
+                move_label_tensor = torch.tensor(data["moveLabel"].item(), pin_memory=True).long()
+                result_value_tensor = torch.tensor(data["resultValue"].item(), pin_memory=True).reshape((1))
+            else:
+                features_tensor = torch.from_numpy(data["features"])
+                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"])
+                move_label_tensor = torch.tensor(data["moveLabel"].item()).long()
+                result_value_tensor = torch.tensor(data["resultValue"].item()).reshape((1))
+            
             return (
-                torch.from_numpy(self.__datasource[idx]["features"].copy()).to(
-                    self.device
-                ),
+                features_tensor.to(self.device, non_blocking=True),
                 (
-                    torch.tensor(self.__datasource[idx]["moveLabel"])
-                    # one_hotのtargetsにいれるのでLongTEnsorに変換しておく
-                    .long()
-                    .to(self.device),
-                    torch.tensor(self.__datasource[idx]["resultValue"])
-                    .reshape((1))
-                    .to(self.device),
-                    torch.from_numpy(self.__datasource[idx]["legalMoveMask"].copy()).to(
-                        self.device
-                    ),
+                    move_label_tensor.to(self.device, non_blocking=True),
+                    result_value_tensor.to(self.device, non_blocking=True),
+                    legal_move_mask_tensor.to(self.device, non_blocking=True),
                 ),
             )

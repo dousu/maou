@@ -5,7 +5,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import botocore.session
 import numpy as np
@@ -362,8 +362,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             data = np.concatenate([np.load(path, mmap_mode="r") for path in file_paths])
             return data
 
-        def get_item(self, idx: int) -> dict[str, Any]:
-            """特定のレコードだけが入った辞書を返す."""
+        def get_item(self, idx: int) -> np.ndarray:
+            """特定のレコードをnumpy structured arrayとして返す."""
             for key, pruning_info in self.__pruning_info.items():
                 if (
                     pruning_info.start_idx
@@ -373,13 +373,9 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     for file, start_idx, num_rows in pruning_info.files:
                         if start_idx <= idx < start_idx + num_rows:
                             relative_idx = idx - start_idx
-                            # ここもメモリマップ使っているがファイルサイズはそれほどでもないので
-                            # パフォーマンス上のデメリットがあるならなくしてもいい
+                            # numpy structured arrayから直接レコードを取得
                             npy_data = np.load(file, mmap_mode="r")
-                            names = npy_data.dtype.names
-                            return {
-                                name: npy_data[relative_idx][name] for name in names
-                            }
+                            return npy_data[relative_idx]
             raise IndexError(f"Index {idx} out of range.")
 
         def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
@@ -438,7 +434,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         else:
             self.indicies = indicies
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> np.ndarray:
         if idx < 0 or idx >= len(self.indicies):
             raise IndexError(f"Index {idx} out of range.")
 

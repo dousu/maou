@@ -2,7 +2,7 @@ import logging
 import random
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import pyarrow as pa
@@ -76,17 +76,14 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.total_rows = total_rows
             self.logger.info(f"File Data {self.total_rows} rows")
 
-        def get_item(self, idx: int) -> dict[str, Any]:
+        def get_item(self, idx: int) -> np.ndarray:
             for file, start_idx, num_rows in self.file_row_offsets:
                 if start_idx <= idx < start_idx + num_rows:
                     relative_idx = idx - start_idx
 
-                    # ここもメモリマップ使っているがファイルサイズはそれほどでもないので
-                    # パフォーマンス上のデメリットがあるならなくしてもいい
+                    # numpy structured arrayから直接レコードを取得
                     npy_data = np.load(file, mmap_mode="r")
-                    names = npy_data.dtype.names
-
-                    return {name: npy_data[relative_idx][name] for name in names}
+                    return npy_data[relative_idx]
 
             raise IndexError(f"Index {idx} out of range.")
 
@@ -127,7 +124,7 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
         else:
             self.indicies = indicies
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> np.ndarray:
         if idx < 0 or idx >= len(self.indicies):
             raise IndexError(f"Index {idx} out of range.")
 

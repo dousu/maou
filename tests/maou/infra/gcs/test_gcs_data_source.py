@@ -78,23 +78,41 @@ class TestGCSDataSource:
 
         return data
 
-    def compare_dicts(self, d1: dict, d2: dict) -> bool:
-        if d1.keys() != d2.keys():
-            logger.debug(f"keys: {d1.keys()} != {d2.keys()}")
+    def compare_records(self, r1: np.ndarray, r2: dict) -> bool:
+        """Compare numpy structured array record with dict"""
+        # numpy structured arrayの場合はフィールド名を取得
+        if hasattr(r1, 'dtype') and r1.dtype.names:
+            r1_keys = set(r1.dtype.names)
+        else:
+            logger.debug(f"r1 is not a structured array: {type(r1)}")
             return False
-        for key in d1:
+            
+        r2_keys = set(r2.keys())
+        
+        if r1_keys != r2_keys:
+            logger.debug(f"keys: {r1_keys} != {r2_keys}")
+            return False
+            
+        for key in r1_keys:
+            r1_val = r1[key]
+            r2_val = r2[key]
+            
             if (
-                isinstance(d1[key], np.memmap)
-                or isinstance(d1[key], np.ndarray)
-                or isinstance(d2[key], np.memmap)
-                or isinstance(d2[key], np.ndarray)
+                isinstance(r1_val, np.memmap)
+                or isinstance(r1_val, np.ndarray)
+                or isinstance(r2_val, np.memmap)
+                or isinstance(r2_val, np.ndarray)
             ):
-                if not np.array_equal(d1[key], d2[key]):
-                    logger.debug(f"{key}: {d1[key]} != {d2[key]}")
+                if not np.array_equal(r1_val, r2_val):
+                    logger.debug(f"{key}: {r1_val} != {r2_val}")
                     return False
-            elif d1[key] != d2[key]:
-                logger.debug(f"{key}: {d1[key]} != {d2[key]}")
-                return False
+            else:
+                # スカラー値の場合は.item()で取得
+                if hasattr(r1_val, 'item'):
+                    r1_val = r1_val.item()
+                if r1_val != r2_val:
+                    logger.debug(f"{key}: {r1_val} != {r2_val}")
+                    return False
         return True
 
     @pytest.fixture
@@ -192,7 +210,7 @@ class TestGCSDataSource:
         assert len(read_data) == len(expected_data)
         assert all(
             [
-                self.compare_dicts(d1, d2)
+                self.compare_records(d1, d2)
                 for d1, d2 in zip(sorted_read_data, sorted_expected_data)
             ]
         )
@@ -271,7 +289,7 @@ class TestGCSDataSource:
         assert len(read_data) == len(expected_data)
         assert all(
             [
-                self.compare_dicts(d1, d2)
+                self.compare_records(d1, d2)
                 for d1, d2 in zip(sorted_read_data, sorted_expected_data)
             ]
         )
@@ -350,7 +368,7 @@ class TestGCSDataSource:
         assert len(read_data) == len(expected_data)
         assert all(
             [
-                self.compare_dicts(d1, d2)
+                self.compare_records(d1, d2)
                 for d1, d2 in zip(sorted_read_data, sorted_expected_data)
             ]
         )
@@ -396,7 +414,9 @@ class TestGCSDataSource:
         assert len(train_ds) / total_size == pytest.approx(0.8, abs=1.0 / rows / days)
         assert len(test_ds) / total_size == pytest.approx(0.2, abs=1.0 / rows / days)
         # 一応読み込めるかテスト
-        assert "id" in train_ds[0]
+        sample_record = train_ds[0]
+        assert hasattr(sample_record, 'dtype') and sample_record.dtype.names
+        assert "id" in sample_record.dtype.names
 
     def test_iter_batches(self, default_fixture: None, temp_cache_dir: Path) -> None:
         """iter_batchesメソッドをテストする"""

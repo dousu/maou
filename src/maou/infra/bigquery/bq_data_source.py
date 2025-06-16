@@ -420,8 +420,8 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 self.__evict_cache_if_needed()
             return npy_data
 
-        def get_item(self, idx: int) -> dict[str, Any]:
-            """特定のレコードだけが入った辞書を返す."""
+        def get_item(self, idx: int) -> np.ndarray:
+            """特定のレコードをnumpy structured arrayとして返す."""
             if bool(self.__pruning_info):
                 # idx が属するクラスタグループを探索
                 group_idx = None
@@ -435,16 +435,12 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         f"Index {idx} cannot be mapped to a cluster group."
                     )
                 page_data = self.get_page(group_idx)
-                names = page_data.dtype.names
-
-                return {name: page_data[offset_in_group][name] for name in names}
+                return page_data[offset_in_group]
             else:
                 page_num = idx // self.batch_size
                 row_offset = idx % self.batch_size
                 page_data = self.get_page(page_num)
-                names = page_data.dtype.names
-
-                return {name: page_data[row_offset][name] for name in names}
+                return page_data[row_offset]
 
         def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
             """
@@ -511,9 +507,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         else:
             self.indicies = indicies
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> np.ndarray:
         """
-        指定されたインデックス idx のレコード (1行)を dict として返す．
+        指定されたインデックス idx のレコード (1行)を numpy structured array として返す．
                 必要なページのみオンデマンドに取得する．
         """
         if idx < 0 or idx >= len(self.indicies):

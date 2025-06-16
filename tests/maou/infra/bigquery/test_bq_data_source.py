@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Generator
 from datetime import date, datetime
 from pathlib import Path
+from typing import Union
 
 import google_crc32c
 import numpy as np
@@ -15,6 +16,56 @@ from maou.infra.bigquery.bq_data_source import BigQueryDataSource
 from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
 
 logger: logging.Logger = logging.getLogger("TEST")
+
+
+def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
+    """Convert numpy structured array record to dict"""
+    if hasattr(record, 'dtype') and record.dtype.names:
+        return {key: record[key] for key in record.dtype.names}
+    else:
+        return record  # Already a dict
+
+
+def compare_records(r1: Union[np.ndarray, dict], r2: dict) -> bool:
+    """Compare numpy structured array record or dict with dict"""
+    # numpy structured arrayの場合はフィールド名を取得
+    if hasattr(r1, 'dtype') and r1.dtype.names:
+        r1_keys = set(r1.dtype.names)
+        is_structured_array = True
+    elif isinstance(r1, dict):
+        r1_keys = set(r1.keys())
+        is_structured_array = False
+    else:
+        logger.debug(f"r1 is not a structured array or dict: {type(r1)}")
+        return False
+        
+    r2_keys = set(r2.keys())
+    
+    if r1_keys != r2_keys:
+        logger.debug(f"keys: {r1_keys} != {r2_keys}")
+        return False
+        
+    for key in r1_keys:
+        r1_val = r1[key]
+        r2_val = r2[key]
+        
+        if (
+            isinstance(r1_val, np.memmap)
+            or isinstance(r1_val, np.ndarray)
+            or isinstance(r2_val, np.memmap)
+            or isinstance(r2_val, np.ndarray)
+        ):
+            if not np.array_equal(r1_val, r2_val):
+                logger.debug(f"{key}: {r1_val} != {r2_val}")
+                return False
+        else:
+            # スカラー値の場合は.item()で取得
+            if is_structured_array and hasattr(r1_val, 'item'):
+                r1_val = r1_val.item()
+            if r1_val != r2_val:
+                logger.debug(f"{key}: {r1_val} != {r2_val}")
+                return False
+    return True
 
 skip_test = os.getenv("TEST_GCP", "").lower() != "true"
 
@@ -165,12 +216,15 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"].item() if hasattr(x["id"], 'item') else x["id"])
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
         assert len(sorted_read_data) == len(expected_data)
-        assert sorted_read_data == expected_data
+        assert all([
+            compare_records(d1, d2)
+            for d1, d2 in zip(sorted_read_data, expected_data)
+        ])
 
     def test_read_data_with_clustering_key(self, default_fixture: None) -> None:
         # クラスタリングキーが指定されている場合にbqから正しくデータを読み込める
@@ -203,7 +257,7 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"].item() if hasattr(x["id"], 'item') else x["id"])
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = [
@@ -211,7 +265,10 @@ class TestBigQueryDataSource:
             {"id": 2, "cluster": "B", "data": "test2"},
             {"id": 3, "cluster": "A", "data": "test3"},
         ]
-        assert sorted_read_data == expected_data
+        assert all([
+            compare_records(d1, d2)
+            for d1, d2 in zip(sorted_read_data, expected_data)
+        ])
 
     def test_read_data_with_partitioning_key(self, default_fixture: None) -> None:
         # パーティショニングキーが指定されている場合にbqから正しくデータを読み込める
@@ -246,7 +303,7 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"].item() if hasattr(x["id"], 'item') else x["id"])
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = [
@@ -266,7 +323,10 @@ class TestBigQueryDataSource:
                 "data": "test3",
             },
         ]
-        assert sorted_read_data == expected_data
+        assert all([
+            compare_records(d1, d2)
+            for d1, d2 in zip(sorted_read_data, expected_data)
+        ])
 
     def test_pruning(self, default_fixture: None) -> None:
         # パーティショニングキーが指定されている場合にbqで最小データ量の読み込みが処理される
@@ -463,12 +523,15 @@ class TestBigQueryDataSource:
 
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"].item() if hasattr(x["id"], 'item') else x["id"])
 
         # 読み込んだデータが正しいことを確認
         expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
         assert len(sorted_read_data) == len(expected_data)
-        assert sorted_read_data == expected_data
+        assert all([
+            compare_records(d1, d2)
+            for d1, d2 in zip(sorted_read_data, expected_data)
+        ])
 
     def test_local_cache_loading(self, default_fixture: None, tmp_path: Path) -> None:
         # ローカルキャッシュからデータが正しく読み込まれることをテスト
@@ -522,12 +585,15 @@ class TestBigQueryDataSource:
 
         # データを読み込む
         read_data = [data_source2[i] for i in range(len(data_source2))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"].item() if hasattr(x["id"], 'item') else x["id"])
 
         # 読み込んだデータが正しいことを確認
         expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
         assert len(sorted_read_data) == len(expected_data)
-        assert sorted_read_data == expected_data
+        assert all([
+            compare_records(d1, d2)
+            for d1, d2 in zip(sorted_read_data, expected_data)
+        ])
 
     def test_local_cache_no_memory_cache(
         self, default_fixture: None, tmp_path: Path

@@ -2,7 +2,7 @@ import logging
 import os
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import google_crc32c
 import numpy as np
@@ -16,6 +16,14 @@ from maou.infra.s3.s3_data_source import S3DataSource
 from maou.infra.s3.s3_feature_store import S3FeatureStore
 
 logger: logging.Logger = logging.getLogger("TEST")
+
+
+def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
+    """Convert numpy structured array record to dict"""
+    if hasattr(record, 'dtype') and record.dtype.names:
+        return {key: record[key] for key in record.dtype.names}
+    else:
+        return record  # Already a dict
 
 skip_gcp_test = os.getenv("TEST_GCP", "").lower() != "true"
 
@@ -67,13 +75,31 @@ class TestIntegrationPreProcess:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
         self.bucket = "maou-test-bucket"
-        self.prefix = "test-integration-" + self.__calculate_file_crc32c(path)
+        # Add timestamp to ensure unique test data
+        import time
+        timestamp = str(int(time.time() * 1000))  # millisecond timestamp
+        self.prefix = "test-integration-" + self.__calculate_file_crc32c(path) + "-" + timestamp
         self.data_name = "test_data"
         yield
-        # clean up
+        # clean up BigQuery
         self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
             dataset_id=self.dataset_id, table_name=self.table_name
         )
+        # clean up S3
+        try:
+            import boto3
+            s3_client = boto3.client('s3')
+            response = s3_client.list_objects_v2(Bucket=self.bucket, Prefix=self.prefix)
+            if 'Contents' in response:
+                objects_to_delete = [{'Key': obj['Key']} for obj in response['Contents']]
+                if objects_to_delete:
+                    s3_client.delete_objects(
+                        Bucket=self.bucket,
+                        Delete={'Objects': objects_to_delete}
+                    )
+                    logger.debug(f"Deleted {len(objects_to_delete)} S3 objects with prefix {self.prefix}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up S3 objects: {e}")
 
     @pytest.fixture(autouse=True)
     def clean_up_after_test(self) -> Generator[None, Any, Any]:
@@ -87,23 +113,45 @@ class TestIntegrationPreProcess:
                 if f.name != ".gitkeep":
                     f.unlink()
 
-    def compare_dicts(self, d1: dict, d2: dict) -> bool:
-        if d1.keys() != d2.keys():
-            logger.debug(f"keys: {d1.keys()} != {d2.keys()}")
+    def compare_records(self, r1: Union[np.ndarray, dict], r2: dict) -> bool:
+        """Compare numpy structured array record or dict with dict"""
+        # numpy structured arrayの場合はフィールド名を取得
+        if hasattr(r1, 'dtype') and r1.dtype.names:
+            r1_keys = set(r1.dtype.names)
+            is_structured_array = True
+        elif isinstance(r1, dict):
+            r1_keys = set(r1.keys())
+            is_structured_array = False
+        else:
+            logger.debug(f"r1 is not a structured array or dict: {type(r1)}")
             return False
-        for key in d1:
+            
+        r2_keys = set(r2.keys())
+        
+        if r1_keys != r2_keys:
+            logger.debug(f"keys: {r1_keys} != {r2_keys}")
+            return False
+            
+        for key in r1_keys:
+            r1_val = r1[key]
+            r2_val = r2[key]
+            
             if (
-                isinstance(d1[key], np.memmap)
-                or isinstance(d1[key], np.ndarray)
-                or isinstance(d2[key], np.memmap)
-                or isinstance(d2[key], np.ndarray)
+                isinstance(r1_val, np.memmap)
+                or isinstance(r1_val, np.ndarray)
+                or isinstance(r2_val, np.memmap)
+                or isinstance(r2_val, np.ndarray)
             ):
-                if not np.array_equal(d1[key], d2[key]):
-                    logger.debug(f"{key}: {d1[key]} != {d2[key]}")
+                if not np.array_equal(r1_val, r2_val):
+                    logger.debug(f"{key}: {r1_val} != {r2_val}")
                     return False
-            elif d1[key] != d2[key]:
-                logger.debug(f"{key}: {d1[key]} != {d2[key]}")
-                return False
+            else:
+                # スカラー値の場合は.item()で取得
+                if is_structured_array and hasattr(r1_val, 'item'):
+                    r1_val = r1_val.item()
+                if r1_val != r2_val:
+                    logger.debug(f"{key}: {r1_val} != {r2_val}")
+                    return False
         return True
 
     @pytest.mark.skipif(
@@ -153,7 +201,7 @@ class TestIntegrationPreProcess:
             dataset_id=self.dataset_id, table_name=self.table_name
         )
         bq_data = [
-            {key: data for key, data in bq_datasource[i].items()}
+            record_to_dict(bq_datasource[i])
             for i in range(len(bq_datasource))
         ]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
@@ -165,7 +213,7 @@ class TestIntegrationPreProcess:
         logger.debug(sorted_bq_data)
         assert all(
             [
-                self.compare_dicts(d1, d2)
+                self.compare_records(d1, d2)
                 for d1, d2 in zip(sorted_local_data, sorted_bq_data)
             ]
         )
@@ -225,7 +273,7 @@ class TestIntegrationPreProcess:
             local_cache_dir=str(temp_s3_cache_dir),
         )
         s3_data = [
-            {key: data for key, data in s3_datasource[i].items()}
+            record_to_dict(s3_datasource[i])
             for i in range(len(s3_datasource))
         ]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
@@ -237,7 +285,7 @@ class TestIntegrationPreProcess:
         logger.debug(sorted_s3_data)
         assert all(
             [
-                self.compare_dicts(d1, d2)
+                self.compare_records(d1, d2)
                 for d1, d2 in zip(sorted_local_data, sorted_s3_data)
             ]
         )
