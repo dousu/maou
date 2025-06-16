@@ -139,10 +139,10 @@ class Learning:
         if option.enable_prefetch:
             self.logger.info("Enabling PrefetchDataset for background data loading")
             dataset_train = PrefetchDataset(
-                base_dataset=dataset_train, prefetch_factor=4, max_workers=2
+                base_dataset=dataset_train, prefetch_factor=2, max_workers=1
             )
             dataset_test = PrefetchDataset(
-                base_dataset=dataset_test, prefetch_factor=2, max_workers=1
+                base_dataset=dataset_test, prefetch_factor=1, max_workers=1
             )
 
         # dataloader

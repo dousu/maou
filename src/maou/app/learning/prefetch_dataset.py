@@ -42,12 +42,12 @@ class PrefetchDataset(Dataset):
             try:
                 if idx < len(self.base_dataset) and idx not in self._cache:
                     data = self.base_dataset[idx]
-                    self._queue.put((idx, data), timeout=1.0)
+                    self._queue.put((idx, data), timeout=0.1)  # 短いタイムアウト
                     idx += 1
                 else:
-                    threading.Event().wait(0.01)  # 短い待機
+                    threading.Event().wait(0.001)  # より短い待機
             except queue.Full:
-                pass
+                threading.Event().wait(0.001)  # queue満杯時の短い待機
             except Exception:
                 break
 
