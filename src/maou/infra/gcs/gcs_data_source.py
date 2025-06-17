@@ -111,7 +111,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
         ) -> None:
-            # GCSクライアントは遅延初期化（Pickle化対応）
+            # GCSクライアントは遅延初期化
             self._client = None
             self._bucket = None
 
@@ -129,14 +129,14 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         @property
         def client(self) -> Any:
-            """GCSクライアントを遅延初期化で取得（Pickle化対応）"""
+            """GCSクライアントを遅延初期化で取得"""
             if self._client is None:
                 self._client = storage.Client()
             return self._client
 
         @property
         def bucket(self) -> Any:
-            """GCSバケットを遅延初期化で取得（Pickle化対応）"""
+            """GCSバケットを遅延初期化で取得"""
             if self._bucket is None:
                 try:
                     self._bucket = self.client.get_bucket(self.bucket_name)
@@ -188,7 +188,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self._initialized = True
 
         def _cleanup_clients(self) -> None:
-            """GCSクライアントを破棄してPickle化の問題を回避"""
+            """GCSクライアントを破棄してDataLoader並列時のPickle化の問題を回避"""
             if self._client is not None:
                 self.logger.debug("Cleaning up GCS client to enable pickling")
                 self._client = None

@@ -112,7 +112,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
         ) -> None:
-            # S3クライアントは遅延初期化（Pickle化対応）
+            # S3クライアントは遅延初期化
             self._s3_client = None
             self._s3_transfer = None
 
@@ -130,7 +130,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
         @property
         def s3_client(self) -> Any:
-            """S3クライアントを遅延初期化で取得（Pickle化対応）"""
+            """S3クライアントを遅延初期化で取得"""
             if self._s3_client is None:
                 session = botocore.session.get_session()
                 self._s3_client = session.create_client("s3")
@@ -202,7 +202,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self._initialized = True
 
         def _cleanup_clients(self) -> None:
-            """S3クライアントを破棄してPickle化の問題を回避"""
+            """S3クライアントを破棄してDataLoader並列時のPickle化の問題を回避"""
             if self._s3_client is not None:
                 self.logger.debug("Cleaning up S3 client to enable pickling")
                 self._s3_client = None
