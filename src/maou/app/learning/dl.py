@@ -186,7 +186,7 @@ class Learning:
             persistent_workers=option.dataloader_workers > 0,
             prefetch_factor=2 if option.dataloader_workers > 0 else None,
             drop_last=True,
-            timeout=60 if option.dataloader_workers > 0 else 0,
+            timeout=120 if option.dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
         )
         self.validation_loader = DataLoader(
@@ -198,7 +198,7 @@ class Learning:
             persistent_workers=option.dataloader_workers > 0,
             prefetch_factor=2 if option.dataloader_workers > 0 else None,
             drop_last=False,  # validationでは全データを使用
-            timeout=60 if option.dataloader_workers > 0 else 0,
+            timeout=120 if option.dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
         )
         self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
