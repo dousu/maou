@@ -61,6 +61,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self, test_ratio: float
         ) -> tuple["S3DataSource", "S3DataSource"]:
             self.logger.info(f"test_ratio: {test_ratio}")
+            # 初期化を強制してtotal_rowsを取得
+            self.__page_manager._ensure_initialized()
             input_indices, test_indicies = self.__train_test_split(
                 data=list(range(self.__page_manager.total_rows)),
                 test_ratio=test_ratio,
@@ -195,7 +197,18 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 f"S3 Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
+            # データダウンロード完了後，クライアントを破棄してPickle化の問題を回避
+            self._cleanup_clients()
             self._initialized = True
+
+        def _cleanup_clients(self) -> None:
+            """S3クライアントを破棄してPickle化の問題を回避"""
+            if self._s3_client is not None:
+                self.logger.debug("Cleaning up S3 client to enable pickling")
+                self._s3_client = None
+            if self._s3_transfer is not None:
+                self.logger.debug("Cleaning up S3 transfer to enable pickling")
+                self._s3_transfer = None
 
         def __get_data_path(self) -> str:
             """データ名からS3のパスを取得する."""
