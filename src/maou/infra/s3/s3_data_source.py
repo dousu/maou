@@ -124,9 +124,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.__pruning_info: dict[str, S3DataSource.PageManager.PruningInfo] = (
                 defaultdict(S3DataSource.PageManager.PruningInfo)
             )
-
-            # データ初期化を実行
-            self._initialize_data()
+            self._initialized = False
 
         @property
         def s3_client(self) -> Any:
@@ -151,8 +149,11 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 )
             return self._s3_transfer
 
-        def _initialize_data(self) -> None:
-            """データの初期化処理"""
+        def _ensure_initialized(self) -> None:
+            """データが初期化されていることを確認し，必要に応じて初期化を実行"""
+            if self._initialized:
+                return
+
             # ローカルキャッシュの設定
             self.local_cache_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"Local cache directory: {self.local_cache_dir}")
@@ -193,6 +194,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.logger.info(
                 f"S3 Data {self.total_rows} rows, {self.total_pages} pages"
             )
+
+            self._initialized = True
 
         def __get_data_path(self) -> str:
             """データ名からS3のパスを取得する."""
@@ -373,6 +376,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def get_page(self, key: str) -> np.ndarray:
             """指定されたキーのページを取得する."""
+            self._ensure_initialized()
             if key not in self.__pruning_info:
                 raise ValueError(f"Key {key} not found in pruning info.")
 
@@ -383,6 +387,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def get_item(self, idx: int) -> np.ndarray:
             """特定のレコードをnumpy structured arrayとして返す."""
+            self._ensure_initialized()
             for key, pruning_info in self.__pruning_info.items():
                 if (
                     pruning_info.start_idx
@@ -402,6 +407,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             S3 のバケット全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
+            self._ensure_initialized()
             for key in self.__pruning_info.keys():
                 name = key
                 yield name, self.get_page(key)
@@ -449,6 +455,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.__page_manager = page_manager
 
         if indicies is None:
+            # 初期化を強制してtotal_rowsを取得
+            self.__page_manager._ensure_initialized()
             self.indicies = list(range(self.__page_manager.total_rows))
         else:
             self.indicies = indicies

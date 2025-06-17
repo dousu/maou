@@ -123,9 +123,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.__pruning_info: dict[str, GCSDataSource.PageManager.PruningInfo] = (
                 defaultdict(GCSDataSource.PageManager.PruningInfo)
             )
-
-            # データ初期化を実行
-            self._initialize_data()
+            self._initialized = False
 
         @property
         def client(self) -> Any:
@@ -144,8 +142,11 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                     raise ValueError(f"Bucket '{self.bucket_name}' does not exist.")
             return self._bucket
 
-        def _initialize_data(self) -> None:
-            """データの初期化処理"""
+        def _ensure_initialized(self) -> None:
+            """データが初期化されていることを確認し，必要に応じて初期化を実行"""
+            if self._initialized:
+                return
+
             # ローカルキャッシュの設定
             self.local_cache_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"Local cache directory: {self.local_cache_dir}")
@@ -179,6 +180,8 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.logger.info(
                 f"GCS Data {self.total_rows} rows, {self.total_pages} pages"
             )
+
+            self._initialized = True
 
         def __get_data_path(self) -> str:
             """データ名からGCSのパスを取得する."""
@@ -358,6 +361,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def get_page(self, key: str) -> np.ndarray:
             """指定されたキーのページを取得する."""
+            self._ensure_initialized()
             if key not in self.__pruning_info:
                 raise ValueError(f"Key {key} not found in pruning info.")
 
@@ -368,6 +372,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
 
         def get_item(self, idx: int) -> np.ndarray:
             """特定のレコードをnumpy structured arrayとして返す."""
+            self._ensure_initialized()
             for key, pruning_info in self.__pruning_info.items():
                 if (
                     pruning_info.start_idx
@@ -387,6 +392,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             GCS のバケット全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
+            self._ensure_initialized()
             for key in self.__pruning_info.keys():
                 name = key
                 yield name, self.get_page(key)
@@ -434,6 +440,8 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.__page_manager = page_manager
 
         if indicies is None:
+            # 初期化を強制してtotal_rowsを取得
+            self.__page_manager._ensure_initialized()
             self.indicies = list(range(self.__page_manager.total_rows))
         else:
             self.indicies = indicies
