@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+import numpy as np
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
@@ -19,6 +20,33 @@ from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.loss.loss_fn import MaskedGCELoss
 from maou.domain.network.resnet import BottleneckBlock
+
+
+def _default_worker_init_fn(worker_id: int) -> None:
+    """
+    デフォルトのワーカー初期化関数．
+    CUDA初期化は状況に応じて自動的に実行する．
+    """
+    import random
+
+    # 再現性のためのシード設定（ワーカーごとに異なるシードを使用）
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
+
+    # CUDAが利用可能な場合のみ初期化を試みる
+    if torch.cuda.is_available():
+        try:
+            # 現在のCUDAデバイスを確認し初期化
+            current_device = torch.cuda.current_device()
+            torch.cuda.set_device(current_device)
+            # CUDAコンテキストの初期化を確認
+            _ = torch.cuda.current_device()
+        except Exception as e:
+            # CUDA初期化に失敗した場合はログに記録
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Worker {worker_id}: CUDA initialization failed: {e}")
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -84,6 +112,9 @@ class Learning:
         gpu: Optional[str] = None,
         cloud_storage: Optional[CloudStorage] = None,
     ):
+        # マルチプロセシング開始方法の設定（WindowsやCUDA使用時の安定化）
+        self._setup_multiprocessing()
+
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
             self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
@@ -106,34 +137,22 @@ class Learning:
 
         dataset_train: Union[KifDataset, PrefetchDataset]
         dataset_test: Union[KifDataset, PrefetchDataset]
+
         if option.datasource_type == "hcpe":
             # datasetに特徴量と正解ラベルを作成する変換を登録する
-            feature = Transform()
-            dataset_train = KifDataset(
-                datasource=input_datasource,
-                transform=feature,
-                pin_memory=option.pin_memory,
-                device=self.device,
-            )
-            dataset_test = KifDataset(
-                datasource=test_datasource,
-                transform=feature,
-                pin_memory=option.pin_memory,
-                device=self.device,
-            )
+            transform = Transform()
         elif option.datasource_type == "preprocess":
-            dataset_train = KifDataset(
-                datasource=input_datasource,
-                pin_memory=option.pin_memory,
-                device=self.device,
-            )
-            dataset_test = KifDataset(
-                datasource=test_datasource,
-                pin_memory=option.pin_memory,
-                device=self.device,
-            )
+            transform = None
         else:
             raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
+        dataset_train = KifDataset(
+            datasource=input_datasource,
+            transform=transform,
+        )
+        dataset_test = KifDataset(
+            datasource=test_datasource,
+            transform=transform,
+        )
 
         # PrefetchDatasetでラップ（オプション）
         if option.enable_prefetch:
@@ -145,14 +164,28 @@ class Learning:
                 base_dataset=dataset_test, prefetch_factor=1, max_workers=1
             )
 
-        # dataloader
-        # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
+        # dataloader - 最適化された設定で高速データローディングを実現
+        # num_workers: CPUコア数の2-4倍程度が最適
+        # pin_memory: GPUへのデータ転送を高速化
+        # persistent_workers: ワーカープロセスの再利用でオーバーヘッド削減
+        # prefetch_factor: 各ワーカーが事前に読み込むバッチ数
+        # worker_init_fn: 各ワーカープロセスでCUDAコンテキストを初期化
+        # グローバル関数を使用してPickle化の問題を回避
+        worker_init_fn = (
+            _default_worker_init_fn if option.dataloader_workers > 0 else None
+        )
+
         self.training_loader = DataLoader(
             dataset_train,
             batch_size=option.batch_size,
             shuffle=True,
             num_workers=option.dataloader_workers,
             pin_memory=option.pin_memory,
+            persistent_workers=option.dataloader_workers > 0,
+            prefetch_factor=2 if option.dataloader_workers > 0 else None,
+            drop_last=True,
+            timeout=60 if option.dataloader_workers > 0 else 0,
+            worker_init_fn=worker_init_fn,
         )
         self.validation_loader = DataLoader(
             dataset_test,
@@ -160,6 +193,11 @@ class Learning:
             shuffle=False,
             num_workers=option.dataloader_workers,
             pin_memory=option.pin_memory,
+            persistent_workers=option.dataloader_workers > 0,
+            prefetch_factor=2 if option.dataloader_workers > 0 else None,
+            drop_last=False,  # validationでは全データを使用
+            timeout=60 if option.dataloader_workers > 0 else 0,
+            worker_init_fn=worker_init_fn,
         )
         self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
         self.logger.info(f"Test: {len(self.validation_loader)} batches/epoch")
@@ -416,3 +454,55 @@ class Learning:
         pred = y >= 0
         truth = t >= 0.5
         return pred.eq(truth).sum().item() / len(t)
+
+    def _setup_multiprocessing(self) -> None:
+        """
+        マルチプロセシング開始方法を設定する．
+        プラットフォームとCUDA使用状況に応じて最適な方法を選択し，
+        DataLoaderのマルチプロセシング安定性を向上させる．
+        """
+        import platform
+
+        import torch.multiprocessing as mp
+
+        try:
+            # 現在の開始方法を取得
+            current_method = mp.get_start_method(allow_none=True)
+
+            # プラットフォーム別の推奨設定
+            if platform.system() == "Windows":
+                # Windowsでは常にspawnを使用
+                if current_method != "spawn":
+                    mp.set_start_method("spawn", force=True)
+                    self.logger.info(
+                        "Set multiprocessing start method to 'spawn' for Windows"
+                    )
+            elif torch.cuda.is_available() and self.device.type == "cuda":
+                # CUDA使用時はspawnが安全
+                if current_method != "spawn":
+                    try:
+                        mp.set_start_method("spawn", force=True)
+                        self.logger.info(
+                            "Set multiprocessing start method to 'spawn' for CUDA"
+                        )
+                    except RuntimeError as e:
+                        # 既に設定済みの場合は警告のみ
+                        self.logger.warning(
+                            f"Could not set multiprocessing method: {e}"
+                        )
+            else:
+                # Linux/macOSでCPU使用時はforkのままでも問題なし
+                if current_method is None:
+                    self.logger.info(
+                        f"Using default multiprocessing start method: "
+                        f"{mp.get_start_method()}"
+                    )
+                else:
+                    self.logger.info(
+                        f"Using current multiprocessing start method: {current_method}"
+                    )
+
+        except Exception as e:
+            # マルチプロセシング設定に失敗した場合は警告のみ
+            self.logger.warning(f"Failed to configure multiprocessing: {e}")
+            self.logger.info("Continuing with default multiprocessing settings")

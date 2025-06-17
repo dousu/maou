@@ -34,13 +34,9 @@ class KifDataset(Dataset, Sized):
         *,
         datasource: DataSource,
         transform: Optional[Transform] = None,
-        pin_memory: bool,
-        device: torch.device,
     ):
         self.__datasource = datasource
         self.transform: Optional[Transform] = transform
-        self.device = device
-        self.pin_memory = pin_memory
         self.logger.info(f"{len(self.__datasource)} samples")
 
     def __len__(self) -> int:
@@ -60,23 +56,13 @@ class KifDataset(Dataset, Sized):
             )
 
             # torch.from_numpy()を使用してゼロコピー変換
-            # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
-            if self.pin_memory:
-                features_tensor = torch.from_numpy(features).pin_memory()
-                legal_move_mask_tensor = torch.from_numpy(legal_move_mask).pin_memory()
-                move_label_tensor = torch.tensor(
-                    move_label, dtype=torch.long, pin_memory=True
-                )
-                result_value_tensor = torch.tensor(
-                    result_value, dtype=torch.float32, pin_memory=True
-                ).reshape((1))
-            else:
-                features_tensor = torch.from_numpy(features)
-                legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
-                move_label_tensor = torch.tensor(move_label, dtype=torch.long)
-                result_value_tensor = torch.tensor(
-                    result_value, dtype=torch.float32
-                ).reshape((1))
+            # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
+            features_tensor = torch.from_numpy(features)
+            legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
+            move_label_tensor = torch.tensor(move_label, dtype=torch.long)
+            result_value_tensor = torch.tensor(
+                result_value, dtype=torch.float32
+            ).reshape((1))
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
@@ -93,27 +79,13 @@ class KifDataset(Dataset, Sized):
             data = self.__datasource[idx]  # numpy structured array (0次元)
 
             # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
-            # pin_memoryが有効な場合は事前にCPUテンソルを作成してからGPU転送
-            if self.pin_memory:
-                features_tensor = torch.from_numpy(data["features"].copy()).pin_memory()
-                legal_move_mask_tensor = torch.from_numpy(
-                    data["legalMoveMask"].copy()
-                ).pin_memory()
-                move_label_tensor = torch.tensor(
-                    data["moveLabel"].item(), dtype=torch.long, pin_memory=True
-                )
-                result_value_tensor = torch.tensor(
-                    data["resultValue"].item(), dtype=torch.float32, pin_memory=True
-                ).reshape((1))
-            else:
-                features_tensor = torch.from_numpy(data["features"].copy())
-                legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy())
-                move_label_tensor = torch.tensor(
-                    data["moveLabel"].item(), dtype=torch.long
-                )
-                result_value_tensor = torch.tensor(
-                    data["resultValue"].item(), dtype=torch.float32
-                ).reshape((1))
+            # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
+            features_tensor = torch.from_numpy(data["features"].copy())
+            legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy())
+            move_label_tensor = torch.tensor(data["moveLabel"].item(), dtype=torch.long)
+            result_value_tensor = torch.tensor(
+                data["resultValue"].item(), dtype=torch.float32
+            ).reshape((1))
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
