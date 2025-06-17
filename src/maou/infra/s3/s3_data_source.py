@@ -5,7 +5,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import botocore.session
 import numpy as np
@@ -110,31 +110,50 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
         ) -> None:
-            # セッション再利用によるTLSハンドシェイクのオーバーヘッド削減
-            session = botocore.session.get_session()
-            self.s3_client = session.create_client("s3")
-
-            # TransferManagerの設定 (100KB程度の小ファイル向けに最適化)
-            transfer_config = TransferConfig(
-                max_concurrency=max_workers,
-                multipart_threshold=8
-                * 1024
-                * 1024,  # 8MB: 小ファイルは単一リクエストで処理
-            )
-            self.s3_transfer = S3Transfer(client=self.s3_client, config=transfer_config)
+            # S3クライアントは遅延初期化（Pickle化対応）
+            self._s3_client = None
+            self._s3_transfer = None
 
             self.bucket_name = bucket_name
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            if local_cache_dir is None:
+                raise ValueError("local_cache_dir must be specified")
+            self.local_cache_dir = Path(local_cache_dir)
             self.__pruning_info: dict[str, S3DataSource.PageManager.PruningInfo] = (
                 defaultdict(S3DataSource.PageManager.PruningInfo)
             )
 
+            # データ初期化を実行
+            self._initialize_data()
+
+        @property
+        def s3_client(self) -> Any:
+            """S3クライアントを遅延初期化で取得（Pickle化対応）"""
+            if self._s3_client is None:
+                session = botocore.session.get_session()
+                self._s3_client = session.create_client("s3")
+            return self._s3_client
+
+        @property
+        def s3_transfer(self) -> S3Transfer:
+            """S3Transfer を遅延初期化で取得（Pickle化対応）"""
+            if self._s3_transfer is None:
+                transfer_config = TransferConfig(
+                    max_concurrency=self.max_workers,
+                    multipart_threshold=8
+                    * 1024
+                    * 1024,  # 8MB: 小ファイルは単一リクエストで処理
+                )
+                self._s3_transfer = S3Transfer(
+                    client=self.s3_client, config=transfer_config
+                )
+            return self._s3_transfer
+
+        def _initialize_data(self) -> None:
+            """データの初期化処理"""
             # ローカルキャッシュの設定
-            if local_cache_dir is None:
-                raise ValueError("local_cache_dir must be specified")
-            self.local_cache_dir = Path(local_cache_dir)
             self.local_cache_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"Local cache directory: {self.local_cache_dir}")
 

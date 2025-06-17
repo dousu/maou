@@ -5,7 +5,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import google.cloud.storage as storage
 import numpy as np
@@ -109,29 +109,49 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
         ) -> None:
-            # GCSクライアントの初期化
-            self.client = storage.Client()
+            # GCSクライアントは遅延初期化（Pickle化対応）
+            self._client = None
+            self._bucket = None
 
             self.bucket_name = bucket_name
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            if local_cache_dir is None:
+                raise ValueError("local_cache_dir must be specified")
+            self.local_cache_dir = Path(local_cache_dir)
             self.__pruning_info: dict[str, GCSDataSource.PageManager.PruningInfo] = (
                 defaultdict(GCSDataSource.PageManager.PruningInfo)
             )
 
+            # データ初期化を実行
+            self._initialize_data()
+
+        @property
+        def client(self) -> Any:
+            """GCSクライアントを遅延初期化で取得（Pickle化対応）"""
+            if self._client is None:
+                self._client = storage.Client()
+            return self._client
+
+        @property
+        def bucket(self) -> Any:
+            """GCSバケットを遅延初期化で取得（Pickle化対応）"""
+            if self._bucket is None:
+                try:
+                    self._bucket = self.client.get_bucket(self.bucket_name)
+                except NotFound:
+                    raise ValueError(f"Bucket '{self.bucket_name}' does not exist.")
+            return self._bucket
+
+        def _initialize_data(self) -> None:
+            """データの初期化処理"""
             # ローカルキャッシュの設定
-            if local_cache_dir is None:
-                raise ValueError("local_cache_dir must be specified")
-            self.local_cache_dir = Path(local_cache_dir)
             self.local_cache_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"Local cache directory: {self.local_cache_dir}")
 
-            # バケットが存在するか確認
-            try:
-                self.bucket = self.client.get_bucket(self.bucket_name)
-            except NotFound:
-                raise ValueError(f"Bucket '{self.bucket_name}' does not exist.")
+            # バケットが存在するか確認（プロパティアクセスで初期化）
+            _ = self.bucket
 
             # 初期化時にすべてのデータをダウンロード
             self.file_paths = self.__download_all_to_local()
