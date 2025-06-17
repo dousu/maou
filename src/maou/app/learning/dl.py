@@ -112,9 +112,6 @@ class Learning:
         gpu: Optional[str] = None,
         cloud_storage: Optional[CloudStorage] = None,
     ):
-        # マルチプロセシング開始方法の設定（WindowsやCUDA使用時の安定化）
-        self._setup_multiprocessing()
-
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
             self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
@@ -122,6 +119,11 @@ class Learning:
         else:
             self.logger.info("Use CPU")
             self.device = torch.device("cpu")
+
+        # マルチプロセシング開始方法の設定（WindowsやCUDA使用時の安定化）
+        # デバイス設定後に実行してCUDA使用判定を正確に行う
+        self._setup_multiprocessing()
+
         self.__cloud_storage = cloud_storage
 
     def learn(self, option: LearningOption) -> Dict[str, str]:
@@ -477,7 +479,11 @@ class Learning:
                     self.logger.info(
                         "Set multiprocessing start method to 'spawn' for Windows"
                     )
-            elif torch.cuda.is_available() and self.device.type == "cuda":
+            elif (
+                torch.cuda.is_available()
+                and hasattr(self, "device")
+                and self.device.type == "cuda"
+            ):
                 # CUDA使用時はspawnが安全
                 if current_method != "spawn":
                     try:
