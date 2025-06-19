@@ -261,4 +261,3 @@ class DataLoaderBenchmark:
         output["Insights"] = "\n".join(insights)
 
         return output
-

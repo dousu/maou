@@ -114,4 +114,3 @@ def benchmark_dataloader(
     }
 
     return json.dumps(output, indent=2)
-

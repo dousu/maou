@@ -1469,14 +1469,15 @@ def benchmark_dataloader(
 
         # Parse and display results
         import json
+
         result = json.loads(result_json)
-        
+
         click.echo(result["benchmark_results"]["Summary"])
         click.echo()
         click.echo(result["benchmark_results"]["Recommendations"])
         click.echo()
         click.echo(result["benchmark_results"]["Insights"])
-        
+
     except Exception:
         app_logger.exception("Error occurred", stack_info=True)
 
