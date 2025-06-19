@@ -48,6 +48,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             data_name: str,
             local_cache_dir: str,
             max_workers: int = 8,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             self.__page_manager = S3DataSource.PageManager(
                 bucket_name=bucket_name,
@@ -55,6 +56,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 data_name=data_name,
                 local_cache_dir=local_cache_dir,
                 max_workers=max_workers,
+                sample_ratio=sample_ratio,
             )
 
         def train_test_split(
@@ -111,6 +113,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             data_name: str,
             local_cache_dir: str,
             max_workers: int = 16,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             # S3クライアントは遅延初期化
             self._s3_client = None
@@ -120,6 +123,9 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            self.sample_ratio = (
+                max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
+            )
             if local_cache_dir is None:
                 raise ValueError("local_cache_dir must be specified")
             self.local_cache_dir = Path(local_cache_dir)
@@ -215,18 +221,24 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             return f"{self.prefix}/{self.data_name}"
 
         def __download_all_to_local(self) -> list[Path]:
-            """すべてのデータをローカルにダウンロードする"""
-            self.logger.info(
-                f"Downloading all data to local cache: {self.local_cache_dir}"
-            )
-
-            # s3 sync
-            self.__sync_s3_to_local(
-                bucket=self.bucket_name,
-                prefix=self.__get_data_path(),
-                local_path=self.local_cache_dir,
-                delete=True,
-            )
+            """すべてのデータまたはサンプルデータをローカルにダウンロードする"""
+            if self.sample_ratio is not None:
+                self.logger.info(
+                    f"Downloading sample data ({self.sample_ratio:.1%}) "
+                    f"to local cache: {self.local_cache_dir}"
+                )
+                return self.__download_sample_to_local()
+            else:
+                self.logger.info(
+                    f"Downloading all data to local cache: {self.local_cache_dir}"
+                )
+                # s3 sync
+                self.__sync_s3_to_local(
+                    bucket=self.bucket_name,
+                    prefix=self.__get_data_path(),
+                    local_path=self.local_cache_dir,
+                    delete=True,
+                )
 
             # ローカルキャッシュファイルが正しく作成されたか確認
             cache_files = list(self.local_cache_dir.glob("**/*.npy"))
@@ -369,6 +381,74 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 )
                 raise
 
+        def __download_sample_to_local(self) -> list[Path]:
+            """指定された割合のファイルのみローカルにダウンロード"""
+            self.local_cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # S3からファイル一覧を取得
+            prefix = self.__get_data_path()
+            if not prefix.endswith("/"):
+                prefix = prefix + "/"
+
+            try:
+                paginator = self.s3_client.get_paginator("list_objects_v2")
+                pages = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+
+                all_files = []
+                for page in pages:
+                    if "Contents" not in page:
+                        continue
+                    for obj in page["Contents"]:
+                        if obj["Key"] == prefix:
+                            continue  # プレフィックス自体はスキップ
+                        if obj["Key"].endswith(".npy"):
+                            all_files.append(obj["Key"])
+
+                if not all_files:
+                    raise ValueError(
+                        f"No .npy files found in s3://{self.bucket_name}/{prefix}"
+                    )
+
+                # ファイルをサンプリング
+                if self.sample_ratio is not None:
+                    sample_count = max(1, int(len(all_files) * self.sample_ratio))
+                    sampled_files = random.sample(
+                        all_files, min(sample_count, len(all_files))
+                    )
+                else:
+                    sampled_files = all_files
+
+                self.logger.info(
+                    f"Sampling {len(sampled_files)} files out of "
+                    f"{len(all_files)} total files"
+                )
+
+                # ダウンロード実行
+                downloaded_files = []
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = []
+                    for s3_key in sampled_files:
+                        local_file_path = self.local_cache_dir / s3_key[len(prefix) :]
+                        future = executor.submit(
+                            self._download_single_file,
+                            self.bucket_name,
+                            s3_key,
+                            local_file_path,
+                        )
+                        futures.append((future, local_file_path))
+
+                    for future, local_file_path in tqdm(
+                        futures, desc="Downloading sample files", unit="files"
+                    ):
+                        future.result()
+                        downloaded_files.append(local_file_path)
+
+                return downloaded_files
+
+            except Exception as e:
+                self.logger.error(f"Error downloading sample data: {e}")
+                raise
+
         def _download_single_file(
             self, bucket: str, s3_key: str, local_file_path: Path
         ) -> None:
@@ -401,7 +481,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         def get_item(self, idx: int) -> np.ndarray:
             """特定のレコードをnumpy structured arrayとして返す."""
             self._ensure_initialized()
-            for key, pruning_info in self.__pruning_info.items():
+            for pruning_info in self.__pruning_info.values():
                 if (
                     pruning_info.start_idx
                     <= idx
@@ -435,6 +515,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         indicies: Optional[list[int]] = None,
         local_cache_dir: Optional[str] = None,
         max_workers: int = 16,
+        sample_ratio: Optional[float] = None,
     ) -> None:
         """
         Args:
@@ -444,6 +525,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             page_manager (Optional[PageManager]): PageManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
+            sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
             max_workers (int): 並列ダウンロード数 (デフォルト: 16)
         """
         if page_manager is None:
@@ -459,6 +541,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     data_name=data_name,
                     local_cache_dir=local_cache_dir,
                     max_workers=max_workers,
+                    sample_ratio=sample_ratio,
                 )
             else:
                 raise MissingS3Config(

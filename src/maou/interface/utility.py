@@ -18,6 +18,7 @@ def benchmark_dataloader(
     batch_size: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     num_batches: Optional[int] = None,
+    sample_ratio: Optional[float] = None,
 ) -> str:
     """Benchmark DataLoader configurations to find optimal parameters.
 
@@ -28,6 +29,7 @@ def benchmark_dataloader(
         batch_size: Batch size for benchmarking
         pin_memory: Enable pinned memory for GPU transfers
         num_batches: Number of batches to process per configuration
+        sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
 
     Returns:
         JSON string with benchmark results and recommendations
@@ -61,11 +63,20 @@ def benchmark_dataloader(
     elif num_batches <= 0:
         raise ValueError(f"num_batches must be positive, got {num_batches}")
 
+    # Set sample ratio for cloud sources (default: None, means use full data)
+    if sample_ratio is not None:
+        if not 0.01 <= sample_ratio <= 1.0:
+            raise ValueError(
+                f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
+            )
+
     logger.info("Benchmark configuration:")
     logger.info(f"  Device: {device}")
     logger.info(f"  Batch size: {batch_size}")
     logger.info(f"  Pin memory: {pin_memory}")
     logger.info(f"  Batches per test: {num_batches}")
+    if sample_ratio is not None:
+        logger.info(f"  Sample ratio: {sample_ratio:.1%}")
 
     # Get training datasource (ignore test split for benchmarking)
     training_datasource, _ = datasource.train_test_split(test_ratio=0.1)

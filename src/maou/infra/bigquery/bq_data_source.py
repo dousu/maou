@@ -34,6 +34,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             partitioning_key_date: Optional[str] = None,
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             self.__page_manager = BigQueryDataSource.PageManager(
                 dataset_id=dataset_id,
@@ -44,6 +45,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 partitioning_key_date=partitioning_key_date,
                 use_local_cache=use_local_cache,
                 local_cache_dir=local_cache_dir,
+                sample_ratio=sample_ratio,
             )
 
         def train_test_split(
@@ -91,6 +93,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             partitioning_key_date: Optional[str] = None,
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = f"{self.client.project}.{dataset_id}"
@@ -100,6 +103,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.max_cached_bytes = max_cached_bytes
             self.clustering_key = clustering_key
             self.partitioning_key_date = partitioning_key_date
+            self.sample_ratio = (
+                max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
+            )
             self.__pruning_info = []
 
             # ローカルキャッシュの設定
@@ -190,16 +196,27 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 self.__download_all_to_local()
 
         def __get_total_rows(self) -> int:
-            """テーブルの総レコード数を取得する"""
-            meta_num_rows = self.__table_ref.num_rows
-            if meta_num_rows is None:
+            """テーブルの総レコード数またはサンプル数を取得する"""
+            if self.sample_ratio is not None:
+                # サンプリング時は実際のクエリで行数を取得
                 query = f"""
                     SELECT COUNT(*) AS total
                     FROM `{self.dataset_fqn}.{self.table_name}`
+                    TABLESAMPLE SYSTEM ({self.sample_ratio * 100} PERCENT)
                 """
                 result = self.client.query(query).result()
                 return next(result).total
-            return meta_num_rows
+            else:
+                # 通常時はメタデータまたはCOUNTクエリを使用
+                meta_num_rows = self.__table_ref.num_rows
+                if meta_num_rows is None:
+                    query = f"""
+                        SELECT COUNT(*) AS total
+                        FROM `{self.dataset_fqn}.{self.table_name}`
+                    """
+                    result = self.client.query(query).result()
+                    return next(result).total
+                return meta_num_rows
 
         def __evict_cache_if_needed(self) -> None:
             """
@@ -282,22 +299,42 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         filter = f"{self.clustering_key} = {cluster_value}"
                 else:
                     raise Exception("Not found pruning key")
+
+                # サンプリング句を追加
+                tablesample_clause = ""
+                if self.sample_ratio is not None:
+                    tablesample_clause = (
+                        f"TABLESAMPLE SYSTEM ({self.sample_ratio * 100} PERCENT)"
+                    )
+
                 query = f"""
                     SELECT *
-                    FROM `{self.dataset_fqn}.{self.table_name}`
+                    FROM `{self.dataset_fqn}.{self.table_name}` {tablesample_clause}
                     WHERE {filter}
                 """
                 df = self.client.query(query).result().to_dataframe()
             else:
                 # クラスタリングキー未指定の場合
-                # BigQuery の list_rows を使ってpageを実装している
-                start_index = page_num * self.batch_size
-                rows = self.client.list_rows(
-                    table=self.__table_ref,
-                    start_index=start_index,
-                    max_results=self.batch_size,
-                )
-                df = rows.to_dataframe()
+                if self.sample_ratio is not None:
+                    # サンプリング時はクエリを使用
+                    start_index = page_num * self.batch_size
+                    query = f"""
+                        SELECT *
+                        FROM `{self.dataset_fqn}.{self.table_name}`
+                        TABLESAMPLE SYSTEM ({self.sample_ratio * 100} PERCENT)
+                        LIMIT {self.batch_size}
+                        OFFSET {start_index}
+                    """
+                    df = self.client.query(query).result().to_dataframe()
+                else:
+                    # BigQuery の list_rows を使ってpageを実装している
+                    start_index = page_num * self.batch_size
+                    rows = self.client.list_rows(
+                        table=self.__table_ref,
+                        start_index=start_index,
+                        max_results=self.batch_size,
+                    )
+                    df = rows.to_dataframe()
 
             # dataframeをto_recordsからnumpy arrayに構築しなおす
             # このプロセスによって行数も含めてnumpy arrayが構築しなおされる
@@ -467,6 +504,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         indicies: Optional[list[int]] = None,
         use_local_cache: bool = False,
         local_cache_dir: Optional[str] = None,
+        sample_ratio: Optional[float] = None,
     ) -> None:
         """
 
@@ -481,6 +519,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             use_local_cache (bool): ローカルキャッシュを使用するかどうか
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
+            sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
         """
         if page_manager is None:
             if dataset_id is not None and table_name is not None:
@@ -493,6 +532,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     partitioning_key_date=partitioning_key_date,
                     use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
+                    sample_ratio=sample_ratio,
                 )
             else:
                 raise MissingBigQueryConfig(

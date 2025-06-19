@@ -1069,6 +1069,7 @@ def learn_model(
                             partitioning_key_date=input_partitioning_key_date,
                             use_local_cache=input_local_cache,
                             local_cache_dir=input_local_cache_dir,
+                            sample_ratio=None,
                         )
                     else:
                         app_logger.error("BigQueryDataSourceSpliter not available")
@@ -1102,6 +1103,7 @@ def learn_model(
                             data_name=input_data_name,
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
+                            sample_ratio=None,
                         )
                     else:
                         app_logger.error("GCSDataSourceSpliter not available")
@@ -1133,6 +1135,7 @@ def learn_model(
                             data_name=input_data_name,
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
+                            sample_ratio=None,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")
@@ -1313,6 +1316,12 @@ def learn_model(
     required=False,
     default=100,
 )
+@click.option(
+    "--sample-ratio",
+    type=float,
+    help="Ratio of data to sample for cloud sources (0.01-1.0, default: full data).",
+    required=False,
+)
 def benchmark_dataloader(
     input_dir: Optional[Path],
     input_dataset_id: Optional[str],
@@ -1334,6 +1343,7 @@ def benchmark_dataloader(
     batch_size: int,
     pin_memory: Optional[bool],
     num_batches: int,
+    sample_ratio: Optional[float],
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
     try:
@@ -1355,6 +1365,10 @@ def benchmark_dataloader(
 
         # Initialize datasource (similar to learn_model command)
         if input_dir is not None:
+            if sample_ratio is not None:
+                app_logger.warning(
+                    "sample_ratio is ignored for local file data source."
+                )
             if input_format != "hcpe" and input_format != "preprocess":
                 raise Exception(
                     "Please specify a valid input_format ('hcpe' or 'preprocess')."
@@ -1363,6 +1377,11 @@ def benchmark_dataloader(
                 file_paths=FileSystem.collect_files(input_dir),
             )
         elif input_dataset_id is not None and input_table_name is not None:
+            if sample_ratio is not None:
+                app_logger.info(
+                    f"Using BigQuery TABLESAMPLE with "
+                    f"{sample_ratio:.1%} sampling ratio."
+                )
             if HAS_BIGQUERY:
                 try:
                     if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
@@ -1375,6 +1394,7 @@ def benchmark_dataloader(
                             partitioning_key_date=input_partitioning_key_date,
                             use_local_cache=input_local_cache,
                             local_cache_dir=input_local_cache_dir,
+                            sample_ratio=sample_ratio,
                         )
                     else:
                         app_logger.error("BigQueryDataSourceSpliter not available")
@@ -1407,6 +1427,7 @@ def benchmark_dataloader(
                             data_name=input_data_name,
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
+                            sample_ratio=sample_ratio,
                         )
                     else:
                         app_logger.error("GCSDataSourceSpliter not available")
@@ -1437,6 +1458,7 @@ def benchmark_dataloader(
                             data_name=input_data_name,
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
+                            sample_ratio=sample_ratio,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")
@@ -1465,6 +1487,7 @@ def benchmark_dataloader(
             batch_size=batch_size,
             pin_memory=pin_memory,
             num_batches=num_batches,
+            sample_ratio=sample_ratio,
         )
 
         # Parse and display results

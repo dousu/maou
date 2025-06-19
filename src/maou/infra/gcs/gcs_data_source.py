@@ -47,6 +47,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             data_name: str,
             local_cache_dir: str,
             max_workers: int = 8,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             self.__page_manager = GCSDataSource.PageManager(
                 bucket_name=bucket_name,
@@ -54,6 +55,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                 data_name=data_name,
                 local_cache_dir=local_cache_dir,
                 max_workers=max_workers,
+                sample_ratio=sample_ratio,
             )
 
         def train_test_split(
@@ -110,6 +112,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             data_name: str,
             local_cache_dir: str,
             max_workers: int = 16,
+            sample_ratio: Optional[float] = None,
         ) -> None:
             # GCSクライアントは遅延初期化
             self._client = None
@@ -119,6 +122,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            self.sample_ratio = (
+                max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
+            )
             if local_cache_dir is None:
                 raise ValueError("local_cache_dir must be specified")
             self.local_cache_dir = Path(local_cache_dir)
@@ -201,18 +207,24 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             return f"{self.prefix}/{self.data_name}"
 
         def __download_all_to_local(self) -> list[Path]:
-            """すべてのデータをローカルにダウンロードする"""
-            self.logger.info(
-                f"Downloading all data to local cache: {self.local_cache_dir}"
-            )
-
-            # gcs sync
-            self.__sync_gcs_to_local(
-                bucket_name=self.bucket_name,
-                prefix=self.__get_data_path(),
-                local_path=self.local_cache_dir,
-                delete=True,
-            )
+            """すべてのデータまたはサンプルデータをローカルにダウンロードする"""
+            if self.sample_ratio is not None:
+                self.logger.info(
+                    f"Downloading sample data ({self.sample_ratio:.1%}) "
+                    f"to local cache: {self.local_cache_dir}"
+                )
+                return self.__download_sample_to_local()
+            else:
+                self.logger.info(
+                    f"Downloading all data to local cache: {self.local_cache_dir}"
+                )
+                # gcs sync
+                self.__sync_gcs_to_local(
+                    bucket_name=self.bucket_name,
+                    prefix=self.__get_data_path(),
+                    local_path=self.local_cache_dir,
+                    delete=True,
+                )
 
             # ローカルキャッシュファイルが正しく作成されたか確認
             cache_files = list(self.local_cache_dir.glob("**/*.npy"))
@@ -356,20 +368,82 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                 )
                 raise
 
-        def _download_single_file(
-            self, bucket_name: str, gcs_key: str, local_file_path: Path
-        ) -> None:
-            """単一ファイルを高速ダウンロードする."""
-            try:
-                # 親ディレクトリ作成 (mkdir -p)
-                local_file_path.parent.mkdir(parents=True, exist_ok=True)
+        def __download_sample_to_local(self) -> list[Path]:
+            """指定された割合のファイルのみローカルにダウンロード"""
+            self.local_cache_dir.mkdir(parents=True, exist_ok=True)
 
-                self.logger.debug(f"Downloading {gcs_key} to {local_file_path}")
-                blob = self.bucket.blob(gcs_key)
-                blob.download_to_filename(str(local_file_path.absolute()))
+            try:
+                bucket = self.client.bucket(self.bucket_name)
+                prefix = self.__get_data_path()
+                if not prefix.endswith("/"):
+                    prefix = prefix + "/"
+
+                # ファイル一覧を取得
+                all_files = []
+                for blob in bucket.list_blobs(prefix=prefix):
+                    if blob.name == prefix:
+                        continue  # プレフィックス自体はスキップ
+                    if blob.name.endswith(".npy"):
+                        all_files.append(blob.name)
+
+                if not all_files:
+                    raise ValueError(
+                        f"No .npy files found in gs://{self.bucket_name}/{prefix}"
+                    )
+
+                # ファイルをサンプリング
+                if self.sample_ratio is not None:
+                    sample_count = max(1, int(len(all_files) * self.sample_ratio))
+                    sampled_files = random.sample(
+                        all_files, min(sample_count, len(all_files))
+                    )
+                else:
+                    sampled_files = all_files
+
+                self.logger.info(
+                    f"Sampling {len(sampled_files)} files out of "
+                    f"{len(all_files)} total files"
+                )
+
+                # ダウンロード実行
+                downloaded_files = []
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = []
+                    for blob_name in sampled_files:
+                        local_file_path = (
+                            self.local_cache_dir / blob_name[len(prefix) :]
+                        )
+                        future = executor.submit(
+                            self._download_single_file,
+                            bucket,
+                            blob_name,
+                            local_file_path,
+                        )
+                        futures.append((future, local_file_path))
+
+                    for future, local_file_path in tqdm(
+                        futures, desc="Downloading sample files", unit="files"
+                    ):
+                        future.result()
+                        downloaded_files.append(local_file_path)
+
+                return downloaded_files
 
             except Exception as e:
-                self.logger.error(f"Failed to download {gcs_key}: {e}")
+                self.logger.error(f"Error downloading sample data: {e}")
+                raise
+
+        def _download_single_file(
+            self, bucket: Any, blob_name: str, local_file_path: Path
+        ) -> None:
+            """単一ファイルをダウンロード"""
+            try:
+                local_file_path.parent.mkdir(parents=True, exist_ok=True)
+                self.logger.debug(f"Downloading {blob_name} to {local_file_path}")
+                blob = bucket.blob(blob_name)
+                blob.download_to_filename(str(local_file_path.absolute()))
+            except Exception as e:
+                self.logger.error(f"Failed to download {blob_name}: {e}")
                 raise
 
         def get_page(self, key: str) -> np.ndarray:
@@ -386,7 +460,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
         def get_item(self, idx: int) -> np.ndarray:
             """特定のレコードをnumpy structured arrayとして返す."""
             self._ensure_initialized()
-            for key, pruning_info in self.__pruning_info.items():
+            for pruning_info in self.__pruning_info.values():
                 if (
                     pruning_info.start_idx
                     <= idx
@@ -420,6 +494,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
         indicies: Optional[list[int]] = None,
         local_cache_dir: Optional[str] = None,
         max_workers: int = 16,
+        sample_ratio: Optional[float] = None,
     ) -> None:
         """
         Args:
@@ -429,6 +504,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             page_manager (Optional[PageManager]): PageManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
+            sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
             max_workers (int): 並列ダウンロード数 (デフォルト: 16)
         """
         if page_manager is None:
@@ -444,6 +520,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                     data_name=data_name,
                     local_cache_dir=local_cache_dir,
                     max_workers=max_workers,
+                    sample_ratio=sample_ratio,
                 )
             else:
                 raise MissingGCSConfig(
