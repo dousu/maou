@@ -200,7 +200,7 @@ class TestIntegrationPreProcess:
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはhcpeに入っているデータで行わないといけない
         # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -213,7 +213,7 @@ class TestIntegrationPreProcess:
         bq_data = [record_to_dict(bq_datasource[i]) for i in range(len(bq_datasource))]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
         # このときhcpeの定義を使って適切なnumpy型に変換してからbyteにする
-        sorted_bq_data = sorted(
+        sorted_bq_data = sorted(  # type: ignore
             bq_data,
             key=lambda x: x["id"],
         )
@@ -267,7 +267,7 @@ class TestIntegrationPreProcess:
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはhcpeに入っているデータで行わないといけない
         # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -283,7 +283,7 @@ class TestIntegrationPreProcess:
         s3_data = [record_to_dict(s3_datasource[i]) for i in range(len(s3_datasource))]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
         # このときhcpeの定義を使って適切なnumpy型に変換してからbyteにする
-        sorted_s3_data = sorted(
+        sorted_s3_data = sorted(  # type: ignore
             s3_data,
             key=lambda x: x["id"],
         )

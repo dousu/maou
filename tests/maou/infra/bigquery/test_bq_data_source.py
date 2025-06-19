@@ -20,8 +20,8 @@ logger: logging.Logger = logging.getLogger("TEST")
 
 def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
     """Convert numpy structured array record to dict"""
-    if hasattr(record, "dtype") and record.dtype.names:
-        return {key: record[key] for key in record.dtype.names}
+    if hasattr(record, "dtype") and record.dtype.names:  # type: ignore[union-attr]
+        return {key: record[key] for key in record.dtype.names}  # type: ignore[union-attr]
     else:
         return record if isinstance(record, dict) else {}
 
@@ -29,8 +29,8 @@ def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
 def compare_records(r1: Union[np.ndarray, dict], r2: dict) -> bool:
     """Compare numpy structured array record or dict with dict"""
     # numpy structured arrayの場合はフィールド名を取得
-    if hasattr(r1, "dtype") and r1.dtype.names:
-        r1_keys = set(r1.dtype.names)
+    if hasattr(r1, "dtype") and r1.dtype.names:  # type: ignore[union-attr]
+        r1_keys = set(r1.dtype.names)  # type: ignore[union-attr]
         is_structured_array = True
     elif isinstance(r1, dict):
         r1_keys = set(r1.keys())
@@ -217,7 +217,7 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(
+        sorted_read_data = sorted(  # type: ignore
             read_data,
             key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
         )
@@ -260,7 +260,7 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(
+        sorted_read_data = sorted(  # type: ignore
             read_data,
             key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
         )
@@ -308,7 +308,7 @@ class TestBigQueryDataSource:
         )
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(
+        sorted_read_data = sorted(  # type: ignore
             read_data,
             key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
         )
@@ -530,7 +530,7 @@ class TestBigQueryDataSource:
 
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(
+        sorted_read_data = sorted(  # type: ignore
             read_data,
             key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
         )
@@ -594,7 +594,7 @@ class TestBigQueryDataSource:
 
         # データを読み込む
         read_data = [data_source2[i] for i in range(len(data_source2))]
-        sorted_read_data = sorted(
+        sorted_read_data = sorted(  # type: ignore
             read_data,
             key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
         )

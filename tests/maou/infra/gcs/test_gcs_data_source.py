@@ -181,7 +181,7 @@ class TestGCSDataSource:
         assert len(data_source) == rows * days
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])  # type: ignore
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = reduce(
@@ -260,7 +260,7 @@ class TestGCSDataSource:
         ) == set([file.parent.name for file in temp_cache_dir.glob("**/*.npy")])
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])  # type: ignore
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = reduce(
@@ -339,7 +339,7 @@ class TestGCSDataSource:
         ) == set([file.parent.name for file in temp_cache_dir.glob("**/*.npy")])
         # データを読み込む
         read_data = [data_source[i] for i in range(len(data_source))]
-        sorted_read_data = sorted(read_data, key=lambda x: x["id"])
+        sorted_read_data = sorted(read_data, key=lambda x: x["id"])  # type: ignore
         logger.debug(sorted_read_data)
         # 読み込んだデータが正しいことを確認
         expected_data = reduce(

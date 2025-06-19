@@ -240,7 +240,7 @@ class TestIntegrationConverterPreprocess:
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -252,7 +252,7 @@ class TestIntegrationConverterPreprocess:
         )
         bq_data = [record_to_dict(bq_datasource[i]) for i in range(len(bq_datasource))]
         # ローカルと同じようにソートする
-        sorted_bq_data = sorted(
+        sorted_bq_data = sorted(  # type: ignore
             bq_data,
             key=lambda x: x["id"],
         )
@@ -324,7 +324,7 @@ class TestIntegrationConverterPreprocess:
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -339,7 +339,7 @@ class TestIntegrationConverterPreprocess:
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする
-        sorted_s3_data = sorted(
+        sorted_s3_data = sorted(  # type: ignore
             s3_data,
             key=lambda x: x["id"],
         )
@@ -414,7 +414,7 @@ class TestIntegrationConverterPreprocess:
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -426,7 +426,7 @@ class TestIntegrationConverterPreprocess:
         )
         bq_data = [record_to_dict(bq_datasource[i]) for i in range(len(bq_datasource))]
         # ローカルと同じようにソートする
-        sorted_bq_data = sorted(
+        sorted_bq_data = sorted(  # type: ignore
             bq_data,
             key=lambda x: x["id"],
         )
@@ -507,7 +507,7 @@ class TestIntegrationConverterPreprocess:
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -522,7 +522,7 @@ class TestIntegrationConverterPreprocess:
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする
-        sorted_s3_data = sorted(
+        sorted_s3_data = sorted(  # type: ignore
             s3_data,
             key=lambda x: x["id"],
         )

@@ -23,8 +23,8 @@ logger: logging.Logger = logging.getLogger("TEST")
 
 def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
     """Convert numpy structured array record to dict"""
-    if hasattr(record, "dtype") and record.dtype.names:
-        return {key: record[key] for key in record.dtype.names}
+    if hasattr(record, "dtype") and record.dtype.names:  # type: ignore[union-attr]
+        return {key: record[key] for key in record.dtype.names}  # type: ignore[union-attr]
     else:
         return record if isinstance(record, dict) else {}
 
@@ -129,8 +129,8 @@ class TestIntegrationHcpeConverter:
     def compare_records(self, r1: Union[np.ndarray, dict], r2: dict) -> bool:
         """Compare numpy structured array record or dict with dict"""
         # numpy structured arrayの場合はフィールド名を取得
-        if hasattr(r1, "dtype") and r1.dtype.names:
-            r1_keys = set(r1.dtype.names)
+        if hasattr(r1, "dtype") and r1.dtype.names:  # type: ignore[union-attr]
+            r1_keys = set(r1.dtype.names)  # type: ignore[union-attr]
             is_structured_array = True
         elif isinstance(r1, dict):
             r1_keys = set(r1.keys())
@@ -298,7 +298,7 @@ class TestIntegrationHcpeConverter:
         ]
         # ソートはhcpeに入っているデータで行わないといけない
         # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: hash(
                 x["hcp"].tobytes()
@@ -322,7 +322,7 @@ class TestIntegrationHcpeConverter:
         ]
         # BQのデータはIDで一意になるがローカルに合わせてソートする
         # BQとローカルで型が違うのは許容している
-        sorted_bq_data = sorted(
+        sorted_bq_data = sorted(  # type: ignore
             bq_data,
             key=lambda x: hash(
                 x["hcp"].tobytes()
@@ -448,7 +448,7 @@ class TestIntegrationHcpeConverter:
         ]
         # ソートはhcpeに入っているデータで行わないといけない
         # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
-        sorted_local_data = sorted(
+        sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
         )
@@ -463,7 +463,7 @@ class TestIntegrationHcpeConverter:
         s3_data = [record_to_dict(s3_datasource[i]) for i in range(len(s3_datasource))]
         # s3のデータはIDで一意になるがローカルに合わせてソートする
         # s3とローカルで型が違うのは許容している
-        sorted_s3_data = sorted(
+        sorted_s3_data = sorted(  # type: ignore
             s3_data,
             key=lambda x: x["id"],
         )
