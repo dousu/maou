@@ -25,7 +25,8 @@ def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
     """Convert numpy structured array record to dict"""
     if hasattr(record, "dtype") and record.dtype.names:  # type: ignore[union-attr]
         return {
-            key: record[key] for key in record.dtype.names  # type: ignore[union-attr]
+            key: record[key]
+            for key in record.dtype.names  # type: ignore[union-attr]
         }
     else:
         return record if isinstance(record, dict) else {}
