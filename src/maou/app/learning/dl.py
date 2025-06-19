@@ -166,8 +166,8 @@ class Learning:
         self.__train()
 
         learning_result["Data Samples"] = (
-            f"Training: {len(self.training_loader.dataset)}, "
-            f"Test: {len(self.validation_loader.dataset)}"
+            f"Training: {len(self.training_loader.dataset)}, "  # type: ignore
+            f"Test: {len(self.validation_loader.dataset)}"  # type: ignore
         )
         learning_result["Option"] = str(option)
         learning_result["Result"] = "Finish"
