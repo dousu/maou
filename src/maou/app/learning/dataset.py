@@ -49,7 +49,7 @@ class KifDataset(Dataset, Sized):
             # transformを使用するパターン（GPU転送の最適化）
             data = self.__datasource[idx]  # numpy structured array (0次元)
             features, move_label, result_value, legal_move_mask = self.transform(
-                hcp=data["hcp"].item(),
+                hcp=data["hcp"],
                 move16=data["bestMove16"].item(),
                 game_result=data["gameResult"].item(),
                 eval=data["eval"].item(),

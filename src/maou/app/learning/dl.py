@@ -96,6 +96,7 @@ class Learning:
         dataloader_workers: int
         pin_memory: bool
         enable_prefetch: bool
+        prefetch_factor: int
         gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
@@ -184,7 +185,7 @@ class Learning:
             num_workers=option.dataloader_workers,
             pin_memory=option.pin_memory,
             persistent_workers=option.dataloader_workers > 0,
-            prefetch_factor=2 if option.dataloader_workers > 0 else None,
+            prefetch_factor=option.prefetch_factor if option.dataloader_workers > 0 else None,
             drop_last=True,
             timeout=120 if option.dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
@@ -196,7 +197,7 @@ class Learning:
             num_workers=option.dataloader_workers,
             pin_memory=option.pin_memory,
             persistent_workers=option.dataloader_workers > 0,
-            prefetch_factor=2 if option.dataloader_workers > 0 else None,
+            prefetch_factor=option.prefetch_factor if option.dataloader_workers > 0 else None,
             drop_last=False,  # validationでは全データを使用
             timeout=120 if option.dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,

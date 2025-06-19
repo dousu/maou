@@ -8,6 +8,7 @@ from maou.infra.app_logging import app_logger, get_log_level_from_env
 from maou.infra.file_system.file_data_source import FileDataSource
 from maou.infra.file_system.file_system import FileSystem
 from maou.interface import converter, learn, preprocess
+from maou.interface import utility as utility_interface
 
 # 必要なライブラリが利用可能かどうかをチェックする変数
 HAS_BIGQUERY = False
@@ -847,6 +848,12 @@ def pre_process(
     required=False,
 )
 @click.option(
+    "--prefetch-factor",
+    type=int,
+    help="Number of batches loaded in advance by each worker (default: 2).",
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter.",
@@ -966,6 +973,7 @@ def learn_model(
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
     enable_prefetch: Optional[bool],
+    prefetch_factor: Optional[int],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
@@ -1156,6 +1164,7 @@ def learn_model(
                 dataloader_workers=dataloader_workers,
                 pin_memory=pin_memory,
                 enable_prefetch=enable_prefetch,
+                prefetch_factor=prefetch_factor,
                 gce_parameter=gce_parameter,
                 policy_loss_ratio=policy_loss_ratio,
                 value_loss_ratio=value_loss_ratio,
@@ -1172,6 +1181,314 @@ def learn_model(
         app_logger.exception("Error occurred", stack_info=True)
 
 
+@click.command()
+@click.option(
+    "--input-dir",
+    help="Input data directory.",
+    type=click.Path(exists=True, path_type=Path),
+    required=False,
+)
+@click.option(
+    "--input-dataset-id",
+    help="BigQuery dataset ID for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-table-name",
+    help="BigQuery table name for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-format",
+    help="Input format: 'hcpe' or 'preprocess'.",
+    type=str,
+    default="hcpe",
+    required=False,
+)
+@click.option(
+    "--input-batch-size",
+    help="Batch size for reading from BigQuery.",
+    type=int,
+    default=10000,
+    required=False,
+)
+@click.option(
+    "--input-max-cached-bytes",
+    help="Max cache size in bytes for input (default: 500MB).",
+    type=int,
+    default=500 * 1024 * 1024,
+    required=False,
+)
+@click.option(
+    "--input-clustering-key",
+    help="BigQuery clustering key.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-partitioning-key-date",
+    help="BigQuery date partitioning key.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-local-cache",
+    type=bool,
+    is_flag=True,
+    help="Enable local caching of cloud data.",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-local-cache-dir",
+    type=str,
+    help="Directory path for storing the local cache of cloud data.",
+    required=False,
+)
+@click.option(
+    "--input-gcs",
+    type=bool,
+    is_flag=True,
+    help="Use GCS as input data source.",
+    required=False,
+)
+@click.option(
+    "--input-s3",
+    type=bool,
+    is_flag=True,
+    help="Use S3 as input data source.",
+    required=False,
+)
+@click.option(
+    "--input-bucket-name",
+    help="S3/GCS bucket name for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-prefix",
+    help="S3/GCS prefix path for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-data-name",
+    help="Name to identify the data in S3/GCS for input.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--input-max-workers",
+    help="Number of parallel download threads for S3/GCS input (default: 8).",
+    type=int,
+    required=False,
+    default=8,
+)
+@click.option(
+    "--gpu",
+    type=str,
+    help="PyTorch device (e.g., 'cuda:0' or 'cpu').",
+    required=False,
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    help="Batch size for benchmarking (default: 256).",
+    required=False,
+    default=256,
+)
+@click.option(
+    "--pin-memory",
+    type=bool,
+    is_flag=True,
+    help="Enable pinned memory for faster GPU transfers.",
+    required=False,
+)
+@click.option(
+    "--num-batches",
+    type=int,
+    help="Number of batches to process per configuration (default: 100).",
+    required=False,
+    default=100,
+)
+def benchmark_dataloader(
+    input_dir: Optional[Path],
+    input_dataset_id: Optional[str],
+    input_table_name: Optional[str],
+    input_format: str,
+    input_batch_size: int,
+    input_max_cached_bytes: int,
+    input_clustering_key: Optional[str],
+    input_partitioning_key_date: Optional[str],
+    input_local_cache: bool,
+    input_local_cache_dir: Optional[str],
+    input_gcs: Optional[bool],
+    input_s3: Optional[bool],
+    input_bucket_name: Optional[str],
+    input_prefix: Optional[str],
+    input_data_name: Optional[str],
+    input_max_workers: int,
+    gpu: Optional[str],
+    batch_size: int,
+    pin_memory: Optional[bool],
+    num_batches: int,
+) -> None:
+    """Benchmark DataLoader configurations to find optimal parameters."""
+    try:
+        # Check for mixing cloud providers for input
+        cloud_input_count = sum(
+            [
+                bool(input_dataset_id is not None or input_table_name is not None),
+                bool(input_gcs),
+                bool(input_s3),
+            ]
+        )
+        if cloud_input_count > 1:
+            error_msg = (
+                "Cannot use multiple cloud providers for input simultaneously. "
+                "Please choose only one: BigQuery, GCS, or S3."
+            )
+            app_logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Initialize datasource (similar to learn_model command)
+        if input_dir is not None:
+            if input_format != "hcpe" and input_format != "preprocess":
+                raise Exception(
+                    "Please specify a valid input_format ('hcpe' or 'preprocess')."
+                )
+            datasource = FileDataSource.FileDataSourceSpliter(
+                file_paths=FileSystem.collect_files(input_dir),
+            )
+        elif input_dataset_id is not None and input_table_name is not None:
+            if HAS_BIGQUERY:
+                try:
+                    if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
+                        datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                            dataset_id=input_dataset_id,
+                            table_name=input_table_name,
+                            batch_size=input_batch_size,
+                            max_cached_bytes=input_max_cached_bytes,
+                            clustering_key=input_clustering_key,
+                            partitioning_key_date=input_partitioning_key_date,
+                            use_local_cache=input_local_cache,
+                            local_cache_dir=input_local_cache_dir,
+                        )
+                    else:
+                        app_logger.error("BigQueryDataSourceSpliter not available")
+                        raise AttributeError("BigQueryDataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(
+                        f"Failed to initialize BigQueryDataSourceSpliter: {e}"
+                    )
+                    raise
+            else:
+                error_msg = (
+                    "BigQuery input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
+        elif (
+            input_gcs
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_GCS:
+                try:
+                    if hasattr(GCSDataSource, "GCSDataSourceSpliter"):
+                        datasource = GCSDataSource.GCSDataSourceSpliter(
+                            bucket_name=input_bucket_name,
+                            prefix=input_prefix,
+                            data_name=input_data_name,
+                            local_cache_dir=input_local_cache_dir,
+                            max_workers=input_max_workers,
+                        )
+                    else:
+                        app_logger.error("GCSDataSourceSpliter not available")
+                        raise AttributeError("GCSDataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize GCSDataSourceSpliter: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "GCS input requested but required packages are not installed. "
+                    "Install with 'poetry install -E gcp'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
+        elif (
+            input_s3
+            and input_bucket_name is not None
+            and input_prefix is not None
+            and input_data_name is not None
+            and input_local_cache_dir is not None
+        ):
+            if HAS_AWS:
+                try:
+                    if hasattr(S3DataSource, "S3DataSourceSpliter"):
+                        datasource = S3DataSource.S3DataSourceSpliter(
+                            bucket_name=input_bucket_name,
+                            prefix=input_prefix,
+                            data_name=input_data_name,
+                            local_cache_dir=input_local_cache_dir,
+                            max_workers=input_max_workers,
+                        )
+                    else:
+                        app_logger.error("S3DataSourceSpliter not available")
+                        raise AttributeError("S3DataSourceSpliter not available")
+                except Exception as e:
+                    app_logger.error(f"Failed to initialize S3DataSourceSpliter: {e}")
+                    raise
+            else:
+                error_msg = (
+                    "S3 input requested but required packages are not installed. "
+                    "Install with 'poetry install -E aws'"
+                )
+                app_logger.error(error_msg)
+                raise ImportError(error_msg)
+        else:
+            raise Exception(
+                "Please specify an input directory, a BigQuery table, "
+                "a GCS bucket, or an S3 bucket."
+            )
+
+        # Run benchmark
+        result_json = utility_interface.benchmark_dataloader(
+            datasource=datasource,
+            datasource_type=input_format,
+            gpu=gpu,
+            batch_size=batch_size,
+            pin_memory=pin_memory,
+            num_batches=num_batches,
+        )
+
+        # Parse and display results
+        import json
+        result = json.loads(result_json)
+        
+        click.echo(result["benchmark_results"]["Summary"])
+        click.echo()
+        click.echo(result["benchmark_results"]["Recommendations"])
+        click.echo()
+        click.echo(result["benchmark_results"]["Insights"])
+        
+    except Exception:
+        app_logger.exception("Error occurred", stack_info=True)
+
+
+@click.group()
+def utility() -> None:
+    """Utility commands for ML development experiments."""
+    pass
+
+
+utility.add_command(benchmark_dataloader)
 main.add_command(hcpe_convert)
 main.add_command(pre_process)
 main.add_command(learn_model)
+main.add_command(utility)
