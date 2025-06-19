@@ -106,21 +106,19 @@ class Learning:
         )
 
         # Setup training components using shared setup module
-        device_config, dataloaders, model_components = (
-            TrainingSetup.setup_training_components(
-                training_datasource=input_datasource,
-                validation_datasource=test_datasource,
-                datasource_type=option.datasource_type,
-                gpu=None,  # Device already set in __init__
-                batch_size=option.batch_size,
-                dataloader_workers=option.dataloader_workers,
-                pin_memory=option.pin_memory,
-                enable_prefetch=option.enable_prefetch,
-                prefetch_factor=option.prefetch_factor,
-                gce_parameter=option.gce_parameter,
-                learning_ratio=option.learning_ratio,
-                momentum=option.momentum,
-            )
+        _, dataloaders, model_components = TrainingSetup.setup_training_components(
+            training_datasource=input_datasource,
+            validation_datasource=test_datasource,
+            datasource_type=option.datasource_type,
+            gpu=None,  # Device already set in __init__
+            batch_size=option.batch_size,
+            dataloader_workers=option.dataloader_workers,
+            pin_memory=option.pin_memory,
+            enable_prefetch=option.enable_prefetch,
+            prefetch_factor=option.prefetch_factor,
+            gce_parameter=option.gce_parameter,
+            learning_ratio=option.learning_ratio,
+            momentum=option.momentum,
         )
 
         self.training_loader, self.validation_loader = dataloaders

@@ -145,9 +145,9 @@ def make_move_label(turn: int, move: int) -> int:
         # 移動方向を計算するために座標を計算する
         to_x, to_y = divmod(to_sq, 9)
         from_x, from_y = divmod(from_sq, 9)
-        logger.debug(
-            f"from:{from_sq} ({from_x}, {from_y}), to:{to_sq} ({to_x}, {to_y})"
-        )
+        # logger.debug(
+        #     f"from:{from_sq} ({from_x}, {from_y}), to:{to_sq} ({to_x}, {to_y})"
+        # )
 
         diff_x = to_x - from_x
         diff_y = to_y - from_y
@@ -157,7 +157,7 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y > 6 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("KEIMA_LEFT")
+                    # logger.debug("KEIMA_LEFT")
                     if to_y < 2:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -170,7 +170,7 @@ def make_move_label(turn: int, move: int) -> int:
                         - 5
                     )
                 else:
-                    logger.debug("KEIMA_LEFT PROMOTION")
+                    # logger.debug("KEIMA_LEFT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -186,7 +186,7 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y > 6 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("KEIMA_RIGHT")
+                    # logger.debug("KEIMA_RIGHT")
                     if to_y < 2:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -198,7 +198,7 @@ def make_move_label(turn: int, move: int) -> int:
                         - to_x * 2
                     )
                 else:
-                    logger.debug("KEIMA_RIGHT PROMOTION")
+                    # logger.debug("KEIMA_RIGHT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -211,10 +211,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("UP")
+                    # logger.debug("UP")
                     return MoveCategoryStartLabel.UP + to_sq - to_x
                 else:
-                    logger.debug("UP PROMOTION")
+                    # logger.debug("UP PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -225,20 +225,20 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("DOWN")
+                    # logger.debug("DOWN")
                     return MoveCategoryStartLabel.DOWN + to_sq - (to_x + 1)
                 else:
-                    logger.debug("DOWN PROMOTION")
+                    # logger.debug("DOWN PROMOTION")
                     return MoveCategoryStartLabel.DOWN_PROMOTION + to_sq - (to_x + 1)
             case (diff_x, 0) if diff_x > 0:
                 # LEFT
                 if to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("LEFT")
+                    # logger.debug("LEFT")
                     return MoveCategoryStartLabel.LEFT + to_sq - 9
                 else:
-                    logger.debug("LEFT PROMOTION")
+                    # logger.debug("LEFT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -249,10 +249,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("RIGHT")
+                    # logger.debug("RIGHT")
                     return MoveCategoryStartLabel.RIGHT + to_sq
                 else:
-                    logger.debug("RIGHT PROMOTION")
+                    # logger.debug("RIGHT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -263,10 +263,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 8 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("UP_LEFT")
+                    # logger.debug("UP_LEFT")
                     return MoveCategoryStartLabel.UP_LEFT + to_sq - to_x - 8
                 else:
-                    logger.debug("UP_LEFT PROMOTION")
+                    # logger.debug("UP_LEFT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -279,10 +279,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 8 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("UP_RIGHT")
+                    # logger.debug("UP_RIGHT")
                     return MoveCategoryStartLabel.UP_RIGHT + to_sq - to_x
                 else:
-                    logger.debug("UP_RIGHT PROMOTION")
+                    # logger.debug("UP_RIGHT PROMOTION")
                     if not to_y < 3:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -293,10 +293,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 0 or to_x == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("DOWN_LEFT")
+                    # logger.debug("DOWN_LEFT")
                     return MoveCategoryStartLabel.DOWN_LEFT + to_sq - to_x - 9
                 else:
-                    logger.debug("DOWN_LEFT PROMOTION")
+                    # logger.debug("DOWN_LEFT PROMOTION")
                     if 8 - to_y + to_x < 6:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -322,10 +322,10 @@ def make_move_label(turn: int, move: int) -> int:
                 if to_y == 0 or to_x == 8:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 if not cshogi.move_is_promotion(move):  # type: ignore
-                    logger.debug("DOWN_RIGHT")
+                    # logger.debug("DOWN_RIGHT")
                     return MoveCategoryStartLabel.DOWN_RIGHT + to_sq - (to_x + 1)
                 else:
-                    logger.debug("DOWN_RIGHT PROMOTION")
+                    # logger.debug("DOWN_RIGHT PROMOTION")
                     if 8 - to_y + 8 - to_x < 6:
                         raise IllegalMove(
                             "Can not transform illegal move to move label."
@@ -354,35 +354,35 @@ def make_move_label(turn: int, move: int) -> int:
         # 打てない領域だけラベリングをずらすので右上からの座標を計算しておく
         # 座標を計算しておくと簡単
         to_x, to_y = divmod(to_sq, 9)
-        logger.debug(f"DROP to:{to_sq} ({to_x}, {to_y})")
+        # logger.debug(f"DROP to:{to_sq} ({to_x}, {to_y})")
 
         match cshogi.move_drop_hand_piece(move):  # type: ignore
             case HandPiece.FU:
-                logger.debug("DROP FU")
+                # logger.debug("DROP FU")
                 if to_y == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 return MoveCategoryStartLabel.FU + to_sq - (to_x + 1)
             case HandPiece.KY:
-                logger.debug("DROP KY")
+                # logger.debug("DROP KY")
                 if to_y == 0:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 return MoveCategoryStartLabel.KY + to_sq - (to_x + 1)
             case HandPiece.KE:
-                logger.debug("DROP KE")
+                # logger.debug("DROP KE")
                 if to_y < 2:
                     raise IllegalMove("Can not transform illegal move to move label.")
                 return MoveCategoryStartLabel.KE + to_sq - (to_x + 1) * 2
             case HandPiece.GI:
-                logger.debug("DROP GI")
+                # logger.debug("DROP GI")
                 return MoveCategoryStartLabel.GI + to_sq
             case HandPiece.KI:
-                logger.debug("DROP KI")
+                # logger.debug("DROP KI")
                 return MoveCategoryStartLabel.KI + to_sq
             case HandPiece.KA:
-                logger.debug("DROP KA")
+                # logger.debug("DROP KA")
                 return MoveCategoryStartLabel.KA + to_sq
             case HandPiece.HI:
-                logger.debug("DROP HI")
+                # logger.debug("DROP HI")
                 return MoveCategoryStartLabel.HI + to_sq
             case _:
                 raise IllegalMove("Can not transform illegal move to move label.")
