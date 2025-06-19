@@ -670,9 +670,8 @@ class TrainingBenchmarkUseCase:
 
         # Add validation results if available
         if validation_result is not None:
-            validation_summary = format_timing_summary(
-                validation_result, "Validation"
-            )
+            validation_summary = format_timing_summary(validation_result, "Validation")
+            # Dynamic dict key assignment for validation summary
             output["benchmark_results"]["ValidationSummary"] = validation_summary  # type: ignore
             output["validation_metrics"] = validation_result.to_dict()
 
