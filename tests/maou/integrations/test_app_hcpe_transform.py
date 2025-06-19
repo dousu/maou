@@ -181,6 +181,7 @@ class TestIntegrationPreProcess:
         output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
         option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=output_dir,
+            max_workers=1,
         )
         datasource = FileDataSource(file_paths=input_paths)
         PreProcess(
@@ -247,6 +248,7 @@ class TestIntegrationPreProcess:
         output_dir = Path("tests/maou/app/pre_process/resources/test_dir/output")
         option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=output_dir,
+            max_workers=1,
         )
         datasource = FileDataSource(file_paths=input_paths)
         PreProcess(

@@ -112,18 +112,28 @@ def learn(
     # テスト割合設定 (デフォルト0.25)
     if test_ratio is None:
         test_ratio = 0.25
+    elif not 0.0 < test_ratio < 1.0:
+        raise ValueError(f"test_ratio must be between 0 and 1, got {test_ratio}")
 
     # エポック設定 (デフォルト10)
     if epoch is None:
         epoch = 10
+    elif epoch <= 0:
+        raise ValueError(f"epoch must be positive, got {epoch}")
 
     # バッチサイズ設定 (デフォルト1000)
     if batch_size is None:
         batch_size = 1000
+    elif batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
 
-    # DataLoaderのワーカー数設定 (デフォルト2)
+    # DataLoaderのワーカー数設定 (デフォルト0)
     if dataloader_workers is None:
         dataloader_workers = 0
+    elif dataloader_workers < 0:
+        raise ValueError(
+            f"dataloader_workers must be non-negative, got {dataloader_workers}"
+        )
 
     # pin_memory設定 (デフォルトFalse)
     if pin_memory is None:
@@ -136,28 +146,40 @@ def learn(
     # 損失関数のパラメータ設定 (デフォルト0.7)
     if gce_parameter is None:
         gce_parameter = 0.7
+    elif not 0.0 < gce_parameter <= 1.0:
+        raise ValueError(f"gce_parameter must be between 0 and 1, got {gce_parameter}")
 
     # policy損失関数のパラメータ設定 (デフォルト1)
     if policy_loss_ratio is None:
         policy_loss_ratio = 1
+    elif policy_loss_ratio <= 0:
+        raise ValueError(f"policy_loss_ratio must be positive, got {policy_loss_ratio}")
 
     # value損失関数のパラメータ設定 (デフォルト1)
     if value_loss_ratio is None:
         value_loss_ratio = 1
+    elif value_loss_ratio <= 0:
+        raise ValueError(f"value_loss_ratio must be positive, got {value_loss_ratio}")
 
     # オプティマイザのパラメータ設定 (デフォルト0.01)
     if learning_ratio is None:
         learning_ratio = 0.01
+    elif learning_ratio <= 0:
+        raise ValueError(f"learning_ratio must be positive, got {learning_ratio}")
 
     # オプティマイザのパラメータ設定momemtum (デフォルト0.9)
     if momentum is None:
         momentum = 0.9
+    elif not 0.0 <= momentum <= 1.0:
+        raise ValueError(f"momentum must be between 0 and 1, got {momentum}")
 
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 
     # 開始エポック数設定 (デフォルト0)
     if start_epoch is None:
         start_epoch = 0
+    elif start_epoch < 0:
+        raise ValueError(f"start_epoch must be non-negative, got {start_epoch}")
 
     # SummaryWriterの書き込み先設定 (デフォルト./logs)
     if log_dir is None:

@@ -30,6 +30,7 @@ class TestHCPEConverter:
         option: hcpe_transform.PreProcess.PreProcessOption = (
             hcpe_transform.PreProcess.PreProcessOption(
                 output_dir=output_dir,
+                max_workers=1,
             )
         )
         self.clean_up_dir(output_dir)
@@ -50,6 +51,7 @@ class TestHCPEConverter:
         option: hcpe_transform.PreProcess.PreProcessOption = (
             hcpe_transform.PreProcess.PreProcessOption(
                 output_dir=output_dir,
+                max_workers=1,
             )
         )
         self.clean_up_dir(output_dir)

@@ -1,7 +1,6 @@
 import abc
 import contextlib
 import logging
-import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +75,7 @@ class HCPEConverter:
         max_moves: Optional[int] = None
         allowed_endgame_status: Optional[list[str]] = None
         exclude_moves: Optional[list[int]] = None
-        max_workers: Optional[int] = None
+        max_workers: int
 
     @staticmethod
     def _process_single_file(
@@ -237,8 +236,6 @@ class HCPEConverter:
 
         # Determine number of workers
         max_workers = option.max_workers
-        if max_workers is None:
-            max_workers = min(len(option.input_paths), os.cpu_count() or 1)
 
         self.logger.info(f"Using {max_workers} workers for parallel processing")
 

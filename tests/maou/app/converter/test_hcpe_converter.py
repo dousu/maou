@@ -42,6 +42,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -68,6 +69,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -90,6 +92,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -114,6 +117,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -137,6 +141,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -163,6 +168,7 @@ class TestHCPEConverter:
                 min_moves=113,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -189,6 +195,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=120,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 
@@ -216,6 +223,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=["%TORYO"],
+                max_workers=1,
             )
         )
 
@@ -244,6 +252,7 @@ class TestHCPEConverter:
                 min_moves=113,
                 max_moves=120,
                 allowed_endgame_status=["%TORYO"],
+                max_workers=1,
             )
         )
 
@@ -274,6 +283,7 @@ class TestHCPEConverter:
                 min_moves=None,
                 max_moves=None,
                 allowed_endgame_status=None,
+                max_workers=1,
             )
         )
 

@@ -267,6 +267,7 @@ class TestIntegrationHcpeConverter:
             input_paths=input_paths,
             input_format="csa",
             output_dir=output_dir,
+            max_workers=1,
         )
         HCPEConverter(
             feature_store=feature_store,
@@ -365,6 +366,7 @@ class TestIntegrationHcpeConverter:
             input_paths=input_paths,
             input_format="csa",
             output_dir=output_dir,
+            max_workers=1,
         )
         HCPEConverter(
             feature_store=feature_store,
@@ -426,6 +428,7 @@ class TestIntegrationHcpeConverter:
             input_paths=input_paths,
             input_format="csa",
             output_dir=output_dir,
+            max_workers=1,
         )
         HCPEConverter(
             feature_store=feature_store,

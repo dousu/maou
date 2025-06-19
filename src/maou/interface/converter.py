@@ -2,6 +2,7 @@ import abc
 import enum
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -100,6 +101,12 @@ def transform(
     input_format_validation(input_format)
     output_dir_init(output_dir)
     logger.info(f"Input: {input_path}, Output: {output_dir}")
+
+    # 並列処理数 (デフォルトCPU数か4の小さい方)
+    if max_workers is None:
+        max_workers = min(4, os.cpu_count() or 1)
+    elif max_workers < 0:
+        raise ValueError(f"max_workers must be non-negative, got {max_workers}")
 
     option = HCPEConverter.ConvertOption(
         input_paths=file_system.collect_files(input_path),

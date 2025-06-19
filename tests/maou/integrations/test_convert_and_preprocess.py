@@ -212,6 +212,7 @@ class TestIntegrationConverterPreprocess:
             input_paths=input_paths,
             input_format="csa",
             output_dir=hcpe_output_dir,
+            max_workers=1,
         )
         HCPEConverter().convert(hcpe_option)
         output_paths_hcpe = [
@@ -221,6 +222,7 @@ class TestIntegrationConverterPreprocess:
 
         preprocess_option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=preprocess_output_dir,
+            max_workers=1,
         )
         datasource = FileDataSource(file_paths=output_paths_hcpe)
         transformer = PreProcess(
@@ -294,6 +296,7 @@ class TestIntegrationConverterPreprocess:
             input_paths=input_paths,
             input_format="csa",
             output_dir=hcpe_output_dir,
+            max_workers=1,
         )
         HCPEConverter().convert(hcpe_option)
         output_paths_hcpe = [
@@ -303,6 +306,7 @@ class TestIntegrationConverterPreprocess:
 
         preprocess_option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=preprocess_output_dir,
+            max_workers=1,
         )
         datasource = FileDataSource(file_paths=output_paths_hcpe)
         transformer = PreProcess(
@@ -380,11 +384,13 @@ class TestIntegrationConverterPreprocess:
             input_paths=input_paths,
             input_format="csa",
             output_dir=hcpe_output_dir,
+            max_workers=1,
         )
         HCPEConverter(feature_store=feature_store_hcpe).convert(hcpe_option)
 
         preprocess_option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=preprocess_output_dir,
+            max_workers=1,
         )
         datasource = BigQueryDataSource(
             dataset_id=self.dataset_id,
@@ -470,11 +476,13 @@ class TestIntegrationConverterPreprocess:
             input_paths=input_paths,
             input_format="csa",
             output_dir=hcpe_output_dir,
+            max_workers=1,
         )
         HCPEConverter(feature_store=feature_store_hcpe).convert(hcpe_option)
 
         preprocess_option: PreProcess.PreProcessOption = PreProcess.PreProcessOption(
             output_dir=preprocess_output_dir,
+            max_workers=1,
         )
         datasource = S3DataSource(
             bucket_name=self.bucket,

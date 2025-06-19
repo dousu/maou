@@ -1,7 +1,6 @@
 import abc
 import contextlib
 import logging
-import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -86,7 +85,7 @@ class PreProcess:
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
         output_dir: Optional[Path] = None
-        max_workers: Optional[int] = None
+        max_workers: int
 
     @staticmethod
     def _process_record_chunk(
@@ -160,8 +159,6 @@ class PreProcess:
 
         # Determine number of workers
         max_workers = option.max_workers
-        if max_workers is None:
-            max_workers = min(4, os.cpu_count() or 1)  # Limit to 4 for memory reasons
 
         self.logger.info(f"Using {max_workers} workers for parallel processing")
 

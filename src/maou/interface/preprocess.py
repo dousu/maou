@@ -1,6 +1,7 @@
 import abc
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,12 @@ def transform(
     """
     if output_dir is not None:
         output_dir_init(output_dir)
+
+    # 並列処理数 (デフォルトCPU数か4の小さい方)
+    if max_workers is None:
+        max_workers = min(4, os.cpu_count() or 1)
+    elif max_workers < 0:
+        raise ValueError(f"max_workers must be non-negative, got {max_workers}")
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,
