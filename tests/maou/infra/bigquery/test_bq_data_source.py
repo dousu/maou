@@ -133,7 +133,17 @@ class TestBigQueryDataSource:
                 moves,
                 partitioningKey,
             )
-            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(  # noqa: E501
+            for (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            ) in zip(  # noqa: E501
                 [str(uuid.uuid4()) for _ in range(num_rows)],
                 [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
                 np.random.randint(-1000, 1000, num_rows),
@@ -154,7 +164,10 @@ class TestBigQueryDataSource:
                 ("bestMove16", np.int16),
                 ("gameResult", np.int8),
                 ("ratings", (np.uint16, 2)),
-                ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
+                (
+                    "endgameStatus",
+                    (np.unicode_, 16),  # type: ignore[attr-defined]
+                ),  # noqa: E501
                 ("moves", np.int16),
                 ("partitioningKey", np.dtype("datetime64[D]")),
             ],
@@ -196,7 +209,8 @@ class TestBigQueryDataSource:
         )
 
     def test_read_data_without_pruning_key(self, default_fixture: None) -> None:
-        # パーティショニングやクラスタリングキーが指定されていない場合にbqから正しくデータを読み込める
+        # パーティショニングやクラスタリングキーが指定されていない場合に
+        # bqから正しくデータを読み込める
         # BigQueryにテストデータを投入
         data = np.array(
             [
@@ -204,7 +218,10 @@ class TestBigQueryDataSource:
                 (2, "test2"),
                 (3, "test3"),
             ],
-            dtype=[("id", np.int16), ("data", np.unicode_, 16)],  # type: ignore[attr-defined] # noqa: E501
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],  # noqa: E501
         )
         self.bq.store_features(
             name="test_features", key_columns=["id"], structured_array=data
@@ -336,7 +353,8 @@ class TestBigQueryDataSource:
         )
 
     def test_pruning(self, default_fixture: None) -> None:
-        # パーティショニングキーが指定されている場合にbqで最小データ量の読み込みが処理される
+        # パーティショニングキーが指定されている場合に
+        # bqで最小データ量の読み込みが処理される
         # BigQueryにテストデータを投入
         self.insert_partitioning_test_data()
 
@@ -659,7 +677,8 @@ class TestBigQueryDataSource:
     def test_local_cache_no_bigquery_queries_after_init(
         self, default_fixture: None, tmp_path: Path
     ) -> None:
-        # ローカルキャッシュを使用した場合，初期化以降BigQueryでクエリを実行していないことを確認するテスト
+        # ローカルキャッシュを使用した場合，初期化以降
+        # BigQueryでクエリを実行していないことを確認するテスト
         # BigQueryにテストデータを投入
         data = np.array(
             [

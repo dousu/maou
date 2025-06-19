@@ -202,7 +202,17 @@ class TestIntegrationHcpeConverter:
                 moves,
                 partitioningKey,
             )
-            for id, hcp, eval, bestMove16, gameResult, ratings, endgameStatus, moves, partitioningKey in zip(  # noqa: E501
+            for (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            ) in zip(  # noqa: E501
                 [str(uuid.uuid4()) for _ in range(num_rows)],
                 [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
                 np.random.randint(-1000, 1000, num_rows),
@@ -297,7 +307,8 @@ class TestIntegrationHcpeConverter:
             for i in range(len(local_datasource))
         ]
         # ソートはhcpeに入っているデータで行わないといけない
-        # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
+        # hcpeには一意に決まるデータはないので各キーをbyteに変換して
+        # ハッシュ値を計算してソートする
         sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: hash(
@@ -400,7 +411,8 @@ class TestIntegrationHcpeConverter:
         # 現在はパーティショニングだがクラスタリングだとある程度多めにかかってしまう
         # 現時点だと300kBでいいはずなのに7MBほどかかった
         # 自動の再クラスタリングが働かないこともあるのかもしれない
-        # 現在のデータならデータソースは211.75kB程度になるのでほぼ最小であることを確認している
+        # 現在のデータならデータソースは211.75kB程度になるので
+        # ほぼ最小であることを確認している
         assert total_bytes_processed < 300 * 1024
 
     @pytest.mark.skipif(
@@ -447,7 +459,8 @@ class TestIntegrationHcpeConverter:
             record_to_dict(local_datasource[i]) for i in range(len(local_datasource))
         ]
         # ソートはhcpeに入っているデータで行わないといけない
-        # hcpeには一意に決まるデータはないので各キーをbyteに変換してハッシュ値を計算してソートする
+        # hcpeには一意に決まるデータはないので各キーをbyteに変換して
+        # ハッシュ値を計算してソートする
         sorted_local_data = sorted(  # type: ignore
             local_data,
             key=lambda x: x["id"],
