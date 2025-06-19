@@ -6,6 +6,10 @@ import torch
 
 from maou.app.learning.dl import LearningDataSource
 from maou.app.utility.dataloader_benchmark import BenchmarkConfig, DataLoaderBenchmark
+from maou.app.utility.training_benchmark import (
+    TrainingBenchmarkConfig,
+    TrainingBenchmarkUseCase,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -125,3 +129,86 @@ def benchmark_dataloader(
     }
 
     return json.dumps(output, indent=2)
+
+
+def benchmark_training(
+    datasource: LearningDataSource.DataSourceSpliter,
+    datasource_type: str,
+    *,
+    gpu: Optional[str] = None,
+    batch_size: Optional[int] = None,
+    dataloader_workers: Optional[int] = None,
+    pin_memory: Optional[bool] = None,
+    enable_prefetch: Optional[bool] = None,
+    prefetch_factor: Optional[int] = None,
+    gce_parameter: Optional[float] = None,
+    policy_loss_ratio: Optional[float] = None,
+    value_loss_ratio: Optional[float] = None,
+    learning_ratio: Optional[float] = None,
+    momentum: Optional[float] = None,
+    warmup_batches: Optional[int] = None,
+    max_batches: Optional[int] = None,
+    enable_profiling: Optional[bool] = None,
+    test_ratio: Optional[float] = None,
+    run_validation: Optional[bool] = None,
+    sample_ratio: Optional[float] = None,
+) -> str:
+    """
+    Benchmark single epoch training performance with detailed timing analysis.
+
+    Args:
+        datasource: Training data source splitter
+        datasource_type: Type of data source ('hcpe' or 'preprocess')
+        gpu: GPU device to use for benchmarking
+        batch_size: Training batch size
+        dataloader_workers: Number of DataLoader workers
+        pin_memory: Enable pinned memory for GPU transfers
+        enable_prefetch: Enable background data prefetching
+        prefetch_factor: Number of batches loaded in advance by each worker
+        gce_parameter: GCE loss hyperparameter
+        policy_loss_ratio: Policy loss weight
+        value_loss_ratio: Value loss weight
+        learning_ratio: Learning rate
+        momentum: Optimizer momentum
+        warmup_batches: Number of warmup batches to exclude from timing
+        max_batches: Maximum number of batches to process
+        enable_profiling: Enable PyTorch profiler for detailed analysis
+        test_ratio: Test set ratio for validation benchmark
+        run_validation: Also run validation benchmark (inference only)
+        sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
+
+    Returns:
+        JSON string with benchmark results and recommendations
+    """
+    # Create configuration with defaults
+    config = TrainingBenchmarkConfig(
+        datasource=datasource,
+        datasource_type=datasource_type,
+        gpu=gpu,
+        batch_size=batch_size or 256,
+        dataloader_workers=dataloader_workers or 4,
+        pin_memory=pin_memory,
+        enable_prefetch=enable_prefetch or False,
+        prefetch_factor=prefetch_factor or 2,
+        gce_parameter=gce_parameter or 0.1,
+        policy_loss_ratio=policy_loss_ratio or 1.0,
+        value_loss_ratio=value_loss_ratio or 1.0,
+        learning_ratio=learning_ratio or 0.01,
+        momentum=momentum or 0.9,
+        warmup_batches=warmup_batches or 5,
+        max_batches=max_batches or 100,
+        enable_profiling=enable_profiling or False,
+        test_ratio=test_ratio or 0.2,
+        run_validation=run_validation or False,
+        sample_ratio=sample_ratio,
+    )
+
+    # Validate sample_ratio
+    if sample_ratio is not None and not 0.01 <= sample_ratio <= 1.0:
+        raise ValueError(
+            f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
+        )
+
+    # Execute use case
+    use_case = TrainingBenchmarkUseCase()
+    return use_case.execute(config)

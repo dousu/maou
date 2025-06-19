@@ -3,50 +3,17 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
-import numpy as np
 import torch
 from torch import optim
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 from tqdm.auto import tqdm
 
-from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.learning.network import Network
-from maou.app.learning.prefetch_dataset import PrefetchDataset
+from maou.app.learning.dataset import DataSource
+from maou.app.learning.setup import TrainingSetup
 from maou.app.pre_process.feature import FEATURES_NUM
-from maou.app.pre_process.transform import Transform
-from maou.domain.loss.loss_fn import MaskedGCELoss
-from maou.domain.network.resnet import BottleneckBlock
-
-
-def _default_worker_init_fn(worker_id: int) -> None:
-    """
-    デフォルトのワーカー初期化関数．
-    CUDA初期化は状況に応じて自動的に実行する．
-    """
-    import random
-
-    # 再現性のためのシード設定（ワーカーごとに異なるシードを使用）
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-    torch.manual_seed(worker_seed)
-
-    # CUDAが利用可能な場合のみ初期化を試みる
-    if torch.cuda.is_available():
-        try:
-            # 現在のCUDAデバイスを確認し初期化
-            current_device = torch.cuda.current_device()
-            torch.cuda.set_device(current_device)
-            # CUDAコンテキストの初期化を確認
-            _ = torch.cuda.current_device()
-        except Exception as e:
-            # CUDA初期化に失敗した場合はログに記録
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Worker {worker_id}: CUDA initialization failed: {e}")
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -138,119 +105,53 @@ class Learning:
             test_ratio=option.test_ratio
         )
 
-        dataset_train: Union[KifDataset, PrefetchDataset]
-        dataset_test: Union[KifDataset, PrefetchDataset]
-
-        if option.datasource_type == "hcpe":
-            # datasetに特徴量と正解ラベルを作成する変換を登録する
-            transform = Transform()
-        elif option.datasource_type == "preprocess":
-            transform = None
-        else:
-            raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
-        dataset_train = KifDataset(
-            datasource=input_datasource,
-            transform=transform,
-        )
-        dataset_test = KifDataset(
-            datasource=test_datasource,
-            transform=transform,
-        )
-
-        # PrefetchDatasetでラップ（オプション）
-        if option.enable_prefetch:
-            self.logger.info("Enabling PrefetchDataset for background data loading")
-            dataset_train = PrefetchDataset(
-                base_dataset=dataset_train, prefetch_factor=2, max_workers=1
+        # Setup training components using shared setup module
+        device_config, dataloaders, model_components = (
+            TrainingSetup.setup_training_components(
+                training_datasource=input_datasource,
+                validation_datasource=test_datasource,
+                datasource_type=option.datasource_type,
+                gpu=None,  # Device already set in __init__
+                batch_size=option.batch_size,
+                dataloader_workers=option.dataloader_workers,
+                pin_memory=option.pin_memory,
+                enable_prefetch=option.enable_prefetch,
+                prefetch_factor=option.prefetch_factor,
+                gce_parameter=option.gce_parameter,
+                learning_ratio=option.learning_ratio,
+                momentum=option.momentum,
             )
-            dataset_test = PrefetchDataset(
-                base_dataset=dataset_test, prefetch_factor=1, max_workers=1
-            )
-
-        # dataloader - 最適化された設定で高速データローディングを実現
-        # num_workers: CPUコア数の2-4倍程度が最適
-        # pin_memory: GPUへのデータ転送を高速化
-        # persistent_workers: ワーカープロセスの再利用でオーバーヘッド削減
-        # prefetch_factor: 各ワーカーが事前に読み込むバッチ数
-        # worker_init_fn: 各ワーカープロセスでCUDAコンテキストを初期化
-        # グローバル関数を使用してPickle化の問題を回避
-        worker_init_fn = (
-            _default_worker_init_fn if option.dataloader_workers > 0 else None
         )
 
-        self.training_loader = DataLoader(
-            dataset_train,
-            batch_size=option.batch_size,
-            shuffle=True,
-            num_workers=option.dataloader_workers,
-            pin_memory=option.pin_memory,
-            persistent_workers=option.dataloader_workers > 0,
-            prefetch_factor=option.prefetch_factor
-            if option.dataloader_workers > 0
-            else None,
-            drop_last=True,
-            timeout=120 if option.dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
-        )
-        self.validation_loader = DataLoader(
-            dataset_test,
-            batch_size=option.batch_size,
-            shuffle=False,
-            num_workers=option.dataloader_workers,
-            pin_memory=option.pin_memory,
-            persistent_workers=option.dataloader_workers > 0,
-            prefetch_factor=option.prefetch_factor
-            if option.dataloader_workers > 0
-            else None,
-            drop_last=False,  # validationでは全データを使用
-            timeout=120 if option.dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
-        )
-        self.logger.info(f"Train: {len(self.training_loader)} batches/epoch")
-        self.logger.info(f"Test: {len(self.validation_loader)} batches/epoch")
+        self.training_loader, self.validation_loader = dataloaders
 
-        # モデル定義: 将棋特化の「広く浅い」BottleneckBlock構成
-        #
-        # 将棋AIにおけるネットワーク設計の考察:
-        # 1. 盤面の空間的制約: 9x9の限られた空間での複雑なパターン認識が必要
-        # 2. 特徴の多様性: 駒の配置，攻撃ライン，王の安全性など多様な戦術要素
-        # 3. 計算効率: リアルタイム対局での高速推論が求められる
-        #
-        # 設計方針: 深さよりも幅を重視したバランス型構成
-        # - 浅いネットワーク: 過学習を防ぎ，汎化性能を向上
-        # - 広いチャンネル: 多様な戦術パターンを並列で学習
-        # - 段階的拡張: 低レベル特徴から高レベル戦術まで効率的に抽出
+        # Dataset information already logged in TrainingSetup
 
-        # 各層のボトルネック幅（3x3 convolution層のチャンネル数）
-        # expansion=4により実際の出力は4倍: [96, 192, 384, 576]
-        bottleneck_width = [24, 48, 96, 144]
+        # Get model components from setup (model already moved to self.device in setup)
+        model = model_components.model
 
-        model = Network(
-            BottleneckBlock,  # 効率的なBottleneckアーキテクチャを使用
-            FEATURES_NUM,  # 入力特徴量チャンネル数
-            [2, 2, 2, 1],  # 将棋特化: 広く浅い構成でパターン認識を重視
-            [1, 2, 2, 2],  # 各層のstride（2で特徴マップサイズ半減）
-            bottleneck_width,  # 幅重視: 多様な戦術要素を並列学習
-        )
+        # Move model to the correct device if needed (setup uses its own device
+        # detection)
+        model.to(self.device)
+
         self.logger.info(
             str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
         )
+
         if option.compilation:
             compiled_model = torch.compile(model)
             self.model = compiled_model  # type: ignore
             self.logger.info("Finished model compilation")
         else:
             self.model = model
-        self.model.to(self.device)
-        # ヘッドが二つあるので2つ損失関数を設定する
-        # 損失を単純に加算するのかどうかは議論の余地がある
-        # policyの損失関数は合法手以外を無視して損失を計算しない設計も考えられる
-        self.loss_fn_policy = MaskedGCELoss(q=option.gce_parameter)
-        self.loss_fn_value = torch.nn.BCEWithLogitsLoss()
-        # SGD+Momentum
-        # weight_decayは特に根拠なし
+
+        # Use loss functions and optimizer from setup
+        self.loss_fn_policy = model_components.loss_fn_policy
+        self.loss_fn_value = model_components.loss_fn_value
+
+        # Create new optimizer with the same settings but for the final model
         self.optimizer = optim.SGD(
-            model.parameters(),
+            self.model.parameters(),
             lr=option.learning_ratio,
             momentum=option.momentum,
             weight_decay=0.0001,
@@ -265,7 +166,8 @@ class Learning:
         self.__train()
 
         learning_result["Data Samples"] = (
-            f"Training: {len(dataset_train)}, Test: {len(dataset_test)}"
+            f"Training: {len(self.training_loader.dataset)}, "
+            f"Test: {len(self.validation_loader.dataset)}"
         )
         learning_result["Option"] = str(option)
         learning_result["Result"] = "Finish"
