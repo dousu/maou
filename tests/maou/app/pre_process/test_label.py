@@ -1,3 +1,4 @@
+# flake8: noqa: E501
 import logging
 
 import cshogi
@@ -54,23 +55,33 @@ class TestLabel:
         - G*5b (52金打想定) 11173
         """
         # 1b1a (11と想定) 128
-        test1b1a = label.make_move_label(cshogi.BLACK, 128)  # type: ignore[attr-defined]
+        test1b1a = label.make_move_label(
+            cshogi.BLACK, 128
+        )  # type: ignore[attr-defined]
         assert test1b1a < label.MOVE_LABELS_NUM
         assert test1b1a == 0
         # R*9i (99飛打想定) 11088
-        testR_9i = label.make_move_label(cshogi.BLACK, 11088)  # type: ignore[attr-defined]
+        testR_9i = label.make_move_label(
+            cshogi.BLACK, 11088
+        )  # type: ignore[attr-defined]
         assert testR_9i < label.MOVE_LABELS_NUM
         assert testR_9i == label.MOVE_LABELS_NUM - 1
         # 7g7f (76歩想定) 7739
-        test7g7f = label.make_move_label(cshogi.BLACK, 7739)  # type: ignore[attr-defined]
+        test7g7f = label.make_move_label(
+            cshogi.BLACK, 7739
+        )  # type: ignore[attr-defined]
         assert test7g7f < label.MOVE_LABELS_NUM
         assert test7g7f == label.MoveCategoryStartLabel.UP + 53
         # 2h7h (78飛想定) 7997
-        test2h7h = label.make_move_label(cshogi.BLACK, 2109)  # type: ignore[attr-defined]
+        test2h7h = label.make_move_label(
+            cshogi.BLACK, 2109
+        )  # type: ignore[attr-defined]
         assert test2h7h < label.MOVE_LABELS_NUM
         assert test2h7h == label.MoveCategoryStartLabel.LEFT + 61 - 9
         # 4e5c (53桂成らず想定) 4006
-        test4e5c = label.make_move_label(cshogi.BLACK, 4006)  # type: ignore[attr-defined]
+        test4e5c = label.make_move_label(
+            cshogi.BLACK, 4006
+        )  # type: ignore[attr-defined]
         assert test4e5c < label.MOVE_LABELS_NUM
         assert test4e5c == label.MoveCategoryStartLabel.KEIMA_LEFT + 38 - 10 - 8 - 5
         # 4e5c+ (53桂成想定) 20390
