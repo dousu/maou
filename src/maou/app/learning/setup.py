@@ -5,7 +5,7 @@ training_benchmark.py と dl.py の重複コードを統一化．
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import torch
 from torch import optim
@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
-from maou.app.learning.prefetch_dataset import PrefetchDataset
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.loss.loss_fn import MaskedGCELoss
@@ -103,8 +102,7 @@ class DatasetFactory:
         training_datasource: DataSource,
         validation_datasource: DataSource,
         datasource_type: str,
-        enable_prefetch: bool = False,
-    ) -> Tuple[Union[KifDataset, PrefetchDataset], Union[KifDataset, PrefetchDataset]]:
+    ) -> Tuple[KifDataset, KifDataset]:
         """学習・検証用データセットの作成."""
 
         # Validate datasource type
@@ -123,16 +121,6 @@ class DatasetFactory:
             datasource=validation_datasource, transform=transform
         )
 
-        # Apply PrefetchDataset if enabled
-        if enable_prefetch:
-            cls.logger.info("Enabling PrefetchDataset for background data loading")
-            dataset_train = PrefetchDataset(
-                base_dataset=dataset_train, prefetch_factor=2, max_workers=1
-            )
-            dataset_validation = PrefetchDataset(
-                base_dataset=dataset_validation, prefetch_factor=1, max_workers=1
-            )
-
         return dataset_train, dataset_validation
 
 
@@ -144,8 +132,8 @@ class DataLoaderFactory:
     @classmethod
     def create_dataloaders(
         cls,
-        dataset_train: Union[KifDataset, PrefetchDataset],
-        dataset_validation: Union[KifDataset, PrefetchDataset],
+        dataset_train: KifDataset,
+        dataset_validation: KifDataset,
         batch_size: int,
         dataloader_workers: int,
         pin_memory: bool,
@@ -263,7 +251,6 @@ class TrainingSetup:
         batch_size: int = 256,
         dataloader_workers: int = 4,
         pin_memory: Optional[bool] = None,
-        enable_prefetch: bool = False,
         prefetch_factor: int = 2,
         gce_parameter: float = 0.1,
         learning_ratio: float = 0.01,
@@ -285,7 +272,6 @@ class TrainingSetup:
             training_datasource,
             validation_datasource,
             datasource_type,
-            enable_prefetch,
         )
 
         # 3. DataLoader creation

@@ -62,7 +62,6 @@ class Learning:
         batch_size: int
         dataloader_workers: int
         pin_memory: bool
-        enable_prefetch: bool
         prefetch_factor: int
         gce_parameter: float
         policy_loss_ratio: float
@@ -114,7 +113,6 @@ class Learning:
             batch_size=option.batch_size,
             dataloader_workers=option.dataloader_workers,
             pin_memory=option.pin_memory,
-            enable_prefetch=option.enable_prefetch,
             prefetch_factor=option.prefetch_factor,
             gce_parameter=option.gce_parameter,
             learning_ratio=option.learning_ratio,

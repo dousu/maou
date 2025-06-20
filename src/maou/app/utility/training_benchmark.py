@@ -467,7 +467,6 @@ class TrainingBenchmarkConfig:
     batch_size: int = 256
     dataloader_workers: int = 4
     pin_memory: Optional[bool] = None
-    enable_prefetch: bool = False
     prefetch_factor: int = 2
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
@@ -509,7 +508,6 @@ class TrainingBenchmarkUseCase:
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
-                enable_prefetch=config.enable_prefetch,
                 prefetch_factor=config.prefetch_factor,
                 gce_parameter=config.gce_parameter,
                 learning_ratio=config.learning_ratio,
@@ -659,7 +657,6 @@ class TrainingBenchmarkUseCase:
                 "batch_size": config.batch_size,
                 "dataloader_workers": config.dataloader_workers,
                 "pin_memory": device_config.pin_memory,
-                "enable_prefetch": config.enable_prefetch,
                 "prefetch_factor": config.prefetch_factor,
                 "warmup_batches": config.warmup_batches,
                 "max_batches": config.max_batches,

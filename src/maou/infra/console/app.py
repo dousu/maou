@@ -841,13 +841,6 @@ def pre_process(
     required=False,
 )
 @click.option(
-    "--enable-prefetch",
-    type=bool,
-    is_flag=True,
-    help="Enable background data prefetching for improved performance.",
-    required=False,
-)
-@click.option(
     "--prefetch-factor",
     type=int,
     help="Number of batches loaded in advance by each worker (default: 2).",
@@ -972,7 +965,6 @@ def learn_model(
     batch_size: Optional[int],
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
-    enable_prefetch: Optional[bool],
     prefetch_factor: Optional[int],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
@@ -1166,7 +1158,6 @@ def learn_model(
                 batch_size=batch_size,
                 dataloader_workers=dataloader_workers,
                 pin_memory=pin_memory,
-                enable_prefetch=enable_prefetch,
                 prefetch_factor=prefetch_factor,
                 gce_parameter=gce_parameter,
                 policy_loss_ratio=policy_loss_ratio,
@@ -1638,13 +1629,6 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
-    "--enable-prefetch",
-    type=bool,
-    is_flag=True,
-    help="Enable background data prefetching for improved performance.",
-    required=False,
-)
-@click.option(
     "--prefetch-factor",
     type=int,
     help="Number of batches loaded in advance by each worker (default: 2).",
@@ -1748,7 +1732,6 @@ def benchmark_training(
     batch_size: int,
     dataloader_workers: int,
     pin_memory: Optional[bool],
-    enable_prefetch: Optional[bool],
     prefetch_factor: int,
     gce_parameter: float,
     policy_loss_ratio: float,
@@ -1904,7 +1887,6 @@ def benchmark_training(
             batch_size=batch_size,
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
-            enable_prefetch=enable_prefetch,
             prefetch_factor=prefetch_factor,
             gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,

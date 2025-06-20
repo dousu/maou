@@ -139,7 +139,6 @@ def benchmark_training(
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
-    enable_prefetch: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
@@ -163,7 +162,6 @@ def benchmark_training(
         batch_size: Training batch size
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
-        enable_prefetch: Enable background data prefetching
         prefetch_factor: Number of batches loaded in advance by each worker
         gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
@@ -188,7 +186,6 @@ def benchmark_training(
         batch_size=batch_size or 256,
         dataloader_workers=dataloader_workers or 4,
         pin_memory=pin_memory,
-        enable_prefetch=enable_prefetch or False,
         prefetch_factor=prefetch_factor or 2,
         gce_parameter=gce_parameter or 0.1,
         policy_loss_ratio=policy_loss_ratio or 1.0,
