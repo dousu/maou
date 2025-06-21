@@ -29,7 +29,7 @@ class TestFeature:
         P-00KA
         +
         """
-        board = cshogi.Board()
+        board = cshogi.Board()  # type: ignore
         # 色々実験したいときは以下の空の局面のSFENを使うといい
         # "6K2/9/9/9/9/9/9/9/3K5 b 2R2B4G4S4N4L18P 1"
         board.set_sfen(
@@ -330,7 +330,7 @@ class TestFeature:
         assert np.array_equal(features[66:], white_pieces_in_hand)
 
         # 手番変えてチェック
-        board.turn = cshogi.WHITE
+        board.turn = cshogi.WHITE  # type: ignore
         features_rotated = feature.make_feature(board)
 
         # 駒配置チェック

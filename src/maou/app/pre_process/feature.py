@@ -26,7 +26,7 @@ def make_feature(board: cshogi.Board) -> np.ndarray:  # type: ignore
     Returns:
         Feature array with shape (FEATURES_NUM, 9, 9)
     """
-    features = np.empty((FEATURES_NUM, 9, 9), dtype=np.uint8)
+    features = np.empty((FEATURES_NUM, 9, 9), dtype=np.float32)
     features.fill(0)
     if board.turn == cshogi.BLACK:  # type: ignore
         board.piece_planes(features)
@@ -42,4 +42,4 @@ def make_feature(board: cshogi.Board) -> np.ndarray:  # type: ignore
             # 全面1にする
             features[i : i + num].fill(1)
             i += max_num
-    return features
+    return features.astype(np.uint8)
