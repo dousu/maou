@@ -277,6 +277,24 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             if not prefix.endswith("/"):
                 prefix = prefix + "/"
             try:
+                # S3バケットとプレフィックスの存在確認
+                try:
+                    self.s3_client.head_bucket(Bucket=bucket)
+                except ClientError as e:
+                    error_code = e.response["Error"]["Code"]
+                    if error_code == "404":
+                        raise ValueError(
+                            f"S3 bucket '{bucket}' does not exist. "
+                            f"Please verify the bucket name."
+                        )
+                    elif error_code == "403":
+                        raise ValueError(
+                            f"Access denied to S3 bucket '{bucket}'. "
+                            f"Please check your AWS credentials and permissions."
+                        )
+                    else:
+                        raise ValueError(f"Error accessing S3 bucket '{bucket}': {e}")
+
                 paginator = self.s3_client.get_paginator("list_objects_v2")
                 pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
 
@@ -312,6 +330,18 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                         if download_file:
                             download_tasks.append((obj["Key"], local_file_path))
 
+                # S3オブジェクトが見つからなかった場合のエラーハンドリング
+                if len(s3_local_files) == 0:
+                    self.logger.error(
+                        f"No objects found in S3 path 's3://{bucket}/{prefix}'. "
+                        f"Please verify that the bucket '{bucket}' exists and "
+                        f"contains data at prefix '{prefix}'"
+                    )
+                    raise ValueError(
+                        f"No data found in S3 path 's3://{bucket}/{prefix}'. "
+                        f"Verify the bucket name and prefix are correct."
+                    )
+
                 # 並列ダウンロード実行
                 download_count = 0
                 skip_count = len(s3_local_files) - len(download_tasks)
@@ -342,30 +372,37 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                             download_count += 1
 
                 delete_count = 0
-                if delete:
+                if delete and local_path.exists():
                     # まずはファイルを削除してそのあと空のディレクトリがあれば削除する
                     s3_local_paths = {str(file.resolve()) for file in s3_local_files}
-                    for local_file in local_path.glob("**/*"):
-                        try:
-                            if (
-                                local_file.is_file()
-                                and str(local_file.resolve()) not in s3_local_paths
-                            ):
-                                local_file.unlink()
-                                delete_count += 1
-                                self.logger.debug(f"Deleted {local_file}")
-                        except FileNotFoundError:
-                            continue
-                    # 空のディレクトリを削除
-                    for local_dir in local_path.glob("**"):
-                        try:
-                            if local_dir.is_dir() and not any(local_dir.iterdir()):
-                                local_dir.rmdir()
-                                self.logger.debug(
-                                    f"Deleted empty directory {local_dir}"
-                                )
-                        except FileNotFoundError:
-                            continue
+                    try:
+                        for local_file in local_path.glob("**/*"):
+                            try:
+                                if (
+                                    local_file.is_file()
+                                    and str(local_file.resolve()) not in s3_local_paths
+                                ):
+                                    local_file.unlink()
+                                    delete_count += 1
+                                    self.logger.debug(f"Deleted {local_file}")
+                            except FileNotFoundError:
+                                continue
+                        # 空のディレクトリを削除
+                        for local_dir in local_path.glob("**"):
+                            try:
+                                if local_dir.is_dir() and not any(local_dir.iterdir()):
+                                    local_dir.rmdir()
+                                    self.logger.debug(
+                                        f"Deleted empty directory {local_dir}"
+                                    )
+                            except FileNotFoundError:
+                                continue
+                    except (FileNotFoundError, OSError) as e:
+                        self.logger.debug(f"Cleanup operation failed: {e}")
+                elif delete and not local_path.exists():
+                    self.logger.debug(
+                        f"Local path {local_path} does not exist, skipping cleanup"
+                    )
                 result_message = (
                     f"同期完了: {download_count}ファイルをダウンロード，"
                     f"{skip_count}ファイルをスキップ"
