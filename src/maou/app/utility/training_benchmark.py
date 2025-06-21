@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -85,6 +87,12 @@ class SingleEpochBenchmark:
         self.loss_fn_value = loss_fn_value
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
+
+        # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
+        if self.device.type == "cuda":
+            self.scaler: Optional[GradScaler] = GradScaler("cuda")
+        else:
+            self.scaler = None
 
     def benchmark_epoch(
         self,
@@ -182,44 +190,95 @@ class SingleEpochBenchmark:
                 # 前のバッチの勾配をクリア
                 self.optimizer.zero_grad()
 
-                # 順伝播時間の測定
-                forward_start = time.perf_counter()
-                outputs_policy, outputs_value = self.model(inputs)
+                # Mixed precision training with autocast
+                if self.scaler is not None:
+                    # GPU使用時: Mixed precision training
+                    # 順伝播時間の測定
+                    forward_start = time.perf_counter()
+                    with autocast("cuda"):
+                        outputs_policy, outputs_value = self.model(inputs)
 
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize()
+                        # 損失計算時間の測定は autocast 内で実行
+                        loss_start = time.perf_counter()
+                        loss = self.policy_loss_ratio * self.loss_fn_policy(
+                            outputs_policy, labels_policy, legal_move_mask
+                        ) + self.value_loss_ratio * self.loss_fn_value(
+                            outputs_value, labels_value
+                        )
+                        loss_time = time.perf_counter() - loss_start
 
-                forward_time = time.perf_counter() - forward_start
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
 
-                # 損失計算時間の測定
-                loss_start = time.perf_counter()
-                loss = self.policy_loss_ratio * self.loss_fn_policy(
-                    outputs_policy, labels_policy, legal_move_mask
-                ) + self.value_loss_ratio * self.loss_fn_value(
-                    outputs_value, labels_value
-                )
-                loss_time = time.perf_counter() - loss_start
+                    forward_time = time.perf_counter() - forward_start - loss_time
 
-                # 逆伝播時間の測定
-                backward_start = time.perf_counter()
-                loss.backward()
+                    # 逆伝播時間の測定
+                    backward_start = time.perf_counter()
+                    self.scaler.scale(loss).backward()
 
-                # 勾配クリッピング
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    # 勾配クリッピング (scaled gradients)
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=1.0
+                    )
 
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize()
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
 
-                backward_time = time.perf_counter() - backward_start
+                    backward_time = time.perf_counter() - backward_start
 
-                # オプティマイザステップ時間の測定
-                step_start = time.perf_counter()
-                self.optimizer.step()
+                    # オプティマイザステップ時間の測定
+                    step_start = time.perf_counter()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
 
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize()
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
 
-                step_time = time.perf_counter() - step_start
+                    step_time = time.perf_counter() - step_start
+
+                else:
+                    # CPU使用時: 従来通りの処理
+                    # 順伝播時間の測定
+                    forward_start = time.perf_counter()
+                    outputs_policy, outputs_value = self.model(inputs)
+
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+
+                    forward_time = time.perf_counter() - forward_start
+
+                    # 損失計算時間の測定
+                    loss_start = time.perf_counter()
+                    loss = self.policy_loss_ratio * self.loss_fn_policy(
+                        outputs_policy, labels_policy, legal_move_mask
+                    ) + self.value_loss_ratio * self.loss_fn_value(
+                        outputs_value, labels_value
+                    )
+                    loss_time = time.perf_counter() - loss_start
+
+                    # 逆伝播時間の測定
+                    backward_start = time.perf_counter()
+                    loss.backward()
+
+                    # 勾配クリッピング
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=1.0
+                    )
+
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+
+                    backward_time = time.perf_counter() - backward_start
+
+                    # オプティマイザステップ時間の測定
+                    step_start = time.perf_counter()
+                    self.optimizer.step()
+
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+
+                    step_time = time.perf_counter() - step_start
 
                 batch_total_time = time.perf_counter() - batch_start_time
                 batch_end_time = time.perf_counter()
@@ -374,23 +433,46 @@ class SingleEpochBenchmark:
 
                 gpu_transfer_time = time.perf_counter() - gpu_transfer_start
 
-                # 順伝播時間の測定
-                forward_start = time.perf_counter()
-                outputs_policy, outputs_value = self.model(inputs)
+                # Mixed precision for validation (memory efficiency)
+                if self.scaler is not None:
+                    # GPU使用時: Mixed precisionで推論
+                    forward_start = time.perf_counter()
+                    with autocast("cuda"):
+                        outputs_policy, outputs_value = self.model(inputs)
 
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize()
+                        # 損失計算時間の測定は autocast 内で実行
+                        loss_start = time.perf_counter()
+                        loss = self.policy_loss_ratio * self.loss_fn_policy(
+                            outputs_policy, labels_policy, legal_move_mask
+                        ) + self.value_loss_ratio * self.loss_fn_value(
+                            outputs_value, labels_value
+                        )
+                        loss_time = time.perf_counter() - loss_start
 
-                forward_time = time.perf_counter() - forward_start
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
 
-                # 損失計算時間の測定
-                loss_start = time.perf_counter()
-                loss = self.policy_loss_ratio * self.loss_fn_policy(
-                    outputs_policy, labels_policy, legal_move_mask
-                ) + self.value_loss_ratio * self.loss_fn_value(
-                    outputs_value, labels_value
-                )
-                loss_time = time.perf_counter() - loss_start
+                    forward_time = time.perf_counter() - forward_start - loss_time
+
+                else:
+                    # CPU使用時: 従来通りの処理
+                    # 順伝播時間の測定
+                    forward_start = time.perf_counter()
+                    outputs_policy, outputs_value = self.model(inputs)
+
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+
+                    forward_time = time.perf_counter() - forward_start
+
+                    # 損失計算時間の測定
+                    loss_start = time.perf_counter()
+                    loss = self.policy_loss_ratio * self.loss_fn_policy(
+                        outputs_policy, labels_policy, legal_move_mask
+                    ) + self.value_loss_ratio * self.loss_fn_value(
+                        outputs_value, labels_value
+                    )
+                    loss_time = time.perf_counter() - loss_start
 
                 batch_total_time = time.perf_counter() - batch_start_time
 

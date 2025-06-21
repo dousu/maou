@@ -7,6 +7,8 @@ from typing import Dict, Optional
 
 import torch
 from torch import optim
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 from tqdm.auto import tqdm
@@ -51,6 +53,7 @@ class Learning:
     device: torch.device
     resume_from: Optional[Path]
     model: torch.nn.Module
+    scaler: Optional[GradScaler]
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
@@ -90,6 +93,13 @@ class Learning:
         # マルチプロセシング開始方法の設定（WindowsやCUDA使用時の安定化）
         # デバイス設定後に実行してCUDA使用判定を正確に行う
         self._setup_multiprocessing()
+
+        # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
+        if self.device.type == "cuda":
+            self.scaler = GradScaler("cuda")
+            self.logger.info("Initialized GradScaler for mixed precision training")
+        else:
+            self.scaler = None
 
         self.__cloud_storage = cloud_storage
 
@@ -194,20 +204,48 @@ class Learning:
             # Zero your gradients for every batch!
             self.optimizer.zero_grad()
 
-            # Make predictions for this batch
-            outputs_policy, outputs_value = self.model(inputs)
+            # Mixed precision training with autocast
+            if self.scaler is not None:
+                # GPU使用時: Mixed precision training
+                with autocast("cuda"):
+                    # Make predictions for this batch
+                    outputs_policy, outputs_value = self.model(inputs)
 
-            # Compute the loss and its gradients
-            loss = self.policy_loss_ratio * self.loss_fn_policy(
-                outputs_policy, labels_policy, legal_move_mask
-            ) + self.value_loss_ratio * self.loss_fn_value(outputs_value, labels_value)
-            loss.backward()
+                    # Compute the loss
+                    loss = self.policy_loss_ratio * self.loss_fn_policy(
+                        outputs_policy, labels_policy, legal_move_mask
+                    ) + self.value_loss_ratio * self.loss_fn_value(
+                        outputs_value, labels_value
+                    )
 
-            # 勾配クリッピング
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                # Backward pass with gradient scaling
+                self.scaler.scale(loss).backward()
 
-            # Adjust learning weights
-            self.optimizer.step()
+                # 勾配クリッピング (scaled gradients)
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                # Optimizer step with gradient scaling
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                # CPU使用時: 従来通りの処理
+                # Make predictions for this batch
+                outputs_policy, outputs_value = self.model(inputs)
+
+                # Compute the loss and its gradients
+                loss = self.policy_loss_ratio * self.loss_fn_policy(
+                    outputs_policy, labels_policy, legal_move_mask
+                ) + self.value_loss_ratio * self.loss_fn_value(
+                    outputs_value, labels_value
+                )
+                loss.backward()
+
+                # 勾配クリッピング
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                # Adjust learning weights
+                self.optimizer.step()
 
             # Gather data and report
             running_loss += loss.item()
@@ -283,12 +321,24 @@ class Learning:
                         self.device, non_blocking=True
                     )
 
-                    voutputs_policy, voutputs_value = self.model(vinputs)
-                    vloss = self.policy_loss_ratio * self.loss_fn_policy(
-                        voutputs_policy, vlabels_policy, vlegal_move_mask
-                    ) + self.value_loss_ratio * self.loss_fn_value(
-                        voutputs_value, vlabels_value
-                    )
+                    # Mixed precision for validation (memory efficiency)
+                    if self.scaler is not None:
+                        # GPU使用時: Mixed precisionで推論
+                        with autocast("cuda"):
+                            voutputs_policy, voutputs_value = self.model(vinputs)
+                            vloss = self.policy_loss_ratio * self.loss_fn_policy(
+                                voutputs_policy, vlabels_policy, vlegal_move_mask
+                            ) + self.value_loss_ratio * self.loss_fn_value(
+                                voutputs_value, vlabels_value
+                            )
+                    else:
+                        # CPU使用時: 従来通りの処理
+                        voutputs_policy, voutputs_value = self.model(vinputs)
+                        vloss = self.policy_loss_ratio * self.loss_fn_policy(
+                            voutputs_policy, vlabels_policy, vlegal_move_mask
+                        ) + self.value_loss_ratio * self.loss_fn_value(
+                            voutputs_value, vlabels_value
+                        )
                     running_vloss += vloss
 
                     test_accuracy_policy += self.__policy_accuracy(
