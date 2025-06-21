@@ -6,16 +6,20 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import torch
-from torch import optim
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 from tqdm.auto import tqdm
 
-from maou.app.learning.dataset import DataSource
-from maou.app.learning.setup import TrainingSetup
+from maou.app.learning.dataset import DataSource, KifDataset
+from maou.app.learning.setup import (
+    DataLoaderFactory,
+    LossOptimizerFactory,
+    ModelFactory,
+)
 from maou.app.pre_process.feature import FEATURES_NUM
+from maou.app.pre_process.transform import Transform
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -114,31 +118,45 @@ class Learning:
             test_ratio=option.test_ratio
         )
 
-        # Setup training components using shared setup module
-        _, dataloaders, model_components = TrainingSetup.setup_training_components(
-            training_datasource=input_datasource,
-            validation_datasource=test_datasource,
-            datasource_type=option.datasource_type,
-            gpu=None,  # Device already set in __init__
-            batch_size=option.batch_size,
-            dataloader_workers=option.dataloader_workers,
-            pin_memory=option.pin_memory,
-            prefetch_factor=option.prefetch_factor,
-            gce_parameter=option.gce_parameter,
-            learning_ratio=option.learning_ratio,
-            momentum=option.momentum,
+        # Create datasets using existing device
+        # Validate datasource type
+        if option.datasource_type not in ("hcpe", "preprocess"):
+            raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
+
+        # Create transform based on datasource type
+        if option.datasource_type == "hcpe":
+            transform = Transform()
+        else:
+            transform = None
+
+        # Create datasets
+        dataset_train = KifDataset(datasource=input_datasource, transform=transform)
+        dataset_validation = KifDataset(datasource=test_datasource, transform=transform)
+
+        # Set pin_memory based on device
+        pin_memory = option.pin_memory
+        if pin_memory is None:
+            pin_memory = self.device.type == "cuda"
+
+        # Create dataloaders
+        self.training_loader, self.validation_loader = (
+            DataLoaderFactory.create_dataloaders(
+                dataset_train,
+                dataset_validation,
+                option.batch_size,
+                option.dataloader_workers,
+                pin_memory,
+                option.prefetch_factor,
+            )
         )
 
-        self.training_loader, self.validation_loader = dataloaders
+        # Create model using existing device
+        model = ModelFactory.create_shogi_model(self.device)
 
-        # Dataset information already logged in TrainingSetup
-
-        # Get model components from setup (model already moved to self.device in setup)
-        model = model_components.model
-
-        # Move model to the correct device if needed (setup uses its own device
-        # detection)
-        model.to(self.device)
+        # Create loss functions
+        self.loss_fn_policy, self.loss_fn_value = (
+            LossOptimizerFactory.create_loss_functions(option.gce_parameter)
+        )
 
         self.logger.info(
             str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
@@ -151,16 +169,11 @@ class Learning:
         else:
             self.model = model
 
-        # Use loss functions and optimizer from setup
-        self.loss_fn_policy = model_components.loss_fn_policy
-        self.loss_fn_value = model_components.loss_fn_value
-
-        # Create new optimizer with the same settings but for the final model
-        self.optimizer = optim.SGD(
-            self.model.parameters(),
-            lr=option.learning_ratio,
+        # Create optimizer for the final model
+        self.optimizer = LossOptimizerFactory.create_optimizer(
+            self.model,
+            learning_ratio=option.learning_ratio,
             momentum=option.momentum,
-            weight_decay=0.0001,
         )
         self.policy_loss_ratio = option.policy_loss_ratio
         self.value_loss_ratio = option.value_loss_ratio
