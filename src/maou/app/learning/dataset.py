@@ -57,8 +57,8 @@ class KifDataset(Dataset, Sized):
 
             # torch.from_numpy()を使用してゼロコピー変換
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            features_tensor = torch.from_numpy(features)
-            legal_move_mask_tensor = torch.from_numpy(legal_move_mask)
+            features_tensor = torch.from_numpy(features).to(torch.float32)
+            legal_move_mask_tensor = torch.from_numpy(legal_move_mask).to(torch.float32)
             move_label_tensor = torch.tensor(move_label, dtype=torch.long)
             result_value_tensor = torch.tensor(
                 result_value, dtype=torch.float32
@@ -80,8 +80,12 @@ class KifDataset(Dataset, Sized):
 
             # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            features_tensor = torch.from_numpy(data["features"].copy())
-            legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy())
+            features_tensor = torch.from_numpy(data["features"].copy()).to(
+                torch.float32
+            )
+            legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy()).to(
+                torch.float32
+            )
             move_label_tensor = torch.tensor(data["moveLabel"].item(), dtype=torch.long)
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32

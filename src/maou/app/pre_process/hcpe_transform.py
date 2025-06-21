@@ -107,10 +107,10 @@ class PreProcess:
             dtype=[
                 ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                 ("eval", np.int16),
-                ("features", np.float32, (FEATURES_NUM, 9, 9)),
+                ("features", np.uint8, (FEATURES_NUM, 9, 9)),
                 ("moveLabel", np.uint16),
-                ("resultValue", np.float32),
-                ("legalMoveMask", np.float32, (MOVE_LABELS_NUM)),
+                ("resultValue", np.float16),
+                ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
                 ("partitioningKey", np.dtype("datetime64[D]")),
             ],
         )
@@ -177,10 +177,10 @@ class PreProcess:
                         dtype=[
                             ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
                             ("eval", np.int16),
-                            ("features", np.float32, (FEATURES_NUM, 9, 9)),
+                            ("features", np.uint8, (FEATURES_NUM, 9, 9)),
                             ("moveLabel", np.uint16),
-                            ("resultValue", np.float32),
-                            ("legalMoveMask", np.float32, (MOVE_LABELS_NUM)),
+                            ("resultValue", np.float16),
+                            ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
                             ("partitioningKey", np.dtype("datetime64[D]")),
                         ],
                     )
@@ -266,10 +266,10 @@ class PreProcess:
                             dtype=[
                                 ("id", (np.unicode_, 128)),  # type: ignore[attr-defined] # noqa: E501
                                 ("eval", np.int16),
-                                ("features", np.float32, (FEATURES_NUM, 9, 9)),
+                                ("features", np.uint8, (FEATURES_NUM, 9, 9)),
                                 ("moveLabel", np.uint16),
-                                ("resultValue", np.float32),
-                                ("legalMoveMask", np.float32, (MOVE_LABELS_NUM)),
+                                ("resultValue", np.float16),
+                                ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
                                 ("partitioningKey", np.dtype("datetime64[D]")),
                             ],
                         )

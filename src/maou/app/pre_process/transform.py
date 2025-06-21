@@ -35,9 +35,9 @@ class Transform:
             Tuple of (features, move_label, result_value, legal_move_mask)
         """
 
-        self.logger.debug(f"hcp type: {type(hcp)}")
-        self.logger.debug(f"hcp shape: {hcp.shape}")
-        self.logger.debug(f"hcp dtype: {hcp.dtype}")
+        # self.logger.debug(f"hcp type: {type(hcp)}")
+        # self.logger.debug(f"hcp shape: {hcp.shape}")
+        # self.logger.debug(f"hcp dtype: {hcp.dtype}")
         board = cshogi.Board()  # type: ignore
         board.set_hcp(hcp)
 
@@ -84,6 +84,6 @@ class Transform:
 
     def __create_mask(self, valid_labels: list[int], num_classes: int) -> np.ndarray:
         """有効なラベルのリストから対応するマスクを作成する."""
-        mask = np.zeros((num_classes), dtype=np.float32)
+        mask = np.zeros((num_classes), dtype=np.uint8)
         mask[valid_labels] = 1
         return mask
