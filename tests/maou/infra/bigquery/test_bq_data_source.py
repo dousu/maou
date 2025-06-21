@@ -1,0 +1,746 @@
+import logging
+import os
+import re
+import uuid
+from collections.abc import Generator
+from datetime import date, datetime
+from pathlib import Path
+from typing import Union
+
+import google_crc32c
+import numpy as np
+import pytest
+from google.cloud import bigquery
+
+from maou.infra.bigquery.bq_data_source import BigQueryDataSource
+from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
+
+logger: logging.Logger = logging.getLogger("TEST")
+
+
+def record_to_dict(record: Union[np.ndarray, dict]) -> dict:
+    """Convert numpy structured array record to dict"""
+    if hasattr(record, "dtype") and record.dtype.names:  # type: ignore[union-attr]
+        return {
+            key: record[key]
+            for key in record.dtype.names  # type: ignore[union-attr]
+        }
+    else:
+        return record if isinstance(record, dict) else {}
+
+
+def compare_records(r1: Union[np.ndarray, dict], r2: dict) -> bool:
+    """Compare numpy structured array record or dict with dict"""
+    # numpy structured arrayの場合はフィールド名を取得
+    if hasattr(r1, "dtype") and r1.dtype.names:  # type: ignore[union-attr]
+        r1_keys = set(r1.dtype.names)  # type: ignore[union-attr]
+        is_structured_array = True
+    elif isinstance(r1, dict):
+        r1_keys = set(r1.keys())
+        is_structured_array = False
+    else:
+        logger.debug(f"r1 is not a structured array or dict: {type(r1)}")
+        return False
+
+    r2_keys = set(r2.keys())
+
+    if r1_keys != r2_keys:
+        logger.debug(f"keys: {r1_keys} != {r2_keys}")
+        return False
+
+    for key in r1_keys:
+        r1_val = r1[key]
+        r2_val = r2[key]
+
+        if (
+            isinstance(r1_val, np.memmap)
+            or isinstance(r1_val, np.ndarray)
+            or isinstance(r2_val, np.memmap)
+            or isinstance(r2_val, np.ndarray)
+        ):
+            if not np.array_equal(r1_val, r2_val):
+                logger.debug(f"{key}: {r1_val} != {r2_val}")
+                return False
+        else:
+            # スカラー値の場合は.item()で取得
+            if is_structured_array and hasattr(r1_val, "item"):
+                r1_val = r1_val.item()
+            if r1_val != r2_val:
+                logger.debug(f"{key}: {r1_val} != {r2_val}")
+                return False
+    return True
+
+
+skip_test = os.getenv("TEST_GCP", "").lower() != "true"
+
+if skip_test:
+    logger.debug(f"Skip {__name__} TEST_GCP: {os.getenv('TEST_GCP', '')}")
+
+
+@pytest.mark.skipif(
+    skip_test,
+    reason="GCPリソースを使ったテストはTEST_GCPが'true'の場合のみ実行されます",
+)
+class TestBigQueryDataSource:
+    def __calculate_file_crc32c(self, filepath: Path) -> str:
+        """ファイルのCRC32Cハッシュ値を計算する関数.
+        ファイルの内容をもとに8文字のハッシュ値が返ってくる
+        """
+        if not filepath.is_file():
+            raise ValueError(f"Input file `{filepath}` is not file.")
+
+        checksum = google_crc32c.Checksum()
+
+        # ファイルを読み取ってハッシュを計算
+        with open(filepath, "rb") as f:
+            while chunk := f.read(8192):  # 8KBずつ読み取る
+                checksum.update(chunk)
+
+        # ハッシュ値を16進文字列で返す
+        return checksum.digest().hex()
+
+    def insert_partitioning_test_data(self) -> None:
+        # 20MB 以下のデータを生成 (20MBが最小課金容量)
+        # 1行約116バイト (36+16+4+4+4+8+4.5+4+36) × 100,000 行 = 11MB
+        # これにオーバーヘッドがのって少し大きくなる
+        num_rows = 100000
+        partitioning_values = np.array(
+            [
+                date.fromisoformat("2019-12-04"),
+                date.fromisoformat("2019-12-05"),
+                date.fromisoformat("2019-12-07"),
+                date.fromisoformat("2019-12-30"),
+            ]
+        )
+        partitioning_keys = np.tile(
+            partitioning_values, num_rows // len(partitioning_values)
+        )
+        num_remaining = num_rows - len(partitioning_keys)
+        if num_remaining > 0:
+            partitioning_keys = np.concatenate(
+                [
+                    partitioning_keys,
+                    np.random.choice(partitioning_values, num_remaining),
+                ]
+            )
+        np.random.shuffle(partitioning_keys)
+        data = [
+            (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            )
+            for (
+                id,
+                hcp,
+                eval,
+                bestMove16,
+                gameResult,
+                ratings,
+                endgameStatus,
+                moves,
+                partitioningKey,
+            ) in zip(  # noqa: E501
+                [str(uuid.uuid4()) for _ in range(num_rows)],
+                [np.zeros(32, dtype=np.uint8) for _ in range(num_rows)],
+                np.random.randint(-1000, 1000, num_rows),
+                np.random.randint(0, 65536, num_rows),
+                np.random.randint(-1, 2, num_rows),
+                [np.zeros(2) for _ in range(num_rows)],
+                np.random.choice(["WIN", "LOSE", "DRAW", "UNKNOWN"], num_rows),
+                np.random.randint(0, 100, num_rows),
+                partitioning_keys,
+            )
+        ]
+        structured_array = np.array(
+            data,
+            dtype=[
+                ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
+                ("hcp", (np.uint8, 32)),
+                ("eval", np.int16),
+                ("bestMove16", np.int16),
+                ("gameResult", np.int8),
+                ("ratings", (np.uint16, 2)),
+                (
+                    "endgameStatus",
+                    (np.unicode_, 16),  # type: ignore[attr-defined]
+                ),  # noqa: E501
+                ("moves", np.int16),
+                ("partitioningKey", np.dtype("datetime64[D]")),
+            ],
+        )
+        self.bq._BigQueryFeatureStore__create_or_replace_table(  # type: ignore
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            schema=(
+                self.bq._BigQueryFeatureStore__generate_schema(  # type: ignore
+                    structured_array=structured_array
+                )
+            ),
+            clustering_key=None,
+            partitioning_key_date="partitioningKey",
+        )
+        self.bq.load_from_numpy_array(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            structured_array=structured_array,
+        )
+
+        logger.debug(f"Uploaded {num_rows} rows to {self.table_id}")
+
+    @pytest.fixture()
+    def default_fixture(self) -> Generator[None, None, None]:
+        path = Path("src/maou/infra/bigquery/bq_data_source.py")
+        self.dataset_id = "maou_test"
+        self.table_name = "test_" + self.__calculate_file_crc32c(path)
+        logger.debug(f"Test table: {self.dataset_id}.{self.table_name}")
+        self.bq = BigQueryFeatureStore(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
+        client = bigquery.Client()
+        self.table_id = f"{client.project}.{self.dataset_id}.{self.table_name}"
+        yield
+        # clean up
+        self.bq._BigQueryFeatureStore__drop_table(  # type: ignore
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
+
+    def test_read_data_without_pruning_key(self, default_fixture: None) -> None:
+        # パーティショニングやクラスタリングキーが指定されていない場合に
+        # bqから正しくデータを読み込める
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],  # noqa: E501
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(  # type: ignore
+            read_data,
+            key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
+        )
+        logger.debug(sorted_read_data)
+        # 読み込んだデータが正しいことを確認
+        expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
+        assert len(sorted_read_data) == len(expected_data)
+        assert all(
+            [compare_records(d1, d2) for d1, d2 in zip(sorted_read_data, expected_data)]
+        )
+
+    def test_read_data_with_clustering_key(self, default_fixture: None) -> None:
+        # クラスタリングキーが指定されている場合にbqから正しくデータを読み込める
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "A", "test1"),
+                (2, "B", "test2"),
+                (3, "A", "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("cluster", np.unicode_, 16),  # type: ignore[attr-defined]
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features",
+            key_columns=["id"],
+            structured_array=data,
+            clustering_key="cluster",
+        )
+        self.bq.flush_features(key_columns=["id"], clustering_key="cluster")
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            clustering_key="cluster",
+        )
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(  # type: ignore
+            read_data,
+            key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
+        )
+        logger.debug(sorted_read_data)
+        # 読み込んだデータが正しいことを確認
+        expected_data = [
+            {"id": 1, "cluster": "A", "data": "test1"},
+            {"id": 2, "cluster": "B", "data": "test2"},
+            {"id": 3, "cluster": "A", "data": "test3"},
+        ]
+        assert all(
+            [compare_records(d1, d2) for d1, d2 in zip(sorted_read_data, expected_data)]
+        )
+
+    def test_read_data_with_partitioning_key(self, default_fixture: None) -> None:
+        # パーティショニングキーが指定されている場合にbqから正しくデータを読み込める
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, date.fromisoformat("2019-12-04"), "test1"),
+                (2, date.fromisoformat("2019-12-05"), "test2"),
+                (3, date.fromisoformat("2019-12-07"), "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("partition_key", np.dtype("datetime64[D]")),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features",
+            key_columns=["id"],
+            structured_array=data,
+            partitioning_key_date="partition_key",
+        )
+        self.bq.flush_features(
+            key_columns=["id"], partitioning_key_date="partition_key"
+        )
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            partitioning_key_date="partition_key",
+        )
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(  # type: ignore
+            read_data,
+            key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
+        )
+        logger.debug(sorted_read_data)
+        # 読み込んだデータが正しいことを確認
+        expected_data = [
+            {
+                "id": 1,
+                "partition_key": date.fromisoformat("2019-12-04"),
+                "data": "test1",
+            },
+            {
+                "id": 2,
+                "partition_key": date.fromisoformat("2019-12-05"),
+                "data": "test2",
+            },
+            {
+                "id": 3,
+                "partition_key": date.fromisoformat("2019-12-07"),
+                "data": "test3",
+            },
+        ]
+        assert all(
+            [compare_records(d1, d2) for d1, d2 in zip(sorted_read_data, expected_data)]
+        )
+
+    def test_pruning(self, default_fixture: None) -> None:
+        # パーティショニングキーが指定されている場合に
+        # bqで最小データ量の読み込みが処理される
+        # BigQueryにテストデータを投入
+        self.insert_partitioning_test_data()
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            partitioning_key_date="partitioningKey",
+        )
+        # データを読み込む
+        start_time = datetime.now()
+        _ = data_source[0]
+        client = self.bq.client
+
+        table = client.get_table(self.table_id)
+
+        jobs = client.list_jobs(min_creation_time=start_time)
+        total_bytes_processed: int
+        for job in jobs:
+            if job.job_type == "query":
+                logger.debug(
+                    f"QueryJob id: {job.job_id}, query: {job.query},"
+                    f" time: {job.created},"
+                    f" total_bytes_processed: {job.total_bytes_processed}"
+                )
+                pattern = (
+                    "SELECT.*\\n"
+                    f".*{re.escape(self.dataset_id)}\\.{re.escape(self.table_name)}.*"
+                )
+                if re.search(pattern, job.query):
+                    total_bytes_processed = job.total_bytes_processed
+        logger.debug(
+            f"target table bytes: {table.num_bytes},"
+            f" total_bytes_processed: {total_bytes_processed}"
+        )
+        assert total_bytes_processed is not None and table.num_bytes is not None
+        assert total_bytes_processed < table.num_bytes
+        # データは4等分しているので3等分よりは小さくなるはず
+        assert total_bytes_processed < table.num_bytes / 3
+
+    def test_cache_eviction(self, default_fixture: None) -> None:
+        # max_chached_bytesを超えたら古いページが破棄される
+        # batch_sizeより大きなレコード数の場合にキャッシュされる
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            max_cached_bytes=20,
+            batch_size=1,
+        )
+        # データを読み込む
+        for i in range(len(data)):
+            data_source[i]
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
+        for i in range(len(data)):
+            data_source[i]
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
+
+    def test_batch_size_larger_than_record_count(self, default_fixture: None) -> None:
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+                (4, "test4"),
+                (5, "test5"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id, table_name=self.table_name, batch_size=10
+        )
+        # データを読み込む
+        data_source[0]
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
+        data_source[0]
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
+
+    def test_read_from_cache(self, default_fixture: None) -> None:
+        # キャッシュされている場合にbqにアクセスせずデータを返すことができる
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # BigQueryDataSourceからデータを読み込む
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id, table_name=self.table_name
+        )
+        # データを読み込む
+        data_source[0]
+
+        # キャッシュの動作を間接的に確認する
+        # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
+        start_time = datetime.now()
+        data_source[0]
+
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0  # キャッシュが機能していればクエリは発行されない
+
+    def test_local_cache_creation(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュディレクトリが正しく作成されることをテスト
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリ
+        local_cache_dir = tmp_path / "local_cache"
+
+        # BigQueryDataSourceからデータを読み込む（ローカルキャッシュを使用）
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュディレクトリが作成されていることを確認
+        assert local_cache_dir.exists()
+        assert local_cache_dir.is_dir()
+
+        # ローカルキャッシュファイルが作成されていることを確認
+        cache_files = list(local_cache_dir.glob("*.npy"))
+        assert len(cache_files) > 0
+
+        # データを読み込む
+        read_data = [data_source[i] for i in range(len(data_source))]
+        sorted_read_data = sorted(  # type: ignore
+            read_data,
+            key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
+        )
+
+        # 読み込んだデータが正しいことを確認
+        expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
+        assert len(sorted_read_data) == len(expected_data)
+        assert all(
+            [compare_records(d1, d2) for d1, d2 in zip(sorted_read_data, expected_data)]
+        )
+
+    def test_local_cache_loading(self, default_fixture: None, tmp_path: Path) -> None:
+        # ローカルキャッシュからデータが正しく読み込まれることをテスト
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # 1回目：BigQueryからデータを取得してローカルキャッシュに保存
+        start_time = datetime.now()
+        BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュファイルが作成されていることを確認
+        cache_files = list(local_cache_dir.glob("*.npy"))
+        assert len(cache_files) > 0
+
+        # 2回目：ローカルキャッシュからデータを読み込む
+        start_time = datetime.now()
+        data_source2 = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # BigQueryへのアクセスが発生しないことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) == 0
+
+        # データを読み込む
+        read_data = [data_source2[i] for i in range(len(data_source2))]
+        sorted_read_data = sorted(  # type: ignore
+            read_data,
+            key=lambda x: x["id"].item() if hasattr(x["id"], "item") else x["id"],
+        )
+
+        # 読み込んだデータが正しいことを確認
+        expected_data = [{"id": i, "data": f"test{i}"} for i in range(1, len(data) + 1)]
+        assert len(sorted_read_data) == len(expected_data)
+        assert all(
+            [compare_records(d1, d2) for d1, d2 in zip(sorted_read_data, expected_data)]
+        )
+
+    def test_local_cache_no_memory_cache(
+        self, default_fixture: None, tmp_path: Path
+    ) -> None:
+        # ローカルキャッシュを使用する場合，メモリキャッシュが使用されないことをテスト
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # BigQueryDataSourceからデータを読み込む（ローカルキャッシュを使用）
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+        )
+
+        # ローカルキャッシュを使用する場合，メモリキャッシュが使用されないことをテスト
+        # これを確認するために，BigQueryへのアクセスが発生しないことを確認する
+
+        # データを読み込む
+        data_source[0]
+
+        # 同じデータを再度読み込む
+        start_time = datetime.now()
+        data_source[0]
+
+        # BigQueryへのアクセスが発生しないことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert (
+            len(query_jobs) == 0
+        )  # ローカルキャッシュから読み込まれるためクエリは発行されない
+
+    def test_local_cache_no_bigquery_queries_after_init(
+        self, default_fixture: None, tmp_path: Path
+    ) -> None:
+        # ローカルキャッシュを使用した場合，初期化以降
+        # BigQueryでクエリを実行していないことを確認するテスト
+        # BigQueryにテストデータを投入
+        data = np.array(
+            [
+                (1, "test1"),
+                (2, "test2"),
+                (3, "test3"),
+                (4, "test4"),
+                (5, "test5"),
+            ],
+            dtype=[
+                ("id", np.int16),
+                ("data", np.unicode_, 16),  # type: ignore[attr-defined]
+            ],
+        )
+        self.bq.store_features(
+            name="test_features", key_columns=["id"], structured_array=data
+        )
+        self.bq.flush_features(key_columns=["id"])
+
+        # ローカルキャッシュディレクトリを作成
+        local_cache_dir = tmp_path / "local_cache"
+
+        # 初期化時にBigQueryへのアクセスが発生することを確認
+        start_time = datetime.now()
+        data_source = BigQueryDataSource(
+            dataset_id=self.dataset_id,
+            table_name=self.table_name,
+            use_local_cache=True,
+            local_cache_dir=str(local_cache_dir),
+            clustering_key="id",
+        )
+
+        # 初期化時にBigQueryへのアクセスが発生したことを確認
+        client = self.bq.client
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert len(query_jobs) > 0  # 初期化時にBigQueryへのアクセスが発生
+
+        # 初期化後のアクセスを確認するための時間を記録
+        start_time = datetime.now()
+
+        # すべてのデータにアクセス
+        for i in range(len(data_source)):
+            data_source[i]
+
+        # 再度すべてのデータにアクセス（異なる順序で）
+        for i in reversed(range(len(data_source))):
+            data_source[i]
+
+        # ランダムなインデックスでアクセス
+        import random
+
+        random_indices = [random.randint(0, len(data_source) - 1) for _ in range(10)]
+        for i in random_indices:
+            data_source[i]
+
+        # 初期化後にBigQueryへのアクセスが発生していないことを確認
+        jobs = client.list_jobs(min_creation_time=start_time)
+        query_jobs = [job for job in jobs if job.job_type == "query"]
+        assert (
+            len(query_jobs) == 0
+        )  # 初期化後はローカルキャッシュから読み込まれるためクエリは発行されない
