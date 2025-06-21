@@ -1912,6 +1912,23 @@ def benchmark_training(
         if "ValidationSummary" in result["benchmark_results"]:
             click.echo()
             click.echo(result["benchmark_results"]["ValidationSummary"])
+
+        # Display estimation results if sample_ratio was used
+        if "estimation" in result and result["estimation"]:
+            click.echo()
+            click.echo("=== Data Sampling Estimation ===")
+            estimation = result["estimation"]
+            click.echo(f"Sample Ratio Used: {estimation['sample_ratio']:.1%}")
+            click.echo(
+                f"Actual Batches Processed: {estimation['actual_batches_processed']:,}"
+            )
+            click.echo(
+                f"Estimated Total Batches: {estimation['estimated_total_batches']:,}"
+            )
+            click.echo(
+                f"Estimated Full Epoch Time: {estimation['estimated_full_epoch_time_minutes']:.1f} minutes"
+            )
+
         click.echo()
         click.echo(result["benchmark_results"]["Recommendations"])
 
