@@ -1926,7 +1926,8 @@ def benchmark_training(
                 f"Estimated Total Batches: {estimation['estimated_total_batches']:,}"
             )
             click.echo(
-                f"Estimated Full Epoch Time: {estimation['estimated_full_epoch_time_minutes']:.1f} minutes"
+                f"Estimated Full Epoch Time: "
+                f"{estimation['estimated_full_epoch_time_minutes']:.1f} minutes"
             )
 
         click.echo()
