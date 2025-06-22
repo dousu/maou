@@ -29,10 +29,12 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
     - ローカルキャッシュによる重複ダウンロード回避
     - 100KB程度の小ファイル向けに最適化された並列処理設定
     - デフォルト16並列での高速データ転送
+    - バンドリング機能による1GB単位のファイル統合とキャッシュ効率化
 
     Note:
         大量の小ファイル (1M件，100KB/file程度)でのダウンロード時間を大幅短縮．
         gsutil並列コピーに匹敵するパフォーマンスを実現．
+        バンドリング機能により，ローカルキャッシュの管理とI/O効率をさらに向上．
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
@@ -49,6 +51,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 8,
             sample_ratio: Optional[float] = None,
+            array_type: str = "hcpe",
+            enable_bundling: bool = False,
+            bundle_size_gb: float = 1.0,
         ) -> None:
             self.__page_manager = GCSDataSource.PageManager(
                 bucket_name=bucket_name,
@@ -57,6 +62,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                 local_cache_dir=local_cache_dir,
                 max_workers=max_workers,
                 sample_ratio=sample_ratio,
+                array_type=array_type,
+                enable_bundling=enable_bundling,
+                bundle_size_gb=bundle_size_gb,
             )
 
         def train_test_split(
@@ -114,6 +122,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
             sample_ratio: Optional[float] = None,
+            array_type: str = "hcpe",
+            enable_bundling: bool = False,
+            bundle_size_gb: float = 1.0,
         ) -> None:
             # GCSクライアントは遅延初期化
             self._client = None
@@ -123,16 +134,20 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            self.array_type = array_type
             self.sample_ratio = (
                 max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
             )
             if local_cache_dir is None:
                 raise ValueError("local_cache_dir must be specified")
             self.local_cache_dir = Path(local_cache_dir)
+            self.enable_bundling = enable_bundling
+            self.bundle_size_gb = bundle_size_gb
             self.__pruning_info: dict[str, GCSDataSource.PageManager.PruningInfo] = (
                 defaultdict(GCSDataSource.PageManager.PruningInfo)
             )
             self._initialized = False
+            self._bundling_service = None
 
         @property
         def client(self) -> Any:
@@ -151,6 +166,20 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                     raise ValueError(f"Bucket '{self.bucket_name}' does not exist.")
             return self._bucket
 
+        @property
+        def bundling_service(self) -> Optional[Any]:
+            """バンドリングサービスを遅延初期化で取得"""
+            if self.enable_bundling and self._bundling_service is None:
+                from maou.app.common.bundling_service import BundlingService
+
+                bundle_cache_dir = self.local_cache_dir / "bundles"
+                self._bundling_service = BundlingService(
+                    cache_dir=bundle_cache_dir,
+                    target_size_gb=self.bundle_size_gb,
+                    array_type=self.array_type,
+                )
+            return self._bundling_service
+
         def _ensure_initialized(self) -> None:
             """データが初期化されていることを確認し，必要に応じて初期化を実行"""
             if self._initialized:
@@ -166,22 +195,13 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             # 初期化時にすべてのデータをダウンロード
             self.file_paths = self.__download_all_to_local()
 
-            # ダウンロードしたデータから__pruning_infoを作成する
-            total_rows = 0
-            # ディレクトリごとに処理されるようにソートする
-            self.file_paths.sort()
-            last_pruning_value = None
-            for file in self.file_paths:
-                data = load_array(file, mmap_mode="r", array_type="hcpe")
-                num_rows = data.shape[0]
-                # ファイルの親ディレクトリでプルーニングする
-                pruning_value = file.parent.absolute().name
-                if last_pruning_value != pruning_value:
-                    self.__pruning_info[pruning_value].start_idx = total_rows
-                    last_pruning_value = pruning_value
-                self.__pruning_info[pruning_value].append(file=file, count=num_rows)
-                total_rows += num_rows
-            self.total_rows = total_rows
+            # バンドリングが有効な場合はバンドルを作成
+            if self.enable_bundling and self.file_paths:
+                self.__setup_bundling()
+            else:
+                self.__setup_individual_files()
+
+            self.total_rows = sum(info.count for info in self.__pruning_info.values())
             self.total_pages = len(self.__pruning_info)
 
             self.logger.debug(self.__pruning_info)
@@ -193,6 +213,64 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             # データダウンロード完了後，クライアントを破棄してPickle化の問題を回避
             self._cleanup_clients()
             self._initialized = True
+
+        def __setup_bundling(self) -> None:
+            """バンドリング使用時のデータ構造セットアップ"""
+            try:
+                self.logger.info(
+                    f"Setting up bundling for {len(self.file_paths)} files"
+                )
+
+                # バンドルを作成
+                if self.bundling_service is not None:
+                    bundles = self.bundling_service.bundle_files(
+                        file_paths=self.file_paths,
+                        bundle_prefix=f"gcs_{self.data_name}",
+                        array_type=self.array_type,
+                    )
+                else:
+                    raise ValueError("Bundling service not initialized")
+
+                # バンドル情報をpruning_infoに変換
+                for bundle in bundles:
+                    # バンドル全体を1つのページとして扱う
+                    pruning_value = bundle.bundle_id
+                    self.__pruning_info[pruning_value].start_idx = 0
+                    self.__pruning_info[pruning_value].files = [
+                        (bundle.bundle_path, 0, bundle.total_records)
+                    ]
+                    self.__pruning_info[pruning_value].count = bundle.total_records
+
+                self.logger.info(f"Created {len(bundles)} bundles")
+
+            except Exception as e:
+                self.logger.error(f"Failed to setup bundling: {e}")
+                # フォールバックとして個別ファイルを使用
+                self.logger.info("Falling back to individual file mode")
+                self.__setup_individual_files()
+
+        def __setup_individual_files(self) -> None:
+            """個別ファイル使用時のデータ構造セットアップ"""
+            total_rows = 0
+            # ディレクトリごとに処理されるようにソートする
+            self.file_paths.sort()
+            last_pruning_value = None
+            for file in self.file_paths:
+                # Type assertion for array_type
+                from typing import Literal, cast
+
+                array_type_param = cast(
+                    Literal["auto", "hcpe", "preprocessing"], self.array_type
+                )
+                data = load_array(file, mmap_mode="r", array_type=array_type_param)
+                num_rows = data.shape[0]
+                # ファイルの親ディレクトリでプルーニングする
+                pruning_value = file.parent.absolute().name
+                if last_pruning_value != pruning_value:
+                    self.__pruning_info[pruning_value].start_idx = total_rows
+                    last_pruning_value = pruning_value
+                self.__pruning_info[pruning_value].append(file=file, count=num_rows)
+                total_rows += num_rows
 
         def _cleanup_clients(self) -> None:
             """GCSクライアントを破棄してDataLoader並列時のPickle化の問題を回避"""
@@ -458,9 +536,15 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
 
             file_paths = [path for (path, _, _) in self.__pruning_info[key].files]
             file_paths.sort()
+            # Type assertion for array_type
+            from typing import Literal, cast
+
+            array_type_param = cast(
+                Literal["auto", "hcpe", "preprocessing"], self.array_type
+            )
             data = np.concatenate(
                 [
-                    load_array(path, mmap_mode="r", array_type="hcpe")
+                    load_array(path, mmap_mode="r", array_type=array_type_param)
                     for path in file_paths
                 ]
             )
@@ -479,8 +563,15 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                         if start_idx <= idx < start_idx + num_rows:
                             relative_idx = idx - start_idx
                             # numpy structured arrayから直接レコードを取得
+                            # Type assertion for array_type
+                            from typing import Literal, cast
+
+                            array_type_param = cast(
+                                Literal["auto", "hcpe", "preprocessing"],
+                                self.array_type,
+                            )
                             npy_data = load_array(
-                                file, mmap_mode="r", array_type="hcpe"
+                                file, mmap_mode="r", array_type=array_type_param
                             )
                             return npy_data[relative_idx]
             raise IndexError(f"Index {idx} out of range.")
@@ -506,6 +597,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
         local_cache_dir: Optional[str] = None,
         max_workers: int = 16,
         sample_ratio: Optional[float] = None,
+        array_type: str = "hcpe",
+        enable_bundling: bool = False,
+        bundle_size_gb: float = 1.0,
     ) -> None:
         """
         Args:
@@ -517,6 +611,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
             sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
             max_workers (int): 並列ダウンロード数 (デフォルト: 16)
+            array_type (str): 配列タイプ ("hcpe" or "preprocessing")
+            enable_bundling (bool): バンドリング機能を有効にするかどうか (デフォルト: False)
+            bundle_size_gb (float): バンドルサイズ (GB) (デフォルト: 1.0)
         """
         if page_manager is None:
             if (
@@ -532,6 +629,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                     local_cache_dir=local_cache_dir,
                     max_workers=max_workers,
                     sample_ratio=sample_ratio,
+                    array_type=array_type,
+                    enable_bundling=enable_bundling,
+                    bundle_size_gb=bundle_size_gb,
                 )
             else:
                 raise MissingGCSConfig(

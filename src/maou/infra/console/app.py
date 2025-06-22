@@ -369,6 +369,21 @@ def hcpe_convert(
     required=False,
 )
 @click.option(
+    "--input-enable-bundling",
+    type=bool,
+    is_flag=True,
+    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-bundle-size-gb",
+    type=float,
+    help="Target bundle size in GB for array bundling (default: 1.0).",
+    default=1.0,
+    required=False,
+)
+@click.option(
     "--input-gcs",
     type=bool,
     is_flag=True,
@@ -482,6 +497,8 @@ def pre_process(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_enable_bundling: bool,
+    input_bundle_size_gb: float,
     input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
@@ -556,6 +573,8 @@ def pre_process(
                         data_name=input_data_name,
                         local_cache_dir=input_local_cache_dir,
                         max_workers=max_workers,
+                        enable_bundling=input_enable_bundling,
+                        bundle_size_gb=input_bundle_size_gb,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize GCSDataSource: {e}")
@@ -582,6 +601,8 @@ def pre_process(
                         data_name=input_data_name,
                         local_cache_dir=input_local_cache_dir,
                         max_workers=max_workers,
+                        enable_bundling=input_enable_bundling,
+                        bundle_size_gb=input_bundle_size_gb,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to initialize S3DataSource: {e}")
@@ -756,6 +777,21 @@ def pre_process(
     "--input-local-cache-dir",
     type=str,
     help="Directory path for storing the local cache of cloud data.",
+    required=False,
+)
+@click.option(
+    "--input-enable-bundling",
+    type=bool,
+    is_flag=True,
+    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-bundle-size-gb",
+    type=float,
+    help="Target bundle size in GB for array bundling (default: 1.0).",
+    default=1.0,
     required=False,
 )
 @click.option(
@@ -952,6 +988,8 @@ def learn_model(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_enable_bundling: bool,
+    input_bundle_size_gb: float,
     input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
@@ -1096,6 +1134,8 @@ def learn_model(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=None,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("GCSDataSourceSpliter not available")
@@ -1128,6 +1168,8 @@ def learn_model(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=None,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")
@@ -1242,6 +1284,21 @@ def learn_model(
     required=False,
 )
 @click.option(
+    "--input-enable-bundling",
+    type=bool,
+    is_flag=True,
+    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-bundle-size-gb",
+    type=float,
+    help="Target bundle size in GB for array bundling (default: 1.0).",
+    default=1.0,
+    required=False,
+)
+@click.option(
     "--input-gcs",
     type=bool,
     is_flag=True,
@@ -1324,6 +1381,8 @@ def benchmark_dataloader(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_enable_bundling: bool,
+    input_bundle_size_gb: float,
     input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
@@ -1419,6 +1478,8 @@ def benchmark_dataloader(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("GCSDataSourceSpliter not available")
@@ -1450,6 +1511,8 @@ def benchmark_dataloader(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")
@@ -1560,6 +1623,21 @@ def benchmark_dataloader(
     "--input-local-cache-dir",
     type=str,
     help="Directory path for storing the local cache of cloud data.",
+    required=False,
+)
+@click.option(
+    "--input-enable-bundling",
+    type=bool,
+    is_flag=True,
+    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--input-bundle-size-gb",
+    type=float,
+    help="Target bundle size in GB for array bundling (default: 1.0).",
+    default=1.0,
     required=False,
 )
 @click.option(
@@ -1722,6 +1800,8 @@ def benchmark_training(
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
+    input_enable_bundling: bool,
+    input_bundle_size_gb: float,
     input_gcs: Optional[bool],
     input_s3: Optional[bool],
     input_bucket_name: Optional[str],
@@ -1828,6 +1908,8 @@ def benchmark_training(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("GCSDataSourceSpliter not available")
@@ -1859,6 +1941,8 @@ def benchmark_training(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            enable_bundling=input_enable_bundling,
+                            bundle_size_gb=input_bundle_size_gb,
                         )
                     else:
                         app_logger.error("S3DataSourceSpliter not available")

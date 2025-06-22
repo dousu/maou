@@ -195,6 +195,41 @@ poetry run maou hcpe-convert \
   --max-workers 8
 ```
 
+#### Array Bundling for Efficient Caching
+**New Feature**: Bundle small numpy arrays into ~1GB chunks for optimal I/O performance.
+
+```bash
+# Enable bundling for S3/GCS downloads
+poetry run maou pre-process \
+  --input-s3 \
+  --input-bucket-name my-bucket \
+  --input-local-cache-dir ./cache \
+  --input-enable-bundling \
+  --input-bundle-size-gb 1.0 \
+  --max-workers 16
+
+# Enable bundling for learning workflows
+poetry run maou learn-model \
+  --input-s3 \
+  --input-bucket-name my-bucket \
+  --input-local-cache-dir ./cache \
+  --input-enable-bundling \
+  --input-bundle-size-gb 1.5 \
+  --gpu cuda:0
+```
+
+**Benefits of Array Bundling:**
+- **I/O Efficiency**: Reduces file count from thousands to dozens
+- **Cache Management**: 1GB chunks are easier to manage than many small files
+- **Memory Optimization**: Uses memory mapping for efficient access
+- **Performance**: Significantly faster data loading for training
+
+**How it Works:**
+1. Downloads individual arrays from cloud storage
+2. Combines arrays into ~1GB bundles locally
+3. Creates metadata files for fast array lookup
+4. Uses memory mapping for efficient data access during training
+
 ## Architecture
 
 The project follows Clean Architecture principles with strict dependency rules:
