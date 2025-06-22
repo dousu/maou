@@ -130,7 +130,7 @@ class TestHCPESchema:
 class TestPreprocessingSchema:
     """Test preprocessing schema functionality."""
 
-    def test_get_preprocessing_dtype(self) -> None:
+    def test_get_preprocessing_dtype(self) -> None:  # type: ignore[misc]
         """Test preprocessing dtype creation."""
         dtype = get_preprocessing_dtype()
 
@@ -155,8 +155,8 @@ class TestPreprocessingSchema:
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
-        # type: ignore[misc,index]
-        assert dtype["legalMoveMask"].subdtype[0] == np.uint8
+        subdtype = dtype["legalMoveMask"].subdtype  # type: ignore[misc]
+        assert subdtype[0] == np.uint8  # type: ignore[index]
 
     def test_preprocessing_dtype_constant(self) -> None:
         """Test PREPROCESSING_DTYPE constant matches function."""
