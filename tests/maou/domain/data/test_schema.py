@@ -155,7 +155,8 @@ class TestPreprocessingSchema:
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
-        assert dtype["legalMoveMask"].subdtype[0] == np.uint8  # type: ignore[misc]
+        # type: ignore[misc,index]
+        assert dtype["legalMoveMask"].subdtype[0] == np.uint8
 
     def test_preprocessing_dtype_constant(self) -> None:
         """Test PREPROCESSING_DTYPE constant matches function."""
