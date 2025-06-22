@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -37,7 +38,16 @@ class BenchmarkConfig:
 
     def __post_init__(self) -> None:
         if self.num_workers_to_test is None:
-            object.__setattr__(self, "num_workers_to_test", [0, 2, 4, 8, 16])
+            # Cap worker count at CPU cores, but don't exceed 16
+            cpu_count = os.cpu_count() or 1
+            max_workers = min(16, cpu_count)
+            # Create list of worker counts up to the CPU limit
+            worker_counts = [0, 2, 4, 8]
+            if max_workers not in worker_counts and max_workers > 8:
+                worker_counts.append(max_workers)
+            # Filter out counts that exceed CPU cores
+            worker_counts = [w for w in worker_counts if w <= max_workers]
+            object.__setattr__(self, "num_workers_to_test", worker_counts)
         if self.prefetch_factors_to_test is None:
             object.__setattr__(self, "prefetch_factors_to_test", [1, 2, 4, 8])
 
