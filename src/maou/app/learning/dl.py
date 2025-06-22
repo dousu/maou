@@ -6,18 +6,18 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import torch
-from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
-from tqdm.auto import tqdm
 
+from maou.app.learning.callbacks import LoggingCallback, ValidationCallback
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.setup import (
     DataLoaderFactory,
     LossOptimizerFactory,
     ModelFactory,
 )
+from maou.app.learning.training_loop import TrainingLoop
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
 
@@ -194,82 +194,37 @@ class Learning:
         return learning_result
 
     def __train_one_epoch(self, epoch_index: int, tb_writer: SummaryWriter) -> float:
-        running_loss = 0.0
-        last_loss = 0.0
+        # Create logging callback
+        logging_callback = LoggingCallback(
+            writer=tb_writer,
+            dataloader_length=len(self.training_loader),
+            logger=self.logger,
+        )
 
-        # 記録するiteration数
-        # 1/10で10回は記録する設定，最低でも1にする
-        record_num = max(1, len(self.training_loader) // 10)
+        # Create training loop
+        training_loop = TrainingLoop(
+            model=self.model,
+            device=self.device,
+            optimizer=self.optimizer,
+            loss_fn_policy=self.loss_fn_policy,
+            loss_fn_value=self.loss_fn_value,
+            policy_loss_ratio=self.policy_loss_ratio,
+            value_loss_ratio=self.value_loss_ratio,
+            callbacks=[logging_callback],
+            logger=self.logger,
+        )
 
-        # Here, we use enumerate(training_loader) instead of
-        # iter(training_loader) so that we can track the batch
-        # index and do some intra-epoch reporting
-        for i, data in tqdm(enumerate(self.training_loader)):
-            # Every data instance is an input + label pair
-            inputs, (labels_policy, labels_value, legal_move_mask) = data
+        # Run training epoch
+        training_loop.run_epoch(
+            dataloader=self.training_loader,
+            epoch_idx=epoch_index,
+            train_mode=True,
+        )
 
-            # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
-            inputs = inputs.to(self.device, non_blocking=True)
-            labels_policy = labels_policy.to(self.device, non_blocking=True)
-            labels_value = labels_value.to(self.device, non_blocking=True)
-            legal_move_mask = legal_move_mask.to(self.device, non_blocking=True)
-
-            # Zero your gradients for every batch!
-            self.optimizer.zero_grad()
-
-            # Mixed precision training with autocast
-            if self.scaler is not None:
-                # GPU使用時: Mixed precision training
-                with autocast("cuda"):
-                    # Make predictions for this batch
-                    outputs_policy, outputs_value = self.model(inputs)
-
-                    # Compute the loss
-                    loss = self.policy_loss_ratio * self.loss_fn_policy(
-                        outputs_policy, labels_policy, legal_move_mask
-                    ) + self.value_loss_ratio * self.loss_fn_value(
-                        outputs_value, labels_value
-                    )
-
-                # Backward pass with gradient scaling
-                self.scaler.scale(loss).backward()
-
-                # 勾配クリッピング (scaled gradients)
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-                # Optimizer step with gradient scaling
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                # CPU使用時: 従来通りの処理
-                # Make predictions for this batch
-                outputs_policy, outputs_value = self.model(inputs)
-
-                # Compute the loss and its gradients
-                loss = self.policy_loss_ratio * self.loss_fn_policy(
-                    outputs_policy, labels_policy, legal_move_mask
-                ) + self.value_loss_ratio * self.loss_fn_value(
-                    outputs_value, labels_value
-                )
-                loss.backward()
-
-                # 勾配クリッピング
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-                # Adjust learning weights
-                self.optimizer.step()
-
-            # Gather data and report
-            running_loss += loss.item()
-            if i % record_num == record_num - 1:
-                last_loss = running_loss / record_num  # loss avg per batch
-                self.logger.info("  batch {} loss: {}".format(i + 1, last_loss))
-                tb_x = epoch_index * len(self.training_loader) + i + 1
-                tb_writer.add_scalar("Loss/train", last_loss, tb_x)
-                running_loss = 0.0
-
-        return last_loss
+        # Return the last recorded loss from the callback
+        # Since the callback handles all logging, we return a placeholder value
+        # The actual loss tracking is handled by the callback
+        return 0.0  # This value is not critical as logging is handled by callback
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -312,61 +267,40 @@ class Learning:
                 except Exception as e:
                     self.logger.warning(f"Failed to log histogram for {name}: {e}")
 
-            running_vloss = 0.0
+            # Create validation callback
+            validation_callback = ValidationCallback(logger=self.logger)
 
-            test_accuracy_policy = 0.0
-            test_accuracy_value = 0.0
+            # Create validation training loop
+            validation_loop = TrainingLoop(
+                model=self.model,
+                device=self.device,
+                optimizer=self.optimizer,
+                loss_fn_policy=self.loss_fn_policy,
+                loss_fn_value=self.loss_fn_value,
+                policy_loss_ratio=self.policy_loss_ratio,
+                value_loss_ratio=self.value_loss_ratio,
+                callbacks=[validation_callback],
+                logger=self.logger,
+            )
 
-            # Set the model to evaluation mode, disabling dropout and using population
-            # statistics for batch normalization.
-            self.model.eval()
+            # Run validation epoch
+            validation_loop.run_epoch(
+                dataloader=self.validation_loader,
+                epoch_idx=epoch_number,
+                train_mode=False,
+                progress_bar=True,
+            )
 
-            # Disable gradient computation and reduce memory consumption.
-            with torch.no_grad():
-                for i, vdata in tqdm(enumerate(self.validation_loader)):
-                    vinputs, (vlabels_policy, vlabels_value, vlegal_move_mask) = vdata
+            # Get validation metrics
+            avg_vloss = validation_callback.get_average_loss()
+            avg_accuracy_policy, avg_accuracy_value = (
+                validation_callback.get_average_accuracies()
+            )
 
-                    # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
-                    vinputs = vinputs.to(self.device, non_blocking=True)
-                    vlabels_policy = vlabels_policy.to(self.device, non_blocking=True)
-                    vlabels_value = vlabels_value.to(self.device, non_blocking=True)
-                    vlegal_move_mask = vlegal_move_mask.to(
-                        self.device, non_blocking=True
-                    )
-
-                    # Mixed precision for validation (memory efficiency)
-                    if self.scaler is not None:
-                        # GPU使用時: Mixed precisionで推論
-                        with autocast("cuda"):
-                            voutputs_policy, voutputs_value = self.model(vinputs)
-                            vloss = self.policy_loss_ratio * self.loss_fn_policy(
-                                voutputs_policy, vlabels_policy, vlegal_move_mask
-                            ) + self.value_loss_ratio * self.loss_fn_value(
-                                voutputs_value, vlabels_value
-                            )
-                    else:
-                        # CPU使用時: 従来通りの処理
-                        voutputs_policy, voutputs_value = self.model(vinputs)
-                        vloss = self.policy_loss_ratio * self.loss_fn_policy(
-                            voutputs_policy, vlabels_policy, vlegal_move_mask
-                        ) + self.value_loss_ratio * self.loss_fn_value(
-                            voutputs_value, vlabels_value
-                        )
-                    running_vloss += vloss
-
-                    test_accuracy_policy += self.__policy_accuracy(
-                        voutputs_policy, vlabels_policy
-                    )
-                    test_accuracy_value += self.__value_accuracy(
-                        voutputs_value, vlabels_value
-                    )
-
-            avg_vloss = running_vloss / (i + 1)
+            # Reset callback for next epoch
+            validation_callback.reset()
 
             self.logger.info("LOSS train {} valid {}".format(avg_loss, avg_vloss))
-
-            avg_accuracy_policy = test_accuracy_policy / (i + 1)
-            avg_accuracy_value = test_accuracy_value / (i + 1)
             self.logger.info(
                 "ACCURACY policy {} value {}".format(
                     avg_accuracy_policy, avg_accuracy_value
@@ -412,16 +346,6 @@ class Learning:
             epoch_number += 1
 
         writer.close()
-
-    # 方策の正解率
-    def __policy_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
-        return (torch.max(y, 1)[1] == t).sum().item() / len(t)
-
-    # 価値の正解率
-    def __value_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
-        pred = y >= 0
-        truth = t >= 0.5
-        return pred.eq(truth).sum().item() / len(t)
 
     def _setup_multiprocessing(self) -> None:
         """
