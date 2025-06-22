@@ -236,8 +236,7 @@ class TestIntegrationConverterPreprocess:
             for input_path in input_paths
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -321,8 +320,7 @@ class TestIntegrationConverterPreprocess:
             for input_path in input_paths
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -338,7 +336,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name,
             local_cache_dir=str(temp_s3_cache_dir),
-            array_type="preprocessing"
+            array_type="preprocessing",
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする
@@ -413,8 +411,7 @@ class TestIntegrationConverterPreprocess:
             for p in [Path("2020-12-03"), Path("2020-01-30"), Path("2020-01-31")]
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -493,7 +490,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name_hcpe,
             local_cache_dir=str(temp_s3_cache_dir),
-            array_type="hcpe"
+            array_type="hcpe",
         )
         transformer = PreProcess(
             datasource=datasource, feature_store=feature_store_preprocess
@@ -508,8 +505,7 @@ class TestIntegrationConverterPreprocess:
             for p in [Path("2020-12-03"), Path("2020-01-30"), Path("2020-01-31")]
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -525,7 +521,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name_preprocess,
             local_cache_dir=str(temp_s3_cache_dir),
-            array_type="preprocessing"
+            array_type="preprocessing",
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする

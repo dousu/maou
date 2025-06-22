@@ -111,13 +111,13 @@ def validate_hcpe_array(array: np.ndarray) -> bool:
 
 def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
     """Convert numpy dtype to BigQuery type string.
-    
+
     Args:
         numpy_dtype: numpy dtype to convert
-        
+
     Returns:
         str: BigQuery type string
-        
+
     Raises:
         ValueError: If numpy dtype is not supported
     """
@@ -126,10 +126,10 @@ def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
         return "DATE"
     elif numpy_dtype.name == "datetime64[ms]":
         return "TIMESTAMP"
-    
+
     # Handle by kind
     kind = numpy_dtype.kind
-    
+
     if kind in {"i", "u"}:  # signed and unsigned integers
         return "INTEGER"
     elif kind in {"f"}:  # floating point
@@ -150,39 +150,43 @@ def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
 
 def get_bigquery_schema_for_hcpe() -> list[dict]:
     """Get BigQuery schema definition for HCPE data.
-    
+
     Returns:
         list: BigQuery schema fields as dictionaries
     """
     hcpe_dtype = get_hcpe_dtype()
     schema = []
-    
+
     for field_name, (field_dtype, _) in hcpe_dtype.fields.items():
-        schema.append({
-            "name": field_name,
-            "type": numpy_dtype_to_bigquery_type(field_dtype),
-            "mode": "REQUIRED"
-        })
-    
+        schema.append(
+            {
+                "name": field_name,
+                "type": numpy_dtype_to_bigquery_type(field_dtype),
+                "mode": "REQUIRED",
+            }
+        )
+
     return schema
 
 
 def get_bigquery_schema_for_preprocessing() -> list[dict]:
     """Get BigQuery schema definition for preprocessing data.
-    
+
     Returns:
         list: BigQuery schema fields as dictionaries
     """
     preprocessing_dtype = get_preprocessing_dtype()
     schema = []
-    
+
     for field_name, (field_dtype, _) in preprocessing_dtype.fields.items():
-        schema.append({
-            "name": field_name,
-            "type": numpy_dtype_to_bigquery_type(field_dtype),
-            "mode": "REQUIRED"
-        })
-    
+        schema.append(
+            {
+                "name": field_name,
+                "type": numpy_dtype_to_bigquery_type(field_dtype),
+                "mode": "REQUIRED",
+            }
+        )
+
     return schema
 
 

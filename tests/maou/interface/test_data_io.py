@@ -36,7 +36,7 @@ class TestInterfaceDataIO:
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, file_path)
-            
+
             # Check for the actual .npy file that was created
             assert file_path.exists()
 
@@ -56,12 +56,14 @@ class TestInterfaceDataIO:
             from maou.domain.data.io import save_preprocessing_array
 
             save_preprocessing_array(prep_array, file_path)
-            
+
             # Check for the actual .npy file that was created
             assert file_path.exists()
 
             # Load with memory mapping
-            loaded_array = load_array(file_path, mmap_mode="r", array_type="preprocessing")
+            loaded_array = load_array(
+                file_path, mmap_mode="r", array_type="preprocessing"
+            )
 
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, prep_array)
@@ -232,7 +234,7 @@ class TestIntegrationWithInfrastructure:
             for file_path in file_paths:
                 # Check for the actual .npy file that was created
                 assert file_path.exists()
-                
+
                 # This is how DataSource classes typically load files with explicit type
                 data = load_array(file_path, mmap_mode="r", array_type="hcpe")
                 total_rows += data.shape[0]
@@ -266,7 +268,7 @@ class TestIntegrationWithInfrastructure:
             for file_path in file_paths:
                 # Check for the actual .npy file that was created
                 assert file_path.exists()
-                
+
                 data = load_array(file_path, mmap_mode="r", array_type="preprocessing")
                 batches.append((str(file_path), data))
 

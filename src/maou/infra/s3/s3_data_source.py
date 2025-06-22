@@ -17,7 +17,6 @@ from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array
 
 
-
 class MissingS3Config(Exception):
     pass
 
@@ -519,7 +518,10 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             file_paths = [path for (path, _, _) in self.__pruning_info[key].files]
             file_paths.sort()
             data = np.concatenate(
-                [load_array(path, mmap_mode="r", array_type=self.array_type) for path in file_paths]
+                [
+                    load_array(path, mmap_mode="r", array_type=self.array_type)
+                    for path in file_paths
+                ]
             )
             return data
 
@@ -536,7 +538,9 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                         if start_idx <= idx < start_idx + num_rows:
                             relative_idx = idx - start_idx
                             # numpy structured arrayから直接レコードを取得
-                            npy_data = load_array(file, mmap_mode="r", array_type=self.array_type)
+                            npy_data = load_array(
+                                file, mmap_mode="r", array_type=self.array_type
+                            )
                             return npy_data[relative_idx]
             raise IndexError(f"Index {idx} out of range.")
 

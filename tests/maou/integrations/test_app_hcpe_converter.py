@@ -475,7 +475,7 @@ class TestIntegrationHcpeConverter:
             prefix=self.prefix,
             data_name=self.data_name,
             local_cache_dir=str(temp_s3_cache_dir),
-            array_type="hcpe"
+            array_type="hcpe",
         )
         s3_data = [record_to_dict(s3_datasource[i]) for i in range(len(s3_datasource))]
         # s3のデータはIDで一意になるがローカルに合わせてソートする

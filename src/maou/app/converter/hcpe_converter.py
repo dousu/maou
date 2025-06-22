@@ -261,7 +261,9 @@ class HCPEConverter:
                         "success"
                     ):
                         # Load the saved file and store it in feature store
-                        npy_file = option.output_dir / file.with_suffix(".hcpe.npy").name
+                        npy_file = (
+                            option.output_dir / file.with_suffix(".hcpe.npy").name
+                        )
                         if npy_file.exists():
                             from maou.domain.data.io import load_hcpe_array
 
@@ -309,11 +311,15 @@ class HCPEConverter:
                             ):
                                 # Load the saved file and store it in feature store
                                 npy_file = (
-                                    option.output_dir / file.with_suffix(".hcpe.npy").name
+                                    option.output_dir
+                                    / file.with_suffix(".hcpe.npy").name
                                 )
                                 if npy_file.exists():
                                     from maou.domain.data.io import load_hcpe_array
-                                    structured_array = load_hcpe_array(npy_file, validate=False)
+
+                                    structured_array = load_hcpe_array(
+                                        npy_file, validate=False
+                                    )
                                     self.__feature_store.store_features(
                                         name=file.with_suffix(".hcpe").name,
                                         key_columns=["id"],

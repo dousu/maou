@@ -69,7 +69,7 @@ def save_hcpe_array(
             if not file_path.suffix:
                 # Add .raw extension if no extension is provided
                 file_path = file_path.with_suffix(".raw")
-            
+
             # High-performance binary save using tofile() for all formats
             array.tofile(file_path)
             logger.debug(f"Saved HCPE array to {file_path} using tofile()")
@@ -100,7 +100,7 @@ def load_hcpe_array(
     """
     try:
         from .schema import get_hcpe_dtype
-        
+
         file_path = Path(file_path)
 
         # Check for file existence, trying different extensions if needed
@@ -130,21 +130,27 @@ def load_hcpe_array(
                 # First try to check if it's a standard .npy file
                 with open(file_path, "rb") as f:
                     header = f.read(10)
-                    if header.startswith(b'\x93NUMPY'):
+                    if header.startswith(b"\x93NUMPY"):
                         # It's a standard .npy file with numpy header
                         if mmap_mode:
                             array = np.load(file_path, mmap_mode=mmap_mode)
                         else:
                             array = np.load(file_path)
-                        logger.debug(f"Loaded HCPE array from standard .npy file {file_path}")
+                        logger.debug(
+                            f"Loaded HCPE array from standard .npy file {file_path}"
+                        )
                     else:
                         # It's a raw binary file (created with tofile())
                         if mmap_mode:
                             array = np.memmap(file_path, dtype=dtype, mode=mmap_mode)
-                            logger.debug(f"Loaded HCPE array as memmap from {file_path}")
+                            logger.debug(
+                                f"Loaded HCPE array as memmap from {file_path}"
+                            )
                         else:
                             array = np.fromfile(file_path, dtype=dtype)
-                            logger.debug(f"Loaded HCPE array using fromfile() from {file_path}")
+                            logger.debug(
+                                f"Loaded HCPE array using fromfile() from {file_path}"
+                            )
             except Exception:
                 # Fallback to raw binary reading
                 if mmap_mode:
@@ -210,7 +216,7 @@ def save_preprocessing_array(
             if not file_path.suffix:
                 # Add .raw extension if no extension is provided
                 file_path = file_path.with_suffix(".raw")
-            
+
             # High-performance binary save using tofile() for all formats
             array.tofile(file_path)
             logger.debug(f"Saved preprocessing array to {file_path} using tofile()")
@@ -243,7 +249,7 @@ def load_preprocessing_array(
     """
     try:
         from .schema import get_preprocessing_dtype
-        
+
         file_path = Path(file_path)
 
         # Check for file existence, trying different extensions if needed
@@ -273,29 +279,39 @@ def load_preprocessing_array(
                 # First try to check if it's a standard .npy file
                 with open(file_path, "rb") as f:
                     header = f.read(10)
-                    if header.startswith(b'\x93NUMPY'):
+                    if header.startswith(b"\x93NUMPY"):
                         # It's a standard .npy file with numpy header
                         if mmap_mode:
                             array = np.load(file_path, mmap_mode=mmap_mode)
                         else:
                             array = np.load(file_path)
-                        logger.debug(f"Loaded preprocessing array from standard .npy file {file_path}")
+                        logger.debug(
+                            f"Loaded preprocessing array from standard .npy file {file_path}"
+                        )
                     else:
                         # It's a raw binary file (created with tofile())
                         if mmap_mode:
                             array = np.memmap(file_path, dtype=dtype, mode=mmap_mode)
-                            logger.debug(f"Loaded preprocessing array as memmap from {file_path}")
+                            logger.debug(
+                                f"Loaded preprocessing array as memmap from {file_path}"
+                            )
                         else:
                             array = np.fromfile(file_path, dtype=dtype)
-                            logger.debug(f"Loaded preprocessing array using fromfile() from {file_path}")
+                            logger.debug(
+                                f"Loaded preprocessing array using fromfile() from {file_path}"
+                            )
             except Exception:
                 # Fallback to raw binary reading
                 if mmap_mode:
                     array = np.memmap(file_path, dtype=dtype, mode=mmap_mode)
-                    logger.debug(f"Loaded preprocessing array as memmap from {file_path}")
+                    logger.debug(
+                        f"Loaded preprocessing array as memmap from {file_path}"
+                    )
                 else:
                     array = np.fromfile(file_path, dtype=dtype)
-                    logger.debug(f"Loaded preprocessing array using fromfile() from {file_path}")
+                    logger.debug(
+                        f"Loaded preprocessing array using fromfile() from {file_path}"
+                    )
         else:
             # This should not happen with current implementation
             raise DataIOError(f"Unsupported file format: {file_path.suffix}")
@@ -431,19 +447,19 @@ def save_array_to_buffer(
     array_type: Optional[Literal["hcpe", "preprocessing"]] = None,
 ) -> BytesIO:
     """Save numpy array to BytesIO buffer using high-performance binary format.
-    
+
     This function provides a consistent way to serialize numpy arrays to BytesIO
     buffers for cloud storage, using the same high-performance tofile() approach
     as the file-based save functions.
-    
+
     Args:
         array: numpy array to save to buffer
         validate: Whether to validate schema before saving
         array_type: Type of array for validation ("hcpe" or "preprocessing")
-    
+
     Returns:
         BytesIO: Buffer containing the serialized array data
-    
+
     Raises:
         DataIOError: If buffer creation fails
         SchemaValidationError: If validation fails
@@ -458,15 +474,15 @@ def save_array_to_buffer(
                 logger.debug("Preprocessing array validation passed for buffer save")
             else:
                 raise ValueError(f"Unknown array type: {array_type}")
-        
+
         # Create buffer and write binary data using high-performance approach
         buffer = BytesIO()
         buffer.write(array.tobytes())
         buffer.seek(0)
-        
+
         logger.debug(f"Saved array to buffer using tobytes(), shape: {array.shape}")
         return buffer
-        
+
     except Exception as e:
         raise DataIOError(f"Failed to save array to buffer: {e}") from e
 
@@ -510,24 +526,26 @@ def get_file_info(file_path: Union[str, Path]) -> Dict[str, Any]:
         elif file_path.suffix == ".raw":
             # For .raw files, determine dtype and calculate shape from file size
             from .schema import get_hcpe_dtype, get_preprocessing_dtype
-            
+
             # Try to determine array type and dtype
             file_name = file_path.name.lower()
             if "hcpe" in file_name or "game" in file_name:
                 dtype = get_hcpe_dtype()
                 info["array_type"] = "hcpe"
-            elif "pre" in file_name or "processing" in file_name or "train" in file_name:
+            elif (
+                "pre" in file_name or "processing" in file_name or "train" in file_name
+            ):
                 dtype = get_preprocessing_dtype()
                 info["array_type"] = "preprocessing"
             else:
                 # Default to HCPE if can't determine
                 dtype = get_hcpe_dtype()
                 info["array_type"] = "unknown"
-            
+
             # Calculate array shape from file size
             element_size = dtype.itemsize
             total_elements = file_path.stat().st_size // element_size
-            
+
             info["shape"] = (total_elements,)
             info["dtype"] = str(dtype)
             info["size"] = total_elements
@@ -544,27 +562,33 @@ def get_file_info(file_path: Union[str, Path]) -> Dict[str, Any]:
                     info["fortran_order"] = fortran_order
             except (ValueError, OSError) as e:
                 # If reading header fails, treat as raw binary file (created with tofile())
-                logger.debug(f"Failed to read numpy header from {file_path}, treating as raw binary: {e}")
-                
+                logger.debug(
+                    f"Failed to read numpy header from {file_path}, treating as raw binary: {e}"
+                )
+
                 from .schema import get_hcpe_dtype, get_preprocessing_dtype
-                
+
                 # Try to determine array type and dtype from filename
                 file_name = file_path.name.lower()
                 if "hcpe" in file_name or "game" in file_name:
                     dtype = get_hcpe_dtype()
                     info["array_type"] = "hcpe"
-                elif "pre" in file_name or "processing" in file_name or "train" in file_name:
+                elif (
+                    "pre" in file_name
+                    or "processing" in file_name
+                    or "train" in file_name
+                ):
                     dtype = get_preprocessing_dtype()
                     info["array_type"] = "preprocessing"
                 else:
                     # Default to HCPE if can't determine
                     dtype = get_hcpe_dtype()
                     info["array_type"] = "unknown"
-                
+
                 # Calculate array shape from file size
                 element_size = dtype.itemsize
                 total_elements = file_path.stat().st_size // element_size
-                
+
                 info["shape"] = (total_elements,)
                 info["dtype"] = str(dtype)
                 info["size"] = total_elements

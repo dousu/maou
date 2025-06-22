@@ -11,8 +11,6 @@ from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array
 
 
-
-
 class MissingFileDataConfig(Exception):
     pass
 
@@ -88,7 +86,9 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
                     relative_idx = idx - start_idx
 
                     # numpy structured arrayから直接レコードを取得
-                    npy_data = load_array(file, mmap_mode="r", array_type=self.array_type)
+                    npy_data = load_array(
+                        file, mmap_mode="r", array_type=self.array_type
+                    )
                     return npy_data[relative_idx]
 
             raise IndexError(f"Index {idx} out of range.")

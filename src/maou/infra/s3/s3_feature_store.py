@@ -10,8 +10,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from tqdm.auto import tqdm
 
-from maou.interface import converter, preprocess
 from maou.domain.data.io import save_array_to_buffer
+from maou.interface import converter, preprocess
 
 
 class NotFoundKeyColumns(Exception):
@@ -329,23 +329,16 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
                 # 配列タイプを自動判定してvalidation付きで保存
                 try:
                     buffer = save_array_to_buffer(
-                        structured_array, 
-                        validate=True,
-                        array_type="hcpe"
+                        structured_array, validate=True, array_type="hcpe"
                     )
                 except Exception:
                     try:
                         buffer = save_array_to_buffer(
-                            structured_array, 
-                            validate=True,
-                            array_type="preprocessing"
+                            structured_array, validate=True, array_type="preprocessing"
                         )
                     except Exception:
                         # フォールバック：検証なしで保存
-                        buffer = save_array_to_buffer(
-                            structured_array, 
-                            validate=False
-                        )
+                        buffer = save_array_to_buffer(structured_array, validate=False)
 
                 # セキュリティのため常にserver-side encryptionを有効化
                 self.s3_client.put_object(

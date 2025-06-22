@@ -288,7 +288,7 @@ class TestFileInfo:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "info_test.npy"
             save_hcpe_array(array, file_path)
-            
+
             # Get info for the actual .npy file that was created (using tofile())
             info = get_file_info(file_path)
 

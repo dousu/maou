@@ -127,7 +127,9 @@ def load_structured_array(
     """
     # For backward compatibility, try to load with auto-detection first
     try:
-        return load_array(file_path, array_type="auto", mmap_mode=mmap_mode, validate=False)
+        return load_array(
+            file_path, array_type="auto", mmap_mode=mmap_mode, validate=False
+        )
     except Exception:
         # Fallback to the old behavior
         return load_numpy_array(file_path, mmap_mode=mmap_mode, validate=False)

@@ -93,14 +93,18 @@ class DataIOService:
                 else:
                     # Check if this is a .raw file that we can't handle as generic numpy
                     if file_path.suffix == ".raw":
-                        raise DataIOError(f"Cannot load .raw file {file_path} without known schema. Use array_type='hcpe' or 'preprocessing'.")
-                    
+                        raise DataIOError(
+                            f"Cannot load .raw file {file_path} without known schema. Use array_type='hcpe' or 'preprocessing'."
+                        )
+
                     # Check if .raw file exists instead
                     if file_path.suffix in (".npy", ".npz"):
                         raw_path = file_path.with_suffix(".raw")
                         if raw_path.exists():
-                            raise DataIOError(f"Found .raw file {raw_path} but cannot load without known schema. Use array_type='hcpe' or 'preprocessing'.")
-                    
+                            raise DataIOError(
+                                f"Found .raw file {raw_path} but cannot load without known schema. Use array_type='hcpe' or 'preprocessing'."
+                            )
+
                     return np.load(file_path, mmap_mode=mmap_mode)
 
         except Exception as e:
@@ -225,7 +229,11 @@ class DataIOService:
                         file_name = file_path.name.lower()
                         if "hcpe" in file_name or "game" in file_name:
                             return "hcpe"
-                        elif "pre" in file_name or "processing" in file_name or "train" in file_name:
+                        elif (
+                            "pre" in file_name
+                            or "processing" in file_name
+                            or "train" in file_name
+                        ):
                             return "preprocessing"
                         else:
                             return "unknown"
@@ -235,7 +243,7 @@ class DataIOService:
                         if raw_path.exists():
                             # Recursively detect on the .raw file
                             return DataIOService._detect_array_type(raw_path)
-                    
+
                     # Load just the first few records for type detection
                     full_array = np.load(file_path, mmap_mode="r")
                     sample = (

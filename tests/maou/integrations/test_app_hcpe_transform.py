@@ -195,8 +195,7 @@ class TestIntegrationPreProcess:
             for input_path in input_paths
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはhcpeに入っているデータで行わないといけない
@@ -263,8 +262,7 @@ class TestIntegrationPreProcess:
             for input_path in input_paths
         ]
         local_datasource = FileDataSource(
-            file_paths=output_paths,
-            array_type="preprocessing"
+            file_paths=output_paths, array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートはhcpeに入っているデータで行わないといけない
@@ -281,7 +279,7 @@ class TestIntegrationPreProcess:
             prefix=self.prefix,
             data_name=self.data_name,
             local_cache_dir=str(temp_s3_cache_dir),
-            array_type="preprocessing"
+            array_type="preprocessing",
         )
         s3_data = [record_to_dict(s3_datasource[i]) for i in range(len(s3_datasource))]
         # BQのデータはIDで一意になるがローカルに合わせてソートする

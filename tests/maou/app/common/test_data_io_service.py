@@ -8,8 +8,6 @@ import pytest
 
 from maou.app.common.data_io_service import (
     DataIOService,
-    load_numpy_array,
-    save_numpy_array,
 )
 from maou.domain.data.io import DataIOError
 from maou.domain.data.schema import (
@@ -35,7 +33,7 @@ class TestDataIOService:
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, file_path)
-            
+
             # The .npy file should be created using tofile()
             assert file_path.exists()
 
@@ -59,12 +57,14 @@ class TestDataIOService:
             from maou.domain.data.io import save_preprocessing_array
 
             save_preprocessing_array(prep_array, file_path)
-            
+
             # The .npy file should be created using tofile()
             assert file_path.exists()
 
             # Load using service with explicit type
-            loaded_array = DataIOService.load_array(file_path, array_type="preprocessing")
+            loaded_array = DataIOService.load_array(
+                file_path, array_type="preprocessing"
+            )
 
             np.testing.assert_array_equal(loaded_array, prep_array)
 
@@ -78,12 +78,14 @@ class TestDataIOService:
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, file_path)
-            
+
             # The .npy file should be created using tofile()
             assert file_path.exists()
 
             # Load with memory mapping
-            loaded_array = DataIOService.load_array(file_path, mmap_mode="r", array_type="hcpe")
+            loaded_array = DataIOService.load_array(
+                file_path, mmap_mode="r", array_type="hcpe"
+            )
 
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, hcpe_array)
@@ -114,10 +116,14 @@ class TestDataIOService:
             file_path = Path(temp_dir) / "test_compressed.npz"
 
             # Save compressed
-            DataIOService.save_array(prep_array, file_path, array_type="preprocessing", compress=True)
+            DataIOService.save_array(
+                prep_array, file_path, array_type="preprocessing", compress=True
+            )
 
             # Load and verify
-            loaded_array = DataIOService.load_array(file_path, array_type="preprocessing")
+            loaded_array = DataIOService.load_array(
+                file_path, array_type="preprocessing"
+            )
             np.testing.assert_array_equal(loaded_array, prep_array)
 
     def test_explicit_type_specification(self):
@@ -157,6 +163,7 @@ class TestDataIOService:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.npy"
             from maou.domain.data.io import save_hcpe_array
+
             save_hcpe_array(hcpe_array, file_path)
 
             # Should raise error with invalid type
@@ -185,6 +192,7 @@ class TestConvenienceFunctions:
             # The convenience function uses auto-detection which may fail with tofile()
             # For now, we'll use the interface function with explicit type
             from maou.interface.data_io import load_array
+
             loaded_array = load_array(file_path, array_type="hcpe", mmap_mode="r")
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, hcpe_array)
@@ -198,7 +206,8 @@ class TestConvenienceFunctions:
             file_path = Path(temp_dir) / "convenience_save.npy"
 
             # Use interface function with explicit type instead of convenience function
-            from maou.interface.data_io import save_array, load_array
+            from maou.interface.data_io import load_array, save_array
+
             save_array(prep_array, file_path, array_type="preprocessing")
 
             # Verify file was created and is readable
