@@ -216,7 +216,7 @@ class TestIntegrationConverterPreprocess:
         )
         HCPEConverter().convert(hcpe_option)
         output_paths_hcpe = [
-            hcpe_option.output_dir / input_path.with_suffix(".npy").name
+            hcpe_option.output_dir / input_path.with_suffix(".hcpe.npy").name
             for input_path in input_paths
         ]
 
@@ -224,7 +224,7 @@ class TestIntegrationConverterPreprocess:
             output_dir=preprocess_output_dir,
             max_workers=1,
         )
-        datasource = FileDataSource(file_paths=output_paths_hcpe)
+        datasource = FileDataSource(file_paths=output_paths_hcpe, array_type="hcpe")
         transformer = PreProcess(
             datasource=datasource, feature_store=feature_store_preprocess
         )
@@ -237,6 +237,7 @@ class TestIntegrationConverterPreprocess:
         ]
         local_datasource = FileDataSource(
             file_paths=output_paths,
+            array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -300,7 +301,7 @@ class TestIntegrationConverterPreprocess:
         )
         HCPEConverter().convert(hcpe_option)
         output_paths_hcpe = [
-            hcpe_option.output_dir / input_path.with_suffix(".npy").name
+            hcpe_option.output_dir / input_path.with_suffix(".hcpe.npy").name
             for input_path in input_paths
         ]
 
@@ -308,7 +309,7 @@ class TestIntegrationConverterPreprocess:
             output_dir=preprocess_output_dir,
             max_workers=1,
         )
-        datasource = FileDataSource(file_paths=output_paths_hcpe)
+        datasource = FileDataSource(file_paths=output_paths_hcpe, array_type="hcpe")
         transformer = PreProcess(
             datasource=datasource, feature_store=feature_store_preprocess
         )
@@ -321,6 +322,7 @@ class TestIntegrationConverterPreprocess:
         ]
         local_datasource = FileDataSource(
             file_paths=output_paths,
+            array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -336,6 +338,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name,
             local_cache_dir=str(temp_s3_cache_dir),
+            array_type="preprocessing"
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする
@@ -411,6 +414,7 @@ class TestIntegrationConverterPreprocess:
         ]
         local_datasource = FileDataSource(
             file_paths=output_paths,
+            array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -489,6 +493,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name_hcpe,
             local_cache_dir=str(temp_s3_cache_dir),
+            array_type="hcpe"
         )
         transformer = PreProcess(
             datasource=datasource, feature_store=feature_store_preprocess
@@ -504,6 +509,7 @@ class TestIntegrationConverterPreprocess:
         ]
         local_datasource = FileDataSource(
             file_paths=output_paths,
+            array_type="preprocessing"
         )
         local_data = [local_datasource[i] for i in range(len(local_datasource))]
         # ソートする
@@ -519,6 +525,7 @@ class TestIntegrationConverterPreprocess:
             prefix=self.prefix,
             data_name=data_name_preprocess,
             local_cache_dir=str(temp_s3_cache_dir),
+            array_type="preprocessing"
         )
         s3_data = [s3_datasource[i] for i in range(len(s3_datasource))]
         # ローカルと同じようにソートする

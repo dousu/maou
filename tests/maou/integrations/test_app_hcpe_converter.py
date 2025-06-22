@@ -286,9 +286,9 @@ class TestIntegrationHcpeConverter:
             feature_store=feature_store,
         ).convert(option)
 
-        # ローカル
+        # ローカル - .hcpe.npyファイル（内部では高性能tofile()を使用）
         output_paths = [
-            option.output_dir / input_path.with_suffix(".npy").name
+            option.output_dir / input_path.with_suffix(".hcpe.npy").name
             for input_path in input_paths
         ]
         schema = {
@@ -449,9 +449,9 @@ class TestIntegrationHcpeConverter:
             feature_store=feature_store,
         ).convert(option)
 
-        # ローカル
+        # ローカル - .hcpe.npyファイル（内部では高性能tofile()を使用）
         output_paths = [
-            option.output_dir / input_path.with_suffix(".npy").name
+            option.output_dir / input_path.with_suffix(".hcpe.npy").name
             for input_path in input_paths
         ]
         local_datasource = FileDataSource(
@@ -475,6 +475,7 @@ class TestIntegrationHcpeConverter:
             prefix=self.prefix,
             data_name=self.data_name,
             local_cache_dir=str(temp_s3_cache_dir),
+            array_type="hcpe"
         )
         s3_data = [record_to_dict(s3_datasource[i]) for i in range(len(s3_datasource))]
         # s3のデータはIDで一意になるがローカルに合わせてソートする

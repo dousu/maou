@@ -17,6 +17,7 @@ from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array
 
 
+
 class MissingS3Config(Exception):
     pass
 
@@ -50,6 +51,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 8,
             sample_ratio: Optional[float] = None,
+            array_type: str = "hcpe",
         ) -> None:
             self.__page_manager = S3DataSource.PageManager(
                 bucket_name=bucket_name,
@@ -58,6 +60,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 local_cache_dir=local_cache_dir,
                 max_workers=max_workers,
                 sample_ratio=sample_ratio,
+                array_type=array_type,
             )
 
         def train_test_split(
@@ -115,6 +118,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: str,
             max_workers: int = 16,
             sample_ratio: Optional[float] = None,
+            array_type: str = "hcpe",
         ) -> None:
             # S3クライアントは遅延初期化
             self._s3_client = None
@@ -124,6 +128,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            self.array_type = array_type
             self.sample_ratio = (
                 max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
             )
@@ -186,7 +191,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self.file_paths.sort()
             last_pruning_value = None
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r", array_type=self.array_type)
                 num_rows = data.shape[0]
                 # ファイルの親ディレクトリでプルーニングする
                 pruning_value = file.parent.absolute().name
@@ -514,7 +519,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             file_paths = [path for (path, _, _) in self.__pruning_info[key].files]
             file_paths.sort()
             data = np.concatenate(
-                [load_array(path, mmap_mode="r") for path in file_paths]
+                [load_array(path, mmap_mode="r", array_type=self.array_type) for path in file_paths]
             )
             return data
 
@@ -531,7 +536,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                         if start_idx <= idx < start_idx + num_rows:
                             relative_idx = idx - start_idx
                             # numpy structured arrayから直接レコードを取得
-                            npy_data = load_array(file, mmap_mode="r")
+                            npy_data = load_array(file, mmap_mode="r", array_type=self.array_type)
                             return npy_data[relative_idx]
             raise IndexError(f"Index {idx} out of range.")
 
@@ -556,6 +561,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         local_cache_dir: Optional[str] = None,
         max_workers: int = 16,
         sample_ratio: Optional[float] = None,
+        array_type: str = "hcpe",
     ) -> None:
         """
         Args:
@@ -582,6 +588,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     local_cache_dir=local_cache_dir,
                     max_workers=max_workers,
                     sample_ratio=sample_ratio,
+                    array_type=array_type,
                 )
             else:
                 raise MissingS3Config(

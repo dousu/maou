@@ -55,7 +55,8 @@ class TestHCPEConverter:
             )
         )
         self.clean_up_dir(output_dir)
-        with pytest.raises(FileNotFoundError):
+        from maou.domain.data.io import DataIOError
+        with pytest.raises(DataIOError):
             datasource = FileDataSource(file_paths=input_paths)
             transformer = hcpe_transform.PreProcess(datasource=datasource)
             transformer.transform(option)

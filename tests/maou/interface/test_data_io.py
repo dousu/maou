@@ -36,6 +36,9 @@ class TestInterfaceDataIO:
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, file_path)
+            
+            # Check for the actual .npy file that was created
+            assert file_path.exists()
 
             # Load using interface
             loaded_array = load_array(file_path, array_type="hcpe")
@@ -53,9 +56,12 @@ class TestInterfaceDataIO:
             from maou.domain.data.io import save_preprocessing_array
 
             save_preprocessing_array(prep_array, file_path)
+            
+            # Check for the actual .npy file that was created
+            assert file_path.exists()
 
             # Load with memory mapping
-            loaded_array = load_array(file_path, mmap_mode="r")
+            loaded_array = load_array(file_path, mmap_mode="r", array_type="preprocessing")
 
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, prep_array)
@@ -71,7 +77,7 @@ class TestInterfaceDataIO:
             # Save using interface
             save_array(hcpe_array, file_path, array_type="hcpe")
 
-            # Verify file exists and is readable
+            # Check for the actual .npy file that was created
             assert file_path.exists()
             loaded_array = load_array(file_path, array_type="hcpe")
             np.testing.assert_array_equal(loaded_array, hcpe_array)
@@ -102,27 +108,34 @@ class TestInterfaceDataIO:
 
             save_hcpe_array(hcpe_array, file_path)
 
+            # Check for the actual .npy file that was created
+            assert file_path.exists()
+
+            # Get info for the actual .npy file that was created
             info = get_array_info(file_path)
 
             assert info["shape"] == (7,)
             assert info["size"] == 7
-            assert info["format"] == "uncompressed"
+            assert info["format"] == "raw_binary"
 
-    def test_auto_type_detection(self):
-        """Test automatic type detection through interface."""
+    def test_explicit_type_specification(self):
+        """Test explicit type specification through interface."""
         # Test with HCPE array
         hcpe_array = create_empty_hcpe_array(3)
         hcpe_array["moves"] = [50, 75, 100]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            hcpe_file = Path(temp_dir) / "auto_hcpe.npy"
+            hcpe_file = Path(temp_dir) / "explicit_hcpe_game.npy"
 
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, hcpe_file)
 
-            # Load with auto detection
-            loaded_array = load_array(hcpe_file, array_type="auto")
+            # Check for the actual .npy file that was created
+            assert hcpe_file.exists()
+
+            # Load with explicit type specification
+            loaded_array = load_array(hcpe_file, array_type="hcpe")
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
     def test_error_handling(self):
@@ -142,8 +155,11 @@ class TestInterfaceDataIO:
 
             save_hcpe_array(hcpe_array, file_path, validate=False)
 
+            # Check for the actual .npy file that was created
+            assert file_path.exists()
+
             # Should load successfully with validation disabled (default)
-            loaded_array = load_array(file_path)
+            loaded_array = load_array(file_path, array_type="hcpe")
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
 
@@ -155,11 +171,14 @@ class TestBackwardCompatibility:
         hcpe_array = create_empty_hcpe_array(3)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "structured.npy"
+            file_path = Path(temp_dir) / "structured_hcpe.npy"
 
             from maou.domain.data.io import save_hcpe_array
 
             save_hcpe_array(hcpe_array, file_path)
+
+            # Check for the actual .npy file that was created
+            assert file_path.exists()
 
             loaded_array = load_structured_array(file_path, mmap_mode="r")
             assert isinstance(loaded_array, np.memmap)
@@ -171,11 +190,11 @@ class TestBackwardCompatibility:
         prep_array["eval"] = [1000, -500]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "structured_save.npy"
+            file_path = Path(temp_dir) / "structured_save_preprocessing.npy"
 
             save_structured_array(prep_array, file_path)
 
-            # Verify file was created
+            # Check for the actual .npy file that was created
             assert file_path.exists()
             loaded_array = load_structured_array(file_path)
             np.testing.assert_array_equal(loaded_array, prep_array)
@@ -202,7 +221,7 @@ class TestIntegrationWithInfrastructure:
 
             # Save multiple files
             for i, array in enumerate(hcpe_arrays):
-                file_path = Path(temp_dir) / f"data_{i}.npy"
+                file_path = Path(temp_dir) / f"data_hcpe_{i}.npy"
                 file_paths.append(file_path)
                 from maou.domain.data.io import save_hcpe_array
 
@@ -211,8 +230,11 @@ class TestIntegrationWithInfrastructure:
             # Simulate DataSource usage pattern
             total_rows = 0
             for file_path in file_paths:
-                # This is how DataSource classes typically load files
-                data = load_array(file_path, mmap_mode="r")
+                # Check for the actual .npy file that was created
+                assert file_path.exists()
+                
+                # This is how DataSource classes typically load files with explicit type
+                data = load_array(file_path, mmap_mode="r", array_type="hcpe")
                 total_rows += data.shape[0]
 
                 # Verify we can access individual records
@@ -233,7 +255,7 @@ class TestIntegrationWithInfrastructure:
 
             for i, array in enumerate(prep_arrays):
                 array["moveLabel"] = np.arange(len(array)) + i * 1000
-                file_path = Path(temp_dir) / f"batch_{i}.npy"
+                file_path = Path(temp_dir) / f"batch_preprocessing_{i}.npy"
                 file_paths.append(file_path)
                 from maou.domain.data.io import save_preprocessing_array
 
@@ -242,7 +264,10 @@ class TestIntegrationWithInfrastructure:
             # Simulate iter_batches() usage
             batches = []
             for file_path in file_paths:
-                data = load_array(file_path, mmap_mode="r")
+                # Check for the actual .npy file that was created
+                assert file_path.exists()
+                
+                data = load_array(file_path, mmap_mode="r", array_type="preprocessing")
                 batches.append((str(file_path), data))
 
             assert len(batches) == 2

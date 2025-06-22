@@ -10,6 +10,7 @@ import pandas as pd
 from google.cloud import bigquery
 
 from maou.interface import converter, preprocess
+from maou.domain.data.schema import numpy_dtype_to_bigquery_type
 
 
 class SchemaConflictError(Exception):
@@ -81,27 +82,54 @@ class BigQueryFeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         self,
         numpy_type: np.dtype,
     ) -> str:
-        match numpy_type:
-            case t if t.kind in {"i", "u"}:
-                return "INTEGER"
-            case t if t.kind in {"f"}:
-                return "FLOAT"
-            case t if t.kind in {"U"}:
-                return "STRING"
-            # numpy arrayがネストして入っている場合 (V)は
-            # シリアライズするのでBYTESとしておく
-            case t if t.kind in {"S", "V"}:
-                return "BYTES"
-            case t if t.kind in {"b"}:
-                return "BOOLEAN"
-            case t if t.kind in {"M"} and t.name == "datetime64[D]":
-                return "DATE"
-            case t if t.kind in {"M"} and t.name == "datetime64[ms]":
-                return "TIME"
-            case _:
-                raise ValueError(
-                    f"Unsupported Numpy type: {numpy_type.name} {numpy_type.kind} "
-                )
+        # domainレイヤーのメソッドを使用
+        return numpy_dtype_to_bigquery_type(numpy_type)
+
+    def __convert_float16_to_float32(self, structured_array: np.ndarray) -> np.ndarray:
+        """Convert float16 fields to float32 for BigQuery/Parquet compatibility.
+        
+        Args:
+            structured_array: Input numpy structured array
+            
+        Returns:
+            numpy.ndarray: Array with float16 fields converted to float32
+        """
+        if structured_array.dtype.names is None:
+            return structured_array
+            
+        # Check if any fields are float16
+        has_float16 = any(
+            dtype.kind == 'f' and dtype.itemsize == 2  # float16 has 2 bytes
+            for _, (dtype, _) in structured_array.dtype.fields.items()
+        )
+        
+        if not has_float16:
+            return structured_array
+            
+        # Create new dtype with float16 -> float32 conversion
+        new_dtypes = []
+        for field_name, (dtype, offset) in structured_array.dtype.fields.items():
+            if dtype.kind == 'f' and dtype.itemsize == 2:  # float16
+                # Convert to float32
+                if dtype.shape:  # Array field
+                    new_dtypes.append((field_name, (np.float32, dtype.shape)))
+                else:  # Scalar field
+                    new_dtypes.append((field_name, np.float32))
+            else:
+                new_dtypes.append((field_name, dtype))
+        
+        # Create new array with converted types
+        new_array = np.empty(structured_array.shape, dtype=new_dtypes)
+        
+        # Copy data with type conversion
+        for field_name, (dtype, _) in structured_array.dtype.fields.items():
+            if dtype.kind == 'f' and dtype.itemsize == 2:  # float16
+                # Convert float16 to float32
+                new_array[field_name] = structured_array[field_name].astype(np.float32)
+            else:
+                new_array[field_name] = structured_array[field_name]
+                
+        return new_array
 
     def __generate_schema(
         self,
@@ -240,6 +268,9 @@ class BigQueryFeatureStore(converter.FeatureStore, preprocess.FeatureStore):
     ) -> bigquery.Table:
         table_id = f"{self.client.project}.{dataset_id}.{table_name}"
         self.logger.debug(f"Load data to {table_id}")
+        # float16をfloat32に変換（BigQuery/Parquetとの互換性のため）
+        structured_array = self.__convert_float16_to_float32(structured_array)
+        
         # Numpy Structured Arrayをpandasに変換する
         # pandasへの変換では1-dimensionalでないといけない
         df = pd.DataFrame(data=self.__numpy_flatten_nested_column(structured_array))

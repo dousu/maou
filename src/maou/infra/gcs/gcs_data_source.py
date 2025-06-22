@@ -172,7 +172,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.file_paths.sort()
             last_pruning_value = None
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r", array_type="hcpe")
                 num_rows = data.shape[0]
                 # ファイルの親ディレクトリでプルーニングする
                 pruning_value = file.parent.absolute().name
@@ -456,7 +456,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
             file_paths = [path for (path, _, _) in self.__pruning_info[key].files]
             file_paths.sort()
             data = np.concatenate(
-                [load_array(path, mmap_mode="r") for path in file_paths]
+                [load_array(path, mmap_mode="r", array_type="hcpe") for path in file_paths]
             )
             return data
 
@@ -473,7 +473,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                         if start_idx <= idx < start_idx + num_rows:
                             relative_idx = idx - start_idx
                             # numpy structured arrayから直接レコードを取得
-                            npy_data = load_array(file, mmap_mode="r")
+                            npy_data = load_array(file, mmap_mode="r", array_type="hcpe")
                             return npy_data[relative_idx]
             raise IndexError(f"Index {idx} out of range.")
 

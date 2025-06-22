@@ -11,6 +11,8 @@ from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array
 
 
+
+
 class MissingFileDataConfig(Exception):
     pass
 
@@ -19,9 +21,10 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
     class FileDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
         logger: logging.Logger = logging.getLogger(__name__)
 
-        def __init__(self, *, file_paths: list[Path]) -> None:
+        def __init__(self, *, file_paths: list[Path], array_type: str = "hcpe") -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
+                array_type=array_type,
             )
 
         def train_test_split(
@@ -58,18 +61,20 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
     class FileManager:
         logger: logging.Logger = logging.getLogger(__name__)
 
-        def __init__(self, *, file_paths: list[Path]) -> None:
+        def __init__(self, *, file_paths: list[Path], array_type: str = "hcpe") -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
             Args:
                 file_paths (list[Path]): npyファイルのリスト
+                array_type (str): 配列のタイプ ("hcpe" または "preprocessing")
             """
             self.file_paths = file_paths
+            self.array_type = array_type
 
             self.file_row_offsets = []
             total_rows = 0
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r", array_type=self.array_type)
                 num_rows = data.shape[0]
                 self.file_row_offsets.append((file, total_rows, num_rows))
                 total_rows += num_rows
@@ -83,14 +88,14 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
                     relative_idx = idx - start_idx
 
                     # numpy structured arrayから直接レコードを取得
-                    npy_data = load_array(file, mmap_mode="r")
+                    npy_data = load_array(file, mmap_mode="r", array_type=self.array_type)
                     return npy_data[relative_idx]
 
             raise IndexError(f"Index {idx} out of range.")
 
         def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r", array_type=self.array_type)
                 yield str(file), data
 
     def __init__(
@@ -99,19 +104,21 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
         file_paths: Optional[list[Path]] = None,
         file_manager: Optional[FileManager] = None,
         indicies: Optional[list[int]] = None,
+        array_type: str = "hcpe",
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
         Args:
             file_paths (list[Path]): npyファイルのリスト
-            schema (dict[str, str]): 各フィールドのマッピング(例: {"hcp": "hcp", "eval": "eval"})
             file_manager (Optional[FileManager]): FileManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
+            array_type (str): 配列のタイプ ("hcpe" または "preprocessing")
         """
         if file_manager is None:
             if file_paths is not None:
                 self.__file_manager = self.FileManager(
                     file_paths=file_paths,
+                    array_type=array_type,
                 )
             else:
                 raise MissingFileDataConfig(

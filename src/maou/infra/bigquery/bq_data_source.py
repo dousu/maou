@@ -266,7 +266,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             """ローカルからデータを読み込む"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(f"Loading data from local cache: {cache_path}")
-            return load_array(cache_path, mmap_mode="r")
+            return load_array(cache_path, mmap_mode="r", array_type="hcpe")
 
         def __save_to_local(self, page_num: int, npy_data: np.ndarray) -> None:
             """データをローカルに保存する"""

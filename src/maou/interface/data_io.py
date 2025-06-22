@@ -125,7 +125,12 @@ def load_structured_array(
     Returns:
         numpy.ndarray: Loaded structured array
     """
-    return load_numpy_array(file_path, mmap_mode=mmap_mode, validate=False)
+    # For backward compatibility, try to load with auto-detection first
+    try:
+        return load_array(file_path, array_type="auto", mmap_mode=mmap_mode, validate=False)
+    except Exception:
+        # Fallback to the old behavior
+        return load_numpy_array(file_path, mmap_mode=mmap_mode, validate=False)
 
 
 def save_structured_array(array: np.ndarray, file_path: Union[str, Path]) -> None:

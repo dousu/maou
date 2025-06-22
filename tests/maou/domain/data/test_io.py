@@ -40,8 +40,9 @@ class TestHCPEIO:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test_hcpe.npy"
 
-            # Save array
+            # Save array (will save as .npy with high-performance tofile())
             save_hcpe_array(original_array, file_path, validate=True)
+            # Check that the .npy file was created
             assert file_path.exists()
 
             # Load array
@@ -83,10 +84,10 @@ class TestHCPEIO:
         array = create_empty_hcpe_array(2)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Test .npy extension for uncompressed
+            # Test .raw extension for uncompressed
             file_path = Path(temp_dir) / "test"
             save_hcpe_array(array, file_path, compress=False)
-            assert (Path(temp_dir) / "test.npy").exists()
+            assert (Path(temp_dir) / "test.raw").exists()
 
             # Test .npz extension for compressed
             file_path2 = Path(temp_dir) / "test2.npy"  # Start with .npy
@@ -287,10 +288,11 @@ class TestFileInfo:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "info_test.npy"
             save_hcpe_array(array, file_path)
-
+            
+            # Get info for the actual .npy file that was created (using tofile())
             info = get_file_info(file_path)
 
-            assert info["format"] == "uncompressed"
+            assert info["format"] == "raw_binary"
             assert info["shape"] == (5,)
             assert info["size"] == 5
             assert "dtype" in info
@@ -368,23 +370,20 @@ class TestErrorHandling:
             with pytest.raises(DataIOError):
                 load_hcpe_array(file_path)
 
-    @patch("numpy.save")
-    def test_save_with_numpy_error(self, mock_save):
+    def test_save_with_numpy_error(self):
         """Test handling of numpy save errors."""
-        mock_save.side_effect = Exception("Numpy save failed")
-
         array = create_empty_hcpe_array(1)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test.npy"
+        # Try to save to a non-existent directory to trigger an error
+        invalid_path = Path("/non_existent_directory/test.raw")
 
-            with pytest.raises(DataIOError, match="Failed to save HCPE array"):
-                save_hcpe_array(array, file_path, validate=False)
+        with pytest.raises(DataIOError, match="Failed to save HCPE array"):
+            save_hcpe_array(array, invalid_path, validate=False)
 
-    @patch("numpy.load")
-    def test_load_with_numpy_error(self, mock_load):
-        """Test handling of numpy load errors."""
-        mock_load.side_effect = Exception("Numpy load failed")
+    @patch("numpy.fromfile")
+    def test_load_with_numpy_error(self, mock_fromfile):
+        """Test handling of numpy fromfile errors."""
+        mock_fromfile.side_effect = Exception("Numpy fromfile failed")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.npy"
@@ -438,7 +437,7 @@ class TestIntegration:
             info_compressed = get_file_info(compressed_path)
             info_metadata = get_file_info(metadata_path)
 
-            assert info_uncompressed["format"] == "uncompressed"
+            assert info_uncompressed["format"] == "raw_binary"
             assert info_compressed["format"] == "compressed"
             assert info_metadata["has_metadata"] is True
 
@@ -471,6 +470,11 @@ class TestIntegration:
                 np.testing.assert_array_equal(array, loaded_array)
 
                 # Verify file info
-                info = get_file_info(file_path)
-                expected_format = "compressed" if compress else "uncompressed"
+                if compress:
+                    info = get_file_info(file_path)
+                    expected_format = "compressed"
+                else:
+                    # For uncompressed, check the actual file that was created
+                    info = get_file_info(file_path)
+                    expected_format = "raw_binary"
                 assert info["format"] == expected_format

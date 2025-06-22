@@ -257,9 +257,14 @@ class PreProcess:
                     )
 
                 if option.output_dir is not None:
+                    # ファイル名から拡張子を除去してから.pre.npyを付ける
+                    base_name = Path(dataname).stem
+                    # .hcpe のような複合拡張子も除去する
+                    if base_name.endswith('.hcpe'):
+                        base_name = base_name[:-5]  # .hcpe を除去
                     save_preprocessing_array(
                         final_array,
-                        option.output_dir / Path(dataname).with_suffix(".pre.npy").name,
+                        option.output_dir / f"{base_name}.pre.npy",
                         validate=False,
                     )
                 pre_process_result[dataname] = f"success {len(final_array)} rows"

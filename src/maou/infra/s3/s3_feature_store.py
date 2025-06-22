@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError
 from tqdm.auto import tqdm
 
 from maou.interface import converter, preprocess
+from maou.domain.data.io import save_array_to_buffer
 
 
 class NotFoundKeyColumns(Exception):
@@ -324,24 +325,41 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                with BytesIO() as buffer:
-                    # メモリマップ性能を保持するため.npy形式を使用
-                    np.save(buffer, structured_array)
-                    buffer.seek(0)
-
-                    # セキュリティのため常にserver-side encryptionを有効化
-                    self.s3_client.put_object(
-                        Bucket=self.bucket_name,
-                        Key=object_key,
-                        Body=buffer,
-                        ServerSideEncryption="AES256",
+                # domainレイヤーのメソッドを使用してバイナリ形式で保存
+                # 配列タイプを自動判定してvalidation付きで保存
+                try:
+                    buffer = save_array_to_buffer(
+                        structured_array, 
+                        validate=True,
+                        array_type="hcpe"
                     )
+                except Exception:
+                    try:
+                        buffer = save_array_to_buffer(
+                            structured_array, 
+                            validate=True,
+                            array_type="preprocessing"
+                        )
+                    except Exception:
+                        # フォールバック：検証なしで保存
+                        buffer = save_array_to_buffer(
+                            structured_array, 
+                            validate=False
+                        )
 
-                    self.logger.debug(
-                        f"Uploaded {structured_array.nbytes / (1024 * 1024):.1f}MB"
-                        f" to {object_key} (attempt {attempt + 1})"
-                    )
-                    return  # 成功したら終了
+                # セキュリティのため常にserver-side encryptionを有効化
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=object_key,
+                    Body=buffer,
+                    ServerSideEncryption="AES256",
+                )
+
+                self.logger.debug(
+                    f"Uploaded {structured_array.nbytes / (1024 * 1024):.1f}MB"
+                    f" to {object_key} (attempt {attempt + 1})"
+                )
+                return  # 成功したら終了
 
             except Exception as e:
                 if attempt == max_retries - 1:
