@@ -69,6 +69,44 @@ def get_preprocessing_dtype() -> np.dtype:
     )
 
 
+def get_compressed_preprocessing_dtype() -> np.dtype:
+    """Get numpy dtype for bit-packed compressed preprocessed training data.
+
+    This schema uses bit packing to compress the features and legalMoveMask
+    fields, achieving approximately 8x storage reduction for these binary fields.
+
+    The compressed fields are:
+    - features: (104, 9, 9) uint8 → (1053,) uint8 packed bits
+    - legalMoveMask: (1496,) uint8 → (187,) uint8 packed bits
+
+    Returns:
+        numpy.dtype: Structured dtype for compressed preprocessed training data
+    """
+    # Calculate packed sizes (bits rounded up to byte boundary)
+    features_packed_size = (FEATURES_NUM * 9 * 9 + 7) // 8  # 1053 bytes
+    legal_moves_packed_size = (MOVE_LABELS_NUM + 7) // 8  # 187 bytes
+
+    return np.dtype(
+        [
+            ("id", (np.str_, 128)),  # Unique identifier
+            ("eval", np.int16),  # Position evaluation
+            (
+                "features_packed",
+                np.uint8,
+                (features_packed_size,),
+            ),  # Bit-packed board features
+            ("moveLabel", np.uint16),  # Move label for training
+            ("resultValue", np.float16),  # Game result value (-1 to 1)
+            (
+                "legalMoveMask_packed",
+                np.uint8,
+                (legal_moves_packed_size,),
+            ),  # Bit-packed legal move mask
+            ("partitioningKey", np.dtype("datetime64[D]")),  # Date for partitioning
+        ]
+    )
+
+
 def validate_hcpe_array(array: np.ndarray) -> bool:
     """Validate that array conforms to HCPE schema.
 
@@ -243,6 +281,67 @@ def validate_preprocessing_array(array: np.ndarray) -> bool:
     return True
 
 
+def validate_compressed_preprocessing_array(array: np.ndarray) -> bool:
+    """Validate that array conforms to compressed preprocessing schema.
+
+    Args:
+        array: numpy array to validate
+
+    Returns:
+        bool: True if array is valid
+
+    Raises:
+        SchemaValidationError: If validation fails
+    """
+    expected_dtype = get_compressed_preprocessing_dtype()
+
+    if not isinstance(array, np.ndarray):
+        raise SchemaValidationError("Expected numpy ndarray")
+
+    if array.dtype != expected_dtype:
+        raise SchemaValidationError(
+            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
+        )
+
+    # Validate field constraints
+    if len(array) > 0:
+        # Check eval range
+        if np.any((array["eval"] < -32767) | (array["eval"] > 32767)):
+            raise SchemaValidationError("eval values out of range [-32767, 32767]")
+
+        # Check moveLabel range
+        if np.any((array["moveLabel"] < 0) | (array["moveLabel"] >= MOVE_LABELS_NUM)):
+            raise SchemaValidationError(
+                f"moveLabel values out of range [0, {MOVE_LABELS_NUM})"
+            )
+
+        # Check resultValue range
+        if np.any((array["resultValue"] < 0.0) | (array["resultValue"] > 1.0)):
+            raise SchemaValidationError("resultValue values out of range [0.0, 1.0]")
+
+        # Check packed features shape
+        features_packed_size = (FEATURES_NUM * 9 * 9 + 7) // 8
+        expected_features_packed_shape = (features_packed_size,)
+        if array["features_packed"].shape[1:] != expected_features_packed_shape:
+            raise SchemaValidationError(
+                f"Invalid features_packed shape. Expected: "
+                f"{expected_features_packed_shape}, Got: "
+                f"{array['features_packed'].shape[1:]}"
+            )
+
+        # Check packed legal moves shape
+        legal_moves_packed_size = (MOVE_LABELS_NUM + 7) // 8
+        expected_legal_moves_packed_shape = (legal_moves_packed_size,)
+        if array["legalMoveMask_packed"].shape[1:] != expected_legal_moves_packed_shape:
+            raise SchemaValidationError(
+                f"Invalid legalMoveMask_packed shape. Expected: "
+                f"{expected_legal_moves_packed_shape}, Got: "
+                f"{array['legalMoveMask_packed'].shape[1:]}"
+            )
+
+    return True
+
+
 def get_schema_info() -> Dict[str, Dict[str, Any]]:
     """Get information about all available schemas.
 
@@ -279,6 +378,26 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
                 "partitioningKey": "Date for partitioning",
             },
         },
+        "compressed_preprocessing": {
+            "dtype": get_compressed_preprocessing_dtype(),
+            "description": (
+                "Bit-packed compressed preprocessed training data (8x size reduction)"
+            ),
+            "fields": {
+                "id": "Unique identifier",
+                "eval": "Position evaluation",
+                "features_packed": (
+                    f"Bit-packed board features "
+                    f"({(FEATURES_NUM * 9 * 9 + 7) // 8} bytes)"
+                ),
+                "moveLabel": f"Move label for training (0 to {MOVE_LABELS_NUM - 1})",
+                "resultValue": "Game result value (0.0 to 1.0)",
+                "legalMoveMask_packed": (
+                    f"Bit-packed legal move mask ({(MOVE_LABELS_NUM + 7) // 8} bytes)"
+                ),
+                "partitioningKey": "Date for partitioning",
+            },
+        },
     }
 
 
@@ -306,6 +425,19 @@ def create_empty_preprocessing_array(size: int) -> np.ndarray:
     return np.zeros(size, dtype=get_preprocessing_dtype())
 
 
+def create_empty_compressed_preprocessing_array(size: int) -> np.ndarray:
+    """Create empty compressed preprocessing array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with compressed preprocessing schema
+    """
+    return np.zeros(size, dtype=get_compressed_preprocessing_dtype())
+
+
 # Constants for backward compatibility
 HCPE_DTYPE = get_hcpe_dtype()
 PREPROCESSING_DTYPE = get_preprocessing_dtype()
+COMPRESSED_PREPROCESSING_DTYPE = get_compressed_preprocessing_dtype()

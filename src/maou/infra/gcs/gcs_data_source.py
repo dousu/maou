@@ -317,7 +317,7 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                         for gcs_key, local_file_path in download_tasks:
                             future = executor.submit(
                                 self._download_single_file,
-                                bucket_name,
+                                self.bucket,
                                 gcs_key,
                                 local_file_path,
                             )

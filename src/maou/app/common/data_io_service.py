@@ -155,12 +155,25 @@ class DataIOService:
                     compression_level=compression_level,
                 )
             elif array_type == "preprocessing":
+                # Only enable bit packing for .packed files or when
+                # no specific extension is requested
+                file_path_obj = Path(file_path)
+                should_bit_pack = (
+                    file_path_obj.suffix == ".packed"
+                    or file_path_obj.suffix == ""
+                    or (
+                        file_path_obj.suffix == ".npy"
+                        and "packed" in file_path_obj.name.lower()
+                    )
+                )
+
                 save_preprocessing_array(
                     array,
                     file_path,
                     validate=validate,
                     compress=compress,
                     compression_level=compression_level,
+                    bit_pack=should_bit_pack,
                 )
             else:
                 # Fallback: save as generic numpy array
@@ -213,6 +226,8 @@ class DataIOService:
                 or file_name.endswith(".pre.npy")
                 or file_name.endswith(".pre.npz")
                 or file_name.endswith(".pre.raw")
+                or file_name.endswith(".pre.packed")
+                or file_name.endswith(".packed")
             ):
                 return "preprocessing"
 
@@ -226,9 +241,11 @@ class DataIOService:
                             first_key = list(data.keys())[0]
                             sample = data[first_key]
                 else:
-                    # Check if this is a .raw file that we need to handle differently
-                    if file_path.suffix == ".raw":
-                        # For .raw files, try to detect from filename patterns
+                    # Check if this is a .raw or .packed file that we need to
+                    # handle differently
+                    if file_path.suffix in (".raw", ".packed"):
+                        # For .raw and .packed files, try to detect from
+                        # filename patterns
                         file_name = file_path.name.lower()
                         if "hcpe" in file_name or "game" in file_name:
                             return "hcpe"
@@ -236,14 +253,20 @@ class DataIOService:
                             "pre" in file_name
                             or "processing" in file_name
                             or "train" in file_name
+                            or "packed" in file_name
                         ):
                             return "preprocessing"
                         else:
                             return "unknown"
                     elif file_path.suffix in (".npy", ".npz"):
-                        # Check if .raw file exists instead
+                        # Check if .packed or .raw file exists instead
+                        # (prioritize .packed)
+                        packed_path = file_path.with_suffix(".packed")
                         raw_path = file_path.with_suffix(".raw")
-                        if raw_path.exists():
+                        if packed_path.exists():
+                            # Recursively detect on the .packed file
+                            return DataIOService._detect_array_type(packed_path)
+                        elif raw_path.exists():
                             # Recursively detect on the .raw file
                             return DataIOService._detect_array_type(raw_path)
 

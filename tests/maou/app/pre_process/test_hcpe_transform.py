@@ -40,7 +40,7 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         for p in input_paths:
-            output_file = output_dir / p.with_suffix(".pre.npy").name
+            output_file = output_dir / p.with_suffix(".pre.packed").name
             assert output_file.exists()
 
     def test_failed_transformation_no_input(self) -> None:

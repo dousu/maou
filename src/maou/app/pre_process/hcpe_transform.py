@@ -264,8 +264,9 @@ class PreProcess:
                         base_name = base_name[:-5]  # .hcpe を除去
                     save_preprocessing_array(
                         final_array,
-                        option.output_dir / f"{base_name}.pre.npy",
+                        option.output_dir / f"{base_name}.pre.packed",
                         validate=False,
+                        bit_pack=True,
                     )
                 pre_process_result[dataname] = f"success {len(final_array)} rows"
 

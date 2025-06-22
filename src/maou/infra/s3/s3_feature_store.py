@@ -10,7 +10,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from tqdm.auto import tqdm
 
-from maou.domain.data.io import save_array_to_buffer
+from maou.domain.data.io import load_array_from_buffer, save_array_to_buffer
 from maou.interface import converter, preprocess
 
 
@@ -104,12 +104,32 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=file_key)
             data = response["Body"].read()
 
-            # NumpyのStructured Arrayファイルを読み込む
+            # Load array from buffer data (created by save_array_to_buffer)
             with BytesIO(data) as buffer:
-                structured_array = np.load(buffer)
+                # Try to load as HCPE array first, then preprocessing array
+                try:
+                    structured_array = load_array_from_buffer(
+                        buffer, validate=True, array_type="hcpe"
+                    )
+                    self.logger.debug(f"Loaded HCPE array from {file_key}")
+                except Exception:
+                    try:
+                        buffer.seek(0)
+                        structured_array = load_array_from_buffer(
+                            buffer, validate=True, array_type="preprocessing"
+                        )
+                        self.logger.debug(f"Loaded preprocessing array from {file_key}")
+                    except Exception:
+                        # If validation fails, load without validation
+                        buffer.seek(0)
+                        structured_array = load_array_from_buffer(
+                            buffer, validate=False
+                        )
+                        self.logger.debug(f"Loaded generic array from {file_key}")
 
         except ClientError as e:
             self.logger.error(f"Error reading file {file_key}: {e}")
+            raise
 
         return structured_array
 
@@ -225,6 +245,10 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
         """バッファのデータを一括して保存.
         同じスキーマの配列を連結して大きなファイルにまとめることで効率化
         """
+        # Parameters are kept for interface compatibility but not used in S3
+        # implementation
+        _ = key_columns, clustering_key, partitioning_key_date
+
         if not self.__buffer:
             self.logger.debug("Buffer is empty. Nothing to flush.")
             return
@@ -305,8 +329,8 @@ class S3FeatureStore(converter.FeatureStore, preprocess.FeatureStore):
             if len(upload_tasks) > 0:
                 # 簡易的な時間計算 (実際の時間は並列実行なので概算)
                 avg_time_per_file = (
-                    total_size_mb / len(upload_tasks)
-                ) / 50  # 大雑把な推定
+                    total_size_mb / float(len(upload_tasks))
+                ) / 50.0  # 大雑把な推定
 
             self.logger.info(
                 f"Successfully uploaded {len(upload_tasks)} files "

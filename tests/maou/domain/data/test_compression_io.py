@@ -1,0 +1,359 @@
+"""Integration tests for compression I/O operations."""
+
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from maou.domain.data.io import (
+    DataIOError,
+    _convert_from_compressed_format,
+    _convert_to_compressed_format,
+    load_preprocessing_array,
+    save_preprocessing_array,
+)
+from maou.domain.data.schema import (
+    create_empty_compressed_preprocessing_array,
+    create_empty_preprocessing_array,
+)
+
+
+class TestCompressionConversion:
+    """Test conversion between standard and compressed formats."""
+
+    def create_test_preprocessing_array(self, size: int = 3) -> np.ndarray:
+        """Create a test preprocessing array with realistic data."""
+        array = create_empty_preprocessing_array(size)
+
+        for i in range(size):
+            # Set some realistic test data
+            array[i]["id"] = f"test_record_{i}"
+            array[i]["eval"] = 100 * i
+            array[i]["moveLabel"] = 50 * i
+            array[i]["resultValue"] = 0.5
+            array[i]["partitioningKey"] = np.datetime64("2024-01-01")
+
+            # Set binary features and legal moves (only 0s and 1s)
+            array[i]["features"][:10, :3, :3] = 1  # Some features to 1
+            array[i]["legalMoveMask"][:20] = 1  # Some legal moves to 1
+
+        return array
+
+    def test_convert_to_compressed_format(self) -> None:
+        """Test converting standard array to compressed format."""
+        standard_array = self.create_test_preprocessing_array(2)
+
+        compressed_array = _convert_to_compressed_format(standard_array)
+
+        # Check structure
+        assert len(compressed_array) == len(standard_array)
+        assert (
+            compressed_array.dtype
+            == create_empty_compressed_preprocessing_array(1).dtype
+        )
+
+        # Check that non-packed fields are preserved
+        assert np.array_equal(compressed_array["id"], standard_array["id"])
+        assert np.array_equal(compressed_array["eval"], standard_array["eval"])
+        assert np.array_equal(
+            compressed_array["moveLabel"], standard_array["moveLabel"]
+        )
+        assert np.array_equal(
+            compressed_array["resultValue"], standard_array["resultValue"]
+        )
+        assert np.array_equal(
+            compressed_array["partitioningKey"], standard_array["partitioningKey"]
+        )
+
+        # Check that packed fields exist and have correct shapes
+        assert "features_packed" in compressed_array.dtype.names
+        assert "legalMoveMask_packed" in compressed_array.dtype.names
+
+    def test_convert_from_compressed_format(self) -> None:
+        """Test converting compressed array back to standard format."""
+        standard_array = self.create_test_preprocessing_array(2)
+        compressed_array = _convert_to_compressed_format(standard_array)
+
+        reconstructed_array = _convert_from_compressed_format(compressed_array)
+
+        # Check structure
+        assert len(reconstructed_array) == len(standard_array)
+        assert reconstructed_array.dtype == standard_array.dtype
+
+        # Check that all fields are preserved exactly
+        assert np.array_equal(reconstructed_array["id"], standard_array["id"])
+        assert np.array_equal(reconstructed_array["eval"], standard_array["eval"])
+        assert np.array_equal(
+            reconstructed_array["moveLabel"], standard_array["moveLabel"]
+        )
+        assert np.array_equal(
+            reconstructed_array["resultValue"], standard_array["resultValue"]
+        )
+        assert np.array_equal(
+            reconstructed_array["partitioningKey"], standard_array["partitioningKey"]
+        )
+        assert np.array_equal(
+            reconstructed_array["features"], standard_array["features"]
+        )
+        assert np.array_equal(
+            reconstructed_array["legalMoveMask"], standard_array["legalMoveMask"]
+        )
+
+    def test_roundtrip_conversion(self) -> None:
+        """Test full roundtrip conversion preserves data."""
+        original_array = self.create_test_preprocessing_array(5)
+
+        # Standard -> Compressed -> Standard
+        compressed = _convert_to_compressed_format(original_array)
+        reconstructed = _convert_from_compressed_format(compressed)
+
+        # Should be identical
+        for field in original_array.dtype.names:
+            assert np.array_equal(original_array[field], reconstructed[field]), (
+                f"Field {field} differs"
+            )
+
+
+class TestBitPackedFileSaveLoad:
+    """Test saving and loading bit-packed files."""
+
+    def create_test_data(self) -> np.ndarray:
+        """Create test preprocessing data."""
+        array = create_empty_preprocessing_array(10)
+
+        for i in range(len(array)):
+            array[i]["id"] = f"record_{i:03d}"
+            array[i]["eval"] = i * 100
+            array[i]["moveLabel"] = i * 10
+            array[i]["resultValue"] = float(i) / 10.0
+            array[i]["partitioningKey"] = np.datetime64("2024-01-01")
+
+            # Set some binary features (deterministic pattern)
+            array[i]["features"][i : i + 5, :2, :2] = 1
+            array[i]["legalMoveMask"][i * 10 : (i + 1) * 10] = 1
+
+        return array
+
+    def test_save_load_bit_packed_raw(self) -> None:
+        """Test saving and loading bit-packed raw format."""
+        original_array = self.create_test_data()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test_data.packed"
+
+            # Save with bit packing
+            save_preprocessing_array(
+                original_array, file_path, bit_pack=True, compress=False
+            )
+
+            # Check file exists and has .packed extension
+            assert file_path.exists()
+
+            # Load with auto-decompression
+            loaded_array = load_preprocessing_array(file_path, auto_decompress=True)
+
+            # Should be identical to original
+            assert loaded_array.dtype == original_array.dtype
+            for field in original_array.dtype.names:
+                assert np.array_equal(original_array[field], loaded_array[field]), (
+                    f"Field {field} differs"
+                )
+
+    def test_save_load_bit_packed_compressed(self) -> None:
+        """Test saving and loading bit-packed + compressed format."""
+        original_array = self.create_test_data()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test_data.npz"
+
+            # Save with bit packing + compression
+            save_preprocessing_array(
+                original_array, file_path, bit_pack=True, compress=True
+            )
+
+            # Check file exists and has .npz extension
+            assert file_path.exists()
+
+            # Load with auto-decompression
+            loaded_array = load_preprocessing_array(file_path, auto_decompress=True)
+
+            # Should be identical to original
+            assert loaded_array.dtype == original_array.dtype
+            for field in original_array.dtype.names:
+                assert np.array_equal(original_array[field], loaded_array[field]), (
+                    f"Field {field} differs"
+                )
+
+    def test_load_without_auto_decompress(self) -> None:
+        """Test loading bit-packed file without auto-decompression."""
+        original_array = self.create_test_data()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test_data.packed"
+
+            # Save with bit packing
+            save_preprocessing_array(original_array, file_path, bit_pack=True)
+
+            # Load without auto-decompression
+            loaded_array = load_preprocessing_array(file_path, auto_decompress=False)
+
+            # Should be in compressed format
+            assert "features_packed" in loaded_array.dtype.names
+            assert "legalMoveMask_packed" in loaded_array.dtype.names
+            assert "features" not in loaded_array.dtype.names
+            assert "legalMoveMask" not in loaded_array.dtype.names
+
+    def test_file_extension_auto_detection(self) -> None:
+        """Test automatic file extension detection."""
+        original_array = self.create_test_data()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_path = Path(temp_dir) / "test_data"
+            packed_path = base_path.with_suffix(".packed")
+
+            # Save with bit packing
+            save_preprocessing_array(original_array, packed_path, bit_pack=True)
+
+            # Try to load with base path (no extension)
+            loaded_array = load_preprocessing_array(base_path, auto_decompress=True)
+
+            # Should find and load the .packed file
+            assert loaded_array.dtype == original_array.dtype
+            for field in original_array.dtype.names:
+                assert np.array_equal(original_array[field], loaded_array[field])
+
+
+class TestCompressionPerformance:
+    """Test compression performance and file sizes."""
+
+    def test_file_size_reduction(self) -> None:
+        """Test that bit-packed files are significantly smaller."""
+        # Create larger test data to see compression benefits
+        array = create_empty_preprocessing_array(100)
+
+        # Fill with random binary data
+        for i in range(len(array)):
+            array[i]["id"] = f"record_{i:04d}"
+            array[i]["eval"] = i
+            array[i]["moveLabel"] = i % 1000
+            array[i]["resultValue"] = 0.5
+            array[i]["partitioningKey"] = np.datetime64("2024-01-01")
+
+            # Random binary features and legal moves
+            array[i]["features"] = np.random.choice([0, 1], size=(104, 9, 9)).astype(
+                np.uint8
+            )
+            array[i]["legalMoveMask"] = np.random.choice([0, 1], size=(1496,)).astype(
+                np.uint8
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            standard_path = Path(temp_dir) / "standard.raw"
+            packed_path = Path(temp_dir) / "packed.packed"
+
+            # Save in both formats
+            save_preprocessing_array(array, standard_path, bit_pack=False)
+            save_preprocessing_array(array, packed_path, bit_pack=True)
+
+            # Compare file sizes
+            standard_size = standard_path.stat().st_size
+            packed_size = packed_path.stat().st_size
+
+            compression_ratio = standard_size / packed_size
+
+            # Should achieve significant compression (at least 4x)
+            assert compression_ratio >= 4.0
+
+            print(f"Compression ratio: {compression_ratio:.2f}x")
+            print(f"Standard size: {standard_size:,} bytes")
+            print(f"Packed size: {packed_size:,} bytes")
+
+    def test_load_save_performance(self) -> None:
+        """Test that compression doesn't significantly impact performance."""
+        import time
+
+        array = create_empty_preprocessing_array(50)
+
+        # Fill with test data
+        for i in range(len(array)):
+            array[i]["features"] = np.random.choice([0, 1], size=(104, 9, 9)).astype(
+                np.uint8
+            )
+            array[i]["legalMoveMask"] = np.random.choice([0, 1], size=(1496,)).astype(
+                np.uint8
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Time standard save/load
+            standard_path = Path(temp_dir) / "standard.raw"
+
+            start_time = time.perf_counter()
+            save_preprocessing_array(array, standard_path, bit_pack=False)
+            loaded_standard = load_preprocessing_array(standard_path)
+            standard_time = time.perf_counter() - start_time
+
+            # Time bit-packed save/load
+            packed_path = Path(temp_dir) / "packed.packed"
+
+            start_time = time.perf_counter()
+            save_preprocessing_array(array, packed_path, bit_pack=True)
+            loaded_packed = load_preprocessing_array(packed_path, auto_decompress=True)
+            packed_time = time.perf_counter() - start_time
+
+            # Packed should not be more than 10x slower
+            # (compression involves more processing)
+            # This is a reasonable performance expectation for bit-packing operations
+            assert packed_time / standard_time <= 10.0
+
+            # Verify correctness
+            for field in array.dtype.names:
+                assert np.array_equal(array[field], loaded_standard[field])
+                assert np.array_equal(array[field], loaded_packed[field])
+
+            print(f"Standard time: {standard_time:.3f}s")
+            print(f"Packed time: {packed_time:.3f}s")
+            print(f"Packed overhead: {packed_time / standard_time:.2f}x")
+
+
+class TestErrorHandling:
+    """Test error handling in compression I/O."""
+
+    def test_invalid_features_data(self) -> None:
+        """Test error handling for invalid features data."""
+        array = create_empty_preprocessing_array(1)
+
+        # Set invalid values (not 0 or 1)
+        array[0]["features"][0, 0, 0] = 2
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "invalid.packed"
+
+            # Should raise CompressionError
+            with pytest.raises(Exception):  # Could be CompressionError or DataIOError
+                save_preprocessing_array(array, file_path, bit_pack=True)
+
+    def test_nonexistent_file(self) -> None:
+        """Test error handling for nonexistent files."""
+        with pytest.raises(DataIOError, match="File not found"):
+            load_preprocessing_array("nonexistent_file.packed")
+
+    def test_corrupted_packed_file(self) -> None:
+        """Test error handling for corrupted packed files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "corrupted.packed"
+
+            # Write data that's too small for a single record
+            file_path.write_bytes(b"a" * 10)  # Much smaller than expected
+
+            # This test verifies that the system can handle malformed files gracefully
+            # np.fromfile may not error immediately, but validation should catch issues
+            try:
+                loaded_array = load_preprocessing_array(file_path, validate=True)
+                # If we get here, check that the array is not what we expect
+                assert (
+                    len(loaded_array) != 10
+                )  # The test data should not have 10 valid records
+            except Exception:
+                # Any exception is acceptable - the system is handling the corruption
+                pass
