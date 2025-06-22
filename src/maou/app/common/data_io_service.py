@@ -94,7 +94,8 @@ class DataIOService:
                     # Check if this is a .raw file that we can't handle as generic numpy
                     if file_path.suffix == ".raw":
                         raise DataIOError(
-                            f"Cannot load .raw file {file_path} without known schema. Use array_type='hcpe' or 'preprocessing'."
+                            f"Cannot load .raw file {file_path} without known schema. "
+                            f"Use array_type='hcpe' or 'preprocessing'."
                         )
 
                     # Check if .raw file exists instead
@@ -102,7 +103,9 @@ class DataIOService:
                         raw_path = file_path.with_suffix(".raw")
                         if raw_path.exists():
                             raise DataIOError(
-                                f"Found .raw file {raw_path} but cannot load without known schema. Use array_type='hcpe' or 'preprocessing'."
+                                f"Found .raw file {raw_path} but cannot load without "
+                                f"known schema. Use array_type='hcpe' or "
+                                f"'preprocessing'."
                             )
 
                     return np.load(file_path, mmap_mode=mmap_mode)

@@ -28,7 +28,7 @@ from maou.domain.data.schema import (
 class TestHCPEIO:
     """Test HCPE array I/O operations."""
 
-    def test_save_and_load_hcpe_array_uncompressed(self):
+    def test_save_and_load_hcpe_array_uncompressed(self) -> None:
         """Test saving and loading uncompressed HCPE array."""
         # Create test data
         original_array = create_empty_hcpe_array(5)
@@ -58,7 +58,7 @@ class TestHCPEIO:
             )
             assert loaded_array.dtype == original_array.dtype
 
-    def test_save_and_load_hcpe_array_compressed(self):
+    def test_save_and_load_hcpe_array_compressed(self) -> None:
         """Test saving and loading compressed HCPE array."""
         original_array = create_empty_hcpe_array(3)
         original_array["eval"] = [100, -200, 0]
@@ -79,7 +79,7 @@ class TestHCPEIO:
             # Verify data integrity
             np.testing.assert_array_equal(loaded_array, original_array)
 
-    def test_save_hcpe_array_auto_extension(self):
+    def test_save_hcpe_array_auto_extension(self) -> None:
         """Test automatic file extension handling."""
         array = create_empty_hcpe_array(2)
 
@@ -94,12 +94,12 @@ class TestHCPEIO:
             save_hcpe_array(array, file_path2, compress=True)
             assert (Path(temp_dir) / "test2.npz").exists()
 
-    def test_load_hcpe_array_file_not_found(self):
+    def test_load_hcpe_array_file_not_found(self) -> None:
         """Test loading non-existent file."""
         with pytest.raises(DataIOError, match="File not found"):
             load_hcpe_array("non_existent_file.npy")
 
-    def test_save_hcpe_array_validation_error(self):
+    def test_save_hcpe_array_validation_error(self) -> None:
         """Test saving array that fails validation."""
         # Create invalid array
         array = create_empty_hcpe_array(2)
@@ -113,7 +113,7 @@ class TestHCPEIO:
             with pytest.raises(DataIOError):  # DataIOError wraps SchemaValidationError
                 save_hcpe_array(array, file_path, validate=True)
 
-    def test_load_hcpe_array_validation_disabled(self):
+    def test_load_hcpe_array_validation_disabled(self) -> None:
         """Test loading with validation disabled."""
         array = create_empty_hcpe_array(2)
 
@@ -124,7 +124,7 @@ class TestHCPEIO:
 
             np.testing.assert_array_equal(loaded_array, array)
 
-    def test_load_hcpe_array_mmap_mode(self):
+    def test_load_hcpe_array_mmap_mode(self) -> None:
         """Test loading with memory mapping."""
         array = create_empty_hcpe_array(10)
 
@@ -141,7 +141,7 @@ class TestHCPEIO:
 class TestPreprocessingIO:
     """Test preprocessing array I/O operations."""
 
-    def test_save_and_load_preprocessing_array(self):
+    def test_save_and_load_preprocessing_array(self) -> None:
         """Test saving and loading preprocessing array."""
         # Create test data
         original_array = create_empty_preprocessing_array(3)
@@ -169,7 +169,7 @@ class TestPreprocessingIO:
             np.testing.assert_array_equal(loaded_array, original_array)
             assert loaded_array.dtype == original_array.dtype
 
-    def test_save_preprocessing_array_compressed(self):
+    def test_save_preprocessing_array_compressed(self) -> None:
         """Test saving preprocessing array with compression."""
         array = create_empty_preprocessing_array(5)
         array["eval"] = [1, 2, 3, 4, 5]
@@ -184,7 +184,7 @@ class TestPreprocessingIO:
 
             np.testing.assert_array_equal(loaded_array, array)
 
-    def test_preprocessing_array_validation_error(self):
+    def test_preprocessing_array_validation_error(self) -> None:
         """Test preprocessing array validation error."""
         array = create_empty_preprocessing_array(2)
         array["moveLabel"] = np.array(
@@ -201,7 +201,7 @@ class TestPreprocessingIO:
 class TestArrayWithMetadata:
     """Test array saving/loading with metadata."""
 
-    def test_save_and_load_hcpe_with_metadata(self):
+    def test_save_and_load_hcpe_with_metadata(self) -> None:
         """Test saving and loading HCPE array with metadata."""
         array = create_empty_hcpe_array(2)
         array["eval"] = [100, -50]
@@ -229,7 +229,7 @@ class TestArrayWithMetadata:
             np.testing.assert_array_equal(loaded_array, array)
             assert loaded_metadata == metadata
 
-    def test_save_and_load_preprocessing_with_metadata(self):
+    def test_save_and_load_preprocessing_with_metadata(self) -> None:
         """Test saving and loading preprocessing array with metadata."""
         array = create_empty_preprocessing_array(1)
         array["moveLabel"] = [100]
@@ -252,7 +252,7 @@ class TestArrayWithMetadata:
             np.testing.assert_array_equal(loaded_array, array)
             assert loaded_metadata == metadata
 
-    def test_save_array_with_metadata_unknown_schema(self):
+    def test_save_array_with_metadata_unknown_schema(self) -> None:
         """Test saving array that doesn't match known schemas."""
         # Create array with unknown schema
         unknown_array = np.array([1, 2, 3], dtype=np.int32)
@@ -266,7 +266,7 @@ class TestArrayWithMetadata:
                     unknown_array, file_path, metadata, validate=True
                 )
 
-    def test_load_array_with_metadata_missing_data_key(self):
+    def test_load_array_with_metadata_missing_data_key(self) -> None:
         """Test loading file without required 'data' key."""
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "missing_data.npz"
@@ -281,7 +281,7 @@ class TestArrayWithMetadata:
 class TestFileInfo:
     """Test file information functionality."""
 
-    def test_get_file_info_uncompressed(self):
+    def test_get_file_info_uncompressed(self) -> None:
         """Test getting info for uncompressed file."""
         array = create_empty_hcpe_array(5)
 
@@ -299,7 +299,7 @@ class TestFileInfo:
             assert "file_size" in info
             assert Path(info["file_path"]) == file_path
 
-    def test_get_file_info_compressed(self):
+    def test_get_file_info_compressed(self) -> None:
         """Test getting info for compressed file."""
         array = create_empty_preprocessing_array(3)
         metadata = {"test": "info"}
@@ -318,12 +318,12 @@ class TestFileInfo:
             assert info["has_metadata"] is True
             assert info["array_type"] == "preprocessing"
 
-    def test_get_file_info_file_not_found(self):
+    def test_get_file_info_file_not_found(self) -> None:
         """Test getting info for non-existent file."""
         with pytest.raises(DataIOError, match="File not found"):
             get_file_info("non_existent.npy")
 
-    def test_get_file_info_compressed_without_metadata(self):
+    def test_get_file_info_compressed_without_metadata(self) -> None:
         """Test getting info for compressed file without metadata."""
         array = create_empty_hcpe_array(2)
 
@@ -340,7 +340,7 @@ class TestFileInfo:
 class TestErrorHandling:
     """Test error handling and edge cases."""
 
-    def test_save_to_readonly_directory(self):
+    def test_save_to_readonly_directory(self) -> None:
         """Test saving to read-only directory."""
         array = create_empty_hcpe_array(1)
 
@@ -358,7 +358,7 @@ class TestErrorHandling:
                 # Restore permissions for cleanup
                 readonly_path.chmod(0o755)
 
-    def test_load_corrupted_compressed_file(self):
+    def test_load_corrupted_compressed_file(self) -> None:
         """Test loading corrupted compressed file."""
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "corrupted.npz"
@@ -370,7 +370,7 @@ class TestErrorHandling:
             with pytest.raises(DataIOError):
                 load_hcpe_array(file_path)
 
-    def test_save_with_numpy_error(self):
+    def test_save_with_numpy_error(self) -> None:
         """Test handling of numpy save errors."""
         array = create_empty_hcpe_array(1)
 
@@ -381,7 +381,7 @@ class TestErrorHandling:
             save_hcpe_array(array, invalid_path, validate=False)
 
     @patch("numpy.fromfile")
-    def test_load_with_numpy_error(self, mock_fromfile):
+    def test_load_with_numpy_error(self, mock_fromfile) -> None:
         """Test handling of numpy fromfile errors."""
         mock_fromfile.side_effect = Exception("Numpy fromfile failed")
 
@@ -397,7 +397,7 @@ class TestErrorHandling:
 class TestIntegration:
     """Integration tests combining multiple features."""
 
-    def test_full_workflow_hcpe(self):
+    def test_full_workflow_hcpe(self) -> None:
         """Test complete HCPE workflow with validation and compression."""
         # Create realistic HCPE data
         array = create_empty_hcpe_array(10)
@@ -441,7 +441,7 @@ class TestIntegration:
             assert info_compressed["format"] == "compressed"
             assert info_metadata["has_metadata"] is True
 
-    def test_full_workflow_preprocessing(self):
+    def test_full_workflow_preprocessing(self) -> None:
         """Test complete preprocessing workflow."""
         # Create realistic preprocessing data
         array = create_empty_preprocessing_array(5)

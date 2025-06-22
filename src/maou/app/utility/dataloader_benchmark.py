@@ -150,7 +150,9 @@ class DataLoaderBenchmark:
 
         end_time = time.time()
         time_taken = end_time - start_time
-        avg_batch_time = time_taken / batches_processed if batches_processed > 0 else 0
+        avg_batch_time = (
+            time_taken / float(batches_processed) if batches_processed > 0 else 0.0
+        )
 
         # Clean up dataloader workers
         del dataloader

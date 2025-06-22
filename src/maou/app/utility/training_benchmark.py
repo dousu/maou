@@ -44,7 +44,7 @@ class BenchmarkResult:
         return {
             "total_epoch_time": self.total_epoch_time,
             "average_batch_time": self.average_batch_time,
-            "total_batches": self.total_batches,
+            "total_batches": float(self.total_batches),
             "data_loading_time": self.data_loading_time,
             "gpu_transfer_time": self.gpu_transfer_time,
             "forward_pass_time": self.forward_pass_time,
@@ -353,14 +353,14 @@ class TrainingBenchmarkUseCase:
                 training_result.total_epoch_time / config.sample_ratio
             )
             estimated_total_batches = int(
-                training_result.total_batches / config.sample_ratio
+                float(training_result.total_batches) / config.sample_ratio
             )
             estimation_results = {
                 "sample_ratio": config.sample_ratio,
                 "estimated_full_epoch_time_seconds": estimated_full_epoch_time,
-                "estimated_full_epoch_time_minutes": estimated_full_epoch_time / 60,
-                "estimated_total_batches": estimated_total_batches,
-                "actual_batches_processed": training_result.total_batches,
+                "estimated_full_epoch_time_minutes": estimated_full_epoch_time / 60.0,
+                "estimated_total_batches": float(estimated_total_batches),
+                "actual_batches_processed": float(training_result.total_batches),
             }
             self.logger.info(f"Sample ratio: {config.sample_ratio:.1%}")
             self.logger.info(

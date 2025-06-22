@@ -77,7 +77,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             if seed is not None:
                 random.seed(seed)
             random.shuffle(data)
-            split_idx = int(len(data) * (1 - test_ratio))
+            split_idx = int(float(len(data)) * (1 - test_ratio))
             return data[:split_idx], data[split_idx:]
 
     class PageManager:

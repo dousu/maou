@@ -5,7 +5,7 @@ with proper error handling, validation, and compression support.
 """
 
 import logging
-from io import BytesIO
+from io import BytesIO  # type: ignore[attr-defined]
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
@@ -286,7 +286,8 @@ def load_preprocessing_array(
                         else:
                             array = np.load(file_path)
                         logger.debug(
-                            f"Loaded preprocessing array from standard .npy file {file_path}"
+                            f"Loaded preprocessing array from standard .npy file "
+                            f"{file_path}"
                         )
                     else:
                         # It's a raw binary file (created with tofile())
@@ -298,7 +299,8 @@ def load_preprocessing_array(
                         else:
                             array = np.fromfile(file_path, dtype=dtype)
                             logger.debug(
-                                f"Loaded preprocessing array using fromfile() from {file_path}"
+                                f"Loaded preprocessing array using fromfile() from "
+                                f"{file_path}"
                             )
             except Exception:
                 # Fallback to raw binary reading
@@ -551,7 +553,8 @@ def get_file_info(file_path: Union[str, Path]) -> Dict[str, Any]:
             info["size"] = total_elements
             info["format"] = "raw_binary"
         else:
-            # For .npy files, try to read header first, but fallback to raw format if no header
+            # For .npy files, try to read header first, but fallback to raw format
+            # if no header
             try:
                 with open(file_path, "rb") as f:
                     np.lib.format.read_magic(f)  # Read magic but don't store
@@ -561,9 +564,11 @@ def get_file_info(file_path: Union[str, Path]) -> Dict[str, Any]:
                     info["size"] = np.prod(shape) if shape else 0
                     info["fortran_order"] = fortran_order
             except (ValueError, OSError) as e:
-                # If reading header fails, treat as raw binary file (created with tofile())
+                # If reading header fails, treat as raw binary file
+                # (created with tofile())
                 logger.debug(
-                    f"Failed to read numpy header from {file_path}, treating as raw binary: {e}"
+                    f"Failed to read numpy header from {file_path}, "
+                    f"treating as raw binary: {e}"
                 )
 
                 from .schema import get_hcpe_dtype, get_preprocessing_dtype

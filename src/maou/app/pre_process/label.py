@@ -540,8 +540,9 @@ def benchmark_make_move_label(num_iterations: int = 10000) -> None:
     logger.info("Benchmark completed:")
     logger.info(f"  Total time: {elapsed_time:.4f} seconds")
     logger.info(f"  Iterations: {num_iterations}")
-    logger.info(f"  Time per call: {elapsed_time / num_iterations * 1000:.4f} ms")
-    logger.info(f"  Calls per second: {num_iterations / elapsed_time:.0f}")
+    time_per_call = float(elapsed_time) / float(num_iterations) * 1000
+    logger.info(f"  Time per call: {time_per_call:.4f} ms")
+    logger.info(f"  Calls per second: {float(num_iterations) / elapsed_time:.0f}")
 
 
 if __name__ == "__main__":

@@ -148,7 +148,7 @@ class LoggingCallback(BaseCallback):
         if context.loss is not None:
             self.running_loss += context.loss.item()
             if context.batch_idx % self.record_num == self.record_num - 1:
-                last_loss = self.running_loss / self.record_num
+                last_loss = float(self.running_loss) / self.record_num
                 self.logger.info(f"  batch {context.batch_idx + 1} loss: {last_loss}")
                 tb_x = (
                     context.epoch_idx * self.dataloader_length + context.batch_idx + 1
@@ -184,12 +184,12 @@ class ValidationCallback(BaseCallback):
 
     def get_average_loss(self) -> float:
         """Get average validation loss."""
-        return self.running_vloss / max(1, self.batch_count)
+        return float(self.running_vloss) / max(1, self.batch_count)
 
     def get_average_accuracies(self) -> tuple[float, float]:
         """Get average policy and value accuracies."""
-        avg_policy = self.test_accuracy_policy / max(1, self.batch_count)
-        avg_value = self.test_accuracy_value / max(1, self.batch_count)
+        avg_policy = float(self.test_accuracy_policy) / max(1, self.batch_count)
+        avg_value = float(self.test_accuracy_value) / max(1, self.batch_count)
         return avg_policy, avg_value
 
     def reset(self) -> None:
@@ -333,7 +333,7 @@ class TimingCallback(BaseCallback):
             raise RuntimeError("No batches were processed for timing measurement")
 
         def average(values: List[float]) -> float:
-            return sum(values) / len(values)
+            return sum(values) / len(values) if len(values) > 0 else 0.0
 
         return {
             "data_loading_time": average(self.timing_stats["data_loading"]),
@@ -351,15 +351,15 @@ class TimingCallback(BaseCallback):
         return {
             "total_epoch_time": epoch_total_time,
             "total_batches": float(total_batches),
-            "samples_per_second": self.total_samples / epoch_total_time,
-            "batches_per_second": total_batches / epoch_total_time,
+            "samples_per_second": float(self.total_samples) / epoch_total_time,
+            "batches_per_second": float(total_batches) / epoch_total_time,
         }
 
     def get_loss_metrics(self, total_batches: int) -> Dict[str, float]:
         """Get loss metrics."""
         return {
             "total_loss": self.total_loss,
-            "average_loss": self.total_loss / total_batches
+            "average_loss": float(self.total_loss) / total_batches
             if total_batches > 0
             else 0.0,
         }

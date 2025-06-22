@@ -114,9 +114,17 @@ class BigQueryFeatureStore(converter.FeatureStore, preprocess.FeatureStore):
                 if dtype.shape:  # Array field
                     new_dtypes.append((field_name, (np.float32, dtype.shape)))
                 else:  # Scalar field
-                    new_dtypes.append((field_name, np.float32))
+                    new_dtypes.append(
+                        (field_name, np.float32)  # type: ignore[arg-type]
+                    )
             else:
-                new_dtypes.append((field_name, dtype))
+                # Keep original dtype specification
+                if dtype.shape:  # Array field
+                    new_dtypes.append((field_name, (dtype.base, dtype.shape)))
+                else:  # Scalar field
+                    new_dtypes.append(
+                        (field_name, dtype.base)  # type: ignore[arg-type]
+                    )
 
         # Create new array with converted types
         new_array = np.empty(structured_array.shape, dtype=new_dtypes)

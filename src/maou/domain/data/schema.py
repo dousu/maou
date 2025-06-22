@@ -157,14 +157,16 @@ def get_bigquery_schema_for_hcpe() -> list[dict]:
     hcpe_dtype = get_hcpe_dtype()
     schema = []
 
-    for field_name, (field_dtype, _) in hcpe_dtype.fields.items():
-        schema.append(
-            {
-                "name": field_name,
-                "type": numpy_dtype_to_bigquery_type(field_dtype),
-                "mode": "REQUIRED",
-            }
-        )
+    if hcpe_dtype.fields is not None:
+        for field_name, field_info in hcpe_dtype.fields.items():
+            field_dtype = field_info[0]  # First element is always dtype
+            schema.append(
+                {
+                    "name": field_name,
+                    "type": numpy_dtype_to_bigquery_type(field_dtype),
+                    "mode": "REQUIRED",
+                }
+            )
 
     return schema
 
@@ -178,14 +180,16 @@ def get_bigquery_schema_for_preprocessing() -> list[dict]:
     preprocessing_dtype = get_preprocessing_dtype()
     schema = []
 
-    for field_name, (field_dtype, _) in preprocessing_dtype.fields.items():
-        schema.append(
-            {
-                "name": field_name,
-                "type": numpy_dtype_to_bigquery_type(field_dtype),
-                "mode": "REQUIRED",
-            }
-        )
+    if preprocessing_dtype.fields is not None:
+        for field_name, field_info in preprocessing_dtype.fields.items():
+            field_dtype = field_info[0]  # First element is always dtype
+            schema.append(
+                {
+                    "name": field_name,
+                    "type": numpy_dtype_to_bigquery_type(field_dtype),
+                    "mode": "REQUIRED",
+                }
+            )
 
     return schema
 

@@ -92,7 +92,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             if seed is not None:
                 random.seed(seed)
             random.shuffle(data)
-            split_idx = int(len(data) * (1 - test_ratio))
+            split_idx = int(float(len(data)) * (1 - test_ratio))
             return data[:split_idx], data[split_idx:]
 
     class PageManager:
@@ -352,7 +352,8 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 skip_count = len(s3_local_files) - len(download_tasks)
 
                 if download_tasks:
-                    total_size_mb = len(download_tasks) * 1.5  # 概算サイズ (1.5GB/file)
+                    # 概算サイズ (1.5GB/file)
+                    total_size_mb = float(len(download_tasks)) * 1.5
                     desc = (
                         f"Downloading {len(download_tasks)} files "
                         f"(~{total_size_mb:.1f}GB) [{self.max_workers} workers]"
@@ -453,7 +454,9 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
 
                 # ファイルをサンプリング
                 if self.sample_ratio is not None:
-                    sample_count = max(1, int(len(all_files) * self.sample_ratio))
+                    sample_count = max(
+                        1, int(float(len(all_files)) * self.sample_ratio)
+                    )
                     sampled_files = random.sample(
                         all_files, min(sample_count, len(all_files))
                     )

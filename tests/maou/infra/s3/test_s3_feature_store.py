@@ -122,7 +122,8 @@ class TestS3FeatureStore:
         data = [
             self.__generate_test_data(
                 num_rows=rows,
-                partitioning_key=date.fromisoformat("2022-02-02") + timedelta(days=i),
+                partitioning_key=date.fromisoformat("2022-02-02")
+                + timedelta(days=float(i)),
             )
             for i in range(days)
         ]
