@@ -150,14 +150,12 @@ class TestPreprocessingSchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["eval"] == np.int16  # type: ignore[misc]
-            # type: ignore[misc,index]
-            assert dtype["features"].shape == (FEATURES_NUM, 9, 9)
+            assert dtype["features"].shape == (FEATURES_NUM, 9, 9)  # type: ignore[misc]
         assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
-        # type: ignore[misc,index]
-        assert dtype["legalMoveMask"].subdtype[0] == np.uint8
+        assert dtype["legalMoveMask"].subdtype[0] == np.uint8  # type: ignore[misc]
 
     def test_preprocessing_dtype_constant(self) -> None:
         """Test PREPROCESSING_DTYPE constant matches function."""
