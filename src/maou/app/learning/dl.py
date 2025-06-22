@@ -238,7 +238,11 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            self.model.load_state_dict(torch.load(self.resume_from))
+            self.model.load_state_dict(
+                torch.load(
+                    self.resume_from, weights_only=True, map_location=self.device
+                )
+            )
 
         # start epoch設定
         epoch_number = self.start_epoch
