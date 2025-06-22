@@ -164,13 +164,13 @@ class ResNet(nn.Module):
             block, list_out_channels[0], layers[0], stride=strides[0]
         )
         self.layer2 = self._make_layer(
-            block, list_out_channels[1], layers[1], stride=strides[0]
+            block, list_out_channels[1], layers[1], stride=strides[1]
         )
         self.layer3 = self._make_layer(
-            block, list_out_channels[2], layers[2], stride=strides[0]
+            block, list_out_channels[2], layers[2], stride=strides[2]
         )
         self.layer4 = self._make_layer(
-            block, list_out_channels[3], layers[3], stride=strides[0]
+            block, list_out_channels[3], layers[3], stride=strides[3]
         )
 
     def _make_layer(
