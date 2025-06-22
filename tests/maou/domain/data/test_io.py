@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -381,7 +382,7 @@ class TestErrorHandling:
             save_hcpe_array(array, invalid_path, validate=False)
 
     @patch("numpy.fromfile")
-    def test_load_with_numpy_error(self, mock_fromfile) -> None:
+    def test_load_with_numpy_error(self, mock_fromfile: Any) -> None:
         """Test handling of numpy fromfile errors."""
         mock_fromfile.side_effect = Exception("Numpy fromfile failed")
 

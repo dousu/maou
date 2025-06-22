@@ -44,12 +44,12 @@ class TestHCPESchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["hcp"].shape == (32,)  # type: ignore[misc]
-            assert dtype["hcp"].subdtype[0] == np.uint8  # type: ignore[misc]
+            assert dtype["hcp"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["eval"] == np.int16  # type: ignore[misc]
         assert dtype["bestMove16"] == np.int16  # type: ignore[misc]
         assert dtype["gameResult"] == np.int8  # type: ignore[misc]
         assert dtype["ratings"].shape == (2,)  # type: ignore[misc]
-        assert dtype["ratings"].subdtype[0] == np.uint16  # type: ignore[misc]
+        assert dtype["ratings"].subdtype[0] == np.uint16  # type: ignore[misc,index]
         assert dtype["moves"] == np.int16  # type: ignore[misc]
 
     def test_hcpe_dtype_constant(self) -> None:
@@ -150,13 +150,13 @@ class TestPreprocessingSchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["eval"] == np.int16  # type: ignore[misc]
-            # type: ignore[misc]
+            # type: ignore[misc,index]
             assert dtype["features"].shape == (FEATURES_NUM, 9, 9)
-        assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc]
+        assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
-        assert dtype["legalMoveMask"].subdtype[0] == np.uint8  # type: ignore[misc]
+        assert dtype["legalMoveMask"].subdtype[0] == np.uint8  # type: ignore[misc,index]
 
     def test_preprocessing_dtype_constant(self) -> None:
         """Test PREPROCESSING_DTYPE constant matches function."""

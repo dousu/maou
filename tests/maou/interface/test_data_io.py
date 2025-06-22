@@ -23,7 +23,7 @@ from maou.interface.data_io import (
 class TestInterfaceDataIO:
     """Test interface layer data I/O functions."""
 
-    def test_load_array_basic(self):
+    def test_load_array_basic(self) -> None:
         """Test basic array loading functionality."""
         hcpe_array = create_empty_hcpe_array(5)
         hcpe_array["eval"] = [10, 20, 30, 40, 50]
@@ -45,7 +45,7 @@ class TestInterfaceDataIO:
 
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
-    def test_load_array_with_mmap(self):
+    def test_load_array_with_mmap(self) -> None:
         """Test loading array with memory mapping through interface."""
         prep_array = create_empty_preprocessing_array(3)
         prep_array["eval"] = [100, 200, 300]
@@ -68,7 +68,7 @@ class TestInterfaceDataIO:
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, prep_array)
 
-    def test_save_array_basic(self):
+    def test_save_array_basic(self) -> None:
         """Test basic array saving functionality."""
         hcpe_array = create_empty_hcpe_array(2)
         hcpe_array["eval"] = [500, -250]
@@ -84,7 +84,7 @@ class TestInterfaceDataIO:
             loaded_array = load_array(file_path, array_type="hcpe")
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
-    def test_save_array_compressed(self):
+    def test_save_array_compressed(self) -> None:
         """Test saving compressed arrays through interface."""
         prep_array = create_empty_preprocessing_array(4)
         prep_array["moveLabel"] = [10, 20, 30, 40]
@@ -99,7 +99,7 @@ class TestInterfaceDataIO:
             loaded_array = load_array(file_path, array_type="preprocessing")
             np.testing.assert_array_equal(loaded_array, prep_array)
 
-    def test_get_array_info(self):
+    def test_get_array_info(self) -> None:
         """Test getting array information through interface."""
         hcpe_array = create_empty_hcpe_array(7)
 
@@ -120,7 +120,7 @@ class TestInterfaceDataIO:
             assert info["size"] == 7
             assert info["format"] == "raw_binary"
 
-    def test_explicit_type_specification(self):
+    def test_explicit_type_specification(self) -> None:
         """Test explicit type specification through interface."""
         # Test with HCPE array
         hcpe_array = create_empty_hcpe_array(3)
@@ -140,12 +140,12 @@ class TestInterfaceDataIO:
             loaded_array = load_array(hcpe_file, array_type="hcpe")
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
-    def test_error_handling(self):
+    def test_error_handling(self) -> None:
         """Test error handling in interface layer."""
         with pytest.raises(DataIOError):
             load_array("non_existent_file.npy")
 
-    def test_validation_disabled_by_default(self):
+    def test_validation_disabled_by_default(self) -> None:
         """Test that validation is disabled by default for performance."""
         # Create an array that would fail validation if enabled
         hcpe_array = create_empty_hcpe_array(2)
@@ -168,7 +168,7 @@ class TestInterfaceDataIO:
 class TestBackwardCompatibility:
     """Test backward compatibility functions."""
 
-    def test_load_structured_array(self):
+    def test_load_structured_array(self) -> None:
         """Test load_structured_array backward compatibility function."""
         hcpe_array = create_empty_hcpe_array(3)
 
@@ -186,7 +186,7 @@ class TestBackwardCompatibility:
             assert isinstance(loaded_array, np.memmap)
             np.testing.assert_array_equal(loaded_array, hcpe_array)
 
-    def test_save_structured_array(self):
+    def test_save_structured_array(self) -> None:
         """Test save_structured_array backward compatibility function."""
         prep_array = create_empty_preprocessing_array(2)
         prep_array["eval"] = [1000, -500]
@@ -205,7 +205,7 @@ class TestBackwardCompatibility:
 class TestIntegrationWithInfrastructure:
     """Test integration scenarios that infrastructure layer would use."""
 
-    def test_typical_data_source_usage(self):
+    def test_typical_data_source_usage(self) -> None:
         """Test typical usage pattern from DataSource classes."""
         # Create multiple files like DataSource would encounter
         hcpe_arrays = [
@@ -245,7 +245,7 @@ class TestIntegrationWithInfrastructure:
 
             assert total_rows == sum(len(arr) for arr in hcpe_arrays)
 
-    def test_batch_iteration_pattern(self):
+    def test_batch_iteration_pattern(self) -> None:
         """Test batch iteration pattern used by DataSource.iter_batches()."""
         prep_arrays = [
             create_empty_preprocessing_array(5),

@@ -34,10 +34,10 @@ def get_hcpe_dtype() -> np.dtype:
             ("eval", np.int16),  # Position evaluation (-32767 to 32767)
             ("bestMove16", np.int16),  # Best move in 16-bit format
             ("gameResult", np.int8),  # Game result (BLACK_WIN, WHITE_WIN, DRAW)
-            ("id", (np.unicode_, 128)),  # Unique identifier for position
+            ("id", (np.str_, 128)),  # Unique identifier for position
             ("partitioningKey", np.dtype("datetime64[D]")),  # Date for partitioning
             ("ratings", (np.uint16, 2)),  # Player ratings [black, white]
-            ("endgameStatus", (np.unicode_, 16)),  # Endgame status description
+            ("endgameStatus", (np.str_, 16)),  # Endgame status description
             ("moves", np.int16),  # Number of moves in game
         ]
     )
@@ -54,7 +54,7 @@ def get_preprocessing_dtype() -> np.dtype:
     """
     return np.dtype(
         [
-            ("id", (np.unicode_, 128)),  # Unique identifier
+            ("id", (np.str_, 128)),  # Unique identifier
             ("eval", np.int16),  # Position evaluation
             (
                 "features",
