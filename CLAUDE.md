@@ -299,6 +299,69 @@ pytest tests/maou/infra/gcs/test_gcs_data_source.py
 - **Coverage**: Aim for comprehensive test coverage of business logic
 - **Performance**: Integration tests should complete within reasonable time
 
+### Data Source Testing Requirements
+
+#### Explicit Array Type Specification
+
+**CRITICAL**: All DataSource tests must specify explicit `array_type` parameters:
+
+```python
+# File system data source testing
+def test_file_data_source():
+    datasource = FileDataSource(
+        file_paths=test_paths,
+        array_type="hcpe"  # REQUIRED: Explicit type specification
+    )
+
+# S3 data source testing
+def test_s3_data_source():
+    datasource = S3DataSource(
+        bucket_name="test-bucket",
+        prefix="test-data",
+        data_name="features",
+        local_cache_dir=str(temp_cache_dir),
+        array_type="preprocessing"  # REQUIRED: Explicit type specification
+    )
+```
+
+#### Integration Test Patterns
+
+**Cloud storage integration tests:**
+
+```python
+# Test data consistency between local and cloud storage
+def test_local_vs_cloud_consistency():
+    # Create test data with explicit types
+    local_datasource = FileDataSource(file_paths=paths, array_type="hcpe")
+    s3_datasource = S3DataSource(
+        bucket_name=bucket,
+        prefix=prefix,
+        data_name=data_name,
+        local_cache_dir=cache_dir,
+        array_type="hcpe"  # Same type as local
+    )
+
+    # Compare data consistency
+    assert local_data == s3_data
+```
+
+#### Domain Layer Testing
+
+**Test domain layer I/O functions directly:**
+
+```python
+from maou.domain.data.io import save_hcpe_array, load_hcpe_array
+from maou.domain.data.schema import validate_hcpe_array
+
+def test_domain_io_operations():
+    # Test high-performance I/O
+    save_hcpe_array(test_array, test_path, validate=True)
+    loaded_array = load_hcpe_array(test_path, validate=True)
+
+    # Validate schema compliance
+    assert validate_hcpe_array(loaded_array)
+```
+
 ## CLI Commands
 
 The project provides main CLI commands following the data pipeline, plus utility commands for performance optimization:
@@ -552,6 +615,8 @@ The project follows Clean Architecture principles with strict dependency rules:
    - Network models (ResNet with BottleneckBlock implementation)
    - Loss functions and training logic
    - Shogi game parsers (CSA, KIF formats)
+   - **Data schemas and I/O operations**: Centralized numpy dtype definitions and high-performance I/O
+   - **BigQuery type conversion**: Domain-driven cloud integration patterns
    - Pure business rules with no external dependencies
 
 2. **App Layer** (`src/maou/app/`): Use case implementations
@@ -581,6 +646,158 @@ infra → interface → app → domain
 - **App layer**: Can only import from domain layer
 - **Interface layer**: Can import from app and domain layers
 - **Infrastructure layer**: Can import from all other layers
+
+## Data I/O Architecture
+
+### Centralized Domain Layer I/O System
+
+The project uses a centralized data I/O system in the domain layer for consistent, high-performance operations:
+
+#### Core Components
+
+**Domain Schema Management** (`src/maou/domain/data/schema.py`):
+```python
+from maou.domain.data.schema import get_hcpe_dtype, get_preprocessing_dtype
+
+# Get standardized data types
+hcpe_dtype = get_hcpe_dtype()  # For game record data
+preprocessing_dtype = get_preprocessing_dtype()  # For training features
+```
+
+**High-Performance I/O Operations** (`src/maou/domain/data/io.py`):
+```python
+from maou.domain.data.io import save_hcpe_array, load_hcpe_array
+
+# Local file operations (uses high-performance tofile())
+save_hcpe_array(array, "output.hcpe.npy", validate=True)
+loaded_array = load_hcpe_array("input.hcpe.npy", validate=True)
+
+# Cloud storage operations (uses BufferIO for consistency)
+from maou.domain.data.io import save_array_to_buffer
+buffer = save_array_to_buffer(array, array_type="hcpe", validate=True)
+```
+
+#### Design Principles
+
+1. **Centralized Schemas**: All numpy dtypes defined in domain layer for consistency
+2. **High Performance**: Local storage uses `tofile()` for optimal speed and memory usage
+3. **Cloud Consistency**: Cloud storage uses domain layer `save_array_to_buffer()` for uniform serialization
+4. **Validation**: Built-in schema validation for data integrity
+5. **Clean Architecture**: Pure domain functions with no external dependencies
+
+### Explicit Array Type System
+
+**CRITICAL**: The project uses explicit array type specification instead of filename-based auto-detection.
+
+#### DataSource Usage Patterns
+
+**Always specify `array_type` parameter:**
+
+```python
+# File system data source
+from maou.infra.file_system.file_data_source import FileDataSource
+
+datasource = FileDataSource(
+    file_paths=paths,
+    array_type="hcpe"  # REQUIRED: Explicit type specification
+)
+
+# S3 data source
+from maou.infra.s3.s3_data_source import S3DataSource
+
+datasource = S3DataSource(
+    bucket_name="my-bucket",
+    prefix="data",
+    data_name="features",
+    local_cache_dir="./cache",
+    array_type="preprocessing"  # REQUIRED: Explicit type specification
+)
+```
+
+#### Available Array Types
+
+- `"hcpe"`: For game record data (HuffmanCodedPosAndEval format)
+- `"preprocessing"`: For neural network training features
+
+#### Why Explicit Types?
+
+1. **Reliability**: Eliminates filename-based auto-detection errors
+2. **Clarity**: Makes data type intentions explicit in code
+3. **Performance**: Avoids runtime type detection overhead
+4. **Testing**: Ensures consistent test data handling
+
+### BigQuery Integration Guidelines
+
+#### Domain Layer Type Conversion
+
+Use domain layer functions for BigQuery schema generation:
+
+```python
+from maou.domain.data.schema import (
+    numpy_dtype_to_bigquery_type,
+    get_bigquery_schema_for_hcpe,
+    get_bigquery_schema_for_preprocessing
+)
+
+# Generate BigQuery schema from numpy dtype
+bq_type = numpy_dtype_to_bigquery_type(np.float32)  # Returns "FLOAT"
+
+# Get complete schemas
+hcpe_schema = get_bigquery_schema_for_hcpe()
+preprocessing_schema = get_bigquery_schema_for_preprocessing()
+```
+
+#### Float16 Compatibility
+
+BigQuery automatically converts float16 to float32 for Parquet compatibility:
+
+```python
+# BigQueryFeatureStore automatically handles this conversion
+feature_store = BigQueryFeatureStore(dataset_id="my_dataset", table_name="features")
+feature_store.store_features(
+    name="training_data",
+    key_columns=["id"],
+    structured_array=array_with_float16_fields  # Automatically converted to float32
+)
+```
+
+#### Clean Architecture Compliance
+
+- **Domain Layer**: Type conversion functions with no external dependencies
+- **Infrastructure Layer**: BigQuery operations use domain layer conversion functions
+- **No Direct BigQuery Types**: Always convert through domain layer functions
+
+### Cloud Storage Best Practices
+
+#### BufferIO Approach for Feature Stores
+
+**S3 and GCS feature stores use domain layer `save_array_to_buffer()`:**
+
+```python
+# S3FeatureStore implementation (internal)
+from maou.domain.data.io import save_array_to_buffer
+
+# Consistent binary serialization across all cloud providers
+buffer = save_array_to_buffer(structured_array, validate=True, array_type="hcpe")
+# Upload buffer to S3/GCS
+```
+
+#### Benefits of Domain Layer Approach
+
+1. **Consistency**: Same binary format across S3, GCS, and local storage
+2. **Performance**: Optimized `tobytes()` serialization without numpy headers
+3. **Validation**: Automatic schema validation before cloud upload
+4. **Clean Architecture**: Cloud storage uses domain layer definitions
+
+#### Local vs Cloud Storage
+
+```python
+# Local storage (uses tofile() for performance)
+save_hcpe_array(array, "local_file.hcpe.npy")
+
+# Cloud storage (uses BufferIO for consistency)
+feature_store.store_features(structured_array=array)  # Uses save_array_to_buffer() internally
+```
 
 ## Data Pipeline
 
@@ -619,12 +836,17 @@ infra → interface → app → domain
 
 ### Google Cloud Platform
 - **BigQuery**: Structured data storage for HCPE records (requires `-E gcp`)
+  - **Domain Layer Integration**: Uses `numpy_dtype_to_bigquery_type()` for schema conversion
+  - **Float16 Compatibility**: Automatic conversion to float32 for Parquet compatibility
+  - **Schema Generation**: Domain layer functions provide BigQuery schemas
 - **Cloud Storage (GCS)**: Object storage for all data types (requires `-E gcp`)
+  - **BufferIO Integration**: Uses domain layer `save_array_to_buffer()` for consistent serialization
 - **Parallel processing**: Optimized upload/download with configurable workers
 - **Authentication**: `gcloud auth application-default login`
 
 ### Amazon Web Services
 - **S3**: Object storage for all data types (requires `-E aws`)
+  - **BufferIO Integration**: Uses domain layer `save_array_to_buffer()` for consistent serialization
 - **Parallel processing**: Optimized upload/download with configurable workers
 - **Authentication**: AWS SSO or IAM credentials
 
