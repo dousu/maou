@@ -150,7 +150,8 @@ class TestPreprocessingSchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["eval"] == np.int16  # type: ignore[misc]
-            assert dtype["features"].shape == (FEATURES_NUM, 9, 9)  # type: ignore[misc,index]
+            # type: ignore[misc,index]
+            assert dtype["features"].shape == (FEATURES_NUM, 9, 9)
         assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
