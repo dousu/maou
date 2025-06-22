@@ -10,6 +10,8 @@ import cshogi
 import numpy as np
 from tqdm.auto import tqdm
 
+from maou.domain.data.io import save_hcpe_array
+from maou.domain.data.schema import create_empty_hcpe_array
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
 from maou.domain.parser.parser import Parser
@@ -149,20 +151,7 @@ class HCPEConverter:
                 return (str(file), "skipped (no moves)")
 
             # HCPE配列の初期化
-            hcpes = np.zeros(
-                1024,
-                dtype=[
-                    ("hcp", (np.uint8, 32)),
-                    ("eval", np.int16),
-                    ("bestMove16", np.int16),
-                    ("gameResult", np.int8),
-                    ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
-                    ("partitioningKey", np.dtype("datetime64[D]")),
-                    ("ratings", (np.uint16, 2)),
-                    ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined] # noqa: E501
-                    ("moves", np.int16),
-                ],
-            )
+            hcpes = create_empty_hcpe_array(1024)
             board = cshogi.Board()  # type: ignore
             board.set_sfen(parser.init_pos_sfen())
 
@@ -219,9 +208,10 @@ class HCPEConverter:
                 board.push(move)
 
             # ファイルを保存
-            np.save(
-                output_dir / file.with_suffix(".npy").name,
+            save_hcpe_array(
                 hcpes[: idx + 1],
+                output_dir / file.with_suffix(".npy").name,
+                validate=False,
             )
             return (str(file), f"success {idx + 1} rows")
 
@@ -273,7 +263,9 @@ class HCPEConverter:
                         # Load the saved file and store it in feature store
                         npy_file = option.output_dir / file.with_suffix(".npy").name
                         if npy_file.exists():
-                            structured_array = np.load(npy_file)
+                            from maou.domain.data.io import load_hcpe_array
+
+                            structured_array = load_hcpe_array(npy_file, validate=False)
                             self.__feature_store.store_features(
                                 name=file.with_suffix(".hcpe").name,
                                 key_columns=["id"],

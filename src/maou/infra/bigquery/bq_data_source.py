@@ -11,6 +11,7 @@ import numpy as np
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
+from maou.interface.data_io import load_array
 
 
 class MissingBigQueryConfig(Exception):
@@ -265,7 +266,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             """ローカルからデータを読み込む"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(f"Loading data from local cache: {cache_path}")
-            return np.load(cache_path, mmap_mode="r")
+            return load_array(cache_path, mmap_mode="r")
 
         def __save_to_local(self, page_num: int, npy_data: np.ndarray) -> None:
             """データをローカルに保存する"""

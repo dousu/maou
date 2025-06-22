@@ -10,9 +10,9 @@ from typing import ContextManager, Dict, Generator, Optional
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.app.pre_process.feature import FEATURES_NUM
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
+from maou.domain.data.io import save_preprocessing_array
+from maou.domain.data.schema import create_empty_preprocessing_array
 
 
 class FeatureStore(metaclass=abc.ABCMeta):
@@ -94,26 +94,13 @@ class PreProcess:
         start_idx: int,
     ) -> tuple[np.ndarray, int]:
         """Process a chunk of records in parallel."""
-        from maou.app.pre_process.feature import FEATURES_NUM
-        from maou.app.pre_process.label import MOVE_LABELS_NUM
         from maou.app.pre_process.transform import Transform
 
         transform_logic = Transform()
         chunk_length = len(records_chunk)
 
         # Create output array for this chunk
-        array = np.zeros(
-            chunk_length,
-            dtype=[
-                ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
-                ("eval", np.int16),
-                ("features", np.uint8, (FEATURES_NUM, 9, 9)),
-                ("moveLabel", np.uint16),
-                ("resultValue", np.float16),
-                ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
-                ("partitioningKey", np.dtype("datetime64[D]")),
-            ],
-        )
+        array = create_empty_preprocessing_array(chunk_length)
 
         for idx, record in enumerate(records_chunk):
             global_idx = start_idx + idx
@@ -172,18 +159,7 @@ class PreProcess:
 
                 if max_workers == 1 or data_length < 100:
                     # Sequential processing for small batches or single worker
-                    array = np.zeros(
-                        data_length,
-                        dtype=[
-                            ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
-                            ("eval", np.int16),
-                            ("features", np.uint8, (FEATURES_NUM, 9, 9)),
-                            ("moveLabel", np.uint16),
-                            ("resultValue", np.float16),
-                            ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
-                            ("partitioningKey", np.dtype("datetime64[D]")),
-                        ],
-                    )
+                    array = create_empty_preprocessing_array(data_length)
 
                     for idx, record in enumerate(data):
                         id = (
@@ -261,18 +237,7 @@ class PreProcess:
                         chunk_results.sort(key=lambda x: x[0])
 
                         # Create final array and combine chunks
-                        final_array = np.zeros(
-                            data_length,
-                            dtype=[
-                                ("id", (np.unicode_, 128)),  # type: ignore[attr-defined] # noqa: E501
-                                ("eval", np.int16),
-                                ("features", np.uint8, (FEATURES_NUM, 9, 9)),
-                                ("moveLabel", np.uint16),
-                                ("resultValue", np.float16),
-                                ("legalMoveMask", np.uint8, (MOVE_LABELS_NUM)),
-                                ("partitioningKey", np.dtype("datetime64[D]")),
-                            ],
-                        )
+                        final_array = create_empty_preprocessing_array(data_length)
 
                         current_idx = 0
                         for start_idx, chunk_array in chunk_results:
@@ -292,9 +257,10 @@ class PreProcess:
                     )
 
                 if option.output_dir is not None:
-                    np.save(
-                        option.output_dir / Path(dataname).with_suffix(".pre.npy").name,
+                    save_preprocessing_array(
                         final_array,
+                        option.output_dir / Path(dataname).with_suffix(".pre.npy").name,
+                        validate=False,
                     )
                 pre_process_result[dataname] = f"success {len(final_array)} rows"
 

@@ -8,6 +8,7 @@ import numpy as np
 import pyarrow as pa
 
 from maou.interface import learn, preprocess
+from maou.interface.data_io import load_array
 
 
 class MissingFileDataConfig(Exception):
@@ -68,7 +69,7 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.file_row_offsets = []
             total_rows = 0
             for file in self.file_paths:
-                data = np.load(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r")
                 num_rows = data.shape[0]
                 self.file_row_offsets.append((file, total_rows, num_rows))
                 total_rows += num_rows
@@ -82,14 +83,14 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
                     relative_idx = idx - start_idx
 
                     # numpy structured arrayから直接レコードを取得
-                    npy_data = np.load(file, mmap_mode="r")
+                    npy_data = load_array(file, mmap_mode="r")
                     return npy_data[relative_idx]
 
             raise IndexError(f"Index {idx} out of range.")
 
         def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
             for file in self.file_paths:
-                data = np.load(file, mmap_mode="r")
+                data = load_array(file, mmap_mode="r")
                 yield str(file), data
 
     def __init__(
