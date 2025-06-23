@@ -16,6 +16,7 @@ from maou.app.common.data_io_service import (
     load_numpy_array,
     save_numpy_array,
 )
+from maou.app.common.bundling_service import BundlingService
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -143,3 +144,32 @@ def save_structured_array(array: np.ndarray, file_path: Union[str, Path]) -> Non
         file_path: Output file path
     """
     save_numpy_array(array, file_path, compress=False, validate=False)
+
+
+def create_bundling_service(
+    cache_dir: Union[str, Path],
+    target_size_gb: float = 1.0,
+    array_type: str = "hcpe",
+) -> BundlingService:
+    """Create bundling service instance.
+
+    This function provides an interface layer abstraction for creating
+    bundling services while maintaining Clean Architecture principles.
+
+    Args:
+        cache_dir: Directory for storing bundles and metadata
+        target_size_gb: Target bundle size in GB
+        array_type: Primary array type ("hcpe" or "preprocessing")
+
+    Returns:
+        BundlingService: Configured bundling service instance
+
+    Example:
+        >>> bundler = create_bundling_service("./cache", target_size_gb=1.5)
+        >>> bundles = bundler.bundle_files(file_paths)
+    """
+    return BundlingService(
+        cache_dir=Path(cache_dir),
+        target_size_gb=target_size_gb,
+        array_type=array_type,
+    )

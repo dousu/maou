@@ -13,7 +13,7 @@ from google.cloud.exceptions import NotFound
 from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array
+from maou.interface.data_io import load_array, create_bundling_service
 
 
 class MissingGCSConfig(Exception):
@@ -170,10 +170,8 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
         def bundling_service(self) -> Optional[Any]:
             """バンドリングサービスを遅延初期化で取得"""
             if self.enable_bundling and self._bundling_service is None:
-                from maou.app.common.bundling_service import BundlingService
-
                 bundle_cache_dir = self.local_cache_dir / "bundles"
-                self._bundling_service = BundlingService(
+                self._bundling_service = create_bundling_service(
                     cache_dir=bundle_cache_dir,
                     target_size_gb=self.bundle_size_gb,
                     array_type=self.array_type,
