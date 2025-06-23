@@ -242,10 +242,10 @@ def save_bundled_array(
 
     array_type_param = cast(Literal["auto", "hcpe", "preprocessing"], array_type)
 
-    # Save as .npy file for consistent loading
+    # Save as .bundle.raw file for consistent tofile() format
     bundle_path = Path(bundle_path)
-    if not str(bundle_path).endswith(".npy"):
-        bundle_path = bundle_path.with_suffix(".bundle.npy")
+    if not str(bundle_path).endswith((".raw", ".bundle.raw")):
+        bundle_path = bundle_path.with_suffix(".bundle.raw")
 
     save_array(
         array,

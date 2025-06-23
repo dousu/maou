@@ -396,7 +396,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             if self.enable_bundling and cache_files:
                 self.__setup_bundling_with_files(cache_files)
                 # バンドル後のファイルを取得
-                cache_files = list(self.local_cache_dir.glob("bundles/*.npy"))
+                cache_files = list(self.local_cache_dir.glob("bundles/*.bundle.raw"))
 
             return cache_files
 

@@ -292,9 +292,9 @@ class ArrayBundler:
                 validate=False,
             )
 
-            # Update bundle path if it was modified (to .bundle.npy)
-            if not str(bundle_path).endswith(".npy"):
-                bundle.bundle_path = bundle_path.with_suffix(".bundle.npy")
+            # Update bundle path if it was modified (to .bundle.raw)
+            if not str(bundle_path).endswith((".raw", ".bundle.raw")):
+                bundle.bundle_path = bundle_path.with_suffix(".bundle.raw")
 
             bundle.total_size = bundle.bundle_path.stat().st_size
 
