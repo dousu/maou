@@ -14,24 +14,10 @@ repos:
   hooks:
   - id: poetry-check
   - id: poetry-lock
-- repo: https://github.com/hadolint/hadolint
-  rev: v2.13.1-beta
-  hooks:
-  - id: hadolint
 - repo: https://github.com/pycqa/isort
   rev: 6.0.1
   hooks:
   - id: isort
-- repo: https://github.com/psf/black
-  rev: 25.1.0
-  hooks:
-  - id: black
-- repo: https://github.com/pycqa/flake8
-  rev: 7.2.0
-  hooks:
-  - id: flake8
-    # additional_dependencies:
-    # - flake8-docstrings
 - repo: https://github.com/pre-commit/pre-commit
   rev: v4.2.0
   hooks:
@@ -40,10 +26,6 @@ repos:
   rev: v4.8.2
   hooks:
   - id: commitizen
-- repo: https://github.com/koalaman/shellcheck-precommit
-  rev: v0.10.0
-  hooks:
-  - id: shellcheck
 - repo: local
   hooks:
   - id: test
@@ -58,6 +40,7 @@ repos:
   rev: v1.16.0
   hooks:
   - id: mypy
+    additional_dependencies: [numpy]
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.11.12
   hooks:

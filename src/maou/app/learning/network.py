@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn.common_types import _size_2_t
 
-from maou.app.learning.label import MOVE_LABELS_NUM
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.network.resnet import ResNet
 
 
@@ -11,7 +11,7 @@ class Network(nn.Module):
     コア部分はResNetで出力層で二つのヘッドがあり，
     PolicyとValueの2つの評価値を返す．
     このNetwork構成はかなり改善余地がある．
-    基本的に将棋は最適なラベルがデータソースに振られていない問題となる．
+    基本的に将棋は最適なラベルがデータソースに振られていない問題が大きい．
     そのため，dropoutとかノイズに強くなる工夫をNetwork自体に入れた方がいい．
     将棋には合法手があり，それ以外は反則負けになる．
     ラベル出力時には合法手以外の手はすべて0にするような工夫があってもよさそう．
@@ -51,11 +51,15 @@ class Network(nn.Module):
         # 出力層
         # policyとvalueのネットワークはまるまる同じにしてヘッドの設定だけ変えて出しわける
         # policyとvalueにもうちょっと畳み込み層とかを挟んだ方がいい説はある
+        # BottleneckBlockの場合はexpansion factorを考慮した実際のチャンネル数を計算
+        expansion = getattr(block, "expansion", 1)
+        final_channels = list_out_channels[3] * expansion
+
         # policy head
-        self.policy_head = PolicyHead(list_out_channels[3], MOVE_LABELS_NUM)
+        self.policy_head = PolicyHead(final_channels, MOVE_LABELS_NUM)
 
         # value head
-        self.value_head = ValueHead(list_out_channels[3])
+        self.value_head = ValueHead(final_channels)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """forward.

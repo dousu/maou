@@ -1,3 +1,5 @@
 [flake8]
 max-line-length = 88
 ignore = E203,W503
+per-file-ignores =
+    tests/maou/app/pre_process/test_label.py:E501
