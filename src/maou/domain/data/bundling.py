@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from .io import load_hcpe_array, load_preprocessing_array
-
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -242,15 +240,20 @@ class ArrayBundler:
             arrays_to_concat = []
             total_records = 0
 
+            # Import interface layer I/O functions
+            from maou.interface.data_io import (
+                load_array_for_bundling,
+                save_bundled_array,
+            )
+
             for file_path in file_paths:
                 try:
-                    # Load array based on type
-                    if array_type == "hcpe":
-                        array = load_hcpe_array(file_path, validate=False)
-                    elif array_type == "preprocessing":
-                        array = load_preprocessing_array(file_path, validate=False)
-                    else:
-                        raise ValueError(f"Unknown array type: {array_type}")
+                    # Load array using interface layer I/O
+                    array = load_array_for_bundling(
+                        file_path=file_path,
+                        array_type=array_type,
+                        validate=False,
+                    )
 
                     # Add to bundle metadata
                     bundle.add_array(
@@ -281,9 +284,19 @@ class ArrayBundler:
             bundle_path.parent.mkdir(parents=True, exist_ok=True)
             metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Save bundled array using high-performance tofile()
-            bundled_array.tofile(bundle_path)
-            bundle.total_size = bundle_path.stat().st_size
+            # Save bundled array using interface layer I/O (.npy format)
+            save_bundled_array(
+                array=bundled_array,
+                bundle_path=bundle_path,
+                array_type=array_type,
+                validate=False,
+            )
+
+            # Update bundle path if it was modified (to .bundle.npy)
+            if not str(bundle_path).endswith(".npy"):
+                bundle.bundle_path = bundle_path.with_suffix(".bundle.npy")
+
+            bundle.total_size = bundle.bundle_path.stat().st_size
 
             # Save metadata as JSON
             with open(metadata_path, "w", encoding="utf-8") as f:

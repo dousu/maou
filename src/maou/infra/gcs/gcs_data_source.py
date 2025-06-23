@@ -13,7 +13,7 @@ from google.cloud.exceptions import NotFound
 from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array, create_bundling_service
+from maou.interface.data_io import create_bundling_service, load_array
 
 
 class MissingGCSConfig(Exception):
@@ -219,6 +219,9 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
                     f"Setting up bundling for {len(self.file_paths)} files"
                 )
 
+                # 元のファイルパスを保存（クリーンアップ用）
+                original_files = list(self.file_paths)
+
                 # バンドルを作成
                 if self.bundling_service is not None:
                     bundles = self.bundling_service.bundle_files(
@@ -241,11 +244,73 @@ class GCSDataSource(learn.LearningDataSource, preprocess.DataSource):
 
                 self.logger.info(f"Created {len(bundles)} bundles")
 
+                # バンドルの整合性を確認してから元ファイルを削除
+                self.__cleanup_original_files_after_bundling(original_files, bundles)
+
             except Exception as e:
                 self.logger.error(f"Failed to setup bundling: {e}")
                 # フォールバックとして個別ファイルを使用
                 self.logger.info("Falling back to individual file mode")
                 self.__setup_individual_files()
+
+        def __cleanup_original_files_after_bundling(
+            self, original_files: list[Path], bundles: list
+        ) -> None:
+            """バンドル作成後に元ファイルをクリーンアップ"""
+            try:
+                # バンドルの整合性確認
+                total_original_records = 0
+                total_bundle_records = 0
+
+                # 元ファイルのレコード数を計算
+                from typing import Literal, cast
+
+                array_type_param = cast(
+                    Literal["auto", "hcpe", "preprocessing"], self.array_type
+                )
+
+                for file_path in original_files:
+                    try:
+                        data = load_array(
+                            file_path, mmap_mode="r", array_type=array_type_param
+                        )
+                        total_original_records += len(data)
+                    except Exception as e:
+                        self.logger.warning(f"Could not verify {file_path}: {e}")
+                        return  # 検証できない場合はクリーンアップしない
+
+                # バンドルのレコード数を計算
+                for bundle in bundles:
+                    total_bundle_records += bundle.total_records
+
+                # レコード数が一致する場合のみクリーンアップ
+                if total_original_records == total_bundle_records:
+                    deleted_count = 0
+                    failed_count = 0
+
+                    for file_path in original_files:
+                        try:
+                            if file_path.exists():
+                                file_path.unlink()
+                                deleted_count += 1
+                                self.logger.debug(f"Deleted original file: {file_path}")
+                        except Exception as e:
+                            failed_count += 1
+                            self.logger.warning(f"Failed to delete {file_path}: {e}")
+
+                    self.logger.info(
+                        f"Cleaned up {deleted_count} original files after bundling "
+                        f"({failed_count} failed)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Record count mismatch: original={total_original_records}, "
+                        f"bundled={total_bundle_records}. Skipping cleanup."
+                    )
+
+            except Exception as e:
+                self.logger.error(f"Failed to cleanup original files: {e}")
+                # クリーンアップが失敗してもバンドリングは成功とする
 
         def __setup_individual_files(self) -> None:
             """個別ファイル使用時のデータ構造セットアップ"""

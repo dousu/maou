@@ -11,12 +11,12 @@ from typing import Literal, Optional, Union
 
 import numpy as np
 
+from maou.app.common.bundling_service import BundlingService
 from maou.app.common.data_io_service import (
     DataIOService,
     load_numpy_array,
     save_numpy_array,
 )
-from maou.app.common.bundling_service import BundlingService
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -172,4 +172,85 @@ def create_bundling_service(
         cache_dir=Path(cache_dir),
         target_size_gb=target_size_gb,
         array_type=array_type,
+    )
+
+
+def load_array_for_bundling(
+    file_path: Union[str, Path],
+    array_type: str,
+    validate: bool = False,
+) -> np.ndarray:
+    """Load array for bundling operations using interface layer I/O.
+
+    This function provides consistent array loading for bundling operations
+    while maintaining Clean Architecture principles.
+
+    Args:
+        file_path: Path to array file
+        array_type: Array type ("hcpe" or "preprocessing")
+        validate: Whether to validate schema
+
+    Returns:
+        numpy.ndarray: Loaded array
+
+    Raises:
+        ValueError: If array_type is unknown
+        DataIOError: If loading fails
+    """
+    if array_type not in ["hcpe", "preprocessing"]:
+        raise ValueError(f"Unknown array type: {array_type}")
+
+    # Cast to proper literal type for load_array
+    from typing import Literal, cast
+
+    array_type_param = cast(Literal["auto", "hcpe", "preprocessing"], array_type)
+
+    return load_array(
+        file_path,
+        array_type=array_type_param,
+        validate=validate,
+        mmap_mode=None,  # Load fully into memory for bundling
+    )
+
+
+def save_bundled_array(
+    array: np.ndarray,
+    bundle_path: Union[str, Path],
+    array_type: str,
+    validate: bool = False,
+) -> None:
+    """Save bundled array using interface layer I/O.
+
+    This function saves bundled arrays in .npy format for consistent
+    loading using the standard load_array function.
+
+    Args:
+        array: Bundled array to save
+        bundle_path: Output path for bundle file
+        array_type: Array type hint
+        validate: Whether to validate schema
+
+    Raises:
+        ValueError: If array_type is unknown
+        DataIOError: If saving fails
+    """
+    if array_type not in ["hcpe", "preprocessing"]:
+        raise ValueError(f"Unknown array type: {array_type}")
+
+    # Cast to proper literal type for save_array
+    from typing import Literal, cast
+
+    array_type_param = cast(Literal["auto", "hcpe", "preprocessing"], array_type)
+
+    # Save as .npy file for consistent loading
+    bundle_path = Path(bundle_path)
+    if not str(bundle_path).endswith(".npy"):
+        bundle_path = bundle_path.with_suffix(".bundle.npy")
+
+    save_array(
+        array,
+        bundle_path,
+        array_type=array_type_param,
+        validate=validate,
+        compress=False,  # Use uncompressed for performance
     )

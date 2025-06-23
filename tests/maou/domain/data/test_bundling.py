@@ -89,8 +89,9 @@ class TestArrayBundling(unittest.TestCase):
             bundle.total_records, sum(len(arr) for arr in self.test_arrays)
         )
 
-        # Verify files exist
-        self.assertTrue(bundle_path.exists())
+        # Verify files exist (bundle file may have .npy suffix added)
+        actual_bundle_path = bundle.bundle_path
+        self.assertTrue(actual_bundle_path.exists())
         self.assertTrue(metadata_path.exists())
 
         # Verify metadata file content
