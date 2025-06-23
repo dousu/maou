@@ -4,16 +4,16 @@ from typing import Optional
 import click
 
 from maou.infra.console.common import (
+    GCS,
     HAS_AWS,
     HAS_BIGQUERY,
     HAS_GCS,
-    BigQueryDataSource,
-    GCS,
-    GCSDataSource,
     S3,
-    S3DataSource,
+    BigQueryDataSource,
     FileDataSource,
     FileSystem,
+    GCSDataSource,
+    S3DataSource,
     app_logger,
     handle_exception,
 )
@@ -420,9 +420,7 @@ def learn_model(
                     app_logger.error("BigQueryDataSourceSpliter not available")
                     raise AttributeError("BigQueryDataSourceSpliter not available")
             except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
-                )
+                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
                 raise
         else:
             error_msg = (

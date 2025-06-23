@@ -9,10 +9,10 @@ from maou.infra.console.common import (
     HAS_BIGQUERY,
     HAS_GCS,
     BigQueryDataSource,
-    GCSDataSource,
-    S3DataSource,
     FileDataSource,
     FileSystem,
+    GCSDataSource,
+    S3DataSource,
     app_logger,
     handle_exception,
 )
@@ -226,17 +226,14 @@ def benchmark_dataloader(
     # Initialize datasource (similar to learn_model command)
     if input_dir is not None:
         if sample_ratio is not None:
-            app_logger.warning(
-                "sample_ratio is ignored for local file data source."
-            )
+            app_logger.warning("sample_ratio is ignored for local file data source.")
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
         )
     elif input_dataset_id is not None and input_table_name is not None:
         if sample_ratio is not None:
             app_logger.info(
-                f"Using BigQuery TABLESAMPLE with "
-                f"{sample_ratio:.1%} sampling ratio."
+                f"Using BigQuery TABLESAMPLE with {sample_ratio:.1%} sampling ratio."
             )
         if HAS_BIGQUERY:
             try:
@@ -256,9 +253,7 @@ def benchmark_dataloader(
                     app_logger.error("BigQueryDataSourceSpliter not available")
                     raise AttributeError("BigQueryDataSourceSpliter not available")
             except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
-                )
+                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
                 raise
         else:
             error_msg = (
@@ -657,9 +652,7 @@ def benchmark_training(
     # Initialize datasource (similar to learn_model command)
     if input_dir is not None:
         if sample_ratio is not None:
-            app_logger.warning(
-                "sample_ratio is ignored for local file data source."
-            )
+            app_logger.warning("sample_ratio is ignored for local file data source.")
         if input_format != "hcpe" and input_format != "preprocess":
             raise Exception(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
@@ -670,8 +663,7 @@ def benchmark_training(
     elif input_dataset_id is not None and input_table_name is not None:
         if sample_ratio is not None:
             app_logger.info(
-                f"Using BigQuery TABLESAMPLE with "
-                f"{sample_ratio:.1%} sampling ratio."
+                f"Using BigQuery TABLESAMPLE with {sample_ratio:.1%} sampling ratio."
             )
         if HAS_BIGQUERY:
             try:
@@ -691,9 +683,7 @@ def benchmark_training(
                     app_logger.error("BigQueryDataSourceSpliter not available")
                     raise AttributeError("BigQueryDataSourceSpliter not available")
             except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
-                )
+                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
                 raise
         else:
             error_msg = (

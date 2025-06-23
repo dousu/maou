@@ -8,9 +8,9 @@ from maou.infra.console.common import (
     HAS_BIGQUERY,
     HAS_GCS,
     BigQueryFeatureStore,
+    FileSystem,
     GCSFeatureStore,
     S3FeatureStore,
-    FileSystem,
     app_logger,
     handle_exception,
 )

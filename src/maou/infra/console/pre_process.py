@@ -9,12 +9,12 @@ from maou.infra.console.common import (
     HAS_GCS,
     BigQueryDataSource,
     BigQueryFeatureStore,
+    FileDataSource,
+    FileSystem,
     GCSDataSource,
     GCSFeatureStore,
     S3DataSource,
     S3FeatureStore,
-    FileDataSource,
-    FileSystem,
     app_logger,
     handle_exception,
 )
@@ -344,9 +344,7 @@ def pre_process(
         raise ValueError(error_msg)
 
     # Check for mixing cloud providers for output
-    cloud_output_count = sum(
-        [bool(output_bigquery), bool(output_gcs), bool(output_s3)]
-    )
+    cloud_output_count = sum([bool(output_bigquery), bool(output_gcs), bool(output_s3)])
     if cloud_output_count > 1:
         error_msg = (
             "Cannot use multiple cloud providers for output simultaneously. "
