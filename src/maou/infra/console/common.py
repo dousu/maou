@@ -61,11 +61,13 @@ def validate_cloud_provider_exclusivity(
         raise ValueError(error_msg)
 
 
-def handle_exception(func):
+def handle_exception(func) -> callable:
     """Decorator to handle exceptions in CLI commands."""
-    def wrapper(*args, **kwargs):
+
+    def wrapper(*args, **kwargs) -> None:
         try:
             return func(*args, **kwargs)
         except Exception:
             app_logger.exception("Error occurred", stack_info=True)
+
     return wrapper
