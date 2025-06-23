@@ -228,6 +228,7 @@ class DataIOService:
                 or file_name.endswith(".pre.raw")
                 or file_name.endswith(".pre.packed")
                 or file_name.endswith(".packed")
+                or file_name.endswith(".bundle.raw")
             ):
                 return "preprocessing"
 
