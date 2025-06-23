@@ -765,12 +765,20 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
         else:
             self.__page_manager = page_manager
 
+        # 初期化を強制してtotal_rowsを取得
+        self.__page_manager._ensure_initialized()
+
         if indicies is None:
-            # 初期化を強制してtotal_rowsを取得
-            self.__page_manager._ensure_initialized()
             self.indicies = list(range(self.__page_manager.total_rows))
         else:
-            self.indicies = indicies
+            # indiciesが指定されている場合、範囲をチェックして調整
+            max_allowed_idx = self.__page_manager.total_rows - 1
+            valid_indicies = [idx for idx in indicies if 0 <= idx <= max_allowed_idx]
+            if len(valid_indicies) != len(indicies):
+                self.logger.warning(
+                    f"Some indices were out of range. Filtered {len(indicies)} -> {len(valid_indicies)} indices"
+                )
+            self.indicies = valid_indicies
 
     def __getitem__(self, idx: int) -> np.ndarray:
         if idx < 0 or idx >= len(self.indicies):
