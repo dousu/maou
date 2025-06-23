@@ -204,14 +204,11 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 else:
                     raise
 
-            # 初期化時にすべてのデータをダウンロード
+            # 初期化時にすべてのデータをダウンロード（バンドリングも含む）
             self.file_paths = self.__download_all_to_local()
 
-            # バンドリングが有効な場合はバンドルを作成
-            if self.enable_bundling and self.file_paths:
-                self.__setup_bundling()
-            else:
-                self.__setup_individual_files()
+            # individual filesのセットアップ（バンドリングが無効か既に完了している場合）
+            self.__setup_individual_files()
 
             self.total_rows = sum(info.count for info in self.__pruning_info.values())
             self.total_pages = len(self.__pruning_info)
@@ -226,20 +223,18 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
             self._cleanup_clients()
             self._initialized = True
 
-        def __setup_bundling(self) -> None:
-            """バンドリング使用時のデータ構造セットアップ"""
+        def __setup_bundling_with_files(self, files: list[Path]) -> None:
+            """バンドリング使用時のデータ構造セットアップ（ファイルリスト指定版）"""
             try:
-                self.logger.info(
-                    f"Setting up bundling for {len(self.file_paths)} files"
-                )
+                self.logger.info(f"Setting up bundling for {len(files)} files")
 
                 # 元のファイルパスを保存（クリーンアップ用）
-                original_files = list(self.file_paths)
+                original_files = list(files)
 
                 # バンドルを作成
                 if self.bundling_service is not None:
                     bundles = self.bundling_service.bundle_files(
-                        file_paths=self.file_paths,
+                        file_paths=files,
                         bundle_prefix=f"s3_{self.data_name}",
                         array_type=self.array_type,
                     )
@@ -266,6 +261,10 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                 # フォールバックとして個別ファイルを使用
                 self.logger.info("Falling back to individual file mode")
                 self.__setup_individual_files()
+
+        def __setup_bundling(self) -> None:
+            """バンドリング使用時のデータ構造セットアップ（旧版・互換性のため残す）"""
+            self.__setup_bundling_with_files(self.file_paths)
 
         def __cleanup_original_files_after_bundling(
             self, original_files: list[Path], bundles: list
@@ -369,7 +368,7 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     f"Downloading sample data ({self.sample_ratio:.1%}) "
                     f"to local cache: {self.local_cache_dir}"
                 )
-                return self.__download_sample_to_local()
+                cache_files = self.__download_sample_to_local()
             else:
                 self.logger.info(
                     f"Downloading all data to local cache: {self.local_cache_dir}"
@@ -382,14 +381,20 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     delete=True,
                 )
 
-            # ローカルキャッシュファイルが正しく作成されたか確認
-            cache_files = list(self.local_cache_dir.glob("**/*.npy"))
-            self.logger.info(f"Created {len(cache_files)} local cache files")
+                # ローカルキャッシュファイルが正しく作成されたか確認
+                cache_files = list(self.local_cache_dir.glob("**/*.npy"))
+                self.logger.info(f"Created {len(cache_files)} local cache files")
 
-            if len(cache_files) == 0:
-                self.logger.warning(
-                    "No local cache files were created. This might indicate a problem."
-                )
+                if len(cache_files) == 0:
+                    self.logger.warning(
+                        "No local cache files were created. This might indicate a problem."
+                    )
+
+            # バンドリングが有効な場合はここで実行
+            if self.enable_bundling and cache_files:
+                self.__setup_bundling_with_files(cache_files)
+                # バンドル後のファイルを取得
+                cache_files = list(self.local_cache_dir.glob("bundles/*.npy"))
 
             return cache_files
 
