@@ -242,14 +242,16 @@ class S3DataSource(learn.LearningDataSource, preprocess.DataSource):
                     raise ValueError("Bundling service not initialized")
 
                 # バンドル情報をpruning_infoに変換
+                current_start_idx = 0
                 for bundle in bundles:
                     # バンドル全体を1つのページとして扱う
                     pruning_value = bundle.bundle_id
-                    self.__pruning_info[pruning_value].start_idx = 0
+                    self.__pruning_info[pruning_value].start_idx = current_start_idx
                     self.__pruning_info[pruning_value].files = [
                         (bundle.bundle_path, 0, bundle.total_records)
                     ]
                     self.__pruning_info[pruning_value].count = bundle.total_records
+                    current_start_idx += bundle.total_records
 
                 self.logger.info(f"Created {len(bundles)} bundles")
 
