@@ -1,6 +1,5 @@
 from typing import Any, Callable
 
-
 from maou.infra.app_logging import app_logger, get_log_level_from_env
 from maou.infra.file_system.file_data_source import FileDataSource
 from maou.infra.file_system.file_system import FileSystem
