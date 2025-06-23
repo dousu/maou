@@ -1021,6 +1021,14 @@ def learn_model(
     s3_base_path: Optional[str],
 ) -> None:
     try:
+        # Validate input_format early
+        if input_format not in ("hcpe", "preprocess"):
+            raise ValueError(
+                "Please specify a valid input_format ('hcpe' or 'preprocess')."
+            )
+        # Convert input_format to array_type for data sources
+        array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+
         # Check for mixing cloud providers for output
         if output_gcs and output_s3:
             error_msg = (
@@ -1134,6 +1142,7 @@ def learn_model(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=None,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
@@ -1168,6 +1177,7 @@ def learn_model(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=None,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
@@ -1397,6 +1407,14 @@ def benchmark_dataloader(
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
     try:
+        # Validate input_format early
+        if input_format not in ("hcpe", "preprocess"):
+            raise ValueError(
+                "Please specify a valid input_format ('hcpe' or 'preprocess')."
+            )
+        # Convert input_format to array_type for data sources
+        array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+
         # Check for mixing cloud providers for input
         cloud_input_count = sum(
             [
@@ -1418,10 +1436,6 @@ def benchmark_dataloader(
             if sample_ratio is not None:
                 app_logger.warning(
                     "sample_ratio is ignored for local file data source."
-                )
-            if input_format != "hcpe" and input_format != "preprocess":
-                raise Exception(
-                    "Please specify a valid input_format ('hcpe' or 'preprocess')."
                 )
             datasource = FileDataSource.FileDataSourceSpliter(
                 file_paths=FileSystem.collect_files(input_dir),
@@ -1478,6 +1492,7 @@ def benchmark_dataloader(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
@@ -1511,6 +1526,7 @@ def benchmark_dataloader(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
@@ -1827,6 +1843,14 @@ def benchmark_training(
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
     try:
+        # Validate input_format early
+        if input_format not in ("hcpe", "preprocess"):
+            raise ValueError(
+                "Please specify a valid input_format ('hcpe' or 'preprocess')."
+            )
+        # Convert input_format to array_type for data sources
+        array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+
         # Check for mixing cloud providers for input
         cloud_input_count = sum(
             [
@@ -1908,6 +1932,7 @@ def benchmark_training(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
@@ -1941,6 +1966,7 @@ def benchmark_training(
                             local_cache_dir=input_local_cache_dir,
                             max_workers=input_max_workers,
                             sample_ratio=sample_ratio,
+                            array_type=array_type,
                             enable_bundling=input_enable_bundling,
                             bundle_size_gb=input_bundle_size_gb,
                         )
