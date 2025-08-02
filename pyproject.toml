@@ -14,7 +14,7 @@ scikit-learn = "^1.6.1"
 torch = "^2.5.1"
 torchvision = "^0.20.1"
 torchinfo = "^1.8.0"
-tensorboard = "^2.19.0"
+tensorboard = "^2.20.0"
 torch-tb-profiler = "^0.4.3"
 
 [tool.poetry.group.dev.dependencies]
@@ -25,7 +25,7 @@ yamllint = "^1.37.1"
 isort = "^6.0.1"
 commitizen = "^4.8.3"
 pytest = "^8.4.1"
-ruff = "^0.12.1"
+ruff = "^0.12.7"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
