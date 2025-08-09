@@ -14,7 +14,9 @@ class TestHCPEConverter:
 
     @pytest.fixture(autouse=True)
     def clean_up_after_test(self) -> Generator[None, Any, Any]:
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         yield
         self.clean_up_dir(output_dir)
 
@@ -25,14 +27,23 @@ class TestHCPEConverter:
                     f.unlink()
 
     def test_successfull_conversion(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -50,16 +61,23 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         for p in input_paths:
-            output_file = output_dir / p.with_suffix(".hcpe.npy").name
+            output_file = (
+                output_dir / p.with_suffix(".npy").name
+            )
             assert output_file.exists()
 
     def test_failed_conversion_no_input(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/not_exists.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/not_exists.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -77,12 +95,17 @@ class TestHCPEConverter:
             self.test_class.convert(option)
 
     def test_failed_conversion_not_applicable_format(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -100,10 +123,13 @@ class TestHCPEConverter:
             self.test_class.convert(option)
 
     def test_failed_conversion_no_output(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
         ]
         output_dir = Path(
             "tests/maou/app/converter/resources/test_dir/output_not_exists"
@@ -125,13 +151,20 @@ class TestHCPEConverter:
             self.test_class.convert(option)
 
     def test_conversion_filter_min_rating(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -148,19 +181,30 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name).exists()
+        assert (
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
+        ).exists()
         assert not (
-            output_dir / Path("test_data_2").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_2").with_suffix(".npy").name
         ).exists()
 
     def test_conversion_filter_min_moves(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -177,19 +221,30 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name).exists()
+        assert (
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
+        ).exists()
         assert not (
-            output_dir / Path("test_data_2").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_2").with_suffix(".npy").name
         ).exists()
 
     def test_conversion_filter_max_moves(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -207,19 +262,32 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert not (
-            output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
         ).exists()
-        assert (output_dir / Path("test_data_2").with_suffix(".hcpe.npy").name).exists()
+        assert (
+            output_dir
+            / Path("test_data_2").with_suffix(".npy").name
+        ).exists()
 
     def test_conversion_filter_allowed_endgame_status(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -236,21 +304,37 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name).exists()
-        assert (output_dir / Path("test_data_2").with_suffix(".hcpe.npy").name).exists()
+        assert (
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
+        ).exists()
+        assert (
+            output_dir
+            / Path("test_data_2").with_suffix(".npy").name
+        ).exists()
         assert not (
-            output_dir / Path("test_data_3").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_3").with_suffix(".npy").name
         ).exists()
 
     def test_conversion_composite_filter_(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"),
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"
+            ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -268,26 +352,34 @@ class TestHCPEConverter:
         # 出力ファイルのチェック
         assert output_dir.exists()
         assert not (
-            output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
         ).exists()
         assert not (
-            output_dir / Path("test_data_2").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_2").with_suffix(".npy").name
         ).exists()
         assert not (
-            output_dir / Path("test_data_3").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_3").with_suffix(".npy").name
         ).exists()
 
     def test_conversion_no_moves(
-        self, default_fixture: typing.Annotated[None, pytest.fixture]
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
         input_paths = [
-            Path("tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
             Path(
                 "tests/maou/app/converter/resources/test_dir/input/"
                 "test_data_no_moves.csa"
             ),
         ]
-        output_dir = Path("tests/maou/app/converter/resources/test_dir/output")
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -304,7 +396,13 @@ class TestHCPEConverter:
         self.test_class.convert(option)
         # 出力ファイルのチェック
         assert output_dir.exists()
-        assert (output_dir / Path("test_data_1").with_suffix(".hcpe.npy").name).exists()
+        assert (
+            output_dir
+            / Path("test_data_1").with_suffix(".npy").name
+        ).exists()
         assert not (
-            output_dir / Path("test_data_no_moves").with_suffix(".hcpe.npy").name
+            output_dir
+            / Path("test_data_no_moves")
+            .with_suffix(".npy")
+            .name
         ).exists()

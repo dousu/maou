@@ -12,7 +12,9 @@ from tqdm.auto import tqdm
 
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.io import save_preprocessing_array
-from maou.domain.data.schema import create_empty_preprocessing_array
+from maou.domain.data.schema import (
+    create_empty_preprocessing_array,
+)
 
 
 class FeatureStore(metaclass=abc.ABCMeta):
@@ -94,7 +96,6 @@ class PreProcess:
         start_idx: int,
     ) -> tuple[np.ndarray, int]:
         """Process a chunk of records in parallel."""
-        from maou.app.pre_process.transform import Transform
 
         transform_logic = Transform()
         chunk_length = len(records_chunk)
@@ -107,6 +108,7 @@ class PreProcess:
             id = (
                 record["id"]
                 if "id" in record.dtype.names
+                and record["id"] != ""
                 else f"{dataname}_{global_idx}"
             )
             hcp = record["hcp"]
@@ -114,7 +116,12 @@ class PreProcess:
             game_result = record["gameResult"]
             eval = record["eval"]
 
-            features, move_label, result_value, legal_move_mask = transform_logic(
+            (
+                features,
+                move_label,
+                result_value,
+                legal_move_mask,
+            ) = transform_logic(
                 hcp=hcp,
                 move16=move16,
                 game_result=game_result,
@@ -138,51 +145,67 @@ class PreProcess:
 
         return array, chunk_length
 
-    def transform(self, option: PreProcessOption) -> Dict[str, str]:
+    def transform(
+        self, option: PreProcessOption
+    ) -> Dict[str, str]:
         """機械学習の前処理を行う (並列処理版)."""
 
         pre_process_result: Dict[str, str] = {}
-        self.logger.info(f"前処理対象のデータ数 {len(self.__datasource)}")
+        self.logger.info(
+            f"前処理対象のデータ数 {len(self.__datasource)}"
+        )
 
         # Determine number of workers
         max_workers = option.max_workers
 
-        self.logger.info(f"Using {max_workers} workers for parallel processing")
+        self.logger.info(
+            f"Using {max_workers} workers for parallel processing"
+        )
 
         with self.__context():
             for dataname, data in tqdm(
-                self.__datasource.iter_batches(), desc="Processing batches"
+                self.__datasource.iter_batches(),
+                desc="Processing batches",
             ):
                 self.logger.debug(f"target: {dataname}")
                 data_length = len(data)
-                self.logger.debug(f"処理対象: {dataname}, 行数: {data_length}")
+                self.logger.debug(
+                    f"処理対象: {dataname}, 行数: {data_length}"
+                )
 
                 if max_workers == 1 or data_length < 100:
                     # Sequential processing for small batches or single worker
-                    array = create_empty_preprocessing_array(data_length)
+                    array = create_empty_preprocessing_array(
+                        data_length
+                    )
 
                     for idx, record in enumerate(data):
                         id = (
                             record["id"]
                             if "id" in record.dtype.names
+                            and record["id"] != ""
                             else f"{dataname}_{idx}"
                         )
                         hcp = record["hcp"]
                         move16 = record["bestMove16"]
                         game_result = record["gameResult"]
                         eval = record["eval"]
-                        features, move_label, result_value, legal_move_mask = (
-                            self.__transform_logic(
-                                hcp=hcp,
-                                move16=move16,
-                                game_result=game_result,
-                                eval=eval,
-                            )
+                        (
+                            features,
+                            move_label,
+                            result_value,
+                            legal_move_mask,
+                        ) = self.__transform_logic(
+                            hcp=hcp,
+                            move16=move16,
+                            game_result=game_result,
+                            eval=eval,
                         )
 
                         partitioning_key = (
                             record["partitioningKey"]
-                            if "partitioningKey" in record.dtype.names
+                            if "partitioningKey"
+                            in record.dtype.names
                             else datetime.min.date()
                         )
 
@@ -192,25 +215,37 @@ class PreProcess:
                         np_data["features"] = features
                         np_data["moveLabel"] = move_label
                         np_data["resultValue"] = result_value
-                        np_data["legalMoveMask"] = legal_move_mask
-                        np_data["partitioningKey"] = partitioning_key
+                        np_data["legalMoveMask"] = (
+                            legal_move_mask
+                        )
+                        np_data["partitioningKey"] = (
+                            partitioning_key
+                        )
 
                     final_array = array
                 else:
                     # Parallel processing for larger batches
-                    chunk_size = max(1, data_length // max_workers)
+                    chunk_size = max(
+                        1, data_length // max_workers
+                    )
                     chunks = []
 
                     # Split data into chunks
                     for i in range(0, data_length, chunk_size):
-                        end_idx = min(i + chunk_size, data_length)
-                        chunks.append((data[i:end_idx], dataname, i))
+                        end_idx = min(
+                            i + chunk_size, data_length
+                        )
+                        chunks.append(
+                            (data[i:end_idx], dataname, i)
+                        )
 
                     self.logger.debug(
                         f"Split {data_length} records into {len(chunks)} chunks"
                     )
 
-                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    with ProcessPoolExecutor(
+                        max_workers=max_workers
+                    ) as executor:
                         # Submit all chunks
                         future_to_chunk = {
                             executor.submit(
@@ -224,27 +259,45 @@ class PreProcess:
 
                         # Collect results
                         chunk_results = []
-                        for future in as_completed(future_to_chunk):
+                        for future in as_completed(
+                            future_to_chunk
+                        ):
                             try:
-                                chunk_array, chunk_length = future.result()
-                                chunk_data, start_idx = future_to_chunk[future]
-                                chunk_results.append((start_idx, chunk_array))
+                                chunk_array, chunk_length = (
+                                    future.result()
+                                )
+                                chunk_data, start_idx = (
+                                    future_to_chunk[future]
+                                )
+                                chunk_results.append(
+                                    (start_idx, chunk_array)
+                                )
                             except Exception as exc:
-                                self.logger.error(f"Chunk processing failed: {exc}")
+                                self.logger.error(
+                                    f"Chunk processing failed: {exc}"
+                                )
                                 raise
 
                         # Sort results by start index and combine
                         chunk_results.sort(key=lambda x: x[0])
 
                         # Create final array and combine chunks
-                        final_array = create_empty_preprocessing_array(data_length)
+                        final_array = (
+                            create_empty_preprocessing_array(
+                                data_length
+                            )
+                        )
 
                         current_idx = 0
-                        for start_idx, chunk_array in chunk_results:
+                        for (
+                            start_idx,
+                            chunk_array,
+                        ) in chunk_results:
                             chunk_length = len(chunk_array)
-                            final_array[current_idx : current_idx + chunk_length] = (
-                                chunk_array
-                            )
+                            final_array[
+                                current_idx : current_idx
+                                + chunk_length
+                            ] = chunk_array
                             current_idx += chunk_length
 
                 # Store results
@@ -257,18 +310,15 @@ class PreProcess:
                     )
 
                 if option.output_dir is not None:
-                    # ファイル名から拡張子を除去してから.pre.npyを付ける
                     base_name = Path(dataname).stem
-                    # .hcpe のような複合拡張子も除去する
-                    if base_name.endswith(".hcpe"):
-                        base_name = base_name[:-5]  # .hcpe を除去
                     save_preprocessing_array(
                         final_array,
-                        option.output_dir / f"{base_name}.pre.packed",
-                        validate=False,
-                        bit_pack=True,
+                        option.output_dir / f"{base_name}.npy",
+                        bit_pack=False,
                     )
-                pre_process_result[dataname] = f"success {len(final_array)} rows"
+                pre_process_result[dataname] = (
+                    f"success {len(final_array)} rows"
+                )
 
         return pre_process_result
 

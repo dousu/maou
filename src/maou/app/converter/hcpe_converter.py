@@ -10,7 +10,7 @@ import cshogi
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.domain.data.io import save_hcpe_array
+from maou.domain.data.io import load_hcpe_array, save_hcpe_array
 from maou.domain.data.schema import create_empty_hcpe_array
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
@@ -59,7 +59,9 @@ class HCPEConverter:
 
     logger: logging.Logger = logging.getLogger(__name__)
 
-    def __init__(self, *, feature_store: Optional[FeatureStore] = None):
+    def __init__(
+        self, *, feature_store: Optional[FeatureStore] = None
+    ):
         """Initialize HCPE converter.
 
         Args:
@@ -103,13 +105,17 @@ class HCPEConverter:
             """指定された条件を満たす場合Trueを返す"""
             moves: int = len(parser.moves())
             if (
-                (min_rating is not None and min(parser.ratings()) < min_rating)
+                (
+                    min_rating is not None
+                    and min(parser.ratings()) < min_rating
+                )
                 or (min_moves is not None and moves < min_moves)
                 or (max_moves is not None and moves > max_moves)
                 or (
                     allowed_endgame_status is not None
                     and not len(allowed_endgame_status) == 0
-                    and parser.endgame() not in allowed_endgame_status
+                    and parser.endgame()
+                    not in allowed_endgame_status
                 )
             ):
                 return False
@@ -125,7 +131,9 @@ class HCPEConverter:
                     parser = KifParser()
                     parser.parse(file.read_text())
                 case format_str:
-                    raise NotApplicableFormat(f"undefined format {format_str}")
+                    raise NotApplicableFormat(
+                        f"undefined format {format_str}"
+                    )
 
             logger.debug(
                 f"棋譜:{file} "
@@ -142,12 +150,14 @@ class HCPEConverter:
                 max_moves,
                 allowed_endgame_status,
             ):
-                logger.info(f"skip the file {file}")
+                logger.debug(f"skip the file {file}")
                 return (str(file), "skipped")
 
             # movesの数が0であればそもそもHCPEは作れないのでスキップ
             if len(parser.moves()) == 0:
-                logger.info(f"skip the file {file} because of no moves")
+                logger.debug(
+                    f"skip the file {file} because of no moves"
+                )
                 return (str(file), "skipped (no moves)")
 
             # HCPE配列の初期化
@@ -156,7 +166,9 @@ class HCPEConverter:
             board.set_sfen(parser.init_pos_sfen())
 
             # 棋譜共通情報を取得する
-            partitioning_key_value = parser.partitioning_key_value()
+            partitioning_key_value = (
+                parser.partitioning_key_value()
+            )
             ratings = parser.ratings()
             endgame = parser.endgame()
             moves = len(parser.moves())
@@ -172,9 +184,14 @@ class HCPEConverter:
                 logger.debug(f"{move} : {score} : {comment}")
 
                 if move < 0 or move > 16777215:
-                    raise IllegalMove(f"moveの値が想定外 path: {file}")
+                    raise IllegalMove(
+                        f"moveの値が想定外 path: {file}"
+                    )
 
-                if exclude_moves is not None and move in exclude_moves:
+                if (
+                    exclude_moves is not None
+                    and move in exclude_moves
+                ):
                     logger.info(
                         f"skip the move {move} in {file} at {idx + 1}. "
                         f"exclude moves: {exclude_moves}"
@@ -195,7 +212,9 @@ class HCPEConverter:
                 # 特に動かす駒の種類の情報が抜けているので注意
                 hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
                 hcpe["gameResult"] = parser.winner()
-                hcpe["id"] = f"{file.with_suffix('.hcpe').name}_{idx}"
+                hcpe["id"] = (
+                    f"{file.with_suffix('.hcpe').name}_{idx}"
+                )
                 # 棋譜共通情報を記録
                 hcpe["partitioningKey"] = np.datetime64(
                     partitioning_key_value.isoformat()
@@ -210,8 +229,7 @@ class HCPEConverter:
             # ファイルを保存
             save_hcpe_array(
                 hcpes[: idx + 1],
-                output_dir / file.with_suffix(".hcpe.npy").name,
-                validate=False,
+                output_dir / file.with_suffix(".npy").name,
             )
             return (str(file), f"success {idx + 1} rows")
 
@@ -222,32 +240,45 @@ class HCPEConverter:
     def convert(self, option: ConvertOption) -> Dict[str, str]:
         """HCPEファイルを作成する (並列処理版)."""
         conversion_result: Dict[str, str] = {}
-        self.logger.debug(f"変換対象のファイル {option.input_paths}")
+        self.logger.debug(
+            f"変換対象のファイル {option.input_paths}"
+        )
 
         # Determine number of workers
         max_workers = option.max_workers
 
-        self.logger.info(f"Using {max_workers} workers for parallel processing")
+        self.logger.info(
+            f"Using {max_workers} workers for parallel processing"
+        )
 
         with self.__context():
             if max_workers == 1 or len(option.input_paths) == 1:
                 # Sequential processing for single worker or single file
-                for file in tqdm(option.input_paths, desc="Processing files"):
-                    file_path, result = self._process_single_file(
-                        file,
-                        option.input_format,
-                        option.output_dir,
-                        option.min_rating,
-                        option.min_moves,
-                        option.max_moves,
-                        option.allowed_endgame_status,
-                        option.exclude_moves,
+                for file in tqdm(
+                    option.input_paths, desc="Processing files"
+                ):
+                    file_path, result = (
+                        self._process_single_file(
+                            file,
+                            option.input_format,
+                            option.output_dir,
+                            option.min_rating,
+                            option.min_moves,
+                            option.max_moves,
+                            option.allowed_endgame_status,
+                            option.exclude_moves,
+                        )
                     )
 
                     # For sequential processing, re-raise exceptions for compatibility
                     if result.startswith("error:"):
-                        error_msg = result[7:]  # Remove "error: " prefix
-                        if "No such file or directory" in error_msg:
+                        error_msg = result[
+                            7:
+                        ]  # Remove "error: " prefix
+                        if (
+                            "No such file or directory"
+                            in error_msg
+                        ):
                             raise FileNotFoundError(error_msg)
                         elif "undefined format" in error_msg:
                             raise NotApplicableFormat(error_msg)
@@ -257,19 +288,21 @@ class HCPEConverter:
                     conversion_result[file_path] = result
 
                     # Handle feature store for sequential processing
-                    if self.__feature_store is not None and result.startswith(
-                        "success"
+                    if (
+                        self.__feature_store is not None
+                        and result.startswith("success")
                     ):
                         # Load the saved file and store it in feature store
                         npy_file = (
-                            option.output_dir / file.with_suffix(".hcpe.npy").name
+                            option.output_dir
+                            / file.with_suffix(".npy").name
                         )
                         if npy_file.exists():
-                            from maou.domain.data.io import load_hcpe_array
-
-                            structured_array = load_hcpe_array(npy_file, validate=False)
+                            structured_array = load_hcpe_array(
+                                npy_file, mmap_mode="r"
+                            )
                             self.__feature_store.store_features(
-                                name=file.with_suffix(".hcpe").name,
+                                name=file.name,
                                 key_columns=["id"],
                                 structured_array=structured_array,
                                 clustering_key=None,
@@ -277,7 +310,9 @@ class HCPEConverter:
                             )
             else:
                 # Parallel processing
-                with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                with ProcessPoolExecutor(
+                    max_workers=max_workers
+                ) as executor:
                     # Submit all jobs
                     future_to_file = {
                         executor.submit(
@@ -303,25 +338,33 @@ class HCPEConverter:
                         file = future_to_file[future]
                         try:
                             file_path, result = future.result()
-                            conversion_result[file_path] = result
+                            conversion_result[file_path] = (
+                                result
+                            )
 
                             # Handle feature store for parallel processing
-                            if self.__feature_store is not None and result.startswith(
-                                "success"
+                            if (
+                                self.__feature_store is not None
+                                and result.startswith("success")
                             ):
                                 # Load the saved file and store it in feature store
                                 npy_file = (
                                     option.output_dir
-                                    / file.with_suffix(".hcpe.npy").name
+                                    / file.with_suffix(
+                                        ".npy"
+                                    ).name
                                 )
                                 if npy_file.exists():
-                                    from maou.domain.data.io import load_hcpe_array
-
-                                    structured_array = load_hcpe_array(
-                                        npy_file, validate=False
+                                    structured_array = (
+                                        load_hcpe_array(
+                                            npy_file,
+                                            mmap_mode="r",
+                                        )
                                     )
                                     self.__feature_store.store_features(
-                                        name=file.with_suffix(".hcpe").name,
+                                        name=file.with_suffix(
+                                            ".hcpe"
+                                        ).name,
                                         key_columns=["id"],
                                         structured_array=structured_array,
                                         clustering_key=None,
@@ -331,7 +374,9 @@ class HCPEConverter:
                             self.logger.error(
                                 f"File {file} generated an exception: {exc}"
                             )
-                            conversion_result[str(file)] = f"error: {str(exc)}"
+                            conversion_result[str(file)] = (
+                                f"error: {str(exc)}"
+                            )
 
         return conversion_result
 

@@ -2,7 +2,7 @@ import logging
 import random
 from collections.abc import Generator
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import numpy as np
 import pyarrow as pa
@@ -15,23 +15,37 @@ class MissingFileDataConfig(Exception):
     pass
 
 
-class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
-    class FileDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
+class FileDataSource(
+    learn.LearningDataSource, preprocess.DataSource
+):
+    class FileDataSourceSpliter(
+        learn.LearningDataSource.DataSourceSpliter
+    ):
         logger: logging.Logger = logging.getLogger(__name__)
 
-        def __init__(self, *, file_paths: list[Path], array_type: str = "hcpe") -> None:
+        def __init__(
+            self,
+            file_paths: list[Path],
+            array_type: Literal["hcpe", "preprocessing"],
+            bit_pack: bool = True,
+        ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
                 array_type=array_type,
+                bit_pack=bit_pack,
             )
 
         def train_test_split(
             self, test_ratio: float
         ) -> tuple["FileDataSource", "FileDataSource"]:
             self.logger.info(f"test_ratio: {test_ratio}")
-            input_indicies, test_indicies = self.__train_test_split(
-                data=list(range(self.__file_manager.total_rows)),
-                test_ratio=test_ratio,
+            input_indicies, test_indicies = (
+                self.__train_test_split(
+                    data=list(
+                        range(self.__file_manager.total_rows)
+                    ),
+                    test_ratio=test_ratio,
+                )
             )
             return (
                 FileDataSource(
@@ -48,7 +62,9 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: Optional[Union[int, float, str, bytes, bytearray]] = None,
+            seed: Optional[
+                Union[int, float, str, bytes, bytearray]
+            ] = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -58,44 +74,74 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
 
     class FileManager:
         logger: logging.Logger = logging.getLogger(__name__)
+        array_type: Literal["hcpe", "preprocessing"]
 
-        def __init__(self, *, file_paths: list[Path], array_type: str = "hcpe") -> None:
+        def __init__(
+            self,
+            file_paths: list[Path],
+            array_type: Literal["hcpe", "preprocessing"],
+            bit_pack: bool,
+        ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
             Args:
                 file_paths (list[Path]): npyファイルのリスト
-                array_type (str): 配列のタイプ ("hcpe" または "preprocessing")
+                array_type (Literal["hcpe", "preprocessing"]): 配列のタイプ ("hcpe" または "preprocessing")
             """
             self.file_paths = file_paths
             self.array_type = array_type
+            self.bit_pack = bit_pack
 
             self.file_row_offsets = []
             total_rows = 0
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r", array_type=self.array_type)
+                data = load_array(
+                    file,
+                    mmap_mode="r",
+                    array_type=self.array_type,
+                    bit_pack=bit_pack,
+                )
                 num_rows = data.shape[0]
-                self.file_row_offsets.append((file, total_rows, num_rows))
+                self.file_row_offsets.append(
+                    (file, total_rows, num_rows)
+                )
                 total_rows += num_rows
 
             self.total_rows = total_rows
-            self.logger.info(f"File Data {self.total_rows} rows")
+            self.logger.info(
+                f"File Data {self.total_rows} rows"
+            )
 
         def get_item(self, idx: int) -> np.ndarray:
-            for file, start_idx, num_rows in self.file_row_offsets:
+            for (
+                file,
+                start_idx,
+                num_rows,
+            ) in self.file_row_offsets:
                 if start_idx <= idx < start_idx + num_rows:
                     relative_idx = idx - start_idx
 
                     # numpy structured arrayから直接レコードを取得
                     npy_data = load_array(
-                        file, mmap_mode="r", array_type=self.array_type
+                        file,
+                        mmap_mode="r",
+                        array_type=self.array_type,
+                        bit_pack=self.bit_pack,
                     )
                     return npy_data[relative_idx]
 
             raise IndexError(f"Index {idx} out of range.")
 
-        def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
+        def iter_batches(
+            self,
+        ) -> Generator[tuple[str, np.ndarray], None, None]:
             for file in self.file_paths:
-                data = load_array(file, mmap_mode="r", array_type=self.array_type)
+                data = load_array(
+                    file,
+                    mmap_mode="r",
+                    array_type=self.array_type,
+                    bit_pack=self.bit_pack,
+                )
                 yield str(file), data
 
     def __init__(
@@ -104,7 +150,10 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
         file_paths: Optional[list[Path]] = None,
         file_manager: Optional[FileManager] = None,
         indicies: Optional[list[int]] = None,
-        array_type: str = "hcpe",
+        array_type: Optional[
+            Literal["hcpe", "preprocessing"]
+        ] = None,
+        bit_pack: bool = True,
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -112,13 +161,17 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             file_paths (list[Path]): npyファイルのリスト
             file_manager (Optional[FileManager]): FileManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
-            array_type (str): 配列のタイプ ("hcpe" または "preprocessing")
+            array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
         """
         if file_manager is None:
-            if file_paths is not None:
+            if (
+                file_paths is not None
+                and array_type is not None
+            ):
                 self.__file_manager = self.FileManager(
                     file_paths=file_paths,
                     array_type=array_type,
+                    bit_pack=bit_pack,
                 )
             else:
                 raise MissingFileDataConfig(
@@ -128,7 +181,9 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.__file_manager = file_manager
 
         if indicies is None:
-            self.indicies = list(range(self.__file_manager.total_rows))
+            self.indicies = list(
+                range(self.__file_manager.total_rows)
+            )
         else:
             self.indicies = indicies
 
@@ -143,7 +198,9 @@ class FileDataSource(learn.LearningDataSource, preprocess.DataSource):
 
     def iter_batches(
         self,
-    ) -> Generator[tuple[str, Union[pa.Table, np.ndarray]], None, None]:
+    ) -> Generator[
+        tuple[str, Union[pa.Table, np.ndarray]], None, None
+    ]:
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__file_manager.iter_batches():
             yield name, batch

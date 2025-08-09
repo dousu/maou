@@ -334,7 +334,11 @@ def learn_model(
             "Please specify a valid input_format ('hcpe' or 'preprocess')."
         )
     # Convert input_format to array_type for data sources
-    array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+    array_type = (
+        "preprocessing"
+        if input_format == "preprocess"
+        else "hcpe"
+    )
 
     # Check for mixing cloud providers for output
     if output_gcs and output_s3:
@@ -347,20 +351,31 @@ def learn_model(
 
     # Initialize cloud storage
     cloud_storage = None
-    if output_gcs and gcs_bucket_name is not None and gcs_base_path is not None:
+    if (
+        output_gcs
+        and gcs_bucket_name is not None
+        and gcs_base_path is not None
+    ):
         if HAS_GCS:
             try:
                 cloud_storage = GCS(
-                    bucket_name=gcs_bucket_name, base_path=gcs_base_path
+                    bucket_name=gcs_bucket_name,
+                    base_path=gcs_base_path,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCS: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCS: {e}"
+                )
         else:
             app_logger.warning(
                 "GCS output requested but required packages are not installed. "
                 "Install with 'poetry install -E gcp'"
             )
-    elif output_s3 and s3_bucket_name is not None and s3_base_path is not None:
+    elif (
+        output_s3
+        and s3_bucket_name is not None
+        and s3_base_path is not None
+    ):
         if HAS_AWS:
             try:
                 cloud_storage = S3(
@@ -368,7 +383,9 @@ def learn_model(
                     base_path=s3_base_path,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3: {e}"
+                )
         else:
             app_logger.warning(
                 "S3 output requested but required packages are not installed. "
@@ -378,7 +395,10 @@ def learn_model(
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [
-            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(
+                input_dataset_id is not None
+                or input_table_name is not None
+            ),
             bool(input_gcs),
             bool(input_s3),
         ]
@@ -393,19 +413,30 @@ def learn_model(
 
     # Initialize datasource
     if input_dir is not None:
-        if input_format != "hcpe" and input_format != "preprocess":
+        if (
+            input_format != "hcpe"
+            and input_format != "preprocess"
+        ):
             raise Exception(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
+            array_type=array_type,
         )
-    elif input_dataset_id is not None and input_table_name is not None:
+    elif (
+        input_dataset_id is not None
+        and input_table_name is not None
+    ):
         if HAS_BIGQUERY:
             try:
                 # BigQueryDataSourceSpliterを使用
-                if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
+                if hasattr(
+                    BigQueryDataSource,
+                    "BigQueryDataSourceSpliter",
+                ):
                     datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                        array_type=array_type,
                         dataset_id=input_dataset_id,
                         table_name=input_table_name,
                         batch_size=input_batch_size,
@@ -417,10 +448,16 @@ def learn_model(
                         sample_ratio=None,
                     )
                 else:
-                    app_logger.error("BigQueryDataSourceSpliter not available")
-                    raise AttributeError("BigQueryDataSourceSpliter not available")
+                    app_logger.error(
+                        "BigQueryDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "BigQueryDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -439,23 +476,32 @@ def learn_model(
         if HAS_GCS:
             try:
                 # GCSDataSourceSpliterを使用
-                if hasattr(GCSDataSource, "GCSDataSourceSpliter"):
-                    datasource = GCSDataSource.GCSDataSourceSpliter(
+                if hasattr(
+                    GCSDataSource, "GCSDataSourceSpliter"
+                ):
+                    datasource = GCSDataSource.DataSourceSpliter(
+                        cls_ref=GCSDataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
                         local_cache_dir=input_local_cache_dir,
+                        array_type=array_type,
                         max_workers=input_max_workers,
                         sample_ratio=None,
-                        array_type=array_type,
                         enable_bundling=input_enable_bundling,
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("GCSDataSourceSpliter not available")
-                    raise AttributeError("GCSDataSourceSpliter not available")
+                    app_logger.error(
+                        "GCSDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "GCSDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -475,22 +521,29 @@ def learn_model(
             try:
                 # S3DataSourceSpliterを使用
                 if hasattr(S3DataSource, "S3DataSourceSpliter"):
-                    datasource = S3DataSource.S3DataSourceSpliter(
+                    datasource = S3DataSource.DataSourceSpliter(
+                        cls_ref=S3DataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
+                        array_type=array_type,
                         local_cache_dir=input_local_cache_dir,
                         max_workers=input_max_workers,
                         sample_ratio=None,
-                        array_type=array_type,
                         enable_bundling=input_enable_bundling,
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("S3DataSourceSpliter not available")
-                    raise AttributeError("S3DataSourceSpliter not available")
+                    app_logger.error(
+                        "S3DataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "S3DataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3DataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3DataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (

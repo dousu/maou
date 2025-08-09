@@ -165,7 +165,11 @@ def hcpe_convert(
 
     # Check for mixing cloud providers
     cloud_provider_count = sum(
-        [bool(output_bigquery), bool(output_gcs), bool(output_s3)]
+        [
+            bool(output_bigquery),
+            bool(output_gcs),
+            bool(output_s3),
+        ]
     )
     if cloud_provider_count > 1:
         error_msg = (
@@ -176,7 +180,11 @@ def hcpe_convert(
         raise ValueError(error_msg)
 
     # Initialize BigQuery feature store if requested
-    if output_bigquery and dataset_id is not None and table_name is not None:
+    if (
+        output_bigquery
+        and dataset_id is not None
+        and table_name is not None
+    ):
         if HAS_BIGQUERY:
             try:
                 feature_store = BigQueryFeatureStore(
@@ -185,7 +193,9 @@ def hcpe_convert(
                     max_cached_bytes=max_cached_bytes,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQuery: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQuery: {e}"
+                )
         else:
             app_logger.warning(
                 "BigQuery output requested "
@@ -205,11 +215,13 @@ def hcpe_convert(
                     bucket_name=bucket_name,
                     prefix=prefix,
                     data_name=data_name,
+                    array_type="hcpe",
                     max_cached_bytes=max_cached_bytes,
-                    max_workers=max_workers,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSFeatureStore: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSFeatureStore: {e}"
+                )
         else:
             app_logger.warning(
                 "GCS output requested "
@@ -229,11 +241,13 @@ def hcpe_convert(
                     bucket_name=bucket_name,
                     prefix=prefix,
                     data_name=data_name,
+                    array_type="hcpe",
                     max_cached_bytes=max_cached_bytes,
-                    max_workers=max_workers,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3FeatureStore: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3FeatureStore: {e}"
+                )
         else:
             app_logger.warning(
                 "S3 output requested "

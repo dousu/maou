@@ -205,12 +205,19 @@ def benchmark_dataloader(
             "Please specify a valid input_format ('hcpe' or 'preprocess')."
         )
     # Convert input_format to array_type for data sources
-    array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+    array_type = (
+        "preprocessing"
+        if input_format == "preprocess"
+        else "hcpe"
+    )
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [
-            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(
+                input_dataset_id is not None
+                or input_table_name is not None
+            ),
             bool(input_gcs),
             bool(input_s3),
         ]
@@ -226,19 +233,29 @@ def benchmark_dataloader(
     # Initialize datasource (similar to learn_model command)
     if input_dir is not None:
         if sample_ratio is not None:
-            app_logger.warning("sample_ratio is ignored for local file data source.")
+            app_logger.warning(
+                "sample_ratio is ignored for local file data source."
+            )
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
+            array_type=array_type,
         )
-    elif input_dataset_id is not None and input_table_name is not None:
+    elif (
+        input_dataset_id is not None
+        and input_table_name is not None
+    ):
         if sample_ratio is not None:
             app_logger.info(
                 f"Using BigQuery TABLESAMPLE with {sample_ratio:.1%} sampling ratio."
             )
         if HAS_BIGQUERY:
             try:
-                if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
+                if hasattr(
+                    BigQueryDataSource,
+                    "BigQueryDataSourceSpliter",
+                ):
                     datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                        array_type=array_type,
                         dataset_id=input_dataset_id,
                         table_name=input_table_name,
                         batch_size=input_batch_size,
@@ -250,10 +267,16 @@ def benchmark_dataloader(
                         sample_ratio=sample_ratio,
                     )
                 else:
-                    app_logger.error("BigQueryDataSourceSpliter not available")
-                    raise AttributeError("BigQueryDataSourceSpliter not available")
+                    app_logger.error(
+                        "BigQueryDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "BigQueryDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -271,23 +294,32 @@ def benchmark_dataloader(
     ):
         if HAS_GCS:
             try:
-                if hasattr(GCSDataSource, "GCSDataSourceSpliter"):
-                    datasource = GCSDataSource.GCSDataSourceSpliter(
+                if hasattr(
+                    GCSDataSource, "GCSDataSourceSpliter"
+                ):
+                    datasource = GCSDataSource.DataSourceSpliter(
+                        cls_ref=GCSDataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
                         local_cache_dir=input_local_cache_dir,
+                        array_type=array_type,
                         max_workers=input_max_workers,
                         sample_ratio=sample_ratio,
-                        array_type=array_type,
                         enable_bundling=input_enable_bundling,
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("GCSDataSourceSpliter not available")
-                    raise AttributeError("GCSDataSourceSpliter not available")
+                    app_logger.error(
+                        "GCSDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "GCSDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -306,7 +338,8 @@ def benchmark_dataloader(
         if HAS_AWS:
             try:
                 if hasattr(S3DataSource, "S3DataSourceSpliter"):
-                    datasource = S3DataSource.S3DataSourceSpliter(
+                    datasource = S3DataSource.DataSourceSpliter(
+                        cls_ref=S3DataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
@@ -318,10 +351,16 @@ def benchmark_dataloader(
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("S3DataSourceSpliter not available")
-                    raise AttributeError("S3DataSourceSpliter not available")
+                    app_logger.error(
+                        "S3DataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "S3DataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3DataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3DataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -631,12 +670,19 @@ def benchmark_training(
             "Please specify a valid input_format ('hcpe' or 'preprocess')."
         )
     # Convert input_format to array_type for data sources
-    array_type = "preprocessing" if input_format == "preprocess" else "hcpe"
+    array_type = (
+        "preprocessing"
+        if input_format == "preprocess"
+        else "hcpe"
+    )
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [
-            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(
+                input_dataset_id is not None
+                or input_table_name is not None
+            ),
             bool(input_gcs),
             bool(input_s3),
         ]
@@ -652,23 +698,36 @@ def benchmark_training(
     # Initialize datasource (similar to learn_model command)
     if input_dir is not None:
         if sample_ratio is not None:
-            app_logger.warning("sample_ratio is ignored for local file data source.")
-        if input_format != "hcpe" and input_format != "preprocess":
+            app_logger.warning(
+                "sample_ratio is ignored for local file data source."
+            )
+        if (
+            input_format != "hcpe"
+            and input_format != "preprocess"
+        ):
             raise Exception(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
+            array_type=array_type,
         )
-    elif input_dataset_id is not None and input_table_name is not None:
+    elif (
+        input_dataset_id is not None
+        and input_table_name is not None
+    ):
         if sample_ratio is not None:
             app_logger.info(
                 f"Using BigQuery TABLESAMPLE with {sample_ratio:.1%} sampling ratio."
             )
         if HAS_BIGQUERY:
             try:
-                if hasattr(BigQueryDataSource, "BigQueryDataSourceSpliter"):
+                if hasattr(
+                    BigQueryDataSource,
+                    "BigQueryDataSourceSpliter",
+                ):
                     datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
+                        array_type=array_type,
                         dataset_id=input_dataset_id,
                         table_name=input_table_name,
                         batch_size=input_batch_size,
@@ -680,10 +739,16 @@ def benchmark_training(
                         sample_ratio=sample_ratio,
                     )
                 else:
-                    app_logger.error("BigQueryDataSourceSpliter not available")
-                    raise AttributeError("BigQueryDataSourceSpliter not available")
+                    app_logger.error(
+                        "BigQueryDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "BigQueryDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQueryDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -701,23 +766,32 @@ def benchmark_training(
     ):
         if HAS_GCS:
             try:
-                if hasattr(GCSDataSource, "GCSDataSourceSpliter"):
-                    datasource = GCSDataSource.GCSDataSourceSpliter(
+                if hasattr(
+                    GCSDataSource, "GCSDataSourceSpliter"
+                ):
+                    datasource = GCSDataSource.DataSourceSpliter(
+                        cls_ref=GCSDataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
+                        array_type=array_type,
                         local_cache_dir=input_local_cache_dir,
                         max_workers=input_max_workers,
                         sample_ratio=sample_ratio,
-                        array_type=array_type,
                         enable_bundling=input_enable_bundling,
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("GCSDataSourceSpliter not available")
-                    raise AttributeError("GCSDataSourceSpliter not available")
+                    app_logger.error(
+                        "GCSDataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "GCSDataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSDataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSDataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -736,22 +810,29 @@ def benchmark_training(
         if HAS_AWS:
             try:
                 if hasattr(S3DataSource, "S3DataSourceSpliter"):
-                    datasource = S3DataSource.S3DataSourceSpliter(
+                    datasource = S3DataSource.DataSourceSpliter(
+                        cls_ref=S3DataSource,
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
+                        array_type=array_type,
                         local_cache_dir=input_local_cache_dir,
                         max_workers=input_max_workers,
                         sample_ratio=sample_ratio,
-                        array_type=array_type,
                         enable_bundling=input_enable_bundling,
                         bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
-                    app_logger.error("S3DataSourceSpliter not available")
-                    raise AttributeError("S3DataSourceSpliter not available")
+                    app_logger.error(
+                        "S3DataSourceSpliter not available"
+                    )
+                    raise AttributeError(
+                        "S3DataSourceSpliter not available"
+                    )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3DataSourceSpliter: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3DataSourceSpliter: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -796,14 +877,18 @@ def benchmark_training(
     click.echo(result["benchmark_results"]["Summary"])
     if "ValidationSummary" in result["benchmark_results"]:
         click.echo()
-        click.echo(result["benchmark_results"]["ValidationSummary"])
+        click.echo(
+            result["benchmark_results"]["ValidationSummary"]
+        )
 
     # Display estimation results if sample_ratio was used
     if "estimation" in result and result["estimation"]:
         click.echo()
         click.echo("=== Data Sampling Estimation ===")
         estimation = result["estimation"]
-        click.echo(f"Sample Ratio Used: {estimation['sample_ratio']:.1%}")
+        click.echo(
+            f"Sample Ratio Used: {estimation['sample_ratio']:.1%}"
+        )
         click.echo(
             f"Actual Batches Processed: {estimation['actual_batches_processed']:,}"
         )

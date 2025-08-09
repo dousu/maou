@@ -113,7 +113,7 @@ module = [
 profile = "black"
 
 [tool.ruff]
-line-length = 88
+line-length = 64
 indent-width = 4
 
 [[tool.poetry.source]]

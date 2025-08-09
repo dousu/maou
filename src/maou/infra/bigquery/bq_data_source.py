@@ -5,28 +5,34 @@ import random
 from collections import OrderedDict
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import numpy as np
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array
+from maou.interface.data_io import load_array, save_array
+from maou.interface.data_schema import get_dtype
 
 
 class MissingBigQueryConfig(Exception):
     pass
 
 
-class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
+class BigQueryDataSource(
+    learn.LearningDataSource, preprocess.DataSource
+):
     logger: logging.Logger = logging.getLogger(__name__)
 
-    class BigQueryDataSourceSpliter(learn.LearningDataSource.DataSourceSpliter):
+    class BigQueryDataSourceSpliter(
+        learn.LearningDataSource.DataSourceSpliter
+    ):
         logger: logging.Logger = logging.getLogger(__name__)
 
         def __init__(
             self,
             *,
+            array_type: Literal["hcpe", "preprocessing"],
             dataset_id: str,
             table_name: str,
             batch_size: int = 10_000,
@@ -37,25 +43,32 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             local_cache_dir: Optional[str] = None,
             sample_ratio: Optional[float] = None,
         ) -> None:
-            self.__page_manager = BigQueryDataSource.PageManager(
-                dataset_id=dataset_id,
-                table_name=table_name,
-                batch_size=batch_size,
-                max_cached_bytes=max_cached_bytes,
-                clustering_key=clustering_key,
-                partitioning_key_date=partitioning_key_date,
-                use_local_cache=use_local_cache,
-                local_cache_dir=local_cache_dir,
-                sample_ratio=sample_ratio,
+            self.__page_manager = (
+                BigQueryDataSource.PageManager(
+                    array_type=array_type,
+                    dataset_id=dataset_id,
+                    table_name=table_name,
+                    batch_size=batch_size,
+                    max_cached_bytes=max_cached_bytes,
+                    clustering_key=clustering_key,
+                    partitioning_key_date=partitioning_key_date,
+                    use_local_cache=use_local_cache,
+                    local_cache_dir=local_cache_dir,
+                    sample_ratio=sample_ratio,
+                )
             )
 
         def train_test_split(
             self, test_ratio: float
         ) -> tuple["BigQueryDataSource", "BigQueryDataSource"]:
             self.logger.info(f"test_ratio: {test_ratio}")
-            input_indices, test_indicies = self.__train_test_split(
-                data=list(range(self.__page_manager.total_rows)),
-                test_ratio=test_ratio,
+            input_indices, test_indicies = (
+                self.__train_test_split(
+                    data=list(
+                        range(self.__page_manager.total_rows)
+                    ),
+                    test_ratio=test_ratio,
+                )
             )
             return (
                 BigQueryDataSource(
@@ -72,7 +85,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: Optional[Union[int, float, str, bytes, bytearray]] = None,
+            seed: Optional[
+                Union[int, float, str, bytes, bytearray]
+            ] = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -82,10 +97,12 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
 
     class PageManager:
         logger: logging.Logger = logging.getLogger(__name__)
+        array_type: Literal["hcpe", "preprocessing"]
 
         def __init__(
             self,
             *,
+            array_type: Literal["hcpe", "preprocessing"],
             dataset_id: str,
             table_name: str,
             batch_size: int,
@@ -97,7 +114,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             sample_ratio: Optional[float] = None,
         ) -> None:
             self.client = bigquery.Client()
-            self.dataset_fqn = f"{self.client.project}.{dataset_id}"
+            self.dataset_fqn = (
+                f"{self.client.project}.{dataset_id}"
+            )
             self.table_name = table_name
             self.batch_size = batch_size
             self.total_cached_bytes = 0
@@ -105,8 +124,11 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             self.clustering_key = clustering_key
             self.partitioning_key_date = partitioning_key_date
             self.sample_ratio = (
-                max(0.01, min(1.0, sample_ratio)) if sample_ratio is not None else None
+                max(0.01, min(1.0, sample_ratio))
+                if sample_ratio is not None
+                else None
             )
+            self.array_type = array_type
             self.__pruning_info = []
 
             # ローカルキャッシュの設定
@@ -117,12 +139,18 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         "local_cache_dir must be specified when use_local_cache is True"
                     )
                 self.local_cache_dir = Path(local_cache_dir)
-                self.local_cache_dir.mkdir(parents=True, exist_ok=True)
-                self.logger.info(f"Local cache directory: {self.local_cache_dir}")
+                self.local_cache_dir.mkdir(
+                    parents=True, exist_ok=True
+                )
+                self.logger.info(
+                    f"Local cache directory: {self.local_cache_dir}"
+                )
 
             # ページ番号をキーにしたLRUキャッシュ (OrderedDict)
             # ローカルキャッシュを使用する場合は不要
-            self.__page_cache: Optional[OrderedDict[int, np.ndarray]] = None
+            self.__page_cache: Optional[
+                OrderedDict[int, np.ndarray]
+            ] = None
             if not self.use_local_cache:
                 self.__page_cache = OrderedDict()
 
@@ -225,7 +253,10 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             古いページから順次削除する．
             """
             # ローカルキャッシュを使用する場合はメモリキャッシュを使用しない
-            if self.use_local_cache or self.__page_cache is None:
+            if (
+                self.use_local_cache
+                or self.__page_cache is None
+            ):
                 return
 
             while (
@@ -233,7 +264,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 # どうせメモリに格納できるのだからキャッシュは最低1つ残しておく
                 and len(self.__page_cache) > 1
             ):
-                key, evicted_table = self.__page_cache.popitem(last=False)
+                key, evicted_table = self.__page_cache.popitem(
+                    last=False
+                )
                 self.total_cached_bytes -= evicted_table.nbytes
                 self.logger.debug(
                     f"Evicted cache for page {key} (nbytes: {evicted_table.nbytes}). "
@@ -243,9 +276,15 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         def __get_local_cache_path(self, page_num: int) -> Path:
             """ページ番号からローカルキャッシュのパスを取得する"""
             if bool(self.__pruning_info):
-                pruning_value = self.__pruning_info[page_num]["pruning_value"]
+                pruning_value = self.__pruning_info[page_num][
+                    "pruning_value"
+                ]
                 # 値をファイル名に適した形式に変換
-                safe_value = str(pruning_value).replace("/", "_").replace(":", "_")
+                safe_value = (
+                    str(pruning_value)
+                    .replace("/", "_")
+                    .replace(":", "_")
+                )
                 filename = (
                     f"{self.dataset_fqn.replace('.', '_')}"
                     f"_{self.table_name}_{safe_value}.npy"
@@ -257,24 +296,46 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 )
             return self.local_cache_dir / filename
 
-        def __check_local_cache_exists(self, page_num: int) -> bool:
+        def __check_local_cache_exists(
+            self, page_num: int
+        ) -> bool:
             """ローカルキャッシュが存在するか確認する"""
             cache_path = self.__get_local_cache_path(page_num)
             return cache_path.exists()
 
-        def __load_from_local(self, page_num: int) -> np.ndarray:
+        def __load_from_local(
+            self, page_num: int
+        ) -> np.ndarray:
             """ローカルからデータを読み込む"""
             cache_path = self.__get_local_cache_path(page_num)
-            self.logger.debug(f"Loading data from local cache: {cache_path}")
-            return load_array(cache_path, mmap_mode="r", array_type="hcpe")
+            self.logger.debug(
+                f"Loading data from local cache: {cache_path}"
+            )
+            return load_array(
+                cache_path,
+                mmap_mode="r",
+                array_type=self.array_type,
+                bit_pack=False,
+            )
 
-        def __save_to_local(self, page_num: int, npy_data: np.ndarray) -> None:
+        def __save_to_local(
+            self, page_num: int, npy_data: np.ndarray
+        ) -> None:
             """データをローカルに保存する"""
             cache_path = self.__get_local_cache_path(page_num)
-            self.logger.debug(f"Saving data to local cache: {cache_path}")
-            np.save(cache_path, npy_data)
+            self.logger.debug(
+                f"Saving data to local cache: {cache_path}"
+            )
+            save_array(
+                npy_data,
+                cache_path,
+                array_type=self.array_type,
+                bit_pack=False,
+            )
 
-        def __fetch_from_bigquery(self, page_num: int) -> np.ndarray:
+        def __fetch_from_bigquery(
+            self, page_num: int
+        ) -> np.ndarray:
             """BigQueryからデータを取得する"""
             # 一旦pandas dataframeとして取得
             if bool(self.__pruning_info):
@@ -287,14 +348,22 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         f"(clusters count: {len(self.__pruning_info)})."
                     )
                 if self.partitioning_key_date:
-                    partition_value = pruning_info["pruning_value"]
+                    partition_value = pruning_info[
+                        "pruning_value"
+                    ]
                     # パーティショニングの値でwhere句を作る
                     filter = f"{self.partitioning_key_date} = DATE '{partition_value}'"
                 elif self.clustering_key:
-                    cluster_value = pruning_info["pruning_value"]
+                    cluster_value = pruning_info[
+                        "pruning_value"
+                    ]
                     # クラスタ値でフィルタしたクエリを実行
                     # クラスタ値が文字列の場合はシングルクォートで囲む
                     if isinstance(cluster_value, str):
+                        filter = f"{self.clustering_key} = '{cluster_value}'"
+                    elif isinstance(
+                        cluster_value, datetime.date
+                    ):
                         filter = f"{self.clustering_key} = '{cluster_value}'"
                     else:
                         filter = f"{self.clustering_key} = {cluster_value}"
@@ -304,16 +373,18 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 # サンプリング句を追加
                 tablesample_clause = ""
                 if self.sample_ratio is not None:
-                    tablesample_clause = (
-                        f"TABLESAMPLE SYSTEM ({self.sample_ratio * 100} PERCENT)"
-                    )
+                    tablesample_clause = f"TABLESAMPLE SYSTEM ({self.sample_ratio * 100} PERCENT)"
 
                 query = f"""
                     SELECT *
                     FROM `{self.dataset_fqn}.{self.table_name}` {tablesample_clause}
                     WHERE {filter}
                 """
-                df = self.client.query(query).result().to_dataframe()
+                df = (
+                    self.client.query(query)
+                    .result()
+                    .to_dataframe()
+                )
             else:
                 # クラスタリングキー未指定の場合
                 if self.sample_ratio is not None:
@@ -326,7 +397,11 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         LIMIT {self.batch_size}
                         OFFSET {start_index}
                     """
-                    df = self.client.query(query).result().to_dataframe()
+                    df = (
+                        self.client.query(query)
+                        .result()
+                        .to_dataframe()
+                    )
                 else:
                     # BigQuery の list_rows を使ってpageを実装している
                     start_index = page_num * self.batch_size
@@ -345,20 +420,34 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             # recordsの中にバイト列が入っていた場合はpickle.loadsしておく
             # pickle.loadsする場合は必ずnumpy arrayになるものとして扱う
             for col in records.dtype.names:
-                if records[col].dtype == "object" and isinstance(
+                if records[
+                    col
+                ].dtype == "object" and isinstance(
                     records[col][0], bytes
                 ):
-                    unpickled_data = np.array([pickle.loads(x) for x in records[col]])
+                    unpickled_data = np.array(
+                        [pickle.loads(x) for x in records[col]]
+                    )
                     data.append(unpickled_data)
-                    dtype.append((col, unpickled_data.dtype, unpickled_data.shape[1:]))
-                elif records[col].dtype == "object" and isinstance(
+                    dtype.append(
+                        (
+                            col,
+                            unpickled_data.dtype,
+                            unpickled_data.shape[1:],
+                        )
+                    )
+                elif records[
+                    col
+                ].dtype == "object" and isinstance(
                     records[col][0], str
                 ):
                     data.append(records[col])
                     # Unicode128バイトで固定しているが検討の余地あり
                     # 基本的に文字列は学習データとして使わないので足りなくても問題ない
                     dtype.append((col, "U128"))
-                elif records[col].dtype == "object" and isinstance(
+                elif records[
+                    col
+                ].dtype == "object" and isinstance(
                     records[col][0], datetime.date
                 ):
                     data.append(records[col])
@@ -369,6 +458,24 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             # この構築の仕方 (list(zip(...)))あまり効率よくなさそう
             npy_data = np.array(list(zip(*data)), dtype=dtype)
 
+            return self.__convert_dtype(npy_data)
+
+        def __convert_dtype(
+            self, npy_data: np.ndarray
+        ) -> np.ndarray:
+            dtype = get_dtype(
+                array_type=self.array_type, bit_pack=False
+            )
+            # dtypeが異なる場合は変換する
+            if npy_data.dtype != dtype:
+                self.logger.debug(
+                    f"Converting dtype from {npy_data.dtype} to {dtype}"
+                )
+                npy_data = npy_data.astype(dtype)
+            else:
+                self.logger.debug(
+                    f"No dtype conversion needed: {npy_data.dtype}"
+                )
             return npy_data
 
         def __download_all_to_local(self) -> None:
@@ -380,7 +487,9 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             # すべてのページのローカルキャッシュが存在するか確認
             all_cache_exists = True
             for page_num in range(self.total_pages):
-                if not self.__check_local_cache_exists(page_num):
+                if not self.__check_local_cache_exists(
+                    page_num
+                ):
                     all_cache_exists = False
                     break
 
@@ -396,9 +505,13 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 "Downloading all data to local cache. This may take a while."
             )
             for page_num in range(self.total_pages):
-                if not self.__check_local_cache_exists(page_num):
+                if not self.__check_local_cache_exists(
+                    page_num
+                ):
                     # BigQueryからデータを取得してローカルに保存
-                    npy_data = self.__fetch_from_bigquery(page_num)
+                    npy_data = self.__fetch_from_bigquery(
+                        page_num
+                    )
                     self.__save_to_local(page_num, npy_data)
                 else:
                     self.logger.info(
@@ -406,8 +519,12 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                     )
 
             # ローカルキャッシュファイルが正しく作成されたか確認
-            cache_files = list(self.local_cache_dir.glob("*.npy"))
-            self.logger.info(f"Created {len(cache_files)} local cache files")
+            cache_files = list(
+                self.local_cache_dir.glob("*.npy")
+            )
+            self.logger.info(
+                f"Created {len(cache_files)} local cache files"
+            )
 
             if len(cache_files) == 0:
                 self.logger.warning(
@@ -433,13 +550,18 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                         f"Local cache not found for page {page_num}, "
                         "fetching from BigQuery"
                     )
-                    npy_data = self.__fetch_from_bigquery(page_num)
+                    npy_data = self.__fetch_from_bigquery(
+                        page_num
+                    )
                     self.__save_to_local(page_num, npy_data)
                     return npy_data
 
             # ローカルキャッシュが無効な場合
             # キャッシュがあれば順序更新
-            if self.__page_cache is not None and page_num in self.__page_cache:
+            if (
+                self.__page_cache is not None
+                and page_num in self.__page_cache
+            ):
                 page = self.__page_cache.pop(page_num)
                 self.__page_cache[page_num] = page
                 return page
@@ -464,9 +586,15 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 # idx が属するクラスタグループを探索
                 group_idx = None
                 for i, info in enumerate(self.__pruning_info):
-                    if info["cumulative"] <= idx < info["cumulative"] + info["cnt"]:
+                    if (
+                        info["cumulative"]
+                        <= idx
+                        < info["cumulative"] + info["cnt"]
+                    ):
                         group_idx = i
-                        offset_in_group = idx - info["cumulative"]
+                        offset_in_group = (
+                            idx - info["cumulative"]
+                        )
                         break
                 if group_idx is None:
                     raise IndexError(
@@ -480,21 +608,32 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
                 page_data = self.get_page(page_num)
                 return page_data[row_offset]
 
-        def iter_batches(self) -> Generator[tuple[str, np.ndarray], None, None]:
+        def iter_batches(
+            self,
+        ) -> Generator[tuple[str, np.ndarray], None, None]:
             """
             BigQuery のテーブル全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
             for page_num in range(self.total_pages):
                 if bool(self.__pruning_info):
-                    name = str(self.__pruning_info[page_num]["pruning_value"])
+                    name = str(
+                        self.__pruning_info[page_num][
+                            "pruning_value"
+                        ]
+                    )
                 else:
-                    name = f"batch_{page_num}_{self.total_pages}"
+                    name = (
+                        f"batch_{page_num}_{self.total_pages}"
+                    )
                 yield name, self.get_page(page_num)
 
     def __init__(
         self,
         *,
+        array_type: Optional[
+            Literal["hcpe", "preprocessing"]
+        ] = None,
         dataset_id: Optional[str] = None,
         table_name: Optional[str] = None,
         batch_size: int = 10_000,
@@ -510,6 +649,7 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
         """
 
         Args:
+            array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
             dataset_id (Optional[str]): BigQuery データセット名
             table_name (Optional[str]): BigQuery テーブル名
             batch_size (int): 一度に取得するレコード数
@@ -523,8 +663,13 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
         """
         if page_manager is None:
-            if dataset_id is not None and table_name is not None:
+            if (
+                array_type is not None
+                and dataset_id is not None
+                and table_name is not None
+            ):
                 self.__page_manager = self.PageManager(
+                    array_type=array_type,
                     dataset_id=dataset_id,
                     table_name=table_name,
                     batch_size=batch_size,
@@ -538,13 +683,17 @@ class BigQueryDataSource(learn.LearningDataSource, preprocess.DataSource):
             else:
                 raise MissingBigQueryConfig(
                     "BigQueryのデータセット名またはテーブル名が未設定"
-                    f" dataset_id: {dataset_id}, table_name: {table_name}"
+                    f" array_type: {array_type},"
+                    f" dataset_id: {dataset_id},"
+                    f" table_name: {table_name}"
                 )
         else:
             self.__page_manager = page_manager
 
         if indicies is None:
-            self.indicies = list(range(self.__page_manager.total_rows))
+            self.indicies = list(
+                range(self.__page_manager.total_rows)
+            )
         else:
             self.indicies = indicies
 

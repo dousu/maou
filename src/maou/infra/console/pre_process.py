@@ -238,7 +238,10 @@ def pre_process(
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [
-            bool(input_dataset_id is not None or input_table_name is not None),
+            bool(
+                input_dataset_id is not None
+                or input_table_name is not None
+            ),
             bool(input_gcs),
             bool(input_s3),
         ]
@@ -253,10 +256,14 @@ def pre_process(
 
     # Initialize datasource
     datasource = None
-    if input_dataset_id is not None and input_table_name is not None:
+    if (
+        input_dataset_id is not None
+        and input_table_name is not None
+    ):
         if HAS_BIGQUERY:
             try:
                 datasource = BigQueryDataSource(
+                    array_type="hcpe",
                     dataset_id=input_dataset_id,
                     table_name=input_table_name,
                     batch_size=input_batch_size,
@@ -267,7 +274,9 @@ def pre_process(
                     local_cache_dir=input_local_cache_dir,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQueryDataSource: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQueryDataSource: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -291,11 +300,14 @@ def pre_process(
                     data_name=input_data_name,
                     local_cache_dir=input_local_cache_dir,
                     max_workers=max_workers,
+                    array_type="hcpe",
                     enable_bundling=input_enable_bundling,
                     bundle_size_gb=input_bundle_size_gb,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSDataSource: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSDataSource: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -319,11 +331,14 @@ def pre_process(
                     data_name=input_data_name,
                     local_cache_dir=input_local_cache_dir,
                     max_workers=max_workers,
+                    array_type="hcpe",
                     enable_bundling=input_enable_bundling,
                     bundle_size_gb=input_bundle_size_gb,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3DataSource: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3DataSource: {e}"
+                )
                 raise
         else:
             error_msg = (
@@ -334,7 +349,10 @@ def pre_process(
             raise ImportError(error_msg)
     elif input_path is not None:
         input_paths = FileSystem.collect_files(input_path)
-        datasource = FileDataSource(file_paths=input_paths)
+        datasource = FileDataSource(
+            file_paths=input_paths,
+            array_type="hcpe",
+        )
     else:
         error_msg = (
             "Please specify an input source "
@@ -344,7 +362,13 @@ def pre_process(
         raise ValueError(error_msg)
 
     # Check for mixing cloud providers for output
-    cloud_output_count = sum([bool(output_bigquery), bool(output_gcs), bool(output_s3)])
+    cloud_output_count = sum(
+        [
+            bool(output_bigquery),
+            bool(output_gcs),
+            bool(output_s3),
+        ]
+    )
     if cloud_output_count > 1:
         error_msg = (
             "Cannot use multiple cloud providers for output simultaneously. "
@@ -355,7 +379,11 @@ def pre_process(
 
     # Initialize feature store
     feature_store = None
-    if output_bigquery and dataset_id is not None and table_name is not None:
+    if (
+        output_bigquery
+        and dataset_id is not None
+        and table_name is not None
+    ):
         if HAS_BIGQUERY:
             try:
                 feature_store = BigQueryFeatureStore(
@@ -364,7 +392,9 @@ def pre_process(
                     max_cached_bytes=output_max_cached_bytes,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize BigQuery: {e}")
+                app_logger.error(
+                    f"Failed to initialize BigQuery: {e}"
+                )
         else:
             app_logger.warning(
                 "BigQuery output requested "
@@ -383,11 +413,13 @@ def pre_process(
                     bucket_name=output_bucket_name,
                     prefix=output_prefix,
                     data_name=output_data_name,
+                    array_type="preprocessing",
                     max_cached_bytes=output_max_cached_bytes,
-                    max_workers=max_workers,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize GCSFeatureStore: {e}")
+                app_logger.error(
+                    f"Failed to initialize GCSFeatureStore: {e}"
+                )
         else:
             app_logger.warning(
                 "GCS output requested "
@@ -406,11 +438,13 @@ def pre_process(
                     bucket_name=output_bucket_name,
                     prefix=output_prefix,
                     data_name=output_data_name,
+                    array_type="preprocessing",
                     max_cached_bytes=output_max_cached_bytes,
-                    max_workers=max_workers,
                 )
             except Exception as e:
-                app_logger.error(f"Failed to initialize S3FeatureStore: {e}")
+                app_logger.error(
+                    f"Failed to initialize S3FeatureStore: {e}"
+                )
         else:
             app_logger.warning(
                 "S3 output requested "
