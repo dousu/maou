@@ -22,7 +22,6 @@ from maou.domain.network.resnet import BottleneckBlock
 def default_worker_init_fn(worker_id: int) -> None:
     """
     デフォルトのワーカー初期化関数．
-    CUDA初期化は状況に応じて自動的に実行する．
     """
     import random
 
