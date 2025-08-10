@@ -10,8 +10,8 @@ PIECE_TYPES = 14
 # 歩18，香車4，桂馬4，銀4，金4，角2，飛車2
 
 FEATURES_NUM = (
-    PIECE_TYPES * 2 + sum(cshogi.MAX_PIECES_IN_HAND) * 2
-)  # type: ignore
+    PIECE_TYPES * 2 + sum(cshogi.MAX_PIECES_IN_HAND) * 2  # type: ignore
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -41,8 +41,9 @@ def make_feature(board: cshogi.Board) -> np.ndarray:  # type: ignore
     # 先手と後手の持ち駒数から特徴量を作成する
     for hands in pieces_in_hand:
         for num, max_num in zip(
-            hands, cshogi.MAX_PIECES_IN_HAND
-        ):  # type: ignore
+            hands,
+            cshogi.MAX_PIECES_IN_HAND,  # type: ignore
+        ):
             # 全面1にする
             features[i : i + num].fill(1)
             i += max_num
