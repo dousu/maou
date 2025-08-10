@@ -198,12 +198,6 @@ from maou.interface import preprocess
     required=False,
     default=4,
 )
-@click.option(
-    "--cpu-workers",
-    help="Number of parallel CPU workers for record processing (default: auto-detect).",
-    type=int,
-    required=False,
-)
 @handle_exception
 def pre_process(
     input_path: Optional[Path],
