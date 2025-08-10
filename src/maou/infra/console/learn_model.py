@@ -476,9 +476,7 @@ def learn_model(
         if HAS_GCS:
             try:
                 # GCSDataSourceSpliterを使用
-                if hasattr(
-                    GCSDataSource, "GCSDataSourceSpliter"
-                ):
+                if hasattr(GCSDataSource, "DataSourceSpliter"):
                     datasource = GCSDataSource.DataSourceSpliter(
                         cls_ref=GCSDataSource,
                         bucket_name=input_bucket_name,
@@ -493,14 +491,14 @@ def learn_model(
                     )
                 else:
                     app_logger.error(
-                        "GCSDataSourceSpliter not available"
+                        "DataSourceSpliter not available"
                     )
                     raise AttributeError(
-                        "GCSDataSourceSpliter not available"
+                        "DataSourceSpliter not available"
                     )
             except Exception as e:
                 app_logger.error(
-                    f"Failed to initialize GCSDataSourceSpliter: {e}"
+                    f"Failed to initialize DataSourceSpliter: {e}"
                 )
                 raise
         else:
@@ -520,7 +518,7 @@ def learn_model(
         if HAS_AWS:
             try:
                 # S3DataSourceSpliterを使用
-                if hasattr(S3DataSource, "S3DataSourceSpliter"):
+                if hasattr(S3DataSource, "DataSourceSpliter"):
                     datasource = S3DataSource.DataSourceSpliter(
                         cls_ref=S3DataSource,
                         bucket_name=input_bucket_name,
@@ -535,10 +533,10 @@ def learn_model(
                     )
                 else:
                     app_logger.error(
-                        "S3DataSourceSpliter not available"
+                        "DataSourceSpliter not available"
                     )
                     raise AttributeError(
-                        "S3DataSourceSpliter not available"
+                        "DataSourceSpliter not available"
                     )
             except Exception as e:
                 app_logger.error(
