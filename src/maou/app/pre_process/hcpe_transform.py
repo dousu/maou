@@ -82,7 +82,6 @@ class PreProcess:
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
-        self.__transform_logic: Transform = Transform()
 
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
@@ -90,26 +89,24 @@ class PreProcess:
         max_workers: int
 
     @staticmethod
-    def _process_record_chunk(
-        records_chunk: np.ndarray,
+    def _process_single_array(
+        data: np.ndarray,
         dataname: str,
-        start_idx: int,
-    ) -> tuple[np.ndarray, int]:
+    ) -> np.ndarray:
         """Process a chunk of records in parallel."""
 
         transform_logic = Transform()
-        chunk_length = len(records_chunk)
+        data_length = len(data)
 
         # Create output array for this chunk
-        array = create_empty_preprocessing_array(chunk_length)
+        array = create_empty_preprocessing_array(data_length)
 
-        for idx, record in enumerate(records_chunk):
-            global_idx = start_idx + idx
+        for idx, record in enumerate(data):
             id = (
                 record["id"]
                 if "id" in record.dtype.names
                 and record["id"] != ""
-                else f"{dataname}_{global_idx}"
+                else f"{dataname}_{idx}"
             )
             hcp = record["hcp"]
             move16 = record["bestMove16"]
@@ -143,7 +140,7 @@ class PreProcess:
             np_data["legalMoveMask"] = legal_move_mask
             np_data["partitioningKey"] = partitioning_key
 
-        return array, chunk_length
+        return array
 
     def transform(
         self, option: PreProcessOption
@@ -163,162 +160,83 @@ class PreProcess:
         )
 
         with self.__context():
-            for dataname, data in tqdm(
-                self.__datasource.iter_batches(),
-                desc="Processing batches",
-            ):
-                self.logger.debug(f"target: {dataname}")
-                data_length = len(data)
-                self.logger.debug(
-                    f"処理対象: {dataname}, 行数: {data_length}"
-                )
-
-                if max_workers == 1 or data_length < 100:
-                    # Sequential processing for small batches or single worker
-                    array = create_empty_preprocessing_array(
-                        data_length
+            if max_workers == 1:
+                for dataname, data in tqdm(
+                    self.__datasource.iter_batches(),
+                    desc="Processing batches",
+                ):
+                    array = self._process_single_array(
+                        data, dataname
                     )
 
-                    for idx, record in enumerate(data):
-                        id = (
-                            record["id"]
-                            if "id" in record.dtype.names
-                            and record["id"] != ""
-                            else f"{dataname}_{idx}"
-                        )
-                        hcp = record["hcp"]
-                        move16 = record["bestMove16"]
-                        game_result = record["gameResult"]
-                        eval = record["eval"]
-                        (
-                            features,
-                            move_label,
-                            result_value,
-                            legal_move_mask,
-                        ) = self.__transform_logic(
-                            hcp=hcp,
-                            move16=move16,
-                            game_result=game_result,
-                            eval=eval,
-                        )
-
-                        partitioning_key = (
-                            record["partitioningKey"]
-                            if "partitioningKey"
-                            in record.dtype.names
-                            else datetime.min.date()
-                        )
-
-                        np_data = array[idx]
-                        np_data["id"] = id
-                        np_data["eval"] = eval
-                        np_data["features"] = features
-                        np_data["moveLabel"] = move_label
-                        np_data["resultValue"] = result_value
-                        np_data["legalMoveMask"] = (
-                            legal_move_mask
-                        )
-                        np_data["partitioningKey"] = (
-                            partitioning_key
-                        )
-
-                    final_array = array
-                else:
-                    # Parallel processing for larger batches
-                    chunk_size = max(
-                        1, data_length // max_workers
+                    pre_process_result[dataname] = (
+                        f"success {len(array)} rows"
                     )
-                    chunks = []
-
-                    # Split data into chunks
-                    for i in range(0, data_length, chunk_size):
-                        end_idx = min(
-                            i + chunk_size, data_length
-                        )
-                        chunks.append(
-                            (data[i:end_idx], dataname, i)
+                    # Store results
+                    if self.__feature_store is not None:
+                        self.__feature_store.store_features(
+                            name=dataname,
+                            key_columns=["id"],
+                            structured_array=array,
+                            partitioning_key_date="partitioningKey",
                         )
 
-                    self.logger.debug(
-                        f"Split {data_length} records into {len(chunks)} chunks"
-                    )
-
-                    with ProcessPoolExecutor(
-                        max_workers=max_workers
-                    ) as executor:
-                        # Submit all chunks
-                        future_to_chunk = {
-                            executor.submit(
-                                self._process_record_chunk,
-                                chunk_data,
-                                chunk_dataname,
-                                start_idx,
-                            ): (chunk_data, start_idx)
-                            for chunk_data, chunk_dataname, start_idx in chunks
-                        }
-
-                        # Collect results
-                        chunk_results = []
-                        for future in as_completed(
-                            future_to_chunk
-                        ):
-                            try:
-                                chunk_array, chunk_length = (
-                                    future.result()
-                                )
-                                chunk_data, start_idx = (
-                                    future_to_chunk[future]
-                                )
-                                chunk_results.append(
-                                    (start_idx, chunk_array)
-                                )
-                            except Exception as exc:
-                                self.logger.error(
-                                    f"Chunk processing failed: {exc}"
-                                )
-                                raise
-
-                        # Sort results by start index and combine
-                        chunk_results.sort(key=lambda x: x[0])
-
-                        # Create final array and combine chunks
-                        final_array = (
-                            create_empty_preprocessing_array(
-                                data_length
+                    if option.output_dir is not None:
+                        base_name = Path(dataname).stem
+                        save_preprocessing_array(
+                            array,
+                            option.output_dir
+                            / f"{base_name}.npy",
+                            bit_pack=False,
+                        )
+            else:
+                # Parallel processing
+                with ProcessPoolExecutor(
+                    max_workers=max_workers
+                ) as executor:
+                    # Submit all jobs
+                    future_to_dataname = {
+                        executor.submit(
+                            self._process_single_array,
+                            data,
+                            dataname,
+                        ): dataname
+                        for dataname, data in self.__datasource.iter_batches()
+                    }
+                    for future in tqdm(
+                        as_completed(future_to_dataname),
+                        desc="Processing files",
+                    ):
+                        dataname = future_to_dataname[future]
+                        try:
+                            array = future.result()
+                            pre_process_result[dataname] = (
+                                f"success {len(array)} rows"
                             )
-                        )
+                            # Store results
+                            if self.__feature_store is not None:
+                                self.__feature_store.store_features(
+                                    name=dataname,
+                                    key_columns=["id"],
+                                    structured_array=array,
+                                    partitioning_key_date="partitioningKey",
+                                )
 
-                        current_idx = 0
-                        for (
-                            start_idx,
-                            chunk_array,
-                        ) in chunk_results:
-                            chunk_length = len(chunk_array)
-                            final_array[
-                                current_idx : current_idx
-                                + chunk_length
-                            ] = chunk_array
-                            current_idx += chunk_length
-
-                # Store results
-                if self.__feature_store is not None:
-                    self.__feature_store.store_features(
-                        name=dataname,
-                        key_columns=["id"],
-                        structured_array=final_array,
-                        partitioning_key_date="partitioningKey",
-                    )
-
-                if option.output_dir is not None:
-                    base_name = Path(dataname).stem
-                    save_preprocessing_array(
-                        final_array,
-                        option.output_dir / f"{base_name}.npy",
-                        bit_pack=False,
-                    )
-                pre_process_result[dataname] = (
-                    f"success {len(final_array)} rows"
-                )
+                            if option.output_dir is not None:
+                                base_name = Path(dataname).stem
+                                save_preprocessing_array(
+                                    array,
+                                    option.output_dir
+                                    / f"{base_name}.npy",
+                                    bit_pack=False,
+                                )
+                        except Exception as exc:
+                            self.logger.error(
+                                f"{dataname} processing failed: {exc}"
+                            )
+                            pre_process_result[dataname] = (
+                                f"Dataname {dataname} generated an exception: {exc}"
+                            )
 
         return pre_process_result
 
