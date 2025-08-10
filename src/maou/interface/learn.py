@@ -4,7 +4,11 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from maou.app.learning.dl import CloudStorage, Learning, LearningDataSource
+from maou.app.learning.dl import (
+    CloudStorage,
+    Learning,
+    LearningDataSource,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -18,7 +22,9 @@ class FileSystem(metaclass=abc.ABCMeta):
 
     @staticmethod
     @abc.abstractmethod
-    def collect_files(p: Path, ext: Optional[str] = None) -> list[Path]:
+    def collect_files(
+        p: Path, ext: Optional[str] = None
+    ) -> list[Path]:
         pass
 
 
@@ -48,7 +54,9 @@ def dir_init(d: Path) -> None:
         d.mkdir()
     else:
         if not d.is_dir():
-            raise ValueError(f"Directory `{d}` is not directory.")
+            raise ValueError(
+                f"Directory `{d}` is not directory."
+            )
 
 
 def learn(
@@ -103,7 +111,9 @@ def learn(
     """
     # データソースのtype確認 (hcpeかpreprocessのみ)
     if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(f"Data source type `{datasource_type}` is invalid.")
+        raise ValueError(
+            f"Data source type `{datasource_type}` is invalid."
+        )
 
     # モデルをコンパイルするかどうか (デフォルトTrue)
     if compilation is None:
@@ -113,7 +123,9 @@ def learn(
     if test_ratio is None:
         test_ratio = 0.25
     elif not 0.0 < test_ratio < 1.0:
-        raise ValueError(f"test_ratio must be between 0 and 1, got {test_ratio}")
+        raise ValueError(
+            f"test_ratio must be between 0 and 1, got {test_ratio}"
+        )
 
     # エポック設定 (デフォルト10)
     if epoch is None:
@@ -125,7 +137,9 @@ def learn(
     if batch_size is None:
         batch_size = 1000
     elif batch_size <= 0:
-        raise ValueError(f"batch_size must be positive, got {batch_size}")
+        raise ValueError(
+            f"batch_size must be positive, got {batch_size}"
+        )
 
     # DataLoaderのワーカー数設定 (デフォルト0)
     if dataloader_workers is None:
@@ -143,37 +157,49 @@ def learn(
     if prefetch_factor is None:
         prefetch_factor = 2
     elif prefetch_factor <= 0:
-        raise ValueError(f"prefetch_factor must be positive, got {prefetch_factor}")
+        raise ValueError(
+            f"prefetch_factor must be positive, got {prefetch_factor}"
+        )
 
     # 損失関数のパラメータ設定 (デフォルト0.7)
     if gce_parameter is None:
         gce_parameter = 0.7
     elif not 0.0 < gce_parameter <= 1.0:
-        raise ValueError(f"gce_parameter must be between 0 and 1, got {gce_parameter}")
+        raise ValueError(
+            f"gce_parameter must be between 0 and 1, got {gce_parameter}"
+        )
 
     # policy損失関数のパラメータ設定 (デフォルト1)
     if policy_loss_ratio is None:
         policy_loss_ratio = 1
     elif policy_loss_ratio <= 0:
-        raise ValueError(f"policy_loss_ratio must be positive, got {policy_loss_ratio}")
+        raise ValueError(
+            f"policy_loss_ratio must be positive, got {policy_loss_ratio}"
+        )
 
     # value損失関数のパラメータ設定 (デフォルト1)
     if value_loss_ratio is None:
         value_loss_ratio = 1
     elif value_loss_ratio <= 0:
-        raise ValueError(f"value_loss_ratio must be positive, got {value_loss_ratio}")
+        raise ValueError(
+            f"value_loss_ratio must be positive, got {value_loss_ratio}"
+        )
 
     # オプティマイザのパラメータ設定 (デフォルト0.01)
     if learning_ratio is None:
         learning_ratio = 0.01
     elif learning_ratio <= 0:
-        raise ValueError(f"learning_ratio must be positive, got {learning_ratio}")
+        raise ValueError(
+            f"learning_ratio must be positive, got {learning_ratio}"
+        )
 
     # オプティマイザのパラメータ設定momemtum (デフォルト0.9)
     if momentum is None:
         momentum = 0.9
     elif not 0.0 <= momentum <= 1.0:
-        raise ValueError(f"momentum must be between 0 and 1, got {momentum}")
+        raise ValueError(
+            f"momentum must be between 0 and 1, got {momentum}"
+        )
 
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 
@@ -181,7 +207,9 @@ def learn(
     if start_epoch is None:
         start_epoch = 0
     elif start_epoch < 0:
-        raise ValueError(f"start_epoch must be non-negative, got {start_epoch}")
+        raise ValueError(
+            f"start_epoch must be non-negative, got {start_epoch}"
+        )
 
     # SummaryWriterの書き込み先設定 (デフォルト./logs)
     if log_dir is None:
@@ -221,6 +249,8 @@ def learn(
         model_dir=model_dir,
     )
 
-    learning_result = Learning(gpu=gpu, cloud_storage=cloud_storage).learn(option)
+    learning_result = Learning(
+        gpu=gpu, cloud_storage=cloud_storage
+    ).learn(option)
 
     return json.dumps(learning_result)

@@ -10,7 +10,10 @@ from torch.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 
-from maou.app.learning.callbacks import LoggingCallback, ValidationCallback
+from maou.app.learning.callbacks import (
+    LoggingCallback,
+    ValidationCallback,
+)
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.setup import (
     DataLoaderFactory,
@@ -24,7 +27,9 @@ from maou.app.pre_process.transform import Transform
 
 class CloudStorage(metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def upload_from_local(self, *, local_path: Path, cloud_path: str) -> None:
+    def upload_from_local(
+        self, *, local_path: Path, cloud_path: str
+    ) -> None:
         pass
 
     @abc.abstractmethod
@@ -41,7 +46,9 @@ class CloudStorage(metaclass=abc.ABCMeta):
 class LearningDataSource(DataSource):
     class DataSourceSpliter(metaclass=abc.ABCMeta):
         @abc.abstractmethod
-        def train_test_split(self, test_ratio: float) -> tuple[DataSource, DataSource]:
+        def train_test_split(
+            self, test_ratio: float
+        ) -> tuple[DataSource, DataSource]:
             pass
 
 
@@ -88,7 +95,9 @@ class Learning:
     ):
         if gpu is not None and gpu != "cpu":
             self.device = torch.device(gpu)
-            self.logger.info(f"Use GPU {torch.cuda.get_device_name(self.device)}")
+            self.logger.info(
+                f"Use GPU {torch.cuda.get_device_name(self.device)}"
+            )
             torch.set_float32_matmul_precision("high")
         else:
             self.logger.info("Use CPU")
@@ -101,7 +110,9 @@ class Learning:
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
             self.scaler = GradScaler("cuda")
-            self.logger.info("Initialized GradScaler for mixed precision training")
+            self.logger.info(
+                "Initialized GradScaler for mixed precision training"
+            )
         else:
             self.scaler = None
 
@@ -110,18 +121,24 @@ class Learning:
     def learn(self, option: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
-        torch.autograd.set_detect_anomaly(mode=True, check_nan=True)
+        torch.autograd.set_detect_anomaly(
+            mode=True, check_nan=True
+        )
         learning_result: Dict[str, str] = {}
 
         # 入力とテスト用のデータソース取得
-        input_datasource, test_datasource = option.datasource.train_test_split(
-            test_ratio=option.test_ratio
+        input_datasource, test_datasource = (
+            option.datasource.train_test_split(
+                test_ratio=option.test_ratio
+            )
         )
 
         # Create datasets using existing device
         # Validate datasource type
         if option.datasource_type not in ("hcpe", "preprocess"):
-            raise ValueError(f"Data source type `{option.datasource_type}` is invalid.")
+            raise ValueError(
+                f"Data source type `{option.datasource_type}` is invalid."
+            )
 
         # Create transform based on datasource type
         if option.datasource_type == "hcpe":
@@ -130,8 +147,12 @@ class Learning:
             transform = None
 
         # Create datasets
-        dataset_train = KifDataset(datasource=input_datasource, transform=transform)
-        dataset_validation = KifDataset(datasource=test_datasource, transform=transform)
+        dataset_train = KifDataset(
+            datasource=input_datasource, transform=transform
+        )
+        dataset_validation = KifDataset(
+            datasource=test_datasource, transform=transform
+        )
 
         # Set pin_memory based on device
         pin_memory = option.pin_memory
@@ -155,11 +176,23 @@ class Learning:
 
         # Create loss functions
         self.loss_fn_policy, self.loss_fn_value = (
-            LossOptimizerFactory.create_loss_functions(option.gce_parameter)
+            LossOptimizerFactory.create_loss_functions(
+                option.gce_parameter
+            )
         )
 
         self.logger.info(
-            str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
+            str(
+                summary(
+                    model,
+                    input_size=(
+                        option.batch_size,
+                        FEATURES_NUM,
+                        9,
+                        9,
+                    ),
+                )
+            )
         )
 
         if option.compilation:
@@ -193,7 +226,9 @@ class Learning:
 
         return learning_result
 
-    def __train_one_epoch(self, epoch_index: int, tb_writer: SummaryWriter) -> float:
+    def __train_one_epoch(
+        self, epoch_index: int, tb_writer: SummaryWriter
+    ) -> float:
         # Create logging callback
         logging_callback = LoggingCallback(
             writer=tb_writer,
@@ -228,7 +263,9 @@ class Learning:
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_writer_log_dir = self.log_dir / "training_log_{}".format(timestamp)
+        summary_writer_log_dir = (
+            self.log_dir / "training_log_{}".format(timestamp)
+        )
         writer = SummaryWriter(summary_writer_log_dir)
         epoch_number = 0
 
@@ -240,7 +277,9 @@ class Learning:
         if self.resume_from is not None:
             self.model.load_state_dict(
                 torch.load(
-                    self.resume_from, weights_only=True, map_location=self.device
+                    self.resume_from,
+                    weights_only=True,
+                    map_location=self.device,
                 )
             )
 
@@ -248,11 +287,15 @@ class Learning:
         epoch_number = self.start_epoch
 
         for _ in range(epoch_number, EPOCHS):
-            self.logger.info("EPOCH {}:".format(epoch_number + 1))
+            self.logger.info(
+                "EPOCH {}:".format(epoch_number + 1)
+            )
 
             # Make sure gradient tracking is on, and do a pass over the data
             self.model.train(True)
-            avg_loss = self.__train_one_epoch(epoch_number, writer)
+            avg_loss = self.__train_one_epoch(
+                epoch_number, writer
+            )
 
             # 学習ごとに各層のパラメータを記録
             for name, param in self.model.named_parameters():
@@ -264,15 +307,23 @@ class Learning:
                         epoch_number + 1,
                     )
                     if param.grad is not None:
-                        grad_np = param.grad.detach().cpu().numpy()
+                        grad_np = (
+                            param.grad.detach().cpu().numpy()
+                        )
                         writer.add_histogram(
-                            f"gradients/{name}", grad_np, epoch_number + 1
+                            f"gradients/{name}",
+                            grad_np,
+                            epoch_number + 1,
                         )
                 except Exception as e:
-                    self.logger.warning(f"Failed to log histogram for {name}: {e}")
+                    self.logger.warning(
+                        f"Failed to log histogram for {name}: {e}"
+                    )
 
             # Create validation callback
-            validation_callback = ValidationCallback(logger=self.logger)
+            validation_callback = ValidationCallback(
+                logger=self.logger
+            )
 
             # Create validation training loop
             validation_loop = TrainingLoop(
@@ -304,7 +355,11 @@ class Learning:
             # Reset callback for next epoch
             validation_callback.reset()
 
-            self.logger.info("LOSS train {} valid {}".format(avg_loss, avg_vloss))
+            self.logger.info(
+                "LOSS train {} valid {}".format(
+                    avg_loss, avg_vloss
+                )
+            )
             self.logger.info(
                 "ACCURACY policy {} value {}".format(
                     avg_accuracy_policy, avg_accuracy_value
@@ -312,7 +367,10 @@ class Learning:
             )
             writer.add_scalars(
                 "Accuracy",
-                {"Policy": avg_accuracy_policy, "Value": avg_accuracy_value},
+                {
+                    "Policy": avg_accuracy_policy,
+                    "Value": avg_accuracy_value,
+                },
                 epoch_number + 1,
             )
 
@@ -328,20 +386,30 @@ class Learning:
             # Track best performance, and save the model's state
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
-                model_path = self.model_dir / "model_{}_{}.pt".format(
-                    timestamp, epoch_number + 1
+                model_path = (
+                    self.model_dir
+                    / "model_{}_{}.pt".format(
+                        timestamp, epoch_number + 1
+                    )
                 )
-                self.logger.info("Saving model to {}".format(model_path))
+                self.logger.info(
+                    "Saving model to {}".format(model_path)
+                )
                 torch.save(self.model.state_dict(), model_path)
                 if self.__cloud_storage is not None:
-                    self.logger.info("Uploading model to cloud storage")
+                    self.logger.info(
+                        "Uploading model to cloud storage"
+                    )
                     self.__cloud_storage.upload_from_local(
-                        local_path=model_path, cloud_path=str(model_path)
+                        local_path=model_path,
+                        cloud_path=str(model_path),
                     )
 
             # SummaryWriterのイベントをGCSに保存する
             if self.__cloud_storage is not None:
-                self.logger.info("Uploading tensorboard logs to cloud storage")
+                self.logger.info(
+                    "Uploading tensorboard logs to cloud storage"
+                )
                 self.__cloud_storage.upload_folder_from_local(
                     local_folder=summary_writer_log_dir,
                     cloud_folder="tensorboard",
@@ -363,7 +431,9 @@ class Learning:
 
         try:
             # 現在の開始方法を取得
-            current_method = mp.get_start_method(allow_none=True)
+            current_method = mp.get_start_method(
+                allow_none=True
+            )
 
             # プラットフォーム別の推奨設定
             if platform.system() == "Windows":
@@ -404,5 +474,9 @@ class Learning:
 
         except Exception as e:
             # マルチプロセシング設定に失敗した場合は警告のみ
-            self.logger.warning(f"Failed to configure multiprocessing: {e}")
-            self.logger.info("Continuing with default multiprocessing settings")
+            self.logger.warning(
+                f"Failed to configure multiprocessing: {e}"
+            )
+            self.logger.info(
+                "Continuing with default multiprocessing settings"
+            )

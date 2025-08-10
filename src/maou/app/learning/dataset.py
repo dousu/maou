@@ -44,11 +44,21 @@ class KifDataset(Dataset, Sized):
 
     def __getitem__(
         self, idx: int
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> tuple[
+        torch.Tensor,
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    ]:
         if self.transform is not None:
             # transformを使用するパターン（GPU転送の最適化）
-            data = self.__datasource[idx]  # numpy structured array (0次元)
-            features, move_label, result_value, legal_move_mask = self.transform(
+            data = self.__datasource[
+                idx
+            ]  # numpy structured array (0次元)
+            (
+                features,
+                move_label,
+                result_value,
+                legal_move_mask,
+            ) = self.transform(
                 hcp=data["hcp"],
                 move16=data["bestMove16"].item(),
                 game_result=data["gameResult"].item(),
@@ -57,9 +67,15 @@ class KifDataset(Dataset, Sized):
 
             # torch.from_numpy()を使用してゼロコピー変換
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            features_tensor = torch.from_numpy(features).to(torch.float32)
-            legal_move_mask_tensor = torch.from_numpy(legal_move_mask).to(torch.float32)
-            move_label_tensor = torch.tensor(move_label, dtype=torch.long)
+            features_tensor = torch.from_numpy(features).to(
+                torch.float32
+            )
+            legal_move_mask_tensor = torch.from_numpy(
+                legal_move_mask
+            ).to(torch.float32)
+            move_label_tensor = torch.tensor(
+                move_label, dtype=torch.long
+            )
             result_value_tensor = torch.tensor(
                 result_value, dtype=torch.float32
             ).reshape((1))
@@ -76,17 +92,21 @@ class KifDataset(Dataset, Sized):
             )
         else:
             # 前処理済みのデータを使うパターン（structured arrayから直接アクセス）
-            data = self.__datasource[idx]  # numpy structured array (0次元)
+            data = self.__datasource[
+                idx
+            ]  # numpy structured array (0次元)
 
             # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            features_tensor = torch.from_numpy(data["features"].copy()).to(
-                torch.float32
+            features_tensor = torch.from_numpy(
+                data["features"].copy()
+            ).to(torch.float32)
+            legal_move_mask_tensor = torch.from_numpy(
+                data["legalMoveMask"].copy()
+            ).to(torch.float32)
+            move_label_tensor = torch.tensor(
+                data["moveLabel"].item(), dtype=torch.long
             )
-            legal_move_mask_tensor = torch.from_numpy(data["legalMoveMask"].copy()).to(
-                torch.float32
-            )
-            move_label_tensor = torch.tensor(data["moveLabel"].item(), dtype=torch.long)
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32
             ).reshape((1))

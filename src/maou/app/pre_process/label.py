@@ -115,7 +115,8 @@ MOVE_LABELS_NUM = MoveCategoryStartLabel.HI + 81
 _DROP_LABEL_OFFSETS = {
     HandPiece.FU: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
     HandPiece.KY: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
-    HandPiece.KE: lambda to_sq, to_x, to_y: to_sq - (to_x + 1) * 2,
+    HandPiece.KE: lambda to_sq, to_x, to_y: to_sq
+    - (to_x + 1) * 2,
     HandPiece.GI: lambda to_sq, to_x, to_y: to_sq,
     HandPiece.KI: lambda to_sq, to_x, to_y: to_sq,
     HandPiece.KA: lambda to_sq, to_x, to_y: to_sq,
@@ -153,7 +154,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 # Pre-computed lookup tables for performance optimization
 _COORDINATE_CACHE: Dict[int, Tuple[int, int]] = {}
-_MOVE_DIRECTION_CACHE: Dict[Tuple[int, int], Tuple[int, int]] = {}
+_MOVE_DIRECTION_CACHE: Dict[
+    Tuple[int, int], Tuple[int, int]
+] = {}
 
 # Initialize coordinate cache for all 81 squares
 for sq in range(81):
@@ -178,30 +181,48 @@ _DIRECTION_DOWN_RIGHT = (-1, 1)
 # Pre-computed label offset calculations for each direction
 _LABEL_OFFSETS = {
     _DIRECTION_UP: lambda to_sq, to_x, to_y: to_sq - to_x,
-    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
+    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq
+    - (to_x + 1),
     _DIRECTION_LEFT: lambda to_sq, to_x, to_y: to_sq - 9,
     _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: to_sq,
-    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq - to_x - 8,
+    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq
+    - to_x
+    - 8,
     _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: to_sq - to_x,
-    _DIRECTION_DOWN_LEFT: lambda to_sq, to_x, to_y: to_sq - to_x - 9,
-    _DIRECTION_DOWN_RIGHT: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
+    _DIRECTION_DOWN_LEFT: lambda to_sq, to_x, to_y: to_sq
+    - to_x
+    - 9,
+    _DIRECTION_DOWN_RIGHT: lambda to_sq, to_x, to_y: to_sq
+    - (to_x + 1),
     _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: to_sq
     - (to_x + 1) * 2
     - to_x * 2
     - 5,
-    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq - (to_x + 1) * 2 - to_x * 2,
+    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq
+    - (to_x + 1) * 2
+    - to_x * 2,
 }
 
 # Pre-computed promotion label offsets
 _PROMOTION_LABEL_OFFSETS = {
     _DIRECTION_UP: lambda to_sq, to_x, to_y: to_sq - to_x * 6,
-    _DIRECTION_LEFT: lambda to_sq, to_x, to_y: to_sq - to_x * 6 - 3,
-    _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: to_sq - to_x * 6,
-    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq - to_x * 6 - 3,
-    _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: to_sq - to_x * 6,
-    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
-    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: to_sq - to_x * 6 - 3,
-    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq - to_x * 6,
+    _DIRECTION_LEFT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6
+    - 3,
+    _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6,
+    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6
+    - 3,
+    _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6,
+    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq
+    - (to_x + 1),
+    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6
+    - 3,
+    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq
+    - to_x * 6,
 }
 
 
@@ -241,9 +262,13 @@ def _process_board_move(turn: int, move: int) -> int:
 
     # Handle each direction with optimized logic
     if direction == _DIRECTION_KEIMA_LEFT:
-        return _process_keima_left(to_sq, to_x, to_y, is_promotion)
+        return _process_keima_left(
+            to_sq, to_x, to_y, is_promotion
+        )
     elif direction == _DIRECTION_KEIMA_RIGHT:
-        return _process_keima_right(to_sq, to_x, to_y, is_promotion)
+        return _process_keima_right(
+            to_sq, to_x, to_y, is_promotion
+        )
     elif direction[0] == 0 and direction[1] < 0:  # UP
         return _process_up(to_sq, to_x, to_y, is_promotion)
     elif direction[0] == 0 and direction[1] > 0:  # DOWN
@@ -255,168 +280,267 @@ def _process_board_move(turn: int, move: int) -> int:
     elif direction[0] > 0 and direction[1] < 0:  # UP_LEFT
         return _process_up_left(to_sq, to_x, to_y, is_promotion)
     elif direction[0] < 0 and direction[1] < 0:  # UP_RIGHT
-        return _process_up_right(to_sq, to_x, to_y, is_promotion)
+        return _process_up_right(
+            to_sq, to_x, to_y, is_promotion
+        )
     elif direction[0] > 0 and direction[1] > 0:  # DOWN_LEFT
-        return _process_down_left(to_sq, to_x, to_y, is_promotion)
+        return _process_down_left(
+            to_sq, to_x, to_y, is_promotion
+        )
     elif direction[0] < 0 and direction[1] > 0:  # DOWN_RIGHT
-        return _process_down_right(to_sq, to_x, to_y, is_promotion)
+        return _process_down_right(
+            to_sq, to_x, to_y, is_promotion
+        )
     else:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
 
-def _process_keima_left(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_keima_left(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process KEIMA_LEFT moves."""
     if to_y > 6 or to_x == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
         if to_y < 2:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.KEIMA_LEFT + _LABEL_OFFSETS[
-            _DIRECTION_KEIMA_LEFT
-        ](to_sq, to_x, to_y)
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.KEIMA_LEFT
+            + _LABEL_OFFSETS[_DIRECTION_KEIMA_LEFT](
+                to_sq, to_x, to_y
+            )
+        )
     else:
         if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
-            _DIRECTION_KEIMA_LEFT
-        ](to_sq, to_x, to_y)
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_KEIMA_LEFT](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_keima_right(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_keima_right(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process KEIMA_RIGHT moves."""
     if to_y > 6 or to_x == 8:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
         if to_y < 2:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.KEIMA_RIGHT + _LABEL_OFFSETS[
-            _DIRECTION_KEIMA_RIGHT
-        ](to_sq, to_x, to_y)
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.KEIMA_RIGHT
+            + _LABEL_OFFSETS[_DIRECTION_KEIMA_RIGHT](
+                to_sq, to_x, to_y
+            )
+        )
     else:
         if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
-            _DIRECTION_KEIMA_RIGHT
-        ](to_sq, to_x, to_y)
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_KEIMA_RIGHT](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_up(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_up(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process UP moves."""
     if to_y == 8:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.UP + _LABEL_OFFSETS[_DIRECTION_UP](
-            to_sq, to_x, to_y
-        )
-    else:
-        if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.UP_PROMOTION + _PROMOTION_LABEL_OFFSETS[
+        return MoveCategoryStartLabel.UP + _LABEL_OFFSETS[
             _DIRECTION_UP
         ](to_sq, to_x, to_y)
+    else:
+        if to_y >= 3:
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.UP_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_UP](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_down(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_down(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process DOWN moves."""
     if to_y == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.DOWN + _LABEL_OFFSETS[_DIRECTION_DOWN](
-            to_sq, to_x, to_y
-        )
-    else:
-        return MoveCategoryStartLabel.DOWN_PROMOTION + _PROMOTION_LABEL_OFFSETS[
+        return MoveCategoryStartLabel.DOWN + _LABEL_OFFSETS[
             _DIRECTION_DOWN
         ](to_sq, to_x, to_y)
+    else:
+        return (
+            MoveCategoryStartLabel.DOWN_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_DOWN](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_left(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_left(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process LEFT moves."""
     if to_x == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.LEFT + _LABEL_OFFSETS[_DIRECTION_LEFT](
-            to_sq, to_x, to_y
-        )
-    else:
-        if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.LEFT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
+        return MoveCategoryStartLabel.LEFT + _LABEL_OFFSETS[
             _DIRECTION_LEFT
         ](to_sq, to_x, to_y)
+    else:
+        if to_y >= 3:
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.LEFT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_LEFT](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_right(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_right(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process RIGHT moves."""
     if to_x == 8:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.RIGHT + _LABEL_OFFSETS[_DIRECTION_RIGHT](
-            to_sq, to_x, to_y
-        )
-    else:
-        if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.RIGHT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
+        return MoveCategoryStartLabel.RIGHT + _LABEL_OFFSETS[
             _DIRECTION_RIGHT
         ](to_sq, to_x, to_y)
+    else:
+        if to_y >= 3:
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.RIGHT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_RIGHT](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_up_left(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_up_left(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process UP_LEFT moves."""
     if to_y == 8 or to_x == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.UP_LEFT + _LABEL_OFFSETS[_DIRECTION_UP_LEFT](
-            to_sq, to_x, to_y
-        )
-    else:
-        if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.UP_LEFT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
+        return MoveCategoryStartLabel.UP_LEFT + _LABEL_OFFSETS[
             _DIRECTION_UP_LEFT
         ](to_sq, to_x, to_y)
-
-
-def _process_up_right(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
-    """Process UP_RIGHT moves."""
-    if to_y == 8 or to_x == 8:
-        raise IllegalMove("Can not transform illegal move to move label.")
-
-    if not is_promotion:
-        return MoveCategoryStartLabel.UP_RIGHT + _LABEL_OFFSETS[_DIRECTION_UP_RIGHT](
-            to_sq, to_x, to_y
-        )
     else:
         if to_y >= 3:
-            raise IllegalMove("Can not transform illegal move to move label.")
-        return MoveCategoryStartLabel.UP_RIGHT_PROMOTION + _PROMOTION_LABEL_OFFSETS[
-            _DIRECTION_UP_RIGHT
-        ](to_sq, to_x, to_y)
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.UP_LEFT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_UP_LEFT](
+                to_sq, to_x, to_y
+            )
+        )
 
 
-def _process_down_left(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
-    """Process DOWN_LEFT moves."""
-    if to_y == 0 or to_x == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+def _process_up_right(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
+    """Process UP_RIGHT moves."""
+    if to_y == 8 or to_x == 8:
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.DOWN_LEFT + _LABEL_OFFSETS[_DIRECTION_DOWN_LEFT](
-            to_sq, to_x, to_y
+        return MoveCategoryStartLabel.UP_RIGHT + _LABEL_OFFSETS[
+            _DIRECTION_UP_RIGHT
+        ](to_sq, to_x, to_y)
+    else:
+        if to_y >= 3:
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
+        return (
+            MoveCategoryStartLabel.UP_RIGHT_PROMOTION
+            + _PROMOTION_LABEL_OFFSETS[_DIRECTION_UP_RIGHT](
+                to_sq, to_x, to_y
+            )
+        )
+
+
+def _process_down_left(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
+    """Process DOWN_LEFT moves."""
+    if to_y == 0 or to_x == 0:
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
+
+    if not is_promotion:
+        return (
+            MoveCategoryStartLabel.DOWN_LEFT
+            + _LABEL_OFFSETS[_DIRECTION_DOWN_LEFT](
+                to_sq, to_x, to_y
+            )
         )
     else:
         if 8 - to_y + to_x < 6:
-            raise IllegalMove("Can not transform illegal move to move label.")
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
 
         # Use pre-computed range sums for better performance
-        range_sum = _DOWN_LEFT_RANGE_SUMS.get(to_x, 21)  # Default to 21 for to_x >= 6
+        range_sum = _DOWN_LEFT_RANGE_SUMS.get(
+            to_x, 21
+        )  # Default to 21 for to_x >= 6
         return (
             MoveCategoryStartLabel.DOWN_LEFT_PROMOTION
             + to_sq
@@ -426,18 +550,27 @@ def _process_down_left(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> 
         )
 
 
-def _process_down_right(to_sq: int, to_x: int, to_y: int, is_promotion: bool) -> int:
+def _process_down_right(
+    to_sq: int, to_x: int, to_y: int, is_promotion: bool
+) -> int:
     """Process DOWN_RIGHT moves."""
     if to_y == 0 or to_x == 8:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     if not is_promotion:
-        return MoveCategoryStartLabel.DOWN_RIGHT + _LABEL_OFFSETS[
-            _DIRECTION_DOWN_RIGHT
-        ](to_sq, to_x, to_y)
+        return (
+            MoveCategoryStartLabel.DOWN_RIGHT
+            + _LABEL_OFFSETS[_DIRECTION_DOWN_RIGHT](
+                to_sq, to_x, to_y
+            )
+        )
     else:
         if 8 - to_y + 8 - to_x < 6:
-            raise IllegalMove("Can not transform illegal move to move label.")
+            raise IllegalMove(
+                "Can not transform illegal move to move label."
+            )
 
         # Use pre-computed range sums for better performance
         if to_x > 2:
@@ -449,7 +582,11 @@ def _process_down_right(to_sq: int, to_x: int, to_y: int, is_promotion: bool) ->
                 - range_sum
             )
         else:
-            return MoveCategoryStartLabel.DOWN_RIGHT_PROMOTION + to_sq - (to_x + 1)
+            return (
+                MoveCategoryStartLabel.DOWN_RIGHT_PROMOTION
+                + to_sq
+                - (to_x + 1)
+            )
 
 
 def _process_drop_move(turn: int, move: int) -> int:
@@ -466,12 +603,18 @@ def _process_drop_move(turn: int, move: int) -> int:
 
     # Validate drop constraints
     if hand_piece in (HandPiece.FU, HandPiece.KY) and to_y == 0:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
     elif hand_piece == HandPiece.KE and to_y < 2:
-        raise IllegalMove("Can not transform illegal move to move label.")
+        raise IllegalMove(
+            "Can not transform illegal move to move label."
+        )
 
     # Calculate label using lookup table
-    base_label = getattr(MoveCategoryStartLabel, hand_piece.name)
+    base_label = getattr(
+        MoveCategoryStartLabel, hand_piece.name
+    )
     offset = _DROP_LABEL_OFFSETS[hand_piece](to_sq, to_x, to_y)
     return base_label + offset
 
@@ -500,7 +643,9 @@ def make_result_value(turn: int, game_result: int) -> float:
             return 0.5
 
 
-def benchmark_make_move_label(num_iterations: int = 10000) -> None:
+def benchmark_make_move_label(
+    num_iterations: int = 10000,
+) -> None:
     """Benchmark the make_move_label function performance.
 
     This function can be used to measure performance improvements
@@ -523,7 +668,9 @@ def benchmark_make_move_label(num_iterations: int = 10000) -> None:
             move = (from_sq << 7) | to_sq
             test_moves.append((cshogi.BLACK, move))  # type: ignore
 
-    logger.info(f"Starting benchmark with {num_iterations} iterations...")
+    logger.info(
+        f"Starting benchmark with {num_iterations} iterations..."
+    )
     start_time = time.perf_counter()
 
     for i in range(num_iterations):
@@ -540,9 +687,13 @@ def benchmark_make_move_label(num_iterations: int = 10000) -> None:
     logger.info("Benchmark completed:")
     logger.info(f"  Total time: {elapsed_time:.4f} seconds")
     logger.info(f"  Iterations: {num_iterations}")
-    time_per_call = float(elapsed_time) / float(num_iterations) * 1000
+    time_per_call = (
+        float(elapsed_time) / float(num_iterations) * 1000
+    )
     logger.info(f"  Time per call: {time_per_call:.4f} ms")
-    logger.info(f"  Calls per second: {float(num_iterations) / elapsed_time:.0f}")
+    logger.info(
+        f"  Calls per second: {float(num_iterations) / elapsed_time:.0f}"
+    )
 
 
 if __name__ == "__main__":

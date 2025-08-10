@@ -5,7 +5,10 @@ from typing import Optional
 import torch
 
 from maou.app.learning.dl import LearningDataSource
-from maou.app.utility.dataloader_benchmark import BenchmarkConfig, DataLoaderBenchmark
+from maou.app.utility.dataloader_benchmark import (
+    BenchmarkConfig,
+    DataLoaderBenchmark,
+)
 from maou.app.utility.training_benchmark import (
     TrainingBenchmarkConfig,
     TrainingBenchmarkUseCase,
@@ -40,12 +43,16 @@ def benchmark_dataloader(
     """
     # Validate datasource type
     if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(f"Data source type `{datasource_type}` is invalid.")
+        raise ValueError(
+            f"Data source type `{datasource_type}` is invalid."
+        )
 
     # Set device
     if gpu is not None and gpu != "cpu":
         device = torch.device(gpu)
-        logger.info(f"Benchmarking on GPU: {torch.cuda.get_device_name(device)}")
+        logger.info(
+            f"Benchmarking on GPU: {torch.cuda.get_device_name(device)}"
+        )
         torch.set_float32_matmul_precision("high")
     else:
         device = torch.device("cpu")
@@ -55,7 +62,9 @@ def benchmark_dataloader(
     if batch_size is None:
         batch_size = 256
     elif batch_size <= 0:
-        raise ValueError(f"batch_size must be positive, got {batch_size}")
+        raise ValueError(
+            f"batch_size must be positive, got {batch_size}"
+        )
 
     # Set pin_memory (default: True for GPU, False for CPU)
     if pin_memory is None:
@@ -65,7 +74,9 @@ def benchmark_dataloader(
     if num_batches is None:
         num_batches = 100
     elif num_batches <= 0:
-        raise ValueError(f"num_batches must be positive, got {num_batches}")
+        raise ValueError(
+            f"num_batches must be positive, got {num_batches}"
+        )
 
     # Set sample ratio for cloud sources (default: None, means use full data)
     if sample_ratio is not None:
@@ -83,7 +94,9 @@ def benchmark_dataloader(
         logger.info(f"  Sample ratio: {sample_ratio:.1%}")
 
     # Get training datasource (ignore test split for benchmarking)
-    training_datasource, _ = datasource.train_test_split(test_ratio=0.1)
+    training_datasource, _ = datasource.train_test_split(
+        test_ratio=0.1
+    )
 
     # Create benchmark configuration
     config = BenchmarkConfig(
@@ -100,7 +113,9 @@ def benchmark_dataloader(
     results, optimal = benchmark.run_benchmark()
 
     # Format results
-    formatted_results = benchmark.format_results(results, optimal)
+    formatted_results = benchmark.format_results(
+        results, optimal
+    )
 
     # Create comprehensive output
     output = {
@@ -201,7 +216,10 @@ def benchmark_training(
     )
 
     # Validate sample_ratio
-    if sample_ratio is not None and not 0.01 <= sample_ratio <= 1.0:
+    if (
+        sample_ratio is not None
+        and not 0.01 <= sample_ratio <= 1.0
+    ):
         raise ValueError(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
         )

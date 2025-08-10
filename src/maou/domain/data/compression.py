@@ -26,8 +26,12 @@ class CompressionError(Exception):
 
 
 # Constants for packed array sizes
-FEATURES_PACKED_SIZE = (FEATURES_NUM * 9 * 9 + 7) // 8  # 1053 bytes
-LEGAL_MOVES_PACKED_SIZE = (MOVE_LABELS_NUM + 7) // 8  # 187 bytes
+FEATURES_PACKED_SIZE = (
+    FEATURES_NUM * 9 * 9 + 7
+) // 8  # 1053 bytes
+LEGAL_MOVES_PACKED_SIZE = (
+    MOVE_LABELS_NUM + 7
+) // 8  # 187 bytes
 
 # Original shapes for validation
 FEATURES_SHAPE = (FEATURES_NUM, 9, 9)
@@ -62,8 +66,12 @@ def pack_features_array(features: np.ndarray) -> np.ndarray:
             )
 
         # Validate that features only contain 0 or 1 values
-        if not np.all(np.logical_or(features == 0, features == 1)):
-            raise CompressionError("Features array contains values other than 0 or 1")
+        if not np.all(
+            np.logical_or(features == 0, features == 1)
+        ):
+            raise CompressionError(
+                "Features array contains values other than 0 or 1"
+            )
 
         # Flatten the array and pack bits
         flattened = features.flatten()
@@ -77,10 +85,14 @@ def pack_features_array(features: np.ndarray) -> np.ndarray:
         return packed
 
     except Exception as e:
-        raise CompressionError(f"Failed to pack features array: {e}") from e
+        raise CompressionError(
+            f"Failed to pack features array: {e}"
+        ) from e
 
 
-def unpack_features_array(packed_features: np.ndarray) -> np.ndarray:
+def unpack_features_array(
+    packed_features: np.ndarray,
+) -> np.ndarray:
     """Unpack features array from bit packed format.
 
     Decompresses packed bit array back to original features array format.
@@ -126,10 +138,14 @@ def unpack_features_array(packed_features: np.ndarray) -> np.ndarray:
         return features
 
     except Exception as e:
-        raise CompressionError(f"Failed to unpack features array: {e}") from e
+        raise CompressionError(
+            f"Failed to unpack features array: {e}"
+        ) from e
 
 
-def pack_legal_moves_mask(legal_moves: np.ndarray) -> np.ndarray:
+def pack_legal_moves_mask(
+    legal_moves: np.ndarray,
+) -> np.ndarray:
     """Pack legal moves mask using bit packing compression.
 
     Compresses legal moves mask from (MOVE_LABELS_NUM,) uint8 array containing
@@ -157,7 +173,9 @@ def pack_legal_moves_mask(legal_moves: np.ndarray) -> np.ndarray:
             )
 
         # Validate that legal moves only contain 0 or 1 values
-        if not np.all(np.logical_or(legal_moves == 0, legal_moves == 1)):
+        if not np.all(
+            np.logical_or(legal_moves == 0, legal_moves == 1)
+        ):
             raise CompressionError(
                 "Legal moves array contains values other than 0 or 1"
             )
@@ -173,10 +191,14 @@ def pack_legal_moves_mask(legal_moves: np.ndarray) -> np.ndarray:
         return packed
 
     except Exception as e:
-        raise CompressionError(f"Failed to pack legal moves mask: {e}") from e
+        raise CompressionError(
+            f"Failed to pack legal moves mask: {e}"
+        ) from e
 
 
-def unpack_legal_moves_mask(packed_legal_moves: np.ndarray) -> np.ndarray:
+def unpack_legal_moves_mask(
+    packed_legal_moves: np.ndarray,
+) -> np.ndarray:
     """Unpack legal moves mask from bit packed format.
 
     Decompresses packed bit array back to original legal moves mask format.
@@ -191,7 +213,9 @@ def unpack_legal_moves_mask(packed_legal_moves: np.ndarray) -> np.ndarray:
         CompressionError: If decompression fails or input is invalid
     """
     try:
-        if packed_legal_moves.shape != (LEGAL_MOVES_PACKED_SIZE,):
+        if packed_legal_moves.shape != (
+            LEGAL_MOVES_PACKED_SIZE,
+        ):
             raise CompressionError(
                 f"Invalid packed legal moves shape. Expected "
                 f"({LEGAL_MOVES_PACKED_SIZE},), got {packed_legal_moves.shape}"
@@ -218,10 +242,14 @@ def unpack_legal_moves_mask(packed_legal_moves: np.ndarray) -> np.ndarray:
         return unpacked
 
     except Exception as e:
-        raise CompressionError(f"Failed to unpack legal moves mask: {e}") from e
+        raise CompressionError(
+            f"Failed to unpack legal moves mask: {e}"
+        ) from e
 
 
-def pack_preprocessing_record(record: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def pack_preprocessing_record(
+    record: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
     """Pack features and legal moves from a preprocessing record.
 
     Extracts and compresses the features and legalMoveMask fields from a
@@ -248,7 +276,9 @@ def pack_preprocessing_record(record: np.ndarray) -> Tuple[np.ndarray, np.ndarra
         return packed_features, packed_legal_moves
 
     except Exception as e:
-        raise CompressionError(f"Failed to pack preprocessing record: {e}") from e
+        raise CompressionError(
+            f"Failed to pack preprocessing record: {e}"
+        ) from e
 
 
 def unpack_preprocessing_fields(
@@ -271,12 +301,16 @@ def unpack_preprocessing_fields(
     try:
         # Unpack both arrays
         features = unpack_features_array(packed_features)
-        legal_moves = unpack_legal_moves_mask(packed_legal_moves)
+        legal_moves = unpack_legal_moves_mask(
+            packed_legal_moves
+        )
 
         return features, legal_moves
 
     except Exception as e:
-        raise CompressionError(f"Failed to unpack preprocessing fields: {e}") from e
+        raise CompressionError(
+            f"Failed to unpack preprocessing fields: {e}"
+        ) from e
 
 
 def get_compression_stats() -> dict:
@@ -289,17 +323,23 @@ def get_compression_stats() -> dict:
         "features": {
             "original_size": FEATURES_NUM * 9 * 9,
             "packed_size": FEATURES_PACKED_SIZE,
-            "compression_ratio": (FEATURES_NUM * 9 * 9) / FEATURES_PACKED_SIZE,
+            "compression_ratio": (FEATURES_NUM * 9 * 9)
+            / FEATURES_PACKED_SIZE,
         },
         "legal_moves": {
             "original_size": MOVE_LABELS_NUM,
             "packed_size": LEGAL_MOVES_PACKED_SIZE,
-            "compression_ratio": MOVE_LABELS_NUM / LEGAL_MOVES_PACKED_SIZE,
+            "compression_ratio": MOVE_LABELS_NUM
+            / LEGAL_MOVES_PACKED_SIZE,
         },
         "total": {
-            "original_size": FEATURES_NUM * 9 * 9 + MOVE_LABELS_NUM,
-            "packed_size": FEATURES_PACKED_SIZE + LEGAL_MOVES_PACKED_SIZE,
-            "compression_ratio": (FEATURES_NUM * 9 * 9 + MOVE_LABELS_NUM)
+            "original_size": FEATURES_NUM * 9 * 9
+            + MOVE_LABELS_NUM,
+            "packed_size": FEATURES_PACKED_SIZE
+            + LEGAL_MOVES_PACKED_SIZE,
+            "compression_ratio": (
+                FEATURES_NUM * 9 * 9 + MOVE_LABELS_NUM
+            )
             / (FEATURES_PACKED_SIZE + LEGAL_MOVES_PACKED_SIZE),
         },
     }

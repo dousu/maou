@@ -77,38 +77,59 @@ class TestHCPESchema:
         array["eval"] = [100, -200, 0, 32767, -32767]
         array["gameResult"] = [1, -1, 0, 1, -1]
         array["moves"] = [50, 100, 150, 200, 250]
-        array["id"] = ["game1_0", "game1_1", "game1_2", "game1_3", "game1_4"]
+        array["id"] = [
+            "game1_0",
+            "game1_1",
+            "game1_2",
+            "game1_3",
+            "game1_4",
+        ]
 
         # Should not raise any exception
         assert validate_hcpe_array(array) is True
 
     def test_validate_hcpe_array_wrong_type(self) -> None:
         """Test validation with wrong input type."""
-        with pytest.raises(SchemaValidationError, match="Expected numpy ndarray"):
+        with pytest.raises(
+            SchemaValidationError,
+            match="Expected numpy ndarray",
+        ):
             validate_hcpe_array([1, 2, 3])
 
     def test_validate_hcpe_array_wrong_dtype(self) -> None:
         """Test validation with wrong dtype."""
         wrong_array = np.array([1, 2, 3], dtype=np.int32)
-        with pytest.raises(SchemaValidationError, match="Invalid dtype"):
+        with pytest.raises(
+            SchemaValidationError, match="Invalid dtype"
+        ):
             validate_hcpe_array(wrong_array)
 
-    def test_validate_hcpe_array_eval_out_of_range(self) -> None:
+    def test_validate_hcpe_array_eval_out_of_range(
+        self,
+    ) -> None:
         """Test validation with eval values out of range."""
         array = create_empty_hcpe_array(2)
-        array["eval"] = np.array([32768, -32768], dtype=np.int32).astype(
-            np.int16
-        )  # Out of int16 range
+        array["eval"] = np.array(
+            [32768, -32768], dtype=np.int32
+        ).astype(np.int16)  # Out of int16 range
 
-        with pytest.raises(SchemaValidationError, match="eval values out of range"):
+        with pytest.raises(
+            SchemaValidationError,
+            match="eval values out of range",
+        ):
             validate_hcpe_array(array)
 
-    def test_validate_hcpe_array_invalid_game_result(self) -> None:
+    def test_validate_hcpe_array_invalid_game_result(
+        self,
+    ) -> None:
         """Test validation with invalid gameResult values."""
         array = create_empty_hcpe_array(2)
         array["gameResult"] = [2, 3]  # Invalid values
 
-        with pytest.raises(SchemaValidationError, match="Invalid gameResult values"):
+        with pytest.raises(
+            SchemaValidationError,
+            match="Invalid gameResult values",
+        ):
             validate_hcpe_array(array)
 
     def test_validate_hcpe_array_negative_moves(self) -> None:
@@ -117,7 +138,8 @@ class TestHCPESchema:
         array["moves"] = [-1, 50]
 
         with pytest.raises(
-            SchemaValidationError, match="moves count cannot be negative"
+            SchemaValidationError,
+            match="moves count cannot be negative",
         ):
             validate_hcpe_array(array)
 
@@ -150,11 +172,17 @@ class TestPreprocessingSchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["eval"] == np.int16  # type: ignore[misc]
-            assert dtype["features"].shape == (FEATURES_NUM, 9, 9)  # type: ignore[misc]
+            assert dtype["features"].shape == (
+                FEATURES_NUM,
+                9,
+                9,
+            )  # type: ignore[misc]
         assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
-        assert dtype["legalMoveMask"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
+        assert dtype["legalMoveMask"].shape == (
+            MOVE_LABELS_NUM,
+        )  # type: ignore[misc]
         subdtype = dtype["legalMoveMask"].subdtype  # type: ignore[misc]
         assert subdtype[0] == np.uint8  # type: ignore[index]
 
@@ -197,48 +225,76 @@ class TestPreprocessingSchema:
         # Should not raise any exception
         assert validate_preprocessing_array(array) is True
 
-    def test_validate_preprocessing_array_wrong_type(self) -> None:
+    def test_validate_preprocessing_array_wrong_type(
+        self,
+    ) -> None:
         """Test validation with wrong input type."""
-        with pytest.raises(SchemaValidationError, match="Expected numpy ndarray"):
+        with pytest.raises(
+            SchemaValidationError,
+            match="Expected numpy ndarray",
+        ):
             validate_preprocessing_array("not an array")
 
-    def test_validate_preprocessing_array_wrong_dtype(self) -> None:
+    def test_validate_preprocessing_array_wrong_dtype(
+        self,
+    ) -> None:
         """Test validation with wrong dtype."""
         wrong_array = np.array([1, 2, 3], dtype=np.float32)
-        with pytest.raises(SchemaValidationError, match="Invalid dtype"):
+        with pytest.raises(
+            SchemaValidationError, match="Invalid dtype"
+        ):
             validate_preprocessing_array(wrong_array)
 
-    def test_validate_preprocessing_array_eval_out_of_range(self) -> None:
+    def test_validate_preprocessing_array_eval_out_of_range(
+        self,
+    ) -> None:
         """Test validation with eval values out of range."""
         array = create_empty_preprocessing_array(2)
-        array["eval"] = np.array([32768, -32768], dtype=np.int32).astype(
-            np.int16
-        )  # Out of int16 range
+        array["eval"] = np.array(
+            [32768, -32768], dtype=np.int32
+        ).astype(np.int16)  # Out of int16 range
 
-        with pytest.raises(SchemaValidationError, match="eval values out of range"):
+        with pytest.raises(
+            SchemaValidationError,
+            match="eval values out of range",
+        ):
             validate_preprocessing_array(array)
 
-    def test_validate_preprocessing_array_move_label_out_of_range(self) -> None:
+    def test_validate_preprocessing_array_move_label_out_of_range(
+        self,
+    ) -> None:
         """Test validation with moveLabel values out of range."""
         array = create_empty_preprocessing_array(2)
-        array["moveLabel"] = [MOVE_LABELS_NUM, MOVE_LABELS_NUM + 1]  # Out of range
+        array["moveLabel"] = [
+            MOVE_LABELS_NUM,
+            MOVE_LABELS_NUM + 1,
+        ]  # Out of range
 
         with pytest.raises(
-            SchemaValidationError, match="moveLabel values out of range"
+            SchemaValidationError,
+            match="moveLabel values out of range",
         ):
             validate_preprocessing_array(array)
 
-    def test_validate_preprocessing_array_result_value_out_of_range(self) -> None:
+    def test_validate_preprocessing_array_result_value_out_of_range(
+        self,
+    ) -> None:
         """Test validation with resultValue out of range."""
         array = create_empty_preprocessing_array(2)
-        array["resultValue"] = [-0.1, 1.1]  # Out of [0.0, 1.0] range
+        array["resultValue"] = [
+            -0.1,
+            1.1,
+        ]  # Out of [0.0, 1.0] range
 
         with pytest.raises(
-            SchemaValidationError, match="resultValue values out of range"
+            SchemaValidationError,
+            match="resultValue values out of range",
         ):
             validate_preprocessing_array(array)
 
-    def test_validate_preprocessing_array_wrong_features_shape(self) -> None:
+    def test_validate_preprocessing_array_wrong_features_shape(
+        self,
+    ) -> None:
         """Test validation with wrong features shape."""
         array = create_empty_preprocessing_array(1)
         # This test is tricky because numpy will enforce the dtype shape
@@ -294,10 +350,14 @@ class TestSchemaIntegration:
         features_shape = preprocessing_dtype["features"].shape
         assert features_shape == (FEATURES_NUM, 9, 9)
 
-        legal_move_mask_shape = preprocessing_dtype["legalMoveMask"].shape
+        legal_move_mask_shape = preprocessing_dtype[
+            "legalMoveMask"
+        ].shape
         assert legal_move_mask_shape == (MOVE_LABELS_NUM,)
 
-    def test_array_creation_and_validation_integration(self) -> None:
+    def test_array_creation_and_validation_integration(
+        self,
+    ) -> None:
         """Test that created arrays pass validation."""
         # Test HCPE
         hcpe_array = create_empty_hcpe_array(10)
@@ -312,11 +372,27 @@ class TestSchemaIntegration:
         # Create HCPE array with realistic game data
         hcpe_array = create_empty_hcpe_array(3)
         hcpe_array["eval"] = [150, -75, 0]
-        hcpe_array["gameResult"] = [1, -1, 0]  # BLACK_WIN, WHITE_WIN, DRAW
+        hcpe_array["gameResult"] = [
+            1,
+            -1,
+            0,
+        ]  # BLACK_WIN, WHITE_WIN, DRAW
         hcpe_array["moves"] = [120, 95, 200]
-        hcpe_array["ratings"] = [[1500, 1600], [1800, 1700], [2000, 1900]]
-        hcpe_array["id"] = ["game1_move1", "game2_move1", "game3_move1"]
-        hcpe_array["endgameStatus"] = ["checkmate", "resignation", "draw"]
+        hcpe_array["ratings"] = [
+            [1500, 1600],
+            [1800, 1700],
+            [2000, 1900],
+        ]
+        hcpe_array["id"] = [
+            "game1_move1",
+            "game2_move1",
+            "game3_move1",
+        ]
+        hcpe_array["endgameStatus"] = [
+            "checkmate",
+            "resignation",
+            "draw",
+        ]
 
         assert validate_hcpe_array(hcpe_array) is True
 

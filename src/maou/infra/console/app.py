@@ -2,7 +2,10 @@ import logging
 
 import click
 
-from maou.infra.app_logging import app_logger, get_log_level_from_env
+from maou.infra.app_logging import (
+    app_logger,
+    get_log_level_from_env,
+)
 from maou.infra.console.hcpe_convert import hcpe_convert
 from maou.infra.console.learn_model import learn_model
 from maou.infra.console.pre_process import pre_process
@@ -10,7 +13,12 @@ from maou.infra.console.utility import utility
 
 
 @click.group()
-@click.option("--debug-mode", "-d", is_flag=True, help="Enable debug logging.")
+@click.option(
+    "--debug-mode",
+    "-d",
+    is_flag=True,
+    help="Enable debug logging.",
+)
 def main(debug_mode: bool) -> None:
     if debug_mode:
         app_logger.setLevel(logging.DEBUG)

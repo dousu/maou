@@ -84,7 +84,9 @@ class CSAParser(parser.Parser):
         """
         try:
             datetime_str = self.kif.var_info["START_TIME"]
-            date_obj = datetime.strptime(datetime_str, "%Y/%m/%d %H:%M:%S")
+            date_obj = datetime.strptime(
+                datetime_str, "%Y/%m/%d %H:%M:%S"
+            )
             clustering_key = date_obj.date()
         except KeyError:
             clustering_key = None
@@ -98,7 +100,9 @@ class CSAParser(parser.Parser):
         """
         try:
             datetime_str = self.kif.var_info["START_TIME"]
-            date_obj = datetime.strptime(datetime_str, "%Y/%m/%d %H:%M:%S")
+            date_obj = datetime.strptime(
+                datetime_str, "%Y/%m/%d %H:%M:%S"
+            )
             partitioning_key = date_obj.date()
         except KeyError:
             partitioning_key = None

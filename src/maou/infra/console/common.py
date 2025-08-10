@@ -1,7 +1,12 @@
 from typing import Any, Callable
 
-from maou.infra.app_logging import app_logger, get_log_level_from_env
-from maou.infra.file_system.file_data_source import FileDataSource
+from maou.infra.app_logging import (
+    app_logger,
+    get_log_level_from_env,
+)
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
 from maou.infra.file_system.file_system import FileSystem
 
 __all__ = [
@@ -31,8 +36,12 @@ HAS_AWS = False
 
 # BigQuery関連のライブラリのインポートを試みる
 try:
-    from maou.infra.bigquery.bq_data_source import BigQueryDataSource
-    from maou.infra.bigquery.bq_feature_store import BigQueryFeatureStore
+    from maou.infra.bigquery.bq_data_source import (
+        BigQueryDataSource,
+    )
+    from maou.infra.bigquery.bq_feature_store import (
+        BigQueryFeatureStore,
+    )
 
     HAS_BIGQUERY = True
 except ImportError:
@@ -48,7 +57,9 @@ try:
 
     HAS_GCS = True
 except ImportError:
-    app_logger.debug("GCS dependencies not available. Some features will be disabled.")
+    app_logger.debug(
+        "GCS dependencies not available. Some features will be disabled."
+    )
 
 # AWS S3関連のライブラリのインポートを試みる
 try:
@@ -64,7 +75,9 @@ except ImportError:
 
 
 def validate_cloud_provider_exclusivity(
-    provider_flags: list[bool], provider_names: list[str], operation: str
+    provider_flags: list[bool],
+    provider_names: list[str],
+    operation: str,
 ) -> None:
     """Validate that only one cloud provider is selected for a given operation."""
     active_count = sum(provider_flags)
@@ -84,6 +97,8 @@ def handle_exception(func: Callable) -> Callable:
         try:
             return func(*args, **kwargs)
         except Exception:
-            app_logger.exception("Error occurred", stack_info=True)
+            app_logger.exception(
+                "Error occurred", stack_info=True
+            )
 
     return wrapper

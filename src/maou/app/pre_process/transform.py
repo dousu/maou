@@ -21,7 +21,12 @@ class Transform:
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __call__(
-        self, *, hcp: np.ndarray, move16: int, game_result: int, eval: int
+        self,
+        *,
+        hcp: np.ndarray,
+        move16: int,
+        game_result: int,
+        eval: int,
     ) -> tuple[np.ndarray, int, float, np.ndarray]:
         """Transform HCPE data into training features.
 
@@ -55,13 +60,18 @@ class Transform:
             move_label = make_move_label(board.turn, move16)
 
             # result value
-            result_value = make_result_value(board.turn, game_result)
+            result_value = make_result_value(
+                board.turn, game_result
+            )
 
             # 合法手のラベルを取得する
             legal_move_labels = [
-                make_move_label(board.turn, m) for m in board.legal_moves
+                make_move_label(board.turn, m)
+                for m in board.legal_moves
             ]
-            legal_move_mask = self.__create_mask(legal_move_labels, MOVE_LABELS_NUM)
+            legal_move_mask = self.__create_mask(
+                legal_move_labels, MOVE_LABELS_NUM
+            )
         except Exception:
             move = board.move_from_move16(move16)
             self.logger.error(
@@ -82,7 +92,9 @@ class Transform:
             legal_move_mask,
         )
 
-    def __create_mask(self, valid_labels: list[int], num_classes: int) -> np.ndarray:
+    def __create_mask(
+        self, valid_labels: list[int], num_classes: int
+    ) -> np.ndarray:
         """有効なラベルのリストから対応するマスクを作成する."""
         mask = np.zeros((num_classes), dtype=np.uint8)
         mask[valid_labels] = 1

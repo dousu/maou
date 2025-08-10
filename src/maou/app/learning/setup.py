@@ -45,7 +45,9 @@ def default_worker_init_fn(worker_id: int) -> None:
         except Exception as e:
             # CUDA初期化に失敗した場合はログに記録
             logger = logging.getLogger(__name__)
-            logger.warning(f"Worker {worker_id}: CUDA initialization failed: {e}")
+            logger.warning(
+                f"Worker {worker_id}: CUDA initialization failed: {e}"
+            )
 
 
 @dataclass
@@ -73,12 +75,16 @@ class DeviceSetup:
 
     @classmethod
     def setup_device(
-        cls, gpu: Optional[str] = None, pin_memory: Optional[bool] = None
+        cls,
+        gpu: Optional[str] = None,
+        pin_memory: Optional[bool] = None,
     ) -> DeviceConfig:
         """GPU/CPUデバイスの設定."""
         if gpu is not None and gpu != "cpu":
             device = torch.device(gpu)
-            cls.logger.info(f"Using GPU: {torch.cuda.get_device_name(device)}")
+            cls.logger.info(
+                f"Using GPU: {torch.cuda.get_device_name(device)}"
+            )
             torch.set_float32_matmul_precision("high")
         else:
             device = torch.device("cpu")
@@ -88,7 +94,9 @@ class DeviceSetup:
         if pin_memory is None:
             pin_memory = device.type == "cuda"
 
-        return DeviceConfig(device=device, pin_memory=pin_memory)
+        return DeviceConfig(
+            device=device, pin_memory=pin_memory
+        )
 
 
 class DatasetFactory:
@@ -107,7 +115,9 @@ class DatasetFactory:
 
         # Validate datasource type
         if datasource_type not in ("hcpe", "preprocess"):
-            raise ValueError(f"Data source type `{datasource_type}` is invalid.")
+            raise ValueError(
+                f"Data source type `{datasource_type}` is invalid."
+            )
 
         # Create transform based on datasource type
         if datasource_type == "hcpe":
@@ -116,9 +126,12 @@ class DatasetFactory:
             transform = None
 
         # Create base datasets
-        dataset_train = KifDataset(datasource=training_datasource, transform=transform)
+        dataset_train = KifDataset(
+            datasource=training_datasource, transform=transform
+        )
         dataset_validation = KifDataset(
-            datasource=validation_datasource, transform=transform
+            datasource=validation_datasource,
+            transform=transform,
         )
 
         return dataset_train, dataset_validation
@@ -142,7 +155,11 @@ class DataLoaderFactory:
         """学習・検証用DataLoaderの作成."""
 
         # Worker initialization function
-        worker_init_fn = default_worker_init_fn if dataloader_workers > 0 else None
+        worker_init_fn = (
+            default_worker_init_fn
+            if dataloader_workers > 0
+            else None
+        )
 
         # Training DataLoader
         training_loader = DataLoader(
@@ -152,7 +169,9 @@ class DataLoaderFactory:
             num_workers=dataloader_workers,
             pin_memory=pin_memory,
             persistent_workers=dataloader_workers > 0,
-            prefetch_factor=prefetch_factor if dataloader_workers > 0 else None,
+            prefetch_factor=prefetch_factor
+            if dataloader_workers > 0
+            else None,
             drop_last=True,
             timeout=120 if dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
@@ -166,14 +185,20 @@ class DataLoaderFactory:
             num_workers=dataloader_workers,
             pin_memory=pin_memory,
             persistent_workers=dataloader_workers > 0,
-            prefetch_factor=prefetch_factor if dataloader_workers > 0 else None,
+            prefetch_factor=prefetch_factor
+            if dataloader_workers > 0
+            else None,
             drop_last=False,  # validationでは全データを使用
             timeout=120 if dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
         )
 
-        cls.logger.info(f"Training: {len(training_loader)} batches")
-        cls.logger.info(f"Validation: {len(validation_loader)} batches")
+        cls.logger.info(
+            f"Training: {len(training_loader)} batches"
+        )
+        cls.logger.info(
+            f"Validation: {len(validation_loader)} batches"
+        )
 
         return training_loader, validation_loader
 
@@ -184,7 +209,9 @@ class ModelFactory:
     logger: logging.Logger = logging.getLogger(__name__)
 
     @classmethod
-    def create_shogi_model(cls, device: torch.device) -> Network:
+    def create_shogi_model(
+        cls, device: torch.device
+    ) -> Network:
         """将棋特化のBottleneckBlockモデルを作成."""
 
         # 将棋特化の「広く浅い」BottleneckBlock構成
@@ -195,13 +222,25 @@ class ModelFactory:
         model = Network(
             BottleneckBlock,  # 効率的なBottleneckアーキテクチャを使用
             FEATURES_NUM,  # 入力特徴量チャンネル数
-            [2, 2, 2, 1],  # 将棋特化: 広く浅い構成でパターン認識を重視
-            [1, 2, 2, 2],  # 各層のstride（2で特徴マップサイズ半減）
+            [
+                2,
+                2,
+                2,
+                1,
+            ],  # 将棋特化: 広く浅い構成でパターン認識を重視
+            [
+                1,
+                2,
+                2,
+                2,
+            ],  # 各層のstride（2で特徴マップサイズ半減）
             bottleneck_width,  # 幅重視: 多様な戦術要素を並列学習
         )
 
         model.to(device)
-        cls.logger.info("Created Shogi-optimized BottleneckBlock model")
+        cls.logger.info(
+            "Created Shogi-optimized BottleneckBlock model"
+        )
 
         return model
 
@@ -265,31 +304,41 @@ class TrainingSetup:
         cls.logger.info("Setting up training components")
 
         # 1. Device setup
-        device_config = DeviceSetup.setup_device(gpu, pin_memory)
+        device_config = DeviceSetup.setup_device(
+            gpu, pin_memory
+        )
 
         # 2. Dataset creation
-        dataset_train, dataset_validation = DatasetFactory.create_datasets(
-            training_datasource,
-            validation_datasource,
-            datasource_type,
+        dataset_train, dataset_validation = (
+            DatasetFactory.create_datasets(
+                training_datasource,
+                validation_datasource,
+                datasource_type,
+            )
         )
 
         # 3. DataLoader creation
-        training_loader, validation_loader = DataLoaderFactory.create_dataloaders(
-            dataset_train,
-            dataset_validation,
-            batch_size,
-            dataloader_workers,
-            device_config.pin_memory,
-            prefetch_factor,
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_dataloaders(
+                dataset_train,
+                dataset_validation,
+                batch_size,
+                dataloader_workers,
+                device_config.pin_memory,
+                prefetch_factor,
+            )
         )
 
         # 4. Model creation
-        model = ModelFactory.create_shogi_model(device_config.device)
+        model = ModelFactory.create_shogi_model(
+            device_config.device
+        )
 
         # 5. Loss functions and optimizer
-        loss_fn_policy, loss_fn_value = LossOptimizerFactory.create_loss_functions(
-            gce_parameter
+        loss_fn_policy, loss_fn_value = (
+            LossOptimizerFactory.create_loss_functions(
+                gce_parameter
+            )
         )
         optimizer = LossOptimizerFactory.create_optimizer(
             model, learning_ratio, momentum
@@ -304,4 +353,8 @@ class TrainingSetup:
 
         cls.logger.info("Training components setup completed")
 
-        return device_config, (training_loader, validation_loader), model_components
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )

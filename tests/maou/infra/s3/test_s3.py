@@ -14,7 +14,9 @@ logger: logging.Logger = logging.getLogger("TEST")
 skip_test = os.getenv("TEST_AWS", "").lower() != "true"
 
 if skip_test:
-    logger.debug(f"Skip s3.py TEST_AWS: {os.getenv('TEST_AWS', '')}")
+    logger.debug(
+        f"Skip s3.py TEST_AWS: {os.getenv('TEST_AWS', '')}"
+    )
 
 
 @pytest.mark.skipif(
@@ -27,7 +29,9 @@ class TestS3:
         ファイルの内容をもとに32文字のハッシュ値が返ってくる
         """
         if not filepath.is_file():
-            raise ValueError(f"Input file `{filepath}` is not file.")
+            raise ValueError(
+                f"Input file `{filepath}` is not file."
+            )
 
         hash_md5 = hashlib.md5()
 
@@ -45,9 +49,13 @@ class TestS3:
                 content = file.read()
                 return content
         except FileNotFoundError:
-            print(f"Error: The file '{file_path}' does not exist.")
+            print(
+                f"Error: The file '{file_path}' does not exist."
+            )
         except UnicodeDecodeError:
-            print(f"Error: The file '{file_path}' could not be decoded as UTF-8.")
+            print(
+                f"Error: The file '{file_path}' could not be decoded as UTF-8."
+            )
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
         return ""
@@ -55,47 +63,76 @@ class TestS3:
     @pytest.fixture
     def default_fixture(self) -> None:
         path = Path("src/maou/infra/s3/s3.py")
-        self.bucket_name = "maou-test-" + self.__calculate_file_md5(path)[:8]
+        self.bucket_name = (
+            "maou-test-" + self.__calculate_file_md5(path)[:8]
+        )
         logger.debug(f"Test Bucket: {self.bucket_name}")
-        self.test_class = S3(bucket_name=self.bucket_name, base_path="s3")
+        self.test_class = S3(
+            bucket_name=self.bucket_name, base_path="s3"
+        )
         self.s3_client = boto3.client("s3")
 
     def test_save_object(self, default_fixture: None) -> None:
-        file_path = Path("tests/maou/infra/gcs/resources/test.txt")
+        file_path = Path(
+            "tests/maou/infra/gcs/resources/test.txt"
+        )
         cloud_path = file_path.name
-        self.test_class.upload_from_local(local_path=file_path, cloud_path=cloud_path)
+        self.test_class.upload_from_local(
+            local_path=file_path, cloud_path=cloud_path
+        )
 
         # base_pathを含めたパスでオブジェクトを確認
         s3_path = f"s3/{cloud_path}"
 
         # オブジェクトが存在するか確認
         try:
-            self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_path)
+            self.s3_client.head_object(
+                Bucket=self.bucket_name, Key=s3_path
+            )
         except ClientError:
             assert False, (
                 f"Object {s3_path} does not exist in bucket {self.bucket_name}"
             )
 
         # オブジェクトの内容を取得して比較
-        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_path)
-        blob_content_str = response["Body"].read().decode("utf-8")
-        logger.debug(f"contents of object {s3_path}: {blob_content_str}")
-        assert self.__read_file_as_string(file_path) == blob_content_str
+        response = self.s3_client.get_object(
+            Bucket=self.bucket_name, Key=s3_path
+        )
+        blob_content_str = (
+            response["Body"].read().decode("utf-8")
+        )
+        logger.debug(
+            f"contents of object {s3_path}: {blob_content_str}"
+        )
+        assert (
+            self.__read_file_as_string(file_path)
+            == blob_content_str
+        )
 
         # clean up
-        response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix="s3/")
+        response = self.s3_client.list_objects_v2(
+            Bucket=self.bucket_name, Prefix="s3/"
+        )
         if "Contents" in response:
-            objects = [{"Key": obj["Key"]} for obj in response["Contents"]]
+            objects = [
+                {"Key": obj["Key"]}
+                for obj in response["Contents"]
+            ]
             if objects:
                 self.s3_client.delete_objects(
-                    Bucket=self.bucket_name, Delete={"Objects": objects}
+                    Bucket=self.bucket_name,
+                    Delete={"Objects": objects},
                 )
                 for obj in objects:
-                    logger.debug(f"Deleting object: {obj['Key']}")
+                    logger.debug(
+                        f"Deleting object: {obj['Key']}"
+                    )
 
     def test_upload_folder(self, default_fixture: None) -> None:
         """フォルダアップロードの基本機能をテストする."""
-        folder_path = Path("tests/maou/infra/gcs/resources/test_folder")
+        folder_path = Path(
+            "tests/maou/infra/gcs/resources/test_folder"
+        )
         cloud_folder = "test_upload_folder"
 
         # フォルダをアップロード
@@ -130,27 +167,43 @@ class TestS3:
         test_file_path = folder_path / "file1.txt"
         test_key = f"s3/{cloud_folder}/file1.txt"
 
-        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=test_key)
-        blob_content_str = response["Body"].read().decode("utf-8")
-        assert self.__read_file_as_string(test_file_path) == blob_content_str
+        response = self.s3_client.get_object(
+            Bucket=self.bucket_name, Key=test_key
+        )
+        blob_content_str = (
+            response["Body"].read().decode("utf-8")
+        )
+        assert (
+            self.__read_file_as_string(test_file_path)
+            == blob_content_str
+        )
 
         # clean up
         if objects:
-            delete_objects = [{"Key": obj["Key"]} for obj in objects]
+            delete_objects = [
+                {"Key": obj["Key"]} for obj in objects
+            ]
             self.s3_client.delete_objects(
-                Bucket=self.bucket_name, Delete={"Objects": delete_objects}
+                Bucket=self.bucket_name,
+                Delete={"Objects": delete_objects},
             )
             for obj in objects:
                 logger.debug(f"Deleting object: {obj['Key']}")
 
-    def test_upload_folder_with_extensions(self, default_fixture: None) -> None:
+    def test_upload_folder_with_extensions(
+        self, default_fixture: None
+    ) -> None:
         """拡張子フィルタリング機能をテストする."""
-        folder_path = Path("tests/maou/infra/gcs/resources/test_folder")
+        folder_path = Path(
+            "tests/maou/infra/gcs/resources/test_folder"
+        )
         cloud_folder = "test_upload_folder_extensions"
 
         # .txtファイルのみをアップロード
         self.test_class.upload_folder_from_local(
-            local_folder=folder_path, cloud_folder=cloud_folder, extensions=[".txt"]
+            local_folder=folder_path,
+            cloud_folder=cloud_folder,
+            extensions=[".txt"],
         )
 
         # アップロードされたファイルを確認
@@ -184,24 +237,35 @@ class TestS3:
 
         # clean up
         if objects:
-            delete_objects = [{"Key": obj["Key"]} for obj in objects]
+            delete_objects = [
+                {"Key": obj["Key"]} for obj in objects
+            ]
             self.s3_client.delete_objects(
-                Bucket=self.bucket_name, Delete={"Objects": delete_objects}
+                Bucket=self.bucket_name,
+                Delete={"Objects": delete_objects},
             )
             for obj in objects:
                 logger.debug(f"Deleting object: {obj['Key']}")
 
-    def test_upload_folder_errors(self, default_fixture: None) -> None:
+    def test_upload_folder_errors(
+        self, default_fixture: None
+    ) -> None:
         """エラーケースをテストする."""
         # 存在しないフォルダを指定した場合
         with pytest.raises(ValueError, match="does not exist"):
             self.test_class.upload_folder_from_local(
-                local_folder=Path("non_existent_folder"), cloud_folder="error_test"
+                local_folder=Path("non_existent_folder"),
+                cloud_folder="error_test",
             )
 
         # ファイルをフォルダとして指定した場合
-        file_path = Path("tests/maou/infra/gcs/resources/test.txt")
-        with pytest.raises(ValueError, match="is not a directory"):
+        file_path = Path(
+            "tests/maou/infra/gcs/resources/test.txt"
+        )
+        with pytest.raises(
+            ValueError, match="is not a directory"
+        ):
             self.test_class.upload_folder_from_local(
-                local_folder=file_path, cloud_folder="error_test"
+                local_folder=file_path,
+                cloud_folder="error_test",
             )

@@ -20,7 +20,9 @@ from typing import Optional
 class CustomLogFormatter(logging.Formatter):
     # 時刻はJSTを使用する
     def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
+        self,
+        record: logging.LogRecord,
+        datefmt: Optional[str] = None,
     ) -> str:
         tz_jst = timezone(timedelta(hours=+9), "JST")
         ct = datetime.fromtimestamp(record.created, tz=tz_jst)

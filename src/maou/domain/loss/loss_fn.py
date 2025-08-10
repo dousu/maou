@@ -8,7 +8,9 @@ class GCELoss(torch.nn.Module):
         super(GCELoss, self).__init__()
         self.q = q
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(
             targets, num_classes=probs.size(1)
@@ -36,13 +38,18 @@ class MaskedGCELoss(torch.nn.Module):
     """
 
     # qはGCEのパラメータ (0 < q <= 1)
-    def __init__(self, q: float = 0.7, alpha: float = 0.5) -> None:
+    def __init__(
+        self, q: float = 0.7, alpha: float = 0.5
+    ) -> None:
         super(MaskedGCELoss, self).__init__()
         self.q = q
         self.alpha = alpha
 
     def forward(
-        self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
         # 数値的安定性のためにlogitsをクリップ
         logits = torch.clamp(logits, -100, 100)
@@ -55,5 +62,9 @@ class MaskedGCELoss(torch.nn.Module):
             targets, num_classes=probs.size(1)
         ).float()
         loss = (1 - probs**self.q) / max(self.q, 1e-5)
-        masked_loss = loss * targets_one_hot * (1 + self.alpha * (1 - mask))
+        masked_loss = (
+            loss
+            * targets_one_hot
+            * (1 + self.alpha * (1 - mask))
+        )
         return masked_loss.sum(dim=1).mean()

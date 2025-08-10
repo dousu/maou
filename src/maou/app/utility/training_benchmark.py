@@ -89,7 +89,9 @@ class SingleEpochBenchmark:
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
-            self.scaler: Optional[GradScaler] = GradScaler("cuda")
+            self.scaler: Optional[GradScaler] = GradScaler(
+                "cuda"
+            )
         else:
             self.scaler = None
 
@@ -116,7 +118,9 @@ class SingleEpochBenchmark:
         self.logger.info("Starting single epoch benchmark")
 
         # Create timing callback
-        timing_callback = TimingCallback(warmup_batches=warmup_batches)
+        timing_callback = TimingCallback(
+            warmup_batches=warmup_batches
+        )
 
         # Create training loop
         training_loop = TrainingLoop(
@@ -144,9 +148,17 @@ class SingleEpochBenchmark:
         # Get timing statistics
         timing_stats = timing_callback.get_timing_statistics()
         # Use measured batches + warmup for total count
-        actual_batches = timing_callback.measured_batches + warmup_batches
-        performance_metrics = timing_callback.get_performance_metrics(actual_batches)
-        loss_metrics = timing_callback.get_loss_metrics(actual_batches)
+        actual_batches = (
+            timing_callback.measured_batches + warmup_batches
+        )
+        performance_metrics = (
+            timing_callback.get_performance_metrics(
+                actual_batches
+            )
+        )
+        loss_metrics = timing_callback.get_loss_metrics(
+            actual_batches
+        )
 
         # Log summary
         self.logger.info(
@@ -161,19 +173,35 @@ class SingleEpochBenchmark:
         )
 
         return BenchmarkResult(
-            total_epoch_time=performance_metrics["total_epoch_time"],
-            average_batch_time=timing_stats["average_batch_time"],
+            total_epoch_time=performance_metrics[
+                "total_epoch_time"
+            ],
+            average_batch_time=timing_stats[
+                "average_batch_time"
+            ],
             total_batches=performance_metrics["total_batches"],
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
-            loss_computation_time=timing_stats["loss_computation_time"],
-            backward_pass_time=timing_stats["backward_pass_time"],
-            optimizer_step_time=timing_stats["optimizer_step_time"],
-            final_loss=loss_metrics["total_loss"],  # Use total as final for now
+            loss_computation_time=timing_stats[
+                "loss_computation_time"
+            ],
+            backward_pass_time=timing_stats[
+                "backward_pass_time"
+            ],
+            optimizer_step_time=timing_stats[
+                "optimizer_step_time"
+            ],
+            final_loss=loss_metrics[
+                "total_loss"
+            ],  # Use total as final for now
             average_loss=loss_metrics["average_loss"],
-            samples_per_second=performance_metrics["samples_per_second"],
-            batches_per_second=performance_metrics["batches_per_second"],
+            samples_per_second=performance_metrics[
+                "samples_per_second"
+            ],
+            batches_per_second=performance_metrics[
+                "batches_per_second"
+            ],
         )
 
     def benchmark_validation(
@@ -224,8 +252,14 @@ class SingleEpochBenchmark:
         timing_stats = timing_callback.get_timing_statistics()
         # For validation, use all processed batches (no warmup)
         actual_batches = timing_callback.measured_batches
-        performance_metrics = timing_callback.get_performance_metrics(actual_batches)
-        loss_metrics = timing_callback.get_loss_metrics(actual_batches)
+        performance_metrics = (
+            timing_callback.get_performance_metrics(
+                actual_batches
+            )
+        )
+        loss_metrics = timing_callback.get_loss_metrics(
+            actual_batches
+        )
 
         # Log summary
         self.logger.info(
@@ -240,19 +274,31 @@ class SingleEpochBenchmark:
         )
 
         return BenchmarkResult(
-            total_epoch_time=performance_metrics["total_epoch_time"],
-            average_batch_time=timing_stats["average_batch_time"],
+            total_epoch_time=performance_metrics[
+                "total_epoch_time"
+            ],
+            average_batch_time=timing_stats[
+                "average_batch_time"
+            ],
             total_batches=performance_metrics["total_batches"],
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
-            loss_computation_time=timing_stats["loss_computation_time"],
+            loss_computation_time=timing_stats[
+                "loss_computation_time"
+            ],
             backward_pass_time=0.0,  # バリデーションでは逆伝播なし
             optimizer_step_time=0.0,  # バリデーションではオプティマイザステップなし
-            final_loss=loss_metrics["total_loss"],  # Use total as final for now
+            final_loss=loss_metrics[
+                "total_loss"
+            ],  # Use total as final for now
             average_loss=loss_metrics["average_loss"],
-            samples_per_second=performance_metrics["samples_per_second"],
-            batches_per_second=performance_metrics["batches_per_second"],
+            samples_per_second=performance_metrics[
+                "samples_per_second"
+            ],
+            batches_per_second=performance_metrics[
+                "batches_per_second"
+            ],
         )
 
 
@@ -293,8 +339,10 @@ class TrainingBenchmarkUseCase:
         self.logger.info("Starting training benchmark use case")
 
         # Split data into training and validation sets
-        training_datasource, validation_datasource = config.datasource.train_test_split(
-            test_ratio=config.test_ratio
+        training_datasource, validation_datasource = (
+            config.datasource.train_test_split(
+                test_ratio=config.test_ratio
+            )
         )
 
         # Setup all training components using shared setup module
@@ -350,34 +398,71 @@ class TrainingBenchmarkUseCase:
         estimation_results = {}
         if config.sample_ratio is not None:
             estimated_full_epoch_time = (
-                training_result.total_epoch_time / config.sample_ratio
+                training_result.total_epoch_time
+                / config.sample_ratio
             )
             estimated_total_batches = int(
-                float(training_result.total_batches) / config.sample_ratio
+                float(training_result.total_batches)
+                / config.sample_ratio
             )
             estimation_results = {
                 "sample_ratio": config.sample_ratio,
                 "estimated_full_epoch_time_seconds": estimated_full_epoch_time,
-                "estimated_full_epoch_time_minutes": estimated_full_epoch_time / 60.0,
-                "estimated_total_batches": float(estimated_total_batches),
-                "actual_batches_processed": float(training_result.total_batches),
+                "estimated_full_epoch_time_minutes": estimated_full_epoch_time
+                / 60.0,
+                "estimated_total_batches": float(
+                    estimated_total_batches
+                ),
+                "actual_batches_processed": float(
+                    training_result.total_batches
+                ),
             }
-            self.logger.info(f"Sample ratio: {config.sample_ratio:.1%}")
+            self.logger.info(
+                f"Sample ratio: {config.sample_ratio:.1%}"
+            )
             self.logger.info(
                 f"Estimated full epoch time: "
                 f"{estimated_full_epoch_time / 60:.1f} minutes"
             )
-            self.logger.info(f"Estimated total batches: {estimated_total_batches:,}")
+            self.logger.info(
+                f"Estimated total batches: {estimated_total_batches:,}"
+            )
 
         # Format results for display
-        def format_timing_summary(result: BenchmarkResult, label: str) -> str:
+        def format_timing_summary(
+            result: BenchmarkResult, label: str
+        ) -> str:
             # Pre-calculate percentages to avoid long lines
-            data_pct = result.data_loading_time / result.average_batch_time * 100
-            gpu_pct = result.gpu_transfer_time / result.average_batch_time * 100
-            forward_pct = result.forward_pass_time / result.average_batch_time * 100
-            loss_pct = result.loss_computation_time / result.average_batch_time * 100
-            backward_pct = result.backward_pass_time / result.average_batch_time * 100
-            opt_pct = result.optimizer_step_time / result.average_batch_time * 100
+            data_pct = (
+                result.data_loading_time
+                / result.average_batch_time
+                * 100
+            )
+            gpu_pct = (
+                result.gpu_transfer_time
+                / result.average_batch_time
+                * 100
+            )
+            forward_pct = (
+                result.forward_pass_time
+                / result.average_batch_time
+                * 100
+            )
+            loss_pct = (
+                result.loss_computation_time
+                / result.average_batch_time
+                * 100
+            )
+            backward_pct = (
+                result.backward_pass_time
+                / result.average_batch_time
+                * 100
+            )
+            opt_pct = (
+                result.optimizer_step_time
+                / result.average_batch_time
+                * 100
+            )
             return f"""{label} Performance Summary:
   Total Time: {result.total_epoch_time:.2f}s
   Average Batch Time: {result.average_batch_time:.4f}s
@@ -396,7 +481,9 @@ class TrainingBenchmarkUseCase:
   - Final Loss: {result.final_loss:.6f}
   - Average Loss: {result.average_loss:.6f}"""
 
-        training_summary = format_timing_summary(training_result, "Training")
+        training_summary = format_timing_summary(
+            training_result, "Training"
+        )
 
         # Create recommendations based on timing analysis
         recommendations = []
@@ -413,7 +500,8 @@ class TrainingBenchmarkUseCase:
 
         # Data loading analysis
         data_loading_percentage = (
-            training_result.data_loading_time / training_result.average_batch_time
+            training_result.data_loading_time
+            / training_result.average_batch_time
         ) * 100
         if data_loading_percentage > 20:
             recommendations.append(
@@ -424,7 +512,8 @@ class TrainingBenchmarkUseCase:
         # GPU transfer analysis
         if device.type == "cuda":
             gpu_transfer_percentage = (
-                training_result.gpu_transfer_time / training_result.average_batch_time
+                training_result.gpu_transfer_time
+                / training_result.average_batch_time
             ) * 100
             if gpu_transfer_percentage > 10:
                 recommendations.append(
@@ -433,14 +522,18 @@ class TrainingBenchmarkUseCase:
                 )
 
         # Throughput analysis
-        if training_result.samples_per_second < 1000 and device.type == "cuda":
+        if (
+            training_result.samples_per_second < 1000
+            and device.type == "cuda"
+        ):
             recommendations.append(
                 "Low throughput detected - consider optimizing batch size, "
                 "DataLoader workers, or model compilation"
             )
 
-        recommendations_text = "Performance Recommendations:\n" + "\n".join(
-            f"- {rec}" for rec in recommendations
+        recommendations_text = (
+            "Performance Recommendations:\n"
+            + "\n".join(f"- {rec}" for rec in recommendations)
         )
 
         # Create output
@@ -466,11 +559,15 @@ class TrainingBenchmarkUseCase:
 
         # Add validation results if available
         if validation_result is not None:
-            validation_summary = format_timing_summary(validation_result, "Validation")
+            validation_summary = format_timing_summary(
+                validation_result, "Validation"
+            )
             # Dynamic dict key assignment for validation summary
             output["benchmark_results"]["ValidationSummary"] = (  # type: ignore
                 validation_summary
             )
-            output["validation_metrics"] = validation_result.to_dict()
+            output["validation_metrics"] = (
+                validation_result.to_dict()
+            )
 
         return json.dumps(output, indent=2)

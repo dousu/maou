@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from maou.app.pre_process.hcpe_transform import DataSource, FeatureStore, PreProcess
+from maou.app.pre_process.hcpe_transform import (
+    DataSource,
+    FeatureStore,
+    PreProcess,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -19,7 +23,9 @@ class FileSystem(metaclass=abc.ABCMeta):
 
     @staticmethod
     @abc.abstractmethod
-    def collect_files(p: Path, ext: Optional[str] = None) -> list[Path]:
+    def collect_files(
+        p: Path, ext: Optional[str] = None
+    ) -> list[Path]:
         pass
 
 
@@ -35,7 +41,9 @@ def output_dir_init(output_dir: Path) -> None:
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
     elif not output_dir.is_dir():
-        raise ValueError(f"Output Dir `{output_dir}` is not directory.")
+        raise ValueError(
+            f"Output Dir `{output_dir}` is not directory."
+        )
 
 
 def transform(
@@ -63,7 +71,9 @@ def transform(
     if max_workers is None:
         max_workers = min(4, os.cpu_count() or 1)
     elif max_workers < 0:
-        raise ValueError(f"max_workers must be non-negative, got {max_workers}")
+        raise ValueError(
+            f"max_workers must be non-negative, got {max_workers}"
+        )
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,

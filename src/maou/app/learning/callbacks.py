@@ -34,43 +34,63 @@ class TrainingCallback(Protocol):
         """Called at the start of each batch."""
         ...
 
-    def on_data_transfer_start(self, context: TrainingContext) -> None:
+    def on_data_transfer_start(
+        self, context: TrainingContext
+    ) -> None:
         """Called before GPU data transfer."""
         ...
 
-    def on_data_transfer_end(self, context: TrainingContext) -> None:
+    def on_data_transfer_end(
+        self, context: TrainingContext
+    ) -> None:
         """Called after GPU data transfer."""
         ...
 
-    def on_forward_pass_start(self, context: TrainingContext) -> None:
+    def on_forward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
         """Called before forward pass."""
         ...
 
-    def on_forward_pass_end(self, context: TrainingContext) -> None:
+    def on_forward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
         """Called after forward pass."""
         ...
 
-    def on_loss_computation_start(self, context: TrainingContext) -> None:
+    def on_loss_computation_start(
+        self, context: TrainingContext
+    ) -> None:
         """Called before loss computation."""
         ...
 
-    def on_loss_computation_end(self, context: TrainingContext) -> None:
+    def on_loss_computation_end(
+        self, context: TrainingContext
+    ) -> None:
         """Called after loss computation."""
         ...
 
-    def on_backward_pass_start(self, context: TrainingContext) -> None:
+    def on_backward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
         """Called before backward pass."""
         ...
 
-    def on_backward_pass_end(self, context: TrainingContext) -> None:
+    def on_backward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
         """Called after backward pass."""
         ...
 
-    def on_optimizer_step_start(self, context: TrainingContext) -> None:
+    def on_optimizer_step_start(
+        self, context: TrainingContext
+    ) -> None:
         """Called before optimizer step."""
         ...
 
-    def on_optimizer_step_end(self, context: TrainingContext) -> None:
+    def on_optimizer_step_end(
+        self, context: TrainingContext
+    ) -> None:
         """Called after optimizer step."""
         ...
 
@@ -92,34 +112,54 @@ class BaseCallback:
     def on_batch_start(self, context: TrainingContext) -> None:
         pass
 
-    def on_data_transfer_start(self, context: TrainingContext) -> None:
+    def on_data_transfer_start(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_data_transfer_end(self, context: TrainingContext) -> None:
+    def on_data_transfer_end(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_forward_pass_start(self, context: TrainingContext) -> None:
+    def on_forward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_forward_pass_end(self, context: TrainingContext) -> None:
+    def on_forward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_loss_computation_start(self, context: TrainingContext) -> None:
+    def on_loss_computation_start(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_loss_computation_end(self, context: TrainingContext) -> None:
+    def on_loss_computation_end(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_backward_pass_start(self, context: TrainingContext) -> None:
+    def on_backward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_backward_pass_end(self, context: TrainingContext) -> None:
+    def on_backward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_optimizer_step_start(self, context: TrainingContext) -> None:
+    def on_optimizer_step_start(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
-    def on_optimizer_step_end(self, context: TrainingContext) -> None:
+    def on_optimizer_step_end(
+        self, context: TrainingContext
+    ) -> None:
         pass
 
     def on_batch_end(self, context: TrainingContext) -> None:
@@ -147,13 +187,24 @@ class LoggingCallback(BaseCallback):
     def on_batch_end(self, context: TrainingContext) -> None:
         if context.loss is not None:
             self.running_loss += context.loss.item()
-            if context.batch_idx % self.record_num == self.record_num - 1:
-                last_loss = float(self.running_loss) / float(self.record_num)
-                self.logger.info(f"  batch {context.batch_idx + 1} loss: {last_loss}")
-                tb_x = (
-                    context.epoch_idx * self.dataloader_length + context.batch_idx + 1
+            if (
+                context.batch_idx % self.record_num
+                == self.record_num - 1
+            ):
+                last_loss = float(self.running_loss) / float(
+                    self.record_num
                 )
-                self.writer.add_scalar("Loss/train", last_loss, tb_x)
+                self.logger.info(
+                    f"  batch {context.batch_idx + 1} loss: {last_loss}"
+                )
+                tb_x = (
+                    context.epoch_idx * self.dataloader_length
+                    + context.batch_idx
+                    + 1
+                )
+                self.writer.add_scalar(
+                    "Loss/train", last_loss, tb_x
+                )
                 self.running_loss = 0.0
 
 
@@ -184,12 +235,18 @@ class ValidationCallback(BaseCallback):
 
     def get_average_loss(self) -> float:
         """Get average validation loss."""
-        return float(self.running_vloss) / float(max(1, self.batch_count))
+        return float(self.running_vloss) / float(
+            max(1, self.batch_count)
+        )
 
     def get_average_accuracies(self) -> tuple[float, float]:
         """Get average policy and value accuracies."""
-        avg_policy = float(self.test_accuracy_policy) / float(max(1, self.batch_count))
-        avg_value = float(self.test_accuracy_value) / float(max(1, self.batch_count))
+        avg_policy = float(self.test_accuracy_policy) / float(
+            max(1, self.batch_count)
+        )
+        avg_value = float(self.test_accuracy_value) / float(
+            max(1, self.batch_count)
+        )
         return avg_policy, avg_value
 
     def reset(self) -> None:
@@ -199,11 +256,15 @@ class ValidationCallback(BaseCallback):
         self.test_accuracy_value = 0.0
         self.batch_count = 0
 
-    def _policy_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
+    def _policy_accuracy(
+        self, y: torch.Tensor, t: torch.Tensor
+    ) -> float:
         """Calculate policy accuracy."""
         return (torch.max(y, 1)[1] == t).sum().item() / len(t)
 
-    def _value_accuracy(self, y: torch.Tensor, t: torch.Tensor) -> float:
+    def _value_accuracy(
+        self, y: torch.Tensor, t: torch.Tensor
+    ) -> float:
         """Calculate value accuracy."""
         pred = y >= 0
         truth = t >= 0.5
@@ -248,7 +309,10 @@ class TimingCallback(BaseCallback):
 
         # データローディング時間の測定
         if self.previous_batch_end_time is not None:
-            data_load_time = self.batch_start_time - self.previous_batch_end_time
+            data_load_time = (
+                self.batch_start_time
+                - self.previous_batch_end_time
+            )
         else:
             data_load_time = 0.0
 
@@ -257,50 +321,87 @@ class TimingCallback(BaseCallback):
         if context.batch_size is not None:
             self.total_samples += context.batch_size
 
-    def on_data_transfer_start(self, context: TrainingContext) -> None:
-        self._temp_timings["gpu_transfer_start"] = time.perf_counter()
+    def on_data_transfer_start(
+        self, context: TrainingContext
+    ) -> None:
+        self._temp_timings["gpu_transfer_start"] = (
+            time.perf_counter()
+        )
 
-    def on_data_transfer_end(self, context: TrainingContext) -> None:
+    def on_data_transfer_end(
+        self, context: TrainingContext
+    ) -> None:
         self._temp_timings["gpu_transfer"] = (
-            time.perf_counter() - self._temp_timings["gpu_transfer_start"]
+            time.perf_counter()
+            - self._temp_timings["gpu_transfer_start"]
         )
 
-    def on_forward_pass_start(self, context: TrainingContext) -> None:
-        self._temp_timings["forward_start"] = time.perf_counter()
+    def on_forward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
+        self._temp_timings["forward_start"] = (
+            time.perf_counter()
+        )
 
-    def on_forward_pass_end(self, context: TrainingContext) -> None:
+    def on_forward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
         self._temp_timings["forward_pass"] = (
-            time.perf_counter() - self._temp_timings["forward_start"]
+            time.perf_counter()
+            - self._temp_timings["forward_start"]
         )
 
-    def on_loss_computation_start(self, context: TrainingContext) -> None:
+    def on_loss_computation_start(
+        self, context: TrainingContext
+    ) -> None:
         self._temp_timings["loss_start"] = time.perf_counter()
 
-    def on_loss_computation_end(self, context: TrainingContext) -> None:
+    def on_loss_computation_end(
+        self, context: TrainingContext
+    ) -> None:
         self._temp_timings["loss_computation"] = (
-            time.perf_counter() - self._temp_timings["loss_start"]
+            time.perf_counter()
+            - self._temp_timings["loss_start"]
         )
         # 順伝播時間から損失計算時間を除外
-        self._temp_timings["forward_pass"] -= self._temp_timings["loss_computation"]
-
-    def on_backward_pass_start(self, context: TrainingContext) -> None:
-        self._temp_timings["backward_start"] = time.perf_counter()
-
-    def on_backward_pass_end(self, context: TrainingContext) -> None:
-        self._temp_timings["backward_pass"] = (
-            time.perf_counter() - self._temp_timings["backward_start"]
+        self._temp_timings["forward_pass"] -= (
+            self._temp_timings["loss_computation"]
         )
 
-    def on_optimizer_step_start(self, context: TrainingContext) -> None:
-        self._temp_timings["optimizer_start"] = time.perf_counter()
+    def on_backward_pass_start(
+        self, context: TrainingContext
+    ) -> None:
+        self._temp_timings["backward_start"] = (
+            time.perf_counter()
+        )
 
-    def on_optimizer_step_end(self, context: TrainingContext) -> None:
+    def on_backward_pass_end(
+        self, context: TrainingContext
+    ) -> None:
+        self._temp_timings["backward_pass"] = (
+            time.perf_counter()
+            - self._temp_timings["backward_start"]
+        )
+
+    def on_optimizer_step_start(
+        self, context: TrainingContext
+    ) -> None:
+        self._temp_timings["optimizer_start"] = (
+            time.perf_counter()
+        )
+
+    def on_optimizer_step_end(
+        self, context: TrainingContext
+    ) -> None:
         self._temp_timings["optimizer_step"] = (
-            time.perf_counter() - self._temp_timings["optimizer_start"]
+            time.perf_counter()
+            - self._temp_timings["optimizer_start"]
         )
 
     def on_batch_end(self, context: TrainingContext) -> None:
-        batch_total_time = time.perf_counter() - self.batch_start_time
+        batch_total_time = (
+            time.perf_counter() - self.batch_start_time
+        )
         batch_end_time = time.perf_counter()
 
         if context.loss is not None:
@@ -310,9 +411,15 @@ class TimingCallback(BaseCallback):
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:
-            self.timing_stats["data_loading"].append(self._temp_timings["data_loading"])
-            self.timing_stats["gpu_transfer"].append(self._temp_timings["gpu_transfer"])
-            self.timing_stats["forward_pass"].append(self._temp_timings["forward_pass"])
+            self.timing_stats["data_loading"].append(
+                self._temp_timings["data_loading"]
+            )
+            self.timing_stats["gpu_transfer"].append(
+                self._temp_timings["gpu_transfer"]
+            )
+            self.timing_stats["forward_pass"].append(
+                self._temp_timings["forward_pass"]
+            )
             self.timing_stats["loss_computation"].append(
                 self._temp_timings["loss_computation"]
             )
@@ -322,7 +429,9 @@ class TimingCallback(BaseCallback):
             self.timing_stats["optimizer_step"].append(
                 self._temp_timings["optimizer_step"]
             )
-            self.timing_stats["total_batch"].append(batch_total_time)
+            self.timing_stats["total_batch"].append(
+                batch_total_time
+            )
             self.measured_batches += 1
 
         self.previous_batch_end_time = batch_end_time
@@ -330,32 +439,60 @@ class TimingCallback(BaseCallback):
     def get_timing_statistics(self) -> Dict[str, float]:
         """Get averaged timing statistics."""
         if not self.timing_stats["total_batch"]:
-            raise RuntimeError("No batches were processed for timing measurement")
+            raise RuntimeError(
+                "No batches were processed for timing measurement"
+            )
 
         def average(values: List[float]) -> float:
-            return float(sum(values)) / float(len(values)) if len(values) > 0 else 0.0
+            return (
+                float(sum(values)) / float(len(values))
+                if len(values) > 0
+                else 0.0
+            )
 
         return {
-            "data_loading_time": average(self.timing_stats["data_loading"]),
-            "gpu_transfer_time": average(self.timing_stats["gpu_transfer"]),
-            "forward_pass_time": average(self.timing_stats["forward_pass"]),
-            "loss_computation_time": average(self.timing_stats["loss_computation"]),
-            "backward_pass_time": average(self.timing_stats["backward_pass"]),
-            "optimizer_step_time": average(self.timing_stats["optimizer_step"]),
-            "average_batch_time": average(self.timing_stats["total_batch"]),
+            "data_loading_time": average(
+                self.timing_stats["data_loading"]
+            ),
+            "gpu_transfer_time": average(
+                self.timing_stats["gpu_transfer"]
+            ),
+            "forward_pass_time": average(
+                self.timing_stats["forward_pass"]
+            ),
+            "loss_computation_time": average(
+                self.timing_stats["loss_computation"]
+            ),
+            "backward_pass_time": average(
+                self.timing_stats["backward_pass"]
+            ),
+            "optimizer_step_time": average(
+                self.timing_stats["optimizer_step"]
+            ),
+            "average_batch_time": average(
+                self.timing_stats["total_batch"]
+            ),
         }
 
-    def get_performance_metrics(self, total_batches: int) -> Dict[str, float]:
+    def get_performance_metrics(
+        self, total_batches: int
+    ) -> Dict[str, float]:
         """Get performance metrics."""
-        epoch_total_time = time.perf_counter() - self.epoch_start_time
+        epoch_total_time = (
+            time.perf_counter() - self.epoch_start_time
+        )
         return {
             "total_epoch_time": epoch_total_time,
             "total_batches": float(total_batches),
-            "samples_per_second": float(self.total_samples) / epoch_total_time,
-            "batches_per_second": float(total_batches) / epoch_total_time,
+            "samples_per_second": float(self.total_samples)
+            / epoch_total_time,
+            "batches_per_second": float(total_batches)
+            / epoch_total_time,
         }
 
-    def get_loss_metrics(self, total_batches: int) -> Dict[str, float]:
+    def get_loss_metrics(
+        self, total_batches: int
+    ) -> Dict[str, float]:
         """Get loss metrics."""
         return {
             "total_loss": self.total_loss,

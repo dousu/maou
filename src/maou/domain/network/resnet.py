@@ -95,17 +95,26 @@ class BottleneckBlock(nn.Module):
         width = out_channels // self.expansion
 
         # 1x1 conv: チャンネル数を減らす
-        self.conv1 = nn.Conv2d(in_channels, width, kernel_size=1, bias=False)
+        self.conv1 = nn.Conv2d(
+            in_channels, width, kernel_size=1, bias=False
+        )
         self.bn1 = nn.BatchNorm2d(width)
 
         # 3x3 conv: 特徴抽出
         self.conv2 = nn.Conv2d(
-            width, width, kernel_size=3, stride=stride, padding=1, bias=False
+            width,
+            width,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False,
         )
         self.bn2 = nn.BatchNorm2d(width)
 
         # 1x1 conv: チャンネル数を拡張
-        self.conv3 = nn.Conv2d(width, out_channels, kernel_size=1, bias=False)
+        self.conv3 = nn.Conv2d(
+            width, out_channels, kernel_size=1, bias=False
+        )
         self.bn3 = nn.BatchNorm2d(out_channels)
 
         self.relu = nn.ReLU(inplace=True)
@@ -161,16 +170,28 @@ class ResNet(nn.Module):
         # 各層を構築
         # stride=2で空間サイズ縮小
         self.layer1 = self._make_layer(
-            block, list_out_channels[0], layers[0], stride=strides[0]
+            block,
+            list_out_channels[0],
+            layers[0],
+            stride=strides[0],
         )
         self.layer2 = self._make_layer(
-            block, list_out_channels[1], layers[1], stride=strides[1]
+            block,
+            list_out_channels[1],
+            layers[1],
+            stride=strides[1],
         )
         self.layer3 = self._make_layer(
-            block, list_out_channels[2], layers[2], stride=strides[2]
+            block,
+            list_out_channels[2],
+            layers[2],
+            stride=strides[2],
         )
         self.layer4 = self._make_layer(
-            block, list_out_channels[3], layers[3], stride=strides[3]
+            block,
+            list_out_channels[3],
+            layers[3],
+            stride=strides[3],
         )
 
     def _make_layer(
@@ -186,7 +207,10 @@ class ResNet(nn.Module):
         expansion = getattr(block, "expansion", 1)
         final_out_channels = out_channels * expansion
 
-        if stride != 1 or self.block_in_channels != final_out_channels:
+        if (
+            stride != 1
+            or self.block_in_channels != final_out_channels
+        ):
             # スキップ接続のためのダウンサンプルを作成
             downsample = nn.Sequential(
                 nn.Conv2d(
@@ -212,7 +236,10 @@ class ResNet(nn.Module):
         self.block_in_channels = final_out_channels
         for _ in range(1, blocks):
             layers.append(
-                block(in_channels=final_out_channels, out_channels=final_out_channels)
+                block(
+                    in_channels=final_out_channels,
+                    out_channels=final_out_channels,
+                )
             )
 
         return nn.Sequential(*layers)

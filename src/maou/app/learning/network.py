@@ -56,12 +56,16 @@ class Network(nn.Module):
         final_channels = list_out_channels[3] * expansion
 
         # policy head
-        self.policy_head = PolicyHead(final_channels, MOVE_LABELS_NUM)
+        self.policy_head = PolicyHead(
+            final_channels, MOVE_LABELS_NUM
+        )
 
         # value head
         self.value_head = ValueHead(final_channels)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """forward.
         Policyの評価とValueの評価を返すのでtupleで2つ返している．
         """
@@ -96,7 +100,9 @@ class PolicyHead(nn.Module):
     def __init__(self, in_channels: int, num_classes: int):
         super(PolicyHead, self).__init__()
         # 128にしているのは勘
-        self.conv = nn.Conv2d(in_channels, 128, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(
+            in_channels, 128, kernel_size=3, stride=1, padding=1
+        )
         self.relu = nn.ReLU()
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()
@@ -125,7 +131,9 @@ class ValueHead(nn.Module):
     def __init__(self, in_channels: int):
         super(ValueHead, self).__init__()
         # 128にしているのは勘
-        self.conv = nn.Conv2d(in_channels, 128, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(
+            in_channels, 128, kernel_size=3, stride=1, padding=1
+        )
         self.relu = nn.ReLU()
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()

@@ -43,13 +43,22 @@ class BenchmarkConfig:
             max_workers = min(16, cpu_count)
             # Create list of worker counts up to the CPU limit
             worker_counts = [0, 2, 4, 8]
-            if max_workers not in worker_counts and max_workers > 8:
+            if (
+                max_workers not in worker_counts
+                and max_workers > 8
+            ):
                 worker_counts.append(max_workers)
             # Filter out counts that exceed CPU cores
-            worker_counts = [w for w in worker_counts if w <= max_workers]
-            object.__setattr__(self, "num_workers_to_test", worker_counts)
+            worker_counts = [
+                w for w in worker_counts if w <= max_workers
+            ]
+            object.__setattr__(
+                self, "num_workers_to_test", worker_counts
+            )
         if self.prefetch_factors_to_test is None:
-            object.__setattr__(self, "prefetch_factors_to_test", [1, 2, 4, 8])
+            object.__setattr__(
+                self, "prefetch_factors_to_test", [1, 2, 4, 8]
+            )
 
 
 class DataLoaderBenchmark:
@@ -96,7 +105,9 @@ class DataLoaderBenchmark:
             import numpy as np
 
             # Use worker_id to avoid unused variable warning
-            worker_seed = (torch.initial_seed() + worker_id) % 2**32
+            worker_seed = (
+                torch.initial_seed() + worker_id
+            ) % 2**32
             np.random.seed(worker_seed)
             random.seed(worker_seed)
             torch.manual_seed(worker_seed)
@@ -109,10 +120,14 @@ class DataLoaderBenchmark:
             num_workers=num_workers,
             pin_memory=self.config.pin_memory,
             persistent_workers=num_workers > 0,
-            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            prefetch_factor=prefetch_factor
+            if num_workers > 0
+            else None,
             drop_last=True,
             timeout=120 if num_workers > 0 else 0,
-            worker_init_fn=worker_init_fn if num_workers > 0 else None,
+            worker_init_fn=worker_init_fn
+            if num_workers > 0
+            else None,
         )
 
         # Warmup phase to initialize workers and CUDA contexts
@@ -122,7 +137,9 @@ class DataLoaderBenchmark:
                 break
             inputs, _ = batch
             if self.config.device.type == "cuda":
-                inputs = inputs.to(self.config.device, non_blocking=True)
+                inputs = inputs.to(
+                    self.config.device, non_blocking=True
+                )
                 torch.cuda.synchronize()  # Ensure CUDA operations complete
 
         # Benchmark phase
@@ -133,13 +150,22 @@ class DataLoaderBenchmark:
             if i >= self.config.num_batches:
                 break
 
-            inputs, (labels_policy, labels_value, legal_move_mask) = batch
+            (
+                inputs,
+                (labels_policy, labels_value, legal_move_mask),
+            ) = batch
 
             # Simulate GPU transfer if using CUDA
             if self.config.device.type == "cuda":
-                inputs = inputs.to(self.config.device, non_blocking=True)
-                labels_policy = labels_policy.to(self.config.device, non_blocking=True)
-                labels_value = labels_value.to(self.config.device, non_blocking=True)
+                inputs = inputs.to(
+                    self.config.device, non_blocking=True
+                )
+                labels_policy = labels_policy.to(
+                    self.config.device, non_blocking=True
+                )
+                labels_value = labels_value.to(
+                    self.config.device, non_blocking=True
+                )
                 legal_move_mask = legal_move_mask.to(
                     self.config.device, non_blocking=True
                 )
@@ -151,7 +177,9 @@ class DataLoaderBenchmark:
         end_time = time.time()
         time_taken = end_time - start_time
         avg_batch_time = (
-            time_taken / float(batches_processed) if batches_processed > 0 else 0.0
+            time_taken / float(batches_processed)
+            if batches_processed > 0
+            else 0.0
         )
 
         # Clean up dataloader workers
@@ -166,7 +194,9 @@ class DataLoaderBenchmark:
             avg_batch_time=avg_batch_time,
         )
 
-    def run_benchmark(self) -> Tuple[List[BenchmarkResult], BenchmarkResult]:
+    def run_benchmark(
+        self,
+    ) -> Tuple[List[BenchmarkResult], BenchmarkResult]:
         """Run comprehensive DataLoader benchmark.
 
         Returns:
@@ -175,10 +205,20 @@ class DataLoaderBenchmark:
         self.logger.info("Starting DataLoader benchmark")
 
         # Ensure we have valid test configurations
-        num_workers_list = self.config.num_workers_to_test or [0, 2, 4, 8, 16]
-        prefetch_factors_list = self.config.prefetch_factors_to_test or [1, 2, 4, 8]
+        num_workers_list = self.config.num_workers_to_test or [
+            0,
+            2,
+            4,
+            8,
+            16,
+        ]
+        prefetch_factors_list = (
+            self.config.prefetch_factors_to_test or [1, 2, 4, 8]
+        )
 
-        self.logger.info(f"Testing {len(num_workers_list)} worker configurations")
+        self.logger.info(
+            f"Testing {len(num_workers_list)} worker configurations"
+        )
         self.logger.info(
             f"Processing {self.config.num_batches} batches per configuration"
         )
@@ -190,19 +230,23 @@ class DataLoaderBenchmark:
             if num_workers == 0:
                 # No prefetch_factor for single-threaded loading
                 result = self.benchmark_configuration(
-                    num_workers=num_workers, prefetch_factor=None
+                    num_workers=num_workers,
+                    prefetch_factor=None,
                 )
                 results.append(result)
             else:
                 # Test different prefetch_factors for multi-threaded loading
                 for prefetch_factor in prefetch_factors_list:
                     result = self.benchmark_configuration(
-                        num_workers=num_workers, prefetch_factor=prefetch_factor
+                        num_workers=num_workers,
+                        prefetch_factor=prefetch_factor,
                     )
                     results.append(result)
 
         # Find optimal configuration (lowest average batch time)
-        optimal_result = min(results, key=lambda r: r.avg_batch_time)
+        optimal_result = min(
+            results, key=lambda r: r.avg_batch_time
+        )
 
         self.logger.info(
             f"Benchmark complete. Optimal configuration: "
@@ -214,7 +258,9 @@ class DataLoaderBenchmark:
         return results, optimal_result
 
     def format_results(
-        self, results: List[BenchmarkResult], optimal: BenchmarkResult
+        self,
+        results: List[BenchmarkResult],
+        optimal: BenchmarkResult,
     ) -> Dict[str, str]:
         """Format benchmark results for display.
 
@@ -225,7 +271,9 @@ class DataLoaderBenchmark:
 
         # Summary table
         summary_lines = ["DataLoader Benchmark Results:"]
-        for result in sorted(results, key=lambda r: r.avg_batch_time):
+        for result in sorted(
+            results, key=lambda r: r.avg_batch_time
+        ):
             marker = " ← Optimal" if result == optimal else ""
             summary_lines.append(
                 f"num_workers={result.num_workers}, "
@@ -237,12 +285,18 @@ class DataLoaderBenchmark:
         output["Summary"] = "\n".join(summary_lines)
 
         # Recommendations
-        rec_lines = ["Recommended configuration for maou learn-model:"]
-        rec_lines.append(f"--dataloader-workers {optimal.num_workers}")
+        rec_lines = [
+            "Recommended configuration for maou learn-model:"
+        ]
+        rec_lines.append(
+            f"--dataloader-workers {optimal.num_workers}"
+        )
         if optimal.pin_memory:
             rec_lines.append("--pin-memory")
         if optimal.prefetch_factor is not None:
-            rec_lines.append(f"--prefetch-factor {optimal.prefetch_factor}")
+            rec_lines.append(
+                f"--prefetch-factor {optimal.prefetch_factor}"
+            )
 
         output["Recommendations"] = "\n".join(rec_lines)
 
