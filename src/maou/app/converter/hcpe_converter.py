@@ -123,17 +123,16 @@ class HCPEConverter:
 
         try:
             parser: Parser
-            match input_format:
-                case "csa":
-                    parser = CSAParser()
-                    parser.parse(file.read_text())
-                case "kif":
-                    parser = KifParser()
-                    parser.parse(file.read_text())
-                case format_str:
-                    raise NotApplicableFormat(
-                        f"undefined format {format_str}"
-                    )
+            if input_format == "csa":
+                parser = CSAParser()
+                parser.parse(file.read_text())
+            elif input_format == "kif":
+                parser = KifParser()
+                parser.parse(file.read_text())
+            else:
+                raise NotApplicableFormat(
+                    f"undefined format {input_format}"
+                )
 
             logger.debug(
                 f"棋譜:{file} "
