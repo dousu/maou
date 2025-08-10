@@ -286,6 +286,13 @@ class ObjectStorageDataSource(
                         f"Downloading sample data ({self.sample_ratio:.1%}) "
                         f"to local cache: {self.local_cache_dir}"
                     )
+                    bundler = Bundler(
+                        bundle_id=1,
+                        enable_bundling=enable_bundling,
+                        bundle_size_gb=bundle_size_gb,
+                        array_type=self.array_type,
+                        local_data_path=self.__get_local_data_path(),
+                    )
                     all_objects = type(self).list_objects(
                         bucket_name=self.bucket_name,
                         data_path=self.__get_data_path_prefix(),
