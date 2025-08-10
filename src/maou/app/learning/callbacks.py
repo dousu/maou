@@ -346,9 +346,14 @@ class TimingCallback(BaseCallback):
     def on_forward_pass_end(
         self, context: TrainingContext
     ) -> None:
-        self._temp_timings["forward_pass"] = (
+        total_forward_time = (
             time.perf_counter()
             - self._temp_timings["forward_start"]
+        )
+        # 純粋なモデル順伝播時間 = 全体時間 - 損失計算時間
+        self._temp_timings["forward_pass"] = (
+            total_forward_time
+            - self._temp_timings.get("loss_computation", 0.0)
         )
 
     def on_loss_computation_start(
@@ -362,10 +367,6 @@ class TimingCallback(BaseCallback):
         self._temp_timings["loss_computation"] = (
             time.perf_counter()
             - self._temp_timings["loss_start"]
-        )
-        # 順伝播時間から損失計算時間を除外
-        self._temp_timings["forward_pass"] -= (
-            self._temp_timings["loss_computation"]
         )
 
     def on_backward_pass_start(
