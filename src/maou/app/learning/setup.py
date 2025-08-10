@@ -34,21 +34,6 @@ def default_worker_init_fn(worker_id: int) -> None:
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
-    # CUDAが利用可能な場合のみ初期化を試みる
-    if torch.cuda.is_available():
-        try:
-            # 現在のCUDAデバイスを確認し初期化
-            current_device = torch.cuda.current_device()
-            torch.cuda.set_device(current_device)
-            # CUDAコンテキストの初期化を確認
-            _ = torch.cuda.current_device()
-        except Exception as e:
-            # CUDA初期化に失敗した場合はログに記録
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Worker {worker_id}: CUDA initialization failed: {e}"
-            )
-
 
 @dataclass
 class DeviceConfig:
