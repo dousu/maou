@@ -83,6 +83,8 @@ class Bundler:
             self.logger.warning(
                 f"Bundle file {file_path} already exists. Skipping save."
             )
+            self.file_paths.append(file_path)
+            self.bundle_id += 1
             return
         save_array(
             array=bundled_array,
