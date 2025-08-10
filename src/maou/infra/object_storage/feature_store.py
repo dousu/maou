@@ -31,7 +31,7 @@ class ObjectStorageFeatureStore(
         data_name: str,
         array_type: Literal["hcpe", "preprocessing"],
         location: str = "ASIA-NORTHEAST1",
-        max_cached_bytes: int = 50 * 1024 * 1024,
+        max_cached_bytes: int = 1 * 1024 * 1024,
         queue_timeout: int = 600,
     ):
         self.bucket_name = bucket_name

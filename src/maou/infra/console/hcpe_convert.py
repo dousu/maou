@@ -133,12 +133,6 @@ from maou.interface import converter
     required=False,
     default=4,
 )
-@click.option(
-    "--cpu-workers",
-    help="Number of parallel CPU workers for file processing (default: auto-detect).",
-    type=int,
-    required=False,
-)
 @handle_exception
 def hcpe_convert(
     input_path: Path,
@@ -159,7 +153,6 @@ def hcpe_convert(
     data_name: Optional[str],
     max_cached_bytes: int,
     max_workers: int,
-    cpu_workers: Optional[int],
 ) -> None:
     feature_store = None
 
@@ -267,6 +260,6 @@ def hcpe_convert(
             allowed_endgame_status=allowed_endgame_status,
             exclude_moves=exclude_moves,
             feature_store=feature_store,
-            max_workers=cpu_workers,
+            max_workers=max_workers,
         )
     )

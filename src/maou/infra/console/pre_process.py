@@ -233,7 +233,6 @@ def pre_process(
     output_prefix: Optional[str],
     output_data_name: Optional[str],
     max_workers: int,
-    cpu_workers: Optional[int],
 ) -> None:
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -456,6 +455,6 @@ def pre_process(
             datasource=datasource,
             output_dir=output_dir,
             feature_store=feature_store,
-            max_workers=cpu_workers,
+            max_workers=max_workers,
         )
     )
