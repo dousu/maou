@@ -146,6 +146,7 @@ class ObjectStorageFeatureStore(
             )
             self.queue.put((object_path, byte_data))
             self.bundle_id += 1
+            self.__buffer_size = 0
             self.__buffer.clear()
         except Exception as e:
             self.logger.error(f"Error flushing features: {e}")
