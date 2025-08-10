@@ -163,7 +163,7 @@ class PreProcess:
             if max_workers == 1:
                 for dataname, data in tqdm(
                     self.__datasource.iter_batches(),
-                    desc="Processing batches",
+                    desc="PreProcess (single)",
                 ):
                     array = self._process_single_array(
                         data, dataname
@@ -205,7 +205,7 @@ class PreProcess:
                     }
                     for future in tqdm(
                         as_completed(future_to_dataname),
-                        desc="Processing files",
+                        desc=f"PreProcess (parallel {max_workers} workers)",
                     ):
                         dataname = future_to_dataname[future]
                         try:

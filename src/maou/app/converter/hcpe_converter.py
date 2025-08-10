@@ -255,7 +255,7 @@ class HCPEConverter:
             if max_workers == 1 or len(option.input_paths) == 1:
                 # Sequential processing for single worker or single file
                 for file in tqdm(
-                    option.input_paths, desc="Processing files"
+                    option.input_paths, desc="HCPE (single)"
                 ):
                     file_path, result = (
                         self._process_single_file(
@@ -333,7 +333,7 @@ class HCPEConverter:
                     for future in tqdm(
                         as_completed(future_to_file),
                         total=len(option.input_paths),
-                        desc="Processing files",
+                        desc=f"HCPE (parallel {max_workers} workers)",
                     ):
                         file = future_to_file[future]
                         try:
