@@ -27,6 +27,14 @@ from maou.interface import utility as utility_interface
     required=False,
 )
 @click.option(
+    "--input-file-packed",
+    type=bool,
+    is_flag=True,
+    help="Enable unpacking local numpy file.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--input-dataset-id",
     help="BigQuery dataset ID for input.",
     type=str,
@@ -175,6 +183,7 @@ from maou.interface import utility as utility_interface
 @handle_exception
 def benchmark_dataloader(
     input_dir: Optional[Path],
+    input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
     input_format: str,
@@ -239,6 +248,7 @@ def benchmark_dataloader(
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
+            bit_pack=input_file_packed,
         )
     elif (
         input_dataset_id is not None
@@ -629,6 +639,7 @@ def benchmark_dataloader(
 @handle_exception
 def benchmark_training(
     input_dir: Optional[Path],
+    input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
     input_format: str,
@@ -711,6 +722,7 @@ def benchmark_training(
         datasource = FileDataSource.FileDataSourceSpliter(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
+            bit_pack=input_file_packed,
         )
     elif (
         input_dataset_id is not None

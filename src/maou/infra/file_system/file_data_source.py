@@ -8,7 +8,11 @@ import numpy as np
 import pyarrow as pa
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array
+from maou.interface.data_io import load_array, load_packed_array
+from maou.interface.data_schema import (
+    convert_array_from_packed_schema,
+    convert_record_from_packed_schema,
+)
 
 
 class MissingFileDataConfig(Exception):
@@ -27,7 +31,7 @@ class FileDataSource(
             self,
             file_paths: list[Path],
             array_type: Literal["hcpe", "preprocessing"],
-            bit_pack: bool = True,
+            bit_pack: bool = False,
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
@@ -91,58 +95,95 @@ class FileDataSource(
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
+            self.memmap_arrays: list[
+                tuple[str, np.ndarray]
+            ] = []
 
-            self.file_row_offsets = []
-            total_rows = 0
-            for file in self.file_paths:
-                data = load_array(
-                    file,
-                    mmap_mode="r",
-                    array_type=self.array_type,
-                    bit_pack=bit_pack,
-                )
-                num_rows = data.shape[0]
-                self.file_row_offsets.append(
-                    (file, total_rows, num_rows)
-                )
-                total_rows += num_rows
+            # すべてのファイルパスをmemmapで読み込む
+            lengths = []
+            for file_path in self.file_paths:
+                try:
+                    if (
+                        self.bit_pack
+                        and self.array_type == "preprocessing"
+                    ):
+                        array = load_packed_array(
+                            file_path,
+                            mmap_mode="r",
+                            array_type=self.array_type,
+                        )
+                    else:
+                        array = load_array(
+                            file_path,
+                            mmap_mode="r",
+                            array_type=self.array_type,
+                            bit_pack=self.bit_pack,
+                        )
+                    self.memmap_arrays.append(
+                        (file_path.name, array)
+                    )
+                    lengths.append(len(array))
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to load array {file_path}: {e}"
+                    )
+                    raise
+            self.cum_lengths = np.cumsum([0] + lengths)
 
-            self.total_rows = total_rows
+            self.total_rows = self.cum_lengths[-1]
+            self.total_pages = len(self.cum_lengths) - 1
+
             self.logger.info(
-                f"File Data {self.total_rows} rows"
+                f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
         def get_item(self, idx: int) -> np.ndarray:
-            for (
-                file,
-                start_idx,
-                num_rows,
-            ) in self.file_row_offsets:
-                if start_idx <= idx < start_idx + num_rows:
-                    relative_idx = idx - start_idx
-
-                    # numpy structured arrayから直接レコードを取得
-                    npy_data = load_array(
-                        file,
-                        mmap_mode="r",
-                        array_type=self.array_type,
-                        bit_pack=self.bit_pack,
-                    )
-                    return npy_data[relative_idx]
-
-            raise IndexError(f"Index {idx} out of range.")
+            """特定のレコードをnumpy structured arrayとして返す."""
+            if idx < 0 or idx >= self.total_rows:
+                raise IndexError(f"Index {idx} out of range.")
+            file_idx = int(
+                np.searchsorted(
+                    self.cum_lengths, idx, side="right"
+                )
+                - 1
+            )
+            relative_idx = idx - self.cum_lengths[file_idx]
+            if (
+                self.bit_pack
+                and self.array_type == "preprocessing"
+            ):
+                return convert_record_from_packed_schema(
+                    compressed_record=self.memmap_arrays[
+                        file_idx
+                    ][1][relative_idx],
+                    array_type=self.array_type,
+                )
+            else:
+                return self.memmap_arrays[file_idx][1][
+                    relative_idx
+                ]
 
         def iter_batches(
             self,
         ) -> Generator[tuple[str, np.ndarray], None, None]:
-            for file in self.file_paths:
-                data = load_array(
-                    file,
-                    mmap_mode="r",
-                    array_type=self.array_type,
-                    bit_pack=self.bit_pack,
-                )
-                yield str(file), data
+            if (
+                self.bit_pack
+                and self.array_type == "preprocessing"
+            ):
+                for name, array in self.memmap_arrays:
+                    yield (
+                        name,
+                        convert_array_from_packed_schema(
+                            compressed_array=array,
+                            array_type=self.array_type,
+                        ),
+                    )
+            else:
+                for name, array in self.memmap_arrays:
+                    yield (
+                        name,
+                        array,
+                    )
 
     def __init__(
         self,

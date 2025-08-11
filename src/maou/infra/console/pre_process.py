@@ -29,6 +29,14 @@ from maou.interface import preprocess
     required=False,
 )
 @click.option(
+    "--input-file-packed",
+    type=bool,
+    is_flag=True,
+    help="Enable unpacking local numpy file.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--output-dir",
     help="Directory for output files.",
     type=click.Path(path_type=Path),
@@ -222,6 +230,7 @@ from maou.interface import preprocess
 @handle_exception
 def pre_process(
     input_path: Optional[Path],
+    input_file_packed: bool,
     output_dir: Optional[Path],
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
@@ -371,6 +380,7 @@ def pre_process(
         datasource = FileDataSource(
             file_paths=input_paths,
             array_type="hcpe",
+            bit_pack=input_file_packed,
         )
     else:
         error_msg = (

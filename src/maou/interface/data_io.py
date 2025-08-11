@@ -154,3 +154,35 @@ def save_array_to_bytes(
         array_type=array_type,
         bit_pack=bit_pack,
     )
+
+
+def load_packed_array(
+    file_path: Union[str, Path],
+    *,
+    mmap_mode: Optional[Literal["r", "r+", "w+", "c"]] = None,
+    array_type: Literal["preprocessing"],
+) -> np.ndarray:
+    """Load numpy array from file with packed schema.
+
+    Args:
+        file_path: Path to numpy file (.npy)
+        mmap_mode: Memory mapping mode for .npy files ('r', 'r+', 'w+', 'c')
+        array_type: Expected array type ("preprocessing")
+
+    Returns:
+        numpy.ndarray: Loaded array
+
+    Raises:
+        DataIOError: If loading fails
+
+    Example:
+        >>> data = load_array("data.npy", mmap_mode="r", array_type="preprocessing")
+    """
+    if array_type not in ["preprocessing"]:
+        raise ValueError(f"Unknown array type: {array_type}")
+
+    return DataIOService.load_packed_array(
+        file_path,
+        array_type=array_type,
+        mmap_mode=mmap_mode,
+    )

@@ -8,12 +8,12 @@ import pytest
 
 from maou.domain.data.io import (
     DataIOError,
-    _convert_from_packed_format,
     _convert_to_packed_format,
     load_preprocessing_array,
     save_preprocessing_array,
 )
 from maou.domain.data.schema import (
+    convert_array_from_packed_format,
     create_empty_packed_preprocessing_array,
     create_empty_preprocessing_array,
 )
@@ -94,7 +94,7 @@ class TestCompressionConversion:
         standard_array = self.create_test_preprocessing_array(2)
         packed_array = _convert_to_packed_format(standard_array)
 
-        reconstructed_array = _convert_from_packed_format(
+        reconstructed_array = convert_array_from_packed_format(
             packed_array
         )
 
@@ -136,13 +136,15 @@ class TestCompressionConversion:
 
         # Standard -> Compressed -> Standard
         packed = _convert_to_packed_format(original_array)
-        reconstructed = _convert_from_packed_format(packed)
+        reconstructed = convert_array_from_packed_format(packed)
 
         # Should be identical
-        for field in original_array.dtype.names:
-            assert np.array_equal(
-                original_array[field], reconstructed[field]
-            ), f"Field {field} differs"
+        field_names = original_array.dtype.names
+        if field_names is not None:
+            for field in field_names:
+                assert np.array_equal(
+                    original_array[field], reconstructed[field]
+                ), f"Field {field} differs"
 
 
 class TestBitPackedFileSaveLoad:
@@ -190,10 +192,12 @@ class TestBitPackedFileSaveLoad:
 
         # Should be identical to original
         assert loaded_array.dtype == original_array.dtype
-        for field in original_array.dtype.names:
-            assert np.array_equal(
-                original_array[field], loaded_array[field]
-            ), f"Field {field} differs"
+        field_names = original_array.dtype.names
+        if field_names is not None:
+            for field in field_names:
+                assert np.array_equal(
+                    original_array[field], loaded_array[field]
+                ), f"Field {field} differs"
 
     def test_load_without_unpacking(
         self, tmp_path: Path

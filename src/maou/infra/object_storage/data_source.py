@@ -412,7 +412,7 @@ class ObjectStorageDataSource(
             """特定のレコードをnumpy structured arrayとして返す."""
             if idx < 0 or idx >= self.total_rows:
                 raise IndexError(f"Index {idx} out of range.")
-            file_idx = (
+            file_idx = int(
                 np.searchsorted(
                     self.cum_lengths, idx, side="right"
                 )
@@ -425,7 +425,7 @@ class ObjectStorageDataSource(
             self,
         ) -> Generator[tuple[str, np.ndarray], None, None]:
             """
-            GCS のバケット全体に対して，
+            バケット全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
             for name, array in self.memmap_arrays:

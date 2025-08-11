@@ -11,6 +11,9 @@ import numpy as np
 
 from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.data.compression import (
+    unpack_preprocessing_fields,
+)
 
 
 class SchemaValidationError(Exception):
@@ -545,6 +548,94 @@ def create_empty_packed_preprocessing_array(
     return np.zeros(
         size, dtype=get_packed_preprocessing_dtype()
     )
+
+
+def convert_array_from_packed_format(
+    compressed_array: np.ndarray,
+) -> np.ndarray:
+    """Convert compressed preprocessing array to standard format.
+
+    Args:
+        compressed_array: Compressed preprocessing array
+
+    Returns:
+        Standard preprocessing array with unpacked fields
+    """
+
+    # Create empty standard array
+    standard_dtype = get_preprocessing_dtype()
+    standard_array = np.empty(
+        len(compressed_array), dtype=standard_dtype
+    )
+
+    # Copy non-packed fields directly
+    standard_array["id"] = compressed_array["id"]
+    standard_array["eval"] = compressed_array["eval"]
+    standard_array["moveLabel"] = compressed_array["moveLabel"]
+    standard_array["resultValue"] = compressed_array[
+        "resultValue"
+    ]
+    standard_array["partitioningKey"] = compressed_array[
+        "partitioningKey"
+    ]
+
+    # Unpack binary fields for each record
+    for i in range(len(compressed_array)):
+        packed_features = compressed_array[i]["features_packed"]
+        packed_legal_moves = compressed_array[i][
+            "legalMoveMask_packed"
+        ]
+        features, legal_moves = unpack_preprocessing_fields(
+            packed_features, packed_legal_moves
+        )
+        standard_array[i]["features"] = features
+        standard_array[i]["legalMoveMask"] = legal_moves
+
+    return standard_array
+
+
+def convert_record_from_packed_format(
+    compressed_record: np.ndarray,
+) -> np.ndarray:
+    """Convert compressed preprocessing record to standard format.
+
+    Args:
+        compressed_record: Compressed preprocessing record
+
+    Returns:
+        Standard preprocessing record with unpacked fields
+    """
+
+    # Create empty standard array
+    standard_dtype = get_preprocessing_dtype()
+    standard_array = np.empty(
+        (),
+        dtype=standard_dtype,
+    )
+
+    # Copy non-packed fields directly
+    standard_array["id"] = compressed_record["id"]
+    standard_array["eval"] = compressed_record["eval"]
+    standard_array["moveLabel"] = compressed_record["moveLabel"]
+    standard_array["resultValue"] = compressed_record[
+        "resultValue"
+    ]
+    standard_array["partitioningKey"] = compressed_record[
+        "partitioningKey"
+    ]
+
+    # Unpack binary fields for each record
+    packed_features = compressed_record["features_packed"]
+    packed_legal_moves = compressed_record[
+        "legalMoveMask_packed"
+    ]
+    features, legal_moves = unpack_preprocessing_fields(
+        packed_features, packed_legal_moves
+    )
+    standard_array["features"] = features
+    standard_array["legalMoveMask"] = legal_moves
+
+    return standard_array
 
 
 # Constants for backward compatibility

@@ -13,9 +13,9 @@ import numpy as np
 
 from maou.domain.data.compression import (
     pack_preprocessing_record,
-    unpack_preprocessing_fields,
 )
 from maou.domain.data.schema import (
+    convert_array_from_packed_format,
     get_hcpe_dtype,
     get_packed_preprocessing_dtype,
     get_preprocessing_dtype,
@@ -174,7 +174,7 @@ def save_preprocessing_array_with_unpacking(
     """
     try:
         # Standard format without bit packing
-        unpacked_array = _convert_from_packed_format(array)
+        unpacked_array = convert_array_from_packed_format(array)
         # High-performance binary save using tofile() for all formats
         unpacked_array.tofile(file_path)
         logger.debug(
@@ -233,7 +233,7 @@ def load_preprocessing_array(
                     f"Loaded bit-packed preprocessing array using "
                     f"fromfile() from {file_path}"
                 )
-            array = _convert_from_packed_format(array)
+            array = convert_array_from_packed_format(array)
         else:
             dtype = get_preprocessing_dtype()
 
@@ -252,6 +252,56 @@ def load_preprocessing_array(
 
         logger.debug(
             f"Loaded preprocessing array from {file_path}, shape: {array.shape}"
+        )
+        return array
+
+    except Exception as e:
+        raise DataIOError(
+            f"Failed to load preprocessing array from {file_path}: {e}"
+        ) from e
+
+
+def load_packed_preprocessing_array(
+    file_path: Path,
+    *,
+    mmap_mode: Optional[Literal["r", "r+", "w+", "c"]] = None,
+) -> Union[np.ndarray, np.memmap]:
+    """Load packed preprocessing array from file.
+
+    Args:
+        file_path: Input file path
+        mmap_mode: Memory mapping mode ('r', 'r+', 'w+', 'c')
+
+    Returns:
+        numpy.ndarray or numpy.memmap: Loaded preprocessing array in standard format
+
+    Raises:
+        DataIOError: If load operation fails
+    """
+    try:
+        # Check for file existence, trying different extensions if needed
+        if not file_path.exists():
+            raise DataIOError(f"File not found: {file_path}")
+
+        array: Union[np.ndarray, np.memmap]
+        # Load bit-packed format
+        dtype = get_packed_preprocessing_dtype()
+        if mmap_mode:
+            array = np.memmap(
+                file_path, dtype=dtype, mode=mmap_mode
+            )
+            logger.debug(
+                f"Loaded bit-packed preprocessing array as memmap from {file_path}"
+            )
+        else:
+            array = np.fromfile(file_path, dtype=dtype)
+            logger.debug(
+                f"Loaded bit-packed preprocessing array using "
+                f"fromfile() from {file_path}"
+            )
+
+        logger.debug(
+            f"Loaded packed preprocessing array from {file_path}, shape: {array.shape}"
         )
         return array
 
@@ -448,7 +498,7 @@ def load_preprocessing_array_from_buffer(
                 logger.debug(
                     "Loaded bit-packed preprocessing array using frombuffer() from buffer"
                 )
-            array = _convert_from_packed_format(array)
+            array = convert_array_from_packed_format(array)
         else:
             dtype = get_preprocessing_dtype()
 
@@ -514,47 +564,3 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
         )
 
     return compressed_array
-
-
-def _convert_from_packed_format(
-    compressed_array: np.ndarray,
-) -> np.ndarray:
-    """Convert compressed preprocessing array to standard format.
-
-    Args:
-        compressed_array: Compressed preprocessing array
-
-    Returns:
-        Standard preprocessing array with unpacked fields
-    """
-
-    # Create empty standard array
-    standard_dtype = get_preprocessing_dtype()
-    standard_array = np.empty(
-        len(compressed_array), dtype=standard_dtype
-    )
-
-    # Copy non-packed fields directly
-    standard_array["id"] = compressed_array["id"]
-    standard_array["eval"] = compressed_array["eval"]
-    standard_array["moveLabel"] = compressed_array["moveLabel"]
-    standard_array["resultValue"] = compressed_array[
-        "resultValue"
-    ]
-    standard_array["partitioningKey"] = compressed_array[
-        "partitioningKey"
-    ]
-
-    # Unpack binary fields for each record
-    for i in range(len(compressed_array)):
-        packed_features = compressed_array[i]["features_packed"]
-        packed_legal_moves = compressed_array[i][
-            "legalMoveMask_packed"
-        ]
-        features, legal_moves = unpack_preprocessing_fields(
-            packed_features, packed_legal_moves
-        )
-        standard_array[i]["features"] = features
-        standard_array[i]["legalMoveMask"] = legal_moves
-
-    return standard_array

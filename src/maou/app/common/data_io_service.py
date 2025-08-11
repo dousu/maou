@@ -17,6 +17,7 @@ from maou.domain.data.io import (
     DataIOError,
     load_hcpe_array,
     load_hcpe_array_from_buffer,
+    load_packed_preprocessing_array,
     load_preprocessing_array,
     load_preprocessing_array_from_buffer,
     save_hcpe_array,
@@ -237,3 +238,50 @@ class DataIOService:
             ) from e
         buffer.seek(0)
         return buffer.getvalue()
+
+    @staticmethod
+    def load_packed_array(
+        file_path: Union[str, Path],
+        array_type: Literal["preprocessing"],
+        *,
+        mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = None,
+    ) -> np.ndarray:
+        """Load numpy array with packed schema.
+
+        Args:
+            file_path: Path to numpy file (.npy)
+            array_type: Type of array to load ("preprocessing")
+            mmap_mode: Memory mapping mode for .npy files
+
+        Returns:
+            numpy.ndarray: Loaded array
+
+        Raises:
+            DataIOError: If loading fails
+        """
+        try:
+            file_path = Path(file_path)
+
+            if array_type == "preprocessing":
+                return load_packed_preprocessing_array(
+                    file_path,
+                    mmap_mode=mmap_mode,
+                )
+            else:
+                logger.error(
+                    f"Unknown array type '{array_type}', "
+                    f"Failed to load array from {file_path}"
+                )
+                raise DataIOArrayTypeError(
+                    f"Unknown array type '{array_type}'"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to load array from {file_path}: {e}"
+            )
+            raise DataIOError(
+                f"Failed to load array from {file_path}: {e}"
+            ) from e
