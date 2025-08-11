@@ -14,7 +14,7 @@ class S3DataSource(ObjectStorageDataSource):
         @staticmethod
         def list_objects(
             bucket_name: str, data_path: str
-        ) -> list[str]:
+        ) -> list[tuple[str, int]]:
             import botocore.session
 
             if not data_path.endswith("/"):
@@ -28,7 +28,7 @@ class S3DataSource(ObjectStorageDataSource):
             )
 
             return [
-                str(obj["Key"])
+                (str(obj["Key"]), int(obj["Size"]))
                 for page in pages
                 if "Contents" in page
                 for obj in page["Contents"]

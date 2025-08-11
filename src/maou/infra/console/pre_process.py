@@ -73,6 +73,13 @@ from maou.interface import preprocess
     required=False,
 )
 @click.option(
+    "--input-max-workers",
+    help="Number of parallel download processes for S3/GCS (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
+@click.option(
     "--input-local-cache",
     type=bool,
     is_flag=True,
@@ -192,8 +199,22 @@ from maou.interface import preprocess
     required=False,
 )
 @click.option(
-    "--max-workers",
-    help="Number of parallel upload threads for S3 (default: 4).",
+    "--output-max-workers",
+    help="Number of parallel upload processes for S3/GCS (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
+@click.option(
+    "--output-max-queue-size",
+    help="Number of max queue size (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
+@click.option(
+    "--process-max-workers",
+    help="Number of parallel processing processes (default: 4).",
     type=int,
     required=False,
     default=4,
@@ -208,6 +229,7 @@ def pre_process(
     input_max_cached_bytes: int,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
+    input_max_workers: int,
     input_local_cache: bool,
     input_local_cache_dir: Optional[str],
     input_enable_bundling: bool,
@@ -226,7 +248,9 @@ def pre_process(
     output_bucket_name: Optional[str],
     output_prefix: Optional[str],
     output_data_name: Optional[str],
-    max_workers: int,
+    output_max_workers: int,
+    output_max_queue_size: int,
+    process_max_workers: int,
 ) -> None:
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -292,7 +316,8 @@ def pre_process(
                     prefix=input_prefix,
                     data_name=input_data_name,
                     local_cache_dir=input_local_cache_dir,
-                    max_workers=max_workers,
+                    max_workers=input_max_workers,
+                    max_cached_bytes=input_max_cached_bytes,
                     array_type="hcpe",
                     enable_bundling=input_enable_bundling,
                     bundle_size_gb=input_bundle_size_gb,
@@ -323,7 +348,8 @@ def pre_process(
                     prefix=input_prefix,
                     data_name=input_data_name,
                     local_cache_dir=input_local_cache_dir,
-                    max_workers=max_workers,
+                    max_workers=input_max_workers,
+                    max_cached_bytes=input_max_cached_bytes,
                     array_type="hcpe",
                     enable_bundling=input_enable_bundling,
                     bundle_size_gb=input_bundle_size_gb,
@@ -407,7 +433,9 @@ def pre_process(
                     prefix=output_prefix,
                     data_name=output_data_name,
                     array_type="preprocessing",
+                    max_workers=output_max_workers,
                     max_cached_bytes=output_max_cached_bytes,
+                    max_queue_size=output_max_queue_size,
                 )
             except Exception as e:
                 app_logger.error(
@@ -432,7 +460,9 @@ def pre_process(
                     prefix=output_prefix,
                     data_name=output_data_name,
                     array_type="preprocessing",
+                    max_workers=output_max_workers,
                     max_cached_bytes=output_max_cached_bytes,
+                    max_queue_size=output_max_queue_size,
                 )
             except Exception as e:
                 app_logger.error(
@@ -449,6 +479,6 @@ def pre_process(
             datasource=datasource,
             output_dir=output_dir,
             feature_store=feature_store,
-            max_workers=max_workers,
+            max_workers=process_max_workers,
         )
     )

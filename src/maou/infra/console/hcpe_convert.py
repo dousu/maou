@@ -127,8 +127,22 @@ from maou.interface import converter
     default=500 * 1024 * 1024,
 )
 @click.option(
-    "--max-workers",
-    help="Number of parallel upload threads for S3/GCS (default: 4).",
+    "--output-max-workers",
+    help="Number of parallel upload processes for S3/GCS (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
+@click.option(
+    "--output-max-queue-size",
+    help="Number of max queue size (default: 4).",
+    type=int,
+    required=False,
+    default=4,
+)
+@click.option(
+    "--process-max-workers",
+    help="Number of parallel processing processes (default: 4).",
     type=int,
     required=False,
     default=4,
@@ -152,7 +166,9 @@ def hcpe_convert(
     prefix: Optional[str],
     data_name: Optional[str],
     max_cached_bytes: int,
-    max_workers: int,
+    output_max_workers: int,
+    output_max_queue_size: int,
+    process_max_workers: int,
 ) -> None:
     feature_store = None
 
@@ -209,7 +225,9 @@ def hcpe_convert(
                     prefix=prefix,
                     data_name=data_name,
                     array_type="hcpe",
+                    max_workers=output_max_workers,
                     max_cached_bytes=max_cached_bytes,
+                    max_queue_size=output_max_queue_size,
                 )
             except Exception as e:
                 app_logger.error(
@@ -235,7 +253,9 @@ def hcpe_convert(
                     prefix=prefix,
                     data_name=data_name,
                     array_type="hcpe",
+                    max_workers=output_max_workers,
                     max_cached_bytes=max_cached_bytes,
+                    max_queue_size=output_max_queue_size,
                 )
             except Exception as e:
                 app_logger.error(
@@ -260,6 +280,6 @@ def hcpe_convert(
             allowed_endgame_status=allowed_endgame_status,
             exclude_moves=exclude_moves,
             feature_store=feature_store,
-            max_workers=max_workers,
+            max_workers=process_max_workers,
         )
     )

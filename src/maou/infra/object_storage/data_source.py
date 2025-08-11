@@ -126,6 +126,7 @@ class ObjectStorageDataSource(
             local_cache_dir: str,
             array_type: Literal["hcpe", "preprocessing"],
             max_workers: int = 8,
+            max_cached_bytes: int = 100 * 1024 * 1024,
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = True,
             bundle_size_gb: float = 1.0,
@@ -136,6 +137,7 @@ class ObjectStorageDataSource(
                 data_name=data_name,
                 local_cache_dir=local_cache_dir,
                 max_workers=max_workers,
+                max_cached_bytes=max_cached_bytes,
                 sample_ratio=sample_ratio,
                 array_type=array_type,
                 enable_bundling=enable_bundling,
@@ -195,7 +197,8 @@ class ObjectStorageDataSource(
             data_name: str,
             local_cache_dir: str,
             array_type: Literal["hcpe", "preprocessing"],
-            max_workers: int = 16,
+            max_workers: int = 8,
+            max_cached_bytes: int = 100 * 1024 * 1024,
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
@@ -204,6 +207,7 @@ class ObjectStorageDataSource(
             self.prefix = prefix
             self.data_name = data_name
             self.max_workers = max_workers
+            self.max_cached_bytes = max_cached_bytes
             self.array_type = array_type
             self.sample_ratio = (
                 max(0.01, min(1.0, sample_ratio))
@@ -333,20 +337,34 @@ class ObjectStorageDataSource(
                         data_path=self.__get_data_path_prefix(),
                     )
 
-                chunk_size = max(
-                    1, len(objects) // self.max_workers
-                )
-                chunks = []
+                chunks: list[dict] = []
+                current_chunk: list[str] = []
+                current_sum = 0
 
                 # Split data into chunks
-                for i in range(0, len(objects), chunk_size):
-                    end_idx = min(i + chunk_size, len(objects))
+                for name, size in objects:
+                    if (
+                        current_sum + size
+                        > int(
+                            self.max_cached_bytes
+                            / self.max_workers
+                        )
+                        and current_chunk
+                    ):
+                        chunks.append(
+                            {
+                                "bucket_name": self.bucket_name,
+                                "object_paths": current_chunk,
+                            }
+                        )
+                        current_chunk.clear()
+                        current_sum = 0
+                    current_chunk.append(name)
+                if current_chunk:
                     chunks.append(
                         {
                             "bucket_name": self.bucket_name,
-                            "object_paths": list(
-                                objects[i:end_idx]
-                            ),
+                            "object_paths": current_chunk,
                         }
                     )
 
@@ -416,7 +434,7 @@ class ObjectStorageDataSource(
         @staticmethod
         def list_objects(
             bucket_name: str, data_path: str
-        ) -> list[str]:
+        ) -> list[tuple[str, int]]:
             raise Exception("list_objectsが未実装")
 
         @staticmethod
@@ -434,7 +452,8 @@ class ObjectStorageDataSource(
         page_manager: Optional[PageManager] = None,
         indicies: Optional[list[int]] = None,
         local_cache_dir: Optional[str] = None,
-        max_workers: int = 16,
+        max_workers: int = 8,
+        max_cached_bytes: int = 100 * 1024 * 1024,
         sample_ratio: Optional[float] = None,
         array_type: Optional[
             Literal["hcpe", "preprocessing"]
@@ -451,7 +470,9 @@ class ObjectStorageDataSource(
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
             sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
-            max_workers (int): 並列ダウンロード数 (デフォルト: 16)
+            max_workers (int): 並列ダウンロード数 (デフォルト: 8)
+            max_cached_bytes (int):
+              キャッシュの上限サイズ (バイト単位，デフォルト100MB)
             array_type (str): 配列タイプ ("hcpe" or "preprocessing")
             enable_bundling (bool): バンドリング機能を有効にするかどうか (デフォルト: False)
             bundle_size_gb (float): バンドルサイズ (GB) (デフォルト: 1.0)
@@ -470,6 +491,7 @@ class ObjectStorageDataSource(
                     data_name=data_name,
                     local_cache_dir=local_cache_dir,
                     max_workers=max_workers,
+                    max_cached_bytes=max_cached_bytes,
                     sample_ratio=sample_ratio,
                     array_type=array_type,
                     enable_bundling=enable_bundling,

@@ -31,8 +31,10 @@ class ObjectStorageFeatureStore(
         data_name: str,
         array_type: Literal["hcpe", "preprocessing"],
         location: str = "ASIA-NORTHEAST1",
-        max_cached_bytes: int = 1 * 1024 * 1024,
+        max_workers: int = 8,
+        max_cached_bytes: int = 100 * 1024 * 1024,
         queue_timeout: int = 600,
+        max_queue_size: int = 8,
     ):
         self.bucket_name = bucket_name
         self.prefix = prefix
@@ -45,21 +47,27 @@ class ObjectStorageFeatureStore(
         self.__buffer: list[np.ndarray] = []
         self.__buffer_size: int = 0
         self.bundle_id: int = 1
+        # upload用のワーカー数
+        self.max_workers = max_workers
         # 最大値指定
         self.max_cached_bytes = max_cached_bytes
         # アップロード用のプロセスを別でたてる
         self.queue: mp.Queue[Optional[tuple[str, bytes]]] = (
-            mp.Queue()
+            mp.Queue(maxsize=max_queue_size)
         )
-        self.uploader_process = mp.Process(
-            target=type(self).uploader,
-            kwargs={
-                "bucket_name": self.bucket_name,
-                "queue": self.queue,
-                "queue_timeout": queue_timeout,
-            },
-        )
-        self.uploader_process.start()
+        self.uploader_processes = [
+            mp.Process(
+                target=type(self).uploader,
+                kwargs={
+                    "bucket_name": self.bucket_name,
+                    "queue": self.queue,
+                    "queue_timeout": queue_timeout,
+                },
+            )
+            for _ in range(self.max_workers)
+        ]
+        for p in self.uploader_processes:
+            p.start()
 
     def __get_data_path(self) -> str:
         """データ名からGCSのパスを取得する."""
@@ -184,8 +192,10 @@ class ObjectStorageFeatureStore(
                 clustering_key=None,
                 partitioning_key_date=None,
             )
-        self.queue.put(None)
-        self.uploader_process.join()
+        for _ in range(self.max_workers):
+            self.queue.put(None)
+        for p in self.uploader_processes:
+            p.join()
         self.logger.debug(
             "Features successfully stored in ObjectStorage."
             " bucket:"

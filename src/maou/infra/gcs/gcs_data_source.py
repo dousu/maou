@@ -12,7 +12,7 @@ class GCSDataSource(ObjectStorageDataSource):
         @staticmethod
         def list_objects(
             bucket_name: str, data_path: str
-        ) -> list[str]:
+        ) -> list[tuple[str, int]]:
             import google.cloud.storage as storage
 
             client = storage.Client()
@@ -21,7 +21,7 @@ class GCSDataSource(ObjectStorageDataSource):
                 data_path += "/"
             blobs = bucket.list_blobs(prefix=data_path)
             return [
-                blob.name
+                (blob.name, blob.size)
                 for blob in blobs
                 if blob.name.endswith(".npy")
             ]
