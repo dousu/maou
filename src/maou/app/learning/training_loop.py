@@ -93,6 +93,7 @@ class TrainingLoop:
                     desc="Training"
                     if train_mode
                     else "Validation",
+                    total=len(dataloader),
                 )
                 if progress_bar
                 else enumerate(dataloader)
