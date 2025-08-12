@@ -414,6 +414,14 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--input-file-packed",
+    type=bool,
+    is_flag=True,
+    help="Enable unpacking local numpy file.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--input-dataset-id",
     help="BigQuery dataset ID for input.",
     type=str,
