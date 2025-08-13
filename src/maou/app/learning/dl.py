@@ -14,15 +14,10 @@ from maou.app.learning.callbacks import (
     LoggingCallback,
     ValidationCallback,
 )
-from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.learning.setup import (
-    DataLoaderFactory,
-    LossOptimizerFactory,
-    ModelFactory,
-)
+from maou.app.learning.dataset import DataSource
+from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.app.pre_process.feature import FEATURES_NUM
-from maou.app.pre_process.transform import Transform
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -70,6 +65,7 @@ class Learning:
     class LearningOption:
         datasource: LearningDataSource.DataSourceSpliter
         datasource_type: str
+        gpu: Optional[str] = None
         compilation: bool
         test_ratio: float
         epoch: int
@@ -90,138 +86,70 @@ class Learning:
     def __init__(
         self,
         *,
-        gpu: Optional[str] = None,
         cloud_storage: Optional[CloudStorage] = None,
     ):
-        if gpu is not None and gpu != "cpu":
-            self.device = torch.device(gpu)
-            self.logger.info(
-                f"Use GPU {torch.cuda.get_device_name(self.device)}"
-            )
-            torch.set_float32_matmul_precision("high")
-        else:
-            self.logger.info("Use CPU")
-            self.device = torch.device("cpu")
-
-        # マルチプロセシング開始方法の設定（WindowsやCUDA使用時の安定化）
-        # デバイス設定後に実行してCUDA使用判定を正確に行う
-        self._setup_multiprocessing()
-
-        # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
-        if self.device.type == "cuda":
-            self.scaler = GradScaler("cuda")
-            self.logger.info(
-                "Initialized GradScaler for mixed precision training"
-            )
-        else:
-            self.scaler = None
-
         self.__cloud_storage = cloud_storage
 
-    def learn(self, option: LearningOption) -> Dict[str, str]:
+    def learn(self, config: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
-        torch.autograd.set_detect_anomaly(
-            mode=True, check_nan=True
-        )
         learning_result: Dict[str, str] = {}
 
         # 入力とテスト用のデータソース取得
-        input_datasource, test_datasource = (
-            option.datasource.train_test_split(
-                test_ratio=option.test_ratio
+        training_datasource, validation_datasource = (
+            config.datasource.train_test_split(
+                test_ratio=config.test_ratio
             )
         )
 
-        # Create datasets using existing device
-        # Validate datasource type
-        if option.datasource_type not in ("hcpe", "preprocess"):
-            raise ValueError(
-                f"Data source type `{option.datasource_type}` is invalid."
+        device_config, dataloaders, model_components = (
+            TrainingSetup.setup_training_components(
+                training_datasource=training_datasource,
+                validation_datasource=validation_datasource,
+                datasource_type=config.datasource_type,
+                gpu=config.gpu,
+                compilation=config.compilation,
+                batch_size=config.batch_size,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+                gce_parameter=config.gce_parameter,
+                learning_ratio=config.learning_ratio,
+                momentum=config.momentum,
             )
-
-        # Create transform based on datasource type
-        if option.datasource_type == "hcpe":
-            transform = Transform()
-        else:
-            transform = None
-
-        # Create datasets
-        dataset_train = KifDataset(
-            datasource=input_datasource, transform=transform
-        )
-        dataset_validation = KifDataset(
-            datasource=test_datasource, transform=transform
         )
 
-        # Set pin_memory based on device
-        pin_memory = option.pin_memory
-        if pin_memory is None:
-            pin_memory = self.device.type == "cuda"
-
-        # Create dataloaders
+        self.device = device_config.device
         self.training_loader, self.validation_loader = (
-            DataLoaderFactory.create_dataloaders(
-                dataset_train,
-                dataset_validation,
-                option.batch_size,
-                option.dataloader_workers,
-                pin_memory,
-                option.prefetch_factor,
-            )
+            dataloaders
         )
-
-        # Create model using existing device
-        model = ModelFactory.create_shogi_model(self.device)
-
-        # Create loss functions
-        self.loss_fn_policy, self.loss_fn_value = (
-            LossOptimizerFactory.create_loss_functions(
-                option.gce_parameter
-            )
-        )
-
-        self.logger.info(
-            str(
-                summary(
-                    model,
-                    input_size=(
-                        option.batch_size,
-                        FEATURES_NUM,
-                        9,
-                        9,
-                    ),
-                )
-            )
-        )
-
-        if option.compilation:
-            compiled_model = torch.compile(model)
-            self.model = compiled_model  # type: ignore
-            self.logger.info("Finished model compilation")
-        else:
-            self.model = model
-
-        # Create optimizer for the final model
-        self.optimizer = LossOptimizerFactory.create_optimizer(
+        self.model = model_components.model
+        self.loss_fn_policy = model_components.loss_fn_policy
+        self.loss_fn_value = model_components.loss_fn_value
+        self.optimizer = model_components.optimizer
+        self.policy_loss_ratio = config.policy_loss_ratio
+        self.value_loss_ratio = config.value_loss_ratio
+        self.log_dir = config.log_dir
+        self.epoch = config.epoch
+        self.model_dir = config.model_dir
+        self.resume_from = config.resume_from
+        self.start_epoch = config.start_epoch
+        summary(
             self.model,
-            learning_ratio=option.learning_ratio,
-            momentum=option.momentum,
+            input_size=(
+                config.batch_size,
+                FEATURES_NUM,
+                9,
+                9,
+            ),
         )
-        self.policy_loss_ratio = option.policy_loss_ratio
-        self.value_loss_ratio = option.value_loss_ratio
-        self.log_dir = option.log_dir
-        self.epoch = option.epoch
-        self.model_dir = option.model_dir
-        self.resume_from = option.resume_from
-        self.start_epoch = option.start_epoch
         self.__train()
 
         learning_result["Data Samples"] = (
             f"Training: {len(self.training_loader.dataset)}, "  # type: ignore
             f"Test: {len(self.validation_loader.dataset)}"  # type: ignore
         )
-        learning_result["Option"] = str(option)
+        learning_result["Option"] = str(config)
         learning_result["Result"] = "Finish"
 
         return learning_result
@@ -253,13 +181,11 @@ class Learning:
         training_loop.run_epoch(
             dataloader=self.training_loader,
             epoch_idx=epoch_index,
+            progress_bar=True,
             train_mode=True,
         )
 
-        # Return the last recorded loss from the callback
-        # Since the callback handles all logging, we return a placeholder value
-        # The actual loss tracking is handled by the callback
-        return 0.0  # This value is not critical as logging is handled by callback
+        return float(logging_callback.last_loss)
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -291,8 +217,6 @@ class Learning:
                 "EPOCH {}:".format(epoch_number + 1)
             )
 
-            # Make sure gradient tracking is on, and do a pass over the data
-            self.model.train(True)
             avg_loss = self.__train_one_epoch(
                 epoch_number, writer
             )
@@ -418,65 +342,3 @@ class Learning:
             epoch_number += 1
 
         writer.close()
-
-    def _setup_multiprocessing(self) -> None:
-        """
-        マルチプロセシング開始方法を設定する．
-        プラットフォームとCUDA使用状況に応じて最適な方法を選択し，
-        DataLoaderのマルチプロセシング安定性を向上させる．
-        """
-        import platform
-
-        import torch.multiprocessing as mp
-
-        try:
-            # 現在の開始方法を取得
-            current_method = mp.get_start_method(
-                allow_none=True
-            )
-
-            # プラットフォーム別の推奨設定
-            if platform.system() == "Windows":
-                # Windowsでは常にspawnを使用
-                if current_method != "spawn":
-                    mp.set_start_method("spawn", force=True)
-                    self.logger.info(
-                        "Set multiprocessing start method to 'spawn' for Windows"
-                    )
-            elif (
-                torch.cuda.is_available()
-                and hasattr(self, "device")
-                and self.device.type == "cuda"
-            ):
-                # CUDA使用時はspawnが安全
-                if current_method != "spawn":
-                    try:
-                        mp.set_start_method("spawn", force=True)
-                        self.logger.info(
-                            "Set multiprocessing start method to 'spawn' for CUDA"
-                        )
-                    except RuntimeError as e:
-                        # 既に設定済みの場合は警告のみ
-                        self.logger.warning(
-                            f"Could not set multiprocessing method: {e}"
-                        )
-            else:
-                # Linux/macOSでCPU使用時はforkのままでも問題なし
-                if current_method is None:
-                    self.logger.info(
-                        f"Using default multiprocessing start method: "
-                        f"{mp.get_start_method()}"
-                    )
-                else:
-                    self.logger.info(
-                        f"Using current multiprocessing start method: {current_method}"
-                    )
-
-        except Exception as e:
-            # マルチプロセシング設定に失敗した場合は警告のみ
-            self.logger.warning(
-                f"Failed to configure multiprocessing: {e}"
-            )
-            self.logger.info(
-                "Continuing with default multiprocessing settings"
-            )

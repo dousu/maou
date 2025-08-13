@@ -64,7 +64,7 @@ def learn(
     datasource_type: str,
     *,
     gpu: Optional[str] = None,
-    compilation: Optional[bool] = None,
+    compilation: bool = False,
     test_ratio: Optional[float] = None,
     epoch: Optional[int] = None,
     batch_size: Optional[int] = None,
@@ -115,13 +115,9 @@ def learn(
             f"Data source type `{datasource_type}` is invalid."
         )
 
-    # モデルをコンパイルするかどうか (デフォルトTrue)
-    if compilation is None:
-        compilation = True
-
-    # テスト割合設定 (デフォルト0.25)
+    # テスト割合設定 (デフォルト0.2)
     if test_ratio is None:
-        test_ratio = 0.25
+        test_ratio = 0.2
     elif not 0.0 < test_ratio < 1.0:
         raise ValueError(
             f"test_ratio must be between 0 and 1, got {test_ratio}"
@@ -231,6 +227,7 @@ def learn(
     option = Learning.LearningOption(
         datasource=datasource,
         datasource_type=datasource_type,
+        gpu=gpu,
         compilation=compilation,
         test_ratio=test_ratio,
         epoch=epoch,
@@ -250,7 +247,7 @@ def learn(
     )
 
     learning_result = Learning(
-        gpu=gpu, cloud_storage=cloud_storage
+        cloud_storage=cloud_storage
     ).learn(option)
 
     return json.dumps(learning_result)

@@ -159,6 +159,7 @@ from maou.interface import learn
     type=bool,
     help="Enable PyTorch compilation.",
     required=False,
+    default=False,
 )
 @click.option(
     "--test-ratio",
@@ -200,26 +201,30 @@ from maou.interface import learn
 @click.option(
     "--gce-parameter",
     type=float,
-    help="GCE loss hyperparameter.",
+    help="GCE loss hyperparameter (default: 0.1).",
     required=False,
+    default=0.1,
 )
 @click.option(
     "--policy-loss-ratio",
     type=float,
     help="Policy loss weight.",
     required=False,
+    default=1.0,
 )
 @click.option(
     "--value-loss-ratio",
     type=float,
     help="Value loss weight.",
     required=False,
+    default=1.0,
 )
 @click.option(
     "--learning-ratio",
     type=float,
     help="Learning rate.",
     required=False,
+    default=0.01,
 )
 @click.option(
     "--momentum",
@@ -314,7 +319,7 @@ def learn_model(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
-    compilation: Optional[bool],
+    compilation: bool,
     test_ratio: Optional[float],
     epoch: Optional[int],
     batch_size: Optional[int],
@@ -492,8 +497,8 @@ def learn_model(
                         bucket_name=input_bucket_name,
                         prefix=input_prefix,
                         data_name=input_data_name,
-                        local_cache_dir=input_local_cache_dir,
                         array_type=array_type,
+                        local_cache_dir=input_local_cache_dir,
                         max_workers=input_max_workers,
                         max_cached_bytes=input_max_cached_bytes,
                         sample_ratio=None,

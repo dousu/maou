@@ -183,6 +183,7 @@ class LoggingCallback(BaseCallback):
         self.logger = logger or logging.getLogger(__name__)
         self.running_loss = 0.0
         self.record_num = max(1, dataloader_length // 10)
+        self.last_loss = 0.0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if context.loss is not None:
@@ -191,11 +192,11 @@ class LoggingCallback(BaseCallback):
                 context.batch_idx % self.record_num
                 == self.record_num - 1
             ):
-                last_loss = float(self.running_loss) / float(
-                    self.record_num
-                )
+                self.last_loss = float(
+                    self.running_loss
+                ) / float(self.record_num)
                 self.logger.info(
-                    f"  batch {context.batch_idx + 1} loss: {last_loss}"
+                    f"  batch {context.batch_idx + 1} loss: {self.last_loss}"
                 )
                 tb_x = (
                     context.epoch_idx * self.dataloader_length
@@ -203,7 +204,7 @@ class LoggingCallback(BaseCallback):
                     + 1
                 )
                 self.writer.add_scalar(
-                    "Loss/train", last_loss, tb_x
+                    "Loss/train", self.last_loss, tb_x
                 )
                 self.running_loss = 0.0
 

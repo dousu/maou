@@ -152,6 +152,7 @@ def benchmark_training(
     *,
     gpu: Optional[str] = None,
     compilation: bool = False,
+    test_ratio: Optional[float] = None,
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
@@ -164,7 +165,6 @@ def benchmark_training(
     warmup_batches: Optional[int] = None,
     max_batches: Optional[int] = None,
     enable_profiling: Optional[bool] = None,
-    test_ratio: Optional[float] = None,
     run_validation: Optional[bool] = None,
     sample_ratio: Optional[float] = None,
 ) -> str:
@@ -176,6 +176,7 @@ def benchmark_training(
         datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         compilation: Whether to compile the model
+        test_ratio: Test set ratio for validation benchmark
         batch_size: Training batch size
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
@@ -188,7 +189,6 @@ def benchmark_training(
         warmup_batches: Number of warmup batches to exclude from timing
         max_batches: Maximum number of batches to process
         enable_profiling: Enable PyTorch profiler for detailed analysis
-        test_ratio: Test set ratio for validation benchmark
         run_validation: Also run validation benchmark (inference only)
         sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
 
@@ -201,11 +201,12 @@ def benchmark_training(
         datasource_type=datasource_type,
         gpu=gpu,
         compilation=compilation,
-        batch_size=batch_size or 256,
-        dataloader_workers=dataloader_workers or 4,
+        test_ratio=test_ratio or 0.2,
+        batch_size=batch_size or 1000,
+        dataloader_workers=dataloader_workers or 0,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor or 2,
-        gce_parameter=gce_parameter or 0.1,
+        gce_parameter=gce_parameter or 0.7,
         policy_loss_ratio=policy_loss_ratio or 1.0,
         value_loss_ratio=value_loss_ratio or 1.0,
         learning_ratio=learning_ratio or 0.01,
@@ -213,7 +214,6 @@ def benchmark_training(
         warmup_batches=warmup_batches or 5,
         max_batches=max_batches or 100,
         enable_profiling=enable_profiling or False,
-        test_ratio=test_ratio or 0.2,
         run_validation=run_validation or False,
         sample_ratio=sample_ratio,
     )

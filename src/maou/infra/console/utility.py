@@ -548,6 +548,13 @@ def benchmark_dataloader(
     default=False,
 )
 @click.option(
+    "--test-ratio",
+    type=float,
+    help="Test set ratio for validation benchmark (default: 0.2).",
+    required=False,
+    default=0.2,
+)
+@click.option(
     "--batch-size",
     type=int,
     help="Training batch size for benchmark (default: 256).",
@@ -632,13 +639,6 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
-    "--test-ratio",
-    type=float,
-    help="Test set ratio for validation benchmark (default: 0.2).",
-    required=False,
-    default=0.2,
-)
-@click.option(
     "--run-validation",
     type=bool,
     is_flag=True,
@@ -674,6 +674,7 @@ def benchmark_training(
     input_max_workers: int,
     gpu: Optional[str],
     compilation: bool,
+    test_ratio: float,
     batch_size: int,
     dataloader_workers: int,
     pin_memory: Optional[bool],
@@ -686,7 +687,6 @@ def benchmark_training(
     warmup_batches: int,
     max_batches: int,
     enable_profiling: Optional[bool],
-    test_ratio: float,
     run_validation: Optional[bool],
     sample_ratio: Optional[float],
 ) -> None:
@@ -881,6 +881,7 @@ def benchmark_training(
         datasource_type=input_format,
         gpu=gpu,
         compilation=compilation,
+        test_ratio=test_ratio,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
@@ -893,7 +894,6 @@ def benchmark_training(
         warmup_batches=warmup_batches,
         max_batches=max_batches,
         enable_profiling=enable_profiling,
-        test_ratio=test_ratio,
         run_validation=run_validation,
         sample_ratio=sample_ratio,
     )

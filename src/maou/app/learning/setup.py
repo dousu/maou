@@ -288,12 +288,17 @@ class TrainingSetup:
 
         cls.logger.info("Setting up training components")
 
-        # 1. Device setup
+        # Torch config
+        torch.autograd.set_detect_anomaly(
+            mode=True, check_nan=True
+        )
+
+        # Device setup
         device_config = DeviceSetup.setup_device(
             gpu, pin_memory
         )
 
-        # 2. Dataset creation
+        # Dataset creation
         dataset_train, dataset_validation = (
             DatasetFactory.create_datasets(
                 training_datasource,
@@ -302,7 +307,7 @@ class TrainingSetup:
             )
         )
 
-        # 3. DataLoader creation
+        # DataLoader creation
         training_loader, validation_loader = (
             DataLoaderFactory.create_dataloaders(
                 dataset_train,
@@ -314,7 +319,7 @@ class TrainingSetup:
             )
         )
 
-        # 4. Model creation
+        # Model creation
         if compilation:
             model = torch.compile(
                 ModelFactory.create_shogi_model(
@@ -326,7 +331,7 @@ class TrainingSetup:
                 device_config.device
             )
 
-        # 5. Loss functions and optimizer
+        # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (
             LossOptimizerFactory.create_loss_functions(
                 gce_parameter
