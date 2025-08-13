@@ -151,6 +151,7 @@ def benchmark_training(
     datasource_type: str,
     *,
     gpu: Optional[str] = None,
+    compilation: bool = False,
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
@@ -174,6 +175,7 @@ def benchmark_training(
         datasource: Training data source splitter
         datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
+        compilation: Whether to compile the model
         batch_size: Training batch size
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
@@ -198,6 +200,7 @@ def benchmark_training(
         datasource=datasource,
         datasource_type=datasource_type,
         gpu=gpu,
+        compilation=compilation,
         batch_size=batch_size or 256,
         dataloader_workers=dataloader_workers or 4,
         pin_memory=pin_memory,

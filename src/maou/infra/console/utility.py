@@ -541,6 +541,12 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--compilation",
+    type=bool,
+    help="Enable PyTorch compilation.",
+    required=False,
+)
+@click.option(
     "--batch-size",
     type=int,
     help="Training batch size for benchmark (default: 256).",
@@ -666,6 +672,7 @@ def benchmark_training(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
+    compilation: Optional[bool],
     batch_size: int,
     dataloader_workers: int,
     pin_memory: Optional[bool],
@@ -872,6 +879,7 @@ def benchmark_training(
         datasource=datasource,
         datasource_type=input_format,
         gpu=gpu,
+        compilation=compilation,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,

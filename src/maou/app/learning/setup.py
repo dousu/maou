@@ -271,6 +271,7 @@ class TrainingSetup:
         validation_datasource: DataSource,
         datasource_type: str,
         gpu: Optional[str] = None,
+        compilation: bool = False,
         batch_size: int = 256,
         dataloader_workers: int = 4,
         pin_memory: Optional[bool] = None,
@@ -314,9 +315,16 @@ class TrainingSetup:
         )
 
         # 4. Model creation
-        model = ModelFactory.create_shogi_model(
-            device_config.device
-        )
+        if compilation:
+            model = torch.compile(
+                ModelFactory.create_shogi_model(
+                    device_config.device
+                )
+            )
+        else:
+            model = ModelFactory.create_shogi_model(
+                device_config.device
+            )
 
         # 5. Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (
@@ -325,11 +333,13 @@ class TrainingSetup:
             )
         )
         optimizer = LossOptimizerFactory.create_optimizer(
-            model, learning_ratio, momentum
+            model,  # type: ignore
+            learning_ratio,
+            momentum,
         )
 
         model_components = ModelComponents(
-            model=model,
+            model=model,  # type: ignore
             loss_fn_policy=loss_fn_policy,
             loss_fn_value=loss_fn_value,
             optimizer=optimizer,

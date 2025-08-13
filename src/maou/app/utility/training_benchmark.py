@@ -179,7 +179,9 @@ class SingleEpochBenchmark:
             average_batch_time=timing_stats[
                 "average_batch_time"
             ],
-            total_batches=performance_metrics["total_batches"],
+            total_batches=int(
+                performance_metrics["total_batches"]
+            ),
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -280,7 +282,9 @@ class SingleEpochBenchmark:
             average_batch_time=timing_stats[
                 "average_batch_time"
             ],
-            total_batches=performance_metrics["total_batches"],
+            total_batches=int(
+                performance_metrics["total_batches"]
+            ),
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -309,6 +313,7 @@ class TrainingBenchmarkConfig:
     datasource: LearningDataSource.DataSourceSpliter
     datasource_type: str
     gpu: Optional[str] = None
+    compilation: bool = False
     batch_size: int = 256
     dataloader_workers: int = 4
     pin_memory: Optional[bool] = None
@@ -352,6 +357,7 @@ class TrainingBenchmarkUseCase:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
+                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
