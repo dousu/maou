@@ -165,22 +165,24 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_data_transfer_start(context)
 
-        # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
-        context.inputs = context.inputs.to(
-            self.device, non_blocking=True
-        )
-        context.labels_policy = context.labels_policy.to(
-            self.device, non_blocking=True
-        )
-        context.labels_value = context.labels_value.to(
-            self.device, non_blocking=True
-        )
-        context.legal_move_mask = context.legal_move_mask.to(
-            self.device, non_blocking=True
-        )
-
-        # GPU同期（正確な転送時間測定のため）
         if self.device.type == "cuda":
+            # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
+            context.inputs = context.inputs.to(
+                self.device, non_blocking=True
+            )
+            context.labels_policy = context.labels_policy.to(
+                self.device, non_blocking=True
+            )
+            context.labels_value = context.labels_value.to(
+                self.device, non_blocking=True
+            )
+            context.legal_move_mask = (
+                context.legal_move_mask.to(
+                    self.device, non_blocking=True
+                )
+            )
+
+            # GPU同期（正確な転送時間測定のため）
             torch.cuda.synchronize()
 
         for callback in self.callbacks:
