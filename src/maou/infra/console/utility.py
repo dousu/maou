@@ -16,7 +16,7 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import utility as utility_interface
+from maou.interface import utility_interface
 
 
 @click.command("benchmark-dataloader")
@@ -545,6 +545,7 @@ def benchmark_dataloader(
     type=bool,
     help="Enable PyTorch compilation.",
     required=False,
+    default=False,
 )
 @click.option(
     "--batch-size",
@@ -672,7 +673,7 @@ def benchmark_training(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
-    compilation: Optional[bool],
+    compilation: bool,
     batch_size: int,
     dataloader_workers: int,
     pin_memory: Optional[bool],
