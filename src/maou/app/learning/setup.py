@@ -223,7 +223,7 @@ class ModelFactory:
 
         model.to(device)
         cls.logger.info(
-            "Created Shogi-optimized BottleneckBlock model"
+            f"Created Shogi-optimized BottleneckBlock model ({str(device)})"
         )
 
         return model
