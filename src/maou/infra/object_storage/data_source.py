@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
 from maou.interface.data_io import (
@@ -379,7 +380,11 @@ class ObjectStorageDataSource(
                         )
                         for chunk in chunks
                     ]
-                    for future in as_completed(futures):
+                    for future in tqdm(
+                        as_completed(futures),
+                        desc="Downloading",
+                        total=len(chunks),
+                    ):
                         try:
                             byte_list = future.result()
                             for byte_data in byte_list:
