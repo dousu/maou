@@ -361,6 +361,7 @@ class ObjectStorageDataSource(
                         current_chunk.clear()
                         current_sum = 0
                     current_chunk.append(name)
+                    current_sum += size
                 if current_chunk:
                     chunks.append(
                         {
