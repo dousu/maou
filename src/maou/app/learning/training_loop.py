@@ -212,7 +212,7 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_forward_pass_start(context)
 
-        with autocast("cuda"):
+        with autocast(self.device.type):
             context.outputs_policy, context.outputs_value = (
                 self.model(context.inputs)
             )
@@ -368,7 +368,7 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_forward_pass_start(context)
 
-        with autocast("cuda"):
+        with autocast(self.device.type):
             context.outputs_policy, context.outputs_value = (
                 self.model(context.inputs)
             )
