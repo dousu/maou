@@ -6,6 +6,12 @@ from typing import Dict, List, Optional, Protocol
 import torch
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 
+from maou.app.learning.resource_monitor import (
+    GPUResourceMonitor,
+    ResourceUsage,
+    SystemResourceMonitor,
+)
+
 
 @dataclass
 class TrainingContext:
@@ -504,3 +510,81 @@ class TimingCallback(BaseCallback):
                 else 0.0
             ),
         }
+
+
+class ResourceMonitoringCallback(BaseCallback):
+    """リソース使用率を監視するCallback．"""
+
+    def __init__(
+        self,
+        device: torch.device,
+        logger: Optional[logging.Logger] = None,
+    ):
+        """
+        Args:
+            device: 学習で使用しているデバイス
+            logger: ロガー
+        """
+        self.device = device
+        self.logger = logger or logging.getLogger(__name__)
+
+        # システムリソース監視
+        self.system_monitor = SystemResourceMonitor(
+            monitoring_interval=0.5
+        )
+
+        # GPU監視（CUDA使用時のみ）
+        self.gpu_monitor: Optional[GPUResourceMonitor] = None
+        if self.device.type == "cuda":
+            gpu_index = (
+                self.device.index if self.device.index is not None else 0
+            )
+            self.gpu_monitor = GPUResourceMonitor(
+                gpu_index=gpu_index,
+                monitoring_interval=0.5,
+            )
+
+    def on_epoch_start(self, epoch_idx: int) -> None:
+        """エポック開始時にリソース監視を開始する．"""
+        self.logger.debug("Starting resource monitoring")
+        self.system_monitor.start_monitoring()
+
+        if self.gpu_monitor is not None:
+            self.gpu_monitor.start_monitoring()
+
+    def on_epoch_end(self, epoch_idx: int) -> None:
+        """エポック終了時にリソース監視を停止する．"""
+        self.logger.debug("Stopping resource monitoring")
+        self.system_monitor.stop_monitoring()
+
+        if self.gpu_monitor is not None:
+            self.gpu_monitor.stop_monitoring()
+
+    def get_resource_usage(self) -> ResourceUsage:
+        """統合されたリソース使用率統計を取得する．"""
+        # システムリソース使用率を取得
+        system_usage = self.system_monitor.get_resource_usage()
+
+        # GPU使用率を取得（利用可能な場合）
+        gpu_usage = None
+        if self.gpu_monitor is not None:
+            gpu_usage = self.gpu_monitor.get_resource_usage()
+
+        # 統合されたResourceUsageを作成
+        return ResourceUsage(
+            cpu_max_percent=system_usage.cpu_max_percent,
+            memory_max_bytes=system_usage.memory_max_bytes,
+            memory_max_percent=system_usage.memory_max_percent,
+            gpu_max_percent=(
+                gpu_usage.gpu_max_percent if gpu_usage else None
+            ),
+            gpu_memory_max_bytes=(
+                gpu_usage.gpu_memory_max_bytes if gpu_usage else None
+            ),
+            gpu_memory_total_bytes=(
+                gpu_usage.gpu_memory_total_bytes if gpu_usage else None
+            ),
+            gpu_memory_max_percent=(
+                gpu_usage.gpu_memory_max_percent if gpu_usage else None
+            ),
+        )

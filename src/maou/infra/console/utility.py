@@ -651,6 +651,13 @@ def benchmark_dataloader(
     help="Ratio of data to sample for cloud sources (0.01-1.0, default: full data).",
     required=False,
 )
+@click.option(
+    "--enable-resource-monitoring",
+    type=bool,
+    is_flag=True,
+    help="Enable CPU, memory, and GPU usage monitoring during training.",
+    required=False,
+)
 @handle_exception
 def benchmark_training(
     input_dir: Optional[Path],
@@ -689,6 +696,7 @@ def benchmark_training(
     enable_profiling: Optional[bool],
     run_validation: Optional[bool],
     sample_ratio: Optional[float],
+    enable_resource_monitoring: Optional[bool],
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
     # Validate input_format early
@@ -896,6 +904,7 @@ def benchmark_training(
         enable_profiling=enable_profiling,
         run_validation=run_validation,
         sample_ratio=sample_ratio,
+        enable_resource_monitoring=enable_resource_monitoring,
     )
 
     # Parse and display results

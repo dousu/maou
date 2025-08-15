@@ -15,6 +15,8 @@ dependencies = [
     "pyarrow>=19.0.0",
     "numpy>=1.19.0",
     "google-crc32c>=1.6.0",
+    "psutil>=6.0.0",
+    "pynvml>=11.4.1",
 ]
 
 [project.optional-dependencies]

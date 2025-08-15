@@ -1,14 +1,18 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
-from maou.app.learning.callbacks import TimingCallback
+from maou.app.learning.callbacks import (
+    ResourceMonitoringCallback,
+    TimingCallback,
+)
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.loss.loss_fn import MaskedGCELoss
@@ -39,9 +43,12 @@ class BenchmarkResult:
     samples_per_second: float
     batches_per_second: float
 
+    # リソース使用率情報
+    resource_usage: Optional[ResourceUsage] = None
+
     def to_dict(self) -> Dict[str, float]:
         """ベンチマーク結果を辞書形式で返す．"""
-        return {
+        result = {
             "total_epoch_time": self.total_epoch_time,
             "average_batch_time": self.average_batch_time,
             "total_batches": float(self.total_batches),
@@ -56,6 +63,16 @@ class BenchmarkResult:
             "samples_per_second": self.samples_per_second,
             "batches_per_second": self.batches_per_second,
         }
+        
+        # リソース使用率情報があれば追加
+        if self.resource_usage is not None:
+            resource_dict = self.resource_usage.to_dict()
+            # float型に変換できるもののみ追加
+            for key, value in resource_dict.items():
+                if value is not None:
+                    result[f"resource_{key}"] = float(value)
+        
+        return result
 
 
 class SingleEpochBenchmark:
@@ -78,6 +95,7 @@ class SingleEpochBenchmark:
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
+        enable_resource_monitoring: bool = False,
     ):
         self.model = model
         self.device = device
@@ -86,6 +104,7 @@ class SingleEpochBenchmark:
         self.loss_fn_value = loss_fn_value
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
+        self.enable_resource_monitoring = enable_resource_monitoring
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -122,6 +141,18 @@ class SingleEpochBenchmark:
             warmup_batches=warmup_batches
         )
 
+        # Create callbacks list
+        callbacks = [timing_callback]
+
+        # Add resource monitoring callback if enabled
+        resource_callback = None
+        if self.enable_resource_monitoring:
+            resource_callback = ResourceMonitoringCallback(
+                device=self.device,
+                logger=self.logger,
+            )
+            callbacks.append(cast('TimingCallback', resource_callback))
+
         # Create training loop
         training_loop = TrainingLoop(
             model=self.model,
@@ -131,7 +162,7 @@ class SingleEpochBenchmark:
             loss_fn_value=self.loss_fn_value,
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
-            callbacks=[timing_callback],
+            callbacks=callbacks,
             logger=self.logger,
         )
 
@@ -159,6 +190,11 @@ class SingleEpochBenchmark:
         loss_metrics = timing_callback.get_loss_metrics(
             actual_batches
         )
+
+        # Get resource usage if monitoring was enabled
+        resource_usage = None
+        if resource_callback is not None:
+            resource_usage = resource_callback.get_resource_usage()
 
         # Log summary
         self.logger.info(
@@ -204,6 +240,7 @@ class SingleEpochBenchmark:
             batches_per_second=performance_metrics[
                 "batches_per_second"
             ],
+            resource_usage=resource_usage,
         )
 
     def benchmark_validation(
@@ -227,6 +264,18 @@ class SingleEpochBenchmark:
         # Create timing callback for validation (no warmup for validation)
         timing_callback = TimingCallback(warmup_batches=0)
 
+        # Create callbacks list
+        callbacks = [timing_callback]
+
+        # Add resource monitoring callback if enabled
+        resource_callback = None
+        if self.enable_resource_monitoring:
+            resource_callback = ResourceMonitoringCallback(
+                device=self.device,
+                logger=self.logger,
+            )
+            callbacks.append(cast('TimingCallback', resource_callback))
+
         # Create training loop in evaluation mode
         training_loop = TrainingLoop(
             model=self.model,
@@ -236,7 +285,7 @@ class SingleEpochBenchmark:
             loss_fn_value=self.loss_fn_value,
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
-            callbacks=[timing_callback],
+            callbacks=callbacks,
             logger=self.logger,
         )
 
@@ -262,6 +311,11 @@ class SingleEpochBenchmark:
         loss_metrics = timing_callback.get_loss_metrics(
             actual_batches
         )
+
+        # Get resource usage if monitoring was enabled
+        resource_usage = None
+        if resource_callback is not None:
+            resource_usage = resource_callback.get_resource_usage()
 
         # Log summary
         self.logger.info(
@@ -303,6 +357,7 @@ class SingleEpochBenchmark:
             batches_per_second=performance_metrics[
                 "batches_per_second"
             ],
+            resource_usage=resource_usage,
         )
 
 
@@ -329,6 +384,7 @@ class TrainingBenchmarkConfig:
     test_ratio: float = 0.2
     run_validation: bool = False
     sample_ratio: Optional[float] = None
+    enable_resource_monitoring: bool = False
 
 
 class TrainingBenchmarkUseCase:
@@ -380,6 +436,7 @@ class TrainingBenchmarkUseCase:
             loss_fn_value=model_components.loss_fn_value,
             policy_loss_ratio=config.policy_loss_ratio,
             value_loss_ratio=config.value_loss_ratio,
+            enable_resource_monitoring=config.enable_resource_monitoring,
         )
 
         # Run training benchmark
@@ -469,6 +526,26 @@ class TrainingBenchmarkUseCase:
                 / result.average_batch_time
                 * 100
             )
+            # Format resource usage summary if available
+            resource_summary = ""
+            if result.resource_usage is not None:
+                ru = result.resource_usage
+                resource_summary = f"""
+
+  Resource Usage Summary:
+  - CPU Max Usage: {ru.cpu_max_percent:.1f}%
+  - Memory Max Usage: {ru.memory_max_bytes / 1024**3:.1f}GB ({ru.memory_max_percent:.1f}%)"""
+                
+                if ru.gpu_max_percent is not None:
+                    resource_summary += f"""
+  - GPU Max Usage: {ru.gpu_max_percent:.1f}%"""
+                
+                if (ru.gpu_memory_max_bytes is not None and 
+                    ru.gpu_memory_total_bytes is not None and
+                    ru.gpu_memory_max_percent is not None):
+                    resource_summary += f"""
+  - GPU Memory Max Usage: {ru.gpu_memory_max_bytes / 1024**3:.1f}GB / {ru.gpu_memory_total_bytes / 1024**3:.1f}GB ({ru.gpu_memory_max_percent:.1f}%)"""
+
             return f"""{label} Performance Summary:
   Total Time: {result.total_epoch_time:.2f}s
   Average Batch Time: {result.average_batch_time:.4f}s
@@ -485,7 +562,7 @@ class TrainingBenchmarkUseCase:
 
   Loss Information:
   - Final Loss: {result.final_loss:.6f}
-  - Average Loss: {result.average_loss:.6f}"""
+  - Average Loss: {result.average_loss:.6f}{resource_summary}"""
 
         training_summary = format_timing_summary(
             training_result, "Training"

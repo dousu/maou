@@ -167,6 +167,7 @@ def benchmark_training(
     enable_profiling: Optional[bool] = None,
     run_validation: Optional[bool] = None,
     sample_ratio: Optional[float] = None,
+    enable_resource_monitoring: Optional[bool] = None,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -191,6 +192,7 @@ def benchmark_training(
         enable_profiling: Enable PyTorch profiler for detailed analysis
         run_validation: Also run validation benchmark (inference only)
         sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
+        enable_resource_monitoring: Enable CPU, memory, and GPU usage monitoring
 
     Returns:
         JSON string with benchmark results and recommendations
@@ -216,6 +218,7 @@ def benchmark_training(
         enable_profiling=enable_profiling or False,
         run_validation=run_validation or False,
         sample_ratio=sample_ratio,
+        enable_resource_monitoring=enable_resource_monitoring or False,
     )
 
     # Validate sample_ratio
