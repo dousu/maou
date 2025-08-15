@@ -128,9 +128,13 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# 変換後のhcpeファイルは除外する
-*.hcpe
-
 logs/
 models/
 checkpoints/
+
+# pickleで保存したファイルは除外する
+*.pickle
+
+*.npy
+
+**/.claude/settings.local.json

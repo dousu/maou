@@ -11,9 +11,9 @@
 # bash scripts/devcontainer.sh
 bash scripts/dev-init.sh
 # ここで確認できるpythonのパスをVScodeのインタプリタとして設定する
-poetry env info
+poetry env info --path
 # pre-commit系の設定
-bash scripts/pre-commit.sh
+poetry run bash scripts/pre-commit.sh
 ```
 
 ここでシェルスクリプトを実行するような構成になっているのは，
@@ -40,4 +40,35 @@ GitHub Codespacesを使っている場合等，ストレージ容量をなるべ
 
 ```bash
 poetry cache clear --all .
+```
+
+### GCPを使う場合
+
+以下のコマンドを実行してGCPへの認証をしておくと，テストやプログラム中でGCPを利用できる．
+
+```bash
+gcloud auth application-default login
+# gcloud projects listで設定可能なプロジェクトを確認できる
+gcloud config set project "your-project-id"
+gcloud auth application-default set-quota-project "your-project-id"
+```
+
+なお，GCPを使ったテストをするときは以下のように行う．
+
+```bash
+TEST_GCP=true pytest
+```
+
+### AWSを使う場合
+
+```bash
+aws configure sso --use-device-code --profile default
+# アクセストークンが切れたら以下のように再認証する
+# aws sso login --use-device-code --profile default
+```
+
+なお，AWSを使ったテストをするときは以下のように行う．
+
+```bash
+TEST_AWS=true pytest
 ```

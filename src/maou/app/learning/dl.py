@@ -1,3 +1,4 @@
+import abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -5,18 +6,45 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import torch
-from sklearn.model_selection import train_test_split
-from torch import optim
-from torch.utils.data import DataLoader, Dataset
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter  # type: ignore
 from torchinfo import summary
 
-from maou.app.learning.dataset import KifDataset
-from maou.app.learning.feature import FEATURES_NUM
-from maou.app.learning.network import Network
-from maou.app.learning.transform import Transform
-from maou.domain.loss.loss_fn import GCELoss
-from maou.domain.network.resnet import ResidualBlock
+from maou.app.learning.callbacks import (
+    LoggingCallback,
+    ValidationCallback,
+)
+from maou.app.learning.dataset import DataSource
+from maou.app.learning.setup import TrainingSetup
+from maou.app.learning.training_loop import TrainingLoop
+from maou.app.pre_process.feature import FEATURES_NUM
+
+
+class CloudStorage(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def upload_from_local(
+        self, *, local_path: Path, cloud_path: str
+    ) -> None:
+        pass
+
+    @abc.abstractmethod
+    def upload_folder_from_local(
+        self,
+        *,
+        local_folder: Path,
+        cloud_folder: str,
+        extensions: Optional[list[str]] = None,
+    ) -> None:
+        pass
+
+
+class LearningDataSource(DataSource):
+    class DataSourceSpliter(metaclass=abc.ABCMeta):
+        @abc.abstractmethod
+        def train_test_split(
+            self, test_ratio: float
+        ) -> tuple[DataSource, DataSource]:
+            pass
 
 
 class Learning:
@@ -29,168 +57,142 @@ class Learning:
 
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
-    checkpoint_dir: Optional[Path]
     resume_from: Optional[Path]
     model: torch.nn.Module
-
-    def __init__(self, gpu: Optional[str] = None):
-        if gpu is not None:
-            self.logger.info(f"Use GPU {gpu}")
-            self.device = torch.device(gpu)
-            self.pin_memory = True
-        else:
-            self.logger.info("Use CPU")
-            self.device = torch.device("cpu")
-            self.pin_memory = False
+    scaler: Optional[GradScaler]
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
-        input_paths: list[Path]
+        datasource: LearningDataSource.DataSourceSpliter
+        datasource_type: str
+        gpu: Optional[str] = None
         compilation: bool
         test_ratio: float
         epoch: int
         batch_size: int
         dataloader_workers: int
+        pin_memory: bool
+        prefetch_factor: int
         gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
         learning_ratio: float
         momentum: float
-        checkpoint_dir: Optional[Path] = None
         resume_from: Optional[Path] = None
+        start_epoch: int = 0
         log_dir: Path
         model_dir: Path
 
-    def learn(self, option: LearningOption) -> Dict[str, str]:
+    def __init__(
+        self,
+        *,
+        cloud_storage: Optional[CloudStorage] = None,
+    ):
+        self.__cloud_storage = cloud_storage
+
+    def learn(self, config: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
         learning_result: Dict[str, str] = {}
 
-        input_train: list[Path]
-        input_test: list[Path]
-        input_train, input_test = train_test_split(
-            option.input_paths, test_size=option.test_ratio
+        # 入力とテスト用のデータソース取得
+        training_datasource, validation_datasource = (
+            config.datasource.train_test_split(
+                test_ratio=config.test_ratio
+            )
         )
 
-        # datasetに特徴量と正解ラベルを作成する変換を登録する
-        feature = Transform(pin_memory=self.pin_memory)
-        dataset_train: Dataset = KifDataset(input_train, feature)
-        dataset_test: Dataset = KifDataset(input_test, feature)
-
-        # dataloader
-        # 前処理は軽めのはずなのでワーカー数は一旦固定にしてみる
-        self.training_loader = DataLoader(
-            dataset_train,
-            batch_size=option.batch_size,
-            shuffle=True,
-            num_workers=option.dataloader_workers,
-            pin_memory=self.pin_memory,
-        )
-        self.validation_loader = DataLoader(
-            dataset_test,
-            batch_size=option.batch_size,
-            shuffle=False,
-            num_workers=option.dataloader_workers,
-            pin_memory=self.pin_memory,
+        device_config, dataloaders, model_components = (
+            TrainingSetup.setup_training_components(
+                training_datasource=training_datasource,
+                validation_datasource=validation_datasource,
+                datasource_type=config.datasource_type,
+                gpu=config.gpu,
+                compilation=config.compilation,
+                batch_size=config.batch_size,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+                gce_parameter=config.gce_parameter,
+                learning_ratio=config.learning_ratio,
+                momentum=config.momentum,
+            )
         )
 
-        # モデル定義
-        # チャンネル数はてきとうに256まで増やしてる
-        # strideは勘で設定している (2にして計算量減らす)
-        # チャンネル数も適当にちょっとずつあげてみた
-        # あんまりチャンネル数多いと計算量多くなりすぎるので少しだけ
-        channels = 256
-        model = Network(
-            ResidualBlock,
-            FEATURES_NUM,
-            [2, 2, 2, 2],
-            [1, 2, 2, 2],
-            [
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15),
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15 * 3),
-                FEATURES_NUM + int((channels - FEATURES_NUM) / 15 * 7),
-                channels,
-            ],
+        self.device = device_config.device
+        self.training_loader, self.validation_loader = (
+            dataloaders
         )
-        self.logger.info(
-            str(summary(model, input_size=(option.batch_size, FEATURES_NUM, 9, 9)))
+        self.model = model_components.model
+        self.loss_fn_policy = model_components.loss_fn_policy
+        self.loss_fn_value = model_components.loss_fn_value
+        self.optimizer = model_components.optimizer
+        self.policy_loss_ratio = config.policy_loss_ratio
+        self.value_loss_ratio = config.value_loss_ratio
+        self.log_dir = config.log_dir
+        self.epoch = config.epoch
+        self.model_dir = config.model_dir
+        self.resume_from = config.resume_from
+        self.start_epoch = config.start_epoch
+        summary(
+            self.model,
+            input_size=(
+                config.batch_size,
+                FEATURES_NUM,
+                9,
+                9,
+            ),
         )
-        if option.compilation:
-            compiled_model = torch.compile(model)
-            self.model = compiled_model  # type: ignore
-        else:
-            self.model = model
-        self.model.to(self.device)
-        # ヘッドが二つあるので2つ損失関数を設定する
-        # 損失を単純に加算するのかどうかは議論の余地がある
-        # policyの損失関数は合法手以外を無視して損失を計算しない設計も考えられる
-        self.loss_fn_policy = GCELoss(q=option.gce_parameter)
-        self.loss_fn_value = torch.nn.BCEWithLogitsLoss()
-        # SGD+Momentum
-        # weight_decayは特に根拠なし
-        self.optimizer = optim.SGD(
-            model.parameters(),
-            lr=option.learning_ratio,
-            momentum=option.momentum,
-            weight_decay=0.0001,
-        )
-        self.policy_loss_ratio = option.policy_loss_ratio
-        self.value_loss_ratio = option.value_loss_ratio
-        self.log_dir = option.log_dir
-        self.epoch = option.epoch
-        self.model_dir = option.model_dir
-        self.resume_from = option.resume_from
-        self.checkpoint_dir = option.checkpoint_dir
         self.__train()
 
         learning_result["Data Samples"] = (
-            f"Training: {len(dataset_train)}, Test: {len(dataset_test)}"  # type: ignore
+            f"Training: {len(self.training_loader.dataset)}, "  # type: ignore
+            f"Test: {len(self.validation_loader.dataset)}"  # type: ignore
         )
-        learning_result["Option"] = str(option)
+        learning_result["Option"] = str(config)
         learning_result["Result"] = "Finish"
 
         return learning_result
 
-    def __train_one_epoch(self, epoch_index: int, tb_writer: SummaryWriter) -> float:
-        running_loss = 0.0
-        last_loss = 0.0
+    def __train_one_epoch(
+        self, epoch_index: int, tb_writer: SummaryWriter
+    ) -> float:
+        # Create logging callback
+        logging_callback = LoggingCallback(
+            writer=tb_writer,
+            dataloader_length=len(self.training_loader),
+            logger=self.logger,
+        )
 
-        # Here, we use enumerate(training_loader) instead of
-        # iter(training_loader) so that we can track the batch
-        # index and do some intra-epoch reporting
-        for i, data in enumerate(self.training_loader):
-            # Every data instance is an input + label pair
-            inputs, (labels_policy, labels_value) = data
+        # Create training loop
+        training_loop = TrainingLoop(
+            model=self.model,
+            device=self.device,
+            optimizer=self.optimizer,
+            loss_fn_policy=self.loss_fn_policy,
+            loss_fn_value=self.loss_fn_value,
+            policy_loss_ratio=self.policy_loss_ratio,
+            value_loss_ratio=self.value_loss_ratio,
+            callbacks=[logging_callback],
+            logger=self.logger,
+        )
 
-            # Zero your gradients for every batch!
-            self.optimizer.zero_grad()
+        # Run training epoch
+        training_loop.run_epoch(
+            dataloader=self.training_loader,
+            epoch_idx=epoch_index,
+            progress_bar=True,
+            train_mode=True,
+        )
 
-            # Make predictions for this batch
-            outputs_policy, outputs_value = self.model(inputs)
-
-            # Compute the loss and its gradients
-            loss = self.policy_loss_ratio * self.loss_fn_policy(
-                outputs_policy, labels_policy
-            ) + self.value_loss_ratio * self.loss_fn_value(outputs_value, labels_value)
-            loss.backward()
-
-            # Adjust learning weights
-            self.optimizer.step()
-
-            # Gather data and report
-            running_loss += loss.item()
-            if i % 1000 == 999:
-                last_loss = running_loss / 1000  # loss per batch
-                self.logger.info("  batch {} loss: {}".format(i + 1, last_loss))
-                tb_x = epoch_index * len(self.training_loader) + i + 1
-                tb_writer.add_scalar("Loss/train", last_loss, tb_x)
-                running_loss = 0.0
-
-        return last_loss
+        return float(logging_callback.last_loss)
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        writer = SummaryWriter(self.log_dir / "training_log_{}".format(timestamp))
+        summary_writer_log_dir = (
+            self.log_dir / "training_log_{}".format(timestamp)
+        )
+        writer = SummaryWriter(summary_writer_log_dir)
         epoch_number = 0
 
         EPOCHS = self.epoch
@@ -199,42 +201,102 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            # 本当はdictにいろいろ保存することというか，
-            # なんでも読み込めること自体があんまりよくない
-            # https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
-            checkpoint: dict = torch.load(self.resume_from)
-            # チェックポイントはなんらかの障害で意図せず学習が止まることの保険
-            # そのため，epoch_numberは引継ぎする
-            epoch_number = checkpoint["epoch_number"] + 1
-            self.model.load_state_dict(checkpoint["model_state"])
-            self.optimizer.load_state_dict(checkpoint["opt_state"])
+            self.model.load_state_dict(
+                torch.load(
+                    self.resume_from,
+                    weights_only=True,
+                    map_location=self.device,
+                )
+            )
 
-        for epoch in range(epoch_number, EPOCHS):
-            self.logger.info("EPOCH {}:".format(epoch_number + 1))
+        # start epoch設定
+        epoch_number = self.start_epoch
 
-            # Make sure gradient tracking is on, and do a pass over the data
-            self.model.train(True)
-            avg_loss = self.__train_one_epoch(epoch_number, writer)
+        for _ in range(epoch_number, EPOCHS):
+            self.logger.info(
+                "EPOCH {}:".format(epoch_number + 1)
+            )
 
-            running_vloss = 0.0
-            # Set the model to evaluation mode, disabling dropout and using population
-            # statistics for batch normalization.
-            self.model.eval()
+            avg_loss = self.__train_one_epoch(
+                epoch_number, writer
+            )
 
-            # Disable gradient computation and reduce memory consumption.
-            with torch.no_grad():
-                for i, vdata in enumerate(self.validation_loader):
-                    vinputs, (vlabels_policy, vlabels_value) = vdata
-                    voutputs_policy, voutputs_value = self.model(vinputs)
-                    vloss = self.policy_loss_ratio * self.loss_fn_policy(
-                        voutputs_policy, vlabels_policy
-                    ) + self.value_loss_ratio * self.loss_fn_value(
-                        voutputs_value, vlabels_value
+            # 学習ごとに各層のパラメータを記録
+            for name, param in self.model.named_parameters():
+                try:
+                    param_np = param.detach().cpu().numpy()
+                    writer.add_histogram(
+                        f"parameters/{name}",
+                        param_np,
+                        epoch_number + 1,
                     )
-                    running_vloss += vloss
+                    if param.grad is not None:
+                        grad_np = (
+                            param.grad.detach().cpu().numpy()
+                        )
+                        writer.add_histogram(
+                            f"gradients/{name}",
+                            grad_np,
+                            epoch_number + 1,
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to log histogram for {name}: {e}"
+                    )
 
-            avg_vloss = running_vloss / (i + 1)
-            self.logger.info("LOSS train {} valid {}".format(avg_loss, avg_vloss))
+            # Create validation callback
+            validation_callback = ValidationCallback(
+                logger=self.logger
+            )
+
+            # Create validation training loop
+            validation_loop = TrainingLoop(
+                model=self.model,
+                device=self.device,
+                optimizer=self.optimizer,
+                loss_fn_policy=self.loss_fn_policy,
+                loss_fn_value=self.loss_fn_value,
+                policy_loss_ratio=self.policy_loss_ratio,
+                value_loss_ratio=self.value_loss_ratio,
+                callbacks=[validation_callback],
+                logger=self.logger,
+            )
+
+            # Run validation epoch
+            validation_loop.run_epoch(
+                dataloader=self.validation_loader,
+                epoch_idx=epoch_number,
+                train_mode=False,
+                progress_bar=True,
+            )
+
+            # Get validation metrics
+            avg_vloss = validation_callback.get_average_loss()
+            avg_accuracy_policy, avg_accuracy_value = (
+                validation_callback.get_average_accuracies()
+            )
+
+            # Reset callback for next epoch
+            validation_callback.reset()
+
+            self.logger.info(
+                "LOSS train {} valid {}".format(
+                    avg_loss, avg_vloss
+                )
+            )
+            self.logger.info(
+                "ACCURACY policy {} value {}".format(
+                    avg_accuracy_policy, avg_accuracy_value
+                )
+            )
+            writer.add_scalars(
+                "Accuracy",
+                {
+                    "Policy": avg_accuracy_policy,
+                    "Value": avg_accuracy_value,
+                },
+                epoch_number + 1,
+            )
 
             # Log the running loss averaged per batch
             # for both training and validation
@@ -248,24 +310,35 @@ class Learning:
             # Track best performance, and save the model's state
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
-                model_path = self.model_dir / "model_{}_{}.pt".format(
-                    timestamp, epoch_number
+                model_path = (
+                    self.model_dir
+                    / "model_{}_{}.pt".format(
+                        timestamp, epoch_number + 1
+                    )
+                )
+                self.logger.info(
+                    "Saving model to {}".format(model_path)
                 )
                 torch.save(self.model.state_dict(), model_path)
+                if self.__cloud_storage is not None:
+                    self.logger.info(
+                        "Uploading model to cloud storage"
+                    )
+                    self.__cloud_storage.upload_from_local(
+                        local_path=model_path,
+                        cloud_path=str(model_path),
+                    )
 
-            # checkpoint
-            if self.checkpoint_dir is not None:
-                checkpoint_path = self.checkpoint_dir / "model_{}_{}.checkpoint".format(
-                    timestamp, epoch_number
+            # SummaryWriterのイベントをGCSに保存する
+            if self.__cloud_storage is not None:
+                self.logger.info(
+                    "Uploading tensorboard logs to cloud storage"
                 )
-                torch.save(
-                    {
-                        # epoch_numberはepochより1進んでいるのでそのままいれる
-                        "epoch_number": epoch_number,
-                        "model_state": self.model.state_dict(),
-                        "opt_state": self.optimizer.state_dict(),
-                    },
-                    checkpoint_path,
+                self.__cloud_storage.upload_folder_from_local(
+                    local_folder=summary_writer_log_dir,
+                    cloud_folder="tensorboard",
                 )
 
             epoch_number += 1
+
+        writer.close()

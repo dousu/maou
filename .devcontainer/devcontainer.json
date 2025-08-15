@@ -1,15 +1,18 @@
 {
 	"name": "Ubuntu",
-	"image": "mcr.microsoft.com/vscode/devcontainers/universal:focal",
+	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
 	"features": {
-		// Docker
-		// https://github.com/devcontainers/features/tree/main/src/docker-in-docker
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {
-			"version": 3.13
-		}
+			"version": 3.11
+		},
+		// Node.js
+		// https://github.com/devcontainers/features/tree/main/src/node
+		"ghcr.io/devcontainers/features/node:1": {},
+		// GitHub CLI
+		// https://github.com/devcontainers/features/tree/main/src/github-cli
+		"ghcr.io/devcontainers/features/github-cli:1": {}
 	},
 	"customizations": {
 		"vscode": {
@@ -23,11 +26,17 @@
 						"source.fixAll.ruff": "explicit",
 						"source.organizeImports.ruff": "explicit"
 					}
-				}
+				},
+				"python.testing.pytestArgs": [
+        			"tests"
+    			],
+    			"python.testing.unittestEnabled": false,
+    			"python.testing.pytestEnabled": true
 			},
 			"extensions": [
 				"esbenp.prettier-vscode",
-				"charliermarsh.ruff"
+				"charliermarsh.ruff",
+				"GitHub.copilot"
 			]
 		}
 	}
