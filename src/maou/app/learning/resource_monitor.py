@@ -196,7 +196,7 @@ class GPUResourceMonitor:
         self._gpu_max_percent = 0.0
         self._gpu_memory_max_bytes = 0
         self._gpu_memory_max_percent = 0.0
-        
+
         # デフォルト値を設定（GPU利用できない場合に備えて）
         if not self._gpu_available:
             self._total_gpu_memory = 0
