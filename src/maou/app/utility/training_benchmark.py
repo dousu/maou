@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, cast
+from typing import Dict, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -63,7 +63,7 @@ class BenchmarkResult:
             "samples_per_second": self.samples_per_second,
             "batches_per_second": self.batches_per_second,
         }
-        
+
         # リソース使用率情報があれば追加
         if self.resource_usage is not None:
             resource_dict = self.resource_usage.to_dict()
@@ -71,7 +71,7 @@ class BenchmarkResult:
             for key, value in resource_dict.items():
                 if value is not None:
                     result[f"resource_{key}"] = float(value)
-        
+
         return result
 
 
@@ -104,7 +104,9 @@ class SingleEpochBenchmark:
         self.loss_fn_value = loss_fn_value
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
-        self.enable_resource_monitoring = enable_resource_monitoring
+        self.enable_resource_monitoring = (
+            enable_resource_monitoring
+        )
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -151,7 +153,9 @@ class SingleEpochBenchmark:
                 device=self.device,
                 logger=self.logger,
             )
-            callbacks.append(cast('TimingCallback', resource_callback))
+            callbacks.append(
+                cast("TimingCallback", resource_callback)
+            )
 
         # Create training loop
         training_loop = TrainingLoop(
@@ -194,7 +198,9 @@ class SingleEpochBenchmark:
         # Get resource usage if monitoring was enabled
         resource_usage = None
         if resource_callback is not None:
-            resource_usage = resource_callback.get_resource_usage()
+            resource_usage = (
+                resource_callback.get_resource_usage()
+            )
 
         # Log summary
         self.logger.info(
@@ -274,7 +280,9 @@ class SingleEpochBenchmark:
                 device=self.device,
                 logger=self.logger,
             )
-            callbacks.append(cast('TimingCallback', resource_callback))
+            callbacks.append(
+                cast("TimingCallback", resource_callback)
+            )
 
         # Create training loop in evaluation mode
         training_loop = TrainingLoop(
@@ -315,7 +323,9 @@ class SingleEpochBenchmark:
         # Get resource usage if monitoring was enabled
         resource_usage = None
         if resource_callback is not None:
-            resource_usage = resource_callback.get_resource_usage()
+            resource_usage = (
+                resource_callback.get_resource_usage()
+            )
 
         # Log summary
         self.logger.info(
@@ -535,14 +545,16 @@ class TrainingBenchmarkUseCase:
   Resource Usage Summary:
   - CPU Max Usage: {ru.cpu_max_percent:.1f}%
   - Memory Max Usage: {ru.memory_max_bytes / 1024**3:.1f}GB ({ru.memory_max_percent:.1f}%)"""
-                
+
                 if ru.gpu_max_percent is not None:
                     resource_summary += f"""
   - GPU Max Usage: {ru.gpu_max_percent:.1f}%"""
-                
-                if (ru.gpu_memory_max_bytes is not None and 
-                    ru.gpu_memory_total_bytes is not None and
-                    ru.gpu_memory_max_percent is not None):
+
+                if (
+                    ru.gpu_memory_max_bytes is not None
+                    and ru.gpu_memory_total_bytes is not None
+                    and ru.gpu_memory_max_percent is not None
+                ):
                     resource_summary += f"""
   - GPU Memory Max Usage: {ru.gpu_memory_max_bytes / 1024**3:.1f}GB / {ru.gpu_memory_total_bytes / 1024**3:.1f}GB ({ru.gpu_memory_max_percent:.1f}%)"""
 

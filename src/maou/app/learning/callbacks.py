@@ -537,7 +537,9 @@ class ResourceMonitoringCallback(BaseCallback):
         self.gpu_monitor: Optional[GPUResourceMonitor] = None
         if self.device.type == "cuda":
             gpu_index = (
-                self.device.index if self.device.index is not None else 0
+                self.device.index
+                if self.device.index is not None
+                else 0
             )
             self.gpu_monitor = GPUResourceMonitor(
                 gpu_index=gpu_index,
@@ -579,12 +581,18 @@ class ResourceMonitoringCallback(BaseCallback):
                 gpu_usage.gpu_max_percent if gpu_usage else None
             ),
             gpu_memory_max_bytes=(
-                gpu_usage.gpu_memory_max_bytes if gpu_usage else None
+                gpu_usage.gpu_memory_max_bytes
+                if gpu_usage
+                else None
             ),
             gpu_memory_total_bytes=(
-                gpu_usage.gpu_memory_total_bytes if gpu_usage else None
+                gpu_usage.gpu_memory_total_bytes
+                if gpu_usage
+                else None
             ),
             gpu_memory_max_percent=(
-                gpu_usage.gpu_memory_max_percent if gpu_usage else None
+                gpu_usage.gpu_memory_max_percent
+                if gpu_usage
+                else None
             ),
         )

@@ -218,7 +218,8 @@ def benchmark_training(
         enable_profiling=enable_profiling or False,
         run_validation=run_validation or False,
         sample_ratio=sample_ratio,
-        enable_resource_monitoring=enable_resource_monitoring or False,
+        enable_resource_monitoring=enable_resource_monitoring
+        or False,
     )
 
     # Validate sample_ratio

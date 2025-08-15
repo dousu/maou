@@ -8,6 +8,7 @@ import psutil
 
 try:
     import pynvml
+
     HAS_PYNVML = True
 except ImportError:
     HAS_PYNVML = False
@@ -46,7 +47,9 @@ class SystemResourceMonitor:
     最大値を記録する．
     """
 
-    def __init__(self, monitoring_interval: float = 0.5) -> None:
+    def __init__(
+        self, monitoring_interval: float = 0.5
+    ) -> None:
         """
         Args:
             monitoring_interval: 監視間隔（秒）
@@ -67,7 +70,9 @@ class SystemResourceMonitor:
     def start_monitoring(self) -> None:
         """リソース監視を開始する．"""
         if self._monitoring:
-            self.logger.warning("Resource monitoring is already running")
+            self.logger.warning(
+                "Resource monitoring is already running"
+            )
             return
 
         self.logger.debug("Starting system resource monitoring")
@@ -169,7 +174,9 @@ class GPUResourceMonitor:
             self._gpu_available = True
 
             # GPU情報を取得
-            gpu_info = pynvml.nvmlDeviceGetMemoryInfo(self._handle)
+            gpu_info = pynvml.nvmlDeviceGetMemoryInfo(
+                self._handle
+            )
             self._total_gpu_memory = gpu_info.total
 
             self.logger.debug(
@@ -189,7 +196,10 @@ class GPUResourceMonitor:
         self._gpu_max_percent = 0.0
         self._gpu_memory_max_bytes = 0
         self._gpu_memory_max_percent = 0.0
-        self._total_gpu_memory = 0
+        
+        # デフォルト値を設定（GPU利用できない場合に備えて）
+        if not self._gpu_available:
+            self._total_gpu_memory = 0
 
     def start_monitoring(self) -> None:
         """GPU監視を開始する．"""
@@ -197,7 +207,9 @@ class GPUResourceMonitor:
             return
 
         if self._monitoring:
-            self.logger.warning("GPU monitoring is already running")
+            self.logger.warning(
+                "GPU monitoring is already running"
+            )
             return
 
         self.logger.debug("Starting GPU resource monitoring")
@@ -241,10 +253,12 @@ class GPUResourceMonitor:
 
         return ResourceUsage(
             cpu_max_percent=0.0,  # SystemResourceMonitorで設定
-            memory_max_bytes=0,   # SystemResourceMonitorで設定
+            memory_max_bytes=0,  # SystemResourceMonitorで設定
             memory_max_percent=0.0,  # SystemResourceMonitorで設定
             gpu_max_percent=self._gpu_max_percent,
-            gpu_memory_max_bytes=int(self._gpu_memory_max_bytes),
+            gpu_memory_max_bytes=int(
+                self._gpu_memory_max_bytes
+            ),
             gpu_memory_total_bytes=int(self._total_gpu_memory),
             gpu_memory_max_percent=gpu_memory_max_percent,
         )
@@ -254,11 +268,14 @@ class GPUResourceMonitor:
         while self._monitoring:
             try:
                 # GPU使用率を取得
-                utilization = pynvml.nvmlDeviceGetUtilizationRates(
-                    self._handle
+                utilization = (
+                    pynvml.nvmlDeviceGetUtilizationRates(
+                        self._handle
+                    )
                 )
                 self._gpu_max_percent = max(
-                    self._gpu_max_percent, float(utilization.gpu)
+                    self._gpu_max_percent,
+                    float(utilization.gpu),
                 )
 
                 # GPUメモリ使用量を取得
@@ -275,7 +292,8 @@ class GPUResourceMonitor:
                     * 100.0
                 )
                 self._gpu_memory_max_percent = max(
-                    self._gpu_memory_max_percent, gpu_memory_percent
+                    self._gpu_memory_max_percent,
+                    gpu_memory_percent,
                 )
 
                 time.sleep(self.monitoring_interval)
