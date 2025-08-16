@@ -138,3 +138,5 @@ checkpoints/
 *.npy
 
 **/.claude/settings.local.json
+
+settings.json

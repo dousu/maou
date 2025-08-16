@@ -1,6 +1,6 @@
 import logging
 
-import cshogi
+import cshogi  # type: ignore[import]
 
 from maou.app.pre_process import label
 
@@ -252,11 +252,13 @@ class TestLabel:
         ) in working_test_cases:
             # Test round-trip conversion
             move_label = label.make_move_label(
-                cshogi.BLACK, move
-            )  # type: ignore[attr-defined]
+                cshogi.BLACK,  # type: ignore[attr-defined]
+                move,
+            )
             result = label.make_move_from_label(
-                cshogi.BLACK, move_label
-            )  # type: ignore[attr-defined]
+                cshogi.BLACK,  # type: ignore[attr-defined]
+                move_label,
+            )
 
             logger.info(
                 f"Move {move} -> Label {move_label} -> {result} ({description})"
@@ -283,8 +285,9 @@ class TestLabel:
                 move >= label.MOVE_LABELS_NUM
             ):  # Only test moves beyond label range
                 result = label.make_move_from_label(
-                    cshogi.BLACK, move
-                )  # type: ignore[attr-defined]
+                    cshogi.BLACK,  # type: ignore[attr-defined]
+                    move,
+                )
                 actual_usi = cshogi.move_to_usi(move)  # type: ignore[attr-defined]
 
                 logger.info(
@@ -306,11 +309,13 @@ class TestLabel:
 
         for move, expected_usi in drop_moves:
             white_label = label.make_move_label(
-                cshogi.WHITE, move
-            )  # type: ignore[attr-defined]
+                cshogi.WHITE,  # type: ignore[attr-defined]
+                move,
+            )
             white_result = label.make_move_from_label(
-                cshogi.WHITE, white_label
-            )  # type: ignore[attr-defined]
+                cshogi.WHITE,  # type: ignore[attr-defined]
+                white_label,
+            )
             actual_usi = cshogi.move_to_usi(move)  # type: ignore[attr-defined]
 
             logger.info(
@@ -326,8 +331,9 @@ class TestLabel:
         )
         # Test make_move_from_label(cshogi.BLACK, 928) -> 4e5c+
         result_928 = label.make_move_from_label(
-            cshogi.BLACK, 928
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            928,
+        )
         logger.info(
             f"Label 928 -> {result_928} (expected: 4e5c+)"
         )
@@ -386,15 +392,17 @@ class TestLabel:
         )
         # UP_RIGHT
         up_right_first = label.make_move_label(
-            cshogi.BLACK, 1280
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            1280,
+        )
         assert (
             up_right_first
             == label.MoveCategoryStartLabel.UP_RIGHT
         )
         up_right_last = label.make_move_label(
-            cshogi.BLACK, 10310
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            10310,
+        )
         assert (
             up_right_last
             == label.MoveCategoryStartLabel.LEFT - 1
@@ -423,75 +431,85 @@ class TestLabel:
         )
         # DOWN_LEFT
         down_left_first = label.make_move_label(
-            cshogi.BLACK, 10
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            10,
+        )
         assert (
             down_left_first
             == label.MoveCategoryStartLabel.DOWN_LEFT
         )
         down_left_last = label.make_move_label(
-            cshogi.BLACK, 9040
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            9040,
+        )
         assert (
             down_left_last
             == label.MoveCategoryStartLabel.DOWN_RIGHT - 1
         )
         # DOWN_RIGHT
         down_right_first = label.make_move_label(
-            cshogi.BLACK, 1153
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            1153,
         )  # type: ignore[attr-defined]
         assert (
             down_right_first
             == label.MoveCategoryStartLabel.DOWN_RIGHT
         )
         down_right_last = label.make_move_label(
-            cshogi.BLACK, 10183
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            10183,
+        )
         assert (
             down_right_last
             == label.MoveCategoryStartLabel.KEIMA_LEFT - 1
         )
         # KEIMA_LEFT
         keima_left_first = label.make_move_label(
-            cshogi.BLACK, 523
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            523,
+        )
         assert (
             keima_left_first
             == label.MoveCategoryStartLabel.KEIMA_LEFT
         )
         keima_left_last = label.make_move_label(
-            cshogi.BLACK, 9166
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            9166,
+        )
         assert (
             keima_left_last
             == label.MoveCategoryStartLabel.KEIMA_RIGHT - 1
         )
         # KEIMA_RIGHT
         keima_right_first = label.make_move_label(
-            cshogi.BLACK, 1666
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            1666,
+        )
         assert (
             keima_right_first
             == label.MoveCategoryStartLabel.KEIMA_RIGHT
         )
         keima_right_last = label.make_move_label(
-            cshogi.BLACK, 10309
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            10309,
+        )
         assert (
             keima_right_last
             == label.MoveCategoryStartLabel.UP_PROMOTION - 1
         )
         # UP_PROMOTION
         up_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16512
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16512,
+        )
         assert (
             up_promotion_first
             == label.MoveCategoryStartLabel.UP_PROMOTION
         )
         up_promotion_last = label.make_move_label(
-            cshogi.BLACK, 26698
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            26698,
+        )
         assert (
             up_promotion_last
             == label.MoveCategoryStartLabel.UP_LEFT_PROMOTION
@@ -499,15 +517,17 @@ class TestLabel:
         )
         # UP_LEFT_PROMOTION
         up_left_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16521
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16521,
+        )
         assert (
             up_left_promotion_first
             == label.MoveCategoryStartLabel.UP_LEFT_PROMOTION
         )
         up_left_promotion_last = label.make_move_label(
-            cshogi.BLACK, 21834
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            21834,
+        )
         assert (
             up_left_promotion_last
             == label.MoveCategoryStartLabel.UP_RIGHT_PROMOTION
@@ -515,60 +535,68 @@ class TestLabel:
         )
         # UP_RIGHT_PROMOTION
         up_right_promotion_first = label.make_move_label(
-            cshogi.BLACK, 26624
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            26624,
+        )
         assert (
             up_right_promotion_first
             == label.MoveCategoryStartLabel.UP_RIGHT_PROMOTION
         )
         up_right_promotion_last = label.make_move_label(
-            cshogi.BLACK, 26049
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            26049,
+        )
         assert (
             up_right_promotion_last
             == label.MoveCategoryStartLabel.LEFT_PROMOTION - 1
         )
         # LEFT_PROMOTION
         left_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16393
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16393,
+        )
         assert (
             left_promotion_first
             == label.MoveCategoryStartLabel.LEFT_PROMOTION
         )
         left_promotion_last = label.make_move_label(
-            cshogi.BLACK, 16714
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16714,
+        )
         assert (
             left_promotion_last
             == label.MoveCategoryStartLabel.RIGHT_PROMOTION - 1
         )
         # RIGHT_PROMOTION
         right_promotion_first = label.make_move_label(
-            cshogi.BLACK, 17536
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            17536,
+        )
         assert (
             right_promotion_first
             == label.MoveCategoryStartLabel.RIGHT_PROMOTION
         )
         right_promotion_last = label.make_move_label(
-            cshogi.BLACK, 25921
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            25921,
+        )
         assert (
             right_promotion_last
             == label.MoveCategoryStartLabel.DOWN_PROMOTION - 1
         )
         # DOWN_PROMOTION
         down_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16385
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16385,
+        )
         assert (
             down_promotion_first
             == label.MoveCategoryStartLabel.DOWN_PROMOTION
         )
         down_promotion_last = label.make_move_label(
-            cshogi.BLACK, 25936
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            25936,
+        )
         assert (
             down_promotion_last
             == label.MoveCategoryStartLabel.DOWN_LEFT_PROMOTION
@@ -576,15 +604,17 @@ class TestLabel:
         )
         # DOWN_LEFT_PROMOTION
         down_left_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16394
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16394,
+        )
         assert (
             down_left_promotion_first
             == label.MoveCategoryStartLabel.DOWN_LEFT_PROMOTION
         )
         down_left_promotion_last = label.make_move_label(
-            cshogi.BLACK, 16464
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16464,
+        )
         assert (
             down_left_promotion_last
             == label.MoveCategoryStartLabel.DOWN_RIGHT_PROMOTION
@@ -592,15 +622,17 @@ class TestLabel:
         )
         # DOWN_RIGHT_PROMOTION
         down_right_promotion_first = label.make_move_label(
-            cshogi.BLACK, 17537
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            17537,
+        )
         assert (
             down_right_promotion_first
             == label.MoveCategoryStartLabel.DOWN_RIGHT_PROMOTION
         )
         down_right_promotion_last = label.make_move_label(
-            cshogi.BLACK, 25922
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            25922,
+        )
         assert (
             down_right_promotion_last
             == label.MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION
@@ -608,15 +640,17 @@ class TestLabel:
         )
         # KEIMA_LEFT_PROMOTION
         keima_left_promotion_first = label.make_move_label(
-            cshogi.BLACK, 16649
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            16649,
+        )
         assert (
             keima_left_promotion_first
             == label.MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION
         )
         keima_left_promotion_last = label.make_move_label(
-            cshogi.BLACK, 25034
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            25034,
+        )
         assert (
             keima_left_promotion_last
             == label.MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION
@@ -624,15 +658,17 @@ class TestLabel:
         )
         # KEIMA_RIGHT_PROMOTION
         keima_right_promotion_first = label.make_move_label(
-            cshogi.BLACK, 17792
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            17792,
+        )
         assert (
             keima_right_promotion_first
             == label.MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION
         )
         keima_right_promotion_last = label.make_move_label(
-            cshogi.BLACK, 26177
-        )  # type: ignore[attr-defined]
+            cshogi.BLACK,  # type: ignore[attr-defined]
+            26177,
+        )
         assert (
             keima_right_promotion_last
             == label.MoveCategoryStartLabel.FU - 1
@@ -680,33 +716,37 @@ class TestLabel:
         """
         assert (
             label.make_result_value(
-                cshogi.BLACK, cshogi.BLACK_WIN
+                cshogi.BLACK,  # type: ignore[attr-defined]
+                cshogi.BLACK_WIN,  # type: ignore[attr-defined]
             )
             == 1
-        )  # type: ignore[attr-defined]
+        )
         assert (
-            label.make_result_value(cshogi.BLACK, cshogi.DRAW)
+            label.make_result_value(cshogi.BLACK, cshogi.DRAW)  # type: ignore[attr-defined]
             == 0.5
-        )  # type: ignore[attr-defined]
+        )
         assert (
             label.make_result_value(
-                cshogi.BLACK, cshogi.WHITE_WIN
+                cshogi.BLACK,  # type: ignore[attr-defined]
+                cshogi.WHITE_WIN,  # type: ignore[attr-defined]
             )
             == 0
-        )  # type: ignore[attr-defined]
+        )
         assert (
             label.make_result_value(
-                cshogi.WHITE, cshogi.BLACK_WIN
+                cshogi.WHITE,  # type: ignore[attr-defined]
+                cshogi.BLACK_WIN,  # type: ignore[attr-defined]
             )
             == 0
-        )  # type: ignore[attr-defined]
+        )
         assert (
-            label.make_result_value(cshogi.WHITE, cshogi.DRAW)
+            label.make_result_value(cshogi.WHITE, cshogi.DRAW)  # type: ignore[attr-defined]
             == 0.5
-        )  # type: ignore[attr-defined]
+        )
         assert (
             label.make_result_value(
-                cshogi.WHITE, cshogi.WHITE_WIN
+                cshogi.WHITE,  # type: ignore[attr-defined]
+                cshogi.WHITE_WIN,  # type: ignore[attr-defined]
             )
             == 1
-        )  # type: ignore[attr-defined]
+        )
