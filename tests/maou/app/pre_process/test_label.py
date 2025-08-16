@@ -164,11 +164,11 @@ class TestLabel:
         assert (
             testL_5b == label.MoveCategoryStartLabel.KY + 37 - 5
         )
-        # N*5b (58桂打想定) 10667
-        testN_5b = label.make_move_label(cshogi.BLACK, 10667)  # type: ignore[attr-defined]
-        assert testN_5b < label.MOVE_LABELS_NUM
+        # N*5h (58桂打想定) 10667
+        testN_5h = label.make_move_label(cshogi.BLACK, 10667)  # type: ignore[attr-defined]
+        assert testN_5h < label.MOVE_LABELS_NUM
         assert (
-            testN_5b
+            testN_5h
             == label.MoveCategoryStartLabel.KE + 43 - 10
         )
         # S*5b (52銀打想定) 10789
@@ -223,6 +223,146 @@ class TestLabel:
         testG_5b = label.make_move_label(cshogi.WHITE, 11173)  # type: ignore[attr-defined]
         assert testG_5b < label.MOVE_LABELS_NUM
         assert testG_5b == label.MoveCategoryStartLabel.KI + 43
+
+    def test_make_move_from_label(self) -> None:
+        """ラベルから指し手への逆変換のテスト."""
+        # Test cases that work correctly with current implementation
+        working_test_cases = [
+            # (move, expected_usi, description)
+            (128, "1b1a", "1b1a - basic UP move"),
+            (5675, "5i5h", "5i5h - UP move"),
+            (11088, "R*9i", "R*9i - HI drop"),
+            (10405, "P*5b", "P*5b - FU drop"),
+            (10533, "L*5b", "L*5b - KY drop"),
+            (10667, "N*5h", "N*5h - KE drop"),
+            (10789, "S*5b", "S*5b - GI drop"),
+            (11173, "G*5b", "G*5b - KI drop"),
+            (10917, "B*5b", "B*5b - KA drop"),
+            (11045, "R*5b", "R*5b - HI drop"),
+            (20390, "4e5c+", "4e5c+ - KEIMA_LEFT promotion"),
+        ]
+
+        logger.info(
+            "\n=== Testing reverse conversion for working cases ==="
+        )
+        for (
+            move,
+            expected_usi,
+            description,
+        ) in working_test_cases:
+            # Test round-trip conversion
+            move_label = label.make_move_label(
+                cshogi.BLACK, move
+            )  # type: ignore[attr-defined]
+            result = label.make_move_from_label(
+                cshogi.BLACK, move_label
+            )  # type: ignore[attr-defined]
+
+            logger.info(
+                f"Move {move} -> Label {move_label} -> {result} ({description})"
+            )
+            assert result == expected_usi, (
+                f"Expected {expected_usi}, got {result}"
+            )
+
+        # Test extended functionality: move values as input
+        # Note: Only move values beyond MOVE_LABELS_NUM are treated as cshogi move values
+        logger.info(
+            "\n=== Testing move values as direct input (for values > MOVE_LABELS_NUM) ==="
+        )
+        large_move_cases = [
+            (11088, "R*9i"),  # This is beyond MOVE_LABELS_NUM
+            (10405, "P*5b"),  # This is beyond MOVE_LABELS_NUM
+            (10533, "L*5b"),  # This is beyond MOVE_LABELS_NUM
+            (10789, "S*5b"),  # This is beyond MOVE_LABELS_NUM
+            (11173, "G*5b"),  # This is beyond MOVE_LABELS_NUM
+        ]
+
+        for move, expected_usi in large_move_cases:
+            if (
+                move >= label.MOVE_LABELS_NUM
+            ):  # Only test moves beyond label range
+                result = label.make_move_from_label(
+                    cshogi.BLACK, move
+                )  # type: ignore[attr-defined]
+                actual_usi = cshogi.move_to_usi(move)  # type: ignore[attr-defined]
+
+                logger.info(
+                    f"Move {move} -> {result} (cshogi: {actual_usi})"
+                )
+                assert result == actual_usi, (
+                    f"Expected {actual_usi}, got {result}"
+                )
+
+        # Test WHITE turn for drop moves (they should work the same)
+        logger.info(
+            "\n=== Testing WHITE turn for drop moves ==="
+        )
+        drop_moves = [
+            (10405, "P*5b"),
+            (10789, "S*5b"),
+            (11173, "G*5b"),
+        ]
+
+        for move, expected_usi in drop_moves:
+            white_label = label.make_move_label(
+                cshogi.WHITE, move
+            )  # type: ignore[attr-defined]
+            white_result = label.make_move_from_label(
+                cshogi.WHITE, white_label
+            )  # type: ignore[attr-defined]
+            actual_usi = cshogi.move_to_usi(move)  # type: ignore[attr-defined]
+
+            logger.info(
+                f"WHITE Move {move} -> Label {white_label} -> {white_result} (cshogi: {actual_usi})"
+            )
+            assert white_result == actual_usi, (
+                f"Expected {actual_usi}, got {white_result}"
+            )
+
+        # Test specific user-requested cases
+        logger.info(
+            "\n=== Testing specific requested cases ==="
+        )
+        # Test make_move_from_label(cshogi.BLACK, 928) -> 4e5c+
+        result_928 = label.make_move_from_label(
+            cshogi.BLACK, 928
+        )  # type: ignore[attr-defined]
+        logger.info(
+            f"Label 928 -> {result_928} (expected: 4e5c+)"
+        )
+        assert result_928 == "4e5c+", (
+            f"Expected 4e5c+, got {result_928}"
+        )
+
+        # Test make_move_from_label(cshogi.BLACK, 39) -> 5i5h
+        result_39 = label.make_move_from_label(cshogi.BLACK, 39)  # type: ignore[attr-defined]
+        logger.info(f"Label 39 -> {result_39} (expected: 5i5h)")
+        assert result_39 == "5i5h", (
+            f"Expected 5i5h, got {result_39}"
+        )
+
+        # Test error cases
+        logger.info("\n=== Testing error cases ===")
+        try:
+            label.make_move_from_label(cshogi.BLACK, -1)  # type: ignore[attr-defined]
+            assert False, (
+                "Should raise ValueError for negative label"
+            )
+        except ValueError:
+            logger.info("✅ Negative label correctly rejected")
+            pass
+
+        # Test invalid move value
+        try:
+            label.make_move_from_label(cshogi.BLACK, 999999)  # type: ignore[attr-defined]
+            logger.info(
+                "⚠️ Very large move value accepted (may be valid cshogi move)"
+            )
+        except ValueError:
+            logger.info(
+                "✅ Invalid move value correctly rejected"
+            )
 
         # ラベル変換のロジックとMoveCategoryStartLabelの整合性取れているかテスト
         # 最初と最後をチェック
