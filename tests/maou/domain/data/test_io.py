@@ -8,9 +8,9 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.data.io import (
+from maou.domain.board.shogi import FEATURES_NUM
+from maou.domain.data.array_io import (
     DataIOError,
     load_hcpe_array,
     load_preprocessing_array,

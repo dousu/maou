@@ -94,9 +94,6 @@ addopts = [
 
 [tool.mypy]
 disallow_untyped_defs = true
-plugins = [
-  "numpy.typing.mypy_plugin",
-]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

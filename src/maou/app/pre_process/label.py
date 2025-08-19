@@ -3,7 +3,7 @@ import re
 from enum import IntEnum, auto
 from typing import Dict, Tuple
 
-import cshogi
+from maou.domain.board import shogi
 
 
 # 駒の動きのラベリング
@@ -112,7 +112,7 @@ class HandPiece(IntEnum):
 
 MOVE_LABELS_NUM = MoveCategoryStartLabel.HI + 81
 
-# Pre-computed drop piece label offsets
+# lamdba definition for drop piece label offsets
 _DROP_LABEL_OFFSETS = {
     HandPiece.FU: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
     HandPiece.KY: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
@@ -227,7 +227,7 @@ _PROMOTION_LABEL_OFFSETS = {
 }
 
 
-def make_move_label(turn: int, move: int) -> int:
+def make_move_label(turn: shogi.Turn, move: int) -> int:
     """moveの教師データ作成.
     入力値は32ビット (int)のmoveとしようと思っていたが，
     いくつかの値を試したところcshogiの中でどちらか判定して
@@ -238,7 +238,7 @@ def make_move_label(turn: int, move: int) -> int:
     意味のない出力クラスができてしまい，
     不要にDeepLeaningの学習効率を悪くしてしまう．
     """
-    if not cshogi.move_is_drop(move):  # type: ignore # 盤上の移動の場合
+    if not shogi.move_is_drop(move):  # 盤上の移動の場合
         return _process_board_move(turn, move)
     else:  # 駒打ちの場合
         return _process_drop_move(turn, move)
@@ -246,10 +246,10 @@ def make_move_label(turn: int, move: int) -> int:
 
 def _process_board_move(turn: int, move: int) -> int:
     """Process board moves using optimized lookup tables."""
-    to_sq = cshogi.move_to(move)  # type: ignore
-    from_sq = cshogi.move_from(move)  # type: ignore
+    to_sq = shogi.move_to(move)
+    from_sq = shogi.move_from(move)
 
-    if turn == cshogi.WHITE:  # type: ignore
+    if turn == shogi.Turn.WHITE:
         to_sq = 80 - to_sq
         from_sq = 80 - from_sq
 
@@ -259,7 +259,7 @@ def _process_board_move(turn: int, move: int) -> int:
 
     # Calculate direction vector
     direction = (to_x - from_x, to_y - from_y)
-    is_promotion = cshogi.move_is_promotion(move)  # type: ignore
+    is_promotion = shogi.move_is_promotion(move)
 
     # Handle each direction with optimized logic
     if direction == _DIRECTION_KEIMA_LEFT:
@@ -592,14 +592,14 @@ def _process_down_right(
 
 def _process_drop_move(turn: int, move: int) -> int:
     """Process drop moves using optimized lookup tables."""
-    to_sq = cshogi.move_to(move)  # type: ignore
+    to_sq = shogi.move_to(move)
 
-    if turn == cshogi.WHITE:  # type: ignore
+    if turn == shogi.Turn.WHITE:
         to_sq = 80 - to_sq
 
     # Use pre-computed coordinate cache
     to_x, to_y = _COORDINATE_CACHE[to_sq]
-    hand_piece_raw = cshogi.move_drop_hand_piece(move)  # type: ignore
+    hand_piece_raw = shogi.move_drop_hand_piece(move)
     hand_piece = HandPiece(hand_piece_raw)
 
     # Validate drop constraints
@@ -632,13 +632,13 @@ def make_result_value(turn: int, game_result: int) -> float:
         from current player's perspective
     """
     match (turn, game_result):
-        case (cshogi.BLACK, cshogi.BLACK_WIN):  # type: ignore
+        case (shogi.Turn.BLACK, shogi.Result.BLACK_WIN):
             return 1
-        case (cshogi.BLACK, cshogi.WHITE_WIN):  # type: ignore
+        case (shogi.Turn.BLACK, shogi.Result.WHITE_WIN):
             return 0.0
-        case (cshogi.WHITE, cshogi.BLACK_WIN):  # type: ignore
+        case (shogi.Turn.WHITE, shogi.Result.BLACK_WIN):
             return 0.0
-        case (cshogi.WHITE, cshogi.WHITE_WIN):  # type: ignore
+        case (shogi.Turn.WHITE, shogi.Result.WHITE_WIN):
             return 1
         case _:
             return 0.5
@@ -667,7 +667,7 @@ def benchmark_make_move_label(
         if from_sq != to_sq:
             # Create a simple move (this is a simplified test)
             move = (from_sq << 7) | to_sq
-            test_moves.append((cshogi.BLACK, move))  # type: ignore
+            test_moves.append((shogi.Turn.BLACK, move))
 
     logger.info(
         f"Starting benchmark with {num_iterations} iterations..."
@@ -697,7 +697,7 @@ def benchmark_make_move_label(
     )
 
 
-def make_move_from_label(turn: int, label: int) -> str:
+def make_move_from_label(turn: shogi.Turn, label: int) -> str:
     """ラベルから指し手への逆変換.
 
     Args:
@@ -716,7 +716,7 @@ def make_move_from_label(turn: int, label: int) -> str:
     # If label is beyond our label range, treat it as a cshogi move value
     if label >= MOVE_LABELS_NUM:
         try:
-            usi_move = cshogi.move_to_usi(label)  # type: ignore
+            usi_move = shogi.move_to_usi(label)
         except Exception:
             raise ValueError(f"Invalid move value: {label}")
     else:
@@ -738,7 +738,9 @@ def make_move_from_label(turn: int, label: int) -> str:
     return usi_move
 
 
-def _make_board_move_from_label(turn: int, label: int) -> str:
+def _make_board_move_from_label(
+    turn: shogi.Turn, label: int
+) -> str:
     """盤上移動の逆変換."""
     # Determine move category and offset
     if label < MoveCategoryStartLabel.UP_LEFT:
@@ -859,8 +861,14 @@ def _make_board_move_from_label(turn: int, label: int) -> str:
     )
 
 
+# TODO: いくつかの問題あり
+# - _find_*_from_sq()みたいな処理は桂馬以外のすべてに必要
+# - _find_*_from_sq()は盤面情報が必要
 def _decode_board_move(
-    turn: int, direction: str, offset: int, is_promotion: bool
+    turn: shogi.Turn,
+    direction: str,
+    offset: int,
+    is_promotion: bool,
 ) -> str:
     """盤上移動のデコード処理."""
     # Direction-specific decoding
@@ -921,7 +929,7 @@ def _decode_board_move(
         raise ValueError(f"Invalid direction: {direction}")
 
     # Handle turn-based coordinate transformation
-    if turn == cshogi.WHITE:  # type: ignore
+    if turn == shogi.Turn.WHITE:
         to_sq = 80 - to_sq
         from_sq = 80 - from_sq
 
@@ -1395,7 +1403,9 @@ def _decode_keima_right_move(
     )
 
 
-def _make_drop_move_from_label(turn: int, label: int) -> str:
+def _make_drop_move_from_label(
+    turn: shogi.Turn, label: int
+) -> str:
     """駒打ちの逆変換."""
     # Determine piece type
     if label < MoveCategoryStartLabel.KY:
@@ -1424,7 +1434,7 @@ def _make_drop_move_from_label(turn: int, label: int) -> str:
     to_sq = _decode_drop_target(piece, offset)
 
     # Handle turn-based coordinate transformation
-    if turn == cshogi.WHITE:  # type: ignore
+    if turn == shogi.Turn.WHITE:
         to_sq = 80 - to_sq
 
     # Convert to USI format

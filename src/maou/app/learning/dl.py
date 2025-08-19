@@ -17,7 +17,7 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
-from maou.app.pre_process.feature import FEATURES_NUM
+from maou.domain.board.shogi import FEATURES_NUM
 
 
 class CloudStorage(metaclass=abc.ABCMeta):

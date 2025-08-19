@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from maou.domain.data.io import (
+from maou.domain.data.array_io import (
     DataIOError,
     _convert_to_packed_format,
     load_preprocessing_array,

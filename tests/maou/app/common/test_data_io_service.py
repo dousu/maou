@@ -9,7 +9,7 @@ import pytest
 from maou.app.common.data_io_service import (
     DataIOService,
 )
-from maou.domain.data.io import DataIOError
+from maou.domain.data.array_io import DataIOError
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
     create_empty_preprocessing_array,
@@ -30,7 +30,9 @@ class TestDataIOService:
             file_path = Path(temp_dir) / "test_hcpe_game.npy"
 
             # Save using domain I/O directly
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, file_path)
 
@@ -60,7 +62,7 @@ class TestDataIOService:
             )
 
             # Save using domain I/O directly
-            from maou.domain.data.io import (
+            from maou.domain.data.array_io import (
                 save_preprocessing_array,
             )
 
@@ -85,7 +87,9 @@ class TestDataIOService:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test_mmap_hcpe.npy"
 
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, file_path)
 
@@ -116,7 +120,9 @@ class TestDataIOService:
             )
 
             # Load using domain I/O to verify
-            from maou.domain.data.io import load_hcpe_array
+            from maou.domain.data.array_io import (
+                load_hcpe_array,
+            )
 
             loaded_array = load_hcpe_array(file_path)
 
@@ -156,7 +162,9 @@ class TestDataIOService:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Test HCPE loading with explicit type
             hcpe_file = Path(temp_dir) / "game_data.hcpe.npy"
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, hcpe_file)
 
@@ -173,15 +181,18 @@ class TestDataIOService:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.npy"
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, file_path)
 
             # Should raise error with invalid type
             with pytest.raises(DataIOError):
                 DataIOService.load_array(
-                    file_path, array_type="invalid"
-                )  # type: ignore
+                    file_path,
+                    array_type="invalid",  # type: ignore
+                )
 
     def test_load_file_not_found(self) -> None:
         """Test error handling for non-existent file."""
@@ -202,7 +213,9 @@ class TestConvenienceFunctions:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "convenience.npy"
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, file_path)
 

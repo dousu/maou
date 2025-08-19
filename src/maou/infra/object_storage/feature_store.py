@@ -3,7 +3,8 @@ import contextlib
 import hashlib
 import logging
 import multiprocessing as mp
-from typing import Generator, Literal, Optional
+from collections.abc import Generator
+from typing import Literal, Optional
 
 import numpy as np
 

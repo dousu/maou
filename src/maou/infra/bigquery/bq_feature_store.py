@@ -104,17 +104,26 @@ class BigQueryFeatureStore(
             for _, (
                 dtype,
                 _,
-            ) in structured_array.dtype.fields.items()
+                *_,
+            ) in (
+                structured_array.dtype.fields.items()
+                if structured_array.dtype.fields
+                else []
+            )
         )
 
         if not has_float16:
             return structured_array
 
         # Create new dtype with float16 -> float32 conversion
-        new_dtypes = []
+        new_dtypes: list[tuple[str, Any]] = []
+        if structured_array.dtype.fields is None:
+            return structured_array
+
         for field_name, (
             dtype,
             offset,
+            *_,
         ) in structured_array.dtype.fields.items():
             if (
                 dtype.kind == "f" and dtype.itemsize == 2
@@ -135,9 +144,7 @@ class BigQueryFeatureStore(
                         (field_name, (dtype.base, dtype.shape))
                     )
                 else:  # Scalar field
-                    new_dtypes.append(
-                        (field_name, dtype.base)  # type: ignore[arg-type]
-                    )
+                    new_dtypes.append((field_name, dtype.base))
 
         # Create new array with converted types
         new_array = np.empty(
@@ -145,9 +152,13 @@ class BigQueryFeatureStore(
         )
 
         # Copy data with type conversion
+        if structured_array.dtype.fields is None:
+            return new_array
+
         for field_name, (
             dtype,
             _,
+            *_,
         ) in structured_array.dtype.fields.items():
             if (
                 dtype.kind == "f" and dtype.itemsize == 2
@@ -179,7 +190,12 @@ class BigQueryFeatureStore(
             for name, (
                 type,
                 _,
-            ) in structured_array.dtype.fields.items()
+                *_,
+            ) in (
+                structured_array.dtype.fields.items()
+                if structured_array.dtype.fields
+                else []
+            )
         ]
 
     def __numpy_flatten_nested_column(
@@ -190,9 +206,13 @@ class BigQueryFeatureStore(
         if structured_array.dtype.names is None:
             return structured_array
         new_dtypes: list[tuple[str, Any]] = []
+        if structured_array.dtype.fields is None:
+            return structured_array
+
         for name, (
             dtype,
             size,
+            *_,
         ) in structured_array.dtype.fields.items():
             subarray_shape = dtype.shape
             kind = dtype.kind
@@ -206,9 +226,13 @@ class BigQueryFeatureStore(
             structured_array.shape, dtype=new_dtypes
         )
 
+        if structured_array.dtype.fields is None:
+            return new_array
+
         for name, (
             dtype,
             size,
+            *_,
         ) in structured_array.dtype.fields.items():
             subarray_shape = dtype.shape
             kind = dtype.kind
@@ -360,9 +384,15 @@ class BigQueryFeatureStore(
         )
 
         # pandasへの変換で型が変わることがあるので調整する
+        if structured_array.dtype.fields is None:
+            raise ValueError(
+                "structured_array must have named fields"
+            )
+
         for name, (
             dtype,
             _,
+            *_,
         ) in structured_array.dtype.fields.items():
             if (
                 dtype.kind == "M"
@@ -461,13 +491,17 @@ class BigQueryFeatureStore(
             <= set(
                 [
                     name
-                    for name, _ in structured_array.dtype.fields.items()
+                    for name, _ in (
+                        structured_array.dtype.fields.items()
+                        if structured_array.dtype.fields
+                        else []
+                    )
                 ]
             )
         ):
             self.logger.error(
                 f"キーカラムが存在しない: {key_columns},"
-                f" {[name for name, _ in structured_array.dtype.fields.items()]}"
+                f" {[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
             )
             raise NotFoundKeyColumns("Not found key columns")
         if (
@@ -475,12 +509,16 @@ class BigQueryFeatureStore(
             and clustering_key
             not in [
                 name
-                for name, _ in structured_array.dtype.fields.items()
+                for name, _ in (
+                    structured_array.dtype.fields.items()
+                    if structured_array.dtype.fields
+                    else []
+                )
             ]
         ):
             self.logger.error(
                 f"クラスタリングキーが存在しない: {clustering_key}, "
-                f"{[name for name, _ in structured_array.dtype.fields.items()]}"
+                f"{[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
             )
             raise NotFoundKeyColumns(
                 "Not found clustering key columns"
@@ -490,12 +528,16 @@ class BigQueryFeatureStore(
             and partitioning_key_date
             not in [
                 name
-                for name, _ in structured_array.dtype.fields.items()
+                for name, _ in (
+                    structured_array.dtype.fields.items()
+                    if structured_array.dtype.fields
+                    else []
+                )
             ]
         ):
             self.logger.error(
                 f"パーティショニングキーが存在しない: {partitioning_key_date}, "
-                f"{[name for name, _ in structured_array.dtype.fields.items()]}"
+                f"{[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
             )
             raise NotFoundKeyColumns(
                 "Not found clustering key columns"

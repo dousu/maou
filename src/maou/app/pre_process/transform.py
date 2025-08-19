@@ -1,6 +1,5 @@
 import logging
 
-import cshogi
 import numpy as np
 
 from maou.app.pre_process.feature import make_feature
@@ -9,6 +8,7 @@ from maou.app.pre_process.label import (
     make_move_label,
     make_result_value,
 )
+from maou.domain.board import shogi
 
 
 class Transform:
@@ -43,7 +43,7 @@ class Transform:
         # self.logger.debug(f"hcp type: {type(hcp)}")
         # self.logger.debug(f"hcp shape: {hcp.shape}")
         # self.logger.debug(f"hcp dtype: {hcp.dtype}")
-        board = cshogi.Board()  # type: ignore
+        board = shogi.Board()
         board.set_hcp(hcp)
 
         try:
@@ -57,31 +57,33 @@ class Transform:
             # 不正な棋譜が入っているときここは簡単にエラーになるので注意 (ratingで絞るとか？)
             # endgame statusが%TIMEUPが入っていると変なcshogi move値になっていそう
             # こういうどうしようもないのは学習から除外するためにエラー出たら何もしないという選択肢もある
-            move_label = make_move_label(board.turn, move16)
+            move_label = make_move_label(
+                board.get_turn(), move16
+            )
 
             # result value
             result_value = make_result_value(
-                board.turn, game_result
+                board.get_turn(), game_result
             )
 
             # 合法手のラベルを取得する
             legal_move_labels = [
-                make_move_label(board.turn, m)
-                for m in board.legal_moves
+                make_move_label(board.get_turn(), m)
+                for m in board.get_legal_moves()
             ]
             legal_move_mask = self.__create_mask(
                 legal_move_labels, MOVE_LABELS_NUM
             )
         except Exception:
-            move = board.move_from_move16(move16)
+            move = board.get_move_from_move16(move16)
             self.logger.error(
                 f"cshogi move: {move} {move16}"
                 f", game: {game_result}"
                 f", eval: {eval}"
-                f", sfen: {board.sfen()}"
+                f", sfen: {board.get_sfen()}"
             )
             self.logger.error(str(board))
-            board.push(move)
+            board.push_move(move)
             self.logger.error(str(board))
             raise
 

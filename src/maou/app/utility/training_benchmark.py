@@ -658,7 +658,7 @@ class TrainingBenchmarkUseCase:
                 validation_result, "Validation"
             )
             # Dynamic dict key assignment for validation summary
-            output["benchmark_results"]["ValidationSummary"] = (  # type: ignore
+            output["benchmark_results"]["ValidationSummary"] = (  # type: ignore[index]
                 validation_summary
             )
             output["validation_metrics"] = (

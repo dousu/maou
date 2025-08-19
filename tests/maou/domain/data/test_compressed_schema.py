@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.compression import (
     FEATURES_PACKED_SIZE,
     LEGAL_MOVES_PACKED_SIZE,
@@ -138,8 +138,8 @@ class TestCompressedPreprocessingValidation:
             match="Expected numpy ndarray",
         ):
             validate_compressed_preprocessing_array(
-                "not an array"
-            )  # type: ignore
+                "not an array"  # type: ignore
+            )
 
     def test_validate_eval_out_of_range(self) -> None:
         """Test validating array with eval values out of range."""
