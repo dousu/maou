@@ -51,6 +51,14 @@ class TestLabel:
         - 7i9i+ (99飛成想定) 24400
         - 8f8g+ (87歩成想定) 25157
         - G*5b (52金打想定) 11173
+        - 2e1c (13桂想定) 198274 keima right
+        - 2a1c (後手13桂想定) 197762 keima left
+        - 8i9g (97桂想定) 205774 keima left
+        - 8e9g (後手97桂想定) 205262 keima right
+        - 2c1a+ (11桂成想定) 214400 keima right
+        - 9e8c+ (87桂成想定) 222785 keima right
+        - 1e2c+ (23桂成想定) 213515 keima left
+        - 8e9c+ (93桂成想定) 221642 keima left
         """
         # 1b1a (11と想定) 128
         test1b1a = label.make_move_label(shogi.Turn.BLACK, 128)
@@ -257,154 +265,79 @@ class TestLabel:
         assert testG_5b < label.MOVE_LABELS_NUM
         assert testG_5b == label.MoveCategoryStartLabel.KI + 43
 
-    def test_make_move_from_label(self) -> None:
-        """ラベルから指し手への逆変換のテスト."""
-        # Test cases that work correctly with current implementation
-        working_test_cases = [
-            # (move, expected_usi, description)
-            (128, "1b1a", "1b1a - basic UP move"),
-            (5675, "5i5h", "5i5h - UP move"),
-            (11088, "R*9i", "R*9i - HI drop"),
-            (10405, "P*5b", "P*5b - FU drop"),
-            (10533, "L*5b", "L*5b - KY drop"),
-            (10667, "N*5h", "N*5h - KE drop"),
-            (10789, "S*5b", "S*5b - GI drop"),
-            (11173, "G*5b", "G*5b - KI drop"),
-            (10917, "B*5b", "B*5b - KA drop"),
-            (11045, "R*5b", "R*5b - HI drop"),
-            (20390, "4e5c+", "4e5c+ - KEIMA_LEFT promotion"),
-        ]
-
-        logger.info(
-            "\n=== Testing reverse conversion for working cases ==="
+        # 2e1c (13桂想定) 198274 keima right
+        test2e1c = label.make_move_label(
+            shogi.Turn.BLACK, 198274
         )
-        for (
-            move,
-            expected_usi,
-            description,
-        ) in working_test_cases:
-            # Test round-trip conversion
-            move_label = label.make_move_label(
-                shogi.Turn.BLACK,
-                move,
-            )
-            result = label.make_move_from_label(
-                shogi.Turn.BLACK,
-                move_label,
-            )
-
-            logger.info(
-                f"Move {move} -> Label {move_label} -> {result} ({description})"
-            )
-            assert result == expected_usi, (
-                f"Expected {expected_usi}, got {result}"
-            )
-
-        # Test extended functionality: move values as input
-        # Note: Only move values beyond MOVE_LABELS_NUM are treated as cshogi move values
-        logger.info(
-            "\n=== Testing move values as direct input (for values > MOVE_LABELS_NUM) ==="
+        assert test2e1c < label.MOVE_LABELS_NUM
+        assert (
+            test2e1c == label.MoveCategoryStartLabel.KEIMA_RIGHT
         )
-        large_move_cases = [
-            (11088, "R*9i"),  # This is beyond MOVE_LABELS_NUM
-            (10405, "P*5b"),  # This is beyond MOVE_LABELS_NUM
-            (10533, "L*5b"),  # This is beyond MOVE_LABELS_NUM
-            (10789, "S*5b"),  # This is beyond MOVE_LABELS_NUM
-            (11173, "G*5b"),  # This is beyond MOVE_LABELS_NUM
-        ]
-
-        for move, expected_usi in large_move_cases:
-            if (
-                move >= label.MOVE_LABELS_NUM
-            ):  # Only test moves beyond label range
-                result = label.make_move_from_label(
-                    shogi.Turn.BLACK,
-                    move,
-                )
-                actual_usi = shogi.move_to_usi(move)
-
-                logger.info(
-                    f"Move {move} -> {result} (cshogi: {actual_usi})"
-                )
-                assert result == actual_usi, (
-                    f"Expected {actual_usi}, got {result}"
-                )
-
-        # Test WHITE turn for drop moves (they should work the same)
-        logger.info(
-            "\n=== Testing WHITE turn for drop moves ==="
+        # 2a1c (後手13桂想定) 197762 keima left
+        test2a1c = label.make_move_label(
+            shogi.Turn.WHITE, 197762
         )
-        drop_moves = [
-            (10405, "P*5b"),
-            (10789, "S*5b"),
-            (11173, "G*5b"),
-        ]
-
-        for move, expected_usi in drop_moves:
-            white_label = label.make_move_label(
-                shogi.Turn.WHITE,
-                move,
-            )
-            white_result = label.make_move_from_label(
-                shogi.Turn.WHITE,
-                white_label,
-            )
-            actual_usi = shogi.move_to_usi(move)
-
-            logger.info(
-                f"WHITE Move {move} -> Label {white_label} -> {white_result} (cshogi: {actual_usi})"
-            )
-            assert white_result == actual_usi, (
-                f"Expected {actual_usi}, got {white_result}"
-            )
-
-        # Test specific user-requested cases
-        logger.info(
-            "\n=== Testing specific requested cases ==="
+        assert test2a1c < label.MOVE_LABELS_NUM
+        assert (
+            test2a1c
+            == label.MoveCategoryStartLabel.KEIMA_LEFT + 39
         )
-        # Test make_move_from_label(shogi.Turn.BLACK, 928) -> 4e5c+
-        result_928 = label.make_move_from_label(
-            shogi.Turn.BLACK,
-            928,
+        # 8i9g (97桂想定) 205774 keima left
+        test8i9g = label.make_move_label(
+            shogi.Turn.BLACK, 205774
         )
-        logger.info(
-            f"Label 928 -> {result_928} (expected: 4e5c+)"
+        assert test8i9g < label.MOVE_LABELS_NUM
+        assert (
+            test8i9g
+            == label.MoveCategoryStartLabel.KEIMA_LEFT + 39
         )
-        assert result_928 == "4e5c+", (
-            f"Expected 4e5c+, got {result_928}"
+        # 8e9g (後手97桂想定) 205262 keima right
+        test8e9g = label.make_move_label(
+            shogi.Turn.WHITE, 205262
         )
-
-        # Test make_move_from_label(shogi.Turn.BLACK, 39) -> 5i5h
-        result_39 = label.make_move_from_label(
-            shogi.Turn.BLACK, 39
+        assert test8e9g < label.MOVE_LABELS_NUM
+        assert (
+            test8e9g == label.MoveCategoryStartLabel.KEIMA_RIGHT
         )
-        logger.info(f"Label 39 -> {result_39} (expected: 5i5h)")
-        assert result_39 == "5i5h", (
-            f"Expected 5i5h, got {result_39}"
+        # 2c1a+ (11桂成想定) 214400 keima right
+        test2c1a_ = label.make_move_label(
+            shogi.Turn.BLACK, 214400
         )
-
-        # Test error cases
-        logger.info("\n=== Testing error cases ===")
-        try:
-            label.make_move_from_label(shogi.Turn.BLACK, -1)
-            assert False, (
-                "Should raise ValueError for negative label"
-            )
-        except ValueError:
-            logger.info("✅ Negative label correctly rejected")
-            pass
-
-        # Test invalid move value
-        try:
-            label.make_move_from_label(shogi.Turn.BLACK, 999999)
-            logger.info(
-                "⚠️ Very large move value accepted (may be valid cshogi move)"
-            )
-        except ValueError:
-            logger.info(
-                "✅ Invalid move value correctly rejected"
-            )
-
+        assert test2c1a_ < label.MOVE_LABELS_NUM
+        assert (
+            test2c1a_
+            == label.MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION
+        )
+        # 9e8c+ (87桂成想定) 222785 keima right
+        test9e8c_ = label.make_move_label(
+            shogi.Turn.BLACK, 222785
+        )
+        assert test9e8c_ < label.MOVE_LABELS_NUM
+        assert (
+            test9e8c_
+            == label.MoveCategoryStartLabel.KEIMA_RIGHT_PROMOTION
+            + 23
+        )
+        # 1e2c+ (23桂成想定) 213515 keima left
+        test1e2c_ = label.make_move_label(
+            shogi.Turn.BLACK, 213515
+        )
+        assert test1e2c_ < label.MOVE_LABELS_NUM
+        assert (
+            test1e2c_
+            == label.MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION
+            + 2
+        )
+        # 8e9c+ (93桂成想定) 221642 keima left
+        test8e9c_ = label.make_move_label(
+            shogi.Turn.BLACK, 221642
+        )
+        assert test8e9c_ < label.MOVE_LABELS_NUM
+        assert (
+            test8e9c_
+            == label.MoveCategoryStartLabel.KEIMA_LEFT_PROMOTION
+            + 23
+        )
         # ラベル変換のロジックとMoveCategoryStartLabelの整合性取れているかテスト
         # 最初と最後をチェック
         # UP
@@ -769,6 +702,108 @@ class TestLabel:
         assert hi_first == label.MoveCategoryStartLabel.HI
         hi_last = label.make_move_label(shogi.Turn.BLACK, 11088)
         assert hi_last == label.MoveCategoryStartLabel.HI + 80
+
+    def test_make_move_from_label(self) -> None:
+        """ラベルから指し手への逆変換のテスト."""
+        # Test cases that work correctly with current implementation
+        board = shogi.Board()
+        board.set_sfen(
+            "6k2/8P/9/9/5N3/9/9/9/4K4 b 2R2B4G4S3N4L16P 1"
+        )
+        board.set_turn(shogi.Turn.BLACK)
+        working_test_cases = [
+            # (move, expected_usi, description)
+            (128, "1b1a", "1b1a - basic UP move"),
+            (5675, "5i5h", "5i5h - UP move"),
+            (11088, "R*9i", "R*9i - HI drop"),
+            (10405, "P*5b", "P*5b - FU drop"),
+            (10533, "L*5b", "L*5b - KY drop"),
+            (10667, "N*5h", "N*5h - KE drop"),
+            (10789, "S*5b", "S*5b - GI drop"),
+            (11173, "G*5b", "G*5b - KI drop"),
+            (10917, "B*5b", "B*5b - KA drop"),
+            (11045, "R*5b", "R*5b - HI drop"),
+            (20390, "4e5c+", "4e5c+ - KEIMA_LEFT promotion"),
+        ]
+
+        logger.info(
+            "\n=== Testing reverse conversion for working cases ==="
+        )
+        for (
+            move,
+            expected_usi,
+            description,
+        ) in working_test_cases:
+            # Test round-trip conversion
+            move_label = label.make_move_label(
+                shogi.Turn.BLACK,
+                move,
+            )
+            result = label.make_usi_move_from_label(
+                board,
+                move_label,
+            )
+
+            logger.info(
+                f"Move {move} -> Label {move_label} -> {result} ({description})"
+            )
+            assert result == expected_usi, (
+                f"Expected {expected_usi}, got {result}"
+            )
+
+        # Test WHITE turn for drop moves (they should work the same)
+        logger.info(
+            "\n=== Testing WHITE turn for drop moves ==="
+        )
+        board.set_sfen(
+            "6k2/9/9/9/9/9/9/9/4K4 b 2r2b4g4s4n4l18p 1"
+        )
+        board.set_turn(shogi.Turn.WHITE)
+        drop_moves = [
+            (10405, "P*5b"),
+            (10789, "S*5b"),
+            (11173, "G*5b"),
+        ]
+
+        for move, expected_usi in drop_moves:
+            white_label = label.make_move_label(
+                shogi.Turn.WHITE,
+                move,
+            )
+            white_result = label.make_usi_move_from_label(
+                board,
+                white_label,
+            )
+            actual_usi = shogi.move_to_usi(move)
+
+            logger.info(
+                f"WHITE Move {move} -> Label {white_label} -> {white_result} (cshogi: {actual_usi})"
+            )
+            assert white_result == actual_usi, (
+                f"Expected {actual_usi}, got {white_result}"
+            )
+
+        # Test error cases
+        logger.info("\n=== Testing error cases ===")
+        try:
+            label.make_usi_move_from_label(board, -1)
+            assert False, (
+                "Should raise ValueError for negative label"
+            )
+        except ValueError:
+            logger.info("✅ Negative label correctly rejected")
+            pass
+
+        # Test invalid move value
+        try:
+            label.make_usi_move_from_label(board, 999999)
+            logger.info(
+                "⚠️ Very large move value accepted (may be valid cshogi move)"
+            )
+        except ValueError:
+            logger.info(
+                "✅ Invalid move value correctly rejected"
+            )
 
     def test_make_result_value(self) -> None:
         """勝率の教師データ作成のテスト.

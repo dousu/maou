@@ -31,7 +31,7 @@ class TestFeature:
         """
         board = Board()
         # 色々実験したいときは以下の空の局面のSFENを使うといい
-        # "6K2/9/9/9/9/9/9/9/3K5 b 2R2B4G4S4N4L18P 1"
+        # "6k2/9/9/9/9/9/9/9/3K5 b 2R2B4G4S4N4L18P 1"
         board.set_sfen(
             "l5B1l/4+P2G1/2n2sn2/p1pr1pkpp/7P1/P1P1R3P/1PN+p1PN2/2G2s3/L+p1K4L"
             " b 1G4P1b1g2s 99"

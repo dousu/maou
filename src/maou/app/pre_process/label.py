@@ -697,12 +697,14 @@ def benchmark_make_move_label(
     )
 
 
-def make_move_from_label(turn: shogi.Turn, label: int) -> str:
+def make_usi_move_from_label(
+    board: shogi.Board, label: int
+) -> str:
     """ラベルから指し手への逆変換.
 
     Args:
-        turn: 手番 (cshogi.BLACK or cshogi.WHITE)
-        label: 指し手ラベル (0からMOVE_LABELS_NUM-1) または cshogi move値
+        board: 局面情報 (maou.domain.board.shogi.Board)
+        label: 指し手ラベル (0からMOVE_LABELS_NUM-1)
 
     Returns:
         USI形式の指し手文字列 (例: "1b1a", "S*5b")
@@ -710,21 +712,14 @@ def make_move_from_label(turn: shogi.Turn, label: int) -> str:
     Raises:
         ValueError: 無効なラベル値，または無効なUSI形式の場合
     """
-    if label < 0:
+    if label < 0 or label >= MOVE_LABELS_NUM:
         raise ValueError(f"Invalid label: {label}")
-
-    # If label is beyond our label range, treat it as a cshogi move value
-    if label >= MOVE_LABELS_NUM:
-        try:
-            usi_move = shogi.move_to_usi(label)
-        except Exception:
-            raise ValueError(f"Invalid move value: {label}")
     else:
         # Drop moves check - they start from FU
         if label >= MoveCategoryStartLabel.FU:
-            usi_move = _make_drop_move_from_label(turn, label)
+            usi_move = _make_drop_move_from_label(board, label)
         else:
-            usi_move = _make_board_move_from_label(turn, label)
+            usi_move = _make_board_move_from_label(board, label)
 
     # Validate USI format: %d%w%d%w(\+)?
     # Pattern: digit + letter + digit + letter + optional '+'
@@ -739,7 +734,8 @@ def make_move_from_label(turn: shogi.Turn, label: int) -> str:
 
 
 def _make_board_move_from_label(
-    turn: shogi.Turn, label: int
+    board: shogi.Board,
+    label: int,
 ) -> str:
     """盤上移動の逆変換."""
     # Determine move category and offset
@@ -857,15 +853,12 @@ def _make_board_move_from_label(
         is_promotion = True
 
     return _decode_board_move(
-        turn, direction, offset, is_promotion
+        board, direction, offset, is_promotion
     )
 
 
-# TODO: いくつかの問題あり
-# - _find_*_from_sq()みたいな処理は桂馬以外のすべてに必要
-# - _find_*_from_sq()は盤面情報が必要
 def _decode_board_move(
-    turn: shogi.Turn,
+    board: shogi.Board,
     direction: str,
     offset: int,
     is_promotion: bool,
@@ -874,64 +867,37 @@ def _decode_board_move(
     # Direction-specific decoding
     if direction == "UP":
         to_sq = _decode_up_move(offset, is_promotion)
-        from_sq = to_sq + 1  # UP: from y+1 to y
     elif direction == "DOWN":
         to_sq = _decode_down_move(offset, is_promotion)
-        from_sq = to_sq - 1  # DOWN: from y-1 to y
     elif direction == "LEFT":
         to_sq = _decode_left_move(offset, is_promotion)
-        # For LEFT moves, we need to find the from_sq that, when moved to to_sq,
-        # would be classified as a LEFT move and produce the given offset.
-        # The encoding formula is: to_sq - 9 = offset
-        # But we need to find from_sq such that the move (from_sq -> to_sq) produces this offset
-        # Let's search for the correct from_sq by testing different horizontal positions
-        from_sq = _find_left_move_from_sq(
-            to_sq, offset, is_promotion
-        )
     elif direction == "RIGHT":
         to_sq = _decode_right_move(offset, is_promotion)
-        # For RIGHT moves, we need to find the correct from_sq
-        from_sq = _find_right_from_sq(
-            to_sq, offset, is_promotion
-        )
     elif direction == "UP_LEFT":
         to_sq = _decode_up_left_move(offset, is_promotion)
-        from_sq = to_sq - 8  # UP_LEFT: from (x-1,y+1) to (x,y)
     elif direction == "UP_RIGHT":
         to_sq = _decode_up_right_move(offset, is_promotion)
-        from_sq = (
-            to_sq + 10
-        )  # UP_RIGHT: from (x+1,y+1) to (x,y)
     elif direction == "DOWN_LEFT":
         to_sq = _decode_down_left_move(offset, is_promotion)
-        # For DOWN_LEFT moves, we need to find the correct from_sq
-        # The original encoding may handle multi-square diagonal moves
-        from_sq = _find_down_left_from_sq(
-            to_sq, offset, is_promotion
-        )
     elif direction == "DOWN_RIGHT":
         to_sq = _decode_down_right_move(offset, is_promotion)
-        # For DOWN_RIGHT moves, we need to find the correct from_sq
-        from_sq = _find_down_right_from_sq(
-            to_sq, offset, is_promotion
-        )
     elif direction == "KEIMA_LEFT":
         to_sq = _decode_keima_left_move(offset, is_promotion)
-        from_sq = (
-            to_sq - 7
-        )  # KEIMA_LEFT: from (x-1,y+2) to (x,y)
     elif direction == "KEIMA_RIGHT":
         to_sq = _decode_keima_right_move(offset, is_promotion)
-        from_sq = (
-            to_sq + 11
-        )  # KEIMA_RIGHT: from (x+1,y+2) to (x,y)
     else:
         raise ValueError(f"Invalid direction: {direction}")
 
-    # Handle turn-based coordinate transformation
-    if turn == shogi.Turn.WHITE:
-        to_sq = 80 - to_sq
-        from_sq = 80 - from_sq
+    from_sq = _find_move_from_sq(
+        board,
+        to_sq,
+        direction,
+    )
+
+    # # Handle turn-based coordinate transformation
+    # if board.get_turn() == shogi.Turn.WHITE:
+    #     to_sq = 80 - to_sq
+    #     from_sq = 80 - from_sq
 
     # Convert to USI format
     to_usi = _square_to_usi(to_sq)
@@ -946,109 +912,34 @@ def _decode_board_move(
 def _decode_up_move(offset: int, is_promotion: bool) -> int:
     """UP方向の移動デコード."""
     if not is_promotion:
-        # to_sq - to_x = offset
-        # Need to find to_sq where to_y != 8
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_y < 8 and to_sq - to_x == offset
-            ):  # y != 8 (bottom row)
-                return to_sq
+        to_sq = offset + (offset // 8)
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if to_y < 3 and to_sq - to_x * 6 == offset:
-                return to_sq
-    raise ValueError(f"Invalid UP move offset: {offset}")
+        to_sq = offset + (offset // 3) * 6
+        return to_sq
 
 
 def _decode_down_move(offset: int, is_promotion: bool) -> int:
     """DOWN方向の移動デコード."""
     if not is_promotion:
-        # to_sq - (to_x + 1) = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_y > 0 and to_sq - (to_x + 1) == offset
-            ):  # y > 0 (can't be at top row)
-                return to_sq
+        to_sq = offset + (offset // 8) + 1
+        return to_sq
     else:
         # Promotion: any valid position
-        # to_sq - (to_x + 1) = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if to_sq - (to_x + 1) == offset:
-                return to_sq
-    raise ValueError(f"Invalid DOWN move offset: {offset}")
+        to_sq = offset + (offset // 8) + 1
+        return to_sq
 
 
 def _decode_left_move(offset: int, is_promotion: bool) -> int:
     """LEFT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - 9 = offset (from _LABEL_OFFSETS)
         to_sq = offset + 9
-        if 0 <= to_sq < 81:
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-            ):  # Valid left move (can't be at leftmost column)
-                return to_sq
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 - 3 = offset
-        for to_x in range(1, 9):  # Exclude x=0
-            for to_y in range(3):
-                to_sq = to_y * 9 + to_x
-                if to_sq - to_x * 6 - 3 == offset:
-                    return to_sq
-    raise ValueError(f"Invalid LEFT move offset: {offset}")
-
-
-def _find_left_move_from_sq(
-    to_sq: int, expected_offset: int, is_promotion: bool
-) -> int:
-    """LEFT方向の移動でfrom_sqを逆算する."""
-    # Given to_sq and expected_offset, find the from_sq that produces this combination
-    # We know the move is classified as LEFT, meaning from_x > to_x and from_y == to_y
-
-    to_x, to_y = _COORDINATE_CACHE[to_sq]
-
-    if not is_promotion:
-        # Try all possible from_sq positions that could create a LEFT move to to_sq
-        for from_x in range(9):
-            if from_x > to_x:  # LEFT move condition
-                from_sq = (
-                    to_y * 9 + from_x
-                )  # Same rank, different file
-
-                # Test if this combination would produce the expected offset
-                # using the original encoding logic
-                test_offset = (
-                    to_sq - 9
-                )  # This is the LEFT encoding formula
-                if test_offset == expected_offset:
-                    # Additional check: would this move actually be classified as LEFT?
-                    direction = (to_x - from_x, to_y - to_y)
-                    if (
-                        direction[1] == 0 and direction[0] < 0
-                    ):  # LEFT direction condition
-                        return from_sq
-    else:
-        # Similar logic for promotion moves
-        for from_x in range(9):
-            if (
-                from_x > to_x and to_y < 3
-            ):  # LEFT + promotion conditions
-                from_sq = to_y * 9 + from_x
-                test_offset = to_sq - to_x * 6 - 3
-                if test_offset == expected_offset:
-                    return from_sq
-
-    raise ValueError(
-        f"Cannot find valid from_sq for LEFT move to_sq={to_sq}, offset={expected_offset}"
-    )
+        to_sq = offset + (offset // 3) * 6 + 9
+        return to_sq
 
 
 def _decode_right_move(offset: int, is_promotion: bool) -> int:
@@ -1056,72 +947,11 @@ def _decode_right_move(offset: int, is_promotion: bool) -> int:
     if not is_promotion:
         # to_sq = offset (from _LABEL_OFFSETS)
         to_sq = offset
-        to_x, to_y = _COORDINATE_CACHE[to_sq]
-        if (
-            to_x < 8
-        ):  # Valid right move (can't be at rightmost column)
-            return to_sq
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x < 8
-                and to_y < 3
-                and to_sq - to_x * 6 == offset
-            ):
-                return to_sq
-    raise ValueError(f"Invalid RIGHT move offset: {offset}")
-
-
-def _find_right_from_sq(
-    to_sq: int, offset: int, is_promotion: bool
-) -> int:
-    """RIGHT方向の移動でfrom_sqを逆算する."""
-    to_x, to_y = _COORDINATE_CACHE[to_sq]
-
-    # For RIGHT moves: from_x > to_x and from_y == to_y (horizontal move)
-    # We need to find the from_sq that when encoding the move produces the expected offset
-
-    if not is_promotion:
-        # Non-promotion RIGHT: to_sq = offset
-        for from_x in range(
-            to_x + 1, 9
-        ):  # Try from closest to farthest
-            from_sq = from_x * 9 + to_y
-            # Verify this produces the expected offset
-            if to_sq == offset:
-                return from_sq
-    else:
-        # Promotion RIGHT: to_sq - to_x * 6 = offset
-        # Find the from_sq that when the original move is made, produces this offset
-        target_offset = to_sq - to_x * 6
-        if target_offset == offset and to_y < 3:
-            # Search through possible from_sq values to find the one used in the original encoding
-            # For the original WHITE move 24400 (7i9i+):
-            # - Original coordinates: from 62 to 80
-            # - WHITE adjusted: from 18 to 0
-            # - 18 corresponds to (2, 0), distance = 2
-
-            # Try different distances and see which one makes sense
-            # The specific case we need is from_sq=18 for to_sq=0
-            if (
-                to_sq == 0 and to_x == 0 and to_y == 0
-            ):  # Specific case for label 723
-                return 18  # Hardcode the expected result for this specific case
-
-            # General case: try distances from smallest to largest
-            for distance in range(1, 9 - to_x):
-                from_x = to_x + distance
-                if from_x < 9:
-                    from_sq = from_x * 9 + to_y
-                    # This is a valid candidate, return the first reasonable one
-                    return from_sq
-
-    # Fallback: try simple calculation
-    fallback = to_sq + 9
-    return fallback if fallback < 81 else to_sq + 1
+        to_sq = offset + (offset // 3) * 6
+        return to_sq
 
 
 def _decode_up_left_move(
@@ -1129,27 +959,12 @@ def _decode_up_left_move(
 ) -> int:
     """UP_LEFT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - to_x - 8 = offset (from _LABEL_OFFSETS)
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-                and to_y < 8
-                and to_sq - to_x - 8 == offset
-            ):
-                return to_sq
+        to_sq = offset + (offset // 8) + 9
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 - 3 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-                and to_y < 3
-                and to_sq - to_x * 6 - 3 == offset
-            ):
-                return to_sq
-    raise ValueError(f"Invalid UP_LEFT move offset: {offset}")
+        to_sq = offset + (offset // 3) * 6 + 9
+        return to_sq
 
 
 def _decode_up_right_move(
@@ -1157,23 +972,12 @@ def _decode_up_right_move(
 ) -> int:
     """UP_RIGHT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - to_x = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if to_x < 8 and to_y < 8 and to_sq - to_x == offset:
-                return to_sq
+        to_sq = offset + (offset // 8)
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x < 8
-                and to_y < 3
-                and to_sq - to_x * 6 == offset
-            ):
-                return to_sq
-    raise ValueError(f"Invalid UP_RIGHT move offset: {offset}")
+        to_sq = offset + (offset // 3) * 6
+        return to_sq
 
 
 def _decode_down_left_move(
@@ -1181,81 +985,26 @@ def _decode_down_left_move(
 ) -> int:
     """DOWN_LEFT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - to_x - 9 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-                and to_y > 0
-                and to_sq - to_x - 9 == offset
-            ):
-                return to_sq
+        to_sq = offset + (offset // 8) + 9
+        return to_sq
     else:
         # Complex promotion calculation with range sums
-        # to_sq - (to_x + 1) - 2 - range_sum = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0 and 8 - to_y + to_x >= 6
-            ):  # Valid promotion zone
-                range_sum = _DOWN_LEFT_RANGE_SUMS.get(to_x, 21)
-                if to_sq - (to_x + 1) - 2 - range_sum == offset:
-                    return to_sq
-    raise ValueError(f"Invalid DOWN_LEFT move offset: {offset}")
-
-
-def _find_down_left_from_sq(
-    to_sq: int, offset: int, is_promotion: bool
-) -> int:
-    """DOWN_LEFT方向の移動でfrom_sqを逆算する."""
-    to_x, to_y = _COORDINATE_CACHE[to_sq]
-
-    # The key insight is that there are multiple possible from_sq values that could
-    # produce the same offset, but we need to find the specific one that was used
-    # in the original encoding. Since the system is designed to be reversible,
-    # there should be a canonical choice.
-
-    # For move 16662 (1c3e+): from (0,2) to (2,4), the direction is (2,2)
-    # This suggests equal movement in both x and y directions
-
-    if not is_promotion:
-        # For non-promotion moves, find the closest diagonal from_sq
-        distance = min(
-            to_x, to_y
-        )  # Max diagonal distance possible
-        for d in range(1, distance + 1):
-            from_x = to_x - d
-            from_y = to_y - d
-            if from_x >= 0 and from_y >= 0:
-                from_sq = from_x * 9 + from_y
-                # Verify this produces the expected offset
-                test_offset = to_sq - to_x - 9
-                if test_offset == offset:
-                    return from_sq
-    else:
-        # For promotion moves, try to find the maximum diagonal distance
-        # that still satisfies the promotion zone constraints
-        max_distance = min(to_x, to_y)
-        for d in range(
-            max_distance, 0, -1
-        ):  # Try largest distance first
-            from_x = to_x - d
-            from_y = to_y - d
-            if from_x >= 0 and from_y >= 0:
-                from_sq = from_x * 9 + from_y
-                # Verify this is a valid promotion move
-                if 8 - to_y + to_x >= 6:  # Valid promotion zone
-                    range_sum = _DOWN_LEFT_RANGE_SUMS.get(
-                        to_x, 21
-                    )
-                    test_offset = (
-                        to_sq - (to_x + 1) - 2 - range_sum
-                    )
-                    if test_offset == offset:
-                        return from_sq
-
-    # Fallback to simple calculation
-    return to_sq + 8
+        if offset < 3:
+            range_sum = 1
+        elif offset < 7:
+            range_sum = 7
+        elif offset < 12:
+            range_sum = 12
+        elif offset < 18:
+            range_sum = 16
+        elif offset < 25:
+            range_sum = 19
+        elif offset < 33:
+            range_sum = 21
+        else:
+            range_sum = 22 + ((offset - 33) // 8)
+        to_sq = offset + range_sum + 9
+        return to_sq
 
 
 def _decode_down_right_move(
@@ -1263,88 +1012,22 @@ def _decode_down_right_move(
 ) -> int:
     """DOWN_RIGHT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - (to_x + 1) = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x < 8
-                and to_y > 0
-                and to_sq - (to_x + 1) == offset
-            ):
-                return to_sq
+        to_sq = offset + (offset // 8) + 1
+        return to_sq
     else:
         # Complex promotion calculation
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x < 8 and 8 - to_y + 8 - to_x >= 6
-            ):  # Valid promotion zone
-                if to_x > 2:
-                    range_sum = _DOWN_RIGHT_RANGE_SUMS[to_x]
-                    if to_sq - (to_x + 1) - range_sum == offset:
-                        return to_sq
-                else:
-                    if to_sq - (to_x + 1) == offset:
-                        return to_sq
-    raise ValueError(
-        f"Invalid DOWN_RIGHT move offset: {offset}"
-    )
-
-
-def _find_down_right_from_sq(
-    to_sq: int, offset: int, is_promotion: bool
-) -> int:
-    """DOWN_RIGHT方向の移動でfrom_sqを逆算する."""
-    to_x, to_y = _COORDINATE_CACHE[to_sq]
-
-    # For DOWN_RIGHT moves: from_x > to_x and from_y < to_y (negative x, positive y direction)
-    # Similar to DOWN_LEFT but in the opposite x direction
-
-    if not is_promotion:
-        # For non-promotion moves, find the diagonal from_sq
-        max_distance = min(
-            8 - to_x, to_y
-        )  # Max distance we can go in DOWN_RIGHT direction
-        for d in range(1, max_distance + 1):
-            from_x = (
-                to_x + d
-            )  # Moving from right to left (larger x to smaller x)
-            from_y = (
-                to_y - d
-            )  # Moving from bottom to top (larger y to smaller y)
-            if from_x < 9 and from_y >= 0:
-                from_sq = from_x * 9 + from_y
-                # Verify this produces the expected offset
-                test_offset = to_sq - (to_x + 1)
-                if test_offset == offset:
-                    return from_sq
-    else:
-        # For promotion moves, try to find the maximum diagonal distance
-        max_distance = min(8 - to_x, to_y)
-        for d in range(
-            max_distance, 0, -1
-        ):  # Try largest distance first
-            from_x = to_x + d
-            from_y = to_y - d
-            if from_x < 9 and from_y >= 0:
-                from_sq = from_x * 9 + from_y
-                # Verify this is a valid promotion move
-                if (
-                    8 - to_y + 8 - to_x >= 6
-                ):  # Valid promotion zone
-                    if to_x > 2:
-                        range_sum = _DOWN_RIGHT_RANGE_SUMS[to_x]
-                        test_offset = (
-                            to_sq - (to_x + 1) - range_sum
-                        )
-                    else:
-                        test_offset = to_sq - (to_x + 1)
-
-                    if test_offset == offset:
-                        return from_sq
-
-    # Fallback to simple calculation
-    return to_sq - 10
+        if offset < 31:
+            range_sum = (offset // 8) + 1
+        elif offset < 37:
+            range_sum = (offset // 8) + 2
+        elif offset < 42:
+            range_sum = (offset // 8) + 4
+        elif offset < 46:
+            range_sum = (offset // 8) + 7
+        else:
+            range_sum = (offset // 8) + 11
+        to_sq = offset + range_sum
+        return to_sq
 
 
 def _decode_keima_left_move(
@@ -1352,31 +1035,12 @@ def _decode_keima_left_move(
 ) -> int:
     """KEIMA_LEFT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - (to_x + 1) * 2 - to_x * 2 - 5 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-                and to_y >= 2
-                and to_y <= 6
-                and to_sq - (to_x + 1) * 2 - to_x * 2 - 5
-                == offset
-            ):
-                return to_sq
+        to_sq = offset + (offset // 5) * 4 + 11
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 - 3 = offset
-        for to_sq in range(81):
-            to_x, to_y = _COORDINATE_CACHE[to_sq]
-            if (
-                to_x > 0
-                and to_y < 3
-                and to_sq - to_x * 6 - 3 == offset
-            ):
-                return to_sq
-    raise ValueError(
-        f"Invalid KEIMA_LEFT move offset: {offset}"
-    )
+        to_sq = offset + (offset // 3) * 6 + 9
+        return to_sq
 
 
 def _decode_keima_right_move(
@@ -1384,28 +1048,137 @@ def _decode_keima_right_move(
 ) -> int:
     """KEIMA_RIGHT方向の移動デコード."""
     if not is_promotion:
-        # to_sq - (to_x + 1) * 2 - to_x * 2 = offset
-        for to_x in range(8):  # Exclude x=8
-            for to_y in range(2, 7):  # Valid keima range
-                to_sq = to_y * 9 + to_x
-                if to_sq - (to_x + 1) * 2 - to_x * 2 == offset:
-                    return to_sq
+        to_sq = offset + (offset // 5) * 4 + 2
+        return to_sq
     else:
         # Promotion: to_y < 3
-        # to_sq - to_x * 6 = offset
-        for to_x in range(8):  # Exclude x=8
-            for to_y in range(3):
-                to_sq = to_y * 9 + to_x
-                if to_sq - to_x * 6 == offset:
-                    return to_sq
-    raise ValueError(
-        f"Invalid KEIMA_RIGHT move offset: {offset}"
+        to_sq = offset + (offset // 3) * 6
+        return to_sq
+
+
+def _find_move_from_sq(
+    board: shogi.Board, to_sq: int, direction: str
+) -> int:
+    for move in board.get_legal_moves():
+        legal_move_to_sq = shogi.move_to(move)
+        legal_move_from_sq = shogi.move_from(move)
+        logger.debug(
+            f"{shogi.move_to_usi(move)} ({legal_move_to_sq}, {legal_move_from_sq})"
+        )
+
+        # 駒打ちは捜索範囲外なのでスキップ
+        if not 0 < legal_move_from_sq < 81:
+            continue
+
+        if board.get_turn() == shogi.Turn.WHITE:
+            legal_move_to_sq = 80 - legal_move_to_sq
+            legal_move_from_sq = 80 - legal_move_from_sq
+
+        # Use pre-computed coordinate cache
+        to_x, to_y = _COORDINATE_CACHE[legal_move_to_sq]
+        from_x, from_y = _COORDINATE_CACHE[legal_move_from_sq]
+
+        # Calculate direction vector
+        direction_tuple = (to_x - from_x, to_y - from_y)
+
+        if (
+            direction == "KEIMA_LEFT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple == _DIRECTION_KEIMA_LEFT
+        ):
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "KEIMA_RIGHT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple == _DIRECTION_KEIMA_RIGHT
+        ):
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "UP"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] == 0
+            and direction_tuple[1] < 0
+        ):  # UP
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "DOWN"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] == 0
+            and direction_tuple[1] > 0
+        ):  # DOWN
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "LEFT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[1] == 0
+            and direction_tuple[0] > 0
+        ):  # LEFT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "RIGHT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[1] == 0
+            and direction_tuple[0] < 0
+        ):  # RIGHT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "UP_LEFT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] > 0
+            and direction_tuple[1] < 0
+        ):  # UP_LEFT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "UP_RIGHT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] < 0
+            and direction_tuple[1] < 0
+        ):  # UP_RIGHT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "DOWN_LEFT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] > 0
+            and direction_tuple[1] > 0
+        ):  # DOWN_LEFT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+        elif (
+            direction == "DOWN_RIGHT"
+            and to_sq == legal_move_to_sq
+            and direction_tuple[0] < 0
+            and direction_tuple[1] > 0
+        ):  # DOWN_RIGHT
+            if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_from_sq = 80 - legal_move_from_sq
+            return legal_move_from_sq
+    raise IllegalMove(
+        "Can not transform illegal move to move label."
     )
 
 
 def _make_drop_move_from_label(
-    turn: shogi.Turn, label: int
+    board: shogi.Board,
+    label: int,
 ) -> str:
+    turn = board.get_turn()
     """駒打ちの逆変換."""
     # Determine piece type
     if label < MoveCategoryStartLabel.KY:
