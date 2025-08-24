@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
 
-import cshogi
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.domain.data.io import load_hcpe_array, save_hcpe_array
+from maou.domain.board import shogi
+from maou.domain.data.array_io import (
+    load_hcpe_array,
+    save_hcpe_array,
+)
 from maou.domain.data.schema import create_empty_hcpe_array
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
@@ -161,7 +164,7 @@ class HCPEConverter:
 
             # HCPE配列の初期化
             hcpes = create_empty_hcpe_array(1024)
-            board = cshogi.Board()  # type: ignore
+            board = shogi.Board()
             board.set_sfen(parser.init_pos_sfen())
 
             # 棋譜共通情報を取得する
@@ -202,14 +205,14 @@ class HCPEConverter:
                 # 16bitに収める
                 eval = min(32767, max(score, -32767))
                 # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
-                if board.turn == cshogi.BLACK:  # type: ignore
+                if board.get_turn() == shogi.Turn.BLACK:
                     hcpe["eval"] = eval
                 else:
                     hcpe["eval"] = -eval
                 # moveは32bitになっているので16bitに変換する
                 # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
                 # 特に動かす駒の種類の情報が抜けているので注意
-                hcpe["bestMove16"] = cshogi.move16(move)  # type: ignore
+                hcpe["bestMove16"] = shogi.move16(move)
                 hcpe["gameResult"] = parser.winner()
                 hcpe["id"] = (
                     f"{file.with_suffix('.hcpe').name}_{idx}"
@@ -223,7 +226,7 @@ class HCPEConverter:
                 hcpe["moves"] = moves
 
                 # 局面に指し手を反映させる
-                board.push(move)
+                board.push_move(move)
 
             # ファイルを保存
             save_hcpe_array(

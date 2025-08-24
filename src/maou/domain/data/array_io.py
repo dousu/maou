@@ -5,7 +5,7 @@ with proper error handling, validation, and compression support.
 """
 
 import logging
-from io import BytesIO  # type: ignore[attr-defined]
+from io import BytesIO
 from pathlib import Path
 from typing import Literal, Optional, Union
 

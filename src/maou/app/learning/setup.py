@@ -13,8 +13,8 @@ from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
-from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.transform import Transform
+from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.loss.loss_fn import MaskedGCELoss
 from maou.domain.network.resnet import BottleneckBlock
 

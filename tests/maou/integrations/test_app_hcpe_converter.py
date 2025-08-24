@@ -221,13 +221,13 @@ class TestIntegrationHcpeConverter:
         structured_array = np.array(
             data,
             dtype=[
-                ("id", (np.unicode_, 128)),  # type: ignore[attr-defined]
+                ("id", (np.str_, 128)),
                 ("hcp", (np.uint8, 32)),
                 ("eval", np.int16),
                 ("bestMove16", np.int16),
                 ("gameResult", np.int8),
                 ("ratings", (np.uint16, 2)),
-                ("endgameStatus", (np.unicode_, 16)),  # type: ignore[attr-defined]
+                ("endgameStatus", (np.str_, 16)),
                 ("moves", np.int16),
                 ("partitioningKey", np.dtype("datetime64[D]")),
             ],

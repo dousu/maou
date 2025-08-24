@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.schema import (
     HCPE_DTYPE,
     PREPROCESSING_DTYPE,

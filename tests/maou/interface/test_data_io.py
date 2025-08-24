@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from maou.domain.data.io import DataIOError
+from maou.domain.data.array_io import DataIOError
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
     create_empty_preprocessing_array,
@@ -30,7 +30,9 @@ class TestInterfaceDataIO:
             file_path = Path(temp_dir) / "interface_test.npy"
 
             # Save using domain I/O
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, file_path)
 
@@ -54,7 +56,7 @@ class TestInterfaceDataIO:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "mmap_test.npy"
 
-            from maou.domain.data.io import (
+            from maou.domain.data.array_io import (
                 save_preprocessing_array,
             )
 
@@ -133,7 +135,9 @@ class TestInterfaceDataIO:
                 Path(temp_dir) / "explicit_hcpe_game.npy"
             )
 
-            from maou.domain.data.io import save_hcpe_array
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
 
             save_hcpe_array(hcpe_array, hcpe_file)
 
@@ -185,7 +189,9 @@ class TestIntegrationWithInfrastructure:
                     Path(temp_dir) / f"data_hcpe_{i}.npy"
                 )
                 file_paths.append(file_path)
-                from maou.domain.data.io import save_hcpe_array
+                from maou.domain.data.array_io import (
+                    save_hcpe_array,
+                )
 
                 save_hcpe_array(array, file_path)
 
@@ -228,7 +234,7 @@ class TestIntegrationWithInfrastructure:
                     / f"batch_preprocessing_{i}.npy"
                 )
                 file_paths.append(file_path)
-                from maou.domain.data.io import (
+                from maou.domain.data.array_io import (
                     save_preprocessing_array,
                 )
 

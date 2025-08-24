@@ -13,8 +13,8 @@ from typing import Tuple
 
 import numpy as np
 
-from maou.app.pre_process.feature import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.board.shogi import FEATURES_NUM
 
 logger: logging.Logger = logging.getLogger(__name__)
 

@@ -1,9 +1,9 @@
 import logging
 
-import cshogi
 import numpy as np
 
 from maou.app.pre_process import feature
+from maou.domain.board.shogi import FEATURES_NUM, Board, Turn
 
 logger: logging.Logger = logging.getLogger("TEST")
 
@@ -29,9 +29,9 @@ class TestFeature:
         P-00KA
         +
         """
-        board = cshogi.Board()  # type: ignore
+        board = Board()
         # 色々実験したいときは以下の空の局面のSFENを使うといい
-        # "6K2/9/9/9/9/9/9/9/3K5 b 2R2B4G4S4N4L18P 1"
+        # "6k2/9/9/9/9/9/9/9/3K5 b 2R2B4G4S4N4L18P 1"
         board.set_sfen(
             "l5B1l/4+P2G1/2n2sn2/p1pr1pkpp/7P1/P1P1R3P/1PN+p1PN2/2G2s3/L+p1K4L"
             " b 1G4P1b1g2s 99"
@@ -39,7 +39,7 @@ class TestFeature:
         features = feature.make_feature(board)
         logger.info(features.shape)
         # shapeの確認
-        assert features.shape == (feature.FEATURES_NUM, 9, 9)
+        assert features.shape == (FEATURES_NUM, 9, 9)
         # 0または1しか値がないことを確認
         assert np.all(
             np.logical_or(features == 0, features == 1)
@@ -1686,7 +1686,7 @@ class TestFeature:
         )
 
         # 手番変えてチェック
-        board.turn = cshogi.WHITE  # type: ignore
+        board.set_turn(Turn.WHITE)
         features_rotated = feature.make_feature(board)
 
         # 駒配置チェック

@@ -12,7 +12,7 @@ from typing import Literal, Optional, Union
 
 import numpy as np
 
-from maou.domain.data.io import (
+from maou.domain.data.array_io import (
     DataIOArrayTypeError,
     DataIOError,
     load_hcpe_array,

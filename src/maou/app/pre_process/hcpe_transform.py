@@ -11,7 +11,7 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from maou.app.pre_process.transform import Transform
-from maou.domain.data.io import save_preprocessing_array
+from maou.domain.data.array_io import save_preprocessing_array
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
 )
