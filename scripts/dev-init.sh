@@ -9,6 +9,6 @@ poetry sync -E cpu
 # shellcheck source=/dev/null
 source ~/.bashrc
 
-poetry env activate
+eval $(poetry env activate)
 
 poetry cache clear --all -q .

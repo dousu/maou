@@ -12,6 +12,7 @@ from maou.app.learning.callbacks import (
     TimingCallback,
 )
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.network import Network
 from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
@@ -88,7 +89,7 @@ class SingleEpochBenchmark:
     def __init__(
         self,
         *,
-        model: torch.nn.Module,
+        model: Network,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
         loss_fn_policy: MaskedGCELoss,

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 
 import numpy as np
-import pyarrow as pa
 
 from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array, load_packed_array
@@ -239,9 +238,7 @@ class FileDataSource(
 
     def iter_batches(
         self,
-    ) -> Generator[
-        tuple[str, Union[pa.Table, np.ndarray]], None, None
-    ]:
+    ) -> Generator[tuple[str, np.ndarray], None, None]:
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__file_manager.iter_batches():
             yield name, batch
