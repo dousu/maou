@@ -36,6 +36,8 @@ cuda = [
     "onnxruntime-tools",
     "onnxsim",
     "tensorrt-cu12",
+    "tensorrt-lean-cu12",
+    "tensorrt-dispatch-cu12",
 ]
 mpu = [
     "torch>=2.6.0,<=2.7.0",
