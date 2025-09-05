@@ -300,6 +300,7 @@ class Learning:
                     dir=self.model_dir,
                     id=timestamp,
                     epoch=epoch_number + 1,
+                    device=self.device,
                     cloud_storage=self.__cloud_storage,
                 )
 

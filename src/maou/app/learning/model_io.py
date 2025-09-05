@@ -32,6 +32,7 @@ class ModelIO:
         dir: Path,
         id: str,
         epoch: int,
+        device: torch.device,
         cloud_storage: Optional[CloudStorage] = None,
     ) -> None:
         # Training modeを確実に解除しておく
@@ -45,16 +46,17 @@ class ModelIO:
                 local_path=model_path,
                 cloud_path=str(model_path),
             )
-        # TODO: ONNX形式とTensorRT形式での保存を追加する
         # AMPのような高速化をしたいので一部FP16にする
         # TensorRTに変換するときはONNXのFP32を利用してBuilderFlag.FP16を指定する
 
         # torch.onnx.export
         onnx_model_path = model_path.with_suffix(".onnx")
         dummy_data = create_empty_preprocessing_array(1)
-        dummy_input = torch.from_numpy(
-            dummy_data["features"].copy()
-        ).to(torch.float32)
+        dummy_input = (
+            torch.from_numpy(dummy_data["features"].copy())
+            .to(torch.float32)
+            .to(device)
+        )
         torch.onnx.export(
             model=model,
             args=(dummy_input,),
