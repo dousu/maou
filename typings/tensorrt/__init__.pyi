@@ -19,9 +19,27 @@ class IBuilderConfig:
         self, pool: "MemoryPoolType", pool_size: int
     ) -> None: ...
     def set_flag(self, flag: "BuilderFlag") -> None: ...
+    def add_optimization_profile(
+        self, profile: IOptimizationProfile
+    ) -> None: ...
+
+class ITensor:
+    @property
+    def name(self) -> str: ...
+    @property
+    def shape(self) -> tuple: ...
 
 class INetworkDefinition:
-    pass
+    def get_input(self, index: int) -> ITensor: ...
+
+class IOptimizationProfile:
+    def set_shape(
+        self,
+        input: str,
+        min: tuple,
+        opt: tuple,
+        max: tuple,
+    ) -> None: ...
 
 class Builder:
     def __init__(self, logger: Logger) -> None: ...
@@ -34,6 +52,9 @@ class Builder:
     def build_serialized_network(
         self, network: INetworkDefinition, config: Any
     ) -> Any: ...
+    def create_optimization_profile(
+        self,
+    ) -> IOptimizationProfile: ...
 
 class OnnxParser:
     def __init__(

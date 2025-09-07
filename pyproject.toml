@@ -59,8 +59,14 @@ tpu = [
 cpu-infer = [
     "onnxruntime",
 ]
-cuda-infer = [
+onnx-gpu-infer = [
     "onnxruntime-gpu",
+]
+tensorrt-infer = [
+    "cuda-core[cu12]",
+    "tensorrt-cu12",
+    "tensorrt-lean-cu12",
+    "tensorrt-dispatch-cu12",
 ]
 # クラウドプロバイダーごとのextra
 gcp = [
