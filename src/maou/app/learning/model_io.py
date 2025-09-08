@@ -37,7 +37,25 @@ class ModelIO:
         cloud_storage: Optional[CloudStorage] = None,
     ) -> None:
         model = ModelFactory.create_shogi_model(device)
-        model.load_state_dict(trained_model.state_dict())
+
+        # torch.compile()で生成されたモデルのstate_dictは_orig_mod.プレフィックス付き
+        # そのプレフィックスを除去して通常のモデルと互換性を保つ
+        state_dict = trained_model.state_dict()
+        if any(
+            key.startswith("_orig_mod.")
+            for key in state_dict.keys()
+        ):
+            # _orig_mod.プレフィックスを削除
+            clean_state_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith("_orig_mod."):
+                    clean_key = key[len("_orig_mod.") :]
+                    clean_state_dict[clean_key] = value
+                else:
+                    clean_state_dict[key] = value
+            state_dict = clean_state_dict
+
+        model.load_state_dict(state_dict)
         # Training modeを確実に解除しておく
         model.train(False)
         model_path = dir / "model_{}_{}.pt".format(id, epoch)
