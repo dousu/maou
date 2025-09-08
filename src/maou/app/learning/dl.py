@@ -296,7 +296,7 @@ class Learning:
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
                 ModelIO.save_model(
-                    model=self.model,
+                    trained_model=self.model,
                     dir=self.model_dir,
                     id=timestamp,
                     epoch=epoch_number + 1,
