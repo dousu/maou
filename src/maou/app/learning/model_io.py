@@ -62,7 +62,9 @@ class ModelIO:
         logger.info("Saving model to {}".format(model_path))
         torch.save(model.state_dict(), model_path)
         if cloud_storage is not None:
-            logger.info("Uploading model to cloud storage")
+            logger.info(
+                f"Uploading model to cloud storage ({model_path})"
+            )
             cloud_storage.upload_from_local(
                 local_path=model_path,
                 cloud_path=str(model_path),
@@ -72,6 +74,9 @@ class ModelIO:
 
         # torch.onnx.export
         onnx_model_path = model_path.with_suffix(".onnx")
+        logger.info(
+            "Saving model to {}".format(onnx_model_path)
+        )
         dummy_data = create_empty_preprocessing_array(1)
         dummy_input = (
             torch.from_numpy(dummy_data["features"].copy())
@@ -102,11 +107,22 @@ class ModelIO:
         if not check:
             raise RuntimeError("onnxsim.simplify failed")
         onnx.save(onnx_model_simp, onnx_model_path)
+        if cloud_storage is not None:
+            logger.info(
+                f"Uploading model to cloud storage ({onnx_model_path})"
+            )
+            cloud_storage.upload_from_local(
+                local_path=onnx_model_path,
+                cloud_path=str(onnx_model_path),
+            )
 
         # ONNX FP16バージョン作成
-        onnx_model_fp16_path = Path(
-            model_path.stem + "_fp16"
+        onnx_model_fp16_path = (
+            dir / (model_path.stem + "_fp16")
         ).with_suffix(".onnx")
+        logger.info(
+            "Saving model to {}".format(onnx_model_fp16_path)
+        )
         onnx_model_fp16 = float16.convert_float_to_float16(
             model=onnx_model_simp,
             keep_io_types=True,
@@ -125,12 +141,23 @@ class ModelIO:
         # if not check:
         #     raise RuntimeError("onnxsim.simplify failed")
         # onnx.save(onnx_model_simp_fp16, onnx_model_fp16_path)
+        if cloud_storage is not None:
+            logger.info(
+                f"Uploading model to cloud storage ({onnx_model_fp16_path})"
+            )
+            cloud_storage.upload_from_local(
+                local_path=onnx_model_fp16_path,
+                cloud_path=str(onnx_model_fp16_path),
+            )
 
         # TensorRTバージョン作成
         if HAS_TENSORRT:
-            engine_path = Path(
-                model_path.stem + "_tensorrt"
+            engine_path = (
+                dir / (model_path.stem + "_tensorrt")
             ).with_suffix(".engine")
+            logger.info(
+                "Saving model to {}".format(engine_path)
+            )
 
             # builder
             trt_logger = trt.Logger(trt.Logger.WARNING)
@@ -182,3 +209,12 @@ class ModelIO:
             )
             with open(engine_path, "wb") as f:
                 f.write(serialized_engine)
+
+            if cloud_storage is not None:
+                logger.info(
+                    f"Uploading model to cloud storage ({engine_path})"
+                )
+                cloud_storage.upload_from_local(
+                    local_path=engine_path,
+                    cloud_path=str(engine_path),
+                )
