@@ -16,11 +16,11 @@ jobs:
         run: pipx install poetry
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'poetry'
       - name: Install dependencies
         run: |
-          poetry env use '3.11'
+          poetry env use '3.12'
           poetry install
       - name: Auto-update pre-commit & git diff
         id: git
