@@ -39,7 +39,7 @@ class MaskedGCELoss(torch.nn.Module):
 
     # qはGCEのパラメータ (0 < q <= 1)
     def __init__(
-        self, q: float = 0.7, alpha: float = 0.5
+        self, q: float = 0.7, alpha: float = 0.1
     ) -> None:
         super(MaskedGCELoss, self).__init__()
         self.q = q
