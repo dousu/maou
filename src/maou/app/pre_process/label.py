@@ -888,7 +888,7 @@ def _decode_board_move(
     else:
         raise ValueError(f"Invalid direction: {direction}")
 
-    from_sq = _find_move_from_sq(
+    from_sq, to_sq = _find_move_from_sq(
         board,
         to_sq,
         direction,
@@ -1058,7 +1058,7 @@ def _decode_keima_right_move(
 
 def _find_move_from_sq(
     board: shogi.Board, to_sq: int, direction: str
-) -> int:
+) -> tuple[int, int]:
     for move in board.get_legal_moves():
         legal_move_to_sq = shogi.move_to(move)
         legal_move_from_sq = shogi.move_from(move)
@@ -1087,16 +1087,18 @@ def _find_move_from_sq(
             and direction_tuple == _DIRECTION_KEIMA_LEFT
         ):
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "KEIMA_RIGHT"
             and to_sq == legal_move_to_sq
             and direction_tuple == _DIRECTION_KEIMA_RIGHT
         ):
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "UP"
             and to_sq == legal_move_to_sq
@@ -1104,8 +1106,9 @@ def _find_move_from_sq(
             and direction_tuple[1] < 0
         ):  # UP
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "DOWN"
             and to_sq == legal_move_to_sq
@@ -1113,8 +1116,9 @@ def _find_move_from_sq(
             and direction_tuple[1] > 0
         ):  # DOWN
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "LEFT"
             and to_sq == legal_move_to_sq
@@ -1122,8 +1126,9 @@ def _find_move_from_sq(
             and direction_tuple[0] > 0
         ):  # LEFT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "RIGHT"
             and to_sq == legal_move_to_sq
@@ -1131,8 +1136,9 @@ def _find_move_from_sq(
             and direction_tuple[0] < 0
         ):  # RIGHT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "UP_LEFT"
             and to_sq == legal_move_to_sq
@@ -1140,8 +1146,9 @@ def _find_move_from_sq(
             and direction_tuple[1] < 0
         ):  # UP_LEFT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "UP_RIGHT"
             and to_sq == legal_move_to_sq
@@ -1149,8 +1156,9 @@ def _find_move_from_sq(
             and direction_tuple[1] < 0
         ):  # UP_RIGHT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "DOWN_LEFT"
             and to_sq == legal_move_to_sq
@@ -1158,8 +1166,9 @@ def _find_move_from_sq(
             and direction_tuple[1] > 0
         ):  # DOWN_LEFT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
         elif (
             direction == "DOWN_RIGHT"
             and to_sq == legal_move_to_sq
@@ -1167,8 +1176,9 @@ def _find_move_from_sq(
             and direction_tuple[1] > 0
         ):  # DOWN_RIGHT
             if board.get_turn() == shogi.Turn.WHITE:
+                legal_move_to_sq = 80 - legal_move_to_sq
                 legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq
+            return legal_move_from_sq, legal_move_to_sq
     raise IllegalMove(
         "Can not transform illegal move to move label."
     )
