@@ -237,26 +237,18 @@ class TensorRTInference:
             ]  # type: ignore
         )
         value: float = host_output_value_ctype_array[0].item()  # type: ignore
-        logger.debug(
-            f"{policy_labels} {host_output_policy_ctype_array.shape} {host_output_policy_ctype_array.dtype}"
+
+        # データの使用が完了したので，メモリを解放する
+        cudart.cudaFree(cuda_input)
+        cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
+        cudart.cudaFree(cuda_output_policy)
+        cudart.cudaFreeHost(
+            host_output_policy_ctype_array.ctypes.data
         )
-        logger.debug(
-            f"{value} {host_output_value_ctype_array.shape} {host_output_value_ctype_array.dtype}"
+        cudart.cudaFree(cuda_output_value)
+        cudart.cudaFreeHost(
+            host_output_value_ctype_array.ctypes.data
         )
-        # いったんコメントアウト
-        # # 終わったらfreeする
-        # # cudart.cudaFree(self.device)
-        # # cudart.cudaStreamDestroy(stream)
-        # cudart.cudaFree(cuda_input)
-        # cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
-        # cudart.cudaFree(cuda_output_policy)
-        # cudart.cudaFreeHost(
-        #     host_output_policy_ctype_array.ctypes.data
-        # )
-        # cudart.cudaFree(cuda_output_value)
-        # cudart.cudaFreeHost(
-        #     host_output_value_ctype_array.ctypes.data
-        # )
-        # cudart.cudaStreamDestroy(stream)
+        cudart.cudaStreamDestroy(stream)
 
         return policy_labels, value
