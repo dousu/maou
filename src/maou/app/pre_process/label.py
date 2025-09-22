@@ -1181,6 +1181,8 @@ def _find_move_from_sq(
             return legal_move_from_sq, legal_move_to_sq
     raise IllegalMove(
         "Can not transform illegal move to move label."
+        f" direction: {direction} to_sq: {to_sq}"
+        f" turn: {board.get_turn()}"
     )
 
 
