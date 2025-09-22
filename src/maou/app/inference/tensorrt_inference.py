@@ -238,7 +238,7 @@ class TensorRTInference:
         )
         value: float = host_output_value_ctype_array[0].item()  # type: ignore
 
-        # データの使用が完了したので，メモリを解放する
+        # メモリ解放
         cudart.cudaFree(cuda_input)
         cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
         cudart.cudaFree(cuda_output_policy)
