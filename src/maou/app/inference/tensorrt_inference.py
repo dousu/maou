@@ -237,8 +237,12 @@ class TensorRTInference:
             ]  # type: ignore
         )
         value: float = host_output_value_ctype_array[0]  # type: ignore
-        logger.debug(f"{policy_labels}")
-        logger.debug(f"{value}")
+        logger.debug(
+            f"{policy_labels} {host_output_policy_ctype_array.shape} {host_output_policy_ctype_array.dtype}"
+        )
+        logger.debug(
+            f"{value} {host_output_value_ctype_array.shape} {host_output_value_ctype_array.dtype}"
+        )
         # いったんコメントアウト
         # # 終わったらfreeする
         # # cudart.cudaFree(self.device)
