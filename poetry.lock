@@ -260,7 +260,7 @@ description = "Colored terminal output for Python's logging module"
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\""
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"},
     {file = "coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0"},
@@ -530,7 +530,7 @@ description = "The FlatBuffers serialization format for Python"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\""
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "flatbuffers-25.2.10-py2.py3-none-any.whl", hash = "sha256:ebba5f4d5ea615af3f7fd70fc310636fbb2bbd1f566ac0a23d98dd412de50051"},
     {file = "flatbuffers-25.2.10.tar.gz", hash = "sha256:97e451377a41262f8d9bd4295cc836133415cc03d8cb966410a4af92eb00d26e"},
@@ -937,7 +937,7 @@ description = "Human friendly output for text interfaces using Python"
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\""
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
     {file = "humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc"},
@@ -1260,7 +1260,7 @@ description = "Python library for arbitrary-precision floating-point arithmetic"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\""
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"},
     {file = "mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f"},
@@ -1513,7 +1513,7 @@ description = "CUDA Runtime native Libraries"
 optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or extra == \"tensorrt-infer\""
 files = [
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:6116fad3e049e04791c0256a9778c16237837c08b27ed8c8401e2e45de8d60cd"},
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_aarch64.whl", hash = "sha256:d461264ecb429c84c8879a7153499ddc7b19b5f8d84c204307491989a365588e"},
@@ -1848,7 +1848,7 @@ description = "ONNX Runtime is a runtime accelerator for Machine Learning models
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "python_version == \"3.9\" and (extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\")"
+markers = "python_version == \"3.9\" and (extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\")"
 files = [
     {file = "onnxruntime_gpu-1.20.2-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dfba508f110ec062dedfd3032e6eee8cde325026e9d7c5792884e8b9d4ebb9c3"},
     {file = "onnxruntime_gpu-1.20.2-cp310-cp310-win_amd64.whl", hash = "sha256:75a7557292b2741e63fb73236ee84faa08075cead52d9a8d302a67036fc64f16"},
@@ -1876,7 +1876,7 @@ description = "ONNX Runtime is a runtime accelerator for Machine Learning models
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "(extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\") and python_version != \"3.9\""
+markers = "(extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\") and python_version != \"3.9\""
 files = [
     {file = "onnxruntime_gpu-1.22.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:965da7d33a54917e8e5176f292cc22640819f328370f4fb86087908745b03708"},
     {file = "onnxruntime_gpu-1.22.0-cp310-cp310-win_amd64.whl", hash = "sha256:6db51c375ffe3887fe5cce61a0ae054e5e9c1eaf0603f8a106589a819976e4b2"},
@@ -2544,7 +2544,7 @@ description = "A python implementation of GNU readline."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "sys_platform == \"win32\" and (extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\")"
+markers = "sys_platform == \"win32\" and (extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\")"
 files = [
     {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
     {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
@@ -2876,7 +2876,7 @@ description = "Computer algebra system (CAS) in Python"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\""
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"},
     {file = "sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517"},
@@ -2933,7 +2933,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = ">=3.6"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_cu12-10.13.2.6.tar.gz", hash = "sha256:8b41620adc160806edc8930add1d620fb2c64a81aec458ddfc5f9eca037d1250"},
 ]
@@ -2952,7 +2952,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:be6394d3a0080df372782a98441841a0df4646e794976eb1025d1125efc6a59d"},
     {file = "tensorrt_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:9dbdc10ce42c2224648918955e4204b29fa3f0771bf8da4eaf5ea17c5baa9015"},
@@ -2978,7 +2978,7 @@ description = "TensorRT Libraries"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:0fee67ad416227f60917989815aac34bfe7c76059f66a1e0700d64b388f520d7"},
 ]
@@ -2993,7 +2993,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = ">=3.6"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_dispatch_cu12-10.13.2.6.tar.gz", hash = "sha256:652f28fb7e4b879f4ff021f6266f351f69a16edb542574b431a4d5ce915ac2ac"},
 ]
@@ -3012,7 +3012,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:6390177789e85b81530c1e750dd4c0de456a0c4dc0315b7d6a72e6393230740f"},
     {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:ebb1c31b5fe4bccc52d9bff01f9021f4fe101537b7d30fbf8f7144e1a91a963f"},
@@ -3038,7 +3038,7 @@ description = "TensorRT Libraries"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_dispatch_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:b3bdc31308c526f0768d1483fee6ab3f9e018e064b0121f11e35fdda53e1828e"},
 ]
@@ -3053,7 +3053,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = ">=3.6"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_lean_cu12-10.13.2.6.tar.gz", hash = "sha256:795d021f6fa62e38f8f6516624f7a05df3b637691dce4b4aa853062752e2c79d"},
 ]
@@ -3072,7 +3072,7 @@ description = "A high performance deep learning inference library"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:b43d0546b9739e200df3fd768b231dc6fcd514235272a385d2806e8705505e79"},
     {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:692553842c3792bb0023977d71aafbb49aa50a5154f4cc942460383cdd04620e"},
@@ -3098,7 +3098,7 @@ description = "TensorRT Libraries"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"tensorrt-infer\""
+markers = "extra == \"tensorrt-infer\""
 files = [
     {file = "tensorrt_lean_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:80a9844d0f3c439ff9086759d4ec627fec80a6a5c3a3a4e73537170051be1edd"},
 ]
@@ -3594,14 +3594,14 @@ type = ["pytest-mypy"]
 aws = ["boto3"]
 cpu = ["onnxruntime", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torchinfo"]
 cpu-infer = ["onnxruntime"]
-cuda = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "pynvml", "tensorrt-cu12", "tensorrt-dispatch-cu12", "tensorrt-lean-cu12", "torch", "torch-tb-profiler", "torchinfo"]
+cuda = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "pynvml", "torch", "torch-tb-profiler", "torchinfo"]
 gcp = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
 mpu = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torchinfo"]
 onnx-gpu-infer = ["onnxruntime-gpu"]
-tensorrt-infer = ["cuda-core", "tensorrt-cu12", "tensorrt-dispatch-cu12", "tensorrt-lean-cu12"]
+tensorrt-infer = ["cuda-core", "onnxruntime-gpu", "tensorrt-cu12", "tensorrt-dispatch-cu12", "tensorrt-lean-cu12"]
 tpu = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torch-xla", "torchinfo"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.13"
-content-hash = "d82af339c491e1013713cbb2b1cda6f7396dfa67c78270ea4fa9780fb777ec1f"
+content-hash = "c7c114992adc50c76048af988f5c1da9672120e5ab9301fe0844055713f8791f"

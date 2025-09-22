@@ -35,9 +35,6 @@ cuda = [
     "onnxruntime-gpu",
     "onnxruntime-tools",
     "onnxsim",
-    "tensorrt-cu12",
-    "tensorrt-lean-cu12",
-    "tensorrt-dispatch-cu12",
 ]
 mpu = [
     "torch>=2.6.0,<=2.7.0",
@@ -63,6 +60,7 @@ onnx-gpu-infer = [
     "onnxruntime-gpu",
 ]
 tensorrt-infer = [
+    "onnxruntime-gpu",
     "cuda-core[cu12]",
     "tensorrt-cu12",
     "tensorrt-lean-cu12",

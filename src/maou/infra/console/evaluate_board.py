@@ -18,7 +18,7 @@ from maou.interface import infer
 )
 @click.option(
     "--model-path",
-    help="Model file path.",
+    help="ONNX Model file path.",
     type=click.Path(exists=True, path_type=Path),
     required=True,
 )

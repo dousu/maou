@@ -13,14 +13,76 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class TensorRTInference:
     @staticmethod
+    def _build_engine_from_onnx(
+        onnx_path: Path,
+    ) -> bytes:
+        """ONNXモデルから現在のGPUに適したTensorRTエンジンを生成"""
+
+        # builder
+        trt_logger = trt.Logger(trt.Logger.WARNING)
+        builder = trt.Builder(trt_logger)
+
+        # create network definition
+        # EXPLICIT_BATCHは推奨らしいので設定しておく
+        network_flags = 1 << int(
+            trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH
+        )
+        network = builder.create_network(network_flags)
+
+        # import model using the ONNX parser
+        parser = trt.OnnxParser(network, trt_logger)
+        success = parser.parse_from_file(
+            str(onnx_path.absolute())
+        )
+        for idx in range(parser.num_errors):
+            logger.error(parser.get_error(idx))
+        if not success:
+            raise RuntimeError("ONNX parse failed")
+
+        # build engine
+        builder_config = builder.create_builder_config()
+        builder_config.set_memory_pool_limit(
+            trt.MemoryPoolType.WORKSPACE, 1 << 30
+        )
+
+        # FP16最適化
+        if builder.platform_has_fast_fp16:
+            builder_config.set_flag(trt.BuilderFlag.FP16)
+
+        # ONNXではバッチサイズ可変なのでプロファイルを設定する
+        profile = builder.create_optimization_profile()
+        input_tensor = network.get_input(0)
+        t, h, w = input_tensor.shape[1:]
+        profile.set_shape(
+            input_tensor.name,
+            min=(1, t, h, w),
+            opt=(4000, t, h, w),
+            max=(10000, t, h, w),
+        )
+        builder_config.add_optimization_profile(profile)
+
+        logger.info(
+            "Building TensorRT engine for current GPU..."
+        )
+        serialized_engine = builder.build_serialized_network(
+            network, builder_config
+        )
+        logger.info("TensorRT engine built successfully")
+        return serialized_engine
+
+    @staticmethod
     def infer(
-        path: Path,
+        onnx_path: Path,
         input_data: np.ndarray,
         num: int,
         cuda_available: bool,
     ) -> tuple[list[int], float]:
         if not cuda_available:
             raise ValueError("TensorRT requires CUDA.")
+
+        serialized_engine = (
+            TensorRTInference._build_engine_from_onnx(onnx_path)
+        )
 
         # TensorRTのサンプルコードを参考に実装した
         # https://github.com/NVIDIA/TensorRT/blob/main/samples/python/common_runtime.py
@@ -94,8 +156,6 @@ class TensorRTInference:
                     )
         trt_logger = trt.Logger(trt.Logger.WARNING)
         runtime = trt.Runtime(trt_logger)
-        with open(path, "rb") as f:
-            serialized_engine = f.read()
         engine = runtime.deserialize_cuda_engine(
             serialized_engine
         )
@@ -117,7 +177,7 @@ class TensorRTInference:
             host_output_policy_ctype_array,
             cuda_output_policy,
             output_policy_nbytes,
-            output_policy_shape,
+            _,
         ) = cuda_malloc(engine, output_policy_name, batch_size)
         context.set_tensor_address(
             output_policy_name, cuda_output_policy
@@ -128,7 +188,7 @@ class TensorRTInference:
             host_output_value_ctype_array,
             cuda_output_value,
             output_value_nbytes,
-            output_value_shape,
+            _,
         ) = cuda_malloc(engine, output_value_name, batch_size)
         context.set_tensor_address(
             output_value_name, cuda_output_value
