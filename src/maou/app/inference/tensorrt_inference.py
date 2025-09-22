@@ -232,24 +232,27 @@ class TensorRTInference:
         cudart.cudaStreamSynchronize(stream)
         # hostの出力を確認する
         policy_labels: list[int] = list(
-            np.argsort(host_output_policy_ctype_array)[::-1][
+            np.argsort(host_output_policy_ctype_array[0])[::-1][
                 :num
             ]  # type: ignore
         )
-        value: float = host_output_value_ctype_array  # type: ignore
-        # 終わったらfreeする
-        # cudart.cudaFree(self.device)
+        value: float = host_output_value_ctype_array[0]  # type: ignore
+        logger.debug(f"{policy_labels}")
+        logger.debug(f"{value}")
+        # いったんコメントアウト
+        # # 終わったらfreeする
+        # # cudart.cudaFree(self.device)
+        # # cudart.cudaStreamDestroy(stream)
+        # cudart.cudaFree(cuda_input)
+        # cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
+        # cudart.cudaFree(cuda_output_policy)
+        # cudart.cudaFreeHost(
+        #     host_output_policy_ctype_array.ctypes.data
+        # )
+        # cudart.cudaFree(cuda_output_value)
+        # cudart.cudaFreeHost(
+        #     host_output_value_ctype_array.ctypes.data
+        # )
         # cudart.cudaStreamDestroy(stream)
-        cudart.cudaFree(cuda_input)
-        cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
-        cudart.cudaFree(cuda_output_policy)
-        cudart.cudaFreeHost(
-            host_output_policy_ctype_array.ctypes.data
-        )
-        cudart.cudaFree(cuda_output_value)
-        cudart.cudaFreeHost(
-            host_output_value_ctype_array.ctypes.data
-        )
-        cudart.cudaStreamDestroy(stream)
 
         return policy_labels, value
