@@ -232,11 +232,11 @@ class TensorRTInference:
         cudart.cudaStreamSynchronize(stream)
         # hostの出力を確認する
         policy_labels: list[int] = list(
-            np.argsort(host_output_policy_ctype_array[0])[::-1][
+            np.argsort(host_output_policy_ctype_array)[::-1][
                 :num
             ]  # type: ignore
         )
-        value: float = host_output_value_ctype_array[0]  # type: ignore
+        value: float = host_output_value_ctype_array[0].item()  # type: ignore
         logger.debug(
             f"{policy_labels} {host_output_policy_ctype_array.shape} {host_output_policy_ctype_array.dtype}"
         )
