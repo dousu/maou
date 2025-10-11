@@ -306,7 +306,9 @@ class TestHCPEConverter:
             processed_id = processed_record["id"]
 
             # IDが有効な値であることを確認
-            assert processed_id > 0, f"IDが無効 ({processed_id})"
+            assert processed_id > 0, (
+                f"IDが無効 ({processed_id})"
+            )
 
             # 元データから同じハッシュのレコードを抽出
             matching_records = []
@@ -464,7 +466,9 @@ class TestHCPEConverter:
             ]
 
             # 非合法手のラベルが全て0であることを確認
-            assert np.allclose(illegal_move_labels, 0.0, atol=1e-6), (
+            assert np.allclose(
+                illegal_move_labels, 0.0, atol=1e-6
+            ), (
                 f"Record {i}: 非合法手に対するmoveLabelが0でない "
                 f"(max={np.max(illegal_move_labels)}, "
                 f"非0の数={np.sum(illegal_move_labels > 1e-6)})"

@@ -175,7 +175,7 @@ class TestPreprocessingSchema:
                 9,
             )  # type: ignore[misc]
         assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
-        assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc]
+        assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc,index]
         assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (

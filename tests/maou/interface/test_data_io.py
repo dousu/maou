@@ -230,7 +230,9 @@ class TestIntegrationWithInfrastructure:
             for i, array in enumerate(prep_arrays):
                 # moveLabel is a (MOVE_LABELS_NUM,) array, so we set one element per record
                 for j in range(len(array)):
-                    array[j]["moveLabel"][0] = 0.01 * (j + i * 1000)
+                    array[j]["moveLabel"][0] = 0.01 * (
+                        j + i * 1000
+                    )
                 file_path = (
                     Path(temp_dir)
                     / f"batch_preprocessing_{i}.npy"

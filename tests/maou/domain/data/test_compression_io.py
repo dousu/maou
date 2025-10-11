@@ -23,7 +23,7 @@ from maou.domain.data.schema import (
 logger: logging.Logger = logging.getLogger("TEST")
 
 
-def zobrist_like_hash(value) -> np.uint64:
+def zobrist_like_hash(value: bytes | str | int) -> np.uint64:
     if not isinstance(value, bytes):
         value = str(value).encode()
     h = hashlib.sha256(value).digest()
