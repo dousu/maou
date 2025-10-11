@@ -11,6 +11,11 @@ import numpy as np
 from maou.interface import converter, preprocess
 from maou.interface.data_io import save_array_to_bytes
 
+# Use 'spawn' start method to avoid fork() issues in multi-threaded environments
+# This is required for compatibility with cloud storage clients (GCS, S3)
+# and will be the default in Python 3.14+
+_mp_context = mp.get_context("spawn")
+
 
 class NotFoundKeyColumns(Exception):
     """キーカラムが対象のスキーマ内に見つからない."""
@@ -52,12 +57,12 @@ class ObjectStorageFeatureStore(
         self.max_workers = max_workers
         # 最大値指定
         self.max_cached_bytes = max_cached_bytes
-        # アップロード用のプロセスを別でたてる
+        # アップロード用のプロセスを別でたてる（spawn contextを使用）
         self.queue: mp.Queue[Optional[tuple[str, bytes]]] = (
-            mp.Queue(maxsize=max_queue_size)
+            _mp_context.Queue(maxsize=max_queue_size)
         )
         self.uploader_processes = [
-            mp.Process(
+            _mp_context.Process(
                 target=type(self).uploader,
                 kwargs={
                     "bucket_name": self.bucket_name,

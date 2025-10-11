@@ -31,25 +31,25 @@ class TestCompressedPreprocessingSchema:
         # Check field names
         expected_fields = {
             "id",
-            "eval",
             "features_packed",
             "moveLabel",
             "resultValue",
             "legalMoveMask_packed",
-            "partitioningKey",
         }
         assert set(dtype.names) == expected_fields
 
         # Check field types and shapes
-        assert "U128" in str(dtype["id"])
-        assert dtype["eval"] == np.dtype("int16")
+        assert dtype["id"] == np.dtype("uint64")
         assert dtype["features_packed"].shape == (
             FEATURES_PACKED_SIZE,
         )
         assert str(dtype["features_packed"]).startswith(
             "("
         )  # It's an array field
-        assert dtype["moveLabel"] == np.dtype("uint16")
+        assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)
+        assert str(dtype["moveLabel"]).startswith(
+            "("
+        )  # It's an array field
         assert dtype["resultValue"] == np.dtype("float16")
         assert dtype["legalMoveMask_packed"].shape == (
             LEGAL_MOVES_PACKED_SIZE,
@@ -57,7 +57,6 @@ class TestCompressedPreprocessingSchema:
         assert str(dtype["legalMoveMask_packed"]).startswith(
             "("
         )  # It's an array field
-        assert "datetime64[D]" in str(dtype["partitioningKey"])
 
     def test_create_empty_compressed_preprocessing_array(
         self,
@@ -103,14 +102,21 @@ class TestCompressedPreprocessingValidation:
         array = create_empty_packed_preprocessing_array(5)
 
         # Set valid values
-        array["eval"] = [100, -100, 0, 1000, -1000]
-        array["moveLabel"] = [
-            0,
-            100,
-            500,
-            1000,
-            MOVE_LABELS_NUM - 1,
-        ]
+        array["moveLabel"] = np.array(
+            [
+                np.bincount(
+                    arr,
+                    minlength=MOVE_LABELS_NUM,
+                )
+                for arr in [
+                    [0],
+                    [100],
+                    [500],
+                    [1000],
+                    [MOVE_LABELS_NUM - 1],
+                ]
+            ]
+        )
         array["resultValue"] = [0.0, 0.25, 0.5, 0.75, 1.0]
 
         # Should not raise
@@ -141,32 +147,10 @@ class TestCompressedPreprocessingValidation:
                 "not an array"  # type: ignore
             )
 
-    def test_validate_eval_out_of_range(self) -> None:
-        """Test validating array with eval values out of range."""
-        array = create_empty_packed_preprocessing_array(2)
-        # Use numpy array to force values that exceed int16 range after validation
-        array["eval"][0] = 32767
-        array["eval"][1] = -32767
-
-        # Now modify to exceed range and test
-        # Since numpy auto-truncates, we'll test the validation logic directly
-        array["eval"][
-            0
-        ] = -32768  # This should be caught by validation
-
-        with pytest.raises(
-            SchemaValidationError,
-            match="eval values out of range",
-        ):
-            validate_compressed_preprocessing_array(array)
-
     def test_validate_move_label_out_of_range(self) -> None:
         """Test validating array with moveLabel out of range."""
-        array = create_empty_packed_preprocessing_array(2)
-        array["moveLabel"] = [
-            0,
-            MOVE_LABELS_NUM,
-        ]  # Second value is out of range
+        array = create_empty_packed_preprocessing_array(1)
+        array["moveLabel"][0][0] = 1.1
 
         with pytest.raises(
             SchemaValidationError,
@@ -257,8 +241,8 @@ class TestMemoryUsage:
         # The exact ratio depends on the non-packed fields, but should be substantial
         compression_ratio = standard_bytes / compressed_bytes
 
-        # Should achieve at least 4x compression (conservative estimate)
-        assert compression_ratio >= 4.0
+        # Should achieve at least 3x compression (conservative estimate)
+        assert compression_ratio >= 3.0
 
         # Should be less than 10x (sanity check)
         assert compression_ratio <= 10.0

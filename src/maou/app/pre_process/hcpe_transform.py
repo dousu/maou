@@ -3,17 +3,19 @@ import contextlib
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
 
 import numpy as np
 from tqdm.auto import tqdm
 
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_array
 from maou.domain.data.schema import (
+    create_empty_intermediate_array,
     create_empty_preprocessing_array,
+    get_intermediate_dtype,
 )
 
 
@@ -67,6 +69,7 @@ class PreProcess:
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
+    intermediate_data: np.ndarray
 
     def __init__(
         self,
@@ -86,61 +89,129 @@ class PreProcess:
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
         output_dir: Optional[Path] = None
+        output_filename: str = "transformed"
         max_workers: int
 
     @staticmethod
     def _process_single_array(
         data: np.ndarray,
-        dataname: str,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray, list, list, list]:
         """Process a chunk of records in parallel."""
 
-        transform_logic = Transform()
-        data_length = len(data)
-
-        # Create output array for this chunk
-        array = create_empty_preprocessing_array(data_length)
-
-        for idx, record in enumerate(data):
-            id = (
-                record["id"]
-                if "id" in record.dtype.names
-                and record["id"] != ""
-                else f"{dataname}_{idx}"
+        # dataの中にあるhcpからhashをだしてargsortする
+        hashs = np.array(
+            [Transform.board_hash(hcp) for hcp in data["hcp"]]
+        )
+        idx = np.argsort(
+            hashs,
+            kind="mergesort",
+        )
+        sorted_hash = hashs[idx]
+        uniq, counts = np.unique(
+            sorted_hash, return_counts=True
+        )
+        sorted_move_labels = np.array(
+            [
+                Transform.board_move_label(hcp, move)
+                for hcp, move in zip(
+                    data["hcp"], data["bestMove16"]
+                )
+            ]
+        )[idx]
+        sorted_wins = np.array(
+            [
+                Transform.board_game_result(hcp, game_result)
+                for hcp, game_result in zip(
+                    data["hcp"], data["gameResult"]
+                )
+            ]
+        )[idx]
+        sorted_hcps = data["hcp"][idx]
+        moves = []
+        wins = []
+        hcps = []
+        i = 0
+        for c in counts:
+            moves.append(
+                np.bincount(
+                    sorted_move_labels[i : i + c],
+                    minlength=MOVE_LABELS_NUM,
+                )
             )
-            hcp = record["hcp"]
-            move16 = record["bestMove16"]
-            game_result = record["gameResult"]
-            eval = record["eval"]
+            wins.append(np.sum(sorted_wins[i : i + c]))
+            hcps.append(sorted_hcps[i])
+            i += c
 
-            (
-                features,
-                move_label,
-                result_value,
-                legal_move_mask,
-            ) = transform_logic(
-                hcp=hcp,
-                move16=move16,
-                game_result=game_result,
-                eval=eval,
-            )
+        return uniq, counts, moves, wins, hcps
 
-            partitioning_key = (
-                record["partitioningKey"]
-                if "partitioningKey" in record.dtype.names
-                else datetime.min.date()
-            )
+    def add_intermediate_data(
+        self,
+        ids: np.ndarray,
+        counts: np.ndarray,
+        moves: list,
+        wins: list,
+        hcps: list,
+    ) -> None:
+        """中間データを追加する"""
 
-            np_data = array[idx]
-            np_data["id"] = id
-            np_data["eval"] = eval
-            np_data["features"] = features
-            np_data["moveLabel"] = move_label
-            np_data["resultValue"] = result_value
-            np_data["legalMoveMask"] = legal_move_mask
-            np_data["partitioningKey"] = partitioning_key
+        # hash値を持っているかを調べてなかったらレコード追加，あればマイグレーション
+        for i, c, m, w, hcp in zip(
+            ids, counts, moves, wins, hcps
+        ):
+            idx_array = np.where(
+                self.intermediate_data["id"] == i
+            )[0]
+            if len(idx_array) == 0:
+                new_record = np.zeros(
+                    1, dtype=get_intermediate_dtype()
+                )
+                new_record["id"] = i
+                new_record["count"] = c
+                new_record["winCount"] = w
+                new_record["moveLabelCount"] = m
+                # features
+                new_record["features"] = (
+                    Transform.board_feature(hcp)
+                )
+                # legalMoveMask
+                new_record["legalMoveMask"] = (
+                    Transform.board_legal_move_mask(hcp)
+                )
+                self.intermediate_data = np.append(
+                    self.intermediate_data, new_record
+                )
+            else:
+                idx = idx_array[0]
 
-        return array
+                self.intermediate_data["count"][idx] += c
+                self.intermediate_data["winCount"][idx] += w
+                self.intermediate_data["moveLabelCount"][
+                    idx
+                ] += m
+
+    def aggregate_intermediate_data(self) -> np.ndarray:
+        """中間データを集計して最終的な前処理データを作成する"""
+
+        target_data = create_empty_preprocessing_array(
+            len(self.intermediate_data)
+        )
+        target_data["id"] = self.intermediate_data["id"]
+        target_data["features"] = self.intermediate_data[
+            "features"
+        ]
+        target_data["moveLabel"] = (
+            self.intermediate_data["moveLabelCount"]
+            / self.intermediate_data["count"][:, np.newaxis]
+        )
+        target_data["resultValue"] = (
+            self.intermediate_data["winCount"]
+            / self.intermediate_data["count"]
+        )
+        target_data["legalMoveMask"] = self.intermediate_data[
+            "legalMoveMask"
+        ]
+
+        return target_data
 
     def transform(
         self, option: PreProcessOption
@@ -148,6 +219,9 @@ class PreProcess:
         """機械学習の前処理を行う (並列処理版)."""
 
         pre_process_result: Dict[str, str] = {}
+        self.intermediate_data = (
+            create_empty_intermediate_array(0)
+        )
         self.logger.info(
             f"前処理対象のデータ数 {len(self.__datasource)}"
         )
@@ -165,30 +239,35 @@ class PreProcess:
                     self.__datasource.iter_batches(),
                     desc="PreProcess (single)",
                 ):
-                    array = self._process_single_array(
-                        data, dataname
+                    ids, counts, moves, wins, hcps = (
+                        self._process_single_array(
+                            data,
+                        )
                     )
 
-                    pre_process_result[dataname] = (
-                        f"success {len(array)} rows"
+                    self.add_intermediate_data(
+                        ids, counts, moves, wins, hcps
                     )
-                    # Store results
-                    if self.__feature_store is not None:
-                        self.__feature_store.store_features(
-                            name=dataname,
-                            key_columns=["id"],
-                            structured_array=array,
-                            partitioning_key_date="partitioningKey",
-                        )
+                array = self.aggregate_intermediate_data()
+                pre_process_result["aggregated"] = (
+                    f"success {len(array)} rows"
+                )
 
-                    if option.output_dir is not None:
-                        base_name = Path(dataname).stem
-                        save_preprocessing_array(
-                            array,
-                            option.output_dir
-                            / f"{base_name}.npy",
-                            bit_pack=False,
-                        )
+                # Store results
+                if self.__feature_store is not None:
+                    self.__feature_store.store_features(
+                        name=option.output_filename,
+                        key_columns=["id"],
+                        structured_array=array,
+                    )
+
+                if option.output_dir is not None:
+                    base_name = Path(option.output_filename)
+                    save_preprocessing_array(
+                        array,
+                        option.output_dir / f"{base_name}.npy",
+                        bit_pack=False,
+                    )
             else:
                 # Parallel processing
                 with ProcessPoolExecutor(
@@ -199,7 +278,6 @@ class PreProcess:
                         executor.submit(
                             self._process_single_array,
                             data,
-                            dataname,
                         ): dataname
                         for dataname, data in self.__datasource.iter_batches()
                     }
@@ -209,27 +287,12 @@ class PreProcess:
                     ):
                         dataname = future_to_dataname[future]
                         try:
-                            array = future.result()
-                            pre_process_result[dataname] = (
-                                f"success {len(array)} rows"
+                            ids, counts, moves, wins, hcps = (
+                                future.result()
                             )
-                            # Store results
-                            if self.__feature_store is not None:
-                                self.__feature_store.store_features(
-                                    name=dataname,
-                                    key_columns=["id"],
-                                    structured_array=array,
-                                    partitioning_key_date="partitioningKey",
-                                )
-
-                            if option.output_dir is not None:
-                                base_name = Path(dataname).stem
-                                save_preprocessing_array(
-                                    array,
-                                    option.output_dir
-                                    / f"{base_name}.npy",
-                                    bit_pack=False,
-                                )
+                            self.add_intermediate_data(
+                                ids, counts, moves, wins, hcps
+                            )
                         except Exception as exc:
                             self.logger.error(
                                 f"{dataname} processing failed: {exc}"
@@ -237,6 +300,26 @@ class PreProcess:
                             pre_process_result[dataname] = (
                                 f"Dataname {dataname} generated an exception: {exc}"
                             )
+
+                array = self.aggregate_intermediate_data()
+                pre_process_result["aggregated"] = (
+                    f"success {len(array)} rows"
+                )
+                # Store results
+                if self.__feature_store is not None:
+                    self.__feature_store.store_features(
+                        name=option.output_filename,
+                        key_columns=["id"],
+                        structured_array=array,
+                    )
+
+                if option.output_dir is not None:
+                    base_name = Path(option.output_filename)
+                    save_preprocessing_array(
+                        array,
+                        option.output_dir / f"{base_name}.npy",
+                        bit_pack=False,
+                    )
 
         return pre_process_result
 

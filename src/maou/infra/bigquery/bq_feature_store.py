@@ -399,6 +399,9 @@ class BigQueryFeatureStore(
                 and dtype.name == "datetime64[D]"
             ):
                 df[name] = df[name].dt.date
+            elif dtype.name == "uint64":
+                # Convert uint64 to string to avoid overflow in BigQuery INT64
+                df[name] = df[name].astype(str)
 
         # numpyの型
         self.logger.debug(

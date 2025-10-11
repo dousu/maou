@@ -51,7 +51,7 @@ class TestInterfaceDataIO:
     def test_load_array_with_mmap(self) -> None:
         """Test loading array with memory mapping through interface."""
         prep_array = create_empty_preprocessing_array(3)
-        prep_array["eval"] = [100, 200, 300]
+        prep_array["id"] = [100, 200, 300]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "mmap_test.npy"
@@ -103,7 +103,9 @@ class TestInterfaceDataIO:
     def test_save_array_compressed(self) -> None:
         """Test saving compressed arrays through interface."""
         prep_array = create_empty_preprocessing_array(4)
-        prep_array["moveLabel"] = [10, 20, 30, 40]
+        # moveLabel is a (MOVE_LABELS_NUM,) array, so we set one element per record
+        for i in range(4):
+            prep_array[i]["moveLabel"][0] = 0.1 * (i + 1)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "compressed_test.npz"
@@ -226,9 +228,9 @@ class TestIntegrationWithInfrastructure:
             file_paths = []
 
             for i, array in enumerate(prep_arrays):
-                array["moveLabel"] = (
-                    np.arange(len(array)) + i * 1000
-                )
+                # moveLabel is a (MOVE_LABELS_NUM,) array, so we set one element per record
+                for j in range(len(array)):
+                    array[j]["moveLabel"][0] = 0.01 * (j + i * 1000)
                 file_path = (
                     Path(temp_dir)
                     / f"batch_preprocessing_{i}.npy"

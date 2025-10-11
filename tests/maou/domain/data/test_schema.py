@@ -159,26 +159,24 @@ class TestPreprocessingSchema:
         assert isinstance(dtype, np.dtype)
         expected_fields = {
             "id",
-            "eval",
             "features",
             "moveLabel",
             "resultValue",
             "legalMoveMask",
-            "partitioningKey",
         }
         if dtype.names is not None:
             assert set(dtype.names) == expected_fields
 
         # Check specific field types
         if dtype.names is not None:
-            assert dtype["eval"] == np.int16  # type: ignore[misc]
             assert dtype["features"].shape == (
                 FEATURES_NUM,
                 9,
                 9,
             )  # type: ignore[misc]
         assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
-        assert dtype["moveLabel"] == np.uint16  # type: ignore[misc]
+        assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc]
+        assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         assert dtype["legalMoveMask"].shape == (
             MOVE_LABELS_NUM,
@@ -200,8 +198,10 @@ class TestPreprocessingSchema:
         assert len(array) == size
 
         # Check that array is properly initialized
-        assert np.all(array["eval"] == 0)
-        assert np.all(array["moveLabel"] == 0)
+        assert np.all(
+            array["moveLabel"]
+            == np.zeros((MOVE_LABELS_NUM,), dtype=np.float16)
+        )
         assert np.all(array["resultValue"] == 0.0)
 
     def test_validate_preprocessing_array_valid(self) -> None:
@@ -209,10 +209,18 @@ class TestPreprocessingSchema:
         array = create_empty_preprocessing_array(3)
 
         # Fill with valid data
-        array["eval"] = [100, -200, 0]
-        array["moveLabel"] = [0, 100, MOVE_LABELS_NUM - 1]
+        array["moveLabel"] = np.array(
+            [
+                np.bincount(arr, minlength=MOVE_LABELS_NUM)
+                for arr in [[0], [100], [MOVE_LABELS_NUM - 1]]
+            ]
+        )
         array["resultValue"] = [0.0, 0.5, 1.0]
-        array["id"] = ["pos1", "pos2", "pos3"]
+        array["id"] = [
+            1122222232,
+            334411234131313242,
+            3143232423121432423,
+        ]
 
         # Features should have correct shape
         array["features"] = np.random.randint(
@@ -245,30 +253,12 @@ class TestPreprocessingSchema:
         ):
             validate_preprocessing_array(wrong_array)
 
-    def test_validate_preprocessing_array_eval_out_of_range(
-        self,
-    ) -> None:
-        """Test validation with eval values out of range."""
-        array = create_empty_preprocessing_array(2)
-        array["eval"] = np.array(
-            [32768, -32768], dtype=np.int32
-        ).astype(np.int16)  # Out of int16 range
-
-        with pytest.raises(
-            SchemaValidationError,
-            match="eval values out of range",
-        ):
-            validate_preprocessing_array(array)
-
     def test_validate_preprocessing_array_move_label_out_of_range(
         self,
     ) -> None:
         """Test validation with moveLabel values out of range."""
         array = create_empty_preprocessing_array(2)
-        array["moveLabel"] = [
-            MOVE_LABELS_NUM,
-            MOVE_LABELS_NUM + 1,
-        ]  # Out of range
+        array["moveLabel"][0] = 1.1
 
         with pytest.raises(
             SchemaValidationError,
@@ -398,10 +388,11 @@ class TestSchemaIntegration:
 
         # Create preprocessing array with realistic training data
         prep_array = create_empty_preprocessing_array(2)
-        prep_array["eval"] = [200, -150]
-        prep_array["moveLabel"] = [100, 500]
+        prep_array["moveLabel"][0] = np.bincount(
+            [100, 500], minlength=MOVE_LABELS_NUM
+        )
         prep_array["resultValue"] = [1.0, 0.0]
-        prep_array["id"] = ["train_pos1", "train_pos2"]
+        prep_array["id"] = [13234435348, 8284929344598382842]
 
         # Set realistic features and legal move masks
         prep_array["features"] = np.random.randint(
