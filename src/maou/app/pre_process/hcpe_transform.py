@@ -13,9 +13,7 @@ from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_array
 from maou.domain.data.schema import (
-    create_empty_intermediate_array,
     create_empty_preprocessing_array,
-    get_intermediate_dtype,
 )
 
 
@@ -69,8 +67,9 @@ class PreProcess:
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
-    intermediate_data: np.ndarray
-    intermediate_dict: Dict[int, int]  # id -> index mapping
+    intermediate_dict: Dict[
+        int, dict
+    ]  # id -> {count, winCount, moveLabelCount, features, mask}
 
     def __init__(
         self,
@@ -96,158 +95,157 @@ class PreProcess:
     @staticmethod
     def _process_single_array(
         data: np.ndarray,
-    ) -> tuple[
-        np.ndarray, np.ndarray, list, list, list, list, list
-    ]:
-        """Process a chunk of records in parallel (optimized: pre-compute features for unique boards)."""
+    ) -> Dict[int, dict]:
+        """Process a chunk of records (optimized: compute feature/mask only for unique boards).
 
-        # dataの中にあるhcpからhashをだしてargsortする
-        hashs = np.array(
-            [Transform.board_hash(hcp) for hcp in data["hcp"]]
-        )
-        idx = np.argsort(
-            hashs,
-            kind="mergesort",
-        )
+        Returns:
+            Dictionary mapping board hash to aggregated data
+        """
+        from maou.domain.board import shogi
+
+        # 一度だけBoardオブジェクトを作成し，全ての盤面で再利用
+        board = shogi.Board()
+
+        # ハッシュ値を計算してソート
+        n = len(data)
+        hashs = np.empty(n, dtype=np.uint64)
+        for i in range(n):
+            board.set_hcp(data["hcp"][i])
+            hashs[i] = board.hash()
+
+        # ソートしてユニーク盤面を特定
+        idx = np.argsort(hashs, kind="mergesort")
         sorted_hash = hashs[idx]
-        uniq, counts = np.unique(
-            sorted_hash, return_counts=True
-        )
-        sorted_move_labels = np.array(
-            [
-                Transform.board_move_label(hcp, move)
-                for hcp, move in zip(
-                    data["hcp"], data["bestMove16"]
-                )
-            ]
-        )[idx]
-        sorted_wins = np.array(
-            [
-                Transform.board_game_result(hcp, game_result)
-                for hcp, game_result in zip(
-                    data["hcp"], data["gameResult"]
-                )
-            ]
-        )[idx]
-        sorted_hcps = data["hcp"][idx]
 
-        # ユニークな盤面についてのみfeature/maskを計算
-        moves = []
-        wins = []
-        hcps = []
-        features_list = []
-        masks_list = []
-        i = 0
-        for c in counts:
-            moves.append(
-                np.bincount(
-                    sorted_move_labels[i : i + c],
-                    minlength=MOVE_LABELS_NUM,
-                )
-            )
-            wins.append(np.sum(sorted_wins[i : i + c]))
-            hcp = sorted_hcps[i]
-            hcps.append(hcp)
-            # ユニークな盤面についてのみfeatureとmaskを計算
-            features_list.append(Transform.board_feature(hcp))
-            masks_list.append(
-                Transform.board_legal_move_mask(hcp)
-            )
-            i += c
-
-        return (
-            uniq,
-            counts,
-            moves,
-            wins,
-            hcps,
-            features_list,
-            masks_list,
+        # ユニーク値とその出現回数を取得
+        uniq_hash, inverse_indices = np.unique(
+            sorted_hash, return_inverse=True
         )
 
-    def add_intermediate_data(
+        # 各盤面のデータを事前に計算（ソート順）
+        sorted_move_labels = np.empty(n, dtype=np.int32)
+        sorted_wins = np.empty(n, dtype=np.float32)
+
+        for i in range(n):
+            orig_idx = idx[i]
+            board.set_hcp(data["hcp"][orig_idx])
+            sorted_move_labels[i] = Transform.board_move_label(
+                data["hcp"][orig_idx],
+                data["bestMove16"][orig_idx],
+            )
+            sorted_wins[i] = Transform.board_game_result(
+                data["hcp"][orig_idx],
+                data["gameResult"][orig_idx],
+            )
+
+        # ユニーク盤面ごとに集計
+        result = {}
+        start_idx = 0
+        for u_idx, hash_val in enumerate(uniq_hash):
+            # このハッシュ値に対応する範囲を見つける
+            end_idx = start_idx
+            while (
+                end_idx < n and sorted_hash[end_idx] == hash_val
+            ):
+                end_idx += 1
+
+            # この範囲のデータを集計
+            move_counts = np.bincount(
+                sorted_move_labels[start_idx:end_idx],
+                minlength=MOVE_LABELS_NUM,
+            )
+            win_sum = np.sum(sorted_wins[start_idx:end_idx])
+            count = end_idx - start_idx
+
+            # 最初の出現位置のHCPを使って特徴量とマスクを計算
+            orig_idx = idx[start_idx]
+            board.set_hcp(data["hcp"][orig_idx])
+
+            result[int(hash_val)] = {
+                "count": count,
+                "winCount": win_sum,
+                "moveLabelCount": move_counts,
+                "features": Transform.board_feature(
+                    data["hcp"][orig_idx]
+                ),
+                "legalMoveMask": Transform.board_legal_move_mask(
+                    data["hcp"][orig_idx]
+                ),
+            }
+
+            start_idx = end_idx
+
+        return result
+
+    def merge_intermediate_data(
         self,
-        ids: np.ndarray,
-        counts: np.ndarray,
-        moves: list,
-        wins: list,
-        hcps: list,
-        features_list: list,
-        masks_list: list,
+        batch_result: Dict[int, dict],
     ) -> None:
-        """中間データを追加する（辞書ベース最適化版）"""
+        """中間データをマージする（メモリ効率化版）．
 
-        # hash値を持っているかを調べてなかったらレコード追加，あればマイグレーション
-        for i, c, m, w, hcp, feature, mask in zip(
-            ids,
-            counts,
-            moves,
-            wins,
-            hcps,
-            features_list,
-            masks_list,
-        ):
-            if i in self.intermediate_dict:
+        Args:
+            batch_result: バッチ処理結果の辞書
+        """
+        for hash_id, data in batch_result.items():
+            if hash_id in self.intermediate_dict:
                 # 既存データを更新
-                idx = self.intermediate_dict[i]
-                self.intermediate_data["count"][idx] += c
-                self.intermediate_data["winCount"][idx] += w
-                self.intermediate_data["moveLabelCount"][
-                    idx
-                ] += m
+                existing = self.intermediate_dict[hash_id]
+                existing["count"] += data["count"]
+                existing["winCount"] += data["winCount"]
+                existing["moveLabelCount"] += data[
+                    "moveLabelCount"
+                ]
             else:
-                # 新規データを追加
-                new_record = np.zeros(
-                    1, dtype=get_intermediate_dtype()
-                )
-                new_record["id"] = i
-                new_record["count"] = c
-                new_record["winCount"] = w
-                new_record["moveLabelCount"] = m
-                new_record["features"] = feature
-                new_record["legalMoveMask"] = mask
-
-                # 辞書に新しいインデックスを登録
-                self.intermediate_dict[int(i)] = len(
-                    self.intermediate_data
-                )
-                self.intermediate_data = np.append(
-                    self.intermediate_data, new_record
-                )
+                # 新規データを追加（辞書のみで管理，配列は最後に一括作成）
+                self.intermediate_dict[hash_id] = {
+                    "count": data["count"],
+                    "winCount": data["winCount"],
+                    "moveLabelCount": data[
+                        "moveLabelCount"
+                    ].copy(),
+                    "features": data["features"],
+                    "legalMoveMask": data["legalMoveMask"],
+                }
 
     def aggregate_intermediate_data(self) -> np.ndarray:
-        """中間データを集計して最終的な前処理データを作成する"""
+        """中間データを集計して最終的な前処理データを作成する（一括生成版）．
 
-        target_data = create_empty_preprocessing_array(
-            len(self.intermediate_data)
-        )
-        target_data["id"] = self.intermediate_data["id"]
-        target_data["features"] = self.intermediate_data[
-            "features"
-        ]
-        target_data["moveLabel"] = (
-            self.intermediate_data["moveLabelCount"]
-            / self.intermediate_data["count"][:, np.newaxis]
-        )
-        target_data["resultValue"] = (
-            self.intermediate_data["winCount"]
-            / self.intermediate_data["count"]
-        )
-        target_data["legalMoveMask"] = self.intermediate_data[
-            "legalMoveMask"
-        ]
+        Returns:
+            前処理済みデータの構造化配列
+        """
+        n = len(self.intermediate_dict)
+        target_data = create_empty_preprocessing_array(n)
+
+        # 辞書から一括で配列を作成
+        for i, (hash_id, data) in enumerate(
+            self.intermediate_dict.items()
+        ):
+            target_data["id"][i] = hash_id
+            target_data["features"][i] = data["features"]
+            target_data["moveLabel"][i] = (
+                data["moveLabelCount"] / data["count"]
+            )
+            target_data["resultValue"][i] = (
+                data["winCount"] / data["count"]
+            )
+            target_data["legalMoveMask"][i] = data[
+                "legalMoveMask"
+            ]
 
         return target_data
 
     def transform(
         self, option: PreProcessOption
     ) -> Dict[str, str]:
-        """機械学習の前処理を行う (並列処理版)."""
+        """機械学習の前処理を行う（メモリ最適化版）．
 
+        Args:
+            option: 前処理オプション
+
+        Returns:
+            処理結果の辞書
+        """
         pre_process_result: Dict[str, str] = {}
-        self.intermediate_data = (
-            create_empty_intermediate_array(0)
-        )
         self.intermediate_dict = {}  # 辞書を初期化
         self.logger.info(
             f"前処理対象のデータ数 {len(self.__datasource)}"
@@ -262,31 +260,16 @@ class PreProcess:
 
         with self.__context():
             if max_workers == 1:
+                # シングルスレッド処理
                 for dataname, data in tqdm(
                     self.__datasource.iter_batches(),
                     desc="PreProcess (single)",
                 ):
-                    (
-                        ids,
-                        counts,
-                        moves,
-                        wins,
-                        hcps,
-                        features,
-                        masks,
-                    ) = self._process_single_array(
-                        data,
+                    batch_result = self._process_single_array(
+                        data
                     )
+                    self.merge_intermediate_data(batch_result)
 
-                    self.add_intermediate_data(
-                        ids,
-                        counts,
-                        moves,
-                        wins,
-                        hcps,
-                        features,
-                        masks,
-                    )
                 array = self.aggregate_intermediate_data()
                 pre_process_result["aggregated"] = (
                     f"success {len(array)} rows"
@@ -308,7 +291,7 @@ class PreProcess:
                         bit_pack=False,
                     )
             else:
-                # Parallel processing
+                # 並列処理
                 with ProcessPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
@@ -326,23 +309,9 @@ class PreProcess:
                     ):
                         dataname = future_to_dataname[future]
                         try:
-                            (
-                                ids,
-                                counts,
-                                moves,
-                                wins,
-                                hcps,
-                                features,
-                                masks,
-                            ) = future.result()
-                            self.add_intermediate_data(
-                                ids,
-                                counts,
-                                moves,
-                                wins,
-                                hcps,
-                                features,
-                                masks,
+                            batch_result = future.result()
+                            self.merge_intermediate_data(
+                                batch_result
                             )
                         except Exception as exc:
                             self.logger.error(
