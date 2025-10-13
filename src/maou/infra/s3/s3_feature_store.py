@@ -24,14 +24,19 @@ class S3FeatureStore(ObjectStorageFeatureStore):
         bucket_name: str,
         queue: mp.Queue,
         queue_timeout: int,
+        max_workers: int = 1,
     ) -> None:
         import botocore.session
 
         session = botocore.session.get_session()
         client = session.create_client("s3")
+        # シングルプロセスの場合はタイムアウトなし
+        timeout = (
+            None if max_workers == 1 else float(queue_timeout)
+        )
         while True:
             try:
-                item = queue.get(timeout=float(queue_timeout))
+                item = queue.get(timeout=timeout)
                 if item is None:
                     break
                 object_path, byte_data = item

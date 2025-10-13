@@ -68,6 +68,7 @@ class ObjectStorageFeatureStore(
                     "bucket_name": self.bucket_name,
                     "queue": self.queue,
                     "queue_timeout": queue_timeout,
+                    "max_workers": self.max_workers,
                 },
             )
             for _ in range(self.max_workers)
@@ -172,6 +173,7 @@ class ObjectStorageFeatureStore(
         bucket_name: str,
         queue: mp.Queue,
         queue_timeout: int,
+        max_workers: int = 1,
     ) -> None:
         """S3やGCSのクライアントをこの中で使いまわしたいので各クラスに実装を任せる
 
@@ -179,8 +181,9 @@ class ObjectStorageFeatureStore(
 
         ```
         client =
+        timeout = None if max_workers == 1 else float(queue_timeout)
         while True:
-          item = queue.get()
+          item = queue.get(timeout=timeout)
           if item is None:
             break
           object_path, byte_data = item
