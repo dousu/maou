@@ -227,6 +227,19 @@ from maou.interface import preprocess
     required=False,
     default=4,
 )
+@click.option(
+    "--intermediate-cache-dir",
+    help="Directory for intermediate data cache (default: temporary directory).",
+    type=click.Path(path_type=Path),
+    required=False,
+)
+@click.option(
+    "--intermediate-batch-size",
+    help="Batch size for disk writes (default: 1000).",
+    type=int,
+    required=False,
+    default=1000,
+)
 @handle_exception
 def pre_process(
     input_path: Optional[Path],
@@ -260,6 +273,8 @@ def pre_process(
     output_max_workers: int,
     output_max_queue_size: int,
     process_max_workers: int,
+    intermediate_cache_dir: Optional[Path],
+    intermediate_batch_size: int,
 ) -> None:
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -490,5 +505,7 @@ def pre_process(
             output_dir=output_dir,
             feature_store=feature_store,
             max_workers=process_max_workers,
+            intermediate_cache_dir=intermediate_cache_dir,
+            intermediate_batch_size=intermediate_batch_size,
         )
     )

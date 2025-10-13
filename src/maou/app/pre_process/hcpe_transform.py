@@ -1,6 +1,7 @@
 import abc
 import contextlib
 import logging
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,8 @@ from tqdm.auto import tqdm
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_array
-from maou.domain.data.schema import (
-    create_empty_preprocessing_array,
+from maou.domain.data.intermediate_store import (
+    IntermediateDataStore,
 )
 
 
@@ -67,24 +68,29 @@ class PreProcess:
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
-    intermediate_dict: Dict[
-        int, dict
-    ]  # id -> {count, winCount, moveLabelCount, features, mask}
+    intermediate_store: Optional[IntermediateDataStore]
 
     def __init__(
         self,
         *,
         datasource: DataSource,
         feature_store: Optional[FeatureStore] = None,
+        intermediate_cache_dir: Optional[Path] = None,
+        intermediate_batch_size: int = 1000,
     ):
         """Initialize pre-processor.
 
         Args:
             datasource: Source of HCPE data to process
             feature_store: Optional storage backend for processed features
+            intermediate_cache_dir: Directory for intermediate data cache
+            intermediate_batch_size: Batch size for disk writes
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
+        self.__intermediate_cache_dir = intermediate_cache_dir
+        self.__intermediate_batch_size = intermediate_batch_size
+        self.intermediate_store = None
 
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
@@ -181,63 +187,39 @@ class PreProcess:
         self,
         batch_result: Dict[int, dict],
     ) -> None:
-        """中間データをマージする（メモリ効率化版）．
+        """中間データをマージする（ディスクベース版）．
 
         Args:
             batch_result: バッチ処理結果の辞書
         """
-        for hash_id, data in batch_result.items():
-            if hash_id in self.intermediate_dict:
-                # 既存データを更新
-                existing = self.intermediate_dict[hash_id]
-                existing["count"] += data["count"]
-                existing["winCount"] += data["winCount"]
-                existing["moveLabelCount"] += data[
-                    "moveLabelCount"
-                ]
-            else:
-                # 新規データを追加（辞書のみで管理，配列は最後に一括作成）
-                self.intermediate_dict[hash_id] = {
-                    "count": data["count"],
-                    "winCount": data["winCount"],
-                    "moveLabelCount": data[
-                        "moveLabelCount"
-                    ].copy(),
-                    "features": data["features"],
-                    "legalMoveMask": data["legalMoveMask"],
-                }
+        if self.intermediate_store is None:
+            raise RuntimeError(
+                "Intermediate store not initialized"
+            )
+
+        # ディスクストアに追加/更新
+        self.intermediate_store.add_or_update_batch(
+            batch_result
+        )
 
     def aggregate_intermediate_data(self) -> np.ndarray:
-        """中間データを集計して最終的な前処理データを作成する（一括生成版）．
+        """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．
 
         Returns:
             前処理済みデータの構造化配列
         """
-        n = len(self.intermediate_dict)
-        target_data = create_empty_preprocessing_array(n)
-
-        # 辞書から一括で配列を作成
-        for i, (hash_id, data) in enumerate(
-            self.intermediate_dict.items()
-        ):
-            target_data["id"][i] = hash_id
-            target_data["features"][i] = data["features"]
-            target_data["moveLabel"][i] = (
-                data["moveLabelCount"] / data["count"]
+        if self.intermediate_store is None:
+            raise RuntimeError(
+                "Intermediate store not initialized"
             )
-            target_data["resultValue"][i] = (
-                data["winCount"] / data["count"]
-            )
-            target_data["legalMoveMask"][i] = data[
-                "legalMoveMask"
-            ]
 
-        return target_data
+        # ディスクストアから最終配列を生成
+        return self.intermediate_store.finalize_to_array()
 
     def transform(
         self, option: PreProcessOption
     ) -> Dict[str, str]:
-        """機械学習の前処理を行う（メモリ最適化版）．
+        """機械学習の前処理を行う（ディスクベース版）．
 
         Args:
             option: 前処理オプション
@@ -246,7 +228,6 @@ class PreProcess:
             処理結果の辞書
         """
         pre_process_result: Dict[str, str] = {}
-        self.intermediate_dict = {}  # 辞書を初期化
         self.logger.info(
             f"前処理対象のデータ数 {len(self.__datasource)}"
         )
@@ -256,6 +237,36 @@ class PreProcess:
 
         self.logger.info(
             f"Using {max_workers} workers for parallel processing"
+        )
+
+        # 一時ディレクトリを準備
+        if self.__intermediate_cache_dir is None:
+            temp_dir = tempfile.mkdtemp(
+                prefix="maou_preprocess_"
+            )
+            db_path = Path(temp_dir) / "intermediate.db"
+            self.logger.info(
+                f"Using temporary directory: {temp_dir}"
+            )
+        else:
+            self.__intermediate_cache_dir.mkdir(
+                parents=True, exist_ok=True
+            )
+            db_path = (
+                self.__intermediate_cache_dir
+                / "intermediate.db"
+            )
+            self.logger.info(
+                f"Using cache directory: {self.__intermediate_cache_dir}"
+            )
+
+        # ディスクベースストアを初期化
+        self.intermediate_store = IntermediateDataStore(
+            db_path=db_path,
+            batch_size=self.__intermediate_batch_size,
+        )
+        self.logger.info(
+            f"Initialized disk-based intermediate store at {db_path}"
         )
 
         with self.__context():
@@ -340,6 +351,12 @@ class PreProcess:
                         option.output_dir / f"{base_name}.npy",
                         bit_pack=False,
                     )
+
+        # クリーンアップ: ディスクストアを閉じて削除
+        if self.intermediate_store is not None:
+            self.intermediate_store.close()
+            self.intermediate_store = None
+            self.logger.info("Cleaned up intermediate store")
 
         return pre_process_result
 
