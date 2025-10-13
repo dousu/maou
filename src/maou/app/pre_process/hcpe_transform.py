@@ -302,35 +302,86 @@ class PreProcess:
                         bit_pack=False,
                     )
             else:
-                # 並列処理
+                # 並列処理（メモリ効率化版）
                 with ProcessPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
-                    # Submit all jobs
-                    future_to_dataname = {
-                        executor.submit(
-                            self._process_single_array,
-                            data,
-                        ): dataname
-                        for dataname, data in self.__datasource.iter_batches()
-                    }
-                    for future in tqdm(
-                        as_completed(future_to_dataname),
-                        desc=f"PreProcess (parallel {max_workers} workers)",
-                    ):
-                        dataname = future_to_dataname[future]
+                    # メモリ効率化: 逐次サブミット方式
+                    # 全ジョブを一度にサブミットせず、max_workers個ずつ処理
+                    futures = {}
+                    data_iterator = iter(
+                        self.__datasource.iter_batches()
+                    )
+
+                    # バッチ数をカウント（プログレスバー用）
+                    batch_count = 0
+
+                    # 初回のmax_workers個をサブミット
+                    for _ in range(max_workers):
                         try:
-                            batch_result = future.result()
-                            self.merge_intermediate_data(
-                                batch_result
+                            dataname, data = next(data_iterator)
+                            future = executor.submit(
+                                self._process_single_array,
+                                data,
                             )
-                        except Exception as exc:
-                            self.logger.error(
-                                f"{dataname} processing failed: {exc}"
-                            )
-                            pre_process_result[dataname] = (
-                                f"Dataname {dataname} generated an exception: {exc}"
-                            )
+                            futures[future] = dataname
+                            batch_count += 1
+                        except StopIteration:
+                            break
+
+                    # プログレスバー初期化（バッチ数ベース）
+                    pbar = tqdm(
+                        desc=f"PreProcess (parallel {max_workers} workers)",
+                    )
+
+                    # ジョブが完了するたびに新しいジョブをサブミット
+                    while futures:
+                        # 完了したジョブを取得
+                        done_futures = []
+                        for future in as_completed(futures):
+                            dataname = futures[future]
+                            try:
+                                batch_result = future.result()
+                                self.merge_intermediate_data(
+                                    batch_result
+                                )
+                                # 明示的にメモリ解放
+                                del batch_result
+                            except Exception as exc:
+                                self.logger.error(
+                                    f"{dataname} processing failed: {exc}"
+                                )
+                                pre_process_result[dataname] = (
+                                    f"Dataname {dataname} generated an exception: {exc}"
+                                )
+
+                            done_futures.append(future)
+                            pbar.update(1)
+
+                            # 新しいジョブをサブミット
+                            try:
+                                new_dataname, new_data = next(
+                                    data_iterator
+                                )
+                                new_future = executor.submit(
+                                    self._process_single_array,
+                                    new_data,
+                                )
+                                futures[new_future] = (
+                                    new_dataname
+                                )
+                                batch_count += 1
+                            except StopIteration:
+                                pass
+
+                            # 最初に完了したジョブのみ処理して次へ
+                            break
+
+                        # 完了したジョブを削除
+                        for future in done_futures:
+                            del futures[future]
+
+                    pbar.close()
 
                 array = self.aggregate_intermediate_data()
                 pre_process_result["aggregated"] = (
