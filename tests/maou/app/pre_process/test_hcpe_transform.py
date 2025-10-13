@@ -139,34 +139,47 @@ class TestHCPEConverter:
         datasource = MockHCPEDataSource(mock_hcpe_data)
 
         # 2. PreProcessの設定と実行
-        preprocessor = hcpe_transform.PreProcess(
-            datasource=datasource
-        )
-        option = hcpe_transform.PreProcess.PreProcessOption(
-            output_dir=None,
-            output_filename="test",
-            max_workers=1,
-        )
-        preprocessor.transform(option)
+        import tempfile
+        from pathlib import Path
 
-        # 実際の前処理済みデータを取得
-        preprocessed_array = (
-            preprocessor.aggregate_intermediate_data()
+        from maou.domain.data.array_io import (
+            load_preprocessing_array,
         )
 
-        # 3. 基本整合性検証
-        self._test_basic_data_integrity(preprocessed_array)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir)
+            preprocessor = hcpe_transform.PreProcess(
+                datasource=datasource
+            )
+            option = hcpe_transform.PreProcess.PreProcessOption(
+                output_dir=output_path,
+                output_filename="test",
+                max_workers=1,
+            )
+            preprocessor.transform(option)
 
-        # 4. 確率分布検証
-        self._test_probability_distributions(preprocessed_array)
+            # 実際の前処理済みデータを取得
+            preprocessed_array = load_preprocessing_array(
+                output_path / "test.npy", bit_pack=True
+            )
 
-        # 5. データ変換正確性検証（元データとの一致性）
-        self._test_data_transformation_accuracy(
-            preprocessed_array, mock_hcpe_data
-        )
+            # 3. 基本整合性検証
+            self._test_basic_data_integrity(preprocessed_array)
 
-        # 6. 追加整合性検証
-        self._test_additional_validations(preprocessed_array)
+            # 4. 確率分布検証
+            self._test_probability_distributions(
+                preprocessed_array
+            )
+
+            # 5. データ変換正確性検証（元データとの一致性）
+            self._test_data_transformation_accuracy(
+                preprocessed_array, mock_hcpe_data
+            )
+
+            # 6. 追加整合性検証
+            self._test_additional_validations(
+                preprocessed_array
+            )
 
     def _create_mock_hcpe_data(self) -> np.ndarray:
         """テスト用の模擬HCPEデータを作成する．SFENから現実的な局面を作成．"""

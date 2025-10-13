@@ -174,6 +174,12 @@ class TestErrorHandling:
 
     def test_save_to_readonly_directory(self) -> None:
         """Test saving to read-only directory."""
+        import os
+
+        # Skip test if running as root (root bypasses permission checks)
+        if os.geteuid() == 0:
+            pytest.skip("Test skipped when running as root")
+
         array = create_empty_hcpe_array(1)
 
         with tempfile.TemporaryDirectory() as temp_dir:
