@@ -12,6 +12,12 @@ from typing import Dict, Optional
 
 import numpy as np
 
+from maou.domain.data.compression import (
+    pack_features_array,
+    pack_legal_moves_mask,
+    unpack_features_array,
+    unpack_legal_moves_mask,
+)
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
 )
@@ -134,7 +140,9 @@ class IntermediateDataStore:
                 if existing:
                     # Update existing record
                     existing_count = existing[0]
-                    existing_win_count = pickle.loads(existing[1])
+                    existing_win_count = pickle.loads(
+                        existing[1]
+                    )
                     existing_move_label_count = pickle.loads(
                         existing[2]
                     )
@@ -169,6 +177,14 @@ class IntermediateDataStore:
                     )
                 else:
                     # Insert new record
+                    # Compress features and legalMoveMask using bit packing
+                    packed_features = pack_features_array(
+                        data["features"]
+                    )
+                    packed_legal_mask = pack_legal_moves_mask(
+                        data["legalMoveMask"]
+                    )
+
                     cursor.execute(
                         """
                         INSERT INTO intermediate_data
@@ -188,11 +204,11 @@ class IntermediateDataStore:
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                data["features"],
+                                packed_features,
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                data["legalMoveMask"],
+                                packed_legal_mask,
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                         ),
@@ -260,8 +276,15 @@ class IntermediateDataStore:
             move_label_count = pickle.loads(
                 move_label_count_blob
             )
-            features = pickle.loads(features_blob)
-            legal_move_mask = pickle.loads(legal_move_mask_blob)
+            # Decompress features and legalMoveMask from bit-packed format
+            packed_features = pickle.loads(features_blob)
+            packed_legal_mask = pickle.loads(
+                legal_move_mask_blob
+            )
+            features = unpack_features_array(packed_features)
+            legal_move_mask = unpack_legal_moves_mask(
+                packed_legal_mask
+            )
 
             # Convert to native Python types
             count = int(count)

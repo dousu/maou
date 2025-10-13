@@ -299,7 +299,7 @@ class PreProcess:
                     save_preprocessing_array(
                         array,
                         option.output_dir / f"{base_name}.npy",
-                        bit_pack=False,
+                        bit_pack=True,
                     )
             else:
                 # 並列処理（メモリ効率化版）
@@ -400,7 +400,7 @@ class PreProcess:
                     save_preprocessing_array(
                         array,
                         option.output_dir / f"{base_name}.npy",
-                        bit_pack=False,
+                        bit_pack=True,
                     )
 
         # クリーンアップ: ディスクストアを閉じて削除
