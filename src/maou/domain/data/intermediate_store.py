@@ -131,15 +131,20 @@ class IntermediateDataStore:
         self,
         db_path: Path,
         batch_size: int = 1000,
+        enable_vacuum: bool = False,
     ):
         """Initialize intermediate data store.
 
         Args:
             db_path: Path to SQLite database file
             batch_size: Number of records to batch before committing
+            enable_vacuum: If True, run VACUUM after each chunk deletion.
+                         If False (default), only run VACUUM at the end.
+                         VACUUM is expensive (1-2 min per call for large DBs).
         """
         self.db_path = db_path
         self.batch_size = batch_size
+        self.enable_vacuum = enable_vacuum
         self._batch_buffer: Dict[int, dict] = {}
         self._conn: Optional[sqlite3.Connection] = None
         self._init_database()
@@ -154,6 +159,13 @@ class IntermediateDataStore:
         self._conn.execute(
             "PRAGMA cache_size=-64000"
         )  # 64MB cache
+
+        # AUTO_VACUUM=INCREMENTAL: 削除時に自動で領域回収（VACUUMより高速）
+        # 既存DBには影響しないため、新規作成時のみ有効
+        try:
+            self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        except sqlite3.OperationalError:
+            pass  # 既存DBでは変更不可
 
         # Create table for intermediate data
         # Note: hash_id is stored as TEXT to handle uint64 values
@@ -653,6 +665,21 @@ class IntermediateDataStore:
         finally:
             pbar.close()
 
+            # 最後に1回だけVACUUMを実行（全チャンク処理後）
+            if delete_after_yield and not self.enable_vacuum:
+                logger.info(
+                    "Running final VACUUM to reclaim all disk space..."
+                )
+                if self._conn is not None:
+                    cursor = self._conn.cursor()
+                    cursor.execute("VACUUM")
+                    final_db_size_mb = (
+                        self.get_database_size() / 1024 / 1024
+                    )
+                    logger.info(
+                        f"VACUUM completed. Final database size: {final_db_size_mb:.1f} MB"
+                    )
+
     def _delete_records(self, hash_ids: list[str]) -> None:
         """Delete records from database by hash_id.
 
@@ -678,13 +705,22 @@ class IntermediateDataStore:
 
             cursor.execute("COMMIT")
 
-            # Vacuum to reclaim disk space (expensive but necessary)
-            # Run VACUUM after each chunk deletion to immediately reclaim space
-            logger.info(
-                "Running VACUUM to reclaim disk space..."
-            )
-            cursor.execute("VACUUM")
-            logger.info("VACUUM completed")
+            # INCREMENTAL VACUUMで段階的に領域回収（高速）
+            # AUTO_VACUUM=INCREMENTALが有効な場合のみ動作
+            cursor.execute("PRAGMA incremental_vacuum")
+
+            # オプションでVACUUM実行（全データベース再構築、遅い）
+            if self.enable_vacuum:
+                logger.info(
+                    "Running VACUUM to reclaim disk space..."
+                )
+                cursor.execute("VACUUM")
+                logger.info("VACUUM completed")
+            else:
+                logger.debug(
+                    "VACUUM skipped (enable_vacuum=False). "
+                    "Disk space will be reclaimed at the end."
+                )
 
         except Exception as e:
             try:
