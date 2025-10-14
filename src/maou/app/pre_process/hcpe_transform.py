@@ -268,7 +268,8 @@ class PreProcess:
             for (
                 chunk_data
             ) in self.intermediate_store.iter_finalize_chunks(
-                chunk_size=chunk_size
+                chunk_size=chunk_size,
+                delete_after_yield=False,
             ):
                 # ローカルファイル出力（output_dirが指定されている場合）
                 if output_dir is not None:
