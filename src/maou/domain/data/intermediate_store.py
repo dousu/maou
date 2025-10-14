@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, Generator, Optional
 
 import numpy as np
-from tqdm.auto import tqdm
 
 from maou.domain.data.compression import (
     compress_sparse_int_array,
@@ -541,144 +540,115 @@ class IntermediateDataStore:
         cursor = self._conn.cursor()
         processed_count = 0
 
-        # プログレスバーを初期化
-        pbar = tqdm(
-            total=total_count,
-            desc="Aggregating chunks",
-            unit="positions",
-            unit_scale=True,
-        )
+        while processed_count < total_count:
+            # Calculate current chunk size
+            current_chunk_size = min(
+                chunk_size, total_count - processed_count
+            )
 
-        try:
-            while processed_count < total_count:
-                # Calculate current chunk size
-                current_chunk_size = min(
-                    chunk_size, total_count - processed_count
-                )
+            # Create output array for this chunk
+            chunk_data = create_empty_preprocessing_array(
+                current_chunk_size
+            )
 
-                # Create output array for this chunk
-                chunk_data = create_empty_preprocessing_array(
-                    current_chunk_size
-                )
+            # Read chunk from database (always from offset 0 if deleting)
+            # When delete_after_yield=True, we always read from the beginning
+            # since we delete processed records
+            read_offset = (
+                0 if delete_after_yield else processed_count
+            )
 
-                # Read chunk from database (always from offset 0 if deleting)
-                # When delete_after_yield=True, we always read from the beginning
-                # since we delete processed records
-                read_offset = (
-                    0 if delete_after_yield else processed_count
-                )
-
-                cursor.execute(
-                    """
+            cursor.execute(
+                """
                     SELECT hash_id, count, win_count, move_label_count,
                            features, legal_move_mask
                     FROM intermediate_data
                     LIMIT ? OFFSET ?
                     """,
-                    (current_chunk_size, read_offset),
+                (current_chunk_size, read_offset),
+            )
+
+            rows = cursor.fetchall()
+            hash_ids_to_delete = []
+
+            for i, row in enumerate(rows):
+                (
+                    hash_id,
+                    count,
+                    win_count,
+                    move_label_count_blob,
+                    features_blob,
+                    legal_move_mask_blob,
+                ) = row
+
+                # Track hash_id for deletion
+                if delete_after_yield:
+                    hash_ids_to_delete.append(hash_id)
+
+                # Deserialize all binary data
+                win_count = pickle.loads(win_count)
+                # Decompress sparse move_label_count
+                indices, values = pickle.loads(
+                    move_label_count_blob
+                )
+                move_label_count = decompress_sparse_int_array(
+                    indices, values, 1496
+                )
+                # Decompress features and legalMoveMask from bit-packed format
+                packed_features = pickle.loads(features_blob)
+                packed_legal_mask = pickle.loads(
+                    legal_move_mask_blob
+                )
+                features = unpack_features_array(
+                    packed_features
+                )
+                legal_move_mask = unpack_legal_moves_mask(
+                    packed_legal_mask
                 )
 
-                rows = cursor.fetchall()
-                hash_ids_to_delete = []
+                # Convert to native Python types
+                count = int(count)
+                win_count = float(win_count)
 
-                for i, row in enumerate(rows):
-                    (
-                        hash_id,
-                        count,
-                        win_count,
-                        move_label_count_blob,
-                        features_blob,
-                        legal_move_mask_blob,
-                    ) = row
+                # Populate output array (convert hash_id back to uint64)
+                chunk_data["id"][i] = int(hash_id)
+                chunk_data["features"][i] = features
+                chunk_data["moveLabel"][i] = (
+                    move_label_count / count
+                )
+                chunk_data["resultValue"][i] = win_count / count
+                chunk_data["legalMoveMask"][i] = legal_move_mask
 
-                    # Track hash_id for deletion
-                    if delete_after_yield:
-                        hash_ids_to_delete.append(hash_id)
+            processed_count += current_chunk_size
 
-                    # Deserialize all binary data
-                    win_count = pickle.loads(win_count)
-                    # Decompress sparse move_label_count
-                    indices, values = pickle.loads(
-                        move_label_count_blob
-                    )
-                    move_label_count = (
-                        decompress_sparse_int_array(
-                            indices, values, 1496
-                        )
-                    )
-                    # Decompress features and legalMoveMask from bit-packed format
-                    packed_features = pickle.loads(
-                        features_blob
-                    )
-                    packed_legal_mask = pickle.loads(
-                        legal_move_mask_blob
-                    )
-                    features = unpack_features_array(
-                        packed_features
-                    )
-                    legal_move_mask = unpack_legal_moves_mask(
-                        packed_legal_mask
-                    )
+            # Yield the chunk before deletion to ensure data is safely written
+            yield chunk_data
 
-                    # Convert to native Python types
-                    count = int(count)
-                    win_count = float(win_count)
-
-                    # Populate output array (convert hash_id back to uint64)
-                    chunk_data["id"][i] = int(hash_id)
-                    chunk_data["features"][i] = features
-                    chunk_data["moveLabel"][i] = (
-                        move_label_count / count
-                    )
-                    chunk_data["resultValue"][i] = (
-                        win_count / count
-                    )
-                    chunk_data["legalMoveMask"][i] = (
-                        legal_move_mask
-                    )
-
-                processed_count += current_chunk_size
-                chunk_idx = (processed_count - 1) // chunk_size
-
-                # プログレスバー更新
-                pbar.update(current_chunk_size)
-                pbar.set_postfix(
-                    {
-                        "chunk": chunk_idx + 1,
-                        "db_size_mb": f"{self.get_database_size() / 1024 / 1024:.1f}",
-                    }
+            # Delete processed records to free disk space
+            if delete_after_yield and hash_ids_to_delete:
+                self._delete_records(hash_ids_to_delete)
+                db_size_mb = (
+                    self.get_database_size() / 1024 / 1024
+                )
+                logger.debug(
+                    f"Deleted {len(hash_ids_to_delete)} processed records. "
+                    f"Database size: {db_size_mb:.1f} MB"
                 )
 
-                # Yield the chunk before deletion to ensure data is safely written
-                yield chunk_data
-
-                # Delete processed records to free disk space
-                if delete_after_yield and hash_ids_to_delete:
-                    self._delete_records(hash_ids_to_delete)
-                    db_size_mb = (
-                        self.get_database_size() / 1024 / 1024
-                    )
-                    logger.debug(
-                        f"Deleted {len(hash_ids_to_delete)} processed records. "
-                        f"Database size: {db_size_mb:.1f} MB"
-                    )
-        finally:
-            pbar.close()
-
-            # 最後に1回だけVACUUMを実行（全チャンク処理後）
-            if delete_after_yield and not self.enable_vacuum:
+        # 最後に1回だけVACUUMを実行（全チャンク処理後）
+        if delete_after_yield and not self.enable_vacuum:
+            logger.info(
+                "Running final VACUUM to reclaim all disk space..."
+            )
+            if self._conn is not None:
+                cursor = self._conn.cursor()
+                cursor.execute("VACUUM")
+                final_db_size_mb = (
+                    self.get_database_size() / 1024 / 1024
+                )
                 logger.info(
-                    "Running final VACUUM to reclaim all disk space..."
+                    f"VACUUM completed. Final database size: {final_db_size_mb:.1f} MB"
                 )
-                if self._conn is not None:
-                    cursor = self._conn.cursor()
-                    cursor.execute("VACUUM")
-                    final_db_size_mb = (
-                        self.get_database_size() / 1024 / 1024
-                    )
-                    logger.info(
-                        f"VACUUM completed. Final database size: {final_db_size_mb:.1f} MB"
-                    )
 
     def _delete_records(self, hash_ids: list[str]) -> None:
         """Delete records from database by hash_id.
