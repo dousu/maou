@@ -92,12 +92,15 @@ def estimate_resource_requirements(
     intermediate_gb *= 1.2
 
     # ピークディスク容量の推定:
-    # - チャンク分割モード: intermediate(徐々に削減) + output(徐々に増加)
-    #   ピーク時は約 intermediate * 0.5 + output * 0.5 + 安全マージン
+    # - チャンク分割モード:
+    #   各チャンク処理時: intermediate + 出力中のチャンク + 安全マージン
+    #   VACUUM実行により削除分は即座に回収されるため，
+    #   intermediate は最大でも初期サイズ（徐々に削減）
+    #   出力は1チャンク分(約4.5GB)ずつ増加
     # - 一括モード: intermediate + output（最後まで両方残る）
     peak_disk_chunked = (
-        intermediate_gb * 0.5 + output_gb * 0.5
-    ) * 1.1
+        intermediate_gb + (output_gb / 10) + 5
+    )  # intermediate + 1チャンク分 + バッファ
     peak_disk_bulk = (intermediate_gb + output_gb) * 1.1
 
     return {
@@ -610,17 +613,12 @@ class IntermediateDataStore:
             cursor.execute("COMMIT")
 
             # Vacuum to reclaim disk space (expensive but necessary)
-            # Only vacuum periodically to avoid overhead
-            remaining_count = self.get_total_count()
-            if (
-                remaining_count % 1_000_000 == 0
-                or remaining_count == 0
-            ):
-                logger.info(
-                    "Running VACUUM to reclaim disk space..."
-                )
-                cursor.execute("VACUUM")
-                logger.info("VACUUM completed")
+            # Run VACUUM after each chunk deletion to immediately reclaim space
+            logger.info(
+                "Running VACUUM to reclaim disk space..."
+            )
+            cursor.execute("VACUUM")
+            logger.info("VACUUM completed")
 
         except Exception as e:
             cursor.execute("ROLLBACK")
