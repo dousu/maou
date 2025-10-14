@@ -15,6 +15,8 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from maou.domain.data.compression import (
+    compress_sparse_int_array,
+    decompress_sparse_int_array,
     pack_features_array,
     pack_legal_moves_mask,
     unpack_features_array,
@@ -60,7 +62,12 @@ def estimate_resource_requirements(
         - peak_disk_gb_bulk: Peak disk usage with bulk output
     """
     # レコードあたりのサイズ（バイト）
-    intermediate_per_record = 7.3 * 1024  # 約7.3KB/レコード
+    # move_label_countをsparse圧縮: 平均20個の非ゼロ要素と仮定
+    # 20 indices (uint16) + 20 values (int32) = 40 + 80 = 120バイト
+    # 従来の6000バイトから約50分の1に削減
+    intermediate_per_record = (
+        1.5 * 1024
+    )  # 約1.5KB/レコード (sparse圧縮後)
     memory_per_record = 12.9 * 1024  # 約12.9KB/レコード
     output_per_record = (
         4.5 * 1024
@@ -212,6 +219,8 @@ class IntermediateDataStore:
         # Begin transaction for batch insert/update
         cursor.execute("BEGIN TRANSACTION")
 
+        flush_count = len(self._batch_buffer)
+
         try:
             for hash_id, data in self._batch_buffer.items():
                 # Convert hash_id to string for SQLite
@@ -231,8 +240,12 @@ class IntermediateDataStore:
                     existing_win_count = pickle.loads(
                         existing[1]
                     )
-                    existing_move_label_count = pickle.loads(
-                        existing[2]
+                    # Decompress sparse move_label_count
+                    indices, values = pickle.loads(existing[2])
+                    existing_move_label_count = (
+                        decompress_sparse_int_array(
+                            indices, values, 1496
+                        )
                     )
 
                     new_count = existing_count + data["count"]
@@ -242,6 +255,11 @@ class IntermediateDataStore:
                     new_move_label_count = (
                         existing_move_label_count
                         + data["moveLabelCount"]
+                    )
+
+                    # Compress sparse move_label_count
+                    indices, values = compress_sparse_int_array(
+                        new_move_label_count
                     )
 
                     cursor.execute(
@@ -257,7 +275,7 @@ class IntermediateDataStore:
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                new_move_label_count,
+                                (indices, values),
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             hash_id_str,
@@ -271,6 +289,11 @@ class IntermediateDataStore:
                     )
                     packed_legal_mask = pack_legal_moves_mask(
                         data["legalMoveMask"]
+                    )
+
+                    # Compress sparse move_label_count
+                    indices, values = compress_sparse_int_array(
+                        data["moveLabelCount"]
                     )
 
                     cursor.execute(
@@ -288,7 +311,7 @@ class IntermediateDataStore:
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                data["moveLabelCount"],
+                                (indices, values),
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
@@ -303,11 +326,27 @@ class IntermediateDataStore:
                     )
 
             cursor.execute("COMMIT")
+
+            # 定期的にWAL checkpointを実行してWALファイルサイズを抑制
+            # get_total_count()を使うと無限ループになるため、直接COUNT
+            cursor.execute(
+                "SELECT COUNT(*) FROM intermediate_data"
+            )
+            total_records = cursor.fetchone()[0]
+            if total_records % 10000 < flush_count:
+                logger.debug(
+                    f"Running WAL checkpoint at {total_records} records..."
+                )
+                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+
             logger.debug(
-                f"Flushed {len(self._batch_buffer)} records to database"
+                f"Flushed {flush_count} records to database"
             )
         except Exception as e:
-            cursor.execute("ROLLBACK")
+            try:
+                cursor.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass  # トランザクションがない場合はスキップ
             logger.error(f"Failed to flush buffer: {e}")
             raise
         finally:
@@ -546,8 +585,14 @@ class IntermediateDataStore:
 
                     # Deserialize all binary data
                     win_count = pickle.loads(win_count)
-                    move_label_count = pickle.loads(
+                    # Decompress sparse move_label_count
+                    indices, values = pickle.loads(
                         move_label_count_blob
+                    )
+                    move_label_count = (
+                        decompress_sparse_int_array(
+                            indices, values, 1496
+                        )
                     )
                     # Decompress features and legalMoveMask from bit-packed format
                     packed_features = pickle.loads(
@@ -642,7 +687,10 @@ class IntermediateDataStore:
             logger.info("VACUUM completed")
 
         except Exception as e:
-            cursor.execute("ROLLBACK")
+            try:
+                cursor.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass  # トランザクションがない場合はスキップ
             logger.error(f"Failed to delete records: {e}")
             raise
 
