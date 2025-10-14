@@ -59,6 +59,10 @@ class DataSource:
     ) -> Generator[tuple[str, np.ndarray], None, None]:
         pass
 
+    @abc.abstractmethod
+    def total_pages(self) -> int:
+        pass
+
 
 class PreProcess:
     """Processes HCPE data into neural network training features.
@@ -137,11 +141,11 @@ class PreProcess:
             board.set_hcp(data["hcp"][orig_idx])
             sorted_move_labels[i] = Transform.board_move_label(
                 data["hcp"][orig_idx],
-                data["bestMove16"][orig_idx],
+                data["bestMove16"][orig_idx],  # type: ignore
             )
             sorted_wins[i] = Transform.board_game_result(
                 data["hcp"][orig_idx],
-                data["gameResult"][orig_idx],
+                data["gameResult"][orig_idx],  # type: ignore
             )
 
         # ユニーク盤面ごとに集計
@@ -367,11 +371,13 @@ class PreProcess:
         )
 
         with self.__context():
+            total_batches = self.__datasource.total_pages()
             if max_workers == 1:
                 # シングルスレッド処理
                 for dataname, data in tqdm(
                     self.__datasource.iter_batches(),
                     desc="PreProcess (single)",
+                    total=total_batches,
                 ):
                     batch_result = self._process_single_array(
                         data
@@ -438,7 +444,10 @@ class PreProcess:
                 total_count = disk_info["unique_positions"]
 
                 # メモリ効率的な処理: 100万局面以上の場合はチャンク分割
-                if total_count > 1_000_000:
+                if (
+                    total_count is not None
+                    and total_count > 1_000_000
+                ):
                     self.logger.warning(
                         f"Large dataset detected ({total_count:,} positions). "
                         "Using chunked output to avoid memory exhaustion."
@@ -519,6 +528,7 @@ class PreProcess:
                     # プログレスバー初期化（バッチ数ベース）
                     pbar = tqdm(
                         desc=f"PreProcess (parallel {max_workers} workers)",
+                        total=total_batches,
                     )
 
                     # ジョブが完了するたびに新しいジョブをサブミット
@@ -630,7 +640,10 @@ class PreProcess:
                 total_count = disk_info["unique_positions"]
 
                 # メモリ効率的な処理: 100万局面以上の場合はチャンク分割
-                if total_count > 1_000_000:
+                if (
+                    total_count is not None
+                    and total_count > 1_000_000
+                ):
                     self.logger.warning(
                         f"Large dataset detected ({total_count:,} positions). "
                         "Using chunked output to avoid memory exhaustion."

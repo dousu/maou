@@ -716,3 +716,6 @@ class BigQueryDataSource(
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__page_manager.iter_batches():
             yield name, batch
+
+    def total_pages(self) -> int:
+        return self.__page_manager.total_pages

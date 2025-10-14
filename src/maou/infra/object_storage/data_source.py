@@ -545,3 +545,6 @@ class ObjectStorageDataSource(
         """
         for name, batch in self.__page_manager.iter_batches():
             yield name, batch
+
+    def total_pages(self) -> int:
+        return self.__page_manager.total_pages
