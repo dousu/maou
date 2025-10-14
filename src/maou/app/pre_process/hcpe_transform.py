@@ -223,14 +223,14 @@ class PreProcess:
 
     def aggregate_intermediate_data_chunked(
         self,
-        output_dir: Path,
+        output_dir: Optional[Path],
         output_filename: str,
         chunk_size: int = 1_000_000,
     ) -> int:
         """中間データをチャンクごとに集計して出力する（メモリ効率版）．
 
         Args:
-            output_dir: 出力ディレクトリ
+            output_dir: 出力ディレクトリ（Noneの場合はローカルファイル出力をスキップ）
             output_filename: 出力ファイル名（ベース名）
             chunk_size: チャンクあたりの局面数（デフォルト: 100万）
 
@@ -243,37 +243,69 @@ class PreProcess:
             )
 
         total_count = self.intermediate_store.get_total_count()
+        # チャンク数を計算（切り上げ）
+        estimated_chunks = (
+            total_count + chunk_size - 1
+        ) // chunk_size
         self.logger.info(
-            f"Aggregating {total_count} positions in chunks of {chunk_size}"
+            f"Aggregating {total_count} positions in chunks of {chunk_size} "
+            f"(estimated {estimated_chunks} chunks)"
         )
 
         chunk_idx = 0
         total_processed = 0
 
-        for (
-            chunk_data
-        ) in self.intermediate_store.iter_finalize_chunks(
-            chunk_size=chunk_size
-        ):
-            # チャンクごとにファイル出力
-            chunk_filename = (
-                f"{output_filename}_chunk{chunk_idx:04d}.npy"
-            )
-            chunk_path = output_dir / chunk_filename
+        # プログレスバー: チャンク単位で進捗を表示
+        with tqdm(
+            total=estimated_chunks,
+            desc="Aggregating chunks",
+            unit="chunk",
+        ) as pbar:
+            for (
+                chunk_data
+            ) in self.intermediate_store.iter_finalize_chunks(
+                chunk_size=chunk_size
+            ):
+                # ローカルファイル出力（output_dirが指定されている場合）
+                if output_dir is not None:
+                    chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.npy"
+                    chunk_path = output_dir / chunk_filename
 
-            save_preprocessing_array(
-                chunk_data, chunk_path, bit_pack=True
-            )
+                    save_preprocessing_array(
+                        chunk_data, chunk_path, bit_pack=True
+                    )
 
-            total_processed += len(chunk_data)
-            self.logger.info(
-                f"Saved chunk {chunk_idx}: {chunk_path} "
-                f"({len(chunk_data)} positions)"
-            )
+                    self.logger.debug(
+                        f"Saved chunk {chunk_idx} to local file: {chunk_path} "
+                        f"({len(chunk_data)} positions)"
+                    )
 
-            chunk_idx += 1
-            # 明示的にメモリ解放
-            del chunk_data
+                # feature_storeへの出力（feature_storeが指定されている場合）
+                if self.__feature_store is not None:
+                    self.__feature_store.store_features(
+                        name=output_filename,
+                        key_columns=["id"],
+                        structured_array=chunk_data,
+                    )
+                    self.logger.debug(
+                        f"Stored chunk {chunk_idx} to feature store "
+                        f"({len(chunk_data)} positions)"
+                    )
+
+                total_processed += len(chunk_data)
+                chunk_idx += 1
+
+                # プログレスバーを更新（チャンクごと）
+                pbar.update(1)
+                pbar.set_postfix(
+                    {
+                        "positions": f"{total_processed:,}",
+                        "chunk_size": len(chunk_data),
+                    }
+                )
+
+                # 明示的にメモリ解放
+                del chunk_data
 
         self.logger.info(
             f"Aggregation complete: {total_processed} positions "
@@ -412,31 +444,27 @@ class PreProcess:
                         "Using chunked output to avoid memory exhaustion."
                     )
 
-                    if option.output_dir is not None:
-                        # チャンク分割して出力
-                        total_processed = self.aggregate_intermediate_data_chunked(
-                            output_dir=option.output_dir,
-                            output_filename=option.output_filename,
-                            chunk_size=1_000_000,
-                        )
-                        pre_process_result["aggregated"] = (
-                            f"success {total_processed} rows (chunked)"
-                        )
-                    else:
+                    # チャンク分割して出力（ローカルファイルとfeature_storeの両方に対応）
+                    if (
+                        option.output_dir is None
+                        and self.__feature_store is None
+                    ):
                         self.logger.error(
-                            "Cannot use chunked output without output_dir. "
-                            "Please specify --output-dir."
+                            "Cannot use chunked output without output destination. "
+                            "Please specify --output-dir or cloud storage options."
                         )
                         raise ValueError(
-                            "output_dir is required for large datasets"
+                            "output_dir or feature_store is required for large datasets"
                         )
 
-                    # Feature store への出力は大規模データでは推奨しない
-                    if self.__feature_store is not None:
-                        self.logger.warning(
-                            "Feature store output is not recommended for large datasets. "
-                            "Use chunked file output instead."
-                        )
+                    total_processed = self.aggregate_intermediate_data_chunked(
+                        output_dir=option.output_dir,
+                        output_filename=option.output_filename,
+                        chunk_size=1_000_000,
+                    )
+                    pre_process_result["aggregated"] = (
+                        f"success {total_processed} rows (chunked)"
+                    )
                 else:
                     # 小規模データ: 従来の一括処理
                     array = self.aggregate_intermediate_data()
@@ -608,31 +636,27 @@ class PreProcess:
                         "Using chunked output to avoid memory exhaustion."
                     )
 
-                    if option.output_dir is not None:
-                        # チャンク分割して出力
-                        total_processed = self.aggregate_intermediate_data_chunked(
-                            output_dir=option.output_dir,
-                            output_filename=option.output_filename,
-                            chunk_size=1_000_000,
-                        )
-                        pre_process_result["aggregated"] = (
-                            f"success {total_processed} rows (chunked)"
-                        )
-                    else:
+                    # チャンク分割して出力（ローカルファイルとfeature_storeの両方に対応）
+                    if (
+                        option.output_dir is None
+                        and self.__feature_store is None
+                    ):
                         self.logger.error(
-                            "Cannot use chunked output without output_dir. "
-                            "Please specify --output-dir."
+                            "Cannot use chunked output without output destination. "
+                            "Please specify --output-dir or cloud storage options."
                         )
                         raise ValueError(
-                            "output_dir is required for large datasets"
+                            "output_dir or feature_store is required for large datasets"
                         )
 
-                    # Feature store への出力は大規模データでは推奨しない
-                    if self.__feature_store is not None:
-                        self.logger.warning(
-                            "Feature store output is not recommended for large datasets. "
-                            "Use chunked file output instead."
-                        )
+                    total_processed = self.aggregate_intermediate_data_chunked(
+                        output_dir=option.output_dir,
+                        output_filename=option.output_filename,
+                        chunk_size=1_000_000,
+                    )
+                    pre_process_result["aggregated"] = (
+                        f"success {total_processed} rows (chunked)"
+                    )
                 else:
                     # 小規模データ: 従来の一括処理
                     array = self.aggregate_intermediate_data()
