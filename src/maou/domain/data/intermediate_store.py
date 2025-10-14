@@ -6,9 +6,10 @@ preprocessing data, allowing processing of datasets larger than available RAM.
 
 import logging
 import pickle
+import shutil
 import sqlite3
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Generator, Optional
 
 import numpy as np
 
@@ -23,6 +24,89 @@ from maou.domain.data.schema import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def get_disk_usage(path: Path) -> tuple[int, int, int]:
+    """Get disk usage statistics for the given path.
+
+    Args:
+        path: Directory or file path to check
+
+    Returns:
+        Tuple of (total_bytes, used_bytes, free_bytes)
+    """
+    if not path.exists():
+        path = path.parent
+
+    stat = shutil.disk_usage(str(path))
+    return stat.total, stat.used, stat.free
+
+
+def estimate_resource_requirements(
+    unique_positions: int,
+) -> Dict[str, float]:
+    """Estimate resource requirements for preprocessing.
+
+    Args:
+        unique_positions: Number of unique board positions
+
+    Returns:
+        Dictionary with estimated requirements in GB:
+        - intermediate_store_gb: SQLite database size
+        - finalize_memory_gb: Memory for aggregation (per chunk)
+        - output_file_gb: Final output file size
+        - peak_disk_gb_chunked: Peak disk usage with chunked output
+        - peak_disk_gb_bulk: Peak disk usage with bulk output
+    """
+    # レコードあたりのサイズ（バイト）
+    intermediate_per_record = 7.3 * 1024  # 約7.3KB/レコード
+    memory_per_record = 12.9 * 1024  # 約12.9KB/レコード
+    output_per_record = (
+        4.5 * 1024
+    )  # 約4.5KB/レコード（bit-pack圧縮後）
+
+    # GB単位に変換
+    intermediate_gb = (
+        unique_positions
+        * intermediate_per_record
+        / 1024
+        / 1024
+        / 1024
+    )
+    memory_gb = (
+        unique_positions
+        * memory_per_record
+        / 1024
+        / 1024
+        / 1024
+    )
+    output_gb = (
+        unique_positions
+        * output_per_record
+        / 1024
+        / 1024
+        / 1024
+    )
+
+    # SQLiteオーバーヘッド（インデックス・WAL等）: +20%
+    intermediate_gb *= 1.2
+
+    # ピークディスク容量の推定:
+    # - チャンク分割モード: intermediate(徐々に削減) + output(徐々に増加)
+    #   ピーク時は約 intermediate * 0.5 + output * 0.5 + 安全マージン
+    # - 一括モード: intermediate + output（最後まで両方残る）
+    peak_disk_chunked = (
+        intermediate_gb * 0.5 + output_gb * 0.5
+    ) * 1.1
+    peak_disk_bulk = (intermediate_gb + output_gb) * 1.1
+
+    return {
+        "intermediate_store_gb": intermediate_gb,
+        "finalize_memory_gb": memory_gb,
+        "output_file_gb": output_gb,
+        "peak_disk_gb_chunked": peak_disk_chunked,
+        "peak_disk_gb_bulk": peak_disk_bulk,
+    }
 
 
 class IntermediateDataStore:
@@ -226,11 +310,11 @@ class IntermediateDataStore:
             # Clear buffer
             self._batch_buffer.clear()
 
-    def finalize_to_array(self) -> np.ndarray:
-        """Convert all stored data to final preprocessing array.
+    def get_total_count(self) -> int:
+        """Get total number of unique positions in database.
 
         Returns:
-            numpy.ndarray: Preprocessing array with all aggregated data
+            int: Number of unique positions
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
@@ -238,10 +322,102 @@ class IntermediateDataStore:
         # Flush any remaining buffer
         self._flush_buffer()
 
-        # Get total count
         cursor = self._conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM intermediate_data")
-        total_count = cursor.fetchone()[0]
+        return cursor.fetchone()[0]
+
+    def get_database_size(self) -> int:
+        """Get current size of SQLite database file in bytes.
+
+        Returns:
+            int: Database file size in bytes
+        """
+        if not self.db_path.exists():
+            return 0
+
+        # SQLite database size (include WAL file if exists)
+        db_size = self.db_path.stat().st_size
+        wal_path = self.db_path.with_suffix(".db-wal")
+        if wal_path.exists():
+            db_size += wal_path.stat().st_size
+
+        return db_size
+
+    def check_disk_space(
+        self,
+        output_dir: Optional[Path] = None,
+        use_chunked_mode: bool = True,
+    ) -> Dict[str, float | int | bool | None]:
+        """Check if sufficient disk space is available.
+
+        Args:
+            output_dir: Output directory for final arrays (optional)
+            use_chunked_mode: If True, estimate for chunked output with
+                            incremental deletion (default: True)
+
+        Returns:
+            Dictionary with disk space information and warnings
+        """
+        total_count = self.get_total_count()
+        requirements = estimate_resource_requirements(
+            total_count
+        )
+
+        # データベースのディスク使用状況
+        db_total, db_used, db_free = get_disk_usage(
+            self.db_path
+        )
+        db_free_gb = db_free / 1024 / 1024 / 1024
+
+        # チャンクモードではピークディスク使用量が約半分
+        peak_disk_key = (
+            "peak_disk_gb_chunked"
+            if use_chunked_mode
+            else "peak_disk_gb_bulk"
+        )
+
+        result: Dict[str, float | int | bool | None] = {
+            "unique_positions": total_count,
+            "estimated_memory_gb": requirements[
+                "finalize_memory_gb"
+            ],
+            "estimated_output_gb": requirements[
+                "output_file_gb"
+            ],
+            "peak_disk_gb": requirements[peak_disk_key],
+            "db_disk_free_gb": db_free_gb,
+            "db_disk_sufficient": db_free_gb
+            > requirements[peak_disk_key],
+        }
+
+        # 出力先のディスク容量もチェック
+        if output_dir is not None:
+            out_total, out_used, out_free = get_disk_usage(
+                output_dir
+            )
+            out_free_gb = out_free / 1024 / 1024 / 1024
+            result["output_disk_free_gb"] = float(out_free_gb)
+            result["output_disk_sufficient"] = (
+                out_free_gb > requirements[peak_disk_key]
+            )
+
+        return result
+
+    def finalize_to_array(self) -> np.ndarray:
+        """Convert all stored data to final preprocessing array.
+
+        Returns:
+            numpy.ndarray: Preprocessing array with all aggregated data
+
+        Note:
+            This method loads all data into memory at once.
+            For large datasets (>1M positions), use finalize_to_chunks() instead
+            to avoid memory exhaustion.
+
+            This method does NOT delete intermediate data during processing
+            since all data needs to be available until the final array is complete.
+        """
+        total_count = self.get_total_count()
 
         logger.info(
             f"Finalizing {total_count} unique positions from database"
@@ -252,60 +428,204 @@ class IntermediateDataStore:
             total_count
         )
 
-        # Read all data from database
-        cursor.execute(
-            """
-            SELECT hash_id, count, win_count, move_label_count,
-                   features, legal_move_mask
-            FROM intermediate_data
-            """
-        )
-
-        for i, row in enumerate(cursor):
-            (
-                hash_id,
-                count,
-                win_count,
-                move_label_count_blob,
-                features_blob,
-                legal_move_mask_blob,
-            ) = row
-
-            # Deserialize all binary data
-            win_count = pickle.loads(win_count)
-            move_label_count = pickle.loads(
-                move_label_count_blob
-            )
-            # Decompress features and legalMoveMask from bit-packed format
-            packed_features = pickle.loads(features_blob)
-            packed_legal_mask = pickle.loads(
-                legal_move_mask_blob
-            )
-            features = unpack_features_array(packed_features)
-            legal_move_mask = unpack_legal_moves_mask(
-                packed_legal_mask
-            )
-
-            # Convert to native Python types
-            count = int(count)
-            win_count = float(win_count)
-
-            # Populate output array (convert hash_id back to uint64)
-            target_data["id"][i] = int(hash_id)
-            target_data["features"][i] = features
-            target_data["moveLabel"][i] = (
-                move_label_count / count
-            )
-            target_data["resultValue"][i] = win_count / count
-            target_data["legalMoveMask"][i] = legal_move_mask
-
-            if (i + 1) % 10000 == 0:
-                logger.debug(
-                    f"Processed {i + 1}/{total_count} records"
-                )
+        # Process all chunks into the single array
+        # Don't delete during processing since we need all data in memory
+        offset = 0
+        for chunk in self.iter_finalize_chunks(
+            chunk_size=total_count, delete_after_yield=False
+        ):
+            chunk_size = len(chunk)
+            target_data[offset : offset + chunk_size] = chunk
+            offset += chunk_size
 
         logger.info(f"Finalized {total_count} records to array")
         return target_data
+
+    def iter_finalize_chunks(
+        self,
+        chunk_size: int = 1_000_000,
+        delete_after_yield: bool = True,
+    ) -> Generator[np.ndarray, None, None]:
+        """Iterate over finalized chunks of preprocessing data.
+
+        This is a memory-efficient way to process large datasets.
+        Each chunk is yielded as a separate array, allowing for
+        chunked file output without loading all data into memory.
+
+        Args:
+            chunk_size: Number of positions per chunk (default: 1M)
+            delete_after_yield: If True, delete processed records from database
+                              after yielding to save disk space (default: True)
+
+        Yields:
+            numpy.ndarray: Chunks of preprocessing array
+
+        Note:
+            When delete_after_yield=True, processed records are deleted from
+            the database after each chunk is yielded. This reduces peak disk
+            usage from ~2x (intermediate + output) to ~1.5x during processing.
+        """
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
+
+        # Flush any remaining buffer
+        self._flush_buffer()
+
+        total_count = self.get_total_count()
+
+        logger.info(
+            f"Finalizing {total_count} unique positions "
+            f"in chunks of {chunk_size}"
+        )
+        if delete_after_yield:
+            logger.info(
+                "Delete-after-yield enabled: "
+                "intermediate data will be freed as chunks are processed"
+            )
+
+        cursor = self._conn.cursor()
+        processed_count = 0
+
+        while processed_count < total_count:
+            # Calculate current chunk size
+            current_chunk_size = min(
+                chunk_size, total_count - processed_count
+            )
+
+            # Create output array for this chunk
+            chunk_data = create_empty_preprocessing_array(
+                current_chunk_size
+            )
+
+            # Read chunk from database (always from offset 0 if deleting)
+            # When delete_after_yield=True, we always read from the beginning
+            # since we delete processed records
+            read_offset = (
+                0 if delete_after_yield else processed_count
+            )
+
+            cursor.execute(
+                """
+                SELECT hash_id, count, win_count, move_label_count,
+                       features, legal_move_mask
+                FROM intermediate_data
+                LIMIT ? OFFSET ?
+                """,
+                (current_chunk_size, read_offset),
+            )
+
+            rows = cursor.fetchall()
+            hash_ids_to_delete = []
+
+            for i, row in enumerate(rows):
+                (
+                    hash_id,
+                    count,
+                    win_count,
+                    move_label_count_blob,
+                    features_blob,
+                    legal_move_mask_blob,
+                ) = row
+
+                # Track hash_id for deletion
+                if delete_after_yield:
+                    hash_ids_to_delete.append(hash_id)
+
+                # Deserialize all binary data
+                win_count = pickle.loads(win_count)
+                move_label_count = pickle.loads(
+                    move_label_count_blob
+                )
+                # Decompress features and legalMoveMask from bit-packed format
+                packed_features = pickle.loads(features_blob)
+                packed_legal_mask = pickle.loads(
+                    legal_move_mask_blob
+                )
+                features = unpack_features_array(
+                    packed_features
+                )
+                legal_move_mask = unpack_legal_moves_mask(
+                    packed_legal_mask
+                )
+
+                # Convert to native Python types
+                count = int(count)
+                win_count = float(win_count)
+
+                # Populate output array (convert hash_id back to uint64)
+                chunk_data["id"][i] = int(hash_id)
+                chunk_data["features"][i] = features
+                chunk_data["moveLabel"][i] = (
+                    move_label_count / count
+                )
+                chunk_data["resultValue"][i] = win_count / count
+                chunk_data["legalMoveMask"][i] = legal_move_mask
+
+            processed_count += current_chunk_size
+            chunk_idx = (processed_count - 1) // chunk_size
+
+            logger.info(
+                f"Finalized chunk {chunk_idx + 1}: "
+                f"{current_chunk_size} records "
+                f"({processed_count}/{total_count})"
+            )
+
+            # Yield the chunk before deletion to ensure data is safely written
+            yield chunk_data
+
+            # Delete processed records to free disk space
+            if delete_after_yield and hash_ids_to_delete:
+                self._delete_records(hash_ids_to_delete)
+                db_size_mb = (
+                    self.get_database_size() / 1024 / 1024
+                )
+                logger.info(
+                    f"Deleted {len(hash_ids_to_delete)} processed records. "
+                    f"Database size: {db_size_mb:.1f} MB"
+                )
+
+    def _delete_records(self, hash_ids: list[str]) -> None:
+        """Delete records from database by hash_id.
+
+        Args:
+            hash_ids: List of hash_id strings to delete
+        """
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
+
+        cursor = self._conn.cursor()
+        cursor.execute("BEGIN TRANSACTION")
+
+        try:
+            # Delete in batches to avoid SQL statement length limits
+            batch_size = 500
+            for i in range(0, len(hash_ids), batch_size):
+                batch = hash_ids[i : i + batch_size]
+                placeholders = ",".join("?" * len(batch))
+                cursor.execute(
+                    f"DELETE FROM intermediate_data WHERE hash_id IN ({placeholders})",
+                    batch,
+                )
+
+            cursor.execute("COMMIT")
+
+            # Vacuum to reclaim disk space (expensive but necessary)
+            # Only vacuum periodically to avoid overhead
+            remaining_count = self.get_total_count()
+            if (
+                remaining_count % 1_000_000 == 0
+                or remaining_count == 0
+            ):
+                logger.info(
+                    "Running VACUUM to reclaim disk space..."
+                )
+                cursor.execute("VACUUM")
+                logger.info("VACUUM completed")
+
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            logger.error(f"Failed to delete records: {e}")
+            raise
 
     def close(self) -> None:
         """Close database connection and cleanup."""

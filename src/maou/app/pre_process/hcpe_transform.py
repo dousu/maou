@@ -207,6 +207,11 @@ class PreProcess:
 
         Returns:
             前処理済みデータの構造化配列
+
+        Note:
+            This method loads all data into memory at once.
+            For large datasets, this may cause memory exhaustion.
+            Use aggregate_intermediate_data_chunked() for better memory efficiency.
         """
         if self.intermediate_store is None:
             raise RuntimeError(
@@ -215,6 +220,66 @@ class PreProcess:
 
         # ディスクストアから最終配列を生成
         return self.intermediate_store.finalize_to_array()
+
+    def aggregate_intermediate_data_chunked(
+        self,
+        output_dir: Path,
+        output_filename: str,
+        chunk_size: int = 1_000_000,
+    ) -> int:
+        """中間データをチャンクごとに集計して出力する（メモリ効率版）．
+
+        Args:
+            output_dir: 出力ディレクトリ
+            output_filename: 出力ファイル名（ベース名）
+            chunk_size: チャンクあたりの局面数（デフォルト: 100万）
+
+        Returns:
+            処理した総局面数
+        """
+        if self.intermediate_store is None:
+            raise RuntimeError(
+                "Intermediate store not initialized"
+            )
+
+        total_count = self.intermediate_store.get_total_count()
+        self.logger.info(
+            f"Aggregating {total_count} positions in chunks of {chunk_size}"
+        )
+
+        chunk_idx = 0
+        total_processed = 0
+
+        for (
+            chunk_data
+        ) in self.intermediate_store.iter_finalize_chunks(
+            chunk_size=chunk_size
+        ):
+            # チャンクごとにファイル出力
+            chunk_filename = (
+                f"{output_filename}_chunk{chunk_idx:04d}.npy"
+            )
+            chunk_path = output_dir / chunk_filename
+
+            save_preprocessing_array(
+                chunk_data, chunk_path, bit_pack=True
+            )
+
+            total_processed += len(chunk_data)
+            self.logger.info(
+                f"Saved chunk {chunk_idx}: {chunk_path} "
+                f"({len(chunk_data)} positions)"
+            )
+
+            chunk_idx += 1
+            # 明示的にメモリ解放
+            del chunk_data
+
+        self.logger.info(
+            f"Aggregation complete: {total_processed} positions "
+            f"in {chunk_idx} chunks"
+        )
+        return total_processed
 
     def transform(
         self, option: PreProcessOption
@@ -281,26 +346,120 @@ class PreProcess:
                     )
                     self.merge_intermediate_data(batch_result)
 
-                array = self.aggregate_intermediate_data()
-                pre_process_result["aggregated"] = (
-                    f"success {len(array)} rows"
+                # チェック: ユニーク局面数を取得してリソース要件を確認
+                total_count = (
+                    self.intermediate_store.get_total_count()
+                )
+                use_chunked = total_count > 1_000_000
+
+                disk_info = (
+                    self.intermediate_store.check_disk_space(
+                        output_dir=option.output_dir,
+                        use_chunked_mode=use_chunked,
+                    )
                 )
 
-                # Store results
-                if self.__feature_store is not None:
-                    self.__feature_store.store_features(
-                        name=option.output_filename,
-                        key_columns=["id"],
-                        structured_array=array,
+                self.logger.info(
+                    f"Total unique positions: {disk_info['unique_positions']:,}"
+                )
+                self.logger.info(
+                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
+                    f"(per chunk)"
+                    if use_chunked
+                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
+                )
+                self.logger.info(
+                    f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
+                )
+                self.logger.info(
+                    f"Peak disk usage: {disk_info['peak_disk_gb']:.2f} GB "
+                    f"({'chunked mode with incremental deletion' if use_chunked else 'bulk mode'})"
+                )
+                self.logger.info(
+                    f"Available disk space (DB location): {disk_info['db_disk_free_gb']:.2f} GB"
+                )
+
+                # ディスク容量チェック
+                if not disk_info["db_disk_sufficient"]:
+                    self.logger.error(
+                        f"Insufficient disk space at database location. "
+                        f"Required (peak): {disk_info['peak_disk_gb']:.2f} GB, "
+                        f"Available: {disk_info['db_disk_free_gb']:.2f} GB"
+                    )
+                    raise RuntimeError(
+                        "Insufficient disk space for output"
                     )
 
-                if option.output_dir is not None:
-                    base_name = Path(option.output_filename)
-                    save_preprocessing_array(
-                        array,
-                        option.output_dir / f"{base_name}.npy",
-                        bit_pack=True,
+                if (
+                    option.output_dir is not None
+                    and not disk_info["output_disk_sufficient"]
+                ):
+                    self.logger.error(
+                        f"Insufficient disk space at output location. "
+                        f"Required (peak): {disk_info['peak_disk_gb']:.2f} GB, "
+                        f"Available: {disk_info['output_disk_free_gb']:.2f} GB"
                     )
+                    raise RuntimeError(
+                        "Insufficient disk space for output"
+                    )
+
+                total_count = disk_info["unique_positions"]
+
+                # メモリ効率的な処理: 100万局面以上の場合はチャンク分割
+                if total_count > 1_000_000:
+                    self.logger.warning(
+                        f"Large dataset detected ({total_count:,} positions). "
+                        "Using chunked output to avoid memory exhaustion."
+                    )
+
+                    if option.output_dir is not None:
+                        # チャンク分割して出力
+                        total_processed = self.aggregate_intermediate_data_chunked(
+                            output_dir=option.output_dir,
+                            output_filename=option.output_filename,
+                            chunk_size=1_000_000,
+                        )
+                        pre_process_result["aggregated"] = (
+                            f"success {total_processed} rows (chunked)"
+                        )
+                    else:
+                        self.logger.error(
+                            "Cannot use chunked output without output_dir. "
+                            "Please specify --output-dir."
+                        )
+                        raise ValueError(
+                            "output_dir is required for large datasets"
+                        )
+
+                    # Feature store への出力は大規模データでは推奨しない
+                    if self.__feature_store is not None:
+                        self.logger.warning(
+                            "Feature store output is not recommended for large datasets. "
+                            "Use chunked file output instead."
+                        )
+                else:
+                    # 小規模データ: 従来の一括処理
+                    array = self.aggregate_intermediate_data()
+                    pre_process_result["aggregated"] = (
+                        f"success {len(array)} rows"
+                    )
+
+                    # Store results
+                    if self.__feature_store is not None:
+                        self.__feature_store.store_features(
+                            name=option.output_filename,
+                            key_columns=["id"],
+                            structured_array=array,
+                        )
+
+                    if option.output_dir is not None:
+                        base_name = Path(option.output_filename)
+                        save_preprocessing_array(
+                            array,
+                            option.output_dir
+                            / f"{base_name}.npy",
+                            bit_pack=True,
+                        )
             else:
                 # 並列処理（メモリ効率化版）
                 with ProcessPoolExecutor(
@@ -383,25 +542,119 @@ class PreProcess:
 
                     pbar.close()
 
-                array = self.aggregate_intermediate_data()
-                pre_process_result["aggregated"] = (
-                    f"success {len(array)} rows"
+                # チェック: ユニーク局面数を取得してリソース要件を確認
+                total_count = (
+                    self.intermediate_store.get_total_count()
                 )
-                # Store results
-                if self.__feature_store is not None:
-                    self.__feature_store.store_features(
-                        name=option.output_filename,
-                        key_columns=["id"],
-                        structured_array=array,
+                use_chunked = total_count > 1_000_000
+
+                disk_info = (
+                    self.intermediate_store.check_disk_space(
+                        output_dir=option.output_dir,
+                        use_chunked_mode=use_chunked,
+                    )
+                )
+
+                self.logger.info(
+                    f"Total unique positions: {disk_info['unique_positions']:,}"
+                )
+                self.logger.info(
+                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
+                    f"(per chunk)"
+                    if use_chunked
+                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
+                )
+                self.logger.info(
+                    f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
+                )
+                self.logger.info(
+                    f"Peak disk usage: {disk_info['peak_disk_gb']:.2f} GB "
+                    f"({'chunked mode with incremental deletion' if use_chunked else 'bulk mode'})"
+                )
+                self.logger.info(
+                    f"Available disk space (DB location): {disk_info['db_disk_free_gb']:.2f} GB"
+                )
+
+                # ディスク容量チェック
+                if not disk_info["db_disk_sufficient"]:
+                    self.logger.error(
+                        f"Insufficient disk space at database location. "
+                        f"Required (peak): {disk_info['peak_disk_gb']:.2f} GB, "
+                        f"Available: {disk_info['db_disk_free_gb']:.2f} GB"
+                    )
+                    raise RuntimeError(
+                        "Insufficient disk space for output"
                     )
 
-                if option.output_dir is not None:
-                    base_name = Path(option.output_filename)
-                    save_preprocessing_array(
-                        array,
-                        option.output_dir / f"{base_name}.npy",
-                        bit_pack=True,
+                if (
+                    option.output_dir is not None
+                    and not disk_info["output_disk_sufficient"]
+                ):
+                    self.logger.error(
+                        f"Insufficient disk space at output location. "
+                        f"Required (peak): {disk_info['peak_disk_gb']:.2f} GB, "
+                        f"Available: {disk_info['output_disk_free_gb']:.2f} GB"
                     )
+                    raise RuntimeError(
+                        "Insufficient disk space for output"
+                    )
+
+                total_count = disk_info["unique_positions"]
+
+                # メモリ効率的な処理: 100万局面以上の場合はチャンク分割
+                if total_count > 1_000_000:
+                    self.logger.warning(
+                        f"Large dataset detected ({total_count:,} positions). "
+                        "Using chunked output to avoid memory exhaustion."
+                    )
+
+                    if option.output_dir is not None:
+                        # チャンク分割して出力
+                        total_processed = self.aggregate_intermediate_data_chunked(
+                            output_dir=option.output_dir,
+                            output_filename=option.output_filename,
+                            chunk_size=1_000_000,
+                        )
+                        pre_process_result["aggregated"] = (
+                            f"success {total_processed} rows (chunked)"
+                        )
+                    else:
+                        self.logger.error(
+                            "Cannot use chunked output without output_dir. "
+                            "Please specify --output-dir."
+                        )
+                        raise ValueError(
+                            "output_dir is required for large datasets"
+                        )
+
+                    # Feature store への出力は大規模データでは推奨しない
+                    if self.__feature_store is not None:
+                        self.logger.warning(
+                            "Feature store output is not recommended for large datasets. "
+                            "Use chunked file output instead."
+                        )
+                else:
+                    # 小規模データ: 従来の一括処理
+                    array = self.aggregate_intermediate_data()
+                    pre_process_result["aggregated"] = (
+                        f"success {len(array)} rows"
+                    )
+                    # Store results
+                    if self.__feature_store is not None:
+                        self.__feature_store.store_features(
+                            name=option.output_filename,
+                            key_columns=["id"],
+                            structured_array=array,
+                        )
+
+                    if option.output_dir is not None:
+                        base_name = Path(option.output_filename)
+                        save_preprocessing_array(
+                            array,
+                            option.output_dir
+                            / f"{base_name}.npy",
+                            bit_pack=True,
+                        )
 
         # クリーンアップ: ディスクストアを閉じて削除
         if self.intermediate_store is not None:
