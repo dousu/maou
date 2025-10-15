@@ -267,7 +267,9 @@ class ValidationCallback(BaseCallback):
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
         """Calculate policy accuracy."""
-        return (torch.max(y, 1)[1] == t).sum().item() / len(t)
+        return (
+            torch.max(y, 1)[1] == torch.max(t, 1)[1]
+        ).sum().item() / len(t)
 
     def _value_accuracy(
         self, y: torch.Tensor, t: torch.Tensor
