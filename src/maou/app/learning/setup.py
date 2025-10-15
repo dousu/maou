@@ -15,7 +15,7 @@ from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
-from maou.domain.loss.loss_fn import MaskedGCELoss
+from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 from maou.domain.network.resnet import BottleneckBlock
 
 
@@ -47,7 +47,7 @@ class ModelComponents:
     """モデル関連コンポーネント."""
 
     model: Network
-    loss_fn_policy: MaskedGCELoss
+    loss_fn_policy: GCEwithNegativePenaltyLoss
     loss_fn_value: torch.nn.Module
     optimizer: optim.SGD
 
@@ -236,9 +236,11 @@ class LossOptimizerFactory:
     def create_loss_functions(
         cls,
         gce_parameter: float = 0.1,
-    ) -> Tuple[MaskedGCELoss, torch.nn.Module]:
+    ) -> Tuple[GCEwithNegativePenaltyLoss, torch.nn.Module]:
         """方策・価値用の損失関数ペアを作成."""
-        loss_fn_policy = MaskedGCELoss(q=gce_parameter)
+        loss_fn_policy = GCEwithNegativePenaltyLoss(
+            q=gce_parameter
+        )
         loss_fn_value = torch.nn.BCEWithLogitsLoss()
         return loss_fn_policy, loss_fn_value
 

@@ -11,7 +11,7 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
-from maou.domain.loss.loss_fn import MaskedGCELoss
+from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 
 
 class TrainingLoop:
@@ -23,7 +23,7 @@ class TrainingLoop:
         model: torch.nn.Module,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
-        loss_fn_policy: MaskedGCELoss,
+        loss_fn_policy: GCEwithNegativePenaltyLoss,
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,

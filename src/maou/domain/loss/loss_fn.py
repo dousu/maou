@@ -45,7 +45,7 @@ class MaskedGCELoss(torch.nn.Module):
 
     # qはGCEのパラメータ (0 < q <= 1)
     def __init__(
-        self, q: float = 0.7, alpha: float = 0.1
+        self, q: float = 0.7, alpha: float = 0.2
     ) -> None:
         super(MaskedGCELoss, self).__init__()
         self.q = q
@@ -69,3 +69,39 @@ class MaskedGCELoss(torch.nn.Module):
             loss * targets * (1 + self.alpha * (1 - mask))
         )
         return masked_loss.sum(dim=1).mean()
+
+
+class GCEwithNegativePenaltyLoss(torch.nn.Module):
+    def __init__(
+        self, q: float = 0.7, alpha: float = 0.1
+    ) -> None:
+        super(GCEwithNegativePenaltyLoss, self).__init__()
+        self.q = q
+        self.alpha = alpha
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        # 数値的安定性のためにlogitsをクリップ
+        logits = torch.clamp(logits, -100, 100)
+
+        probs = torch.softmax(logits, dim=1)
+        probs = torch.clamp(probs, min=1e-7, max=1.0)
+
+        positive_loss = (1 - torch.pow(probs, self.q)) / max(
+            self.q, 1e-5
+        )
+        positive_term = positive_loss * targets
+
+        negative_term = (
+            torch.pow(probs, self.q)
+            * (1 - targets)
+            * (1 + self.alpha * (1 - mask))
+        )
+
+        total_loss = positive_term + negative_term
+
+        return total_loss.sum(dim=1).mean()
