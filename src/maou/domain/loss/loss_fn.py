@@ -73,11 +73,15 @@ class MaskedGCELoss(torch.nn.Module):
 
 class GCEwithNegativePenaltyLoss(torch.nn.Module):
     def __init__(
-        self, q: float = 0.7, alpha: float = 0.1
+        self,
+        q: float = 0.7,
+        alpha: float = 0.1,
+        negative_weight: float = 0.01,
     ) -> None:
         super(GCEwithNegativePenaltyLoss, self).__init__()
         self.q = q
         self.alpha = alpha
+        self.negative_weight = negative_weight
 
     def forward(
         self,
@@ -97,11 +101,12 @@ class GCEwithNegativePenaltyLoss(torch.nn.Module):
         positive_term = positive_loss * targets
 
         negative_term = (
-            torch.pow(probs, self.q)
-            * (1 - targets)
-            * (1 + self.alpha * (1 - mask))
+            probs * (1 - targets) * self.negative_weight
         )
 
-        total_loss = positive_term + negative_term
+        # 自然にmaskが0のところにはnegative_termのみがはいっているはず
+        total_loss = (positive_term + negative_term) * (
+            1 + self.alpha * (1 - mask)
+        )
 
         return total_loss.sum(dim=1).mean()
