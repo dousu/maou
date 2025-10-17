@@ -5,7 +5,6 @@ import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 from tqdm.auto import tqdm
 
 # maouモジュールのimport
@@ -17,7 +16,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def count_unique_positions(input_path: Path) -> tuple[int, int, int]:
+def count_unique_positions(
+    input_path: Path,
+) -> tuple[int, int, int]:
     """ユニーク局面数を計算する．
 
     Args:
@@ -28,7 +29,9 @@ def count_unique_positions(input_path: Path) -> tuple[int, int, int]:
     """
     # 全てのnpyファイルを検索
     npy_files = sorted(input_path.glob("**/*.npy"))
-    logger.info(f"Found {len(npy_files)} npy files in {input_path}")
+    logger.info(
+        f"Found {len(npy_files)} npy files in {input_path}"
+    )
 
     if not npy_files:
         logger.error("No npy files found")
@@ -60,7 +63,9 @@ def count_unique_positions(input_path: Path) -> tuple[int, int, int]:
     logger.info(f"Total positions: {total_positions:,}")
     logger.info(f"Unique positions: {unique_count:,}")
     if unique_count > 0:
-        logger.info(f"Duplication rate: {total_positions / unique_count:.2f}x")
+        logger.info(
+            f"Duplication rate: {total_positions / unique_count:.2f}x"
+        )
     else:
         logger.warning("No positions found")
 
@@ -77,7 +82,8 @@ def count_unique_positions(input_path: Path) -> tuple[int, int, int]:
         8  # hash_id
         + 4  # count
         + 4  # winCount
-        + MOVE_LABELS_NUM * 8  # moveLabelCount (numpy defaults to int64 for bincount)
+        + MOVE_LABELS_NUM
+        * 8  # moveLabelCount (numpy defaults to int64 for bincount)
         + 104 * 9 * 9 * 1  # features
         + MOVE_LABELS_NUM * 1  # legalMoveMask
     )
@@ -89,16 +95,18 @@ def count_unique_positions(input_path: Path) -> tuple[int, int, int]:
     total_per_entry = per_entry_size + dict_overhead
     estimated_memory = unique_count * total_per_entry
 
-    logger.info(f"\n=== Memory Estimation ===")
+    logger.info("\n=== Memory Estimation ===")
     logger.info(f"Per entry size: {per_entry_size:,} bytes")
     logger.info(f"Dict overhead: {dict_overhead:,} bytes")
     logger.info(f"Total per entry: {total_per_entry:,} bytes")
-    logger.info(f"Estimated memory: {estimated_memory / (1024**3):.2f} GB")
+    logger.info(
+        f"Estimated memory: {estimated_memory / (1024**3):.2f} GB"
+    )
 
     return unique_count, total_positions, estimated_memory
 
 
-def main():
+def main() -> None:
     """メインエントリポイント．"""
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <input_path>")
@@ -115,16 +123,20 @@ def main():
         logger.error(f"Path is not a directory: {input_path}")
         sys.exit(1)
 
-    unique_count, total_positions, estimated_memory = count_unique_positions(
-        input_path
+    unique_count, total_positions, estimated_memory = (
+        count_unique_positions(input_path)
     )
 
     print("\n" + "=" * 60)
     print(f"Total positions: {total_positions:,}")
     print(f"Unique positions: {unique_count:,}")
     if unique_count > 0:
-        print(f"Duplication rate: {total_positions / unique_count:.2f}x")
-        print(f"Estimated memory: {estimated_memory / (1024**3):.2f} GB")
+        print(
+            f"Duplication rate: {total_positions / unique_count:.2f}x"
+        )
+        print(
+            f"Estimated memory: {estimated_memory / (1024**3):.2f} GB"
+        )
     else:
         print("No positions found")
     print("=" * 60)
