@@ -113,7 +113,7 @@ class TestBigQueryFeatureStore:
             data
         )
         logger.debug(f"BigQueryスキーマ: {schema}")
-        logger.debug(f"PyArrow Table: {data}")
+        logger.debug(f"Numpy Source Data: {data}")
         key_columns = ["id"]
         self.test_class.store_features(
             name="test_features",

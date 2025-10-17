@@ -41,7 +41,7 @@ maouプロジェクトでは，以下の2種類のextrasを定義しています
 異なるクラウドプロバイダに応じた依存関係を管理します：
 
 - **gcp**: Google Cloud Platform用
-  - 含まれるライブラリ: google-cloud-storage, google-cloud-bigquery, google-crc32c, pyarrow, google-cloud-bigquery-storage
+  - 含まれるライブラリ: google-cloud-storage, google-cloud-bigquery, google-crc32c, google-cloud-bigquery-storage
   - 用途: GCSやBigQueryを使用したデータの保存や分析
 
 - **aws**: Amazon Web Services用

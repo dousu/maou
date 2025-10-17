@@ -234,13 +234,10 @@ class TestIntegrationConverterPreprocess:
         transformer.transform(preprocess_option)
 
         # ローカル
-        output_paths = [
-            preprocess_output_dir
-            / input_path.with_suffix(".npy").name
-            for input_path in input_paths
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = preprocess_output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )
@@ -334,13 +331,10 @@ class TestIntegrationConverterPreprocess:
         transformer.transform(preprocess_option)
 
         # ローカル
-        output_paths = [
-            preprocess_output_dir
-            / input_path.with_suffix(".npy").name
-            for input_path in input_paths
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = preprocess_output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )
@@ -439,18 +433,10 @@ class TestIntegrationConverterPreprocess:
         transformer.transform(preprocess_option)
 
         # ローカル
-        # パーティションの値でファイル名が作られるので
-        # 入力データに合わせてoutput_pathを作る
-        output_paths = [
-            preprocess_output_dir / p.with_suffix(".npy").name
-            for p in [
-                Path("2020-12-03"),
-                Path("2020-01-30"),
-                Path("2020-01-31"),
-            ]
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = preprocess_output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )
@@ -551,15 +537,10 @@ class TestIntegrationConverterPreprocess:
         transformer.transform(preprocess_option)
 
         # ローカル
-        # S3にあるデータのファイル名で作られるので
-        # 入力データに合わせてoutput_pathを作る
-        output_paths = [
-            preprocess_output_dir
-            / Path(name).with_suffix(".npy").name
-            for name, _ in datasource.iter_batches()
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = preprocess_output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )

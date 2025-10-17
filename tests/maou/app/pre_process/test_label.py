@@ -783,6 +783,32 @@ class TestLabel:
                 f"Expected {actual_usi}, got {white_result}"
             )
 
+        # 後から見つかったエラーのTest
+        logger.info("\n=== Testing Others ===")
+        board.set_sfen(
+            "l6nl/1r3bk2/p1np1gPp1/2p1p3p/3Psp1P1/1PP5P/P1BG1sN2/2S6/LNKG4L w 1G1S3P1r1p 62"
+        )
+        working_test_move_labels = [
+            # (move_label, expected_usi, description)
+            (118, "4b3c", "4b3c - 同角"),
+        ]
+        for (
+            move_label,
+            expected_usi,
+            description,
+        ) in working_test_move_labels:
+            result = label.make_usi_move_from_label(
+                board,
+                move_label,
+            )
+
+            logger.info(
+                f"Label {move_label} -> {result} ({description})"
+            )
+            assert result == expected_usi, (
+                f"Expected {expected_usi}, got {result}"
+            )
+
         # Test error cases
         logger.info("\n=== Testing error cases ===")
         try:

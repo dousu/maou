@@ -9,6 +9,7 @@ import pytest
 from maou.app.common.data_io_service import (
     DataIOService,
 )
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.array_io import DataIOError
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
@@ -52,8 +53,12 @@ class TestDataIOService:
         """Test explicit loading of preprocessing array."""
         # Create test preprocessing data
         prep_array = create_empty_preprocessing_array(2)
-        prep_array["eval"] = [200, -100]
-        prep_array["moveLabel"] = [50, 100]
+        prep_array["moveLabel"] = np.array(
+            [
+                np.bincount(arr, minlength=MOVE_LABELS_NUM)
+                for arr in [[50], [100]]
+            ]
+        )
         prep_array["resultValue"] = [1.0, 0.0]
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,7 +114,6 @@ class TestDataIOService:
     def test_save_array_hcpe(self) -> None:
         """Test explicit saving of HCPE array."""
         hcpe_array = create_empty_hcpe_array(2)
-        hcpe_array["eval"] = [150, -75]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test_save_hcpe.npy"
@@ -234,7 +238,6 @@ class TestConvenienceFunctions:
     def test_save_numpy_array(self) -> None:
         """Test save_numpy_array convenience function."""
         prep_array = create_empty_preprocessing_array(2)
-        prep_array["eval"] = [300, -150]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "convenience_save.npy"

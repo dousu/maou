@@ -111,3 +111,9 @@ class Board:
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
         """手番関係なく常に(先手, 後手)の順にtupleにはいっている"""
         return self.board.pieces_in_hand
+
+    def to_pretty_board(self) -> str:
+        return str(self.board)
+
+    def hash(self) -> int:
+        return self.board.zobrist_hash()

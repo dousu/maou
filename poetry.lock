@@ -46,34 +46,34 @@ tomli = {version = "*", markers = "python_version < \"3.11\""}
 
 [[package]]
 name = "boto3"
-version = "1.38.3"
+version = "1.40.50"
 description = "The AWS SDK for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev"]
 files = [
-    {file = "boto3-1.38.3-py3-none-any.whl", hash = "sha256:9218f86e2164e1bddb75d435bbde4fa651aa58687213d7e3e1b50f7eb8868f66"},
-    {file = "boto3-1.38.3.tar.gz", hash = "sha256:655d51abcd68a40a33c52dbaa2ca73fc63c746b894e2ae22ed8ddc1912ddd93f"},
+    {file = "boto3-1.40.50-py3-none-any.whl", hash = "sha256:62901bc616c64236700001f530fc66b659ecd1acb4f541ddac6fcae3a1d37ea6"},
+    {file = "boto3-1.40.50.tar.gz", hash = "sha256:ae34363e8f34a49ab130d10c507a611926c1101d5d14d70be5598ca308e13266"},
 ]
 
 [package.dependencies]
-botocore = ">=1.38.3,<1.39.0"
+botocore = ">=1.40.50,<1.41.0"
 jmespath = ">=0.7.1,<2.0.0"
-s3transfer = ">=0.12.0,<0.13.0"
+s3transfer = ">=0.14.0,<0.15.0"
 
 [package.extras]
 crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "botocore"
-version = "1.38.3"
+version = "1.40.50"
 description = "Low-level, data-driven core of boto 3."
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev"]
 files = [
-    {file = "botocore-1.38.3-py3-none-any.whl", hash = "sha256:96f823240fe3704b99c17d1d1b2fd2d1679cf56d2a55b095f00255b76087cbf0"},
-    {file = "botocore-1.38.3.tar.gz", hash = "sha256:790f8f966201781f5fcf486d48b4492e9f734446bbf9d19ef8159d08be854243"},
+    {file = "botocore-1.40.50-py3-none-any.whl", hash = "sha256:53126c153fae0670dc54f03d01c89b1af144acedb1020199b133dedb309e434d"},
+    {file = "botocore-1.40.50.tar.gz", hash = "sha256:1d3d5b5759c9cb30202cd5ad231ec8afb1abe5be0c088a1707195c2cbae0e742"},
 ]
 
 [package.dependencies]
@@ -85,7 +85,7 @@ urllib3 = [
 ]
 
 [package.extras]
-crt = ["awscrt (==0.23.8)"]
+crt = ["awscrt (==0.27.6)"]
 
 [[package]]
 name = "cachetools"
@@ -254,6 +254,25 @@ files = [
 markers = {main = "platform_system == \"Windows\""}
 
 [[package]]
+name = "coloredlogs"
+version = "15.0.1"
+description = "Colored terminal output for Python's logging module"
+optional = true
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
+files = [
+    {file = "coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"},
+    {file = "coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0"},
+]
+
+[package.dependencies]
+humanfriendly = ">=9.1"
+
+[package.extras]
+cron = ["capturer (>=2.4)"]
+
+[[package]]
 name = "commitizen"
 version = "4.8.3"
 description = "Python commitizen client tool"
@@ -309,10 +328,107 @@ files = [
 ]
 
 [package.dependencies]
-numpy = {version = "*", markers = "python_version >= \"3.8\" and python_version < \"3.12\""}
+numpy = [
+    {version = "*", markers = "python_version >= \"3.8\" and python_version < \"3.12\""},
+    {version = ">=1.26.0,<1.27.0", markers = "python_version >= \"3.12\" and python_version < \"4.0\""},
+]
 
 [package.extras]
 web = ["flask", "portpicker"]
+
+[[package]]
+name = "cuda-bindings"
+version = "12.9.2"
+description = "Python bindings for CUDA"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "cuda_bindings-12.9.2-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:63aa1288f221ce041b1177fd47ab2ef09dfd59065e6116044473f7fdaf47d4be"},
+    {file = "cuda_bindings-12.9.2-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d4e967a9e6e0b3e0eb8e7dfeec9e79e1ed05e6f3385dc3d91298ab2ba8536016"},
+    {file = "cuda_bindings-12.9.2-cp310-cp310-win_amd64.whl", hash = "sha256:4acba6f49ca4e07e9164b18c28e38c78cad18fd3cb4fb9cad4b32e742323d5ac"},
+    {file = "cuda_bindings-12.9.2-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b65cbe73aa657daf8cc0137da2223e1858e4057056aad727aae5f839f35a724c"},
+    {file = "cuda_bindings-12.9.2-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:657f628fc895f963c8ecea2e41354610e5f9f952dd93d345af18d7ca2d92237e"},
+    {file = "cuda_bindings-12.9.2-cp311-cp311-win_amd64.whl", hash = "sha256:ae2bde07336f198b4f07738b733067909d9158b5ff123d12a531a3fc4b5dcae3"},
+    {file = "cuda_bindings-12.9.2-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cdc3d928162542c737f3f2f830b64916dcd1edd8a08b0357e23ab6e3a34cfa63"},
+    {file = "cuda_bindings-12.9.2-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d9eaed7ac98e4e1ba616176b291f3f309f20af6a6a79a34da7739aa9dbe060a7"},
+    {file = "cuda_bindings-12.9.2-cp312-cp312-win_amd64.whl", hash = "sha256:ca87323459957b2c0ea7d85064f98e93e9bcf265d4013438133d7895099772b4"},
+    {file = "cuda_bindings-12.9.2-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:513ab7bff8fa1fbb949512cc18fcbe3ca190411da653dd7072c1537663176f18"},
+    {file = "cuda_bindings-12.9.2-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:81ebcf681094c5fe6cf248beea029d84858f42748f29dc8b81869a008d52288f"},
+    {file = "cuda_bindings-12.9.2-cp313-cp313-win_amd64.whl", hash = "sha256:48451eca385ae9729f3a9a3458741c43672a0587d044d968654a60f448ef376a"},
+    {file = "cuda_bindings-12.9.2-cp39-cp39-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ab52ac8da54ce3ac9f73316872c31c015138432a504027cae4e45e5354048cb8"},
+    {file = "cuda_bindings-12.9.2-cp39-cp39-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f656b831d9221611927a3ce646ee44f391ff0da429a4eef990f8c2aeecdb7a8d"},
+    {file = "cuda_bindings-12.9.2-cp39-cp39-win_amd64.whl", hash = "sha256:02c8be5d70bcdae8fec8922f95b5908f7c1ad760b9ac0b487fb5c65e41f7e308"},
+]
+
+[package.dependencies]
+cuda-pathfinder = ">=1.1,<2.0"
+nvidia-cuda-nvcc-cu12 = {version = "*", optional = true, markers = "extra == \"all\""}
+nvidia-cuda-nvrtc-cu12 = {version = "*", optional = true, markers = "extra == \"all\""}
+nvidia-cufile-cu12 = {version = "*", optional = true, markers = "sys_platform == \"linux\" and extra == \"all\""}
+nvidia-nvjitlink-cu12 = {version = ">=12.3", optional = true, markers = "extra == \"all\""}
+pywin32 = {version = "*", markers = "sys_platform == \"win32\""}
+
+[package.extras]
+all = ["nvidia-cuda-nvcc-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cufile-cu12 ; sys_platform == \"linux\"", "nvidia-nvjitlink-cu12 (>=12.3)"]
+test = ["cython (>=3.0,<3.1.0)", "llvmlite", "numpy (>=1.21.1)", "pytest (>=6.2.4)", "pytest-benchmark (>=3.4.1)", "setuptools (>=77.0.0)"]
+
+[[package]]
+name = "cuda-core"
+version = "0.3.2"
+description = "cuda.core: (experimental) pythonic CUDA module"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "cuda_core-0.3.2-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7a2a1f7e96e68c0bbc710592e78ca09c951afc10238c739482e265da1e6ea102"},
+    {file = "cuda_core-0.3.2-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1058402b41320516d5022a1cdfc7063909bf620e91126f851d859302b77d02d1"},
+    {file = "cuda_core-0.3.2-cp310-cp310-win_amd64.whl", hash = "sha256:e843a3058fc74640e5d629e87d864ad3f7e763bc89d6c2b83b55a829603ee5a3"},
+    {file = "cuda_core-0.3.2-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ffd99410f648d3bcd26f464da70d2b5ef9b5eaab79b744960d3dd66780dd1ac1"},
+    {file = "cuda_core-0.3.2-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9d339c874905e00ddc36556d56cf7eaa9dae62d4bc4f2db774f15a9b41ca634a"},
+    {file = "cuda_core-0.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:c8c438b2e3c08ba0f3f36a9067e2092f5dfb8e40084206fc2722a7a26745fa70"},
+    {file = "cuda_core-0.3.2-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d5e635d60209478d7fcb26d96e9182e6f7407c983147f488b98130c1ba31df12"},
+    {file = "cuda_core-0.3.2-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1338ab324d29b3afcde623c4a12571cd6e74e76fa0d5533db1e36df978899e4e"},
+    {file = "cuda_core-0.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:b4afafbc3809244dfe764898c8a49abaccb1cc4cd41bbb9a61e89c31dd1f2a18"},
+    {file = "cuda_core-0.3.2-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:89017fa01d65f355155e85e40362f10a16224650743a929bc447090236733e5c"},
+    {file = "cuda_core-0.3.2-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5c048a9d788028d2a268101001d40210812d6dcf178e6869f49e855606ed2605"},
+    {file = "cuda_core-0.3.2-cp313-cp313-win_amd64.whl", hash = "sha256:2fcd38ceb9934e58b830b9aa4c30db7a22d65d328155454f5801eda45ac10f42"},
+    {file = "cuda_core-0.3.2-cp39-cp39-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ad4e8a3b05525e877e0b3e5d626bdbc05b68c0b5d7da843d8c0366ab2bc3421f"},
+    {file = "cuda_core-0.3.2-cp39-cp39-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9e6ba1ff9721825992a03191a50140a89468763fe0a7055397b731622dca4a50"},
+    {file = "cuda_core-0.3.2-cp39-cp39-win_amd64.whl", hash = "sha256:6106c159bfebce4c05ad4b1dbb6006e52ceea1c60f642df270e559e714a19962"},
+]
+
+[package.dependencies]
+cuda-bindings = {version = "==12.*", extras = ["all"], optional = true, markers = "extra == \"cu12\""}
+numpy = "*"
+
+[package.extras]
+cu11 = ["cuda-bindings[all] (==11.8.*)"]
+cu12 = ["cuda-bindings[all] (==12.*)"]
+cu13 = ["cuda-bindings[all] (==13.*)"]
+test = ["cython (>=3.0)", "pytest (>=6.2.4)", "setuptools"]
+test-cu11 = ["cuda-core[test]", "cupy-cuda11x", "nvidia-cuda-runtime-cu11"]
+test-cu12 = ["cuda-core[test]", "cupy-cuda12x", "nvidia-cuda-runtime-cu12"]
+
+[[package]]
+name = "cuda-pathfinder"
+version = "1.2.1"
+description = "Pathfinder for CUDA components"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "cuda_pathfinder-1.2.1-py3-none-any.whl", hash = "sha256:d4fba3a8f6a01bbc72753d69bc7f6bcf8078a91a73adeea0f0c9adf917461d7b"},
+]
+
+[package.extras]
+nvidia-wheels-cu12 = ["cuda-toolkit[cublas,cudart,cufft,curand,cusolver,cusparse,npp,nvcc,nvfatbin,nvjitlink,nvjpeg,nvrtc] (==12.*)", "cuda-toolkit[cufile] (==12.*) ; sys_platform != \"win32\"", "nvidia-cudss-cu12", "nvidia-cufftmp-cu12 ; sys_platform != \"win32\"", "nvidia-libmathdx-cu12", "nvidia-nvshmem-cu12 ; sys_platform != \"win32\""]
+nvidia-wheels-cu13 = ["cuda-toolkit[cublas,cudart,cufft,curand,cusolver,cusparse,npp,nvcc,nvfatbin,nvjitlink,nvjpeg,nvrtc,nvvm] (==13.*)", "cuda-toolkit[cufile] (==13.*) ; sys_platform != \"win32\"", "nvidia-nvshmem-cu13 ; sys_platform != \"win32\""]
+nvidia-wheels-host = ["nvpl-fft ; platform_system == \"Linux\" and platform_machine == \"aarch64\""]
+test = ["pytest (>=6.2.4)"]
 
 [[package]]
 name = "db-dtypes"
@@ -406,6 +522,19 @@ files = [
 mccabe = ">=0.7.0,<0.8.0"
 pycodestyle = ">=2.13.0,<2.14.0"
 pyflakes = ">=3.3.0,<3.4.0"
+
+[[package]]
+name = "flatbuffers"
+version = "25.2.10"
+description = "The FlatBuffers serialization format for Python"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
+files = [
+    {file = "flatbuffers-25.2.10-py2.py3-none-any.whl", hash = "sha256:ebba5f4d5ea615af3f7fd70fc310636fbb2bbd1f566ac0a23d98dd412de50051"},
+    {file = "flatbuffers-25.2.10.tar.gz", hash = "sha256:97e451377a41262f8d9bd4295cc836133415cc03d8cb966410a4af92eb00d26e"},
+]
 
 [[package]]
 name = "fsspec"
@@ -802,6 +931,22 @@ grpcio = ">=1.71.0"
 protobuf = ">=5.26.1,<6.0dev"
 
 [[package]]
+name = "humanfriendly"
+version = "10.0"
+description = "Human friendly output for text interfaces using Python"
+optional = true
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
+files = [
+    {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
+    {file = "humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc"},
+]
+
+[package.dependencies]
+pyreadline3 = {version = "*", markers = "sys_platform == \"win32\" and python_version >= \"3.8\""}
+
+[[package]]
 name = "identify"
 version = "2.6.10"
 description = "File identification library for Python"
@@ -961,6 +1106,57 @@ docs = ["mdx_gh_links (>=0.2)", "mkdocs (>=1.6)", "mkdocs-gen-files", "mkdocs-li
 testing = ["coverage", "pyyaml"]
 
 [[package]]
+name = "markdown-it-py"
+version = "3.0.0"
+description = "Python port of markdown-it. Markdown parsing, done right!"
+optional = true
+python-versions = ">=3.8"
+groups = ["main"]
+markers = "python_version == \"3.9\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+files = [
+    {file = "markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb"},
+    {file = "markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1"},
+]
+
+[package.dependencies]
+mdurl = ">=0.1,<1.0"
+
+[package.extras]
+benchmarking = ["psutil", "pytest", "pytest-benchmark"]
+code-style = ["pre-commit (>=3.0,<4.0)"]
+compare = ["commonmark (>=0.9,<1.0)", "markdown (>=3.4,<4.0)", "mistletoe (>=1.0,<2.0)", "mistune (>=2.0,<3.0)", "panflute (>=2.3,<3.0)"]
+linkify = ["linkify-it-py (>=1,<3)"]
+plugins = ["mdit-py-plugins"]
+profiling = ["gprof2dot"]
+rtd = ["jupyter_sphinx", "mdit-py-plugins", "myst-parser", "pyyaml", "sphinx", "sphinx-copybutton", "sphinx-design", "sphinx_book_theme"]
+testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions"]
+
+[[package]]
+name = "markdown-it-py"
+version = "4.0.0"
+description = "Python port of markdown-it. Markdown parsing, done right!"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "(extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\") and python_version != \"3.9\""
+files = [
+    {file = "markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147"},
+    {file = "markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3"},
+]
+
+[package.dependencies]
+mdurl = ">=0.1,<1.0"
+
+[package.extras]
+benchmarking = ["psutil", "pytest", "pytest-benchmark"]
+compare = ["commonmark (>=0.9,<1.0)", "markdown (>=3.4,<4.0)", "markdown-it-pyrs", "mistletoe (>=1.0,<2.0)", "mistune (>=3.0,<4.0)", "panflute (>=2.3,<3.0)"]
+linkify = ["linkify-it-py (>=1,<3)"]
+plugins = ["mdit-py-plugins (>=0.5.0)"]
+profiling = ["gprof2dot"]
+rtd = ["ipykernel", "jupyter_sphinx", "mdit-py-plugins (>=0.5.0)", "myst-parser", "pyyaml", "sphinx", "sphinx-book-theme (>=1.0,<2.0)", "sphinx-copybutton", "sphinx-design"]
+testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions", "requests"]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.2"
 description = "Safely add untrusted strings to HTML/XML markup."
@@ -1045,13 +1241,26 @@ files = [
 ]
 
 [[package]]
+name = "mdurl"
+version = "0.1.2"
+description = "Markdown URL utilities"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"},
+    {file = "mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"},
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 description = "Python library for arbitrary-precision floating-point arithmetic"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"},
     {file = "mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f"},
@@ -1127,6 +1336,17 @@ groups = ["dev"]
 files = [
     {file = "mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505"},
     {file = "mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558"},
+]
+
+[[package]]
+name = "netron"
+version = "8.5.3"
+description = "Viewer for neural network, deep learning and machine learning models."
+optional = false
+python-versions = "*"
+groups = ["dev"]
+files = [
+    {file = "netron-8.5.3-py3-none-any.whl", hash = "sha256:8b454a661fd8d570d1bd4b98a194b3b998e4485e88e7c64c7fd1c12f84e24b1a"},
 ]
 
 [[package]]
@@ -1259,13 +1479,27 @@ files = [
 ]
 
 [[package]]
+name = "nvidia-cuda-nvcc-cu12"
+version = "12.9.86"
+description = "CUDA nvcc"
+optional = true
+python-versions = ">=3"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:5d6a0d32fdc7ea39917c20065614ae93add6f577d840233237ff08e9a38f58f0"},
+    {file = "nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:44e1eca4d08926193a558d2434b1bf83d57b4d5743e0c431c0c83d51da1df62b"},
+    {file = "nvidia_cuda_nvcc_cu12-12.9.86-py3-none-win_amd64.whl", hash = "sha256:8ed7f0b17dea662755395be029376db3b94fed5cbb17c2d35cc866c5b1b84099"},
+]
+
+[[package]]
 name = "nvidia-cuda-nvrtc-cu12"
 version = "12.6.77"
 description = "NVRTC native runtime libraries"
 optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or extra == \"tensorrt-infer\""
 files = [
     {file = "nvidia_cuda_nvrtc_cu12-12.6.77-py3-none-manylinux2014_aarch64.whl", hash = "sha256:5847f1d6e5b757f1d2b3991a01082a44aad6f10ab3c5c0213fa3e25bddc25a13"},
     {file = "nvidia_cuda_nvrtc_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:35b0cc6ee3a9636d5409133e79273ce1f3fd087abb0532d2d2e8fff1fe9efc53"},
@@ -1279,7 +1513,7 @@ description = "CUDA Runtime native Libraries"
 optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or extra == \"tensorrt-infer\""
 files = [
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:6116fad3e049e04791c0256a9778c16237837c08b27ed8c8401e2e45de8d60cd"},
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_aarch64.whl", hash = "sha256:d461264ecb429c84c8879a7153499ddc7b19b5f8d84c204307491989a365588e"},
@@ -1331,7 +1565,7 @@ description = "cuFile GPUDirect libraries"
 optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and sys_platform == \"linux\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\") or extra == \"tensorrt-infer\" and sys_platform == \"linux\""
 files = [
     {file = "nvidia_cufile_cu12-1.11.1.6-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:cc23469d1c7e52ce6c1d55253273d32c565dd22068647f3aa59b3c6b005bf159"},
     {file = "nvidia_cufile_cu12-1.11.1.6-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:8f57a0051dcf2543f6dc2b98a98cb2719c37d3cee1baba8965d57f3bbc90d4db"},
@@ -1411,9 +1645,10 @@ files = [
 name = "nvidia-ml-py"
 version = "12.575.51"
 description = "Python Bindings for the NVIDIA Management Library"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"cuda\""
 files = [
     {file = "nvidia_ml_py-12.575.51-py3-none-any.whl", hash = "sha256:eb8641800d98ce40a22f479873f34b482e214a7e80349c63be51c3919845446e"},
     {file = "nvidia_ml_py-12.575.51.tar.gz", hash = "sha256:6490e93fea99eb4e966327ae18c6eec6256194c921f23459c8767aee28c54581"},
@@ -1439,7 +1674,7 @@ description = "Nvidia JIT LTO Library"
 optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\")"
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\" and (extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"tensorrt-infer\") or extra == \"tensorrt-infer\""
 files = [
     {file = "nvidia_nvjitlink_cu12-12.6.85-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:eedc36df9e88b682efe4309aa16b5b4e78c2407eac59e8c10a6a47535164369a"},
     {file = "nvidia_nvjitlink_cu12-12.6.85-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:cf4eaa7d4b6b543ffd69d6abfb11efdeb2db48270d94dfd3a452c24150829e41"},
@@ -1478,6 +1713,245 @@ files = [
 rsa = ["cryptography (>=3.0.0)"]
 signals = ["blinker (>=1.4.0)"]
 signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
+
+[[package]]
+name = "onnx"
+version = "1.18.0"
+description = "Open Neural Network Exchange"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "onnx-1.18.0-cp310-cp310-macosx_12_0_universal2.whl", hash = "sha256:4a3b50d94620e2c7c1404d1d59bc53e665883ae3fecbd856cc86da0639fd0fc3"},
+    {file = "onnx-1.18.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e189652dad6e70a0465035c55cc565c27aa38803dd4f4e74e4b952ee1c2de94b"},
+    {file = "onnx-1.18.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bfb1f271b1523b29f324bfd223f6a4cfbdc5a2f2f16e73563671932d33663365"},
+    {file = "onnx-1.18.0-cp310-cp310-win32.whl", hash = "sha256:e03071041efd82e0317b3c45433b2f28146385b80f26f82039bc68048ac1a7a0"},
+    {file = "onnx-1.18.0-cp310-cp310-win_amd64.whl", hash = "sha256:9235b3493951e11e75465d56f4cd97e3e9247f096160dd3466bfabe4cbc938bc"},
+    {file = "onnx-1.18.0-cp311-cp311-macosx_12_0_universal2.whl", hash = "sha256:735e06d8d0cf250dc498f54038831401063c655a8d6e5975b2527a4e7d24be3e"},
+    {file = "onnx-1.18.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:73160799472e1a86083f786fecdf864cf43d55325492a9b5a1cfa64d8a523ecc"},
+    {file = "onnx-1.18.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6acafb3823238bbe8f4340c7ac32fb218689442e074d797bee1c5c9a02fdae75"},
+    {file = "onnx-1.18.0-cp311-cp311-win32.whl", hash = "sha256:4c8c4bbda760c654e65eaffddb1a7de71ec02e60092d33f9000521f897c99be9"},
+    {file = "onnx-1.18.0-cp311-cp311-win_amd64.whl", hash = "sha256:a5810194f0f6be2e58c8d6dedc6119510df7a14280dd07ed5f0f0a85bd74816a"},
+    {file = "onnx-1.18.0-cp311-cp311-win_arm64.whl", hash = "sha256:aa1b7483fac6cdec26922174fc4433f8f5c2f239b1133c5625063bb3b35957d0"},
+    {file = "onnx-1.18.0-cp312-cp312-macosx_12_0_universal2.whl", hash = "sha256:521bac578448667cbb37c50bf05b53c301243ede8233029555239930996a625b"},
+    {file = "onnx-1.18.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e4da451bf1c5ae381f32d430004a89f0405bc57a8471b0bddb6325a5b334aa40"},
+    {file = "onnx-1.18.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:99afac90b4cdb1471432203c3c1f74e16549c526df27056d39f41a9a47cfb4af"},
+    {file = "onnx-1.18.0-cp312-cp312-win32.whl", hash = "sha256:ee159b41a3ae58d9c7341cf432fc74b96aaf50bd7bb1160029f657b40dc69715"},
+    {file = "onnx-1.18.0-cp312-cp312-win_amd64.whl", hash = "sha256:102c04edc76b16e9dfeda5a64c1fccd7d3d2913b1544750c01d38f1ac3c04e05"},
+    {file = "onnx-1.18.0-cp312-cp312-win_arm64.whl", hash = "sha256:911b37d724a5d97396f3c2ef9ea25361c55cbc9aa18d75b12a52b620b67145af"},
+    {file = "onnx-1.18.0-cp313-cp313-macosx_12_0_universal2.whl", hash = "sha256:030d9f5f878c5f4c0ff70a4545b90d7812cd6bfe511de2f3e469d3669c8cff95"},
+    {file = "onnx-1.18.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8521544987d713941ee1e591520044d35e702f73dc87e91e6d4b15a064ae813d"},
+    {file = "onnx-1.18.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3c137eecf6bc618c2f9398bcc381474b55c817237992b169dfe728e169549e8f"},
+    {file = "onnx-1.18.0-cp313-cp313-win32.whl", hash = "sha256:6c093ffc593e07f7e33862824eab9225f86aa189c048dd43ffde207d7041a55f"},
+    {file = "onnx-1.18.0-cp313-cp313-win_amd64.whl", hash = "sha256:230b0fb615e5b798dc4a3718999ec1828360bc71274abd14f915135eab0255f1"},
+    {file = "onnx-1.18.0-cp313-cp313-win_arm64.whl", hash = "sha256:6f91930c1a284135db0f891695a263fc876466bf2afbd2215834ac08f600cfca"},
+    {file = "onnx-1.18.0-cp313-cp313t-macosx_12_0_universal2.whl", hash = "sha256:2f4d37b0b5c96a873887652d1cbf3f3c70821b8c66302d84b0f0d89dd6e47653"},
+    {file = "onnx-1.18.0-cp313-cp313t-win_amd64.whl", hash = "sha256:a69afd0baa372162948b52c13f3aa2730123381edf926d7ef3f68ca7cec6d0d0"},
+    {file = "onnx-1.18.0-cp39-cp39-macosx_12_0_universal2.whl", hash = "sha256:a186b1518450e04dc3679da315a663a56429418e7ccfd947d721de9bd710b0ea"},
+    {file = "onnx-1.18.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:dc22abacfb0d3cd024d6ab784cb5eb5aca9c966a791e8e13b1a4ecb93ddb47d3"},
+    {file = "onnx-1.18.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7839bf2adb494e46ccf375a7936b5d9e241b63e1a84254f3eb2e2e184e3292c8"},
+    {file = "onnx-1.18.0-cp39-cp39-win32.whl", hash = "sha256:2bd5c0c55669b6d8f12e859cc27f3a631fe58730871b21f001527e1d56219e2a"},
+    {file = "onnx-1.18.0-cp39-cp39-win_amd64.whl", hash = "sha256:a3ff1735f99589be4f311eb586f2b949998614a82fb6261ae6af5a29879b9375"},
+    {file = "onnx-1.18.0.tar.gz", hash = "sha256:3d8dbf9e996629131ba3aa1afd1d8239b660d1f830c6688dd7e03157cccd6b9c"},
+]
+
+[package.dependencies]
+numpy = ">=1.22"
+protobuf = ">=4.25.1"
+typing_extensions = ">=4.7.1"
+
+[package.extras]
+reference = ["Pillow", "google-re2 ; python_version < \"3.13\""]
+
+[[package]]
+name = "onnxruntime"
+version = "1.20.1"
+description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "python_version == \"3.9\" and (extra == \"cpu\" or extra == \"cpu-infer\")"
+files = [
+    {file = "onnxruntime-1.20.1-cp310-cp310-macosx_13_0_universal2.whl", hash = "sha256:e50ba5ff7fed4f7d9253a6baf801ca2883cc08491f9d32d78a80da57256a5439"},
+    {file = "onnxruntime-1.20.1-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7b2908b50101a19e99c4d4e97ebb9905561daf61829403061c1adc1b588bc0de"},
+    {file = "onnxruntime-1.20.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d82daaec24045a2e87598b8ac2b417b1cce623244e80e663882e9fe1aae86410"},
+    {file = "onnxruntime-1.20.1-cp310-cp310-win32.whl", hash = "sha256:4c4b251a725a3b8cf2aab284f7d940c26094ecd9d442f07dd81ab5470e99b83f"},
+    {file = "onnxruntime-1.20.1-cp310-cp310-win_amd64.whl", hash = "sha256:d3b616bb53a77a9463707bb313637223380fc327f5064c9a782e8ec69c22e6a2"},
+    {file = "onnxruntime-1.20.1-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:06bfbf02ca9ab5f28946e0f912a562a5f005301d0c419283dc57b3ed7969bb7b"},
+    {file = "onnxruntime-1.20.1-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f6243e34d74423bdd1edf0ae9596dd61023b260f546ee17d701723915f06a9f7"},
+    {file = "onnxruntime-1.20.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5eec64c0269dcdb8d9a9a53dc4d64f87b9e0c19801d9321246a53b7eb5a7d1bc"},
+    {file = "onnxruntime-1.20.1-cp311-cp311-win32.whl", hash = "sha256:a19bc6e8c70e2485a1725b3d517a2319603acc14c1f1a017dda0afe6d4665b41"},
+    {file = "onnxruntime-1.20.1-cp311-cp311-win_amd64.whl", hash = "sha256:8508887eb1c5f9537a4071768723ec7c30c28eb2518a00d0adcd32c89dea3221"},
+    {file = "onnxruntime-1.20.1-cp312-cp312-macosx_13_0_universal2.whl", hash = "sha256:22b0655e2bf4f2161d52706e31f517a0e54939dc393e92577df51808a7edc8c9"},
+    {file = "onnxruntime-1.20.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f1f56e898815963d6dc4ee1c35fc6c36506466eff6d16f3cb9848cea4e8c8172"},
+    {file = "onnxruntime-1.20.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bb71a814f66517a65628c9e4a2bb530a6edd2cd5d87ffa0af0f6f773a027d99e"},
+    {file = "onnxruntime-1.20.1-cp312-cp312-win32.whl", hash = "sha256:bd386cc9ee5f686ee8a75ba74037750aca55183085bf1941da8efcfe12d5b120"},
+    {file = "onnxruntime-1.20.1-cp312-cp312-win_amd64.whl", hash = "sha256:19c2d843eb074f385e8bbb753a40df780511061a63f9def1b216bf53860223fb"},
+    {file = "onnxruntime-1.20.1-cp313-cp313-macosx_13_0_universal2.whl", hash = "sha256:cc01437a32d0042b606f462245c8bbae269e5442797f6213e36ce61d5abdd8cc"},
+    {file = "onnxruntime-1.20.1-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fb44b08e017a648924dbe91b82d89b0c105b1adcfe31e90d1dc06b8677ad37be"},
+    {file = "onnxruntime-1.20.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bda6aebdf7917c1d811f21d41633df00c58aff2bef2f598f69289c1f1dabc4b3"},
+    {file = "onnxruntime-1.20.1-cp313-cp313-win_amd64.whl", hash = "sha256:d30367df7e70f1d9fc5a6a68106f5961686d39b54d3221f760085524e8d38e16"},
+    {file = "onnxruntime-1.20.1-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c9158465745423b2b5d97ed25aa7740c7d38d2993ee2e5c3bfacb0c4145c49d8"},
+    {file = "onnxruntime-1.20.1-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0df6f2df83d61f46e842dbcde610ede27218947c33e994545a22333491e72a3b"},
+]
+
+[package.dependencies]
+coloredlogs = "*"
+flatbuffers = "*"
+numpy = ">=1.21.6"
+packaging = "*"
+protobuf = "*"
+sympy = "*"
+
+[[package]]
+name = "onnxruntime"
+version = "1.22.1"
+description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "(extra == \"cpu\" or extra == \"cpu-infer\") and python_version != \"3.9\""
+files = [
+    {file = "onnxruntime-1.22.1-cp310-cp310-macosx_13_0_universal2.whl", hash = "sha256:80e7f51da1f5201c1379b8d6ef6170505cd800e40da216290f5e06be01aadf95"},
+    {file = "onnxruntime-1.22.1-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b89ddfdbbdaf7e3a59515dee657f6515601d55cb21a0f0f48c81aefc54ff1b73"},
+    {file = "onnxruntime-1.22.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bddc75868bcf6f9ed76858a632f65f7b1846bdcefc6d637b1e359c2c68609964"},
+    {file = "onnxruntime-1.22.1-cp310-cp310-win_amd64.whl", hash = "sha256:01e2f21b2793eb0c8642d2be3cee34cc7d96b85f45f6615e4e220424158877ce"},
+    {file = "onnxruntime-1.22.1-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:f4581bccb786da68725d8eac7c63a8f31a89116b8761ff8b4989dc58b61d49a0"},
+    {file = "onnxruntime-1.22.1-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7ae7526cf10f93454beb0f751e78e5cb7619e3b92f9fc3bd51aa6f3b7a8977e5"},
+    {file = "onnxruntime-1.22.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f6effa1299ac549a05c784d50292e3378dbbf010346ded67400193b09ddc2f04"},
+    {file = "onnxruntime-1.22.1-cp311-cp311-win_amd64.whl", hash = "sha256:f28a42bb322b4ca6d255531bb334a2b3e21f172e37c1741bd5e66bc4b7b61f03"},
+    {file = "onnxruntime-1.22.1-cp312-cp312-macosx_13_0_universal2.whl", hash = "sha256:a938d11c0dc811badf78e435daa3899d9af38abee950d87f3ab7430eb5b3cf5a"},
+    {file = "onnxruntime-1.22.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:984cea2a02fcc5dfea44ade9aca9fe0f7a8a2cd6f77c258fc4388238618f3928"},
+    {file = "onnxruntime-1.22.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2d39a530aff1ec8d02e365f35e503193991417788641b184f5b1e8c9a6d5ce8d"},
+    {file = "onnxruntime-1.22.1-cp312-cp312-win_amd64.whl", hash = "sha256:6a64291d57ea966a245f749eb970f4fa05a64d26672e05a83fdb5db6b7d62f87"},
+    {file = "onnxruntime-1.22.1-cp313-cp313-macosx_13_0_universal2.whl", hash = "sha256:d29c7d87b6cbed8fecfd09dca471832384d12a69e1ab873e5effbb94adc3e966"},
+    {file = "onnxruntime-1.22.1-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:460487d83b7056ba98f1f7bac80287224c31d8149b15712b0d6f5078fcc33d0f"},
+    {file = "onnxruntime-1.22.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b0c37070268ba4e02a1a9d28560cd00cd1e94f0d4f275cbef283854f861a65fa"},
+    {file = "onnxruntime-1.22.1-cp313-cp313-win_amd64.whl", hash = "sha256:70980d729145a36a05f74b573435531f55ef9503bcda81fc6c3d6b9306199982"},
+    {file = "onnxruntime-1.22.1-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:33a7980bbc4b7f446bac26c3785652fe8730ed02617d765399e89ac7d44e0f7d"},
+    {file = "onnxruntime-1.22.1-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6e7e823624b015ea879d976cbef8bfaed2f7e2cc233d7506860a76dd37f8f381"},
+]
+
+[package.dependencies]
+coloredlogs = "*"
+flatbuffers = "*"
+numpy = ">=1.21.6"
+packaging = "*"
+protobuf = "*"
+sympy = "*"
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.20.2"
+description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "python_version == \"3.9\" and (extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\")"
+files = [
+    {file = "onnxruntime_gpu-1.20.2-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dfba508f110ec062dedfd3032e6eee8cde325026e9d7c5792884e8b9d4ebb9c3"},
+    {file = "onnxruntime_gpu-1.20.2-cp310-cp310-win_amd64.whl", hash = "sha256:75a7557292b2741e63fb73236ee84faa08075cead52d9a8d302a67036fc64f16"},
+    {file = "onnxruntime_gpu-1.20.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:85057c7006457bee14fc2a57417b7e4f396f10d9c1b08b11aae08ac2b825eeda"},
+    {file = "onnxruntime_gpu-1.20.2-cp311-cp311-win_amd64.whl", hash = "sha256:d0eafd873e4336949c89e6c7429a68e7e1d0233d9cb363e9780ca76c3c6f865c"},
+    {file = "onnxruntime_gpu-1.20.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:aa66d2e6de13fe6f4d1554b1c219bd2e4778b540ed9d3dc62957c95a8af43d66"},
+    {file = "onnxruntime_gpu-1.20.2-cp312-cp312-win_amd64.whl", hash = "sha256:564a6a1187b208012f57c3bb3723ba65f6bc5cddff6e6b917ac96865768b39f5"},
+    {file = "onnxruntime_gpu-1.20.2-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6af5b30b9b0e729d3ca1dfff493a39771f143cfc22af1d77d487022033cae284"},
+    {file = "onnxruntime_gpu-1.20.2-cp313-cp313-win_amd64.whl", hash = "sha256:6ffe5108d2dbd96a9a40bf76573219e04b67d0330aa93ca5114f1478185ade19"},
+    {file = "onnxruntime_gpu-1.20.2-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:407e5b7a21d656aac6f994d2e329f5577eb3d7f98b63aa1e49e71a702ffa1da1"},
+]
+
+[package.dependencies]
+coloredlogs = "*"
+flatbuffers = "*"
+numpy = ">=1.21.6"
+packaging = "*"
+protobuf = "*"
+sympy = "*"
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.22.0"
+description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "(extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\") and python_version != \"3.9\""
+files = [
+    {file = "onnxruntime_gpu-1.22.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:965da7d33a54917e8e5176f292cc22640819f328370f4fb86087908745b03708"},
+    {file = "onnxruntime_gpu-1.22.0-cp310-cp310-win_amd64.whl", hash = "sha256:6db51c375ffe3887fe5cce61a0ae054e5e9c1eaf0603f8a106589a819976e4b2"},
+    {file = "onnxruntime_gpu-1.22.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d30c1512f22b1f01bacb4f177d49cbefd23e0f4bef56066f1282992d133e6ff8"},
+    {file = "onnxruntime_gpu-1.22.0-cp311-cp311-win_amd64.whl", hash = "sha256:0f1719f7cca76075b398a7d0466ead62d78fd2b8c0ea053dcf65d80c813103e8"},
+    {file = "onnxruntime_gpu-1.22.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:86b064c8f6cbe6da03f51f46351237d985f8fd5eb907d3f9997ea91881131a13"},
+    {file = "onnxruntime_gpu-1.22.0-cp312-cp312-win_amd64.whl", hash = "sha256:89cfd71e1ba17a4668e8770e344f22cde64bfd70b2ad3d03b8a390d4414b5995"},
+    {file = "onnxruntime_gpu-1.22.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c3e635792931c5edf48a6a44b8daf4f74a9458e2d60245d24d91e29b6c1c7aa5"},
+    {file = "onnxruntime_gpu-1.22.0-cp313-cp313-win_amd64.whl", hash = "sha256:082c9744b0470448a7d814babe058d0b5074380f32839aa655e5e5f9975f6d94"},
+    {file = "onnxruntime_gpu-1.22.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d1559033601d71023d72a8e279b2575a104de5f46e136f87534206aa2044eb1c"},
+]
+
+[package.dependencies]
+coloredlogs = "*"
+flatbuffers = "*"
+numpy = ">=1.21.6"
+packaging = "*"
+protobuf = "*"
+sympy = "*"
+
+[package.extras]
+cuda = ["nvidia-cuda-nvrtc-cu12 (>=12.0,<13.0)", "nvidia-cuda-runtime-cu12 (>=12.0,<13.0)", "nvidia-cufft-cu12 (>=11.0,<12.0)", "nvidia-curand-cu12 (>=10.0,<11.0)"]
+cudnn = ["nvidia-cudnn-cu12 (>=9.0,<10.0)"]
+
+[[package]]
+name = "onnxruntime-tools"
+version = "1.7.0"
+description = "Transformers Model Optimization Tool of ONNXRuntime"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "onnxruntime_tools-1.7.0-py3-none-any.whl", hash = "sha256:1dff888b5c482ac5bc627f12e108445fefcb3d600c43f63633975316fe617ad8"},
+    {file = "onnxruntime_tools-1.7.0.tar.gz", hash = "sha256:6dbdcee49424e066bcd10357c37d51bc422ae26494e3c2f0c1970d534f967f6d"},
+]
+
+[package.dependencies]
+coloredlogs = "*"
+numpy = "*"
+onnx = "*"
+packaging = "*"
+psutil = "*"
+py-cpuinfo = "*"
+py3nvml = "*"
+
+[[package]]
+name = "onnxsim"
+version = "0.4.36"
+description = "Simplify your ONNX model"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "onnxsim-0.4.36-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:7498e7b9584c4b354b455564dfba66d460ce2c205b71dae169cfa9b6704e03fd"},
+    {file = "onnxsim-0.4.36-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce87837f8975beebdcc98cc01d6d13e84b10900eb2c14035ce1066c3d670d96d"},
+    {file = "onnxsim-0.4.36-cp310-cp310-win_amd64.whl", hash = "sha256:f92bec8c6c0d4f8463e10021277711d2faac900e4eb890238001b3eadb5c03bc"},
+    {file = "onnxsim-0.4.36-cp311-cp311-macosx_10_15_universal2.whl", hash = "sha256:150b9a3a409af2f3161af3fecda2113e0e6e296fb015b5205a9ddf645765acad"},
+    {file = "onnxsim-0.4.36-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fa7596e6b806ed19077f7652788a50ee576c172b4d16d421f0593aef1a6fa4c4"},
+    {file = "onnxsim-0.4.36-cp311-cp311-win_amd64.whl", hash = "sha256:91fb32def04f2f89d5f76527c852332366957752e5e61ac25be0b2d7bb410f89"},
+    {file = "onnxsim-0.4.36-cp37-cp37m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9c616b1e48e92d916e762bae405563f5b2fd8d0718fbbafef2ceb81570202716"},
+    {file = "onnxsim-0.4.36-cp37-cp37m-win_amd64.whl", hash = "sha256:7c0aa3de159fc9c4560b62ddccc0d1146fef035aeba5eb3797f6550889a2f96a"},
+    {file = "onnxsim-0.4.36-cp38-cp38-macosx_10_15_universal2.whl", hash = "sha256:369815cd292ae1b3cb37d5692428abf69ed3917c7794d895155c4d4d1f8b374e"},
+    {file = "onnxsim-0.4.36-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:19c881a9c9af4e7238c856da8b677e158f9a74f3eeaedbdb447fb109a4d08ce3"},
+    {file = "onnxsim-0.4.36-cp38-cp38-win_amd64.whl", hash = "sha256:f17c2b81ad97e7bb91f6f049282b7d9bc8e4dc93d23d2bdf59e8bf3f5b3e63c7"},
+    {file = "onnxsim-0.4.36-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:6ae38cb9a23b759202d8ecc6c25392a2cecd156499b036fc48720d048833bece"},
+    {file = "onnxsim-0.4.36-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e937abb8e20a6609f27ae19639d21dc5e8621c4a5e44ebbafab9292451f75497"},
+    {file = "onnxsim-0.4.36-cp39-cp39-win_amd64.whl", hash = "sha256:1a23f32bc6ab3829ee69d9b737e4cfeb457d91720c4040788dabbc88e11dfacc"},
+    {file = "onnxsim-0.4.36.tar.gz", hash = "sha256:6e0ee9d6d4a83042bdef7319fbe58352d9fda5f253386be2b267c7c27f0638ee"},
+]
+
+[package.dependencies]
+onnx = "*"
+rich = "*"
 
 [[package]]
 name = "packaging"
@@ -1546,6 +2020,7 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.22.4", markers = "python_version < \"3.11\""},
+    {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
     {version = ">=1.23.2", markers = "python_version == \"3.11\""},
 ]
 python-dateutil = ">=2.8.2"
@@ -1876,6 +2351,35 @@ dev = ["abi3audit", "black (==24.10.0)", "check-manifest", "coverage", "packagin
 test = ["pytest", "pytest-xdist", "setuptools"]
 
 [[package]]
+name = "py-cpuinfo"
+version = "9.0.0"
+description = "Get CPU info with pure Python"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "py-cpuinfo-9.0.0.tar.gz", hash = "sha256:3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690"},
+    {file = "py_cpuinfo-9.0.0-py3-none-any.whl", hash = "sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5"},
+]
+
+[[package]]
+name = "py3nvml"
+version = "0.2.7"
+description = "Python 3 Bindings for the NVIDIA Management Library"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "py3nvml-0.2.7-py3-none-any.whl", hash = "sha256:30101170d1f51419c8d21fd8ca6cdc333a552b4f8a945c2fc7d107d77e4220dd"},
+    {file = "py3nvml-0.2.7.tar.gz", hash = "sha256:09ee1d04598a6e664e24465f804ce3bfe119a6fdb5362df1c168f8aa929fbd73"},
+]
+
+[package.dependencies]
+xmltodict = "*"
+
+[[package]]
 name = "pyarrow"
 version = "19.0.1"
 description = "Python library for Apache Arrow"
@@ -2004,11 +2508,12 @@ version = "2.19.2"
 description = "Pygments is a syntax highlighting package written in Python."
 optional = false
 python-versions = ">=3.8"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"},
     {file = "pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"},
 ]
+markers = {main = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""}
 
 [package.extras]
 windows-terminal = ["colorama (>=0.4.6)"]
@@ -2017,9 +2522,10 @@ windows-terminal = ["colorama (>=0.4.6)"]
 name = "pynvml"
 version = "12.0.0"
 description = "Python utilities for the NVIDIA Management Library"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"cuda\""
 files = [
     {file = "pynvml-12.0.0-py3-none-any.whl", hash = "sha256:fdff84b62a27dbe98e08e1a647eb77342bef1aebe0878bcd15e99a83fcbecb9e"},
     {file = "pynvml-12.0.0.tar.gz", hash = "sha256:299ce2451a6a17e6822d6faee750103e25b415f06f59abb8db65d30f794166f5"},
@@ -2030,6 +2536,22 @@ nvidia-ml-py = ">=12.0.0,<13.0.0a0"
 
 [package.extras]
 test = ["pytest (>=3.6)", "pytest-cov", "pytest-runner"]
+
+[[package]]
+name = "pyreadline3"
+version = "3.5.4"
+description = "A python implementation of GNU readline."
+optional = true
+python-versions = ">=3.8"
+groups = ["main"]
+markers = "sys_platform == \"win32\" and (extra == \"cpu\" or extra == \"cpu-infer\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\")"
+files = [
+    {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
+    {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
+]
+
+[package.extras]
+dev = ["build", "flake8", "mypy", "pytest", "twine"]
 
 [[package]]
 name = "pytest"
@@ -2080,6 +2602,37 @@ groups = ["main", "dev"]
 files = [
     {file = "pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00"},
     {file = "pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3"},
+]
+
+[[package]]
+name = "pywin32"
+version = "311"
+description = "Python for Window Extensions"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\" and sys_platform == \"win32\""
+files = [
+    {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
+    {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
+    {file = "pywin32-311-cp310-cp310-win_arm64.whl", hash = "sha256:0502d1facf1fed4839a9a51ccbcc63d952cf318f78ffc00a7e78528ac27d7a2b"},
+    {file = "pywin32-311-cp311-cp311-win32.whl", hash = "sha256:184eb5e436dea364dcd3d2316d577d625c0351bf237c4e9a5fabbcfa5a58b151"},
+    {file = "pywin32-311-cp311-cp311-win_amd64.whl", hash = "sha256:3ce80b34b22b17ccbd937a6e78e7225d80c52f5ab9940fe0506a1a16f3dab503"},
+    {file = "pywin32-311-cp311-cp311-win_arm64.whl", hash = "sha256:a733f1388e1a842abb67ffa8e7aad0e70ac519e09b0f6a784e65a136ec7cefd2"},
+    {file = "pywin32-311-cp312-cp312-win32.whl", hash = "sha256:750ec6e621af2b948540032557b10a2d43b0cee2ae9758c54154d711cc852d31"},
+    {file = "pywin32-311-cp312-cp312-win_amd64.whl", hash = "sha256:b8c095edad5c211ff31c05223658e71bf7116daa0ecf3ad85f3201ea3190d067"},
+    {file = "pywin32-311-cp312-cp312-win_arm64.whl", hash = "sha256:e286f46a9a39c4a18b319c28f59b61de793654af2f395c102b4f819e584b5852"},
+    {file = "pywin32-311-cp313-cp313-win32.whl", hash = "sha256:f95ba5a847cba10dd8c4d8fefa9f2a6cf283b8b88ed6178fa8a6c1ab16054d0d"},
+    {file = "pywin32-311-cp313-cp313-win_amd64.whl", hash = "sha256:718a38f7e5b058e76aee1c56ddd06908116d35147e133427e59a3983f703a20d"},
+    {file = "pywin32-311-cp313-cp313-win_arm64.whl", hash = "sha256:7b4075d959648406202d92a2310cb990fea19b535c7f4a78d3f5e10b926eeb8a"},
+    {file = "pywin32-311-cp314-cp314-win32.whl", hash = "sha256:b7a2c10b93f8986666d0c803ee19b5990885872a7de910fc460f9b0c2fbf92ee"},
+    {file = "pywin32-311-cp314-cp314-win_amd64.whl", hash = "sha256:3aca44c046bd2ed8c90de9cb8427f581c479e594e99b5c0bb19b29c10fd6cb87"},
+    {file = "pywin32-311-cp314-cp314-win_arm64.whl", hash = "sha256:a508e2d9025764a8270f93111a970e1d0fbfc33f4153b388bb649b7eec4f9b42"},
+    {file = "pywin32-311-cp38-cp38-win32.whl", hash = "sha256:6c6f2969607b5023b0d9ce2541f8d2cbb01c4f46bc87456017cf63b73f1e2d8c"},
+    {file = "pywin32-311-cp38-cp38-win_amd64.whl", hash = "sha256:c8015b09fb9a5e188f83b7b04de91ddca4658cee2ae6f3bc483f0b21a77ef6cd"},
+    {file = "pywin32-311-cp39-cp39-win32.whl", hash = "sha256:aba8f82d551a942cb20d4a83413ccbac30790b50efb89a75e4f586ac0bb8056b"},
+    {file = "pywin32-311-cp39-cp39-win_amd64.whl", hash = "sha256:e0c4cfb0621281fe40387df582097fd796e80430597cb9944f0ae70447bacd91"},
+    {file = "pywin32-311-cp39-cp39-win_arm64.whl", hash = "sha256:62ea666235135fee79bb154e695f3ff67370afefd71bd7fea7512fc70ef31e3d"},
 ]
 
 [[package]]
@@ -2203,6 +2756,26 @@ requests = ">=2.0.0"
 rsa = ["oauthlib[signedtoken] (>=3.0.0)"]
 
 [[package]]
+name = "rich"
+version = "14.1.0"
+description = "Render rich text, tables, progress bars, syntax highlighting, markdown and more to the terminal"
+optional = true
+python-versions = ">=3.8.0"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "rich-14.1.0-py3-none-any.whl", hash = "sha256:536f5f1785986d6dbdea3c75205c473f970777b4a0d6c6dd1b696aa05a3fa04f"},
+    {file = "rich-14.1.0.tar.gz", hash = "sha256:e497a48b844b0320d45007cdebfeaeed8db2a4f4bcf49f15e455cfc4af11eaa8"},
+]
+
+[package.dependencies]
+markdown-it-py = ">=2.2.0"
+pygments = ">=2.13.0,<3.0.0"
+
+[package.extras]
+jupyter = ["ipywidgets (>=7.5.1,<9)"]
+
+[[package]]
 name = "rsa"
 version = "4.9.1"
 description = "Pure-Python RSA implementation"
@@ -2247,14 +2820,14 @@ files = [
 
 [[package]]
 name = "s3transfer"
-version = "0.12.0"
+version = "0.14.0"
 description = "An Amazon S3 Transfer Manager"
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev"]
 files = [
-    {file = "s3transfer-0.12.0-py3-none-any.whl", hash = "sha256:35b314d7d82865756edab59f7baebc6b477189e6ab4c53050e28c1de4d9cce18"},
-    {file = "s3transfer-0.12.0.tar.gz", hash = "sha256:8ac58bc1989a3fdb7c7f3ee0918a66b160d038a147c7b5db1500930a607e9a1c"},
+    {file = "s3transfer-0.14.0-py3-none-any.whl", hash = "sha256:ea3b790c7077558ed1f02a3072fb3cb992bbbd253392f4b6e9e8976941c7d456"},
+    {file = "s3transfer-0.14.0.tar.gz", hash = "sha256:eff12264e7c8b4985074ccce27a3b38a485bb7f7422cc8046fee9be4983e4125"},
 ]
 
 [package.dependencies]
@@ -2303,7 +2876,7 @@ description = "Computer algebra system (CAS) in Python"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\" or extra == \"cpu-infer\" or extra == \"onnx-gpu-infer\" or extra == \"tensorrt-infer\""
 files = [
     {file = "sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"},
     {file = "sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517"},
@@ -2352,6 +2925,186 @@ files = [
     {file = "tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60"},
     {file = "tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530"},
 ]
+
+[[package]]
+name = "tensorrt-cu12"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_cu12-10.13.2.6.tar.gz", hash = "sha256:8b41620adc160806edc8930add1d620fb2c64a81aec458ddfc5f9eca037d1250"},
+]
+
+[package.dependencies]
+tensorrt_cu12_bindings = "10.13.2.6"
+tensorrt_cu12_libs = "10.13.2.6"
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-cu12-bindings"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:be6394d3a0080df372782a98441841a0df4646e794976eb1025d1125efc6a59d"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:9dbdc10ce42c2224648918955e4204b29fa3f0771bf8da4eaf5ea17c5baa9015"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp311-none-manylinux_2_28_x86_64.whl", hash = "sha256:6a8a76ed6027cefce47de9e5cfc244c73d900dc2536261a39ba10543d6b4cee2"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp311-none-win_amd64.whl", hash = "sha256:edd84950d391fdf85fdd9c91db33179ee0e7c9fa5fb5de49ab4ce539963b944d"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp312-none-manylinux_2_28_x86_64.whl", hash = "sha256:617bc7352f0690d62199fb487ab59384fcc39bcdcf17c566df4d31a26bebb112"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp312-none-win_amd64.whl", hash = "sha256:d54ea9df39972b8c1360c209e536c4624517a2ac4320fbc1cbaef587a71bf8cc"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp313-none-manylinux_2_28_x86_64.whl", hash = "sha256:ade7a2a5441b2746e51b92e3e77a18b0542aaebbde0d9a50f22be3a83a1cfeda"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp313-none-win_amd64.whl", hash = "sha256:ab4bdb8a3f7956b1c03e3b1f922393cd1c258d5f145d384eb9dc4062876ad6a7"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp38-none-manylinux_2_28_x86_64.whl", hash = "sha256:85feeecda398072684f35dff9276fc289351ba3902ed327f2baa32a03f12147f"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp38-none-win_amd64.whl", hash = "sha256:3c8a1b4c0dceea6e898d9b1226b5e48f65f6bb2c850a63454ce59f84363db2d6"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp39-none-manylinux_2_28_x86_64.whl", hash = "sha256:73b548f35f3524df189a408a5d052c3f095164a406cb22d2536a5e1f50524d1a"},
+    {file = "tensorrt_cu12_bindings-10.13.2.6-cp39-none-win_amd64.whl", hash = "sha256:beb4fb71cb8e4625401877c157fb4fd4a58fc271bd486c0a842660df16a8f6f9"},
+]
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-cu12-libs"
+version = "10.13.2.6"
+description = "TensorRT Libraries"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:0fee67ad416227f60917989815aac34bfe7c76059f66a1e0700d64b388f520d7"},
+]
+
+[package.dependencies]
+nvidia-cuda-runtime-cu12 = "*"
+
+[[package]]
+name = "tensorrt-dispatch-cu12"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_dispatch_cu12-10.13.2.6.tar.gz", hash = "sha256:652f28fb7e4b879f4ff021f6266f351f69a16edb542574b431a4d5ce915ac2ac"},
+]
+
+[package.dependencies]
+tensorrt_dispatch_cu12_bindings = "10.13.2.6"
+tensorrt_dispatch_cu12_libs = "10.13.2.6"
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-dispatch-cu12-bindings"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:6390177789e85b81530c1e750dd4c0de456a0c4dc0315b7d6a72e6393230740f"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:ebb1c31b5fe4bccc52d9bff01f9021f4fe101537b7d30fbf8f7144e1a91a963f"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp311-none-manylinux_2_28_x86_64.whl", hash = "sha256:c4d9245c7a99c2b0cb2eb2db20c62a787f7968aae69243a532a510fd1a00426b"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp311-none-win_amd64.whl", hash = "sha256:ea7c1ee274d2c736c3165b5c05ddf42589182202b8291139455ecd60af8a200f"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp312-none-manylinux_2_28_x86_64.whl", hash = "sha256:4221112913f15e8f340947b823247881b0356ca860b714e9e95e3de3007614f2"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp312-none-win_amd64.whl", hash = "sha256:ad1af6368fa08c7d4024308fa9d66093b97931ac28614307733b65bc07482657"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp313-none-manylinux_2_28_x86_64.whl", hash = "sha256:948811f05325167a87deaf1f729f1fc8a6077441e11d4b7948a9ab751cec0238"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp313-none-win_amd64.whl", hash = "sha256:9fb122f027303d6d1a47dec30bf9fca89d6d19440b22d3f572d4f972a364ab3e"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp38-none-manylinux_2_28_x86_64.whl", hash = "sha256:3c1ea3773b2e6ea9076e9208679c376431590513baebe4c3f554ac7ee514c45a"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp38-none-win_amd64.whl", hash = "sha256:1c6fdd611181422ce650e8f65dab7adcbb1d9912ea6f75c0673f7bdcf1bd3dd3"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp39-none-manylinux_2_28_x86_64.whl", hash = "sha256:7022926b41e83d9641dba677925a26ef06db9f16141cb68f1231fc9436a0a19d"},
+    {file = "tensorrt_dispatch_cu12_bindings-10.13.2.6-cp39-none-win_amd64.whl", hash = "sha256:93de3069a8f023eab4e5d789bed92579518a3bee575c38f8863a156d0a56f19b"},
+]
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-dispatch-cu12-libs"
+version = "10.13.2.6"
+description = "TensorRT Libraries"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_dispatch_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:b3bdc31308c526f0768d1483fee6ab3f9e018e064b0121f11e35fdda53e1828e"},
+]
+
+[package.dependencies]
+nvidia-cuda-runtime-cu12 = "*"
+
+[[package]]
+name = "tensorrt-lean-cu12"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_lean_cu12-10.13.2.6.tar.gz", hash = "sha256:795d021f6fa62e38f8f6516624f7a05df3b637691dce4b4aa853062752e2c79d"},
+]
+
+[package.dependencies]
+tensorrt_lean_cu12_bindings = "10.13.2.6"
+tensorrt_lean_cu12_libs = "10.13.2.6"
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-lean-cu12-bindings"
+version = "10.13.2.6"
+description = "A high performance deep learning inference library"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp310-none-manylinux_2_28_x86_64.whl", hash = "sha256:b43d0546b9739e200df3fd768b231dc6fcd514235272a385d2806e8705505e79"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp310-none-win_amd64.whl", hash = "sha256:692553842c3792bb0023977d71aafbb49aa50a5154f4cc942460383cdd04620e"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp311-none-manylinux_2_28_x86_64.whl", hash = "sha256:0f25b0f931414cf83a219d32973f105bb88bdfb9faa14e611c9ec97b21dd6c74"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp311-none-win_amd64.whl", hash = "sha256:004845cda3e38a4ec150ceb3e6ba28a0bb93bb468a333845b15adaf9fe744a76"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp312-none-manylinux_2_28_x86_64.whl", hash = "sha256:b80b0cb387f3e51f139ae9bd78eacc96347e66417266e631d2e26b304f8fb02a"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp312-none-win_amd64.whl", hash = "sha256:eb6b064e3fc359c65b2328373c2d98c21a76b0830416bedb1f0b0bde0aa9d212"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp313-none-manylinux_2_28_x86_64.whl", hash = "sha256:e6e077f226d623029422db20956a7f5319bb1075874b8f9ed299d4fe5d443d49"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp313-none-win_amd64.whl", hash = "sha256:0c0668c066066a4e6a9494b07e4072c2df4109c709e1372eb9b0c3a493a2b799"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp38-none-manylinux_2_28_x86_64.whl", hash = "sha256:36135d3a2ba23950670a7a51f48ec2b01368cc5b5bf257ae37e1dfc96ea134d3"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp38-none-win_amd64.whl", hash = "sha256:48eadd17c5f0e2a1015148236c624689926dc76ce19fa89f892b1d9394494662"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp39-none-manylinux_2_28_x86_64.whl", hash = "sha256:5c4fe99ed7af468b683ea8da143431166cba4d001a461fdebf4e97a79edd3603"},
+    {file = "tensorrt_lean_cu12_bindings-10.13.2.6-cp39-none-win_amd64.whl", hash = "sha256:d02031d2735c27ce30a930325c217eef9d730c6d7ae078fee1ee56afb4fd0797"},
+]
+
+[package.extras]
+numpy = ["numpy"]
+
+[[package]]
+name = "tensorrt-lean-cu12-libs"
+version = "10.13.2.6"
+description = "TensorRT Libraries"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"tensorrt-infer\""
+files = [
+    {file = "tensorrt_lean_cu12_libs-10.13.2.6.tar.gz", hash = "sha256:80a9844d0f3c439ff9086759d4ec627fec80a6a5c3a3a4e73537170051be1edd"},
+]
+
+[package.dependencies]
+nvidia-cuda-runtime-cu12 = "*"
 
 [[package]]
 name = "termcolor"
@@ -2477,6 +3230,7 @@ nvidia-cusparselt-cu12 = {version = "0.6.3", markers = "platform_system == \"Lin
 nvidia-nccl-cu12 = {version = "2.26.2", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 nvidia-nvjitlink-cu12 = {version = "12.6.85", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 nvidia-nvtx-cu12 = {version = "12.6.77", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+setuptools = {version = "*", markers = "python_version >= \"3.12\""}
 sympy = ">=1.13.3"
 triton = {version = "3.3.0", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 typing-extensions = ">=4.10.0"
@@ -2768,6 +3522,19 @@ MarkupSafe = ">=2.1.1"
 watchdog = ["watchdog (>=2.3)"]
 
 [[package]]
+name = "xmltodict"
+version = "0.14.2"
+description = "Makes working with XML feel like you are working with JSON"
+optional = true
+python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"mpu\" or extra == \"tpu\""
+files = [
+    {file = "xmltodict-0.14.2-py2.py3-none-any.whl", hash = "sha256:20cc7d723ed729276e808f26fb6b3599f786cbc37e06c65e192ba77c40f20aac"},
+    {file = "xmltodict-0.14.2.tar.gz", hash = "sha256:201e7c28bb210e374999d1dde6382923ab0ed1a8a5faeece48ab525b7810a553"},
+]
+
+[[package]]
 name = "yamllint"
 version = "1.37.1"
 description = "A linter for YAML files."
@@ -2825,13 +3592,16 @@ type = ["pytest-mypy"]
 
 [extras]
 aws = ["boto3"]
-cpu = ["torch", "torch-tb-profiler", "torchinfo"]
-cuda = ["torch", "torch-tb-profiler", "torchinfo"]
+cpu = ["onnxruntime", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torchinfo"]
+cpu-infer = ["onnxruntime"]
+cuda = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "pynvml", "torch", "torch-tb-profiler", "torchinfo"]
 gcp = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
-mpu = ["torch", "torch-tb-profiler", "torchinfo"]
-tpu = ["torch", "torch-tb-profiler", "torch-xla", "torchinfo"]
+mpu = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torchinfo"]
+onnx-gpu-infer = ["onnxruntime-gpu"]
+tensorrt-infer = ["cuda-core", "onnxruntime-gpu", "tensorrt-cu12", "tensorrt-dispatch-cu12", "tensorrt-lean-cu12"]
+tpu = ["onnxruntime-gpu", "onnxruntime-tools", "onnxsim", "torch", "torch-tb-profiler", "torch-xla", "torchinfo"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.9,<3.12"
-content-hash = "31e60e0842a6d97cb8a05d62ae577511251b29e2f30bb7a49f19ed6b0a2f9a8c"
+python-versions = ">=3.9,<3.13"
+content-hash = "c7c114992adc50c76048af988f5c1da9672120e5ab9301fe0844055713f8791f"

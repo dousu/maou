@@ -96,10 +96,14 @@ class TestPreprocessingIO:
         """Test saving and loading preprocessing array."""
         # Create test data
         original_array = create_empty_preprocessing_array(3)
-        original_array["eval"] = [100, -150, 0]
-        original_array["moveLabel"] = [50, 100, 200]
+        original_array["moveLabel"] = np.array(
+            [
+                np.bincount(arr, minlength=MOVE_LABELS_NUM)
+                for arr in [[50], [100], [200]]
+            ]
+        )
         original_array["resultValue"] = [1.0, 0.0, 0.5]
-        original_array["id"] = ["pos1", "pos2", "pos3"]
+        original_array["id"] = [324552, 38948128, 21312344113]
 
         # Fill features and legal move masks
         original_array["features"] = np.random.randint(
@@ -131,10 +135,14 @@ class TestPreprocessingIO:
         """Test saving and loading preprocessing array."""
         # Create test data
         original_array = create_empty_preprocessing_array(3)
-        original_array["eval"] = [100, -150, 0]
-        original_array["moveLabel"] = [50, 100, 200]
+        original_array["moveLabel"] = np.array(
+            [
+                np.bincount(arr, minlength=MOVE_LABELS_NUM)
+                for arr in [[50], [100], [200]]
+            ]
+        )
         original_array["resultValue"] = [1.0, 0.0, 0.5]
-        original_array["id"] = ["pos1", "pos2", "pos3"]
+        original_array["id"] = [324552, 38948128, 21312344113]
 
         # Fill features and legal move masks
         original_array["features"] = np.random.randint(
@@ -166,6 +174,12 @@ class TestErrorHandling:
 
     def test_save_to_readonly_directory(self) -> None:
         """Test saving to read-only directory."""
+        import os
+
+        # Skip test if running as root (root bypasses permission checks)
+        if os.geteuid() == 0:
+            pytest.skip("Test skipped when running as root")
+
         array = create_empty_hcpe_array(1)
 
         with tempfile.TemporaryDirectory() as temp_dir:

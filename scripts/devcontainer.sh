@@ -3,9 +3,10 @@
 set -eux
 
 # 必要ならインストールするが少しでも軽くしたいので基本しない
-# sudo apt update
-# sudo apt install -y build-essential
-# sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+# build-essentialとか
+sudo apt update
+sudo apt install -y cmake
+sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 
 # gcloud CLIのインストール
 # https://cloud.google.com/sdk/docs/install?hl=ja#linux

@@ -70,6 +70,42 @@ def get_hcpe_dtype() -> np.dtype:
     )
 
 
+def get_intermediate_dtype() -> np.dtype:
+    """Get numpy dtype for intermediate data to process.
+
+    Returns:
+        numpy.dtype: Structured dtype for preprocessed training data
+    """
+    return np.dtype(
+        [
+            ("id", np.uint64),  # Unique identifier
+            (
+                "features",
+                np.uint8,
+                (FEATURES_NUM, 9, 9),
+            ),  # Board feature representation
+            (
+                "count",
+                np.int32,
+            ),  # count
+            (
+                "moveLabelCount",
+                np.int32,
+                (MOVE_LABELS_NUM,),
+            ),  # Move label for training
+            (
+                "winCount",
+                np.int32,
+            ),  # Win count
+            (
+                "legalMoveMask",
+                np.uint8,
+                (MOVE_LABELS_NUM,),
+            ),  # Legal move mask
+        ]
+    )
+
+
 def get_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for preprocessed training data.
 
@@ -81,27 +117,26 @@ def get_preprocessing_dtype() -> np.dtype:
     """
     return np.dtype(
         [
-            ("id", (np.str_, 128)),  # Unique identifier
-            ("eval", np.int16),  # Position evaluation
+            ("id", np.uint64),  # Unique identifier
             (
                 "features",
                 np.uint8,
                 (FEATURES_NUM, 9, 9),
             ),  # Board feature representation
-            ("moveLabel", np.uint16),  # Move label for training
+            (
+                "moveLabel",
+                np.float16,
+                (MOVE_LABELS_NUM,),
+            ),  # Move label for training
             (
                 "resultValue",
                 np.float16,
-            ),  # Game result value (-1 to 1)
+            ),  # Game result value (0 to 1)
             (
                 "legalMoveMask",
                 np.uint8,
                 (MOVE_LABELS_NUM,),
             ),  # Legal move mask
-            (
-                "partitioningKey",
-                np.dtype("datetime64[D]"),
-            ),  # Date for partitioning
         ]
     )
 
@@ -129,14 +164,17 @@ def get_packed_preprocessing_dtype() -> np.dtype:
 
     return np.dtype(
         [
-            ("id", (np.str_, 128)),  # Unique identifier
-            ("eval", np.int16),  # Position evaluation
+            ("id", np.uint64),  # Unique identifier
             (
                 "features_packed",
                 np.uint8,
                 (features_packed_size,),
             ),  # Bit-packed board features
-            ("moveLabel", np.uint16),  # Move label for training
+            (
+                "moveLabel",
+                np.float16,
+                (MOVE_LABELS_NUM,),
+            ),  # Move label for training
             (
                 "resultValue",
                 np.float16,
@@ -146,10 +184,6 @@ def get_packed_preprocessing_dtype() -> np.dtype:
                 np.uint8,
                 (legal_moves_packed_size,),
             ),  # Bit-packed legal move mask
-            (
-                "partitioningKey",
-                np.dtype("datetime64[D]"),
-            ),  # Date for partitioning
         ]
     )
 
@@ -222,6 +256,10 @@ def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
         return "DATE"
     elif numpy_dtype.name == "datetime64[ms]":
         return "TIMESTAMP"
+    elif numpy_dtype.name == "uint64":
+        # BigQuery doesn't have unsigned 64-bit integers，
+        # so we use STRING to avoid overflow for hash values
+        return "STRING"
 
     # Handle by kind
     kind = numpy_dtype.kind
@@ -328,21 +366,13 @@ def validate_preprocessing_array(array: np.ndarray) -> bool:
 
     # Validate field constraints
     if len(array) > 0:
-        # Check eval range
-        if np.any(
-            (array["eval"] < -32767) | (array["eval"] > 32767)
-        ):
-            raise SchemaValidationError(
-                "eval values out of range [-32767, 32767]"
-            )
-
         # Check moveLabel range
         if np.any(
             (array["moveLabel"] < 0)
-            | (array["moveLabel"] >= MOVE_LABELS_NUM)
+            | (array["moveLabel"] > 1.0)
         ):
             raise SchemaValidationError(
-                f"moveLabel values out of range [0, {MOVE_LABELS_NUM})"
+                "moveLabel values out of range [0, 1]"
             )
 
         # Check resultValue range
@@ -394,21 +424,13 @@ def validate_compressed_preprocessing_array(
 
     # Validate field constraints
     if len(array) > 0:
-        # Check eval range
-        if np.any(
-            (array["eval"] < -32767) | (array["eval"] > 32767)
-        ):
-            raise SchemaValidationError(
-                "eval values out of range [-32767, 32767]"
-            )
-
         # Check moveLabel range
         if np.any(
             (array["moveLabel"] < 0)
-            | (array["moveLabel"] >= MOVE_LABELS_NUM)
+            | (array["moveLabel"] > 1.0)
         ):
             raise SchemaValidationError(
-                f"moveLabel values out of range [0, {MOVE_LABELS_NUM})"
+                "moveLabel values out of range [0, 1]"
             )
 
         # Check resultValue range
@@ -479,12 +501,13 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
             "description": "Preprocessed training data for neural networks",
             "fields": {
                 "id": "Unique identifier",
-                "eval": "Position evaluation",
                 "features": f"Board feature representation ({FEATURES_NUM}, 9, 9)",
-                "moveLabel": f"Move label for training (0 to {MOVE_LABELS_NUM - 1})",
+                "moveLabel": (
+                    "Move label for training "
+                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
+                ),
                 "resultValue": "Game result value (0.0 to 1.0)",
                 "legalMoveMask": f"Legal move mask ({MOVE_LABELS_NUM} elements)",
-                "partitioningKey": "Date for partitioning",
             },
         },
         "packed_preprocessing": {
@@ -494,17 +517,18 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
             ),
             "fields": {
                 "id": "Unique identifier",
-                "eval": "Position evaluation",
                 "features_packed": (
                     f"Bit-packed board features "
                     f"({(FEATURES_NUM * 9 * 9 + 7) // 8} bytes)"
                 ),
-                "moveLabel": f"Move label for training (0 to {MOVE_LABELS_NUM - 1})",
+                "moveLabel": (
+                    "Move label for training "
+                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
+                ),
                 "resultValue": "Game result value (0.0 to 1.0)",
                 "legalMoveMask_packed": (
                     f"Bit-packed legal move mask ({(MOVE_LABELS_NUM + 7) // 8} bytes)"
                 ),
-                "partitioningKey": "Date for partitioning",
             },
         },
     }
@@ -520,6 +544,18 @@ def create_empty_hcpe_array(size: int) -> np.ndarray:
         numpy.ndarray: Empty array with HCPE schema
     """
     return np.zeros(size, dtype=get_hcpe_dtype())
+
+
+def create_empty_intermediate_array(size: int) -> np.ndarray:
+    """Create empty intermediate array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with intermediate schema
+    """
+    return np.zeros(size, dtype=get_intermediate_dtype())
 
 
 def create_empty_preprocessing_array(size: int) -> np.ndarray:
@@ -570,13 +606,9 @@ def convert_array_from_packed_format(
 
     # Copy non-packed fields directly
     standard_array["id"] = compressed_array["id"]
-    standard_array["eval"] = compressed_array["eval"]
     standard_array["moveLabel"] = compressed_array["moveLabel"]
     standard_array["resultValue"] = compressed_array[
         "resultValue"
-    ]
-    standard_array["partitioningKey"] = compressed_array[
-        "partitioningKey"
     ]
 
     # Unpack binary fields for each record
@@ -615,13 +647,9 @@ def convert_record_from_packed_format(
 
     # Copy non-packed fields directly
     standard_array["id"] = compressed_record["id"]
-    standard_array["eval"] = compressed_record["eval"]
     standard_array["moveLabel"] = compressed_record["moveLabel"]
     standard_array["resultValue"] = compressed_record[
         "resultValue"
-    ]
-    standard_array["partitioningKey"] = compressed_record[
-        "partitioningKey"
     ]
 
     # Unpack binary fields for each record

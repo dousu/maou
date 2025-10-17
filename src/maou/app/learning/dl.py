@@ -15,27 +15,12 @@ from maou.app.learning.callbacks import (
     ValidationCallback,
 )
 from maou.app.learning.dataset import DataSource
+from maou.app.learning.model_io import ModelIO
+from maou.app.learning.network import Network
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.board.shogi import FEATURES_NUM
-
-
-class CloudStorage(metaclass=abc.ABCMeta):
-    @abc.abstractmethod
-    def upload_from_local(
-        self, *, local_path: Path, cloud_path: str
-    ) -> None:
-        pass
-
-    @abc.abstractmethod
-    def upload_folder_from_local(
-        self,
-        *,
-        local_folder: Path,
-        cloud_folder: str,
-        extensions: Optional[list[str]] = None,
-    ) -> None:
-        pass
+from maou.domain.cloud_storage import CloudStorage
 
 
 class LearningDataSource(DataSource):
@@ -58,7 +43,7 @@ class Learning:
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
     resume_from: Optional[Path]
-    model: torch.nn.Module
+    model: Network
     scaler: Optional[GradScaler]
 
     @dataclass(kw_only=True, frozen=True)
@@ -310,24 +295,14 @@ class Learning:
             # Track best performance, and save the model's state
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
-                model_path = (
-                    self.model_dir
-                    / "model_{}_{}.pt".format(
-                        timestamp, epoch_number + 1
-                    )
+                ModelIO.save_model(
+                    trained_model=self.model,
+                    dir=self.model_dir,
+                    id=timestamp,
+                    epoch=epoch_number + 1,
+                    device=self.device,
+                    cloud_storage=self.__cloud_storage,
                 )
-                self.logger.info(
-                    "Saving model to {}".format(model_path)
-                )
-                torch.save(self.model.state_dict(), model_path)
-                if self.__cloud_storage is not None:
-                    self.logger.info(
-                        "Uploading model to cloud storage"
-                    )
-                    self.__cloud_storage.upload_from_local(
-                        local_path=model_path,
-                        cloud_path=str(model_path),
-                    )
 
             # SummaryWriterのイベントをGCSに保存する
             if self.__cloud_storage is not None:

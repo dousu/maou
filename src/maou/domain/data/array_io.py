@@ -546,12 +546,8 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
 
     # Copy non-packed fields directly
     compressed_array["id"] = array["id"]
-    compressed_array["eval"] = array["eval"]
     compressed_array["moveLabel"] = array["moveLabel"]
     compressed_array["resultValue"] = array["resultValue"]
-    compressed_array["partitioningKey"] = array[
-        "partitioningKey"
-    ]
 
     # Pack binary fields for each record
     for i in range(len(array)):

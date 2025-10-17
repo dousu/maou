@@ -192,12 +192,10 @@ class TestIntegrationPreProcess:
         ).transform(option)
 
         # ローカル
-        output_paths = [
-            output_dir / input_path.with_suffix(".npy").name
-            for input_path in input_paths
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )
@@ -268,12 +266,10 @@ class TestIntegrationPreProcess:
         ).transform(option)
 
         # ローカル
-        output_paths = [
-            output_dir / input_path.with_suffix(".npy").name
-            for input_path in input_paths
-        ]
+        # PreProcess.transform() outputs a single aggregated file
+        output_path = output_dir / "transformed.npy"
         local_datasource = FileDataSource(
-            file_paths=output_paths,
+            file_paths=[output_path],
             array_type="preprocessing",
             bit_pack=False,
         )

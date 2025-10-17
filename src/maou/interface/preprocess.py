@@ -52,6 +52,8 @@ def transform(
     output_dir: Optional[Path],
     feature_store: Optional[FeatureStore] = None,
     max_workers: Optional[int] = None,
+    intermediate_cache_dir: Optional[Path] = None,
+    intermediate_batch_size: int = 1000,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -60,6 +62,8 @@ def transform(
         output_dir: Optional directory for output files
         feature_store: Optional storage backend for features
         max_workers: Number of parallel workers for CPU processing
+        intermediate_cache_dir: Directory for intermediate data cache
+        intermediate_batch_size: Batch size for disk writes
 
     Returns:
         JSON string with processing results
@@ -82,6 +86,8 @@ def transform(
     pre_process_result = PreProcess(
         datasource=datasource,
         feature_store=feature_store,
+        intermediate_cache_dir=intermediate_cache_dir,
+        intermediate_batch_size=intermediate_batch_size,
     ).transform(option)
 
     return json.dumps(pre_process_result)

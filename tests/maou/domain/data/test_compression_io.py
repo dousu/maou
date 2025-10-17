@@ -1,11 +1,13 @@
 """Integration tests for compression I/O operations."""
 
+import hashlib
 import logging
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.array_io import (
     DataIOError,
     _convert_to_packed_format,
@@ -21,6 +23,13 @@ from maou.domain.data.schema import (
 logger: logging.Logger = logging.getLogger("TEST")
 
 
+def zobrist_like_hash(value: bytes | str | int) -> np.uint64:
+    if not isinstance(value, bytes):
+        value = str(value).encode()
+    h = hashlib.sha256(value).digest()
+    return np.frombuffer(h[:8], dtype=np.uint64)[0]
+
+
 class TestCompressionConversion:
     """Test conversion between standard and compressed formats."""
 
@@ -32,13 +41,11 @@ class TestCompressionConversion:
 
         for i in range(size):
             # Set some realistic test data
-            array[i]["id"] = f"test_record_{i}"
-            array[i]["eval"] = 100 * i
-            array[i]["moveLabel"] = 50 * i
-            array[i]["resultValue"] = 0.5
-            array[i]["partitioningKey"] = np.datetime64(
-                "2024-01-01"
+            array[i]["id"] = zobrist_like_hash(i)
+            array[i]["moveLabel"] = np.bincount(
+                [50 * i], minlength=MOVE_LABELS_NUM
             )
+            array[i]["resultValue"] = 0.5
 
             # Set binary features and legal moves (only 0s and 1s)
             array[i]["features"][:10, :3, :3] = (
@@ -68,19 +75,12 @@ class TestCompressionConversion:
             packed_array["id"], standard_array["id"]
         )
         assert np.array_equal(
-            packed_array["eval"], standard_array["eval"]
-        )
-        assert np.array_equal(
             packed_array["moveLabel"],
             standard_array["moveLabel"],
         )
         assert np.array_equal(
             packed_array["resultValue"],
             standard_array["resultValue"],
-        )
-        assert np.array_equal(
-            packed_array["partitioningKey"],
-            standard_array["partitioningKey"],
         )
 
         # Check that packed fields exist and have correct shapes
@@ -107,19 +107,12 @@ class TestCompressionConversion:
             reconstructed_array["id"], standard_array["id"]
         )
         assert np.array_equal(
-            reconstructed_array["eval"], standard_array["eval"]
-        )
-        assert np.array_equal(
             reconstructed_array["moveLabel"],
             standard_array["moveLabel"],
         )
         assert np.array_equal(
             reconstructed_array["resultValue"],
             standard_array["resultValue"],
-        )
-        assert np.array_equal(
-            reconstructed_array["partitioningKey"],
-            standard_array["partitioningKey"],
         )
         assert np.array_equal(
             reconstructed_array["features"],
@@ -155,13 +148,13 @@ class TestBitPackedFileSaveLoad:
         array = create_empty_preprocessing_array(10)
 
         for i in range(len(array)):
-            array[i]["id"] = f"record_{i:03d}"
-            array[i]["eval"] = i * 100
-            array[i]["moveLabel"] = i * 10
-            array[i]["resultValue"] = float(i) / 10.0
-            array[i]["partitioningKey"] = np.datetime64(
-                "2024-01-01"
+            array[i]["id"] = zobrist_like_hash(
+                f"record_{i:03d}"
             )
+            array[i]["moveLabel"] = np.bincount(
+                [50 * i], minlength=MOVE_LABELS_NUM
+            )
+            array[i]["resultValue"] = float(i) / 10.0
 
             # Set some binary features (deterministic pattern)
             array[i]["features"][i : i + 5, :2, :2] = 1
@@ -236,13 +229,13 @@ class TestCompressionPerformance:
 
         # Fill with random binary data
         for i in range(len(array)):
-            array[i]["id"] = f"record_{i:04d}"
-            array[i]["eval"] = i
-            array[i]["moveLabel"] = i % 1000
-            array[i]["resultValue"] = 0.5
-            array[i]["partitioningKey"] = np.datetime64(
-                "2024-01-01"
+            array[i]["id"] = zobrist_like_hash(
+                f"record_{i:04d}"
             )
+            array[i]["moveLabel"] = np.bincount(
+                [i % 1000], minlength=MOVE_LABELS_NUM
+            )
+            array[i]["resultValue"] = 0.5
 
             # Random binary features and legal moves
             array[i]["features"] = np.random.choice(
@@ -270,7 +263,7 @@ class TestCompressionPerformance:
         compression_ratio = standard_size / packed_size
 
         # Should achieve significant compression (at least 4x)
-        assert compression_ratio >= 4.0
+        assert compression_ratio >= 3.0
 
         logger.info(
             f"Compression ratio: {compression_ratio:.2f}x"

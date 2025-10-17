@@ -6,6 +6,9 @@ fields which contain only 0 or 1 values.
 
 The compression uses numpy's packbits/unpackbits functions to achieve 8x
 storage reduction while maintaining high performance.
+
+Also provides sparse array compression for move_label_count arrays which
+are mostly zeros, achieving significant storage reduction.
 """
 
 import logging
@@ -343,3 +346,44 @@ def get_compression_stats() -> dict:
             / (FEATURES_PACKED_SIZE + LEGAL_MOVES_PACKED_SIZE),
         },
     }
+
+
+def compress_sparse_int_array(
+    arr: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compress sparse integer array by storing only non-zero elements.
+
+    Args:
+        arr: Integer array (typically int32)
+
+    Returns:
+        Tuple of (indices, values) where indices are positions of non-zero elements
+    """
+    # Ensure arr is a numpy array
+    arr = np.asarray(arr)
+    if arr.ndim != 1:
+        raise ValueError(
+            f"Expected 1D array, got {arr.ndim}D array"
+        )
+
+    nonzero_indices = np.nonzero(arr)[0].astype(np.uint16)
+    nonzero_values = arr[nonzero_indices].astype(np.int32)
+    return nonzero_indices, nonzero_values
+
+
+def decompress_sparse_int_array(
+    indices: np.ndarray, values: np.ndarray, size: int
+) -> np.ndarray:
+    """Decompress sparse integer array back to full array.
+
+    Args:
+        indices: Positions of non-zero elements (uint16)
+        values: Values at those positions (int32)
+        size: Size of the full array
+
+    Returns:
+        Full integer array with zeros and values restored
+    """
+    result = np.zeros(size, dtype=np.int32)
+    result[indices] = values
+    return result
