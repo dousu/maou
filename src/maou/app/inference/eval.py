@@ -10,8 +10,8 @@ logger: logging.Logger = logging.getLogger(__name__)
 class Evaluation:
     @staticmethod
     def get_winrate_from_eval(turn: Turn, eval: float) -> float:
-        """evalは0-1の勝率なのでそのまま返す"""
-        return eval
+        """evalをsigmoidで勝率に変換する"""
+        return 1 / (1 + np.exp(-eval))
 
     @staticmethod
     def get_eval_from_winrate(r: float, a: int = 600) -> float:
