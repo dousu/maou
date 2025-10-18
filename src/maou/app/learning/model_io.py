@@ -2,10 +2,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import onnx
-import onnxsim
 import torch
-from onnxruntime.transformers import float16
 
 from maou.app.learning.network import Network
 from maou.app.learning.setup import ModelFactory
@@ -28,6 +25,17 @@ class ModelIO:
         device: torch.device,
         cloud_storage: Optional[CloudStorage] = None,
     ) -> None:
+        try:
+            import onnx
+            import onnxsim
+            from onnxruntime.transformers import float16
+        except ImportError as exc:
+            raise ModuleNotFoundError(
+                "ONNX export dependencies are missing. "
+                "Install with `poetry install -E cpu` or "
+                "`poetry install -E cpu-infer` to enable model export."
+            ) from exc
+
         model = ModelFactory.create_shogi_model(device)
 
         # torch.compile()で生成されたモデルのstate_dictは_orig_mod.プレフィックス付き
