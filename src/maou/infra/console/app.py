@@ -10,6 +10,7 @@ from maou.infra.console.evaluate_board import evaluate_board
 from maou.infra.console.hcpe_convert import hcpe_convert
 from maou.infra.console.learn_model import learn_model
 from maou.infra.console.pre_process import pre_process
+from maou.infra.console.pretrain_cli import pretrain
 from maou.infra.console.utility import utility
 
 
@@ -34,3 +35,4 @@ main.add_command(pre_process)
 main.add_command(learn_model)
 main.add_command(utility)
 main.add_command(evaluate_board)
+main.add_command(pretrain)

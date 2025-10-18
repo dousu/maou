@@ -135,6 +135,7 @@ module = [
 
 [tool.isort]
 profile = "black"
+line_length = 64
 
 [tool.ruff]
 line-length = 64

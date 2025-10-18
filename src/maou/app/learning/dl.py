@@ -7,7 +7,9 @@ from typing import Dict, Optional
 
 import torch
 from torch.amp.grad_scaler import GradScaler
-from torch.utils.tensorboard import SummaryWriter  # type: ignore
+from torch.utils.tensorboard import (
+    SummaryWriter,  # type: ignore
+)
 from torchinfo import summary
 
 from maou.app.learning.callbacks import (

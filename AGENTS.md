@@ -198,6 +198,13 @@ export MAOU_LOG_LEVEL=WARNING  # Minimal
 poetry run maou --debug-mode hcpe-convert ...
 ```
 
+## Masked Autoencoder Pretraining (Stub)
+
+- `poetry run maou pretrain --input-dir PATH [--config-path FILE]`
+- Currently routed through infra → interface → app layers with a placeholder implementation.
+- Returns a descriptive message and logs the provided options; no training logic yet.
+- Keep the docstring and type hints intact when implementing the real workflow later.
+
 ## Error Resolution
 
 ### CI Failure Resolution Order

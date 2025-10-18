@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol
 
 import torch
-from torch.utils.tensorboard import SummaryWriter  # type: ignore
+from torch.utils.tensorboard import (
+    SummaryWriter,  # type: ignore
+)
 
 from maou.app.learning.resource_monitor import (
     GPUResourceMonitor,
