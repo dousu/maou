@@ -17,6 +17,8 @@ def test_mlp_mixer_masked_tokens() -> None:
     x = torch.randn(2, 104, 9, 9)
     mask = torch.ones(2, 81)
     mask[:, 40:] = 0
-    logits, tokens = model(x, token_mask=mask, return_tokens=True)
+    logits, tokens = model(
+        x, token_mask=mask, return_tokens=True
+    )
     assert logits.shape == (2, 5)
     assert tokens.shape == (2, 81, 104)

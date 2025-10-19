@@ -44,25 +44,33 @@ class Network(nn.Module):
         value_hidden_dim: int | None = None,
     ) -> None:
         super().__init__()
-        self.backbone: LightweightMLPMixer = LightweightMLPMixer(
-            num_classes=None,
-            num_channels=num_channels,
-            num_tokens=num_tokens,
-            token_dim=token_dim,
-            channel_dim=channel_dim,
-            depth=depth,
+        self.backbone: LightweightMLPMixer = (
+            LightweightMLPMixer(
+                num_classes=None,
+                num_channels=num_channels,
+                num_tokens=num_tokens,
+                token_dim=token_dim,
+                channel_dim=channel_dim,
+                depth=depth,
+            )
         )
 
         policy_layers: list[nn.Module]
         if policy_hidden_dim is None:
-            policy_layers = [nn.Linear(num_channels, num_policy_classes)]
+            policy_layers = [
+                nn.Linear(num_channels, num_policy_classes)
+            ]
         else:
             policy_layers = [
                 nn.Linear(num_channels, policy_hidden_dim),
                 nn.GELU(),
-                nn.Linear(policy_hidden_dim, num_policy_classes),
+                nn.Linear(
+                    policy_hidden_dim, num_policy_classes
+                ),
             ]
-        self.policy_head: nn.Module = nn.Sequential(*policy_layers)
+        self.policy_head: nn.Module = nn.Sequential(
+            *policy_layers
+        )
 
         value_layers: list[nn.Module]
         if value_hidden_dim is None:
@@ -73,7 +81,9 @@ class Network(nn.Module):
                 nn.GELU(),
                 nn.Linear(value_hidden_dim, 1),
             ]
-        self.value_head: nn.Module = nn.Sequential(*value_layers)
+        self.value_head: nn.Module = nn.Sequential(
+            *value_layers
+        )
 
     def forward(
         self, x: torch.Tensor
@@ -84,4 +94,3 @@ class Network(nn.Module):
         policy_logits = self.policy_head(features)
         value_logit = self.value_head(features)
         return policy_logits, value_logit
-

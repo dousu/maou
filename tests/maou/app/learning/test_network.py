@@ -30,7 +30,9 @@ def test_backbone_feature_dimension_matches_channels() -> None:
 
 
 def test_network_allows_custom_head_configuration() -> None:
-    network = Network(policy_hidden_dim=128, value_hidden_dim=64)
+    network = Network(
+        policy_hidden_dim=128, value_hidden_dim=64
+    )
     inputs = torch.randn(1, FEATURES_NUM, 9, 9)
 
     policy, value = network(inputs)

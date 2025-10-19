@@ -42,9 +42,13 @@ class _MixerBlock(nn.Module):
     def __init__(self, config: _MixerBlockConfig) -> None:
         super().__init__()
         self.token_norm = nn.LayerNorm(config.num_channels)
-        self.token_mlp = _FeedForward(config.num_tokens, config.token_dim)
+        self.token_mlp = _FeedForward(
+            config.num_tokens, config.token_dim
+        )
         self.channel_norm = nn.LayerNorm(config.num_channels)
-        self.channel_mlp = _FeedForward(config.num_channels, config.channel_dim)
+        self.channel_mlp = _FeedForward(
+            config.num_channels, config.channel_dim
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -136,7 +140,10 @@ class LightweightMLPMixer(nn.Module):
         tokens = self.norm(tokens)
 
         if token_mask is not None:
-            if token_mask.shape != (tokens.size(0), self.num_tokens):
+            if token_mask.shape != (
+                tokens.size(0),
+                self.num_tokens,
+            ):
                 msg = "token_mask must be shaped (batch_size, num_tokens)"
                 raise ValueError(msg)
             mask = token_mask.to(tokens.dtype).unsqueeze(-1)
