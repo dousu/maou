@@ -114,14 +114,21 @@ class LightweightMLPMixer(nn.Module):
     def _flatten_tokens(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.shape
         tokens = height * width
-        if tokens != self.num_tokens:
-            raise ValueError(
-                "Spatial dimensions do not match the configured number of tokens"
-            )
-        if channels != self.num_channels:
-            raise ValueError(
-                "Input channels do not match the configured channel dimension"
-            )
+        token_error = (
+            "Spatial dimensions do not match the configured number of tokens"
+        )
+        channel_error = (
+            "Input channels do not match the configured channel dimension"
+        )
+        tracing = torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
+        if tracing:
+            torch._assert(tokens == self.num_tokens, token_error)
+            torch._assert(channels == self.num_channels, channel_error)
+        else:
+            if tokens != self.num_tokens:
+                raise ValueError(token_error)
+            if channels != self.num_channels:
+                raise ValueError(channel_error)
         x = x.view(batch_size, channels, tokens)
         return x.transpose(1, 2)
 
