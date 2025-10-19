@@ -168,7 +168,6 @@ class LightweightMLPMixer(nn.Module):
         self,
         x: torch.Tensor,
         token_mask: torch.Tensor | None = None,
-        *,
         return_tokens: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if return_tokens:
