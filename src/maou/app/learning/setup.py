@@ -13,10 +13,10 @@ from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import Network
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
-from maou.domain.network.resnet import BottleneckBlock
 
 
 def default_worker_init_fn(worker_id: int) -> None:
@@ -196,34 +196,20 @@ class ModelFactory:
     def create_shogi_model(
         cls, device: torch.device
     ) -> Network:
-        """将棋特化のBottleneckBlockモデルを作成."""
-
-        # 将棋特化の「広く浅い」BottleneckBlock構成
-        # 各層のボトルネック幅（3x3 convolution層のチャンネル数）
-        # expansion=4により実際の出力は4倍: [96, 192, 384, 576]
-        bottleneck_width = [24, 48, 96, 144]
+        """将棋特化のLightweight MLP-Mixerモデルを作成."""
 
         model = Network(
-            BottleneckBlock,  # 効率的なBottleneckアーキテクチャを使用
-            FEATURES_NUM,  # 入力特徴量チャンネル数
-            [
-                2,
-                2,
-                2,
-                1,
-            ],  # 将棋特化: 広く浅い構成でパターン認識を重視
-            [
-                1,
-                2,
-                2,
-                2,
-            ],  # 各層のstride（2で特徴マップサイズ半減）
-            bottleneck_width,  # 幅重視: 多様な戦術要素を並列学習
+            num_policy_classes=MOVE_LABELS_NUM,
+            num_channels=FEATURES_NUM,
+            num_tokens=81,
+            token_dim=64,
+            channel_dim=256,
+            depth=4,
         )
 
         model.to(device)
         cls.logger.info(
-            f"Created Shogi-optimized BottleneckBlock model ({str(device)})"
+            f"Created shogi-optimized Lightweight MLP-Mixer model ({str(device)})"
         )
 
         return model

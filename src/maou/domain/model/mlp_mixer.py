@@ -7,6 +7,7 @@ The :class:`LightweightMLPMixer` expects input tensors of shape
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -41,9 +42,13 @@ class _MixerBlock(nn.Module):
     def __init__(self, config: _MixerBlockConfig) -> None:
         super().__init__()
         self.token_norm = nn.LayerNorm(config.num_channels)
-        self.token_mlp = _FeedForward(config.num_tokens, config.token_dim)
+        self.token_mlp = _FeedForward(
+            config.num_tokens, config.token_dim
+        )
         self.channel_norm = nn.LayerNorm(config.num_channels)
-        self.channel_mlp = _FeedForward(config.num_channels, config.channel_dim)
+        self.channel_mlp = _FeedForward(
+            config.num_channels, config.channel_dim
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -79,7 +84,7 @@ class LightweightMLPMixer(nn.Module):
 
     def __init__(
         self,
-        num_classes: int,
+        num_classes: int | None,
         *,
         num_channels: int = 104,
         num_tokens: int = 81,
@@ -101,7 +106,10 @@ class LightweightMLPMixer(nn.Module):
             _MixerBlock(block_config) for _ in range(depth)
         )
         self.norm = nn.LayerNorm(num_channels)
-        self.head = nn.Linear(num_channels, num_classes)
+        if num_classes is None:
+            self.head: nn.Linear | None = None
+        else:
+            self.head = nn.Linear(num_channels, num_classes)
 
     def _flatten_tokens(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.shape
@@ -117,20 +125,25 @@ class LightweightMLPMixer(nn.Module):
         x = x.view(batch_size, channels, tokens)
         return x.transpose(1, 2)
 
-    def forward(
+    def forward_features(
         self,
         x: torch.Tensor,
         token_mask: torch.Tensor | None = None,
         *,
         return_tokens: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+        """Return pooled token features prior to the classifier head."""
+
         tokens = self._flatten_tokens(x)
         for block in self.blocks:
             tokens = block(tokens)
         tokens = self.norm(tokens)
 
         if token_mask is not None:
-            if token_mask.shape != (tokens.size(0), self.num_tokens):
+            if token_mask.shape != (
+                tokens.size(0),
+                self.num_tokens,
+            ):
                 msg = "token_mask must be shaped (batch_size, num_tokens)"
                 raise ValueError(msg)
             mask = token_mask.to(tokens.dtype).unsqueeze(-1)
@@ -140,7 +153,33 @@ class LightweightMLPMixer(nn.Module):
         else:
             pooled = tokens.mean(dim=1)
 
-        logits = self.head(pooled)
         if return_tokens:
+            return pooled, tokens
+        return pooled
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+        *,
+        return_tokens: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if return_tokens:
+            features, tokens = self.forward_features(
+                x, token_mask, return_tokens=True
+            )
+        else:
+            features = self.forward_features(x, token_mask)
+            tokens = None
+
+        if self.head is None:
+            if return_tokens:
+                assert tokens is not None
+                return features, tokens
+            return features
+
+        logits = self.head(features)
+        if return_tokens:
+            assert tokens is not None
             return logits, tokens
         return logits
