@@ -1,148 +1,87 @@
+"""Lightweight MLP-Mixer based policy and value network."""
+
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
-from torch.nn.common_types import _size_2_t
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.network.resnet import ResNet
+from maou.domain.board.shogi import FEATURES_NUM
+from maou.domain.model.mlp_mixer import LightweightMLPMixer
 
 
 class Network(nn.Module):
-    """Deep Learning Network.
-    コア部分はResNetで出力層で二つのヘッドがあり，
-    PolicyとValueの2つの評価値を返す．
-    このNetwork構成はかなり改善余地がある．
-    基本的に将棋は最適なラベルがデータソースに振られていない問題が大きい．
-    そのため，dropoutとかノイズに強くなる工夫をNetwork自体に入れた方がいい．
-    将棋には合法手があり，それ以外は反則負けになる．
-    ラベル出力時には合法手以外の手はすべて0にするような工夫があってもよさそう．
-    これらのような改善を入れる前に意味のない出力ラベルがあるのでそこを改善するのが先．
-    そうしないと，dead neurons前提になってdropout等がうまく機能しないように思える．
+    """Dual-head shogi network that shares a Lightweight MLP-Mixer backbone.
+
+    The shared mixer extracts a global representation from the 9x9 feature
+    planes. Separate policy and value heads consume this representation and can
+    optionally introduce hidden projections for additional capacity.
+
+    Args:
+        num_policy_classes: Number of classes returned by the policy head.
+        num_channels: Number of input feature channels. Defaults to the shogi
+            board representation (:data:`FEATURES_NUM`).
+        num_tokens: Number of spatial tokens (``height × width``).
+        token_dim: Hidden dimension of the token mixing MLP.
+        channel_dim: Hidden dimension of the channel mixing MLP.
+        depth: Number of Mixer blocks stacked in the backbone.
+        policy_hidden_dim: Optional hidden dimension inserted in the policy
+            head. When ``None`` the head is a single linear layer.
+        value_hidden_dim: Optional hidden dimension inserted in the value head.
+            When ``None`` the head is a single linear layer.
     """
 
     def __init__(
         self,
-        block: type[nn.Module],
-        in_channels: int,
-        layers: list[int],
-        strides: list[_size_2_t],
-        list_out_channels: list[int],
-    ):
-        super(Network, self).__init__()
-        self.relu = nn.ReLU(inplace=True)
-        # 入力層
-        self.conv1 = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=list_out_channels[0],
-            kernel_size=3,
-            padding=1,
-            bias=False,
-        )
-        self.norm1 = nn.BatchNorm2d(list_out_channels[0])
-
-        # 中間層
-        self.resnet = ResNet(
-            block=block,
-            in_channels=list_out_channels[0],
-            layers=layers,
-            strides=strides,
-            list_out_channels=list_out_channels,
+        *,
+        num_policy_classes: int = MOVE_LABELS_NUM,
+        num_channels: int = FEATURES_NUM,
+        num_tokens: int = 81,
+        token_dim: int = 64,
+        channel_dim: int = 256,
+        depth: int = 4,
+        policy_hidden_dim: int | None = None,
+        value_hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.backbone: LightweightMLPMixer = LightweightMLPMixer(
+            num_classes=None,
+            num_channels=num_channels,
+            num_tokens=num_tokens,
+            token_dim=token_dim,
+            channel_dim=channel_dim,
+            depth=depth,
         )
 
-        # 出力層
-        # policyとvalueのネットワークはまるまる同じにしてヘッドの設定だけ変えて出しわける
-        # policyとvalueにもうちょっと畳み込み層とかを挟んだ方がいい説はある
-        # BottleneckBlockの場合はexpansion factorを考慮した実際のチャンネル数を計算
-        expansion = getattr(block, "expansion", 1)
-        final_channels = list_out_channels[3] * expansion
+        policy_layers: list[nn.Module]
+        if policy_hidden_dim is None:
+            policy_layers = [nn.Linear(num_channels, num_policy_classes)]
+        else:
+            policy_layers = [
+                nn.Linear(num_channels, policy_hidden_dim),
+                nn.GELU(),
+                nn.Linear(policy_hidden_dim, num_policy_classes),
+            ]
+        self.policy_head: nn.Module = nn.Sequential(*policy_layers)
 
-        # policy head
-        self.policy_head = PolicyHead(
-            final_channels, MOVE_LABELS_NUM
-        )
-
-        # value head
-        self.value_head = ValueHead(final_channels)
+        value_layers: list[nn.Module]
+        if value_hidden_dim is None:
+            value_layers = [nn.Linear(num_channels, 1)]
+        else:
+            value_layers = [
+                nn.Linear(num_channels, value_hidden_dim),
+                nn.GELU(),
+                nn.Linear(value_hidden_dim, 1),
+            ]
+        self.value_head: nn.Module = nn.Sequential(*value_layers)
 
     def forward(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """forward.
-        Policyの評価とValueの評価を返すのでtupleで2つ返している．
-        """
-        # 入力層
-        x = self.conv1(x)
-        x = self.relu(self.norm1(x))
+        """Return policy and value predictions for the given features."""
 
-        # 中間層 (ResNet)
-        x = self.resnet(x)
+        features = self.backbone.forward_features(x)
+        policy_logits = self.policy_head(features)
+        value_logit = self.value_head(features)
+        return policy_logits, value_logit
 
-        # 出力層
-        # policy head
-        policy = self.policy_head(x)
-
-        # value head
-        value = self.value_head(x)
-
-        return policy, value
-
-
-class PolicyHead(nn.Module):
-    """PolicyHead.
-    単にLinearだけ使ってこう言いうのでもいいかも．
-    nn.Sequential(
-        nn.Linear(in_channels, 512),
-        nn.ReLU(),
-        nn.Dropout(0.5),
-        nn.Linear(512, num_classes)
-    )
-    """
-
-    def __init__(self, in_channels: int, num_classes: int):
-        super(PolicyHead, self).__init__()
-        # 128にしているのは勘
-        self.conv = nn.Conv2d(
-            in_channels, 128, kernel_size=3, stride=1, padding=1
-        )
-        self.relu = nn.ReLU()
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(128, num_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv(x)
-        x = self.relu(x)
-        x = self.avg_pool(x)
-        x = self.flatten(x)
-        x = self.fc(x)
-        return x
-
-
-class ValueHead(nn.Module):
-    """PolicyHead.
-    単にLinearだけ使ってこう言いうのでもいいかも．
-    nn.Sequential(
-        nn.Linear(in_channels, 256),
-        nn.ReLU(),
-        nn.Dropout(0.5),
-        nn.Linear(256, 1)
-    )
-    """
-
-    def __init__(self, in_channels: int):
-        super(ValueHead, self).__init__()
-        # 128にしているのは勘
-        self.conv = nn.Conv2d(
-            in_channels, 128, kernel_size=3, stride=1, padding=1
-        )
-        self.relu = nn.ReLU()
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(128, 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv(x)
-        x = self.relu(x)
-        x = self.avg_pool(x)
-        x = self.flatten(x)
-        x = self.fc(x)
-        return x
