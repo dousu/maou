@@ -340,16 +340,20 @@ class MaskedAutoencoderPretraining:
         model.train()
         total_loss = 0.0
         sample_count = 0
-        batch_iterable = (
-            tqdm(
+        progress = None
+        log_interval: Optional[int] = None
+        if progress_bar:
+            progress = tqdm(
                 enumerate(dataloader),
                 desc=f"MAE Epoch {epoch_index + 1}/{total_epochs}",
                 total=len(dataloader),
             )
-            if progress_bar
-            else enumerate(dataloader)
-        )
-        for _, batch in batch_iterable:
+            batch_iterable = progress
+        else:
+            batch_iterable = enumerate(dataloader)
+            log_interval = max(1, len(dataloader) // 10)
+
+        for batch_index, batch in batch_iterable:
             inputs = batch.to(device)
             mask = self._generate_mask(inputs, mask_ratio)
             masked_inputs = inputs.clone()
@@ -364,8 +368,31 @@ class MaskedAutoencoderPretraining:
             optimizer.step()
 
             batch_size = inputs.size(0)
-            total_loss += float(loss.item()) * batch_size
+            loss_value = float(loss.item())
+            total_loss += loss_value * batch_size
             sample_count += batch_size
+
+            average_loss = total_loss / sample_count
+
+            if progress is not None:
+                progress.set_postfix(
+                    loss=f"{loss_value:.6f}",
+                    avg_loss=f"{average_loss:.6f}",
+                )
+            else:
+                if (
+                    log_interval is not None
+                    and (batch_index + 1) % log_interval == 0
+                ):
+                    self.logger.info(
+                        (
+                            "Batch %d/%d - loss: %.6f (avg: %.6f)"
+                        ),
+                        batch_index + 1,
+                        len(dataloader),
+                        loss_value,
+                        average_loss,
+                    )
 
         if sample_count == 0:
             msg = "Dataloader returned zero samples"
