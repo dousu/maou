@@ -72,3 +72,20 @@ aws configure sso --use-device-code --profile default
 ```bash
 TEST_AWS=true poetry run pytest
 ```
+
+## Masked Autoencoderの事前学習コマンド例
+
+`maou pretrain`コマンドでMasked Autoencoderの事前学習を行う．
+事前学習で保存したstate_dictは`maou learn-model --resume-from`オプションで読み込める．
+
+```bash
+poetry run maou pretrain \
+  --input-dir data/preprocessed \
+  --input-format preprocess \
+  --output-path artifacts/masked-autoencoder.pt \
+  --epochs 10 \
+  --batch-size 128 \
+  --learning-rate 1e-3 \
+  --mask-ratio 0.75 \
+  --hidden-dim 512
+```
