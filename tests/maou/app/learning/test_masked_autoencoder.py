@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
+import pytest
 import torch
 
 from maou.app.learning.masked_autoencoder import (
@@ -11,6 +12,9 @@ from maou.app.learning.masked_autoencoder import (
 )
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA support is required for this test"
+)
 def test_resolve_device_enables_tensorfloat32_for_cuda(monkeypatch: "pytest.MonkeyPatch") -> None:
     """TensorFloat32 matmul precision should be enabled when using CUDA devices."""
 
