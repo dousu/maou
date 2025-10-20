@@ -46,7 +46,7 @@ class DeviceConfig:
 class ModelComponents:
     """モデル関連コンポーネント."""
 
-    model: Network
+    model: torch.nn.Module
     loss_fn_policy: GCEwithNegativePenaltyLoss
     loss_fn_value: torch.nn.Module
     optimizer: optim.SGD
@@ -286,7 +286,6 @@ class TrainingSetup:
         validation_datasource: DataSource,
         datasource_type: str,
         gpu: Optional[str] = None,
-        compilation: bool = False,
         batch_size: int = 256,
         dataloader_workers: int = 4,
         pin_memory: Optional[bool] = None,
@@ -335,16 +334,9 @@ class TrainingSetup:
         )
 
         # Model creation
-        if compilation:
-            model = torch.compile(
-                ModelFactory.create_shogi_model(
-                    device_config.device
-                )
-            )
-        else:
-            model = ModelFactory.create_shogi_model(
-                device_config.device
-            )
+        model = ModelFactory.create_shogi_model(
+            device_config.device
+        )
 
         # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (

@@ -95,7 +95,6 @@ class Learning:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
-                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -130,6 +129,10 @@ class Learning:
                 9,
             ),
         )
+
+        if config.compilation:
+            self.logger.info("Compiling model with torch.compile")
+            self.model = torch.compile(self.model)
         self.__train()
 
         learning_result["Data Samples"] = (

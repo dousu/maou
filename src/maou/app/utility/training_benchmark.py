@@ -424,7 +424,6 @@ class TrainingBenchmarkUseCase:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
-                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -434,6 +433,14 @@ class TrainingBenchmarkUseCase:
                 momentum=config.momentum,
             )
         )
+
+        if config.compilation:
+            self.logger.info(
+                "Compiling model with torch.compile for benchmarking"
+            )
+            model_components.model = torch.compile(
+                model_components.model
+            )
 
         training_loader, validation_loader = dataloaders
         device = device_config.device
