@@ -1,4 +1,4 @@
-"""Tests for the Lightweight MLP-Mixer based Network."""
+"""Tests for the shogi MLP-Mixer based Network."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def test_backbone_feature_dimension_matches_channels() -> None:
 
     features = network.backbone.forward_features(inputs)
 
-    assert features.shape == (3, FEATURES_NUM)
+    assert features.shape == (3, network.embedding_dim)
 
 
 def test_network_allows_custom_head_configuration() -> None:
