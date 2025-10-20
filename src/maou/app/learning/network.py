@@ -18,20 +18,24 @@ class HeadlessNetwork(nn.Module):
         *,
         num_channels: int = FEATURES_NUM,
         num_tokens: int = 81,
-        token_dim: int = 64,
-        channel_dim: int = 256,
-        depth: int = 4,
+        embed_dim: int = 256,
+        token_dim: int = 128,
+        channel_dim: int = 1024,
+        depth: int = 16,
+        dropout_rate: float = 0.15,
     ) -> None:
         super().__init__()
         self.backbone: LightweightMLPMixer = LightweightMLPMixer(
             num_classes=None,
             num_channels=num_channels,
             num_tokens=num_tokens,
+            embed_dim=embed_dim,
             token_dim=token_dim,
             channel_dim=channel_dim,
             depth=depth,
+            dropout_rate=dropout_rate,
         )
-        self._embedding_dim = num_channels
+        self._embedding_dim = embed_dim
 
     @property
     def embedding_dim(self) -> int:
@@ -132,18 +136,22 @@ class Network(HeadlessNetwork):
         num_policy_classes: int = MOVE_LABELS_NUM,
         num_channels: int = FEATURES_NUM,
         num_tokens: int = 81,
-        token_dim: int = 64,
-        channel_dim: int = 256,
-        depth: int = 4,
+        embed_dim: int = 256,
+        token_dim: int = 128,
+        channel_dim: int = 1024,
+        depth: int = 16,
+        dropout_rate: float = 0.15,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
     ) -> None:
         super().__init__(
             num_channels=num_channels,
             num_tokens=num_tokens,
+            embed_dim=embed_dim,
             token_dim=token_dim,
             channel_dim=channel_dim,
             depth=depth,
+            dropout_rate=dropout_rate,
         )
         self.policy_head = PolicyHead(
             input_dim=self.embedding_dim,

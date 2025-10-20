@@ -3,6 +3,7 @@
 import warnings
 from pathlib import Path
 
+import pytest
 import torch
 
 try:  # pragma: no cover - import location varies across PyTorch versions
@@ -12,7 +13,10 @@ except (ImportError, AttributeError):  # pragma: no cover - fallback path
         OnnxExporterWarning as TracerWarning,
     )
 
-from maou.domain.model.mlp_mixer import LightweightMLPMixer
+from maou.domain.model.mlp_mixer import (
+    LightweightMLPMixer,
+    print_model_summary,
+)
 
 
 def test_mlp_mixer_forward_shape() -> None:
@@ -31,7 +35,21 @@ def test_mlp_mixer_masked_tokens() -> None:
         x, token_mask=mask, return_tokens=True
     )
     assert logits.shape == (2, 5)
-    assert tokens.shape == (2, 81, 104)
+    assert tokens.shape == (2, 81, 256)
+
+
+def test_mlp_mixer_parameter_count() -> None:
+    model = LightweightMLPMixer(num_classes=10)
+    param_count = sum(p.numel() for p in model.parameters())
+    assert 8_500_000 <= param_count <= 9_500_000
+
+
+def test_mlp_mixer_summary_prints(capsys: pytest.CaptureFixture[str]) -> None:
+    model = LightweightMLPMixer(num_classes=2)
+    print_model_summary(model)
+    captured = capsys.readouterr().out
+    assert "Parameters" in captured
+    assert "Embedding dimension" in captured
 
 
 def test_mlp_mixer_onnx_export_without_tracer_warning(tmp_path: Path) -> None:

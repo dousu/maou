@@ -202,9 +202,11 @@ class ModelFactory:
         backbone = HeadlessNetwork(
             num_channels=FEATURES_NUM,
             num_tokens=81,
-            token_dim=64,
-            channel_dim=256,
-            depth=4,
+            embed_dim=256,
+            token_dim=128,
+            channel_dim=1024,
+            depth=16,
+            dropout_rate=0.15,
         )
 
         backbone.to(device)
@@ -225,9 +227,11 @@ class ModelFactory:
             num_policy_classes=MOVE_LABELS_NUM,
             num_channels=FEATURES_NUM,
             num_tokens=81,
-            token_dim=64,
-            channel_dim=256,
-            depth=4,
+            embed_dim=256,
+            token_dim=128,
+            channel_dim=1024,
+            depth=16,
+            dropout_rate=0.15,
         )
 
         model.to(device)
@@ -259,7 +263,7 @@ class LossOptimizerFactory:
         model: torch.nn.Module,
         learning_ratio: float = 0.01,
         momentum: float = 0.9,
-        weight_decay: float = 0.0001,
+        weight_decay: float = 0.01,
     ) -> optim.SGD:
         """SGDオプティマイザを作成."""
         return optim.SGD(

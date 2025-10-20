@@ -14,18 +14,27 @@ import torch.nn as nn
 
 
 class _FeedForward(nn.Module):
-    """Two-layer feed-forward MLP with GELU activation."""
+    """Two-layer feed-forward MLP with GELU activation and dropout."""
 
-    def __init__(self, dim: int, hidden_dim: int) -> None:
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int,
+        dropout_rate: float,
+    ) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, dim),
-        )
+        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.activation = nn.GELU()
+        self.fc2 = nn.Linear(hidden_dim, dim)
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        x = self.fc1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.dropout(x)
+        return x
 
 
 @dataclass
@@ -34,6 +43,7 @@ class _MixerBlockConfig:
     num_channels: int
     token_dim: int
     channel_dim: int
+    dropout_rate: float
 
 
 class _MixerBlock(nn.Module):
@@ -43,11 +53,11 @@ class _MixerBlock(nn.Module):
         super().__init__()
         self.token_norm = nn.LayerNorm(config.num_channels)
         self.token_mlp = _FeedForward(
-            config.num_tokens, config.token_dim
+            config.num_tokens, config.token_dim, config.dropout_rate
         )
         self.channel_norm = nn.LayerNorm(config.num_channels)
         self.channel_mlp = _FeedForward(
-            config.num_channels, config.channel_dim
+            config.num_channels, config.channel_dim, config.dropout_rate
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -65,16 +75,17 @@ class _MixerBlock(nn.Module):
 
 
 class LightweightMLPMixer(nn.Module):
-    """MLP-Mixer for 9x9 spatial inputs with 104 channels.
+    """MLP-Mixer tailored to 9×9 shogi planes with rich regularization.
 
     Args:
         num_classes: Number of output classes for the classifier head.
-        num_channels: Channel dimension of each token. Defaults to ``104``.
-        num_tokens: Number of tokens after flattening the spatial dimensions.
-            Defaults to ``81`` (from ``9 × 9``).
+        num_channels: Number of input feature channels (default ``104``).
+        num_tokens: Number of spatial tokens after flattening ``height × width``.
+        embed_dim: Channel dimension used inside the Mixer blocks.
         token_dim: Hidden dimension of the token mixing MLP.
         channel_dim: Hidden dimension of the channel mixing MLP.
         depth: Number of Mixer blocks stacked in the encoder.
+        dropout_rate: Dropout probability applied throughout the network.
 
     The ``forward`` method accepts an optional ``token_mask`` (shape ``B × T``) to
     exclude tokens from the pooled representation and can return the per-token
@@ -88,28 +99,39 @@ class LightweightMLPMixer(nn.Module):
         *,
         num_channels: int = 104,
         num_tokens: int = 81,
-        token_dim: int = 64,
-        channel_dim: int = 256,
-        depth: int = 4,
+        embed_dim: int = 256,
+        token_dim: int = 128,
+        channel_dim: int = 1024,
+        depth: int = 16,
+        dropout_rate: float = 0.15,
     ) -> None:
         super().__init__()
+        if not 0.0 <= dropout_rate <= 1.0:
+            msg = "dropout_rate must lie within [0.0, 1.0]"
+            raise ValueError(msg)
+
         self.num_tokens = num_tokens
-        self.num_channels = num_channels
+        self.input_channels = num_channels
+        self.num_channels = embed_dim
+        self.dropout = nn.Dropout(dropout_rate)
 
         block_config = _MixerBlockConfig(
             num_tokens=num_tokens,
-            num_channels=num_channels,
+            num_channels=embed_dim,
             token_dim=token_dim,
             channel_dim=channel_dim,
+            dropout_rate=dropout_rate,
         )
         self.blocks = nn.ModuleList(
             _MixerBlock(block_config) for _ in range(depth)
         )
-        self.norm = nn.LayerNorm(num_channels)
+        self.input_norm = nn.LayerNorm(num_channels)
+        self.embedding = nn.Linear(num_channels, embed_dim)
+        self.norm = nn.LayerNorm(embed_dim)
         if num_classes is None:
             self.head: nn.Linear | None = None
         else:
-            self.head = nn.Linear(num_channels, num_classes)
+            self.head = nn.Linear(embed_dim, num_classes)
 
     def _flatten_tokens(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.shape
@@ -123,11 +145,11 @@ class LightweightMLPMixer(nn.Module):
         tracing = torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
         if tracing:
             torch._assert(tokens == self.num_tokens, token_error)
-            torch._assert(channels == self.num_channels, channel_error)
+            torch._assert(channels == self.input_channels, channel_error)
         else:
             if tokens != self.num_tokens:
                 raise ValueError(token_error)
-            if channels != self.num_channels:
+            if channels != self.input_channels:
                 raise ValueError(channel_error)
         x = x.view(batch_size, channels, tokens)
         return x.transpose(1, 2)
@@ -142,9 +164,13 @@ class LightweightMLPMixer(nn.Module):
         """Return pooled token features prior to the classifier head."""
 
         tokens = self._flatten_tokens(x)
+        tokens = self.input_norm(tokens)
+        tokens = self.embedding(tokens)
+        tokens = self.dropout(tokens)
         for block in self.blocks:
             tokens = block(tokens)
         tokens = self.norm(tokens)
+        tokens = self.dropout(tokens)
 
         if token_mask is not None:
             if token_mask.shape != (
@@ -189,3 +215,15 @@ class LightweightMLPMixer(nn.Module):
             assert tokens is not None
             return logits, tokens
         return logits
+
+
+def print_model_summary(model: LightweightMLPMixer) -> None:
+    """Print a lightweight summary with parameter count for the given model."""
+
+    param_count = sum(parameter.numel() for parameter in model.parameters())
+    print(
+        "LightweightMLPMixer Summary\n"
+        f"Parameters: {param_count:,}\n"
+        f"Mixer depth: {len(model.blocks)}\n"
+        f"Embedding dimension: {model.num_channels}"
+    )
