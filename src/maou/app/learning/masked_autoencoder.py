@@ -317,10 +317,26 @@ class MaskedAutoencoderPretraining:
         self, device_str: Optional[str]
     ) -> torch.device:
         if device_str is not None:
-            return torch.device(device_str)
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
+            device = torch.device(device_str)
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+
+        self._enable_tensorfloat32_if_applicable(device)
+        return device
+
+    def _enable_tensorfloat32_if_applicable(
+        self, device: torch.device
+    ) -> None:
+        """Enable TensorFloat32 tensor cores when running on CUDA devices."""
+
+        if device.type != "cuda":
+            return
+        torch.set_float32_matmul_precision("high")
+        self.logger.debug(
+            "Enabled TensorFloat32 matmul precision for CUDA device: %s", device
+        )
 
     def _resolve_pin_memory(
         self, option: Optional[bool], device: torch.device
