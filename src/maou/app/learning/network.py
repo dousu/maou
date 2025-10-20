@@ -10,7 +10,102 @@ from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.model.mlp_mixer import LightweightMLPMixer
 
 
-class Network(nn.Module):
+class HeadlessNetwork(nn.Module):
+    """Shared Lightweight MLP-Mixer backbone without policy/value heads."""
+
+    def __init__(
+        self,
+        *,
+        num_channels: int = FEATURES_NUM,
+        num_tokens: int = 81,
+        token_dim: int = 64,
+        channel_dim: int = 256,
+        depth: int = 4,
+    ) -> None:
+        super().__init__()
+        self.backbone: LightweightMLPMixer = LightweightMLPMixer(
+            num_classes=None,
+            num_channels=num_channels,
+            num_tokens=num_tokens,
+            token_dim=token_dim,
+            channel_dim=channel_dim,
+            depth=depth,
+        )
+        self._embedding_dim = num_channels
+
+    @property
+    def embedding_dim(self) -> int:
+        """Return the dimensionality of the pooled backbone features."""
+
+        return self._embedding_dim
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Return pooled token features from the shared backbone."""
+
+        return self.backbone.forward_features(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Alias of :meth:`forward_features` for convenience."""
+
+        return self.forward_features(x)
+
+
+class PolicyHead(nn.Module):
+    """Policy head projecting backbone features to move logits."""
+
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        num_policy_classes: int = MOVE_LABELS_NUM,
+        hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        layers: list[nn.Module]
+        if hidden_dim is None:
+            layers = [nn.Linear(input_dim, num_policy_classes)]
+        else:
+            layers = [
+                nn.Linear(input_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, num_policy_classes),
+            ]
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Return policy logits for the provided features."""
+
+        return self.head(features)
+
+
+class ValueHead(nn.Module):
+    """Value head projecting backbone features to a scalar output."""
+
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        layers: list[nn.Module]
+        if hidden_dim is None:
+            layers = [nn.Linear(input_dim, 1)]
+        else:
+            layers = [
+                nn.Linear(input_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, 1),
+            ]
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Return a scalar value prediction for the provided features."""
+
+        return self.head(features)
+
+
+class Network(HeadlessNetwork):
     """Dual-head shogi network that shares a Lightweight MLP-Mixer backbone.
 
     The shared mixer extracts a global representation from the 9x9 feature
@@ -43,46 +138,21 @@ class Network(nn.Module):
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
     ) -> None:
-        super().__init__()
-        self.backbone: LightweightMLPMixer = (
-            LightweightMLPMixer(
-                num_classes=None,
-                num_channels=num_channels,
-                num_tokens=num_tokens,
-                token_dim=token_dim,
-                channel_dim=channel_dim,
-                depth=depth,
-            )
+        super().__init__(
+            num_channels=num_channels,
+            num_tokens=num_tokens,
+            token_dim=token_dim,
+            channel_dim=channel_dim,
+            depth=depth,
         )
-
-        policy_layers: list[nn.Module]
-        if policy_hidden_dim is None:
-            policy_layers = [
-                nn.Linear(num_channels, num_policy_classes)
-            ]
-        else:
-            policy_layers = [
-                nn.Linear(num_channels, policy_hidden_dim),
-                nn.GELU(),
-                nn.Linear(
-                    policy_hidden_dim, num_policy_classes
-                ),
-            ]
-        self.policy_head: nn.Module = nn.Sequential(
-            *policy_layers
+        self.policy_head = PolicyHead(
+            input_dim=self.embedding_dim,
+            num_policy_classes=num_policy_classes,
+            hidden_dim=policy_hidden_dim,
         )
-
-        value_layers: list[nn.Module]
-        if value_hidden_dim is None:
-            value_layers = [nn.Linear(num_channels, 1)]
-        else:
-            value_layers = [
-                nn.Linear(num_channels, value_hidden_dim),
-                nn.GELU(),
-                nn.Linear(value_hidden_dim, 1),
-            ]
-        self.value_head: nn.Module = nn.Sequential(
-            *value_layers
+        self.value_head = ValueHead(
+            input_dim=self.embedding_dim,
+            hidden_dim=value_hidden_dim,
         )
 
     def forward(
@@ -90,7 +160,7 @@ class Network(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return policy and value predictions for the given features."""
 
-        features = self.backbone.forward_features(x)
+        features = self.forward_features(x)
         policy_logits = self.policy_head(features)
         value_logit = self.value_head(features)
         return policy_logits, value_logit

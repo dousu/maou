@@ -70,7 +70,7 @@ def test_pretrain_cli(
     assert isinstance(state_dict, dict)
     assert state_dict
     assert not any(key.startswith("decoder") for key in state_dict)
-    model = ModelFactory.create_shogi_model(torch.device("cpu"))
-    model.load_state_dict(state_dict)
+    backbone = ModelFactory.create_shogi_backbone(torch.device("cpu"))
+    backbone.load_state_dict(state_dict)
     assert "saved state_dict" in result.output.lower()
     assert compile_called

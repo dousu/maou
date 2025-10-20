@@ -96,7 +96,7 @@ class _MaskedAutoencoder(nn.Module):
         self._flattened_size = int(np.prod(feature_shape))
         channels = feature_shape[0]
 
-        self.encoder = ModelFactory.create_shogi_model(device)
+        self.encoder = ModelFactory.create_shogi_backbone(device)
         self.decoder = nn.Sequential(
             nn.Linear(channels, hidden_dim),
             nn.GELU(),
@@ -106,9 +106,7 @@ class _MaskedAutoencoder(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         reshaped = x.view(batch_size, *self._feature_shape)
-        encoded = self.encoder.backbone.forward_features(
-            reshaped
-        )
+        encoded = self.encoder.forward_features(reshaped)
         decoded = self.decoder(encoded)
         return decoded.view(batch_size, -1)
 
