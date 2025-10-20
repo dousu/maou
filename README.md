@@ -56,7 +56,7 @@ gcloud auth application-default set-quota-project "your-project-id"
 なお，GCPを使ったテストをするときは以下のように行う．
 
 ```bash
-TEST_GCP=true pytest
+TEST_GCP=true poetry run pytest
 ```
 
 ### AWSを使う場合
@@ -70,5 +70,5 @@ aws configure sso --use-device-code --profile default
 なお，AWSを使ったテストをするときは以下のように行う．
 
 ```bash
-TEST_AWS=true pytest
+TEST_AWS=true poetry run pytest
 ```
