@@ -2,6 +2,9 @@
 
 This file provides guidance to OpenAI Codex agents when working with code in this repository. Refer to it alongside `CLAUDE.md`, which remains available for Claude Code agents.
 
+> **For Codex agents:** Follow `.codex/config.yaml`, `.codex/AGENT_GUIDE.md`, and `.codex/COMMANDS.md`.
+> All shell commands **must** use `poetry run`.
+
 ## Development Guidelines
 
 When working on the Maou project, please follow these core principles:
@@ -63,13 +66,13 @@ poetry remove package-name
 
 ### Testing Requirements
 
-**Framework**: Use pytest
+**Framework**: Use `poetry run pytest`
 
 ```bash
-pytest                           # Run all tests
-pytest --cov=src/maou           # Run with coverage
-TEST_GCP=true pytest            # Test GCP features
-TEST_AWS=true pytest            # Test AWS features
+poetry run pytest                           # Run all tests
+poetry run pytest --cov=src/maou            # Run with coverage
+TEST_GCP=true poetry run pytest             # Test GCP features
+TEST_AWS=true poetry run pytest             # Test AWS features
 ```
 
 #### Test Requirements
@@ -101,7 +104,7 @@ poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run is
 ### Pre-commit Hooks
 ```bash
 poetry run bash scripts/pre-commit.sh    # Install hooks
-pre-commit run --all-files               # Run manually
+poetry run pre-commit run --all-files    # Run manually
 ```
 
 ## Environment Setup
@@ -211,7 +214,7 @@ poetry run maou --debug-mode hcpe-convert ...
 1. **Code Formatting**: `poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/`
 2. **Type Errors**: `poetry run mypy src/`
 3. **Linting Issues**: `poetry run flake8 src/`
-4. **Test Failures**: `pytest --tb=short`
+4. **Test Failures**: `poetry run pytest --tb=short`
 
 ## Commit Guidelines
 
@@ -222,7 +225,7 @@ poetry run ruff format src/
 poetry run ruff check src/ --fix
 poetry run isort src/
 poetry run mypy src/
-pytest
+poetry run pytest
 ```
 
 ### Commit Message Format
