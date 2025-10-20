@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -9,6 +10,7 @@ from maou.app.learning.masked_autoencoder import (
     ModelFactory,
     _MaskedAutoencoder,
 )
+from maou.domain.board.shogi import FEATURES_NUM
 
 
 class _DummyBackbone(torch.nn.Module):
@@ -143,3 +145,32 @@ def test_forward_chunk_size_resolution() -> None:
     assert pretraining._resolve_forward_chunk_size(None, 32) == 32
     assert pretraining._resolve_forward_chunk_size(16, 32) == 16
     assert pretraining._resolve_forward_chunk_size(64, 32) == 32
+
+
+def test_persisted_state_dict_matches_training_model(
+    tmp_path: Path,
+) -> None:
+    """Persisted checkpoints should load into the full training network."""
+
+    pretraining = MaskedAutoencoderPretraining()
+    autoencoder = _MaskedAutoencoder(
+        feature_shape=(FEATURES_NUM, 9, 9),
+        hidden_dim=128,
+        device=torch.device("cpu"),
+    )
+    checkpoint_path = tmp_path / "checkpoint.pt"
+
+    pretraining._persist_encoder_state_dict(
+        autoencoder,
+        checkpoint_path,
+    )
+
+    state_dict = torch.load(checkpoint_path, weights_only=True)
+
+    model = ModelFactory.create_shogi_model(torch.device("cpu"))
+    model.load_state_dict(state_dict)
+
+    assert any(
+        key.startswith("policy_head") or key.startswith("value_head")
+        for key in state_dict
+    )

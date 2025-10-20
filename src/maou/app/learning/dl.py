@@ -334,4 +334,11 @@ class Learning:
                     f"_orig_mod.{key}": value for key, value in state_dict.items()
                 }
 
-        self.model.load_state_dict(state_dict)
+        try:
+            self.model.load_state_dict(state_dict)
+        except RuntimeError as exc:
+            self.logger.error(
+                "Failed to load checkpoint into model: %s",
+                exc,
+            )
+            raise
