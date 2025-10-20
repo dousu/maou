@@ -141,6 +141,7 @@ class MaskedAutoencoderPretraining:
         hidden_dim: int = 512
         pin_memory: Optional[bool] = None
         prefetch_factor: int = 2
+        forward_chunk_size: Optional[int] = 2048
         progress_bar: bool = True
 
     def run(
@@ -175,6 +176,12 @@ class MaskedAutoencoderPretraining:
         if resolved_options.prefetch_factor <= 0:
             msg = "prefetch_factor must be greater than zero"
             raise ValueError(msg)
+        if (
+            resolved_options.forward_chunk_size is not None
+            and resolved_options.forward_chunk_size <= 0
+        ):
+            msg = "forward_chunk_size must be greater than zero"
+            raise ValueError(msg)
 
         dataset = _FeatureDataset(training_datasource)
         output_path = self._resolve_output_path(
@@ -208,6 +215,19 @@ class MaskedAutoencoderPretraining:
             lr=resolved_options.learning_rate,
         )
 
+        effective_chunk_size = self._resolve_forward_chunk_size(
+            resolved_options.forward_chunk_size,
+            resolved_options.batch_size,
+        )
+        if effective_chunk_size < resolved_options.batch_size:
+            self.logger.info(
+                (
+                    "Splitting batches into forward chunks of size %d to mitigate "
+                    "peak memory usage"
+                ),
+                effective_chunk_size,
+            )
+
         self.logger.info(
             "Starting masked autoencoder pretraining with %s samples",
             len(dataset),
@@ -223,6 +243,7 @@ class MaskedAutoencoderPretraining:
                 epoch_index=epoch,
                 total_epochs=resolved_options.epochs,
                 progress_bar=resolved_options.progress_bar,
+                forward_chunk_size=effective_chunk_size,
             )
             self.logger.info(
                 "Epoch %d/%d - loss: %.6f",
@@ -292,6 +313,7 @@ class MaskedAutoencoderPretraining:
             "num_workers",
             "hidden_dim",
             "prefetch_factor",
+            "forward_chunk_size",
         }
         float_keys = {"learning_rate", "mask_ratio"}
         bool_keys = {"pin_memory", "progress_bar", "compilation"}
@@ -387,6 +409,7 @@ class MaskedAutoencoderPretraining:
         epoch_index: int,
         total_epochs: int,
         progress_bar: bool,
+        forward_chunk_size: int,
     ) -> float:
         model.train()
         total_loss = 0.0
@@ -411,15 +434,24 @@ class MaskedAutoencoderPretraining:
             masked_inputs[mask] = 0.0
 
             optimizer.zero_grad()
-            reconstructions = model(masked_inputs)
-            loss = self._compute_loss(
-                reconstructions, inputs, mask, device
-            )
-            loss.backward()
+            batch_size = inputs.size(0)
+            chunk_total_loss = 0.0
+            for start in range(0, batch_size, forward_chunk_size):
+                end = min(start + forward_chunk_size, batch_size)
+                chunk_inputs = masked_inputs[start:end]
+                chunk_targets = inputs[start:end]
+                chunk_mask = mask[start:end]
+                reconstructions = model(chunk_inputs)
+                chunk_loss = self._compute_loss(
+                    reconstructions, chunk_targets, chunk_mask, device
+                )
+                chunk_batch_size = chunk_inputs.size(0)
+                scaled_loss = chunk_loss * (chunk_batch_size / batch_size)
+                scaled_loss.backward()
+                chunk_total_loss += float(chunk_loss.item()) * chunk_batch_size
             optimizer.step()
 
-            batch_size = inputs.size(0)
-            loss_value = float(loss.item())
+            loss_value = chunk_total_loss / batch_size
             total_loss += loss_value * batch_size
             sample_count += batch_size
 
@@ -449,6 +481,13 @@ class MaskedAutoencoderPretraining:
             msg = "Dataloader returned zero samples"
             raise ValueError(msg)
         return total_loss / sample_count
+
+    def _resolve_forward_chunk_size(
+        self, requested_size: Optional[int], batch_size: int
+    ) -> int:
+        if requested_size is None:
+            return batch_size
+        return min(requested_size, batch_size)
 
     def _generate_mask(
         self, inputs: torch.Tensor, mask_ratio: float

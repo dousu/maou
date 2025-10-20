@@ -24,6 +24,7 @@ def pretrain(
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
     hidden_dim: int = 512,
+    forward_chunk_size: Optional[int] = None,
 ) -> str:
     """Execute the masked autoencoder pretraining workflow.
 
@@ -41,6 +42,7 @@ def pretrain(
         pin_memory: Explicit pin_memory setting. Defaults based on device when None.
         prefetch_factor: Prefetch batches per worker. Defaults to 2 when omitted.
         hidden_dim: Hidden dimension size of the autoencoder MLP.
+        forward_chunk_size: Optional limit for forward micro-batch size.
 
     Returns:
         A message describing where the trained state_dict was saved.
@@ -49,7 +51,7 @@ def pretrain(
     resolved_prefetch_factor = (
         prefetch_factor if prefetch_factor is not None else 2
     )
-    options = MaskedAutoencoderPretraining.Options(
+    option_kwargs = dict(
         datasource=datasource,
         config_path=config_path,
         output_path=output_path,
@@ -64,4 +66,7 @@ def pretrain(
         prefetch_factor=resolved_prefetch_factor,
         hidden_dim=hidden_dim,
     )
+    if forward_chunk_size is not None:
+        option_kwargs["forward_chunk_size"] = forward_chunk_size
+    options = MaskedAutoencoderPretraining.Options(**option_kwargs)
     return MaskedAutoencoderPretraining().run(options)

@@ -117,6 +117,15 @@ from maou.interface.pretrain import (
     show_default=True,
     help="Hidden dimension of the autoencoder MLP.",
 )
+@click.option(
+    "--forward-chunk-size",
+    type=int,
+    default=None,
+    help=(
+        "Maximum number of samples processed per forward pass. "
+        "Defaults to an adaptive value."
+    ),
+)
 @handle_exception
 def pretrain(
     input_dir: Optional[Path],
@@ -134,6 +143,7 @@ def pretrain(
     prefetch_factor: Optional[int],
     pin_memory: Optional[bool],
     hidden_dim: int,
+    forward_chunk_size: Optional[int],
 ) -> None:
     """CLI entry point for masked autoencoder pretraining."""
     app_logger.info(
@@ -179,5 +189,6 @@ def pretrain(
         pin_memory=pin_memory,
         prefetch_factor=resolved_prefetch,
         hidden_dim=hidden_dim,
+        forward_chunk_size=forward_chunk_size,
     )
     click.echo(message)
