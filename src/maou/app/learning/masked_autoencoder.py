@@ -15,8 +15,8 @@ from tqdm.auto import tqdm
 
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.setup import (
-    DataLoaderFactory,
     ModelFactory,
+    default_worker_init_fn,
 )
 
 
@@ -183,14 +183,12 @@ class MaskedAutoencoderPretraining:
             resolved_options.pin_memory, device
         )
 
-        dataloader, _ = DataLoaderFactory.create_dataloaders(
-            dataset_train=dataset,
-            dataset_validation=dataset,
+        dataloader = self._create_dataloader(
+            dataset=dataset,
             batch_size=resolved_options.batch_size,
-            dataloader_workers=resolved_options.num_workers,
+            num_workers=resolved_options.num_workers,
             pin_memory=pin_memory,
             prefetch_factor=resolved_options.prefetch_factor,
-            drop_last_train=False,
         )
 
         model = _MaskedAutoencoder(
@@ -324,6 +322,36 @@ class MaskedAutoencoderPretraining:
         if option is not None:
             return option
         return device.type == "cuda"
+
+    def _create_dataloader(
+        self,
+        *,
+        dataset: Dataset,
+        batch_size: int,
+        num_workers: int,
+        pin_memory: bool,
+        prefetch_factor: int,
+    ) -> DataLoader:
+        persistent_workers = num_workers > 0
+        worker_init_fn = (
+            default_worker_init_fn if persistent_workers else None
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor
+            if persistent_workers
+            else None,
+            drop_last=False,
+            timeout=120 if persistent_workers else 0,
+            worker_init_fn=worker_init_fn,
+        )
+        self.logger.info("Training DataLoader: %d batches", len(dataloader))
+        return dataloader
 
     def _run_epoch(
         self,
