@@ -14,6 +14,7 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.network import Network
 from maou.app.learning.resource_monitor import ResourceUsage
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
@@ -436,9 +437,9 @@ class TrainingBenchmarkUseCase:
 
         if config.compilation:
             self.logger.info(
-                "Compiling model with torch.compile for benchmarking"
+                "Compiling model with torch.compile for benchmarking (dynamic shapes enabled)"
             )
-            model_components.model = torch.compile(
+            model_components.model = compile_module(
                 model_components.model
             )
 

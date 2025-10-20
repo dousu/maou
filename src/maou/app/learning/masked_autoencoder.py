@@ -15,6 +15,7 @@ from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.setup import (
     ModelFactory,
@@ -209,7 +210,7 @@ class MaskedAutoencoderPretraining:
         ).to(device)
         training_model: nn.Module
         if resolved_options.compilation:
-            training_model = torch.compile(model)
+            training_model = compile_module(model)
         else:
             training_model = model
         optimizer = torch.optim.Adam(
