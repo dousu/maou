@@ -43,6 +43,9 @@ def test_pretrain_persists_state_dict(tmp_path: Path) -> None:
         output_path=output_path,
         epochs=1,
         batch_size=4,
+        num_workers=0,
+        pin_memory=True,
+        prefetch_factor=1,
         hidden_dim=32,
     )
 
