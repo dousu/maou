@@ -12,7 +12,7 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.learning.network import Network
+from maou.app.learning.network import HeadlessNetwork, Network
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
@@ -192,6 +192,28 @@ class ModelFactory:
     """モデル作成の共通化."""
 
     logger: logging.Logger = logging.getLogger(__name__)
+
+    @classmethod
+    def create_shogi_backbone(
+        cls, device: torch.device
+    ) -> HeadlessNetwork:
+        """方策・価値ヘッドを含まないMixerバックボーンを作成."""
+
+        backbone = HeadlessNetwork(
+            num_channels=FEATURES_NUM,
+            num_tokens=81,
+            token_dim=64,
+            channel_dim=256,
+            depth=4,
+        )
+
+        backbone.to(device)
+        cls.logger.info(
+            "Created shogi-optimized Lightweight MLP-Mixer backbone (%s)",
+            str(device),
+        )
+
+        return backbone
 
     @classmethod
     def create_shogi_model(
