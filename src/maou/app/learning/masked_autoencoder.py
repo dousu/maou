@@ -539,13 +539,18 @@ class MaskedAutoencoderPretraining:
     def _persist_encoder_state_dict(
         self, model: _MaskedAutoencoder, output_path: Path
     ) -> None:
-        """Persist only the encoder parameters for downstream training."""
+        """Persist encoder weights aligned with the downstream training model."""
 
-        encoder_state = {
-            key: tensor.detach().cpu()
-            for key, tensor in model.encoder.state_dict().items()
-        }
-        torch.save(encoder_state, output_path)
+        reference_model = ModelFactory.create_shogi_model(
+            torch.device("cpu")
+        )
+        state_dict = reference_model.state_dict()
+        del reference_model
+
+        for key, tensor in model.encoder.state_dict().items():
+            state_dict[key] = tensor.detach().cpu()
+
+        torch.save(state_dict, output_path)
 
 
 __all__ = ["MaskedAutoencoderPretraining"]

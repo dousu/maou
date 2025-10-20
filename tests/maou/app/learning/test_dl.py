@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Mapping, cast
 
+import pytest
 import torch
 
 from maou.app.learning.dl import Learning
-from maou.app.learning.network import Network
+from maou.app.learning.network import HeadlessNetwork, Network
 
 
 class _DummyCompiledModule(torch.nn.Module):
@@ -62,3 +63,18 @@ def test_load_resume_state_dict_without_compilation() -> None:
     learning._load_resume_state_dict(state_dict)
 
     _assert_state_dict_equality(state_dict, target_model.state_dict())
+
+
+def test_load_resume_state_dict_requires_complete_state() -> None:
+    """Checkpoints missing head weights should raise a descriptive error."""
+
+    source_model = HeadlessNetwork()
+    target_model = Network()
+
+    learning = Learning()
+    learning.model = target_model
+
+    state_dict = source_model.state_dict()
+
+    with pytest.raises(RuntimeError):
+        learning._load_resume_state_dict(state_dict)
