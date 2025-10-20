@@ -1,9 +1,11 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from maou.app.learning.setup import ModelFactory
+from maou.app.learning import masked_autoencoder
 
 from maou.domain.data.schema import create_empty_preprocessing_array
 from maou.interface.data_io import save_array
@@ -58,3 +60,32 @@ def test_pretrain_persists_state_dict(tmp_path: Path) -> None:
     model = ModelFactory.create_shogi_model(torch.device("cpu"))
     model.load_state_dict(state_dict)
     assert "saved state_dict" in result.lower()
+
+
+def test_pretrain_compilation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    compile_called = False
+
+    def _fake_compile(module: torch.nn.Module) -> torch.nn.Module:
+        nonlocal compile_called
+        compile_called = True
+        return module
+
+    monkeypatch.setattr(masked_autoencoder.torch, "compile", _fake_compile)
+
+    output_path = tmp_path / "state.pt"
+    datasource = _create_dummy_datasource(tmp_path, samples=4)
+
+    pretrain(
+        datasource=datasource,
+        config_path=None,
+        output_path=output_path,
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        pin_memory=True,
+        prefetch_factor=1,
+        hidden_dim=32,
+        compilation=True,
+    )
+
+    assert compile_called

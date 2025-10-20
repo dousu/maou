@@ -19,6 +19,7 @@ def pretrain(
     learning_rate: float = 1e-3,
     mask_ratio: float = 0.75,
     device: Optional[str] = None,
+    compilation: bool = False,
     num_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
@@ -35,6 +36,7 @@ def pretrain(
         learning_rate: Optimiser learning rate.
         mask_ratio: Fraction of feature elements that will be masked.
         device: Optional explicit device identifier (e.g. "cpu" or "cuda").
+        compilation: Enable PyTorch compilation for the autoencoder model.
         num_workers: Number of DataLoader workers. Defaults to 0 when omitted.
         pin_memory: Explicit pin_memory setting. Defaults based on device when None.
         prefetch_factor: Prefetch batches per worker. Defaults to 2 when omitted.
@@ -56,6 +58,7 @@ def pretrain(
         learning_rate=learning_rate,
         mask_ratio=mask_ratio,
         device=device,
+        compilation=compilation,
         num_workers=resolved_num_workers,
         pin_memory=pin_memory,
         prefetch_factor=resolved_prefetch_factor,
