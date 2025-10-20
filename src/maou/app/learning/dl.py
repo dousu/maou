@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, MutableMapping, Optional
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -188,13 +188,13 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            self.model.load_state_dict(
-                torch.load(
-                    self.resume_from,
-                    weights_only=True,
-                    map_location=self.device,
-                )
+            state_dict: MutableMapping[str, torch.Tensor] = torch.load(
+                self.resume_from,
+                weights_only=True,
+                map_location=self.device,
             )
+
+            self._load_resume_state_dict(state_dict)
 
         # start epoch設定
         epoch_number = self.start_epoch
@@ -319,3 +319,19 @@ class Learning:
             epoch_number += 1
 
         writer.close()
+
+    def _load_resume_state_dict(
+        self, state_dict: MutableMapping[str, torch.Tensor]
+    ) -> None:
+        """Load a checkpoint while remaining compatible with compiled models."""
+
+        if hasattr(self.model, "_orig_mod"):
+            needs_prefix = any(
+                not key.startswith("_orig_mod.") for key in state_dict.keys()
+            )
+            if needs_prefix:
+                state_dict = {
+                    f"_orig_mod.{key}": value for key, value in state_dict.items()
+                }
+
+        self.model.load_state_dict(state_dict)
