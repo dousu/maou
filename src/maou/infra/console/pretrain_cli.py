@@ -81,11 +81,28 @@ from maou.interface.pretrain import (
     help="Explicit device identifier (e.g. 'cpu' or 'cuda').",
 )
 @click.option(
+    "--dataloader-workers",
     "--num-workers",
     type=int,
-    default=0,
-    show_default=True,
-    help="Number of worker processes for the DataLoader.",
+    default=None,
+    help="Number of worker processes for the DataLoader (default: 0).",
+)
+@click.option(
+    "--prefetch-factor",
+    type=int,
+    default=None,
+    help=(
+        "Number of batches prefetched by each worker when workers are enabled "
+        "(default: 2)."
+    ),
+)
+@click.option(
+    "--pin-memory/--no-pin-memory",
+    default=None,
+    help=(
+        "Enable or disable pinned memory for DataLoader tensors. By default, "
+        "it follows the selected device."
+    ),
 )
 @click.option(
     "--hidden-dim",
@@ -106,7 +123,9 @@ def pretrain(
     learning_rate: float,
     mask_ratio: float,
     device: Optional[str],
-    num_workers: int,
+    dataloader_workers: Optional[int],
+    prefetch_factor: Optional[int],
+    pin_memory: Optional[bool],
     hidden_dim: int,
 ) -> None:
     """CLI entry point for masked autoencoder pretraining."""
@@ -134,6 +153,11 @@ def pretrain(
         bit_pack=input_file_packed,
     )
 
+    resolved_workers = dataloader_workers if dataloader_workers is not None else 0
+    resolved_prefetch = (
+        prefetch_factor if prefetch_factor is not None else 2
+    )
+
     message = pretrain_interface(
         datasource=datasource,
         config_path=config_path,
@@ -143,7 +167,9 @@ def pretrain(
         learning_rate=learning_rate,
         mask_ratio=mask_ratio,
         device=device,
-        num_workers=num_workers,
+        num_workers=resolved_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=resolved_prefetch,
         hidden_dim=hidden_dim,
     )
     click.echo(message)
