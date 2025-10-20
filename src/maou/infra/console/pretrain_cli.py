@@ -5,6 +5,8 @@ import click
 
 from maou.infra.console.common import (
     app_logger,
+    FileDataSource,
+    FileSystem,
     handle_exception,
 )
 from maou.interface.pretrain import (
@@ -20,22 +22,128 @@ from maou.interface.pretrain import (
     help="Input directory containing training data.",
 )
 @click.option(
+    "--input-format",
+    type=click.Choice(["preprocess", "hcpe"]),
+    default="preprocess",
+    show_default=True,
+    help="Format of the input data (preprocess or hcpe).",
+)
+@click.option(
+    "--input-file-packed/--no-input-file-packed",
+    default=False,
+    show_default=True,
+    help="Indicates whether the local files are bit-packed.",
+)
+@click.option(
     "--config-path",
     type=click.Path(path_type=Path, exists=True),
     required=False,
     help="Optional configuration file for pretraining.",
 )
+@click.option(
+    "--output-path",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Location to store the pretrained state_dict.",
+)
+@click.option(
+    "--epochs",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Number of training epochs.",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=64,
+    show_default=True,
+    help="Mini-batch size used during optimisation.",
+)
+@click.option(
+    "--learning-rate",
+    type=float,
+    default=1e-3,
+    show_default=True,
+    help="Learning rate for Adam optimiser.",
+)
+@click.option(
+    "--mask-ratio",
+    type=float,
+    default=0.75,
+    show_default=True,
+    help="Fraction of elements masked prior to reconstruction.",
+)
+@click.option(
+    "--device",
+    type=str,
+    required=False,
+    help="Explicit device identifier (e.g. 'cpu' or 'cuda').",
+)
+@click.option(
+    "--num-workers",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Number of worker processes for the DataLoader.",
+)
+@click.option(
+    "--hidden-dim",
+    type=int,
+    default=512,
+    show_default=True,
+    help="Hidden dimension of the autoencoder MLP.",
+)
 @handle_exception
 def pretrain(
     input_dir: Optional[Path],
+    input_format: str,
+    input_file_packed: bool,
     config_path: Optional[Path],
+    output_path: Optional[Path],
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    mask_ratio: float,
+    device: Optional[str],
+    num_workers: int,
+    hidden_dim: int,
 ) -> None:
-    """CLI entry point for masked autoencoder pretraining (stub)."""
+    """CLI entry point for masked autoencoder pretraining."""
     app_logger.info(
         "Invoking masked autoencoder pretraining command."
     )
+    if input_dir is None:
+        raise click.BadOptionUsage(
+            option_name="--input-dir",
+            message="--input-dir must be specified for pretraining.",
+        )
+
+    array_type = (
+        "preprocessing" if input_format == "preprocess" else "hcpe"
+    )
+    file_paths = FileSystem.collect_files(input_dir)
+    if not file_paths:
+        raise click.ClickException(
+            f"No input files found under {input_dir}."
+        )
+
+    datasource = FileDataSource.FileDataSourceSpliter(
+        file_paths=file_paths,
+        array_type=array_type,
+        bit_pack=input_file_packed,
+    )
+
     message = pretrain_interface(
-        input_dir=input_dir,
+        datasource=datasource,
         config_path=config_path,
+        output_path=output_path,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        mask_ratio=mask_ratio,
+        device=device,
+        num_workers=num_workers,
+        hidden_dim=hidden_dim,
     )
     click.echo(message)

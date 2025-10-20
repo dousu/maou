@@ -135,6 +135,7 @@ class DataLoaderFactory:
         dataloader_workers: int,
         pin_memory: bool,
         prefetch_factor: int = 2,
+        drop_last_train: bool = True,
     ) -> Tuple[DataLoader, DataLoader]:
         """学習・検証用DataLoaderの作成."""
 
@@ -156,7 +157,7 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if dataloader_workers > 0
             else None,
-            drop_last=True,
+            drop_last=drop_last_train,
             timeout=120 if dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
         )
