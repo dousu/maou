@@ -19,13 +19,13 @@ maouプロジェクトでは，以下の2種類のextrasを定義しています
 異なるGPU環境に応じた依存関係を管理します：
 
 - **cpu**: CPU環境用
-  - 含まれるライブラリ: torch, torchinfo, tensorboard, torch-tb-profiler
+  - 含まれるライブラリ: torch, torchinfo, torch-tb-profiler, onnxruntime, onnxruntime-tools, onnxsim
   - 用途: GPUを使用しない環境での学習や推論
 
 - **cuda**: NVIDIA GPU環境用
-  - 含まれるライブラリ: torch, torchinfo, tensorboard, torch-tb-profiler, pynvml, onnxruntime-gpu, onnxruntime-tools, onnxsim
+  - 含まれるライブラリ: torch, pytorch-cuda, torchinfo, torch-tb-profiler, pynvml, onnxruntime-gpu, onnxruntime-tools, onnxsim
   - 用途: NVIDIA GPUを使用した高速な学習や推論
-  - 特記事項: CUDA版PyTorchを利用する場合は，Poetry実行前にPyTorch公式の追加インデックスを環境変数で指定する必要があります
+  - 特記事項: CUDA版PyTorchは`pytorch-cuda`メタパッケージ経由で自動的に取得され，PyTorch公式のCUDAインデックス（`https://download.pytorch.org/whl/cu128`）からのみ解決されます．
 
 - **mpu**: Apple Silicon環境用
   - 含まれるライブラリ: torch, torchinfo, tensorboard, torch-tb-profiler
@@ -115,14 +115,12 @@ GPU_TYPE=cuda CLOUD_PROVIDER=aws ./install-deps.sh
 
 ## CUDA版PyTorchの取得方法
 
-`cuda` extraはCUDA対応の補助ライブラリ（`onnxruntime-gpu` や `pynvml` など）をインストールしますが，PyTorch本体はデフォルトでPyPIのCPU版が選択されます．CUDA版PyTorchを取得するには，公式ドキュメントに従って追加インデックスを明示的に指定してください．Poetryでは，インストール時に環境変数を設定することで追加インデックスを利用できます：
+`cuda` extraでは，PyTorch公式が提供する`pytorch-cuda`メタパッケージを直接依存関係として解決します．Poetryのソース設定で`https://download.pytorch.org/whl/cu128`を「explicit」なインデックスとして追加しているため，CUDA用インストールでは常にこのインデックスが利用されます．
 
-```bash
-# CUDA 12.8の例
-PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu128" poetry install -E cuda
-```
+- `poetry install -E cuda`や`poetry sync -E cuda`では，`pytorch-cuda`とそのNVIDIA製ランタイム群がPyTorch CUDAインデックスからインストールされます．
+- `poetry install -E cpu`や`poetry sync -E cpu`では，CUDA用インデックスは参照されず，PyPIのみが利用されます．
 
-この環境変数は`poetry sync`や`poetry update`でも同様に利用できます．CPU環境では変数を設定しないか空文字にしておけばPyPIのみが参照されます．
+したがって，環境変数でインデックスを切り替える必要はありません．環境間での挙動確認には，それぞれのextraを指定してPoetryコマンドを実行してください．
 
 ## 使用例
 
