@@ -11,6 +11,7 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class _FeedForward(nn.Module):
@@ -26,14 +27,14 @@ class _FeedForward(nn.Module):
         self.fc1 = nn.Linear(dim, hidden_dim)
         self.activation = nn.GELU()
         self.fc2 = nn.Linear(hidden_dim, dim)
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout_rate = dropout_rate
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)
         x = self.activation(x)
-        x = self.dropout(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
         x = self.fc2(x)
-        x = self.dropout(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
         return x
 
 
@@ -113,7 +114,7 @@ class ShogiMLPMixer(nn.Module):
         self.num_tokens = num_tokens
         self.input_channels = num_channels
         self.num_channels = embed_dim
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout_rate = dropout_rate
 
         block_config = _MixerBlockConfig(
             num_tokens=num_tokens,
@@ -166,11 +167,11 @@ class ShogiMLPMixer(nn.Module):
         tokens = self._flatten_tokens(x)
         tokens = self.input_norm(tokens)
         tokens = self.embedding(tokens)
-        tokens = self.dropout(tokens)
+        tokens = F.dropout(tokens, p=self.dropout_rate, training=self.training)
         for block in self.blocks:
             tokens = block(tokens)
         tokens = self.norm(tokens)
-        tokens = self.dropout(tokens)
+        tokens = F.dropout(tokens, p=self.dropout_rate, training=self.training)
 
         if token_mask is not None:
             if token_mask.shape != (
