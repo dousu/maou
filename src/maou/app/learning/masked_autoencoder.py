@@ -94,11 +94,14 @@ class _MaskedAutoencoder(nn.Module):
 
         self._feature_shape = feature_shape
         self._flattened_size = int(np.prod(feature_shape))
-        channels = feature_shape[0]
-
         self.encoder = ModelFactory.create_shogi_backbone(device)
+        encoder_output_dim = getattr(self.encoder, "embedding_dim", None)
+        if not isinstance(encoder_output_dim, int):
+            msg = "Encoder must expose integer embedding_dim"
+            raise TypeError(msg)
+
         self.decoder = nn.Sequential(
-            nn.Linear(channels, hidden_dim),
+            nn.Linear(encoder_output_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, self._flattened_size),
         )
