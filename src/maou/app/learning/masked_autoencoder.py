@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -10,6 +11,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
@@ -214,6 +216,10 @@ class MaskedAutoencoderPretraining:
             training_model.parameters(),
             lr=resolved_options.learning_rate,
         )
+        grad_scaler = GradScaler(
+            device="cuda",
+            enabled=device.type == "cuda",
+        )
 
         effective_chunk_size = self._resolve_forward_chunk_size(
             resolved_options.forward_chunk_size,
@@ -244,6 +250,7 @@ class MaskedAutoencoderPretraining:
                 total_epochs=resolved_options.epochs,
                 progress_bar=resolved_options.progress_bar,
                 forward_chunk_size=effective_chunk_size,
+                grad_scaler=grad_scaler,
             )
             self.logger.info(
                 "Epoch %d/%d - loss: %.6f",
@@ -410,6 +417,7 @@ class MaskedAutoencoderPretraining:
         total_epochs: int,
         progress_bar: bool,
         forward_chunk_size: int,
+        grad_scaler: Optional[GradScaler] = None,
     ) -> float:
         model.train()
         total_loss = 0.0
@@ -436,20 +444,32 @@ class MaskedAutoencoderPretraining:
             optimizer.zero_grad()
             batch_size = inputs.size(0)
             chunk_total_loss = 0.0
+            scaler = grad_scaler or GradScaler(
+                device="cuda",
+                enabled=device.type == "cuda",
+            )
+            use_autocast = device.type == "cuda" and scaler.is_enabled()
             for start in range(0, batch_size, forward_chunk_size):
                 end = min(start + forward_chunk_size, batch_size)
                 chunk_inputs = masked_inputs[start:end]
                 chunk_targets = inputs[start:end]
                 chunk_mask = mask[start:end]
-                reconstructions = model(chunk_inputs)
-                chunk_loss = self._compute_loss(
-                    reconstructions, chunk_targets, chunk_mask, device
+                autocast_context = (
+                    autocast(device_type="cuda", dtype=torch.float16)
+                    if use_autocast
+                    else nullcontext()
                 )
+                with autocast_context:
+                    reconstructions = model(chunk_inputs)
+                    chunk_loss = self._compute_loss(
+                        reconstructions, chunk_targets, chunk_mask, device
+                    )
                 chunk_batch_size = chunk_inputs.size(0)
                 scaled_loss = chunk_loss * (chunk_batch_size / batch_size)
-                scaled_loss.backward()
+                scaler.scale(scaled_loss).backward()
                 chunk_total_loss += float(chunk_loss.item()) * chunk_batch_size
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             loss_value = chunk_total_loss / batch_size
             total_loss += loss_value * batch_size
