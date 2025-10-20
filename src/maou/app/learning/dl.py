@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, MutableMapping, Optional
+from typing import Dict, MutableMapping, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -19,6 +19,7 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
 from maou.app.learning.network import Network
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.board.shogi import FEATURES_NUM
@@ -95,7 +96,6 @@ class Learning:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
-                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -130,6 +130,12 @@ class Learning:
                 9,
             ),
         )
+
+        if config.compilation:
+            self.logger.info(
+                "Compiling model with torch.compile (dynamic shapes enabled)"
+            )
+            self.model = cast(Network, compile_module(self.model))
         self.__train()
 
         learning_result["Data Samples"] = (

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, Dict
 
 import numpy as np
 import pytest
@@ -64,10 +65,14 @@ def test_pretrain_persists_state_dict(tmp_path: Path) -> None:
 
 def test_pretrain_compilation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     compile_called = False
+    compile_kwargs: Dict[str, Any] = {}
 
-    def _fake_compile(module: torch.nn.Module) -> torch.nn.Module:
+    def _fake_compile(
+        module: torch.nn.Module, **kwargs: Any
+    ) -> torch.nn.Module:
         nonlocal compile_called
         compile_called = True
+        compile_kwargs.update(kwargs)
         return module
 
     monkeypatch.setattr(masked_autoencoder.torch, "compile", _fake_compile)
@@ -89,3 +94,4 @@ def test_pretrain_compilation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     )
 
     assert compile_called
+    assert compile_kwargs.get("dynamic") is True
