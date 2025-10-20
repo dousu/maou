@@ -1,24 +1,49 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import click
 
-from maou.infra.console.common import (
-    GCS,
-    HAS_AWS,
-    HAS_BIGQUERY,
-    HAS_GCS,
-    S3,
-    BigQueryDataSource,
-    FileDataSource,
-    FileSystem,
-    GCSDataSource,
-    S3DataSource,
-    app_logger,
-    handle_exception,
-)
+from maou.infra.console import common
 from maou.interface import learn
 
+
+if TYPE_CHECKING:
+    from maou.infra.console.common import (
+        BigQueryDataSource as BigQueryDataSourceType,
+        FileDataSource as FileDataSourceType,
+        FileSystem as FileSystemType,
+        GCS as GCSType,
+        GCSDataSource as GCSDataSourceType,
+        S3 as S3Type,
+        S3DataSource as S3DataSourceType,
+    )
+else:
+    BigQueryDataSourceType = Any
+    FileDataSourceType = Any
+    FileSystemType = Any
+    GCSType = Any
+    GCSDataSourceType = Any
+    S3Type = Any
+    S3DataSourceType = Any
+
+
+app_logger = common.app_logger
+FileDataSource = common.FileDataSource
+FileSystem = common.FileSystem
+HAS_BIGQUERY = common.HAS_BIGQUERY
+HAS_GCS = common.HAS_GCS
+HAS_AWS = common.HAS_AWS
+BigQueryDataSource: BigQueryDataSourceType | None = getattr(
+    common, "BigQueryDataSource", None
+)
+GCS: GCSType | None = getattr(common, "GCS", None)
+GCSDataSource: GCSDataSourceType | None = getattr(
+    common, "GCSDataSource", None
+)
+S3: S3Type | None = getattr(common, "S3", None)
+S3DataSource: S3DataSourceType | None = getattr(
+    common, "S3DataSource", None
+)
 
 @click.command("learn-model")
 @click.option(
@@ -297,7 +322,7 @@ from maou.interface import learn
     type=str,
     required=False,
 )
-@handle_exception
+@common.handle_exception
 def learn_model(
     input_dir: Optional[Path],
     input_file_packed: bool,
