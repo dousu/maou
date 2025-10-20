@@ -11,9 +11,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
 
 from maou.app.learning.dl import LearningDataSource
-from maou.app.learning.setup import DataLoaderFactory, ModelFactory
+from maou.app.learning.setup import (
+    DataLoaderFactory,
+    ModelFactory,
+)
 
 
 class _FeatureDataset(Dataset):
@@ -29,11 +33,15 @@ class _FeatureDataset(Dataset):
             msg = "features must be 3-dimensional (channels, height, width)"
             raise ValueError(msg)
 
-        self.original_shape: tuple[int, ...] = tuple(first_features.shape)
+        self.original_shape: tuple[int, ...] = tuple(
+            first_features.shape
+        )
         self._num_features = int(first_features.size)
         self._datasource = datasource
 
-    def __len__(self) -> int:  # pragma: no cover - simple delegation
+    def __len__(
+        self,
+    ) -> int:  # pragma: no cover - simple delegation
         return len(self._datasource)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
@@ -51,11 +59,18 @@ class _FeatureDataset(Dataset):
         channels, height, width = self.original_shape
         return int(channels), int(height), int(width)
 
-    def _extract_features(self, record: np.ndarray) -> np.ndarray:
-        if record.dtype.names is None or "features" not in record.dtype.names:
+    def _extract_features(
+        self, record: np.ndarray
+    ) -> np.ndarray:
+        if (
+            record.dtype.names is None
+            or "features" not in record.dtype.names
+        ):
             msg = "Record does not contain 'features' field"
             raise ValueError(msg)
-        features = np.asarray(record["features"], dtype=np.float32)
+        features = np.asarray(
+            record["features"], dtype=np.float32
+        )
         if features.ndim < 2:
             msg = "features must be at least 2-dimensional"
             raise ValueError(msg)
@@ -91,7 +106,9 @@ class _MaskedAutoencoder(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         reshaped = x.view(batch_size, *self._feature_shape)
-        encoded = self.encoder.backbone.forward_features(reshaped)
+        encoded = self.encoder.backbone.forward_features(
+            reshaped
+        )
         decoded = self.decoder(encoded)
         return decoded.view(batch_size, -1)
 
@@ -122,6 +139,7 @@ class MaskedAutoencoderPretraining:
         hidden_dim: int = 512
         pin_memory: Optional[bool] = None
         prefetch_factor: int = 2
+        progress_bar: bool = True
 
     def run(
         self, options: "MaskedAutoencoderPretraining.Options"
@@ -137,8 +155,10 @@ class MaskedAutoencoderPretraining:
         """
 
         resolved_options = self._apply_config_overrides(options)
-        training_datasource, _ = resolved_options.datasource.train_test_split(
-            test_ratio=0.0
+        training_datasource, _ = (
+            resolved_options.datasource.train_test_split(
+                test_ratio=0.0
+            )
         )
 
         if resolved_options.epochs <= 0:
@@ -155,7 +175,9 @@ class MaskedAutoencoderPretraining:
             raise ValueError(msg)
 
         dataset = _FeatureDataset(training_datasource)
-        output_path = self._resolve_output_path(resolved_options.output_path)
+        output_path = self._resolve_output_path(
+            resolved_options.output_path
+        )
         device = self._resolve_device(resolved_options.device)
         pin_memory = self._resolve_pin_memory(
             resolved_options.pin_memory, device
@@ -177,7 +199,8 @@ class MaskedAutoencoderPretraining:
             device=device,
         ).to(device)
         optimizer = torch.optim.Adam(
-            model.parameters(), lr=resolved_options.learning_rate
+            model.parameters(),
+            lr=resolved_options.learning_rate,
         )
 
         self.logger.info(
@@ -192,6 +215,9 @@ class MaskedAutoencoderPretraining:
                 optimizer=optimizer,
                 device=device,
                 mask_ratio=resolved_options.mask_ratio,
+                epoch_index=epoch,
+                total_epochs=resolved_options.epochs,
+                progress_bar=resolved_options.progress_bar,
             )
             self.logger.info(
                 "Epoch %d/%d - loss: %.6f",
@@ -225,8 +251,12 @@ class MaskedAutoencoderPretraining:
             if key not in option_dict:
                 msg = f"Unknown configuration option: {key}"
                 raise ValueError(msg)
-            option_dict[key] = self._coerce_option_value(key, value)
-        return MaskedAutoencoderPretraining.Options(**option_dict)
+            option_dict[key] = self._coerce_option_value(
+                key, value
+            )
+        return MaskedAutoencoderPretraining.Options(
+            **option_dict
+        )
 
     def _load_config(self, path: Path) -> Dict[str, Any]:
         suffix = path.suffix.lower()
@@ -259,6 +289,7 @@ class MaskedAutoencoderPretraining:
             "prefetch_factor",
         }
         float_keys = {"learning_rate", "mask_ratio"}
+        bool_keys = {"pin_memory", "progress_bar"}
         if key in path_keys and value is not None:
             return Path(value)
         if key in int_keys and value is not None:
@@ -267,7 +298,7 @@ class MaskedAutoencoderPretraining:
             return float(value)
         if key == "device" and value is not None:
             return str(value)
-        if key == "pin_memory" and value is not None:
+        if key in bool_keys and value is not None:
             return bool(value)
         return value
 
@@ -278,7 +309,9 @@ class MaskedAutoencoderPretraining:
             return output_path
         return Path.cwd() / "masked_autoencoder_state.pt"
 
-    def _resolve_device(self, device_str: Optional[str]) -> torch.device:
+    def _resolve_device(
+        self, device_str: Optional[str]
+    ) -> torch.device:
         if device_str is not None:
             return torch.device(device_str)
         if torch.cuda.is_available():
@@ -300,11 +333,23 @@ class MaskedAutoencoderPretraining:
         optimizer: torch.optim.Optimizer,
         device: torch.device,
         mask_ratio: float,
+        epoch_index: int,
+        total_epochs: int,
+        progress_bar: bool,
     ) -> float:
         model.train()
         total_loss = 0.0
         sample_count = 0
-        for batch in dataloader:
+        batch_iterable = (
+            tqdm(
+                enumerate(dataloader),
+                desc=f"MAE Epoch {epoch_index + 1}/{total_epochs}",
+                total=len(dataloader),
+            )
+            if progress_bar
+            else enumerate(dataloader)
+        )
+        for _, batch in batch_iterable:
             inputs = batch.to(device)
             mask = self._generate_mask(inputs, mask_ratio)
             masked_inputs = inputs.clone()
@@ -334,7 +379,9 @@ class MaskedAutoencoderPretraining:
             return torch.zeros_like(inputs, dtype=torch.bool)
         if mask_ratio >= 1.0:
             return torch.ones_like(inputs, dtype=torch.bool)
-        probabilities = torch.rand_like(inputs, dtype=torch.float32)
+        probabilities = torch.rand_like(
+            inputs, dtype=torch.float32
+        )
         return probabilities < mask_ratio
 
     def _compute_loss(
