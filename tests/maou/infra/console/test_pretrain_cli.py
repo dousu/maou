@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from click.testing import CliRunner
 
@@ -8,6 +9,7 @@ from maou.domain.data.schema import create_empty_preprocessing_array
 from maou.interface.data_io import save_array
 from maou.infra.console.pretrain_cli import pretrain
 from maou.app.learning.setup import ModelFactory
+from maou.app.learning import masked_autoencoder
 
 
 def _write_preprocessing_file(directory: Path, samples: int) -> None:
@@ -24,9 +26,20 @@ def _write_preprocessing_file(directory: Path, samples: int) -> None:
     )
 
 
-def test_pretrain_cli(tmp_path: Path) -> None:
+def test_pretrain_cli(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _write_preprocessing_file(tmp_path, samples=6)
     output_path = tmp_path / "weights.pt"
+
+    compile_called = False
+
+    def _fake_compile(module: torch.nn.Module) -> torch.nn.Module:
+        nonlocal compile_called
+        compile_called = True
+        return module
+
+    monkeypatch.setattr(masked_autoencoder.torch, "compile", _fake_compile)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -47,6 +60,7 @@ def test_pretrain_cli(tmp_path: Path) -> None:
             "--pin-memory",
             "--hidden-dim",
             "32",
+            "--compilation",
         ],
     )
 
@@ -59,3 +73,4 @@ def test_pretrain_cli(tmp_path: Path) -> None:
     model = ModelFactory.create_shogi_model(torch.device("cpu"))
     model.load_state_dict(state_dict)
     assert "saved state_dict" in result.output.lower()
+    assert compile_called

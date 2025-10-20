@@ -135,6 +135,7 @@ class MaskedAutoencoderPretraining:
         learning_rate: float = 1e-3
         mask_ratio: float = 0.75
         device: Optional[str] = None
+        compilation: bool = False
         num_workers: int = 0
         hidden_dim: int = 512
         pin_memory: Optional[bool] = None
@@ -196,8 +197,13 @@ class MaskedAutoencoderPretraining:
             hidden_dim=resolved_options.hidden_dim,
             device=device,
         ).to(device)
+        training_model: nn.Module
+        if resolved_options.compilation:
+            training_model = torch.compile(model)
+        else:
+            training_model = model
         optimizer = torch.optim.Adam(
-            model.parameters(),
+            training_model.parameters(),
             lr=resolved_options.learning_rate,
         )
 
@@ -208,7 +214,7 @@ class MaskedAutoencoderPretraining:
 
         for epoch in range(resolved_options.epochs):
             epoch_loss = self._run_epoch(
-                model=model,
+                model=training_model,
                 dataloader=dataloader,
                 optimizer=optimizer,
                 device=device,
@@ -287,7 +293,7 @@ class MaskedAutoencoderPretraining:
             "prefetch_factor",
         }
         float_keys = {"learning_rate", "mask_ratio"}
-        bool_keys = {"pin_memory", "progress_bar"}
+        bool_keys = {"pin_memory", "progress_bar", "compilation"}
         if key in path_keys and value is not None:
             return Path(value)
         if key in int_keys and value is not None:
@@ -356,7 +362,7 @@ class MaskedAutoencoderPretraining:
     def _run_epoch(
         self,
         *,
-        model: _MaskedAutoencoder,
+        model: nn.Module,
         dataloader: DataLoader,
         optimizer: torch.optim.Optimizer,
         device: torch.device,

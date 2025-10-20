@@ -81,6 +81,12 @@ from maou.interface.pretrain import (
     help="Explicit device identifier (e.g. 'cpu' or 'cuda').",
 )
 @click.option(
+    "--compilation/--no-compilation",
+    default=False,
+    show_default=True,
+    help="Enable PyTorch compilation of the masked autoencoder.",
+)
+@click.option(
     "--dataloader-workers",
     "--num-workers",
     type=int,
@@ -123,6 +129,7 @@ def pretrain(
     learning_rate: float,
     mask_ratio: float,
     device: Optional[str],
+    compilation: bool,
     dataloader_workers: Optional[int],
     prefetch_factor: Optional[int],
     pin_memory: Optional[bool],
@@ -167,6 +174,7 @@ def pretrain(
         learning_rate=learning_rate,
         mask_ratio=mask_ratio,
         device=device,
+        compilation=compilation,
         num_workers=resolved_workers,
         pin_memory=pin_memory,
         prefetch_factor=resolved_prefetch,
