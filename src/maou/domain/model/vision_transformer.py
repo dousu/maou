@@ -1,7 +1,8 @@
-"""Vision Transformer tailored for shogi board evaluation.
+"""Vision Transformer tailored for compact board evaluation tasks.
 
-The :class:`ShogiVisionTransformer` consumes shogi board tensors shaped
-``(batch_size, 104, 9, 9)`` and predicts a scalar evaluation value per board.
+The :class:`VisionTransformer` consumes board tensors shaped
+``(batch_size, channels, height, width)`` and predicts a scalar evaluation per
+board using the flattened cells as tokens.
 """
 
 from __future__ import annotations
@@ -13,8 +14,8 @@ from torch import Tensor, nn
 
 
 @dataclass(frozen=True)
-class ShogiViTConfig:
-    """Configuration bundle for :class:`ShogiVisionTransformer`."""
+class VisionTransformerConfig:
+    """Configuration bundle for :class:`VisionTransformer`."""
 
     input_channels: int = 104
     board_size: int = 9
@@ -35,7 +36,7 @@ class ShogiViTConfig:
 class ViTEncoderBlock(nn.Module):
     """Single Vision Transformer encoder block."""
 
-    def __init__(self, config: ShogiViTConfig) -> None:
+    def __init__(self, config: VisionTransformerConfig) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(config.embed_dim)
         self.attn = nn.MultiheadAttention(
@@ -69,12 +70,12 @@ class ViTEncoderBlock(nn.Module):
         return x
 
 
-class ShogiVisionTransformer(nn.Module):
-    """Vision Transformer designed around the shogi board topology."""
+class VisionTransformer(nn.Module):
+    """Vision Transformer designed around small board-shaped inputs."""
 
-    def __init__(self, config: ShogiViTConfig | None = None) -> None:
+    def __init__(self, config: VisionTransformerConfig | None = None) -> None:
         super().__init__()
-        self.config = config or ShogiViTConfig()
+        self.config = config or VisionTransformerConfig()
         self.token_projection = nn.Linear(
             self.config.input_channels, self.config.embed_dim
         )
@@ -101,7 +102,7 @@ class ShogiVisionTransformer(nn.Module):
             nn.init.zeros_(self.head.bias)
 
     def forward(self, x: Tensor) -> Tensor:
-        """Return a scalar evaluation for each shogi board in ``x``."""
+        """Return a scalar evaluation for each board tensor in ``x``."""
 
         batch_size = x.shape[0]
         tokens = x.permute(0, 2, 3, 1).reshape(
