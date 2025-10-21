@@ -207,7 +207,7 @@ class ModelFactory:
             mlp_ratio=3.0,
             depth=6,
             dropout_rate=0.1,
-            attention_dropout_rate=0.1,
+            attention_dropout_rate=0.0,
         )
 
         backbone.to(device)
@@ -233,7 +233,7 @@ class ModelFactory:
             mlp_ratio=3.0,
             depth=6,
             dropout_rate=0.1,
-            attention_dropout_rate=0.1,
+            attention_dropout_rate=0.0,
         )
 
         model.to(device)

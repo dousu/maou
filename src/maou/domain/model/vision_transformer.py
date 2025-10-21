@@ -7,11 +7,13 @@ board using the flattened cells as tokens.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Optional
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 
 @dataclass(frozen=True)
@@ -25,7 +27,7 @@ class VisionTransformerConfig:
     mlp_ratio: float = 4.0
     num_layers: int = 6
     dropout: float = 0.1
-    attention_dropout: float = 0.1
+    attention_dropout: float = 0.0
     use_head: bool = True
 
     @property
@@ -41,11 +43,10 @@ class ViTEncoderBlock(nn.Module):
     def __init__(self, config: VisionTransformerConfig) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(config.embed_dim)
-        self.attn = nn.MultiheadAttention(
+        self.attn = _FlashSelfAttention(
             embed_dim=config.embed_dim,
             num_heads=config.num_heads,
             dropout=config.attention_dropout,
-            batch_first=True,
         )
         self.dropout = nn.Dropout(p=config.dropout)
         mlp_hidden = int(config.embed_dim * config.mlp_ratio)
@@ -63,13 +64,91 @@ class ViTEncoderBlock(nn.Module):
 
         residual = x
         x = self.norm1(x)
-        attn_output, _ = self.attn(x, x, x, need_weights=False)
+        attn_output = self.attn(x)
         x = residual + self.dropout(attn_output)
 
         residual = x
         x = self.norm2(x)
         x = residual + self.mlp(x)
         return x
+
+
+class _FlashSelfAttention(nn.Module):
+    """Self-attention layer that prefers FlashAttention when available."""
+
+    def __init__(
+        self,
+        *,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if embed_dim % num_heads != 0:
+            msg = (
+                "embed_dim must be divisible by num_heads for multi-head attention"
+            )
+            raise ValueError(msg)
+
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        # FlashAttention kernels require dropout to be disabled. Enforce at runtime.
+        if dropout != 0.0:
+            msg = "FlashAttention requires attention dropout to be zero"
+            raise ValueError(msg)
+        self.dropout_p = float(dropout)
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x: Tensor) -> Tensor:
+        batch_size, seq_len, _ = x.shape
+        qkv = self.qkv(x)
+        qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(dim=0)
+
+        use_flash = (
+            x.device.type == "cuda"
+            and hasattr(torch.backends, "cuda")
+            and hasattr(torch.backends.cuda, "sdp_kernel")
+        )
+        kernel_context = (
+            torch.backends.cuda.sdp_kernel(
+                enable_flash=True,
+                enable_mem_efficient=True,
+                enable_math=True,
+            )
+            if use_flash
+            else nullcontext()
+        )
+        try:
+            with kernel_context:
+                attn = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    dropout_p=self.dropout_p,
+                    is_causal=False,
+                )
+        except RuntimeError:
+            if not use_flash:
+                raise
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=True,
+                enable_math=True,
+            ):
+                attn = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    dropout_p=self.dropout_p,
+                    is_causal=False,
+                )
+
+        attn = attn.transpose(1, 2).contiguous().view(batch_size, seq_len, self.embed_dim)
+        return self.proj(attn)
 
 
 class VisionTransformer(nn.Module):

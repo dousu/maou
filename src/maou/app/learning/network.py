@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Tuple
+from collections.abc import Mapping
+from typing import Any, Tuple
 
 import torch
 from torch import nn
@@ -28,7 +29,7 @@ class HeadlessNetwork(nn.Module):
         mlp_ratio: float = 4.0,
         depth: int = 6,
         dropout_rate: float = 0.1,
-        attention_dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.0,
     ) -> None:
         super().__init__()
         height, width = board_size
@@ -90,6 +91,28 @@ class HeadlessNetwork(nn.Module):
                 f"Expected {self._board_size} but received {(height, width)}."
             )
             raise ValueError(msg)
+
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> torch.nn.modules.module._IncompatibleKeys:
+        """Load only backbone parameters, ignoring head-specific entries."""
+
+        if hasattr(self, "policy_head") or hasattr(self, "value_head"):
+            return super().load_state_dict(
+                state_dict, strict=strict, assign=assign
+            )
+
+        backbone_state = {
+            key: value
+            for key, value in state_dict.items()
+            if key.startswith("backbone.")
+        }
+        return super().load_state_dict(
+            backbone_state, strict=strict, assign=assign
+        )
 
 
 class PolicyHead(nn.Module):
@@ -161,7 +184,7 @@ class Network(HeadlessNetwork):
         mlp_ratio: float = 4.0,
         depth: int = 6,
         dropout_rate: float = 0.1,
-        attention_dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.0,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
     ) -> None:
