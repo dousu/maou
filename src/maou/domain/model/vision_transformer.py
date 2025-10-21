@@ -15,6 +15,12 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel as torch_sdpa_kernel
+except (ImportError, AttributeError):  # pragma: no cover - fallback for older PyTorch
+    SDPBackend = None  # type: ignore[assignment]
+    torch_sdpa_kernel = None  # type: ignore[assignment]
+
 
 @dataclass(frozen=True)
 class VisionTransformerConfig:
@@ -108,20 +114,29 @@ class _FlashSelfAttention(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(dim=0)
 
-        use_flash = (
-            x.device.type == "cuda"
-            and hasattr(torch.backends, "cuda")
-            and hasattr(torch.backends.cuda, "sdp_kernel")
+        use_cuda = x.device.type == "cuda"
+        has_new_sdpa = torch_sdpa_kernel is not None and SDPBackend is not None
+        has_legacy_sdpa = hasattr(torch.backends, "cuda") and hasattr(
+            torch.backends.cuda, "sdp_kernel"
         )
-        kernel_context = (
-            torch.backends.cuda.sdp_kernel(
+        supports_specialized_kernels = use_cuda and (has_new_sdpa or has_legacy_sdpa)
+        if use_cuda and has_new_sdpa:
+            kernel_context = torch_sdpa_kernel(
+                [
+                    SDPBackend.FLASH_ATTENTION,
+                    SDPBackend.EFFICIENT_ATTENTION,
+                    SDPBackend.MATH,
+                ],
+                set_priority=True,
+            )
+        elif use_cuda and has_legacy_sdpa:
+            kernel_context = torch.backends.cuda.sdp_kernel(
                 enable_flash=True,
                 enable_mem_efficient=True,
                 enable_math=True,
             )
-            if use_flash
-            else nullcontext()
-        )
+        else:
+            kernel_context = nullcontext()
         try:
             with kernel_context:
                 attn = F.scaled_dot_product_attention(
@@ -132,13 +147,20 @@ class _FlashSelfAttention(nn.Module):
                     is_causal=False,
                 )
         except RuntimeError:
-            if not use_flash:
+            if not supports_specialized_kernels:
                 raise
-            with torch.backends.cuda.sdp_kernel(
-                enable_flash=False,
-                enable_mem_efficient=True,
-                enable_math=True,
-            ):
+            if has_new_sdpa:
+                fallback_context = torch_sdpa_kernel(
+                    [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH],
+                    set_priority=True,
+                )
+            else:
+                fallback_context = torch.backends.cuda.sdp_kernel(
+                    enable_flash=False,
+                    enable_mem_efficient=True,
+                    enable_math=True,
+                )
+            with fallback_context:
                 attn = F.scaled_dot_product_attention(
                     q,
                     k,
