@@ -7,7 +7,7 @@ from typing import Final
 import torch
 
 
-_DYNAMIC_COMPILATION: Final[bool] = False
+_DYNAMIC_COMPILATION: Final[bool] = True
 
 
 def compile_module(module: torch.nn.Module) -> torch.nn.Module:

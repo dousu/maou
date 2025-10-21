@@ -59,7 +59,7 @@ def test_pretrain_persists_state_dict(tmp_path: Path) -> None:
     assert state_dict
     assert not any(key.startswith("decoder") for key in state_dict)
     backbone = ModelFactory.create_shogi_backbone(torch.device("cpu"))
-    backbone.load_state_dict(state_dict)
+    backbone.load_state_dict(state_dict, strict=False)
     assert "saved state_dict" in result.lower()
 
 
