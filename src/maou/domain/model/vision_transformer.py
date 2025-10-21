@@ -126,8 +126,7 @@ class _FlashSelfAttention(nn.Module):
                     SDPBackend.FLASH_ATTENTION,
                     SDPBackend.EFFICIENT_ATTENTION,
                     SDPBackend.MATH,
-                ],
-                set_priority=True,
+                ]
             )
         elif use_cuda and has_legacy_sdpa:
             kernel_context = torch.backends.cuda.sdp_kernel(
@@ -151,8 +150,7 @@ class _FlashSelfAttention(nn.Module):
                 raise
             if has_new_sdpa:
                 fallback_context = torch_sdpa_kernel(
-                    [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH],
-                    set_priority=True,
+                    [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
                 )
             else:
                 fallback_context = torch.backends.cuda.sdp_kernel(
