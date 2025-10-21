@@ -8,6 +8,7 @@ board using the flattened cells as tokens.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from torch import Tensor, nn
@@ -25,6 +26,7 @@ class VisionTransformerConfig:
     num_layers: int = 6
     dropout: float = 0.1
     attention_dropout: float = 0.1
+    use_head: bool = True
 
     @property
     def num_tokens(self) -> int:
@@ -76,6 +78,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, config: VisionTransformerConfig | None = None) -> None:
         super().__init__()
         self.config = config or VisionTransformerConfig()
+        self.embedding_dim = self.config.embed_dim
         self.token_projection = nn.Linear(
             self.config.input_channels, self.config.embed_dim
         )
@@ -87,7 +90,11 @@ class VisionTransformer(nn.Module):
             [ViTEncoderBlock(self.config) for _ in range(self.config.num_layers)]
         )
         self.norm = nn.LayerNorm(self.config.embed_dim)
-        self.head = nn.Linear(self.config.embed_dim, 1)
+        self.head: Optional[nn.Linear]
+        if self.config.use_head:
+            self.head = nn.Linear(self.config.embed_dim, 1)
+        else:
+            self.head = None
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
@@ -97,12 +104,13 @@ class VisionTransformer(nn.Module):
         nn.init.trunc_normal_(self.token_projection.weight, std=0.02)
         if self.token_projection.bias is not None:
             nn.init.zeros_(self.token_projection.bias)
-        nn.init.trunc_normal_(self.head.weight, std=0.02)
-        if self.head.bias is not None:
-            nn.init.zeros_(self.head.bias)
+        if self.head is not None:
+            nn.init.trunc_normal_(self.head.weight, std=0.02)
+            if self.head.bias is not None:
+                nn.init.zeros_(self.head.bias)
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Return a scalar evaluation for each board tensor in ``x``."""
+    def _encode_tokens(self, x: Tensor) -> Tensor:
+        """Project inputs into token embeddings and run encoder blocks."""
 
         batch_size = x.shape[0]
         tokens = x.permute(0, 2, 3, 1).reshape(
@@ -115,7 +123,26 @@ class VisionTransformer(nn.Module):
         tokens = self.embedding_dropout(tokens)
         for block in self.encoder:
             tokens = block(tokens)
+        return tokens
+
+    def forward_features(self, x: Tensor) -> Tensor:
+        """Return pooled token features prior to the prediction head."""
+
+        tokens = self._encode_tokens(x)
         tokens = self.norm(tokens)
         pooled = tokens.mean(dim=1)
+        return pooled
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Return a scalar evaluation for each board tensor in ``x``."""
+
+        if self.head is None:
+            msg = (
+                "VisionTransformer configured without a prediction head cannot "
+                "be called directly. Use `forward_features` instead."
+            )
+            raise RuntimeError(msg)
+
+        pooled = self.forward_features(x)
         output = self.head(pooled)
         return output.squeeze(-1)

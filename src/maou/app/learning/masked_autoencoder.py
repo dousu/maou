@@ -81,7 +81,7 @@ class _FeatureDataset(Dataset):
 
 
 class _MaskedAutoencoder(nn.Module):
-    """Masked autoencoder that reuses the shogi mixer backbone as encoder."""
+    """Masked autoencoder that reuses the shogi ViT backbone as encoder."""
 
     def __init__(
         self,

@@ -1,4 +1,4 @@
-"""Tests for the shogi MLP-Mixer based Network."""
+"""Tests for the shogi Vision Transformer based Network."""
 
 from __future__ import annotations
 
