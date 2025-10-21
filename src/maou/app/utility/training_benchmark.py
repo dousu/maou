@@ -437,7 +437,7 @@ class TrainingBenchmarkUseCase:
 
         if config.compilation:
             self.logger.info(
-                "Compiling model with torch.compile for benchmarking (dynamic shapes enabled)"
+                "Compiling model with torch.compile for benchmarking (dynamic shapes disabled)"
             )
             model_components.model = compile_module(
                 model_components.model

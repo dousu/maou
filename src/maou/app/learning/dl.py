@@ -133,7 +133,7 @@ class Learning:
 
         if config.compilation:
             self.logger.info(
-                "Compiling model with torch.compile (dynamic shapes enabled)"
+                "Compiling model with torch.compile (dynamic shapes disabled)"
             )
             self.model = cast(Network, compile_module(self.model))
         self.__train()
