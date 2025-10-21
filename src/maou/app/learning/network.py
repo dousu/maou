@@ -1,41 +1,56 @@
-"""Shogi-optimized MLP-Mixer based policy and value network."""
+"""Neural network architectures used for shogi learning workflows."""
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
+from typing import Tuple
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
+import torch
+from torch import nn
+
 from maou.domain.board.shogi import FEATURES_NUM
-from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.model.vision_transformer import (
+    VisionTransformer as DomainVisionTransformer,
+    VisionTransformerConfig,
+)
 
 
 class HeadlessNetwork(nn.Module):
-    """Shared Shogi MLP-Mixer backbone without policy/value heads."""
+    """Headless shogi backbone that wraps the domain VisionTransformer."""
 
     def __init__(
         self,
         *,
         num_channels: int = FEATURES_NUM,
-        num_tokens: int = 81,
-        embed_dim: int = 256,
-        token_dim: int = 128,
-        channel_dim: int = 1024,
-        depth: int = 16,
-        dropout_rate: float = 0.15,
+        board_size: Tuple[int, int] = (9, 9),
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        mlp_ratio: float = 4.0,
+        depth: int = 6,
+        dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.1,
     ) -> None:
         super().__init__()
-        self.backbone: ShogiMLPMixer = ShogiMLPMixer(
-            num_classes=None,
-            num_channels=num_channels,
-            num_tokens=num_tokens,
+        height, width = board_size
+        if height != width:
+            msg = "VisionTransformer requires a square board size."
+            raise ValueError(msg)
+
+        config = VisionTransformerConfig(
+            input_channels=num_channels,
+            board_size=height,
             embed_dim=embed_dim,
-            token_dim=token_dim,
-            channel_dim=channel_dim,
-            depth=depth,
-            dropout_rate=dropout_rate,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            num_layers=depth,
+            dropout=dropout_rate,
+            attention_dropout=attention_dropout_rate,
+            use_head=False,
         )
-        self._embedding_dim = embed_dim
+        self.backbone: DomainVisionTransformer = DomainVisionTransformer(config)
+        self._embedding_dim = self.backbone.embedding_dim
+        self._num_channels = num_channels
+        self._board_size = board_size
 
     @property
     def embedding_dim(self) -> int:
@@ -46,12 +61,35 @@ class HeadlessNetwork(nn.Module):
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         """Return pooled token features from the shared backbone."""
 
+        self._validate_inputs(x)
         return self.backbone.forward_features(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Alias of :meth:`forward_features` for convenience."""
 
         return self.forward_features(x)
+
+    def _validate_inputs(self, x: torch.Tensor) -> None:
+        if x.dim() != 4:
+            msg = (
+                "VisionTransformer expects inputs of shape (batch, channels,"
+                " height, width)."
+            )
+            raise ValueError(msg)
+
+        _, channels, height, width = x.shape
+        if channels != self._num_channels:
+            msg = (
+                f"Expected {self._num_channels} channels but received "
+                f"{channels}."
+            )
+            raise ValueError(msg)
+        if (height, width) != self._board_size:
+            msg = (
+                "Input board dimensions must match the configured board size. "
+                f"Expected {self._board_size} but received {(height, width)}."
+            )
+            raise ValueError(msg)
 
 
 class PolicyHead(nn.Module):
@@ -110,48 +148,32 @@ class ValueHead(nn.Module):
 
 
 class Network(HeadlessNetwork):
-    """Dual-head shogi network that shares a Shogi MLP-Mixer backbone.
-
-    The shared mixer extracts a global representation from the 9x9 feature
-    planes. Separate policy and value heads consume this representation and can
-    optionally introduce hidden projections for additional capacity.
-
-    Args:
-        num_policy_classes: Number of classes returned by the policy head.
-        num_channels: Number of input feature channels. Defaults to the shogi
-            board representation (:data:`FEATURES_NUM`).
-        num_tokens: Number of spatial tokens (``height × width``).
-        token_dim: Hidden dimension of the token mixing MLP.
-        channel_dim: Hidden dimension of the channel mixing MLP.
-        depth: Number of Mixer blocks stacked in the backbone.
-        policy_hidden_dim: Optional hidden dimension inserted in the policy
-            head. When ``None`` the head is a single linear layer.
-        value_hidden_dim: Optional hidden dimension inserted in the value head.
-            When ``None`` the head is a single linear layer.
-    """
+    """Dual-head shogi network built on a Vision Transformer backbone."""
 
     def __init__(
         self,
         *,
         num_policy_classes: int = MOVE_LABELS_NUM,
         num_channels: int = FEATURES_NUM,
-        num_tokens: int = 81,
-        embed_dim: int = 256,
-        token_dim: int = 128,
-        channel_dim: int = 1024,
-        depth: int = 16,
-        dropout_rate: float = 0.15,
+        board_size: Tuple[int, int] = (9, 9),
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        mlp_ratio: float = 4.0,
+        depth: int = 6,
+        dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.1,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
     ) -> None:
         super().__init__(
             num_channels=num_channels,
-            num_tokens=num_tokens,
             embed_dim=embed_dim,
-            token_dim=token_dim,
-            channel_dim=channel_dim,
             depth=depth,
             dropout_rate=dropout_rate,
+            board_size=board_size,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            attention_dropout_rate=attention_dropout_rate,
         )
         self.policy_head = PolicyHead(
             input_dim=self.embedding_dim,

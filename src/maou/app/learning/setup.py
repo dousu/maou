@@ -197,21 +197,22 @@ class ModelFactory:
     def create_shogi_backbone(
         cls, device: torch.device
     ) -> HeadlessNetwork:
-        """方策・価値ヘッドを含まないMixerバックボーンを作成."""
+        """方策・価値ヘッドを含まないVision Transformerバックボーンを作成."""
 
         backbone = HeadlessNetwork(
             num_channels=FEATURES_NUM,
-            num_tokens=81,
-            embed_dim=256,
-            token_dim=128,
-            channel_dim=1024,
-            depth=16,
-            dropout_rate=0.15,
+            board_size=(9, 9),
+            embed_dim=512,
+            num_heads=8,
+            mlp_ratio=4.0,
+            depth=6,
+            dropout_rate=0.1,
+            attention_dropout_rate=0.1,
         )
 
         backbone.to(device)
         cls.logger.info(
-            "Created shogi-optimized Shogi MLP-Mixer backbone (%s)",
+            "Created shogi-optimized Vision Transformer backbone (%s)",
             str(device),
         )
 
@@ -221,22 +222,23 @@ class ModelFactory:
     def create_shogi_model(
         cls, device: torch.device
     ) -> Network:
-        """将棋特化のShogi MLP-Mixerモデルを作成."""
+        """将棋特化のVision Transformerモデルを作成."""
 
         model = Network(
             num_policy_classes=MOVE_LABELS_NUM,
             num_channels=FEATURES_NUM,
-            num_tokens=81,
-            embed_dim=256,
-            token_dim=128,
-            channel_dim=1024,
-            depth=16,
-            dropout_rate=0.15,
+            board_size=(9, 9),
+            embed_dim=512,
+            num_heads=8,
+            mlp_ratio=4.0,
+            depth=6,
+            dropout_rate=0.1,
+            attention_dropout_rate=0.1,
         )
 
         model.to(device)
         cls.logger.info(
-            f"Created shogi-optimized Shogi MLP-Mixer model ({str(device)})"
+            f"Created shogi-optimized Vision Transformer model ({str(device)})"
         )
 
         return model
