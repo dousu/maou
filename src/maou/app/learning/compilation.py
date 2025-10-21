@@ -7,10 +7,10 @@ from typing import Final
 import torch
 
 
-_DYNAMIC_COMPILATION: Final[bool] = True
+_DYNAMIC_COMPILATION: Final[bool] = False
 
 
 def compile_module(module: torch.nn.Module) -> torch.nn.Module:
-    """Return a ``torch.compile`` wrapped module using dynamic shapes."""
+    """Return a ``torch.compile`` wrapped module with static shapes."""
 
     return torch.compile(module, dynamic=_DYNAMIC_COMPILATION)
