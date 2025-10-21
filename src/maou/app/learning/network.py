@@ -1,13 +1,80 @@
-"""Shogi-optimized MLP-Mixer based policy and value network."""
+"""Neural network architectures used for shogi learning workflows."""
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
+from typing import Tuple
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
+import torch
+from torch import nn
+
 from maou.domain.board.shogi import FEATURES_NUM
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.domain.model.vision_transformer import (
+    VisionTransformer as DomainVisionTransformer,
+    VisionTransformerConfig,
+)
+
+
+class VisionTransformer(DomainVisionTransformer):
+    """App-layer wrapper around the domain VisionTransformer."""
+
+    def __init__(
+        self,
+        *,
+        num_channels: int = FEATURES_NUM,
+        board_size: Tuple[int, int] = (9, 9),
+        embed_dim: int = 512,
+        depth: int = 6,
+        num_heads: int = 8,
+        mlp_ratio: float = 4.0,
+        dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.1,
+    ) -> None:
+        height, width = board_size
+        if height != width:
+            msg = "VisionTransformer requires a square board size."
+            raise ValueError(msg)
+
+        config = VisionTransformerConfig(
+            input_channels=num_channels,
+            board_size=height,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            num_layers=depth,
+            dropout=dropout_rate,
+            attention_dropout=attention_dropout_rate,
+        )
+        super().__init__(config)
+        self._num_channels = num_channels
+        self._board_size = board_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Validate inputs before delegating to the domain implementation."""
+
+        if x.dim() != 4:
+            msg = (
+                "VisionTransformer expects inputs of shape (batch, channels,"
+                " height, width)."
+            )
+            raise ValueError(msg)
+
+        batch_size, channels, height, width = x.shape
+        if channels != self._num_channels:
+            msg = (
+                f"Expected {self._num_channels} channels but received "
+                f"{channels}."
+            )
+            raise ValueError(msg)
+        if (height, width) != self._board_size:
+            msg = (
+                "Input board dimensions must match the configured board size. "
+                f"Expected {self._board_size} but received {(height, width)}."
+            )
+            raise ValueError(msg)
+
+        return super().forward(x)
 
 
 class HeadlessNetwork(nn.Module):
@@ -110,25 +177,7 @@ class ValueHead(nn.Module):
 
 
 class Network(HeadlessNetwork):
-    """Dual-head shogi network that shares a Shogi MLP-Mixer backbone.
-
-    The shared mixer extracts a global representation from the 9x9 feature
-    planes. Separate policy and value heads consume this representation and can
-    optionally introduce hidden projections for additional capacity.
-
-    Args:
-        num_policy_classes: Number of classes returned by the policy head.
-        num_channels: Number of input feature channels. Defaults to the shogi
-            board representation (:data:`FEATURES_NUM`).
-        num_tokens: Number of spatial tokens (``height × width``).
-        token_dim: Hidden dimension of the token mixing MLP.
-        channel_dim: Hidden dimension of the channel mixing MLP.
-        depth: Number of Mixer blocks stacked in the backbone.
-        policy_hidden_dim: Optional hidden dimension inserted in the policy
-            head. When ``None`` the head is a single linear layer.
-        value_hidden_dim: Optional hidden dimension inserted in the value head.
-            When ``None`` the head is a single linear layer.
-    """
+    """Dual-head shogi network that shares a Shogi MLP-Mixer backbone."""
 
     def __init__(
         self,
