@@ -116,20 +116,36 @@ class _FlashSelfAttention(nn.Module):
         kernel_context = (
             torch.backends.cuda.sdp_kernel(
                 enable_flash=True,
-                enable_mem_efficient=False,
-                enable_math=False,
+                enable_mem_efficient=True,
+                enable_math=True,
             )
             if use_flash
             else nullcontext()
         )
-        with kernel_context:
-            attn = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                dropout_p=self.dropout_p,
-                is_causal=False,
-            )
+        try:
+            with kernel_context:
+                attn = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    dropout_p=self.dropout_p,
+                    is_causal=False,
+                )
+        except RuntimeError:
+            if not use_flash:
+                raise
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=True,
+                enable_math=True,
+            ):
+                attn = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    dropout_p=self.dropout_p,
+                    is_causal=False,
+                )
 
         attn = attn.transpose(1, 2).contiguous().view(batch_size, seq_len, self.embed_dim)
         return self.proj(attn)
