@@ -14,6 +14,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
+from torchinfo import summary
 
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
@@ -208,6 +209,12 @@ class MaskedAutoencoderPretraining:
             hidden_dim=resolved_options.hidden_dim,
             device=device,
         ).to(device)
+        self._log_model_summary(
+            model=model,
+            batch_size=resolved_options.batch_size,
+            num_features=dataset.num_features,
+            device=device,
+        )
         training_model: nn.Module
         if resolved_options.compilation:
             training_model = compile_module(model)
@@ -552,6 +559,28 @@ class MaskedAutoencoderPretraining:
             state_dict[key] = tensor.detach().cpu()
 
         torch.save(state_dict, output_path)
+
+    def _log_model_summary(
+        self,
+        *,
+        model: nn.Module,
+        batch_size: int,
+        num_features: int,
+        device: torch.device,
+    ) -> None:
+        """Log a torchinfo summary of the masked autoencoder architecture."""
+
+        summary_batch_size = max(1, min(batch_size, 2))
+        stats = summary(
+            model,
+            input_size=(summary_batch_size, num_features),
+            device=str(device),
+            verbose=0,
+        )
+        self.logger.info(
+            "Masked autoencoder architecture summary:\n%s",
+            stats,
+        )
 
 
 __all__ = ["MaskedAutoencoderPretraining"]

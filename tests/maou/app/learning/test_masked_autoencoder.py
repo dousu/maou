@@ -5,6 +5,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
+from maou.app.learning import masked_autoencoder
 from maou.app.learning.masked_autoencoder import (
     MaskedAutoencoderPretraining,
     ModelFactory,
@@ -174,3 +175,58 @@ def test_persisted_state_dict_matches_training_model(
         key.startswith("policy_head") or key.startswith("value_head")
         for key in state_dict
     )
+
+
+def test_log_model_summary_logs_stats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_log_model_summary should emit torchinfo statistics."""
+
+    pretraining = MaskedAutoencoderPretraining()
+    model = torch.nn.Sequential(
+        torch.nn.Linear(10, 4),
+        torch.nn.ReLU(),
+        torch.nn.Linear(4, 10),
+    )
+
+    summary_calls: list[dict[str, object]] = []
+
+    class _FakeStats:
+        def __str__(self) -> str:
+            return "fake summary"
+
+    def _fake_summary(
+        model: torch.nn.Module,
+        *,
+        input_size: tuple[int, int],
+        device: str,
+        verbose: int,
+    ) -> _FakeStats:
+        summary_calls.append(
+            {"input_size": input_size, "device": device, "verbose": verbose}
+        )
+        return _FakeStats()
+
+    monkeypatch.setattr(masked_autoencoder, "summary", _fake_summary)
+
+    logged_messages: list[str] = []
+
+    def _record(message: str, *args: object, **_: object) -> None:
+        formatted = message % args if args else message
+        logged_messages.append(formatted)
+
+    monkeypatch.setattr(pretraining.logger, "info", _record)
+
+    pretraining._log_model_summary(
+        model=model,
+        batch_size=5,
+        num_features=10,
+        device=torch.device("cpu"),
+    )
+
+    assert summary_calls
+    summary_call = summary_calls[0]
+    assert summary_call["input_size"] == (2, 10)
+    assert summary_call["device"] == "cpu"
+    assert summary_call["verbose"] == 0
+    assert any("fake summary" in message for message in logged_messages)
