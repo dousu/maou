@@ -9,6 +9,22 @@ from maou.infra.file_system.file_data_source import (
 )
 from maou.infra.file_system.file_system import FileSystem
 
+# NOTE:
+#   Optional cloud provider dependencies (BigQuery, GCS, AWS) might not be
+#   installed in every runtime.  To keep the public API of this module stable,
+#   we initialise the exported symbols with ``None`` so that "from
+#   maou.infra.console.common import S3DataSource" continues to succeed even
+#   when the dependency is unavailable.  Callers must consult the corresponding
+#   ``HAS_*`` flag before using the objects.
+BigQueryDataSource: type[Any] | None = None
+BigQueryFeatureStore: type[Any] | None = None
+GCS: type[Any] | None = None
+GCSDataSource: type[Any] | None = None
+GCSFeatureStore: type[Any] | None = None
+S3: type[Any] | None = None
+S3DataSource: type[Any] | None = None
+S3FeatureStore: type[Any] | None = None
+
 __all__ = [
     "app_logger",
     "get_log_level_from_env",
