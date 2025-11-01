@@ -256,7 +256,7 @@ class LossOptimizerFactory:
         loss_fn_policy = GCEwithNegativePenaltyLoss(
             q=gce_parameter
         )
-        loss_fn_value = torch.nn.BCEWithLogitsLoss()
+        loss_fn_value = torch.nn.MSELoss()
         return loss_fn_policy, loss_fn_value
 
     @classmethod
