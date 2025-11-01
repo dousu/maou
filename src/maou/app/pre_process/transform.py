@@ -142,7 +142,7 @@ class Transform:
             game_result: ゲーム結果 (0=引き分け, 1=先手勝ち, 2=後手勝ち)
 
         Returns:
-            対応する結果値 (0=手番側負け, 0.5=引き分け, 2=手番側勝ち)
+            対応する結果値 (0=手番側負け, 0.5=引き分け, 1=手番側勝ち)
         """
         board = shogi.Board()
         board.set_hcp(hcp)

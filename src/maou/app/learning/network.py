@@ -155,12 +155,13 @@ class ValueHead(nn.Module):
         super().__init__()
         layers: list[nn.Module]
         if hidden_dim is None:
-            layers = [nn.Linear(input_dim, 1)]
+            layers = [nn.Linear(input_dim, 1), nn.Sigmoid()]
         else:
             layers = [
                 nn.Linear(input_dim, hidden_dim),
                 nn.GELU(),
                 nn.Linear(hidden_dim, 1),
+                nn.Sigmoid(),
             ]
         self.head = nn.Sequential(*layers)
 
