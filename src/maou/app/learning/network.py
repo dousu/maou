@@ -144,7 +144,12 @@ class PolicyHead(nn.Module):
 
 
 class ValueHead(nn.Module):
-    """Value head projecting backbone features to a scalar output."""
+    """Value head projecting backbone features to a scalar output.
+
+    Note: This head outputs logits (raw scores), not probabilities.
+    Use BCEWithLogitsLoss for training, which combines sigmoid and BCE loss
+    for numerical stability and compatibility with mixed precision training.
+    """
 
     def __init__(
         self,
@@ -155,18 +160,23 @@ class ValueHead(nn.Module):
         super().__init__()
         layers: list[nn.Module]
         if hidden_dim is None:
-            layers = [nn.Linear(input_dim, 1), nn.Sigmoid()]
+            # Output logits directly (no Sigmoid)
+            layers = [nn.Linear(input_dim, 1)]
         else:
+            # Output logits directly (no Sigmoid)
             layers = [
                 nn.Linear(input_dim, hidden_dim),
                 nn.GELU(),
                 nn.Linear(hidden_dim, 1),
-                nn.Sigmoid(),
             ]
         self.head = nn.Sequential(*layers)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """Return a scalar value prediction for the provided features."""
+        """Return a scalar value logit for the provided features.
+
+        Note: Output is a logit (raw score), not a probability.
+        Apply sigmoid during inference: torch.sigmoid(value_logit)
+        """
 
         return self.head(features)
 

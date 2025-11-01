@@ -252,11 +252,24 @@ class LossOptimizerFactory:
         cls,
         gce_parameter: float = 0.1,
     ) -> Tuple[GCEwithNegativePenaltyLoss, torch.nn.Module]:
-        """方策・価値用の損失関数ペアを作成."""
+        """方策・価値用の損失関数ペアを作成．
+
+        Value loss関数としてBCEWithLogitsLossを使用．
+        二峰性分布（0と1に集中）のデータに対してMSELossは平均値予測が
+        最適解となるため，BCEWithLogitsLossの方が適切．
+
+        BCEWithLogitsLossはSigmoidとBCE lossを組み合わせた関数で，
+        以下の利点がある:
+        - 数値的により安定（log-sum-exp trick）
+        - Mixed precision training（autocast）と互換性がある
+        - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
+        """
         loss_fn_policy = GCEwithNegativePenaltyLoss(
             q=gce_parameter
         )
-        loss_fn_value = torch.nn.MSELoss()
+        # BCEWithLogitsLoss: Value headはlogitsを出力
+        # Sigmoid + BCE lossを内部で実行（数値的に安定，autocast対応）
+        loss_fn_value = torch.nn.BCEWithLogitsLoss()
         return loss_fn_policy, loss_fn_value
 
     @classmethod
