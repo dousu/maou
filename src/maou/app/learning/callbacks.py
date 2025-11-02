@@ -218,14 +218,15 @@ class LoggingCallback(BaseCallback):
 
 
 class ValidationCallback(BaseCallback):
-    """Callback for validation with policy accuracy and value Brier Score."""
+    """Callback for validation with policy cross entropy and value Brier Score."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
         self.running_vloss = 0.0
-        self.test_accuracy_policy = 0.0
+        self.policy_cross_entropy_sum = 0.0
         self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.policy_sample_count = 0
         self.value_sample_count = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
@@ -235,13 +236,15 @@ class ValidationCallback(BaseCallback):
             and context.outputs_value is not None
         ):
             self.running_vloss += context.loss.item()
-            self.test_accuracy_policy += self._policy_accuracy(
+            self.policy_cross_entropy_sum += self._policy_cross_entropy(
                 context.outputs_policy, context.labels_policy
             )
+            policy_batch_size = int(context.labels_policy.size(0))
             value_batch_size = int(context.labels_value.numel())
             self.value_brier_score_sum += self._value_brier_score(
                 context.outputs_value, context.labels_value
             )
+            self.policy_sample_count += policy_batch_size
             self.value_sample_count += value_batch_size
             self.batch_count += 1
 
@@ -252,30 +255,31 @@ class ValidationCallback(BaseCallback):
         )
 
     def get_average_metrics(self) -> tuple[float, float]:
-        """Get average policy accuracy and value Brier Score."""
-        avg_policy = float(self.test_accuracy_policy) / float(
-            max(1, self.batch_count)
+        """Get average policy cross entropy and value Brier Score."""
+        avg_policy_cross_entropy = float(self.policy_cross_entropy_sum) / float(
+            max(1, self.policy_sample_count)
         )
         avg_value = float(self.value_brier_score_sum) / float(
             max(1, self.value_sample_count)
         )
-        return avg_policy, avg_value
+        return avg_policy_cross_entropy, avg_value
 
     def reset(self) -> None:
         """Reset all counters for next epoch."""
         self.running_vloss = 0.0
-        self.test_accuracy_policy = 0.0
+        self.policy_cross_entropy_sum = 0.0
         self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.policy_sample_count = 0
         self.value_sample_count = 0
 
-    def _policy_accuracy(
+    def _policy_cross_entropy(
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
-        """Calculate policy accuracy."""
-        return (
-            torch.max(y, 1)[1] == torch.max(t, 1)[1]
-        ).sum().item() / len(t)
+        """Calculate sum of policy cross entropy for a batch."""
+        log_probabilities = torch.nn.functional.log_softmax(y, dim=1)
+        cross_entropy = -torch.sum(t * log_probabilities, dim=1)
+        return float(torch.sum(cross_entropy).item())
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
