@@ -16,7 +16,6 @@ from maou.app.learning.network import HeadlessNetwork, Network
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 
 
 def default_worker_init_fn(worker_id: int) -> None:
@@ -47,7 +46,7 @@ class ModelComponents:
     """モデル関連コンポーネント."""
 
     model: torch.nn.Module
-    loss_fn_policy: GCEwithNegativePenaltyLoss
+    loss_fn_policy: torch.nn.Module
     loss_fn_value: torch.nn.Module
     optimizer: optim.SGD
 
@@ -251,7 +250,7 @@ class LossOptimizerFactory:
     def create_loss_functions(
         cls,
         gce_parameter: float = 0.1,
-    ) -> Tuple[GCEwithNegativePenaltyLoss, torch.nn.Module]:
+    ) -> Tuple[torch.nn.Module, torch.nn.Module]:
         """方策・価値用の損失関数ペアを作成．
 
         Value loss関数としてBCEWithLogitsLossを使用．
@@ -264,9 +263,8 @@ class LossOptimizerFactory:
         - Mixed precision training（autocast）と互換性がある
         - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
         """
-        loss_fn_policy = GCEwithNegativePenaltyLoss(
-            q=gce_parameter
-        )
+        _ = gce_parameter
+        loss_fn_policy = torch.nn.CrossEntropyLoss()
         # BCEWithLogitsLoss: Value headはlogitsを出力
         # Sigmoid + BCE lossを内部で実行（数値的に安定，autocast対応）
         loss_fn_value = torch.nn.BCEWithLogitsLoss()

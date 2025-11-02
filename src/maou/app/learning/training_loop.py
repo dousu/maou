@@ -11,7 +11,6 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 
 
 class TrainingLoop:
@@ -23,7 +22,7 @@ class TrainingLoop:
         model: torch.nn.Module,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
-        loss_fn_policy: GCEwithNegativePenaltyLoss,
+        loss_fn_policy: torch.nn.Module,
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
@@ -221,12 +220,14 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
+            policy_targets = torch.argmax(
+                context.labels_policy, dim=1
+            )
             context.loss = (
                 self.policy_loss_ratio
                 * self.loss_fn_policy(
                     context.outputs_policy,
-                    context.labels_policy,
-                    context.legal_move_mask,
+                    policy_targets,
                 )
                 + self.value_loss_ratio
                 * self.loss_fn_value(
@@ -301,12 +302,12 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
+        policy_targets = torch.argmax(context.labels_policy, dim=1)
         context.loss = (
             self.policy_loss_ratio
             * self.loss_fn_policy(
                 context.outputs_policy,
-                context.labels_policy,
-                context.legal_move_mask,
+                policy_targets,
             )
             + self.value_loss_ratio
             * self.loss_fn_value(
@@ -377,12 +378,14 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
+            policy_targets = torch.argmax(
+                context.labels_policy, dim=1
+            )
             context.loss = (
                 self.policy_loss_ratio
                 * self.loss_fn_policy(
                     context.outputs_policy,
-                    context.labels_policy,
-                    context.legal_move_mask,
+                    policy_targets,
                 )
                 + self.value_loss_ratio
                 * self.loss_fn_value(
@@ -428,12 +431,12 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
+        policy_targets = torch.argmax(context.labels_policy, dim=1)
         context.loss = (
             self.policy_loss_ratio
             * self.loss_fn_policy(
                 context.outputs_policy,
-                context.labels_policy,
-                context.legal_move_mask,
+                policy_targets,
             )
             + self.value_loss_ratio
             * self.loss_fn_value(

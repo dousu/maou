@@ -17,7 +17,6 @@ from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 
 
 @dataclass(frozen=True)
@@ -93,7 +92,7 @@ class SingleEpochBenchmark:
         model: Network,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
-        loss_fn_policy: GCEwithNegativePenaltyLoss,
+        loss_fn_policy: torch.nn.Module,
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
