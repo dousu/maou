@@ -218,14 +218,15 @@ class LoggingCallback(BaseCallback):
 
 
 class ValidationCallback(BaseCallback):
-    """Callback for validation with accuracy tracking."""
+    """Callback for validation with policy accuracy and value Brier Score."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
         self.running_vloss = 0.0
         self.test_accuracy_policy = 0.0
-        self.test_accuracy_value = 0.0
+        self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.value_sample_count = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -237,9 +238,11 @@ class ValidationCallback(BaseCallback):
             self.test_accuracy_policy += self._policy_accuracy(
                 context.outputs_policy, context.labels_policy
             )
-            self.test_accuracy_value += self._value_accuracy(
+            value_batch_size = int(context.labels_value.numel())
+            self.value_brier_score_sum += self._value_brier_score(
                 context.outputs_value, context.labels_value
             )
+            self.value_sample_count += value_batch_size
             self.batch_count += 1
 
     def get_average_loss(self) -> float:
@@ -248,13 +251,13 @@ class ValidationCallback(BaseCallback):
             max(1, self.batch_count)
         )
 
-    def get_average_accuracies(self) -> tuple[float, float]:
-        """Get average policy and value accuracies."""
+    def get_average_metrics(self) -> tuple[float, float]:
+        """Get average policy accuracy and value Brier Score."""
         avg_policy = float(self.test_accuracy_policy) / float(
             max(1, self.batch_count)
         )
-        avg_value = float(self.test_accuracy_value) / float(
-            max(1, self.batch_count)
+        avg_value = float(self.value_brier_score_sum) / float(
+            max(1, self.value_sample_count)
         )
         return avg_policy, avg_value
 
@@ -262,8 +265,9 @@ class ValidationCallback(BaseCallback):
         """Reset all counters for next epoch."""
         self.running_vloss = 0.0
         self.test_accuracy_policy = 0.0
-        self.test_accuracy_value = 0.0
+        self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.value_sample_count = 0
 
     def _policy_accuracy(
         self, y: torch.Tensor, t: torch.Tensor
@@ -273,13 +277,13 @@ class ValidationCallback(BaseCallback):
             torch.max(y, 1)[1] == torch.max(t, 1)[1]
         ).sum().item() / len(t)
 
-    def _value_accuracy(
+    def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
-        """Calculate value accuracy."""
-        pred = y >= 0
-        truth = t >= 0.5
-        return pred.eq(truth).sum().item() / len(t)
+        """Calculate sum of Brier Score components for a batch."""
+        probabilities = torch.sigmoid(y)
+        squared_error = torch.square(probabilities - t)
+        return torch.sum(squared_error).item()
 
 
 @dataclass(frozen=True)

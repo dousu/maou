@@ -265,9 +265,10 @@ class Learning:
 
             # Get validation metrics
             avg_vloss = validation_callback.get_average_loss()
-            avg_accuracy_policy, avg_accuracy_value = (
-                validation_callback.get_average_accuracies()
-            )
+            (
+                avg_policy_accuracy,
+                avg_value_brier_score,
+            ) = validation_callback.get_average_metrics()
 
             # Reset callback for next epoch
             validation_callback.reset()
@@ -278,15 +279,15 @@ class Learning:
                 )
             )
             self.logger.info(
-                "ACCURACY policy {} value {}".format(
-                    avg_accuracy_policy, avg_accuracy_value
+                "METRICS policy_accuracy {} value_brier_score {}".format(
+                    avg_policy_accuracy, avg_value_brier_score
                 )
             )
             writer.add_scalars(
-                "Accuracy",
+                "Validation Metrics",
                 {
-                    "Policy": avg_accuracy_policy,
-                    "Value": avg_accuracy_value,
+                    "Policy Accuracy": avg_policy_accuracy,
+                    "Value Brier Score": avg_value_brier_score,
                 },
                 epoch_number + 1,
             )
