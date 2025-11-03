@@ -330,13 +330,13 @@ class ValidationCallback(BaseCallback):
     def _policy_cross_entropy(
         self, logits: torch.Tensor, target_distribution: torch.Tensor
     ) -> float:
-        """Calculate mean cross entropy between logits and target distribution."""
+        """Calculate total cross entropy between logits and target distribution."""
         if logits.ndim != 2 or target_distribution.ndim != 2:
             raise ValueError("Tensors y and t must be 2-dimensional.")
 
         log_probs = torch.log_softmax(logits, dim=1)
         cross_entropy = -torch.sum(target_distribution * log_probs, dim=1)
-        return float(torch.mean(cross_entropy).item())
+        return float(torch.sum(cross_entropy).item())
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
