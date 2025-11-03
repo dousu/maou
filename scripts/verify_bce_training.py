@@ -1,6 +1,5 @@
 """Verify BCE loss training with real data."""
 import torch
-import numpy as np
 from pathlib import Path
 from maou.app.learning.network import Network
 from maou.app.learning.dataset import KifDataset
@@ -63,8 +62,8 @@ def main():
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     print(f"\nLoss function: {loss_fn_value.__class__.__name__}")
-    print(f"Learning rate: 0.001")
-    print(f"Optimizer: SGD(momentum=0.9)")
+    print("Learning rate: 0.001")
+    print("Optimizer: SGD(momentum=0.9)")
 
     # Training loop
     print("\n" + "=" * 80)
@@ -145,7 +144,7 @@ def main():
 
     # Check value label distribution
     value_hist = torch.histc(all_value_labels, bins=5, min=0, max=1)
-    print(f"\nValue label distribution:")
+    print("\nValue label distribution:")
     print(f"  [0.0-0.2]: {value_hist[0].item():.0f}")
     print(f"  [0.2-0.4]: {value_hist[1].item():.0f}")
     print(f"  [0.4-0.6]: {value_hist[2].item():.0f}")
@@ -154,7 +153,7 @@ def main():
 
     # Check prediction distribution
     pred_hist = torch.histc(all_value_preds, bins=5, min=0, max=1)
-    print(f"\nValue prediction distribution:")
+    print("\nValue prediction distribution:")
     print(f"  [0.0-0.2]: {pred_hist[0].item():.0f}")
     print(f"  [0.2-0.4]: {pred_hist[1].item():.0f}")
     print(f"  [0.4-0.6]: {pred_hist[2].item():.0f}")

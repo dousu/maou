@@ -47,7 +47,6 @@ def main():
     indices = np.random.choice(len(dataset), sample_size, replace=False)
 
     value_labels = []
-    policy_labels = []
 
     for idx in indices[:1000]:  # Check first 1000 samples
         _, (_, value, _) = dataset[idx]
@@ -63,7 +62,7 @@ def main():
     print(f"  Median: {np.median(value_labels):.6f}")
 
     # Check histogram
-    print(f"\nValue label histogram:")
+    print("\nValue label histogram:")
     hist, bins = np.histogram(value_labels, bins=10)
     for i in range(len(hist)):
         bar = "█" * int(hist[i] / hist.max() * 50)
@@ -105,7 +104,7 @@ def main():
     inputs = inputs.to(device)
     labels_value = labels_value.to(device)
 
-    print(f"\nBatch shapes:")
+    print("\nBatch shapes:")
     print(f"  inputs: {inputs.shape}")
     print(f"  labels_value: {labels_value.shape}")
     print(f"  labels_value range: [{labels_value.min():.6f}, {labels_value.max():.6f}]")
@@ -116,7 +115,7 @@ def main():
     with torch.no_grad():
         policy_logits, value_pred = model(inputs)
 
-    print(f"\nModel predictions:")
+    print("\nModel predictions:")
     print(f"  value_pred shape: {value_pred.shape}")
     print(f"  value_pred range: [{value_pred.min():.6f}, {value_pred.max():.6f}]")
     print(f"  value_pred mean: {value_pred.mean():.6f}")
@@ -176,12 +175,12 @@ def main():
         if step % 3 == 0:
             print(f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.6f}")
 
-    print(f"\nLoss over 10 steps:")
+    print("\nLoss over 10 steps:")
     print(f"  Initial: {losses[0]:.6f}")
     print(f"  Final:   {losses[-1]:.6f}")
     print(f"  Change:  {losses[-1] - losses[0]:.6f}")
 
-    print(f"\nValue prediction mean over 10 steps:")
+    print("\nValue prediction mean over 10 steps:")
     print(f"  Initial: {value_preds_over_time[0]:.6f}")
     print(f"  Final:   {value_preds_over_time[-1]:.6f}")
     print(f"  Change:  {value_preds_over_time[-1] - value_preds_over_time[0]:.6f}")
