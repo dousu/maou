@@ -100,9 +100,38 @@ def test_validation_callback_computes_policy_top5_accuracy() -> None:
 
     metrics = callback.get_average_metrics()
 
-    expected_accuracy = pytest.approx((1.0 + (2.0 / 3.0)) / 2.0)
+    expected_accuracy = pytest.approx((1.0 + (1.0 / 3.0)) / 2.0)
 
     assert metrics.policy_top5_accuracy == expected_accuracy
+
+
+def test_validation_callback_limits_prediction_topk_to_target_span() -> None:
+    callback = ValidationCallback()
+
+    policy_targets = torch.tensor(
+        [[0.6, 0.5, 0.4, 0.0, 0.0, 0.0]],
+        dtype=torch.float32,
+    )
+    outputs_policy = torch.tensor(
+        [[0.1, 0.2, 0.3, 5.0, 4.0, 3.0]],
+        dtype=torch.float32,
+    )
+    labels_value = torch.tensor([0.0], dtype=torch.float32)
+    outputs_value = torch.tensor([0.0], dtype=torch.float32)
+
+    context = _create_context(
+        outputs_policy=outputs_policy,
+        policy_target_distribution=policy_targets,
+        labels_value=labels_value,
+        outputs_value=outputs_value,
+        loss=0.0,
+    )
+
+    callback.on_batch_end(context)
+
+    metrics = callback.get_average_metrics()
+
+    assert metrics.policy_top5_accuracy == pytest.approx(0.0)
 
 
 def test_validation_callback_handles_absent_high_confidence_targets() -> None:

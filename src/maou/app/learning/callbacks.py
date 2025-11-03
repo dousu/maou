@@ -385,8 +385,9 @@ class ValidationCallback(BaseCallback):
                     positive_values, k=label_topk
                 ).indices
                 label_top_indices = positive_indices[top_label_rel_indices]
+                current_topk = min(label_topk, topk_pred)
                 predicted_indices_set = set(
-                    prediction_top_indices[sample_idx].tolist()
+                    prediction_top_indices[sample_idx, :current_topk].tolist()
                 )
                 match_count = sum(
                     1 for idx in label_top_indices.tolist() if idx in predicted_indices_set
