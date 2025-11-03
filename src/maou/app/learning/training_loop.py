@@ -11,6 +11,7 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
+from maou.app.learning.policy_targets import normalize_policy_targets
 
 
 class TrainingLoop:
@@ -213,11 +214,12 @@ class TrainingLoop:
             context.labels_value = context.labels_value.to(
                 self.device, non_blocking=True
             )
-            context.legal_move_mask = (
-                context.legal_move_mask.to(
-                    self.device, non_blocking=True
+            if context.legal_move_mask is not None:
+                context.legal_move_mask = (
+                    context.legal_move_mask.to(
+                        self.device, non_blocking=True
+                    )
                 )
-            )
 
             # GPU同期（正確な転送時間測定のため）
             self._maybe_synchronize("post_data_transfer")
@@ -258,13 +260,7 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
-            policy_targets = torch.argmax(
-                context.labels_policy, dim=1
-            )
-            policy_loss = self.loss_fn_policy(
-                context.outputs_policy,
-                policy_targets,
-            )
+            policy_loss = self._compute_policy_loss(context)
             value_loss = self.loss_fn_value(
                 context.outputs_value, context.labels_value
             )
@@ -360,13 +356,7 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(
-            context.labels_policy, dim=1
-        )
-        policy_loss = self.loss_fn_policy(
-            context.outputs_policy,
-            policy_targets,
-        )
+        policy_loss = self._compute_policy_loss(context)
         value_loss = self.loss_fn_value(
             context.outputs_value, context.labels_value
         )
@@ -456,15 +446,9 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
-            policy_targets = torch.argmax(
-                context.labels_policy, dim=1
-            )
+            policy_loss = self._compute_policy_loss(context)
             context.loss = (
-                self.policy_loss_ratio
-                * self.loss_fn_policy(
-                    context.outputs_policy,
-                    policy_targets,
-                )
+                self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio
                 * self.loss_fn_value(
                     context.outputs_value, context.labels_value
@@ -526,15 +510,9 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(
-            context.labels_policy, dim=1
-        )
+        policy_loss = self._compute_policy_loss(context)
         context.loss = (
-            self.policy_loss_ratio
-            * self.loss_fn_policy(
-                context.outputs_policy,
-                policy_targets,
-            )
+            self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio
             * self.loss_fn_value(
                 context.outputs_value, context.labels_value
@@ -550,3 +528,24 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _compute_policy_loss(
+        self, context: TrainingContext
+    ) -> torch.Tensor:
+        if context.outputs_policy is None:
+            raise RuntimeError(
+                "Policy outputs are required before computing the loss"
+            )
+
+        policy_log_probs = torch.nn.functional.log_softmax(
+            context.outputs_policy,
+            dim=1,
+        )
+        policy_targets = normalize_policy_targets(
+            context.labels_policy,
+            context.legal_move_mask,
+            dtype=policy_log_probs.dtype,
+            device=policy_log_probs.device,
+        )
+        context.policy_target_distribution = policy_targets.detach()
+        return self.loss_fn_policy(policy_log_probs, policy_targets)
