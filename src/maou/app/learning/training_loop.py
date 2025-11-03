@@ -2,7 +2,6 @@ import logging
 from typing import List, Optional
 
 import torch
-import torch.nn.functional as F
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
@@ -12,6 +11,7 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
+from maou.app.learning.policy_targets import normalize_policy_targets
 
 
 class TrainingLoop:
@@ -176,11 +176,12 @@ class TrainingLoop:
             context.labels_value = context.labels_value.to(
                 self.device, non_blocking=True
             )
-            context.legal_move_mask = (
-                context.legal_move_mask.to(
-                    self.device, non_blocking=True
+            if context.legal_move_mask is not None:
+                context.legal_move_mask = (
+                    context.legal_move_mask.to(
+                        self.device, non_blocking=True
+                    )
                 )
-            )
 
             # GPU同期（正確な転送時間測定のため）
             torch.cuda.synchronize()
@@ -483,32 +484,15 @@ class TrainingLoop:
                 "Policy outputs are required before computing the loss"
             )
 
-        policy_log_probs = F.log_softmax(context.outputs_policy, dim=1)
-        policy_targets = self._normalize_policy_targets(
+        policy_log_probs = torch.nn.functional.log_softmax(
+            context.outputs_policy,
+            dim=1,
+        )
+        policy_targets = normalize_policy_targets(
             context.labels_policy,
             context.legal_move_mask,
             dtype=policy_log_probs.dtype,
             device=policy_log_probs.device,
         )
-        context.policy_target_distribution = policy_targets
+        context.policy_target_distribution = policy_targets.detach()
         return self.loss_fn_policy(policy_log_probs, policy_targets)
-
-    @staticmethod
-    def _normalize_policy_targets(
-        labels_policy: torch.Tensor,
-        legal_move_mask: Optional[torch.Tensor],
-        *,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        targets = labels_policy.to(device=device, dtype=dtype)
-        if legal_move_mask is not None:
-            targets = targets * legal_move_mask.to(device=device, dtype=dtype)
-
-        target_sum = targets.sum(dim=1, keepdim=True)
-        safe_sum = torch.where(
-            target_sum > 0,
-            target_sum,
-            torch.ones_like(target_sum),
-        )
-        return targets / safe_sum
