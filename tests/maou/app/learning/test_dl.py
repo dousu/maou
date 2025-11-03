@@ -78,3 +78,12 @@ def test_load_resume_state_dict_requires_complete_state() -> None:
 
     with pytest.raises(RuntimeError):
         learning._load_resume_state_dict(state_dict)
+
+
+def test_format_parameter_count_generates_human_readable_labels() -> None:
+    """Learning._format_parameter_count should generate readable suffixes."""
+
+    assert Learning._format_parameter_count(4_000_000) == "4m"
+    assert Learning._format_parameter_count(1_250_000) == "1.2m"
+    assert Learning._format_parameter_count(125_000) == "125k"
+    assert Learning._format_parameter_count(512) == "512"

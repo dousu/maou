@@ -18,7 +18,7 @@ from maou.app.learning.callbacks import (
 )
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
-from maou.app.learning.network import Network
+from maou.app.learning.network import BackboneArchitecture, Network
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
@@ -48,12 +48,14 @@ class Learning:
     resume_from: Optional[Path]
     model: Network
     scaler: Optional[GradScaler]
+    model_architecture: BackboneArchitecture
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
         datasource: LearningDataSource.DataSourceSpliter
         datasource_type: str
         gpu: Optional[str] = None
+        model_architecture: BackboneArchitecture = "resnet"
         compilation: bool
         test_ratio: float
         epoch: int
@@ -82,6 +84,22 @@ class Learning:
     ):
         self.__cloud_storage = cloud_storage
 
+    @staticmethod
+    def _format_parameter_count(parameter_count: int) -> str:
+        """Return a compact, human-friendly parameter count label."""
+
+        def _format(value: float) -> str:
+            formatted = f"{value:.1f}"
+            if formatted.endswith(".0"):
+                return formatted[:-2]
+            return formatted
+
+        if parameter_count >= 1_000_000:
+            return f"{_format(parameter_count / 1_000_000)}m"
+        if parameter_count >= 1_000:
+            return f"{_format(parameter_count / 1_000)}k"
+        return str(parameter_count)
+
     def learn(self, config: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
@@ -100,6 +118,7 @@ class Learning:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
+                model_architecture=config.model_architecture,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -119,6 +138,7 @@ class Learning:
             dataloaders
         )
         self.model = model_components.model
+        self.model_architecture = config.model_architecture
         self.loss_fn_policy = model_components.loss_fn_policy
         self.loss_fn_value = model_components.loss_fn_value
         self.optimizer = model_components.optimizer
@@ -190,8 +210,18 @@ class Learning:
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        parameter_count = sum(
+            parameter.numel() for parameter in self.model.parameters()
+        )
+        parameter_label = self._format_parameter_count(parameter_count)
+        model_tag = f"{self.model_architecture}-{parameter_label}"
         summary_writer_log_dir = (
-            self.log_dir / "training_log_{}".format(timestamp)
+            self.log_dir / f"{model_tag}_training_log_{timestamp}"
+        )
+        self.logger.info(
+            "TensorBoard log directory: %s (parameters ≈ %s)",
+            summary_writer_log_dir,
+            parameter_label,
         )
         writer = SummaryWriter(summary_writer_log_dir)
         epoch_number = 0

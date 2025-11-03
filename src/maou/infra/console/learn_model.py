@@ -180,6 +180,20 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--model-architecture",
+    type=click.Choice(
+        list(learn.SUPPORTED_MODEL_ARCHITECTURES),
+        case_sensitive=False,
+    ),
+    help=(
+        "Backbone architecture to use. Supported values: "
+        + ", ".join(learn.SUPPORTED_MODEL_ARCHITECTURES)
+    ),
+    required=False,
+    default="resnet",
+    show_default=True,
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
@@ -376,6 +390,7 @@ def learn_model(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
+    model_architecture: str,
     compilation: bool,
     test_ratio: Optional[float],
     epoch: Optional[int],
@@ -633,11 +648,13 @@ def learn_model(
             "Please specify an input directory, a BigQuery table, "
             "a GCS bucket, or an S3 bucket."
         )
+    architecture_key = model_architecture.lower()
     click.echo(
         learn.learn(
             datasource=datasource,
             datasource_type=input_format,
             gpu=gpu,
+            model_architecture=architecture_key,
             compilation=compilation,
             test_ratio=test_ratio,
             epoch=epoch,

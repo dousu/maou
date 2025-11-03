@@ -5,6 +5,7 @@ from maou.app.learning.dataset import DataSource
 from maou.app.learning.setup import TrainingSetup
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.board.shogi import FEATURES_NUM
+from maou.domain.model.mlp_mixer import ShogiMLPMixer
 
 
 class DummyPreprocessedDataSource(DataSource):
@@ -50,3 +51,25 @@ def test_training_setup_uses_adamw_optimizer() -> None:
     assert isinstance(optimizer, torch.optim.AdamW)
     assert optimizer.defaults["betas"] == (0.85, 0.98)
     assert optimizer.defaults["eps"] == 1e-07
+
+
+def test_training_setup_supports_mlp_mixer_backbone() -> None:
+    datasource = DummyPreprocessedDataSource(length=4)
+
+    _, _, model_components = TrainingSetup.setup_training_components(
+        training_datasource=datasource,
+        validation_datasource=datasource,
+        datasource_type="preprocess",
+        gpu="cpu",
+        batch_size=2,
+        dataloader_workers=0,
+        pin_memory=False,
+        prefetch_factor=2,
+        optimizer_name="adamw",
+        optimizer_beta1=0.85,
+        optimizer_beta2=0.98,
+        optimizer_eps=1e-7,
+        model_architecture="mlp-mixer",
+    )
+
+    assert isinstance(model_components.model.backbone, ShogiMLPMixer)
