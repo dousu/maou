@@ -241,7 +241,7 @@ class ValidationCallback(BaseCallback):
         self.policy_sample_count = 0
         self.value_sample_count = 0
         self.policy_top1_match_count = 0
-        self.value_high_confidence_count = 0
+        self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
@@ -276,14 +276,14 @@ class ValidationCallback(BaseCallback):
             )
             labels_value = context.labels_value.view(-1)
             predicted_value = torch.sigmoid(context.outputs_value).view(-1)
-            high_confidence_mask = labels_value >= 0.8
-            self.value_high_confidence_count += int(
-                torch.sum(high_confidence_mask).item()
+            prediction_high_confidence_mask = predicted_value >= 0.8
+            self.value_high_confidence_prediction_count += int(
+                torch.sum(prediction_high_confidence_mask).item()
             )
-            if torch.any(high_confidence_mask):
+            if torch.any(prediction_high_confidence_mask):
                 self.value_high_confidence_correct += int(
                     torch.sum(
-                        predicted_value[high_confidence_mask] >= 0.8
+                        labels_value[prediction_high_confidence_mask] >= 0.8
                     ).item()
                 )
             self.batch_count += 1
@@ -307,7 +307,7 @@ class ValidationCallback(BaseCallback):
         )
         value_high_confidence_rate = float(
             self.value_high_confidence_correct
-        ) / float(max(1, self.value_high_confidence_count))
+        ) / float(max(1, self.value_high_confidence_prediction_count))
         return ValidationMetrics(
             policy_cross_entropy=avg_policy_cross_entropy,
             value_brier_score=avg_value_brier,
@@ -324,7 +324,7 @@ class ValidationCallback(BaseCallback):
         self.policy_sample_count = 0
         self.value_sample_count = 0
         self.policy_top1_match_count = 0
-        self.value_high_confidence_count = 0
+        self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
 
     def _policy_cross_entropy(

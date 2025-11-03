@@ -89,3 +89,26 @@ def test_validation_callback_handles_absent_high_confidence_targets() -> None:
     metrics = callback.get_average_metrics()
 
     assert metrics.value_high_confidence_rate == pytest.approx(0.0)
+
+
+def test_validation_callback_measures_value_precision() -> None:
+    callback = ValidationCallback()
+
+    policy_targets = torch.tensor([[1.0], [1.0]], dtype=torch.float32)
+    outputs_policy = torch.tensor([[0.0], [0.0]], dtype=torch.float32)
+    labels_value = torch.tensor([0.1, 0.9], dtype=torch.float32)
+    outputs_value = torch.tensor([4.0, 4.0], dtype=torch.float32)
+
+    context = _create_context(
+        outputs_policy=outputs_policy,
+        policy_target_distribution=policy_targets,
+        labels_value=labels_value,
+        outputs_value=outputs_value,
+        loss=0.7,
+    )
+
+    callback.on_batch_end(context)
+
+    metrics = callback.get_average_metrics()
+
+    assert metrics.value_high_confidence_rate == pytest.approx(0.5)
