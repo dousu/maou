@@ -395,7 +395,7 @@ def learn_model(
         and gcs_bucket_name is not None
         and gcs_base_path is not None
     ):
-        if HAS_GCS:
+        if HAS_GCS and GCS is not None:
             try:
                 cloud_storage = GCS(
                     bucket_name=gcs_bucket_name,
@@ -415,7 +415,7 @@ def learn_model(
         and s3_bucket_name is not None
         and s3_base_path is not None
     ):
-        if HAS_AWS:
+        if HAS_AWS and S3 is not None:
             try:
                 cloud_storage = S3(
                     bucket_name=s3_bucket_name,
@@ -468,7 +468,7 @@ def learn_model(
         input_dataset_id is not None
         and input_table_name is not None
     ):
-        if HAS_BIGQUERY:
+        if HAS_BIGQUERY and BigQueryDataSource is not None:
             try:
                 # BigQueryDataSourceSpliterを使用
                 if hasattr(
@@ -513,7 +513,7 @@ def learn_model(
         and input_data_name is not None
         and input_local_cache_dir is not None
     ):
-        if HAS_GCS:
+        if HAS_GCS and GCSDataSource is not None:
             try:
                 # GCSDataSourceSpliterを使用
                 if hasattr(GCSDataSource, "DataSourceSpliter"):
@@ -556,7 +556,7 @@ def learn_model(
         and input_data_name is not None
         and input_local_cache_dir is not None
     ):
-        if HAS_AWS:
+        if HAS_AWS and S3DataSource is not None:
             try:
                 # S3DataSourceSpliterを使用
                 if hasattr(S3DataSource, "DataSourceSpliter"):

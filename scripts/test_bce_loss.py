@@ -22,7 +22,7 @@ def main():
     )
 
     print(f"\nValue loss function: {loss_fn_value.__class__.__name__}")
-    print(f"Expected: BCELoss")
+    print("Expected: BCELoss")
 
     # Create sample data
     batch_size = 100
@@ -33,7 +33,7 @@ def main():
     labels_value[:50] = 0.0  # 50% losses
     labels_value[50:] = 1.0  # 50% wins
 
-    print(f"\nLabel distribution:")
+    print("\nLabel distribution:")
     print(f"  Zeros (loss): {(labels_value == 0.0).sum().item()}")
     print(f"  Ones (win): {(labels_value == 1.0).sum().item()}")
     print(f"  Mean: {labels_value.mean().item():.4f}")
@@ -43,7 +43,7 @@ def main():
     with torch.no_grad():
         policy_logits, value_pred = model(inputs)
 
-    print(f"\nValue predictions:")
+    print("\nValue predictions:")
     print(f"  Range: [{value_pred.min().item():.4f}, {value_pred.max().item():.4f}]")
     print(f"  Mean: {value_pred.mean().item():.4f}")
     print(f"  Std: {value_pred.std().item():.4f}")
@@ -81,12 +81,12 @@ def main():
         if step % 3 == 0:
             print(f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.4f}")
 
-    print(f"\nLoss progression:")
+    print("\nLoss progression:")
     print(f"  Initial: {losses_bce[0]:.6f}")
     print(f"  Final:   {losses_bce[-1]:.6f}")
     print(f"  Change:  {losses_bce[-1] - losses_bce[0]:.6f}")
 
-    print(f"\nPrediction mean progression:")
+    print("\nPrediction mean progression:")
     print(f"  Initial: {pred_means[0]:.4f}")
     print(f"  Final:   {pred_means[-1]:.4f}")
     print(f"  Change:  {pred_means[-1] - pred_means[0]:.4f}")

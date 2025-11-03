@@ -7,19 +7,34 @@ board using the flattened cells as tokens.
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+import importlib
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from typing import Optional
+from types import ModuleType
+from typing import Any, Callable, Optional, cast
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
 try:
-    from torch.nn.attention import SDPBackend, sdpa_kernel as torch_sdpa_kernel
+    torch_attention_module: ModuleType | None = importlib.import_module(
+        "torch.nn.attention"
+    )
 except (ImportError, AttributeError):  # pragma: no cover - fallback for older PyTorch
-    SDPBackend = None  # type: ignore[assignment]
-    torch_sdpa_kernel = None  # type: ignore[assignment]
+    torch_attention_module = None
+
+_SDPAKernelType = Callable[[list[Any]], AbstractContextManager[None]]
+
+if torch_attention_module is not None:
+    SDPBackend: Any | None = getattr(torch_attention_module, "SDPBackend", None)
+    torch_sdpa_kernel: _SDPAKernelType | None = cast(
+        _SDPAKernelType | None,
+        getattr(torch_attention_module, "sdpa_kernel", None),
+    )
+else:
+    SDPBackend = None
+    torch_sdpa_kernel = None
 
 
 @dataclass(frozen=True)
@@ -120,7 +135,10 @@ class _FlashSelfAttention(nn.Module):
             torch.backends.cuda, "sdp_kernel"
         )
         supports_specialized_kernels = use_cuda and (has_new_sdpa or has_legacy_sdpa)
+        kernel_context: AbstractContextManager[None]
         if use_cuda and has_new_sdpa:
+            assert torch_sdpa_kernel is not None
+            assert SDPBackend is not None
             kernel_context = torch_sdpa_kernel(
                 [
                     SDPBackend.FLASH_ATTENTION,
@@ -149,6 +167,8 @@ class _FlashSelfAttention(nn.Module):
             if not supports_specialized_kernels:
                 raise
             if has_new_sdpa:
+                assert torch_sdpa_kernel is not None
+                assert SDPBackend is not None
                 fallback_context = torch_sdpa_kernel(
                     [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
                 )

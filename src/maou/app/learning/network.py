@@ -65,7 +65,9 @@ class HeadlessNetwork(nn.Module):
         pooled = self.pool(features)
         return torch.flatten(pooled, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Alias of :meth:`forward_features` for convenience."""
 
         return self.forward_features(x)

@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from importlib import import_module
 from types import ModuleType
-from typing import Callable
+from typing import Any, Callable, MutableMapping, Sequence
 
 import click
 
@@ -24,11 +24,15 @@ class LazyGroup(click.Group):
 
     def __init__(
         self,
-        *args: object,
+        name: str | None = None,
+        commands: MutableMapping[str, click.Command]
+        | Sequence[click.Command]
+        | None = None,
+        *,
         lazy_commands: dict[str, LazyCommandSpec] | None = None,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(name=name, commands=commands, **kwargs)
         self._lazy_commands: dict[str, LazyCommandSpec] = (
             lazy_commands or {}
         )

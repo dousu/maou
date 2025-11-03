@@ -6,7 +6,7 @@ import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional, cast
 
 import numpy as np
 import torch
@@ -432,13 +432,16 @@ class MaskedAutoencoderPretraining:
         sample_count = 0
         progress = None
         log_interval: Optional[int] = None
+        batch_iterable: Iterable[tuple[int, torch.Tensor]]
         if progress_bar:
             progress = tqdm(
                 enumerate(dataloader),
                 desc=f"MAE Epoch {epoch_index + 1}/{total_epochs}",
                 total=len(dataloader),
             )
-            batch_iterable = progress
+            batch_iterable = cast(
+                Iterable[tuple[int, torch.Tensor]], progress
+            )
         else:
             batch_iterable = enumerate(dataloader)
             log_interval = max(1, len(dataloader) // 10)
