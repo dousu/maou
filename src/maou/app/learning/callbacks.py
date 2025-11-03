@@ -1,7 +1,7 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol
+from typing import Dict, List, Optional, Protocol, Tuple
 
 import torch
 from torch.utils.tensorboard import (
@@ -225,7 +225,7 @@ class ValidationMetrics:
 
     policy_cross_entropy: float
     value_brier_score: float
-    policy_top1_accuracy: float
+    policy_top5_accuracy: float
     value_high_confidence_rate: float
 
 
@@ -240,7 +240,8 @@ class ValidationCallback(BaseCallback):
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
-        self.policy_top1_match_count = 0
+        self.policy_top5_ratio_sum = 0.0
+        self.policy_top5_sample_count = 0
         self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
 
@@ -268,12 +269,12 @@ class ValidationCallback(BaseCallback):
             )
             self.policy_sample_count += policy_batch_size
             self.value_sample_count += value_batch_size
-            self.policy_top1_match_count += int(
-                torch.sum(
-                    torch.argmax(context.outputs_policy, dim=1)
-                    == torch.argmax(policy_targets, dim=1)
-                ).item()
+            ratio_sum, sample_count = self._compute_policy_top5_accuracy_stats(
+                logits=context.outputs_policy,
+                targets=policy_targets,
             )
+            self.policy_top5_ratio_sum += ratio_sum
+            self.policy_top5_sample_count += sample_count
             labels_value = context.labels_value.view(-1)
             predicted_value = torch.sigmoid(context.outputs_value).view(-1)
             prediction_high_confidence_mask = predicted_value >= 0.8
@@ -302,8 +303,8 @@ class ValidationCallback(BaseCallback):
         avg_value_brier = float(self.value_brier_score_sum) / float(
             max(1, self.value_sample_count)
         )
-        policy_top1_accuracy = float(self.policy_top1_match_count) / float(
-            max(1, self.policy_sample_count)
+        policy_top5_accuracy = float(self.policy_top5_ratio_sum) / float(
+            max(1, self.policy_top5_sample_count)
         )
         value_high_confidence_rate = float(
             self.value_high_confidence_correct
@@ -311,7 +312,7 @@ class ValidationCallback(BaseCallback):
         return ValidationMetrics(
             policy_cross_entropy=avg_policy_cross_entropy,
             value_brier_score=avg_value_brier,
-            policy_top1_accuracy=policy_top1_accuracy,
+            policy_top5_accuracy=policy_top5_accuracy,
             value_high_confidence_rate=value_high_confidence_rate,
         )
 
@@ -323,7 +324,8 @@ class ValidationCallback(BaseCallback):
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
-        self.policy_top1_match_count = 0
+        self.policy_top5_ratio_sum = 0.0
+        self.policy_top5_sample_count = 0
         self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
 
@@ -337,6 +339,64 @@ class ValidationCallback(BaseCallback):
         log_probs = torch.log_softmax(logits, dim=1)
         cross_entropy = -torch.sum(target_distribution * log_probs, dim=1)
         return float(torch.sum(cross_entropy).item())
+
+    def _policy_accuracy(self, logits: torch.Tensor, targets: torch.Tensor) -> float:
+        """Calculate average policy Top-5 accuracy for the provided batch."""
+
+        ratio_sum, sample_count = self._compute_policy_top5_accuracy_stats(
+            logits=logits, targets=targets
+        )
+        if sample_count == 0:
+            return 0.0
+        return ratio_sum / float(sample_count)
+
+    def _compute_policy_top5_accuracy_stats(
+        self, *, logits: torch.Tensor, targets: torch.Tensor
+    ) -> Tuple[float, int]:
+        """Return cumulative ratio sum and sample count for Top-5 accuracy."""
+
+        if logits.ndim != 2 or targets.ndim != 2:
+            raise ValueError("Tensors logits and targets must be 2-dimensional.")
+
+        batch_size = int(targets.size(0))
+        if batch_size == 0:
+            return 0.0, 0
+
+        topk_pred = min(5, int(logits.size(1)))
+        if topk_pred == 0:
+            return 0.0, 0
+
+        prediction_top_indices = torch.topk(logits.detach(), k=topk_pred, dim=1).indices
+        targets_detached = targets.detach()
+
+        ratio_sum = 0.0
+        sample_count = 0
+
+        for sample_idx in range(batch_size):
+            target_values = targets_detached[sample_idx]
+            positive_indices = torch.nonzero(target_values > 0, as_tuple=False).view(-1)
+
+            if int(positive_indices.numel()) == 0:
+                ratio = 0.0
+            else:
+                positive_values = target_values[positive_indices]
+                label_topk = min(5, int(positive_values.numel()))
+                top_label_rel_indices = torch.topk(
+                    positive_values, k=label_topk
+                ).indices
+                label_top_indices = positive_indices[top_label_rel_indices]
+                predicted_indices_set = set(
+                    prediction_top_indices[sample_idx].tolist()
+                )
+                match_count = sum(
+                    1 for idx in label_top_indices.tolist() if idx in predicted_indices_set
+                )
+                ratio = float(match_count) / float(label_topk)
+
+            ratio_sum += ratio
+            sample_count += 1
+
+        return ratio_sum, sample_count
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
