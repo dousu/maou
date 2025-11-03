@@ -223,23 +223,45 @@ class TrainingLoop:
             policy_targets = torch.argmax(
                 context.labels_policy, dim=1
             )
-            context.loss = (
-                self.policy_loss_ratio
-                * self.loss_fn_policy(
-                    context.outputs_policy,
-                    policy_targets,
-                )
-                + self.value_loss_ratio
-                * self.loss_fn_value(
-                    context.outputs_value, context.labels_value
-                )
+            policy_loss = self.loss_fn_policy(
+                context.outputs_policy,
+                policy_targets,
             )
+            value_loss = self.loss_fn_value(
+                context.outputs_value, context.labels_value
+            )
+            context.loss = (
+                self.policy_loss_ratio * policy_loss
+                + self.value_loss_ratio * value_loss
+            )
+            loss_is_finite = torch.isfinite(context.loss)
+            policy_loss_is_finite = torch.isfinite(policy_loss)
+            value_loss_is_finite = torch.isfinite(value_loss)
 
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
         if self.device.type == "cuda":
             torch.cuda.synchronize()
+
+        if not bool(loss_is_finite.item()):
+            for callback in self.callbacks:
+                callback.on_forward_pass_end(context)
+
+            self.logger.warning(
+                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                context.epoch_idx,
+                context.batch_idx,
+                context.loss.detach(),
+                policy_loss.detach(),
+                bool(policy_loss_is_finite.item()),
+                value_loss.detach(),
+                bool(value_loss_is_finite.item()),
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            self.scaler.update()
+            return
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -303,20 +325,38 @@ class TrainingLoop:
             callback.on_loss_computation_start(context)
 
         policy_targets = torch.argmax(context.labels_policy, dim=1)
-        context.loss = (
-            self.policy_loss_ratio
-            * self.loss_fn_policy(
-                context.outputs_policy,
-                policy_targets,
-            )
-            + self.value_loss_ratio
-            * self.loss_fn_value(
-                context.outputs_value, context.labels_value
-            )
+        policy_loss = self.loss_fn_policy(
+            context.outputs_policy,
+            policy_targets,
         )
+        value_loss = self.loss_fn_value(
+            context.outputs_value, context.labels_value
+        )
+        context.loss = (
+            self.policy_loss_ratio * policy_loss
+            + self.value_loss_ratio * value_loss
+        )
+        loss_is_finite = torch.isfinite(context.loss)
+        policy_loss_is_finite = torch.isfinite(policy_loss)
+        value_loss_is_finite = torch.isfinite(value_loss)
 
         for callback in self.callbacks:
             callback.on_loss_computation_end(context)
+
+        if not bool(loss_is_finite.item()):
+            self.logger.warning(
+                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                context.epoch_idx,
+                context.batch_idx,
+                context.loss.detach(),
+                policy_loss.detach(),
+                bool(policy_loss_is_finite.item()),
+                value_loss.detach(),
+                bool(value_loss_is_finite.item()),
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            return
 
         # 逆伝播
         for callback in self.callbacks:
