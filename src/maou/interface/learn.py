@@ -9,6 +9,12 @@ from maou.app.learning.dl import (
     Learning,
     LearningDataSource,
 )
+from maou.app.learning.network import (
+    BACKBONE_ARCHITECTURES,
+    BackboneArchitecture,
+)
+
+SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -64,6 +70,7 @@ def learn(
     datasource_type: str,
     *,
     gpu: Optional[str] = None,
+    model_architecture: BackboneArchitecture = "resnet",
     compilation: bool = False,
     test_ratio: Optional[float] = None,
     epoch: Optional[int] = None,
@@ -92,6 +99,7 @@ def learn(
         datasource: Training data source
         datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for training
+        model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         compilation: Whether to compile the model
         test_ratio: Ratio of data to use for testing
         epoch: Number of training epochs
@@ -121,6 +129,13 @@ def learn(
     if datasource_type not in ("hcpe", "preprocess"):
         raise ValueError(
             f"Data source type `{datasource_type}` is invalid."
+        )
+
+    if model_architecture not in BACKBONE_ARCHITECTURES:
+        valid_options = ", ".join(BACKBONE_ARCHITECTURES)
+        raise ValueError(
+            f"model_architecture must be one of {valid_options}, "
+            f"got {model_architecture}"
         )
 
     # テスト割合設定 (デフォルト0.2)
@@ -298,6 +313,7 @@ def learn(
         start_epoch=start_epoch,
         log_dir=log_dir,
         model_dir=model_dir,
+        model_architecture=model_architecture,
     )
 
     learning_result = Learning(

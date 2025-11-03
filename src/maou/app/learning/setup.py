@@ -11,7 +11,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.learning.network import HeadlessNetwork, Network
+from maou.app.learning.network import (
+    BackboneArchitecture,
+    HeadlessNetwork,
+    Network,
+)
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
@@ -194,13 +198,17 @@ class ModelFactory:
 
     @classmethod
     def create_shogi_backbone(
-        cls, device: torch.device
+        cls,
+        device: torch.device,
+        *,
+        architecture: BackboneArchitecture = "resnet",
     ) -> HeadlessNetwork:
-        """方策・価値ヘッドを含まないResNetバックボーンを作成."""
+        """方策・価値ヘッドを含まないバックボーンを作成."""
 
         backbone = HeadlessNetwork(
             num_channels=FEATURES_NUM,
             board_size=(9, 9),
+            architecture=architecture,
             block=BottleneckBlock,
             layers=(2, 2, 2, 2),
             strides=(1, 2, 2, 2),
@@ -209,7 +217,8 @@ class ModelFactory:
 
         backbone.to(device)
         cls.logger.info(
-            "Created shogi-optimized ResNet backbone (%s)",
+            "Created %s backbone (%s)",
+            architecture,
             str(device),
         )
 
@@ -217,14 +226,18 @@ class ModelFactory:
 
     @classmethod
     def create_shogi_model(
-        cls, device: torch.device
+        cls,
+        device: torch.device,
+        *,
+        architecture: BackboneArchitecture = "resnet",
     ) -> Network:
-        """将棋特化のResNetモデルを作成."""
+        """将棋特化モデルを作成."""
 
         model = Network(
             num_policy_classes=MOVE_LABELS_NUM,
             num_channels=FEATURES_NUM,
             board_size=(9, 9),
+            architecture=architecture,
             block=BottleneckBlock,
             layers=(2, 2, 2, 2),
             strides=(1, 2, 2, 2),
@@ -233,7 +246,9 @@ class ModelFactory:
 
         model.to(device)
         cls.logger.info(
-            f"Created shogi-optimized ResNet model ({str(device)})"
+            "Created shogi model with %s backbone (%s)",
+            architecture,
+            str(device),
         )
 
         return model
@@ -353,6 +368,7 @@ class TrainingSetup:
         validation_datasource: DataSource,
         datasource_type: str,
         gpu: Optional[str] = None,
+        model_architecture: BackboneArchitecture = "resnet",
         batch_size: int = 256,
         dataloader_workers: int = 4,
         pin_memory: Optional[bool] = None,
@@ -406,7 +422,8 @@ class TrainingSetup:
 
         # Model creation
         model = ModelFactory.create_shogi_model(
-            device_config.device
+            device_config.device,
+            architecture=model_architecture,
         )
 
         # Loss functions and optimizer

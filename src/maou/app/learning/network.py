@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Tuple
+from typing import Any, Callable, Literal, Tuple
 
 import torch
 from torch import nn
@@ -14,42 +14,96 @@ from maou.domain.model.resnet import (
     BottleneckBlock,
     ResNet as DomainResNet,
 )
+from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.domain.model.vision_transformer import (
+    VisionTransformer,
+    VisionTransformerConfig,
+)
+
+
+BackboneArchitecture = Literal["resnet", "mlp-mixer", "vit"]
+BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (
+    "resnet",
+    "mlp-mixer",
+    "vit",
+)
 
 
 class HeadlessNetwork(nn.Module):
-    """Headless shogi backbone that wraps the domain ResNet."""
+    """Headless shogi backbone supporting ResNet, MLP-Mixer, and ViT."""
 
     def __init__(
         self,
         *,
         num_channels: int = FEATURES_NUM,
         board_size: Tuple[int, int] = (9, 9),
+        architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
         layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
         strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
         out_channels: Tuple[int, int, int, int] = (64, 128, 256, 512),
         pooling: nn.Module | None = None,
+        architecture_config: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
-        if len(layers) != 4 or len(strides) != 4 or len(out_channels) != 4:
-            msg = "ResNet requires four stages for layers, strides, and out_channels."
-            raise ValueError(msg)
-
-        expansion = getattr(block, "expansion", 1)
-
-        self.backbone: DomainResNet = DomainResNet(
-            block=block,
-            in_channels=num_channels,
-            layers=list(layers),
-            strides=list(strides),
-            list_out_channels=list(out_channels),
-        )
-        self.pool: nn.Module = (
-            pooling if pooling is not None else nn.AdaptiveAvgPool2d((1, 1))
-        )
-        self._embedding_dim = out_channels[-1] * expansion
+        self.architecture: BackboneArchitecture = architecture
         self._num_channels = num_channels
         self._board_size = board_size
+        config: dict[str, Any] = dict(architecture_config or {})
+
+        if architecture == "resnet":
+            if (
+                len(layers) != 4
+                or len(strides) != 4
+                or len(out_channels) != 4
+            ):
+                msg = (
+                    "ResNet requires four stages for layers, strides, and "
+                    "out_channels."
+                )
+                raise ValueError(msg)
+
+            expansion = getattr(block, "expansion", 1)
+            self.backbone: DomainResNet | ShogiMLPMixer | VisionTransformer = (
+                DomainResNet(
+                    block=block,
+                    in_channels=num_channels,
+                    layers=list(layers),
+                    strides=list(strides),
+                    list_out_channels=list(out_channels),
+                )
+            )
+            self.pool: nn.Module = (
+                pooling if pooling is not None else nn.AdaptiveAvgPool2d((1, 1))
+            )
+            self._embedding_dim = out_channels[-1] * expansion
+        elif architecture == "mlp-mixer":
+            mixer_kwargs: dict[str, Any] = {
+                "num_classes": None,
+                "num_channels": num_channels,
+                "num_tokens": board_size[0] * board_size[1],
+            }
+            mixer_kwargs.update(config)
+            self.backbone = ShogiMLPMixer(**mixer_kwargs)
+            self.pool = nn.Identity()
+            self._embedding_dim = self.backbone.num_channels
+        elif architecture == "vit":
+            if board_size[0] != board_size[1]:
+                msg = "Vision Transformer requires square board dimensions."
+                raise ValueError(msg)
+            vit_kwargs: dict[str, Any] = {
+                "input_channels": num_channels,
+                "board_size": board_size[0],
+                "use_head": False,
+            }
+            vit_kwargs.update(config)
+            vit_config = VisionTransformerConfig(**vit_kwargs)
+            self.backbone = VisionTransformer(vit_config)
+            self.pool = nn.Identity()
+            self._embedding_dim = self.backbone.embedding_dim
+        else:  # pragma: no cover - defensive branch
+            msg = f"Unsupported backbone architecture `{architecture}`."
+            raise ValueError(msg)
 
     @property
     def embedding_dim(self) -> int:
@@ -61,9 +115,19 @@ class HeadlessNetwork(nn.Module):
         """Return pooled convolutional features from the shared backbone."""
 
         self._validate_inputs(x)
-        features = self.backbone(x)
-        pooled = self.pool(features)
-        return torch.flatten(pooled, 1)
+        if self.architecture == "resnet":
+            features = self.backbone(x)
+            pooled = self.pool(features)
+            return torch.flatten(pooled, 1)
+
+        backbone_forward = getattr(self.backbone, "forward_features", None)
+        if backbone_forward is None:
+            msg = (
+                "Configured backbone does not implement forward_features."
+            )
+            raise RuntimeError(msg)
+        forward_fn: Callable[[torch.Tensor], torch.Tensor] = backbone_forward
+        return forward_fn(x)
 
     def forward(
         self, x: torch.Tensor
@@ -183,7 +247,7 @@ class ValueHead(nn.Module):
 
 
 class Network(HeadlessNetwork):
-    """Dual-head shogi network built on a ResNet backbone."""
+    """Dual-head shogi network built on selectable backbones."""
 
     def __init__(
         self,
@@ -191,6 +255,7 @@ class Network(HeadlessNetwork):
         num_policy_classes: int = MOVE_LABELS_NUM,
         num_channels: int = FEATURES_NUM,
         board_size: Tuple[int, int] = (9, 9),
+        architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
         layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
         strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
@@ -198,15 +263,18 @@ class Network(HeadlessNetwork):
         pooling: nn.Module | None = None,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
+        architecture_config: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
             num_channels=num_channels,
             board_size=board_size,
+            architecture=architecture,
             block=block,
             layers=layers,
             strides=strides,
             out_channels=out_channels,
             pooling=pooling,
+            architecture_config=architecture_config,
         )
         self.policy_head = PolicyHead(
             input_dim=self.embedding_dim,
