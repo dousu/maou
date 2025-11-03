@@ -38,6 +38,7 @@ class TrainingLoop:
         self.value_loss_ratio = value_loss_ratio
         self.callbacks = callbacks or []
         self.logger = logger or logging.getLogger(__name__)
+        self._cuda_sync_enabled = False
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -56,8 +57,32 @@ class TrainingLoop:
         enable_profiling: bool = False,
         progress_bar: bool = True,
         train_mode: bool = True,
+        force_cuda_sync: Optional[bool] = None,
     ) -> None:
         """Run a single epoch of training or validation."""
+        previous_sync_state = self._cuda_sync_enabled
+        resolved_sync_state = (
+            force_cuda_sync
+            if force_cuda_sync is not None
+            else enable_profiling
+            or self.logger.isEnabledFor(logging.DEBUG)
+        )
+        self._cuda_sync_enabled = resolved_sync_state
+
+        if (
+            self.device.type == "cuda"
+            and previous_sync_state != resolved_sync_state
+        ):
+            self.logger.debug(
+                "CUDA synchronization %s for epoch %d (profiling=%s, forced=%s)",
+                "enabled"
+                if resolved_sync_state
+                else "disabled",
+                epoch_idx,
+                enable_profiling,
+                force_cuda_sync,
+            )
+
         # モデルのモード設定
         self.model.train(train_mode)
 
@@ -150,6 +175,19 @@ class TrainingLoop:
                     profiler.step()
 
         finally:
+            if (
+                self.device.type == "cuda"
+                and previous_sync_state
+                != self._cuda_sync_enabled
+            ):
+                self.logger.debug(
+                    "CUDA synchronization restored to %s after epoch %d",
+                    "enabled"
+                    if previous_sync_state
+                    else "disabled",
+                    epoch_idx,
+                )
+            self._cuda_sync_enabled = previous_sync_state
             if profiler is not None:
                 profiler.stop()
 
@@ -182,7 +220,7 @@ class TrainingLoop:
             )
 
             # GPU同期（正確な転送時間測定のため）
-            torch.cuda.synchronize()
+            self._maybe_synchronize("post_data_transfer")
 
         for callback in self.callbacks:
             callback.on_data_transfer_end(context)
@@ -241,8 +279,7 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_forward_mixed_precision")
 
         if not bool(loss_is_finite.item()):
             for callback in self.callbacks:
@@ -283,8 +320,7 @@ class TrainingLoop:
             self.model.parameters(), max_norm=1.0
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_backward_mixed_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
@@ -296,8 +332,9 @@ class TrainingLoop:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_optimizer_step_mixed_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_optimizer_step_end(context)
@@ -314,8 +351,7 @@ class TrainingLoop:
             self.model(context.inputs)
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_forward_full_precision")
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -324,7 +360,9 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(context.labels_policy, dim=1)
+        policy_targets = torch.argmax(
+            context.labels_policy, dim=1
+        )
         policy_loss = self.loss_fn_policy(
             context.outputs_policy,
             policy_targets,
@@ -374,8 +412,7 @@ class TrainingLoop:
             self.model.parameters(), max_norm=1.0
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_backward_full_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
@@ -386,8 +423,9 @@ class TrainingLoop:
 
         self.optimizer.step()
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_optimizer_step_full_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_optimizer_step_end(context)
@@ -436,8 +474,9 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_eval_forward_mixed_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -448,6 +487,21 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _maybe_synchronize(self, reason: str) -> None:
+        if self.device.type != "cuda":
+            return
+
+        if not self._cuda_sync_enabled:
+            return
+
+        torch.cuda.synchronize()
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(
+                "torch.cuda.synchronize() executed (%s)",
+                reason,
+            )
 
     def _eval_batch_full_precision(
         self, context: TrainingContext
@@ -461,8 +515,9 @@ class TrainingLoop:
             self.model(context.inputs)
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_eval_forward_full_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -471,7 +526,9 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(context.labels_policy, dim=1)
+        policy_targets = torch.argmax(
+            context.labels_policy, dim=1
+        )
         context.loss = (
             self.policy_loss_ratio
             * self.loss_fn_policy(
