@@ -286,11 +286,11 @@ class Learning:
             self.logger.info(
                 (
                     "METRICS policy_cross_entropy {} value_brier_score {} "
-                    "policy_top1_accuracy {} value_high_confidence_rate {}"
+                    "policy_top5_accuracy {} value_high_confidence_rate {}"
                 ).format(
                     metrics.policy_cross_entropy,
                     metrics.value_brier_score,
-                    metrics.policy_top1_accuracy,
+                    metrics.policy_top5_accuracy,
                     metrics.value_high_confidence_rate,
                 )
             )
@@ -305,7 +305,7 @@ class Learning:
             writer.add_scalars(
                 "Validation Accuracy Metrics",
                 {
-                    "Policy Top-1 Accuracy": metrics.policy_top1_accuracy,
+                    "Policy Top-5 Accuracy": metrics.policy_top5_accuracy,
                     "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
                 },
                 epoch_number + 1,
