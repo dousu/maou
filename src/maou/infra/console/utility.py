@@ -618,6 +618,38 @@ def benchmark_dataloader(
     default=0.9,
 )
 @click.option(
+    "--optimizer",
+    type=click.Choice(["adamw", "sgd"], case_sensitive=False),
+    help="Optimizer to use (default: adamw).",
+    required=False,
+    default="adamw",
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta1",
+    type=float,
+    help="AdamW beta1 parameter (default: 0.9).",
+    required=False,
+    default=0.9,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta2",
+    type=float,
+    help="AdamW beta2 parameter (default: 0.999).",
+    required=False,
+    default=0.999,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-eps",
+    type=float,
+    help="AdamW epsilon parameter (default: 1e-08).",
+    required=False,
+    default=1e-8,
+    show_default=True,
+)
+@click.option(
     "--warmup-batches",
     type=int,
     help="Number of warmup batches to exclude from timing (default: 5).",
@@ -691,6 +723,10 @@ def benchmark_training(
     value_loss_ratio: float,
     learning_ratio: float,
     momentum: float,
+    optimizer: str,
+    optimizer_beta1: float,
+    optimizer_beta2: float,
+    optimizer_eps: float,
     warmup_batches: int,
     max_batches: int,
     enable_profiling: Optional[bool],
@@ -899,6 +935,10 @@ def benchmark_training(
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
+        optimizer_name=optimizer,
+        optimizer_beta1=optimizer_beta1,
+        optimizer_beta2=optimizer_beta2,
+        optimizer_eps=optimizer_eps,
         warmup_batches=warmup_batches,
         max_batches=max_batches,
         enable_profiling=enable_profiling,

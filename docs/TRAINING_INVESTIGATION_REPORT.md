@@ -153,6 +153,14 @@ loss_fn_value = torch.nn.SmoothL1Loss()
 
 ## 推奨される修正コマンド
 
+### オプティマイザ選択の指針
+- `--optimizer adamw`（デフォルト）
+  - 既定のAdamWは学習率0.001前後で安定しており，重み減衰グループ分けと相性が良い．
+  - ベータやepsilonは `--optimizer-beta1`（既定0.9），`--optimizer-beta2`（既定0.999），`--optimizer-eps`（既定1e-8）で調整できる．
+- `--optimizer sgd`
+  - 既存のSGDベース実験を再現したい場合に使用する．
+  - `--momentum` でモーメントを指定する（デフォルト0.9）．
+
 ### 最小限の修正（即効性重視）
 ```bash
 poetry run maou learn-model \

@@ -258,6 +258,38 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--optimizer",
+    type=click.Choice(["adamw", "sgd"], case_sensitive=False),
+    help="Optimizer to use (default: adamw).",
+    required=False,
+    default="adamw",
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta1",
+    type=float,
+    help="AdamW beta1 parameter.",
+    required=False,
+    default=0.9,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta2",
+    type=float,
+    help="AdamW beta2 parameter.",
+    required=False,
+    default=0.999,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-eps",
+    type=float,
+    help="AdamW epsilon parameter.",
+    required=False,
+    default=1e-8,
+    show_default=True,
+)
+@click.option(
     "--resume-from",
     type=click.Path(path_type=Path),
     help="Checkpoint file to resume training.",
@@ -356,6 +388,10 @@ def learn_model(
     value_loss_ratio: Optional[float],
     learning_ratio: Optional[float],
     momentum: Optional[float],
+    optimizer: str,
+    optimizer_beta1: float,
+    optimizer_beta2: float,
+    optimizer_eps: float,
     resume_from: Optional[Path],
     start_epoch: Optional[int],
     log_dir: Optional[Path],
@@ -614,6 +650,10 @@ def learn_model(
             value_loss_ratio=value_loss_ratio,
             learning_ratio=learning_ratio,
             momentum=momentum,
+            optimizer_name=optimizer,
+            optimizer_beta1=optimizer_beta1,
+            optimizer_beta2=optimizer_beta2,
+            optimizer_eps=optimizer_eps,
             resume_from=resume_from,
             start_epoch=start_epoch,
             log_dir=log_dir,

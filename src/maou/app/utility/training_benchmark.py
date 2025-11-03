@@ -389,6 +389,10 @@ class TrainingBenchmarkConfig:
     value_loss_ratio: float = 1.0
     learning_ratio: float = 0.01
     momentum: float = 0.9
+    optimizer_name: str = "adamw"
+    optimizer_beta1: float = 0.9
+    optimizer_beta2: float = 0.999
+    optimizer_eps: float = 1e-8
     warmup_batches: int = 5
     max_batches: Optional[int] = None
     enable_profiling: bool = False
@@ -431,6 +435,10 @@ class TrainingBenchmarkUseCase:
                 gce_parameter=config.gce_parameter,
                 learning_ratio=config.learning_ratio,
                 momentum=config.momentum,
+                optimizer_name=config.optimizer_name,
+                optimizer_beta1=config.optimizer_beta1,
+                optimizer_beta2=config.optimizer_beta2,
+                optimizer_eps=config.optimizer_eps,
             )
         )
 

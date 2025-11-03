@@ -162,6 +162,10 @@ def benchmark_training(
     value_loss_ratio: Optional[float] = None,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
+    optimizer_name: Optional[str] = None,
+    optimizer_beta1: Optional[float] = None,
+    optimizer_beta2: Optional[float] = None,
+    optimizer_eps: Optional[float] = None,
     warmup_batches: Optional[int] = None,
     max_batches: Optional[int] = None,
     enable_profiling: Optional[bool] = None,
@@ -187,6 +191,10 @@ def benchmark_training(
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
         momentum: Optimizer momentum
+        optimizer_name: Optimizer selection ('adamw' or 'sgd')
+        optimizer_beta1: AdamW beta1 parameter
+        optimizer_beta2: AdamW beta2 parameter
+        optimizer_eps: AdamW epsilon parameter
         warmup_batches: Number of warmup batches to exclude from timing
         max_batches: Maximum number of batches to process
         enable_profiling: Enable PyTorch profiler for detailed analysis
@@ -197,32 +205,142 @@ def benchmark_training(
     Returns:
         JSON string with benchmark results and recommendations
     """
-    # Create configuration with defaults
-    config = TrainingBenchmarkConfig(
-        datasource=datasource,
-        datasource_type=datasource_type,
-        gpu=gpu,
-        compilation=compilation,
-        test_ratio=test_ratio or 0.2,
-        batch_size=batch_size or 1000,
-        dataloader_workers=dataloader_workers or 0,
-        pin_memory=pin_memory,
-        prefetch_factor=prefetch_factor or 2,
-        gce_parameter=gce_parameter or 0.7,
-        policy_loss_ratio=policy_loss_ratio or 1.0,
-        value_loss_ratio=value_loss_ratio or 1.0,
-        learning_ratio=learning_ratio or 0.01,
-        momentum=momentum or 0.9,
-        warmup_batches=warmup_batches or 5,
-        max_batches=max_batches or 100,
-        enable_profiling=enable_profiling or False,
-        run_validation=run_validation or False,
-        sample_ratio=sample_ratio,
-        enable_resource_monitoring=enable_resource_monitoring
-        or False,
-    )
 
-    # Validate sample_ratio
+    if datasource_type not in ("hcpe", "preprocess"):
+        raise ValueError(
+            f"Data source type `{datasource_type}` is invalid."
+        )
+
+    if test_ratio is None:
+        test_ratio = 0.2
+    elif not 0.0 < test_ratio < 1.0:
+        raise ValueError(
+            f"test_ratio must be between 0 and 1, got {test_ratio}"
+        )
+
+    if batch_size is None:
+        batch_size = 1000
+    elif batch_size <= 0:
+        raise ValueError(
+            f"batch_size must be positive, got {batch_size}"
+        )
+
+    if dataloader_workers is None:
+        dataloader_workers = 0
+    elif dataloader_workers < 0:
+        raise ValueError(
+            "dataloader_workers must be non-negative, "
+            f"got {dataloader_workers}"
+        )
+
+    if pin_memory is None:
+        pin_memory = False
+
+    if prefetch_factor is None:
+        prefetch_factor = 2
+    elif prefetch_factor <= 0:
+        raise ValueError(
+            f"prefetch_factor must be positive, got {prefetch_factor}"
+        )
+
+    if gce_parameter is None:
+        gce_parameter = 0.7
+    elif not 0.0 < gce_parameter <= 1.0:
+        raise ValueError(
+            f"gce_parameter must be between 0 and 1, got {gce_parameter}"
+        )
+
+    if policy_loss_ratio is None:
+        policy_loss_ratio = 1.0
+    elif policy_loss_ratio <= 0:
+        raise ValueError(
+            "policy_loss_ratio must be positive, "
+            f"got {policy_loss_ratio}"
+        )
+
+    if value_loss_ratio is None:
+        value_loss_ratio = 1.0
+    elif value_loss_ratio <= 0:
+        raise ValueError(
+            "value_loss_ratio must be positive, "
+            f"got {value_loss_ratio}"
+        )
+
+    if learning_ratio is None:
+        learning_ratio = 0.01
+    elif learning_ratio <= 0:
+        raise ValueError(
+            f"learning_ratio must be positive, got {learning_ratio}"
+        )
+
+    if momentum is None:
+        momentum = 0.9
+    elif not 0.0 <= momentum <= 1.0:
+        raise ValueError(
+            f"momentum must be between 0 and 1, got {momentum}"
+        )
+
+    if optimizer_name is None:
+        optimizer_name = "adamw"
+    optimizer_key = optimizer_name.lower()
+    if optimizer_key not in {"adamw", "sgd"}:
+        raise ValueError(
+            "optimizer_name must be 'adamw' or 'sgd', "
+            f"got {optimizer_name}"
+        )
+
+    if optimizer_beta1 is None:
+        optimizer_beta1 = 0.9
+    elif not 0.0 < optimizer_beta1 < 1.0:
+        raise ValueError(
+            "optimizer_beta1 must be between 0 and 1, "
+            f"got {optimizer_beta1}"
+        )
+
+    if optimizer_beta2 is None:
+        optimizer_beta2 = 0.999
+    elif not 0.0 < optimizer_beta2 < 1.0:
+        raise ValueError(
+            "optimizer_beta2 must be between 0 and 1, "
+            f"got {optimizer_beta2}"
+        )
+
+    if optimizer_beta2 <= optimizer_beta1:
+        raise ValueError(
+            "optimizer_beta2 must be greater than optimizer_beta1 "
+            f"(got {optimizer_beta1} and {optimizer_beta2})"
+        )
+
+    if optimizer_eps is None:
+        optimizer_eps = 1e-8
+    elif optimizer_eps <= 0:
+        raise ValueError(
+            f"optimizer_eps must be positive, got {optimizer_eps}"
+        )
+
+    if warmup_batches is None:
+        warmup_batches = 5
+    elif warmup_batches < 0:
+        raise ValueError(
+            f"warmup_batches must be non-negative, got {warmup_batches}"
+        )
+
+    if max_batches is None:
+        max_batches = 100
+    elif max_batches <= 0:
+        raise ValueError(
+            f"max_batches must be positive, got {max_batches}"
+        )
+
+    if enable_profiling is None:
+        enable_profiling = False
+
+    if run_validation is None:
+        run_validation = False
+
+    if enable_resource_monitoring is None:
+        enable_resource_monitoring = False
+
     if (
         sample_ratio is not None
         and not 0.01 <= sample_ratio <= 1.0
@@ -231,6 +349,32 @@ def benchmark_training(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
         )
 
-    # Execute use case
+    config = TrainingBenchmarkConfig(
+        datasource=datasource,
+        datasource_type=datasource_type,
+        gpu=gpu,
+        compilation=compilation,
+        test_ratio=test_ratio,
+        batch_size=batch_size,
+        dataloader_workers=dataloader_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        gce_parameter=gce_parameter,
+        policy_loss_ratio=policy_loss_ratio,
+        value_loss_ratio=value_loss_ratio,
+        learning_ratio=learning_ratio,
+        momentum=momentum,
+        optimizer_name=optimizer_key,
+        optimizer_beta1=optimizer_beta1,
+        optimizer_beta2=optimizer_beta2,
+        optimizer_eps=optimizer_eps,
+        warmup_batches=warmup_batches,
+        max_batches=max_batches,
+        enable_profiling=enable_profiling,
+        run_validation=run_validation,
+        sample_ratio=sample_ratio,
+        enable_resource_monitoring=enable_resource_monitoring,
+    )
+
     use_case = TrainingBenchmarkUseCase()
     return use_case.execute(config)
