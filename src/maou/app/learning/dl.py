@@ -66,6 +66,10 @@ class Learning:
         value_loss_ratio: float
         learning_ratio: float
         momentum: float
+        optimizer_name: str
+        optimizer_beta1: float
+        optimizer_beta2: float
+        optimizer_eps: float
         resume_from: Optional[Path] = None
         start_epoch: int = 0
         log_dir: Path
@@ -103,6 +107,10 @@ class Learning:
                 gce_parameter=config.gce_parameter,
                 learning_ratio=config.learning_ratio,
                 momentum=config.momentum,
+                optimizer_name=config.optimizer_name,
+                optimizer_beta1=config.optimizer_beta1,
+                optimizer_beta2=config.optimizer_beta2,
+                optimizer_eps=config.optimizer_eps,
             )
         )
 

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
-from torch import optim
 from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
@@ -49,7 +48,7 @@ class ModelComponents:
     model: torch.nn.Module
     loss_fn_policy: torch.nn.Module
     loss_fn_value: torch.nn.Module
-    optimizer: optim.SGD
+    optimizer: torch.optim.Optimizer
 
 
 class DeviceSetup:
@@ -274,8 +273,11 @@ class LossOptimizerFactory:
         learning_ratio: float = 0.01,
         momentum: float = 0.9,
         weight_decay: float = 0.01,
-    ) -> optim.SGD:
-        """SGDオプティマイザを作成."""
+        optimizer_name: str = "adamw",
+        betas: Tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+    ) -> torch.optim.Optimizer:
+        """オプティマイザを作成."""
         decay_params: List[torch.nn.Parameter] = []
         no_decay_params: List[torch.nn.Parameter] = []
         modules_by_name = dict(model.named_modules())
@@ -316,10 +318,26 @@ class LossOptimizerFactory:
             {"params": no_decay_params, "weight_decay": 0.0},
         ]
 
-        return optim.SGD(
-            param_groups,
-            lr=learning_ratio,
-            momentum=momentum,
+        optimizer_key = optimizer_name.lower()
+
+        if optimizer_key == "adamw":
+            return torch.optim.AdamW(
+                param_groups,
+                lr=learning_ratio,
+                betas=betas,
+                eps=eps,
+            )
+
+        if optimizer_key == "sgd":
+            return torch.optim.SGD(
+                param_groups,
+                lr=learning_ratio,
+                momentum=momentum,
+            )
+
+        raise ValueError(
+            f"Unsupported optimizer `{optimizer_name}`. "
+            "Expected 'adamw' or 'sgd'."
         )
 
 
@@ -342,6 +360,10 @@ class TrainingSetup:
         gce_parameter: float = 0.1,
         learning_ratio: float = 0.01,
         momentum: float = 0.9,
+        optimizer_name: str = "adamw",
+        optimizer_beta1: float = 0.9,
+        optimizer_beta2: float = 0.999,
+        optimizer_eps: float = 1e-8,
     ) -> Tuple[
         DeviceConfig,
         Tuple[DataLoader, DataLoader],
@@ -397,6 +419,9 @@ class TrainingSetup:
             model,  # type: ignore
             learning_ratio,
             momentum,
+            optimizer_name=optimizer_name,
+            betas=(optimizer_beta1, optimizer_beta2),
+            eps=optimizer_eps,
         )
 
         model_components = ModelComponents(

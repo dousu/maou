@@ -76,6 +76,10 @@ def learn(
     value_loss_ratio: Optional[float] = None,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
+    optimizer_name: Optional[str] = None,
+    optimizer_beta1: Optional[float] = None,
+    optimizer_beta2: Optional[float] = None,
+    optimizer_eps: Optional[float] = None,
     resume_from: Optional[Path] = None,
     start_epoch: Optional[int] = None,
     log_dir: Optional[Path] = None,
@@ -100,6 +104,10 @@ def learn(
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
         momentum: SGD momentum parameter
+        optimizer_name: Optimizer selection ('adamw' or 'sgd')
+        optimizer_beta1: AdamW beta1 parameter
+        optimizer_beta2: AdamW beta2 parameter
+        optimizer_eps: AdamW epsilon parameter
         resume_from: Checkpoint file to resume from
         start_epoch: Starting epoch number for training
         log_dir: Directory for training logs
@@ -197,6 +205,48 @@ def learn(
             f"momentum must be between 0 and 1, got {momentum}"
         )
 
+    # Optimizer selection (default AdamW for stability)
+    if optimizer_name is None:
+        optimizer_name = "adamw"
+    optimizer_key = optimizer_name.lower()
+    if optimizer_key not in {"adamw", "sgd"}:
+        raise ValueError(
+            "optimizer_name must be 'adamw' or 'sgd', "
+            f"got {optimizer_name}"
+        )
+
+    # AdamW beta1 parameter (default 0.9)
+    if optimizer_beta1 is None:
+        optimizer_beta1 = 0.9
+    elif not 0.0 < optimizer_beta1 < 1.0:
+        raise ValueError(
+            "optimizer_beta1 must be between 0 and 1, "
+            f"got {optimizer_beta1}"
+        )
+
+    # AdamW beta2 parameter (default 0.999)
+    if optimizer_beta2 is None:
+        optimizer_beta2 = 0.999
+    elif not 0.0 < optimizer_beta2 < 1.0:
+        raise ValueError(
+            "optimizer_beta2 must be between 0 and 1, "
+            f"got {optimizer_beta2}"
+        )
+
+    if optimizer_beta2 <= optimizer_beta1:
+        raise ValueError(
+            "optimizer_beta2 must be greater than optimizer_beta1 "
+            f"(got {optimizer_beta1} and {optimizer_beta2})"
+        )
+
+    # AdamW epsilon parameter (default 1e-8)
+    if optimizer_eps is None:
+        optimizer_eps = 1e-8
+    elif optimizer_eps <= 0:
+        raise ValueError(
+            f"optimizer_eps must be positive, got {optimizer_eps}"
+        )
+
     # 学習開始に利用するチェックポイントファイル設定 (デフォルトNone)
 
     # 開始エポック数設定 (デフォルト0)
@@ -240,6 +290,10 @@ def learn(
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
+        optimizer_name=optimizer_key,
+        optimizer_beta1=optimizer_beta1,
+        optimizer_beta2=optimizer_beta2,
+        optimizer_eps=optimizer_eps,
         resume_from=resume_from,
         start_epoch=start_epoch,
         log_dir=log_dir,
