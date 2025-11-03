@@ -1,4 +1,4 @@
-"""Tests for the VisionTransformer evaluation network."""
+"""Tests for the ResNet-based evaluation network."""
 
 from __future__ import annotations
 
@@ -9,20 +9,20 @@ from torchinfo import summary
 
 from maou.app.learning.network import HeadlessNetwork
 from maou.domain.board.shogi import FEATURES_NUM
+from maou.domain.model.resnet import ResNet as DomainResNet
 from maou.domain.model.vision_transformer import (
     VisionTransformer as DomainVisionTransformer,
     VisionTransformerConfig,
 )
 
 
-def test_headless_network_wraps_domain_vit() -> None:
-    """HeadlessNetwork should compose the domain VisionTransformer."""
+def test_headless_network_wraps_domain_resnet() -> None:
+    """HeadlessNetwork should compose the domain ResNet."""
 
     model = HeadlessNetwork()
 
-    assert isinstance(model.backbone, DomainVisionTransformer)
-    assert model.backbone.head is None
-    assert model.embedding_dim == model.backbone.embedding_dim
+    assert isinstance(model.backbone, DomainResNet)
+    assert model.embedding_dim == 2048
 
 
 def test_headless_network_forward_returns_embeddings() -> None:
