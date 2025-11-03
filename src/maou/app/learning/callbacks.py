@@ -219,8 +219,18 @@ class LoggingCallback(BaseCallback):
                 self.running_loss = 0.0
 
 
+@dataclass(frozen=True)
+class ValidationMetrics:
+    """Validation metrics aggregated over a single epoch."""
+
+    policy_cross_entropy: float
+    value_brier_score: float
+    policy_top1_accuracy: float
+    value_high_confidence_rate: float
+
+
 class ValidationCallback(BaseCallback):
-    """Callback for validation with policy cross entropy and value Brier Score."""
+    """Callback for validation with policy and value quality metrics."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
@@ -230,6 +240,9 @@ class ValidationCallback(BaseCallback):
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
+        self.policy_top1_match_count = 0
+        self.value_high_confidence_prediction_count = 0
+        self.value_high_confidence_correct = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -255,6 +268,24 @@ class ValidationCallback(BaseCallback):
             )
             self.policy_sample_count += policy_batch_size
             self.value_sample_count += value_batch_size
+            self.policy_top1_match_count += int(
+                torch.sum(
+                    torch.argmax(context.outputs_policy, dim=1)
+                    == torch.argmax(policy_targets, dim=1)
+                ).item()
+            )
+            labels_value = context.labels_value.view(-1)
+            predicted_value = torch.sigmoid(context.outputs_value).view(-1)
+            prediction_high_confidence_mask = predicted_value >= 0.8
+            self.value_high_confidence_prediction_count += int(
+                torch.sum(prediction_high_confidence_mask).item()
+            )
+            if torch.any(prediction_high_confidence_mask):
+                self.value_high_confidence_correct += int(
+                    torch.sum(
+                        labels_value[prediction_high_confidence_mask] >= 0.8
+                    ).item()
+                )
             self.batch_count += 1
 
     def get_average_loss(self) -> float:
@@ -263,15 +294,26 @@ class ValidationCallback(BaseCallback):
             max(1, self.batch_count)
         )
 
-    def get_average_metrics(self) -> tuple[float, float]:
-        """Get average policy cross entropy and value Brier Score."""
+    def get_average_metrics(self) -> ValidationMetrics:
+        """Get aggregated policy and value metrics for the epoch."""
         avg_policy_cross_entropy = float(self.policy_cross_entropy_sum) / float(
             max(1, self.policy_sample_count)
         )
-        avg_value = float(self.value_brier_score_sum) / float(
+        avg_value_brier = float(self.value_brier_score_sum) / float(
             max(1, self.value_sample_count)
         )
-        return avg_policy_cross_entropy, avg_value
+        policy_top1_accuracy = float(self.policy_top1_match_count) / float(
+            max(1, self.policy_sample_count)
+        )
+        value_high_confidence_rate = float(
+            self.value_high_confidence_correct
+        ) / float(max(1, self.value_high_confidence_prediction_count))
+        return ValidationMetrics(
+            policy_cross_entropy=avg_policy_cross_entropy,
+            value_brier_score=avg_value_brier,
+            policy_top1_accuracy=policy_top1_accuracy,
+            value_high_confidence_rate=value_high_confidence_rate,
+        )
 
     def reset(self) -> None:
         """Reset all counters for next epoch."""
@@ -281,6 +323,9 @@ class ValidationCallback(BaseCallback):
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
+        self.policy_top1_match_count = 0
+        self.value_high_confidence_prediction_count = 0
+        self.value_high_confidence_correct = 0
 
     def _policy_cross_entropy(
         self, logits: torch.Tensor, target_distribution: torch.Tensor
