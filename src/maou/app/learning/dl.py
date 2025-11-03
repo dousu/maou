@@ -265,10 +265,7 @@ class Learning:
 
             # Get validation metrics
             avg_vloss = validation_callback.get_average_loss()
-            (
-                avg_policy_cross_entropy,
-                avg_value_brier_score,
-            ) = validation_callback.get_average_metrics()
+            metrics = validation_callback.get_average_metrics()
 
             # Reset callback for next epoch
             validation_callback.reset()
@@ -279,15 +276,23 @@ class Learning:
                 )
             )
             self.logger.info(
-                "METRICS policy_cross_entropy {} value_brier_score {}".format(
-                    avg_policy_cross_entropy, avg_value_brier_score
+                (
+                    "METRICS policy_cross_entropy {} value_brier_score {} "
+                    "policy_top1_accuracy {} value_high_confidence_rate {}"
+                ).format(
+                    metrics.policy_cross_entropy,
+                    metrics.value_brier_score,
+                    metrics.policy_top1_accuracy,
+                    metrics.value_high_confidence_rate,
                 )
             )
             writer.add_scalars(
                 "Validation Metrics",
                 {
-                    "Policy Cross Entropy": avg_policy_cross_entropy,
-                    "Value Brier Score": avg_value_brier_score,
+                    "Policy Cross Entropy": metrics.policy_cross_entropy,
+                    "Value Brier Score": metrics.value_brier_score,
+                    "Policy Top-1 Accuracy": metrics.policy_top1_accuracy,
+                    "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
                 },
                 epoch_number + 1,
             )
