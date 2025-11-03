@@ -5,7 +5,7 @@ training_benchmark.py と dl.py の重複コードを統一化．
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from torch import optim
@@ -276,11 +276,52 @@ class LossOptimizerFactory:
         weight_decay: float = 0.01,
     ) -> optim.SGD:
         """SGDオプティマイザを作成."""
+        decay_params: List[torch.nn.Parameter] = []
+        no_decay_params: List[torch.nn.Parameter] = []
+
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            module_name = name.rsplit(".", 1)[0] if "." in name else ""
+            parent_module = (
+                model.get_submodule(module_name)
+                if module_name
+                else model
+            )
+
+            if isinstance(
+                parent_module,
+                (
+                    torch.nn.modules.batchnorm._BatchNorm,
+                    torch.nn.LayerNorm,
+                ),
+            ):
+                no_decay_params.append(param)
+            elif param.ndim <= 1:
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        if not decay_params:
+            raise ValueError(
+                "No parameters found for the weight decay parameter group."
+            )
+
+        if not no_decay_params:
+            raise ValueError(
+                "No parameters found for the no-weight-decay parameter group."
+            )
+
+        param_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+
         return optim.SGD(
-            model.parameters(),
+            param_groups,
             lr=learning_ratio,
             momentum=momentum,
-            weight_decay=weight_decay,
         )
 
 
