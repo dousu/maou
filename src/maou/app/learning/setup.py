@@ -278,25 +278,23 @@ class LossOptimizerFactory:
         """SGDオプティマイザを作成."""
         decay_params: List[torch.nn.Parameter] = []
         no_decay_params: List[torch.nn.Parameter] = []
+        modules_by_name = dict(model.named_modules())
+        normalization_modules = (
+            torch.nn.BatchNorm1d,
+            torch.nn.BatchNorm2d,
+            torch.nn.BatchNorm3d,
+            torch.nn.SyncBatchNorm,
+            torch.nn.LayerNorm,
+        )
 
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
 
             module_name = name.rsplit(".", 1)[0] if "." in name else ""
-            parent_module = (
-                model.get_submodule(module_name)
-                if module_name
-                else model
-            )
+            parent_module = modules_by_name.get(module_name, model)
 
-            if isinstance(
-                parent_module,
-                (
-                    torch.nn.modules.batchnorm._BatchNorm,
-                    torch.nn.LayerNorm,
-                ),
-            ):
+            if isinstance(parent_module, normalization_modules):
                 no_decay_params.append(param)
             elif param.ndim <= 1:
                 no_decay_params.append(param)
