@@ -266,10 +266,34 @@ class ValidationCallback(BaseCallback):
     def _policy_accuracy(
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
-        """Calculate policy accuracy."""
-        return (
-            torch.max(y, 1)[1] == torch.max(t, 1)[1]
-        ).sum().item() / len(t)
+        """Calculate Top-5 policy accuracy based on label overlap."""
+        if y.ndim != 2 or t.ndim != 2:
+            raise ValueError("Tensors y and t must be 2-dimensional.")
+
+        k = min(5, y.size(1))
+        pred_topk = torch.topk(y, k=k, dim=1).indices
+        sorted_indices = torch.argsort(t, dim=1, descending=True)
+        sorted_values = torch.gather(t, 1, sorted_indices)
+
+        total_ratio = 0.0
+        valid_samples = 0
+
+        for batch_idx in range(t.size(0)):
+            positive_indices = sorted_indices[batch_idx][
+                sorted_values[batch_idx] > 0
+            ]
+            if positive_indices.numel() == 0:
+                continue
+
+            label_topk = positive_indices[: min(5, positive_indices.numel())]
+            matches = torch.isin(label_topk, pred_topk[batch_idx])
+            total_ratio += matches.float().mean().item()
+            valid_samples += 1
+
+        if valid_samples == 0:
+            return 0.0
+
+        return total_ratio / float(valid_samples)
 
     def _value_accuracy(
         self, y: torch.Tensor, t: torch.Tensor
