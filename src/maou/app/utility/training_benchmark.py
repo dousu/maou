@@ -14,9 +14,9 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.network import Network
 from maou.app.learning.resource_monitor import ResourceUsage
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,7 @@ class SingleEpochBenchmark:
         model: Network,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
-        loss_fn_policy: GCEwithNegativePenaltyLoss,
+        loss_fn_policy: torch.nn.Module,
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
@@ -424,7 +424,6 @@ class TrainingBenchmarkUseCase:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
-                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -434,6 +433,14 @@ class TrainingBenchmarkUseCase:
                 momentum=config.momentum,
             )
         )
+
+        if config.compilation:
+            self.logger.info(
+                "Compiling model with torch.compile for benchmarking (dynamic shapes disabled)"
+            )
+            model_components.model = compile_module(
+                model_components.model
+            )
 
         training_loader, validation_loader = dataloaders
         device = device_config.device

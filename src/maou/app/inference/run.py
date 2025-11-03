@@ -2,21 +2,21 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
-from maou.app.inference.tensorrt_inference import (
-    TensorRTInference,
-)
 from maou.app.pre_process.feature import make_feature
 from maou.app.pre_process.label import (
     IllegalMove,
     make_usi_move_from_label,
 )
 from maou.domain.board.shogi import Board
+
+if TYPE_CHECKING:
+    pass
 
 
 class ModelType(Enum):
@@ -71,6 +71,18 @@ class InferenceRunner:
                 config.cuda,
             )
         elif config.model_type == ModelType.TENSORRT:
+            try:
+                from maou.app.inference.tensorrt_inference import (
+                    TensorRTInference,
+                )
+            except ModuleNotFoundError as exc:
+                missing_dep = exc.name or "tensorrt"
+                raise RuntimeError(
+                    "TensorRT inference requires optional dependency "
+                    f"'{missing_dep}'. Install with "
+                    "`poetry install -E tensorrt-infer` before using "
+                    "`--model-type TENSORRT`."
+                ) from exc
             policy_labels, value = TensorRTInference.infer(
                 config.model_path,
                 input_data,

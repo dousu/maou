@@ -5,18 +5,18 @@ training_benchmark.py と dl.py の重複コードを統一化．
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.learning.network import Network
+from maou.app.learning.network import HeadlessNetwork, Network
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
-from maou.domain.network.resnet import BottleneckBlock
+from maou.domain.model.resnet import BottleneckBlock
 
 
 def default_worker_init_fn(worker_id: int) -> None:
@@ -46,8 +46,8 @@ class DeviceConfig:
 class ModelComponents:
     """モデル関連コンポーネント."""
 
-    model: Network
-    loss_fn_policy: GCEwithNegativePenaltyLoss
+    model: torch.nn.Module
+    loss_fn_policy: torch.nn.Module
     loss_fn_value: torch.nn.Module
     optimizer: optim.SGD
 
@@ -135,6 +135,7 @@ class DataLoaderFactory:
         dataloader_workers: int,
         pin_memory: bool,
         prefetch_factor: int = 2,
+        drop_last_train: bool = True,
     ) -> Tuple[DataLoader, DataLoader]:
         """学習・検証用DataLoaderの作成."""
 
@@ -156,7 +157,7 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if dataloader_workers > 0
             else None,
-            drop_last=True,
+            drop_last=drop_last_train,
             timeout=120 if dataloader_workers > 0 else 0,
             worker_init_fn=worker_init_fn,
         )
@@ -193,37 +194,47 @@ class ModelFactory:
     logger: logging.Logger = logging.getLogger(__name__)
 
     @classmethod
+    def create_shogi_backbone(
+        cls, device: torch.device
+    ) -> HeadlessNetwork:
+        """方策・価値ヘッドを含まないResNetバックボーンを作成."""
+
+        backbone = HeadlessNetwork(
+            num_channels=FEATURES_NUM,
+            board_size=(9, 9),
+            block=BottleneckBlock,
+            layers=(2, 2, 2, 2),
+            strides=(1, 2, 2, 2),
+            out_channels=(64, 128, 256, 512),
+        )
+
+        backbone.to(device)
+        cls.logger.info(
+            "Created shogi-optimized ResNet backbone (%s)",
+            str(device),
+        )
+
+        return backbone
+
+    @classmethod
     def create_shogi_model(
         cls, device: torch.device
     ) -> Network:
-        """将棋特化のBottleneckBlockモデルを作成."""
-
-        # 将棋特化の「広く浅い」BottleneckBlock構成
-        # 各層のボトルネック幅（3x3 convolution層のチャンネル数）
-        # expansion=4により実際の出力は4倍: [96, 192, 384, 576]
-        bottleneck_width = [24, 48, 96, 144]
+        """将棋特化のResNetモデルを作成."""
 
         model = Network(
-            BottleneckBlock,  # 効率的なBottleneckアーキテクチャを使用
-            FEATURES_NUM,  # 入力特徴量チャンネル数
-            [
-                2,
-                2,
-                2,
-                1,
-            ],  # 将棋特化: 広く浅い構成でパターン認識を重視
-            [
-                1,
-                2,
-                2,
-                2,
-            ],  # 各層のstride（2で特徴マップサイズ半減）
-            bottleneck_width,  # 幅重視: 多様な戦術要素を並列学習
+            num_policy_classes=MOVE_LABELS_NUM,
+            num_channels=FEATURES_NUM,
+            board_size=(9, 9),
+            block=BottleneckBlock,
+            layers=(2, 2, 2, 2),
+            strides=(1, 2, 2, 2),
+            out_channels=(64, 128, 256, 512),
         )
 
         model.to(device)
         cls.logger.info(
-            f"Created Shogi-optimized BottleneckBlock model ({str(device)})"
+            f"Created shogi-optimized ResNet model ({str(device)})"
         )
 
         return model
@@ -236,11 +247,23 @@ class LossOptimizerFactory:
     def create_loss_functions(
         cls,
         gce_parameter: float = 0.1,
-    ) -> Tuple[GCEwithNegativePenaltyLoss, torch.nn.Module]:
-        """方策・価値用の損失関数ペアを作成."""
-        loss_fn_policy = GCEwithNegativePenaltyLoss(
-            q=gce_parameter
-        )
+    ) -> Tuple[torch.nn.Module, torch.nn.Module]:
+        """方策・価値用の損失関数ペアを作成．
+
+        Value loss関数としてBCEWithLogitsLossを使用．
+        二峰性分布（0と1に集中）のデータに対してMSELossは平均値予測が
+        最適解となるため，BCEWithLogitsLossの方が適切．
+
+        BCEWithLogitsLossはSigmoidとBCE lossを組み合わせた関数で，
+        以下の利点がある:
+        - 数値的により安定（log-sum-exp trick）
+        - Mixed precision training（autocast）と互換性がある
+        - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
+        """
+        _ = gce_parameter
+        loss_fn_policy = torch.nn.KLDivLoss(reduction="batchmean")
+        # BCEWithLogitsLoss: Value headはlogitsを出力
+        # Sigmoid + BCE lossを内部で実行（数値的に安定，autocast対応）
         loss_fn_value = torch.nn.BCEWithLogitsLoss()
         return loss_fn_policy, loss_fn_value
 
@@ -250,14 +273,53 @@ class LossOptimizerFactory:
         model: torch.nn.Module,
         learning_ratio: float = 0.01,
         momentum: float = 0.9,
-        weight_decay: float = 0.0001,
+        weight_decay: float = 0.01,
     ) -> optim.SGD:
         """SGDオプティマイザを作成."""
+        decay_params: List[torch.nn.Parameter] = []
+        no_decay_params: List[torch.nn.Parameter] = []
+        modules_by_name = dict(model.named_modules())
+        normalization_modules = (
+            torch.nn.BatchNorm1d,
+            torch.nn.BatchNorm2d,
+            torch.nn.BatchNorm3d,
+            torch.nn.SyncBatchNorm,
+            torch.nn.LayerNorm,
+        )
+
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            module_name = name.rsplit(".", 1)[0] if "." in name else ""
+            parent_module = modules_by_name.get(module_name, model)
+
+            if isinstance(parent_module, normalization_modules):
+                no_decay_params.append(param)
+            elif param.ndim <= 1:
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        if not decay_params:
+            raise ValueError(
+                "No parameters found for the weight decay parameter group."
+            )
+
+        if not no_decay_params:
+            raise ValueError(
+                "No parameters found for the no-weight-decay parameter group."
+            )
+
+        param_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+
         return optim.SGD(
-            model.parameters(),
+            param_groups,
             lr=learning_ratio,
             momentum=momentum,
-            weight_decay=weight_decay,
         )
 
 
@@ -273,7 +335,6 @@ class TrainingSetup:
         validation_datasource: DataSource,
         datasource_type: str,
         gpu: Optional[str] = None,
-        compilation: bool = False,
         batch_size: int = 256,
         dataloader_workers: int = 4,
         pin_memory: Optional[bool] = None,
@@ -322,16 +383,9 @@ class TrainingSetup:
         )
 
         # Model creation
-        if compilation:
-            model = torch.compile(
-                ModelFactory.create_shogi_model(
-                    device_config.device
-                )
-            )
-        else:
-            model = ModelFactory.create_shogi_model(
-                device_config.device
-            )
+        model = ModelFactory.create_shogi_model(
+            device_config.device
+        )
 
         # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (

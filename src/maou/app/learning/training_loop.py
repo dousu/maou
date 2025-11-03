@@ -11,7 +11,7 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
-from maou.domain.loss.loss_fn import GCEwithNegativePenaltyLoss
+from maou.app.learning.policy_targets import normalize_policy_targets
 
 
 class TrainingLoop:
@@ -23,7 +23,7 @@ class TrainingLoop:
         model: torch.nn.Module,
         device: torch.device,
         optimizer: torch.optim.Optimizer,
-        loss_fn_policy: GCEwithNegativePenaltyLoss,
+        loss_fn_policy: torch.nn.Module,
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
@@ -39,6 +39,7 @@ class TrainingLoop:
         self.value_loss_ratio = value_loss_ratio
         self.callbacks = callbacks or []
         self.logger = logger or logging.getLogger(__name__)
+        self._cuda_sync_enabled = False
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -57,8 +58,32 @@ class TrainingLoop:
         enable_profiling: bool = False,
         progress_bar: bool = True,
         train_mode: bool = True,
+        force_cuda_sync: Optional[bool] = None,
     ) -> None:
         """Run a single epoch of training or validation."""
+        previous_sync_state = self._cuda_sync_enabled
+        resolved_sync_state = (
+            force_cuda_sync
+            if force_cuda_sync is not None
+            else enable_profiling
+            or self.logger.isEnabledFor(logging.DEBUG)
+        )
+        self._cuda_sync_enabled = resolved_sync_state
+
+        if (
+            self.device.type == "cuda"
+            and previous_sync_state != resolved_sync_state
+        ):
+            self.logger.debug(
+                "CUDA synchronization %s for epoch %d (profiling=%s, forced=%s)",
+                "enabled"
+                if resolved_sync_state
+                else "disabled",
+                epoch_idx,
+                enable_profiling,
+                force_cuda_sync,
+            )
+
         # モデルのモード設定
         self.model.train(train_mode)
 
@@ -151,6 +176,19 @@ class TrainingLoop:
                     profiler.step()
 
         finally:
+            if (
+                self.device.type == "cuda"
+                and previous_sync_state
+                != self._cuda_sync_enabled
+            ):
+                self.logger.debug(
+                    "CUDA synchronization restored to %s after epoch %d",
+                    "enabled"
+                    if previous_sync_state
+                    else "disabled",
+                    epoch_idx,
+                )
+            self._cuda_sync_enabled = previous_sync_state
             if profiler is not None:
                 profiler.stop()
 
@@ -176,14 +214,15 @@ class TrainingLoop:
             context.labels_value = context.labels_value.to(
                 self.device, non_blocking=True
             )
-            context.legal_move_mask = (
-                context.legal_move_mask.to(
-                    self.device, non_blocking=True
+            if context.legal_move_mask is not None:
+                context.legal_move_mask = (
+                    context.legal_move_mask.to(
+                        self.device, non_blocking=True
+                    )
                 )
-            )
 
             # GPU同期（正確な転送時間測定のため）
-            torch.cuda.synchronize()
+            self._maybe_synchronize("post_data_transfer")
 
         for callback in self.callbacks:
             callback.on_data_transfer_end(context)
@@ -221,24 +260,41 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
-            context.loss = (
-                self.policy_loss_ratio
-                * self.loss_fn_policy(
-                    context.outputs_policy,
-                    context.labels_policy,
-                    context.legal_move_mask,
-                )
-                + self.value_loss_ratio
-                * self.loss_fn_value(
-                    context.outputs_value, context.labels_value
-                )
+            policy_loss = self._compute_policy_loss(context)
+            value_loss = self.loss_fn_value(
+                context.outputs_value, context.labels_value
             )
+            context.loss = (
+                self.policy_loss_ratio * policy_loss
+                + self.value_loss_ratio * value_loss
+            )
+            loss_is_finite = torch.isfinite(context.loss)
+            policy_loss_is_finite = torch.isfinite(policy_loss)
+            value_loss_is_finite = torch.isfinite(value_loss)
 
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_forward_mixed_precision")
+
+        if not bool(loss_is_finite.item()):
+            for callback in self.callbacks:
+                callback.on_forward_pass_end(context)
+
+            self.logger.warning(
+                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                context.epoch_idx,
+                context.batch_idx,
+                context.loss.detach(),
+                policy_loss.detach(),
+                bool(policy_loss_is_finite.item()),
+                value_loss.detach(),
+                bool(value_loss_is_finite.item()),
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            self.scaler.update()
+            return
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -260,8 +316,7 @@ class TrainingLoop:
             self.model.parameters(), max_norm=1.0
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_backward_mixed_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
@@ -273,8 +328,9 @@ class TrainingLoop:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_optimizer_step_mixed_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_optimizer_step_end(context)
@@ -291,8 +347,7 @@ class TrainingLoop:
             self.model(context.inputs)
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_forward_full_precision")
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -301,21 +356,35 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        context.loss = (
-            self.policy_loss_ratio
-            * self.loss_fn_policy(
-                context.outputs_policy,
-                context.labels_policy,
-                context.legal_move_mask,
-            )
-            + self.value_loss_ratio
-            * self.loss_fn_value(
-                context.outputs_value, context.labels_value
-            )
+        policy_loss = self._compute_policy_loss(context)
+        value_loss = self.loss_fn_value(
+            context.outputs_value, context.labels_value
         )
+        context.loss = (
+            self.policy_loss_ratio * policy_loss
+            + self.value_loss_ratio * value_loss
+        )
+        loss_is_finite = torch.isfinite(context.loss)
+        policy_loss_is_finite = torch.isfinite(policy_loss)
+        value_loss_is_finite = torch.isfinite(value_loss)
 
         for callback in self.callbacks:
             callback.on_loss_computation_end(context)
+
+        if not bool(loss_is_finite.item()):
+            self.logger.warning(
+                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                context.epoch_idx,
+                context.batch_idx,
+                context.loss.detach(),
+                policy_loss.detach(),
+                bool(policy_loss_is_finite.item()),
+                value_loss.detach(),
+                bool(value_loss_is_finite.item()),
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            return
 
         # 逆伝播
         for callback in self.callbacks:
@@ -333,8 +402,7 @@ class TrainingLoop:
             self.model.parameters(), max_norm=1.0
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize("post_backward_full_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
@@ -345,8 +413,9 @@ class TrainingLoop:
 
         self.optimizer.step()
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_optimizer_step_full_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_optimizer_step_end(context)
@@ -377,13 +446,9 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
+            policy_loss = self._compute_policy_loss(context)
             context.loss = (
-                self.policy_loss_ratio
-                * self.loss_fn_policy(
-                    context.outputs_policy,
-                    context.labels_policy,
-                    context.legal_move_mask,
-                )
+                self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio
                 * self.loss_fn_value(
                     context.outputs_value, context.labels_value
@@ -393,8 +458,9 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_eval_forward_mixed_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -405,6 +471,21 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _maybe_synchronize(self, reason: str) -> None:
+        if self.device.type != "cuda":
+            return
+
+        if not self._cuda_sync_enabled:
+            return
+
+        torch.cuda.synchronize()
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(
+                "torch.cuda.synchronize() executed (%s)",
+                reason,
+            )
 
     def _eval_batch_full_precision(
         self, context: TrainingContext
@@ -418,8 +499,9 @@ class TrainingLoop:
             self.model(context.inputs)
         )
 
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._maybe_synchronize(
+            "post_eval_forward_full_precision"
+        )
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -428,13 +510,9 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
+        policy_loss = self._compute_policy_loss(context)
         context.loss = (
-            self.policy_loss_ratio
-            * self.loss_fn_policy(
-                context.outputs_policy,
-                context.labels_policy,
-                context.legal_move_mask,
-            )
+            self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio
             * self.loss_fn_value(
                 context.outputs_value, context.labels_value
@@ -450,3 +528,24 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _compute_policy_loss(
+        self, context: TrainingContext
+    ) -> torch.Tensor:
+        if context.outputs_policy is None:
+            raise RuntimeError(
+                "Policy outputs are required before computing the loss"
+            )
+
+        policy_log_probs = torch.nn.functional.log_softmax(
+            context.outputs_policy,
+            dim=1,
+        )
+        policy_targets = normalize_policy_targets(
+            context.labels_policy,
+            context.legal_move_mask,
+            dtype=policy_log_probs.dtype,
+            device=policy_log_probs.device,
+        )
+        context.policy_target_distribution = policy_targets.detach()
+        return self.loss_fn_policy(policy_log_probs, policy_targets)

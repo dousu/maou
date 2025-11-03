@@ -1,0 +1,27 @@
+version: 1
+policies:
+  shell:
+    run_prefix: "poetry run"
+    enforce_tools:
+      - pytest
+      - mypy
+      - ruff
+      - flake8
+      - isort
+      - coverage
+      - maou
+    deny_without_prefix: true
+  docs:
+    code_blocks:
+      languages: ["bash", "sh", "shell", "console"]
+      must_start_with_prefix: true
+defaults:
+  branch_naming: "feature/{ticket_or_topic}"
+  commit_convention: "conventional"
+  test_command: "poetry run pytest -q"
+  qa_pipeline:
+    - "poetry run ruff format src/"
+    - "poetry run ruff check src/ --fix"
+    - "poetry run isort src/"
+    - "poetry run mypy src/"
+    - "poetry run pytest -q"

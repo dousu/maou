@@ -3,11 +3,13 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, MutableMapping, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
-from torch.utils.tensorboard import SummaryWriter  # type: ignore
+from torch.utils.tensorboard import (
+    SummaryWriter,  # type: ignore
+)
 from torchinfo import summary
 
 from maou.app.learning.callbacks import (
@@ -17,6 +19,7 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
 from maou.app.learning.network import Network
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.board.shogi import FEATURES_NUM
@@ -93,7 +96,6 @@ class Learning:
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
                 gpu=config.gpu,
-                compilation=config.compilation,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,
@@ -128,6 +130,12 @@ class Learning:
                 9,
             ),
         )
+
+        if config.compilation:
+            self.logger.info(
+                "Compiling model with torch.compile (dynamic shapes disabled)"
+            )
+            self.model = cast(Network, compile_module(self.model))
         self.__train()
 
         learning_result["Data Samples"] = (
@@ -186,13 +194,13 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            self.model.load_state_dict(
-                torch.load(
-                    self.resume_from,
-                    weights_only=True,
-                    map_location=self.device,
-                )
+            state_dict: MutableMapping[str, torch.Tensor] = torch.load(
+                self.resume_from,
+                weights_only=True,
+                map_location=self.device,
             )
+
+            self._load_resume_state_dict(state_dict)
 
         # start epoch設定
         epoch_number = self.start_epoch
@@ -257,9 +265,7 @@ class Learning:
 
             # Get validation metrics
             avg_vloss = validation_callback.get_average_loss()
-            avg_accuracy_policy, avg_accuracy_value = (
-                validation_callback.get_average_accuracies()
-            )
+            metrics = validation_callback.get_average_metrics()
 
             # Reset callback for next epoch
             validation_callback.reset()
@@ -270,15 +276,23 @@ class Learning:
                 )
             )
             self.logger.info(
-                "ACCURACY policy {} value {}".format(
-                    avg_accuracy_policy, avg_accuracy_value
+                (
+                    "METRICS policy_cross_entropy {} value_brier_score {} "
+                    "policy_top1_accuracy {} value_high_confidence_rate {}"
+                ).format(
+                    metrics.policy_cross_entropy,
+                    metrics.value_brier_score,
+                    metrics.policy_top1_accuracy,
+                    metrics.value_high_confidence_rate,
                 )
             )
             writer.add_scalars(
-                "Accuracy",
+                "Validation Metrics",
                 {
-                    "Policy": avg_accuracy_policy,
-                    "Value": avg_accuracy_value,
+                    "Policy Cross Entropy": metrics.policy_cross_entropy,
+                    "Value Brier Score": metrics.value_brier_score,
+                    "Policy Top-1 Accuracy": metrics.policy_top1_accuracy,
+                    "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
                 },
                 epoch_number + 1,
             )
@@ -309,11 +323,37 @@ class Learning:
                 self.logger.info(
                     "Uploading tensorboard logs to cloud storage"
                 )
+                cloud_tensorboard_folder = (
+                    f"tensorboard/{summary_writer_log_dir.name}"
+                )
                 self.__cloud_storage.upload_folder_from_local(
                     local_folder=summary_writer_log_dir,
-                    cloud_folder="tensorboard",
+                    cloud_folder=cloud_tensorboard_folder,
                 )
 
             epoch_number += 1
 
         writer.close()
+
+    def _load_resume_state_dict(
+        self, state_dict: MutableMapping[str, torch.Tensor]
+    ) -> None:
+        """Load a checkpoint while remaining compatible with compiled models."""
+
+        if hasattr(self.model, "_orig_mod"):
+            needs_prefix = any(
+                not key.startswith("_orig_mod.") for key in state_dict.keys()
+            )
+            if needs_prefix:
+                state_dict = {
+                    f"_orig_mod.{key}": value for key, value in state_dict.items()
+                }
+
+        try:
+            self.model.load_state_dict(state_dict)
+        except RuntimeError as exc:
+            self.logger.error(
+                "Failed to load checkpoint into model: %s",
+                exc,
+            )
+            raise

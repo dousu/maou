@@ -1,24 +1,49 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import click
 
-from maou.infra.console.common import (
-    GCS,
-    HAS_AWS,
-    HAS_BIGQUERY,
-    HAS_GCS,
-    S3,
-    BigQueryDataSource,
-    FileDataSource,
-    FileSystem,
-    GCSDataSource,
-    S3DataSource,
-    app_logger,
-    handle_exception,
-)
+from maou.infra.console import common
 from maou.interface import learn
 
+
+if TYPE_CHECKING:
+    from maou.infra.console.common import (
+        BigQueryDataSource as BigQueryDataSourceType,
+        FileDataSource as FileDataSourceType,
+        FileSystem as FileSystemType,
+        GCS as GCSType,
+        GCSDataSource as GCSDataSourceType,
+        S3 as S3Type,
+        S3DataSource as S3DataSourceType,
+    )
+else:
+    BigQueryDataSourceType = Any
+    FileDataSourceType = Any
+    FileSystemType = Any
+    GCSType = Any
+    GCSDataSourceType = Any
+    S3Type = Any
+    S3DataSourceType = Any
+
+
+app_logger = common.app_logger
+FileDataSource = common.FileDataSource
+FileSystem = common.FileSystem
+HAS_BIGQUERY = common.HAS_BIGQUERY
+HAS_GCS = common.HAS_GCS
+HAS_AWS = common.HAS_AWS
+BigQueryDataSource: BigQueryDataSourceType | None = getattr(
+    common, "BigQueryDataSource", None
+)
+GCS: GCSType | None = getattr(common, "GCS", None)
+GCSDataSource: GCSDataSourceType | None = getattr(
+    common, "GCSDataSource", None
+)
+S3: S3Type | None = getattr(common, "S3", None)
+S3DataSource: S3DataSourceType | None = getattr(
+    common, "S3DataSource", None
+)
 
 @click.command("learn-model")
 @click.option(
@@ -297,7 +322,7 @@ from maou.interface import learn
     type=str,
     required=False,
 )
-@handle_exception
+@common.handle_exception
 def learn_model(
     input_dir: Optional[Path],
     input_file_packed: bool,
@@ -370,7 +395,7 @@ def learn_model(
         and gcs_bucket_name is not None
         and gcs_base_path is not None
     ):
-        if HAS_GCS:
+        if HAS_GCS and GCS is not None:
             try:
                 cloud_storage = GCS(
                     bucket_name=gcs_bucket_name,
@@ -390,7 +415,7 @@ def learn_model(
         and s3_bucket_name is not None
         and s3_base_path is not None
     ):
-        if HAS_AWS:
+        if HAS_AWS and S3 is not None:
             try:
                 cloud_storage = S3(
                     bucket_name=s3_bucket_name,
@@ -443,7 +468,7 @@ def learn_model(
         input_dataset_id is not None
         and input_table_name is not None
     ):
-        if HAS_BIGQUERY:
+        if HAS_BIGQUERY and BigQueryDataSource is not None:
             try:
                 # BigQueryDataSourceSpliterを使用
                 if hasattr(
@@ -488,7 +513,7 @@ def learn_model(
         and input_data_name is not None
         and input_local_cache_dir is not None
     ):
-        if HAS_GCS:
+        if HAS_GCS and GCSDataSource is not None:
             try:
                 # GCSDataSourceSpliterを使用
                 if hasattr(GCSDataSource, "DataSourceSpliter"):
@@ -531,7 +556,7 @@ def learn_model(
         and input_data_name is not None
         and input_local_cache_dir is not None
     ):
-        if HAS_AWS:
+        if HAS_AWS and S3DataSource is not None:
             try:
                 # S3DataSourceSpliterを使用
                 if hasattr(S3DataSource, "DataSourceSpliter"):

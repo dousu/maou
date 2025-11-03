@@ -4,13 +4,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol
 
 import torch
-from torch.utils.tensorboard import SummaryWriter  # type: ignore
+from torch.utils.tensorboard import (
+    SummaryWriter,  # type: ignore
+)
 
 from maou.app.learning.resource_monitor import (
     GPUResourceMonitor,
     ResourceUsage,
     SystemResourceMonitor,
 )
+from maou.app.learning.policy_targets import normalize_policy_targets
 
 
 @dataclass
@@ -22,11 +25,12 @@ class TrainingContext:
     inputs: torch.Tensor
     labels_policy: torch.Tensor
     labels_value: torch.Tensor
-    legal_move_mask: torch.Tensor
+    legal_move_mask: Optional[torch.Tensor]
     outputs_policy: Optional[torch.Tensor] = None
     outputs_value: Optional[torch.Tensor] = None
     loss: Optional[torch.Tensor] = None
     batch_size: Optional[int] = None
+    policy_target_distribution: Optional[torch.Tensor] = None
 
 
 class TrainingCallback(Protocol):
@@ -215,15 +219,30 @@ class LoggingCallback(BaseCallback):
                 self.running_loss = 0.0
 
 
+@dataclass(frozen=True)
+class ValidationMetrics:
+    """Validation metrics aggregated over a single epoch."""
+
+    policy_cross_entropy: float
+    value_brier_score: float
+    policy_top1_accuracy: float
+    value_high_confidence_rate: float
+
+
 class ValidationCallback(BaseCallback):
-    """Callback for validation with accuracy tracking."""
+    """Callback for validation with policy and value quality metrics."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
         self.running_vloss = 0.0
-        self.test_accuracy_policy = 0.0
-        self.test_accuracy_value = 0.0
+        self.policy_cross_entropy_sum = 0.0
+        self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.policy_sample_count = 0
+        self.value_sample_count = 0
+        self.policy_top1_match_count = 0
+        self.value_high_confidence_prediction_count = 0
+        self.value_high_confidence_correct = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -232,12 +251,41 @@ class ValidationCallback(BaseCallback):
             and context.outputs_value is not None
         ):
             self.running_vloss += context.loss.item()
-            self.test_accuracy_policy += self._policy_accuracy(
-                context.outputs_policy, context.labels_policy
+            policy_targets = (
+                context.policy_target_distribution
+                if context.policy_target_distribution is not None
+                else normalize_policy_targets(
+                    context.labels_policy, context.legal_move_mask
+                )
             )
-            self.test_accuracy_value += self._value_accuracy(
+            self.policy_cross_entropy_sum += self._policy_cross_entropy(
+                context.outputs_policy, policy_targets
+            )
+            policy_batch_size = int(policy_targets.size(0))
+            value_batch_size = int(context.labels_value.numel())
+            self.value_brier_score_sum += self._value_brier_score(
                 context.outputs_value, context.labels_value
             )
+            self.policy_sample_count += policy_batch_size
+            self.value_sample_count += value_batch_size
+            self.policy_top1_match_count += int(
+                torch.sum(
+                    torch.argmax(context.outputs_policy, dim=1)
+                    == torch.argmax(policy_targets, dim=1)
+                ).item()
+            )
+            labels_value = context.labels_value.view(-1)
+            predicted_value = torch.sigmoid(context.outputs_value).view(-1)
+            prediction_high_confidence_mask = predicted_value >= 0.8
+            self.value_high_confidence_prediction_count += int(
+                torch.sum(prediction_high_confidence_mask).item()
+            )
+            if torch.any(prediction_high_confidence_mask):
+                self.value_high_confidence_correct += int(
+                    torch.sum(
+                        labels_value[prediction_high_confidence_mask] >= 0.8
+                    ).item()
+                )
             self.batch_count += 1
 
     def get_average_loss(self) -> float:
@@ -246,38 +294,54 @@ class ValidationCallback(BaseCallback):
             max(1, self.batch_count)
         )
 
-    def get_average_accuracies(self) -> tuple[float, float]:
-        """Get average policy and value accuracies."""
-        avg_policy = float(self.test_accuracy_policy) / float(
-            max(1, self.batch_count)
+    def get_average_metrics(self) -> ValidationMetrics:
+        """Get aggregated policy and value metrics for the epoch."""
+        avg_policy_cross_entropy = float(self.policy_cross_entropy_sum) / float(
+            max(1, self.policy_sample_count)
         )
-        avg_value = float(self.test_accuracy_value) / float(
-            max(1, self.batch_count)
+        avg_value_brier = float(self.value_brier_score_sum) / float(
+            max(1, self.value_sample_count)
         )
-        return avg_policy, avg_value
+        policy_top1_accuracy = float(self.policy_top1_match_count) / float(
+            max(1, self.policy_sample_count)
+        )
+        value_high_confidence_rate = float(
+            self.value_high_confidence_correct
+        ) / float(max(1, self.value_high_confidence_prediction_count))
+        return ValidationMetrics(
+            policy_cross_entropy=avg_policy_cross_entropy,
+            value_brier_score=avg_value_brier,
+            policy_top1_accuracy=policy_top1_accuracy,
+            value_high_confidence_rate=value_high_confidence_rate,
+        )
 
     def reset(self) -> None:
         """Reset all counters for next epoch."""
         self.running_vloss = 0.0
-        self.test_accuracy_policy = 0.0
-        self.test_accuracy_value = 0.0
+        self.policy_cross_entropy_sum = 0.0
+        self.value_brier_score_sum = 0.0
         self.batch_count = 0
+        self.policy_sample_count = 0
+        self.value_sample_count = 0
+        self.policy_top1_match_count = 0
+        self.value_high_confidence_prediction_count = 0
+        self.value_high_confidence_correct = 0
 
-    def _policy_accuracy(
-        self, y: torch.Tensor, t: torch.Tensor
+    def _policy_cross_entropy(
+        self, logits: torch.Tensor, target_distribution: torch.Tensor
     ) -> float:
         """Calculate Top-5 policy accuracy based on label overlap."""
-        if y.ndim != 2 or t.ndim != 2:
+        if logits.ndim != 2 or target_distribution.ndim != 2:
             raise ValueError("Tensors y and t must be 2-dimensional.")
 
-        k = min(5, y.size(1))
-        pred_topk = torch.topk(y, k=k, dim=1).indices
-        sorted_indices = torch.argsort(t, dim=1, descending=True)
-        sorted_values = torch.gather(t, 1, sorted_indices)
+        k = min(5, logits.size(1))
+        pred_topk = torch.topk(logits, k=k, dim=1).indices
+        sorted_indices = torch.argsort(target_distribution, dim=1, descending=True)
+        sorted_values = torch.gather(target_distribution, 1, sorted_indices)
 
         total_ratio = 0.0
 
-        for batch_idx in range(t.size(0)):
+        for batch_idx in range(target_distribution.size(0)):
             positive_indices = sorted_indices[batch_idx][
                 sorted_values[batch_idx] > 0
             ]
@@ -290,15 +354,15 @@ class ValidationCallback(BaseCallback):
             matches = torch.isin(label_topk, pred_topk[batch_idx])
             total_ratio += matches.float().mean().item()
 
-        return total_ratio / float(t.size(0))
+        return total_ratio / float(target_distribution.size(0))
 
-    def _value_accuracy(
+    def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
-        """Calculate value accuracy."""
-        pred = y >= 0
-        truth = t >= 0.5
-        return pred.eq(truth).sum().item() / len(t)
+        """Calculate sum of Brier Score components for a batch."""
+        probabilities = torch.sigmoid(y)
+        squared_error = torch.square(probabilities - t)
+        return torch.sum(squared_error).item()
 
 
 @dataclass(frozen=True)
