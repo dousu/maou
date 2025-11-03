@@ -330,13 +330,31 @@ class ValidationCallback(BaseCallback):
     def _policy_cross_entropy(
         self, logits: torch.Tensor, target_distribution: torch.Tensor
     ) -> float:
-        """Calculate sum of policy cross entropy for a batch."""
-        log_probabilities = torch.nn.functional.log_softmax(logits, dim=1)
-        cross_entropy = -torch.sum(
-            target_distribution * log_probabilities,
-            dim=1,
-        )
-        return float(torch.sum(cross_entropy).item())
+        """Calculate Top-5 policy accuracy based on label overlap."""
+        if logits.ndim != 2 or target_distribution.ndim != 2:
+            raise ValueError("Tensors y and t must be 2-dimensional.")
+
+        k = min(5, logits.size(1))
+        pred_topk = torch.topk(logits, k=k, dim=1).indices
+        sorted_indices = torch.argsort(target_distribution, dim=1, descending=True)
+        sorted_values = torch.gather(target_distribution, 1, sorted_indices)
+
+        total_ratio = 0.0
+
+        for batch_idx in range(target_distribution.size(0)):
+            positive_indices = sorted_indices[batch_idx][
+                sorted_values[batch_idx] > 0
+            ]
+
+            if positive_indices.numel() == 0:
+                total_ratio += 0.0
+                continue
+
+            label_topk = positive_indices[: min(5, positive_indices.numel())]
+            matches = torch.isin(label_topk, pred_topk[batch_idx])
+            total_ratio += matches.float().mean().item()
+
+        return total_ratio / float(target_distribution.size(0))
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
