@@ -4,11 +4,22 @@ training_benchmark.py と dl.py の重複コードを統一化．
 """
 
 import logging
+import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
+try:
+    from torch.optim.lr_scheduler import LRScheduler
+except (
+    ImportError
+):  # pragma: no cover - PyTorch < 2.0 compatibility
+    from torch.optim.lr_scheduler import (  # type: ignore
+        _LRScheduler as LRScheduler,
+    )
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import (
@@ -53,6 +64,13 @@ class ModelComponents:
     loss_fn_policy: torch.nn.Module
     loss_fn_value: torch.nn.Module
     optimizer: torch.optim.Optimizer
+    lr_scheduler: Optional[LRScheduler] = None
+
+
+LR_SCHEDULER_DISPLAY_NAMES: Dict[str, str] = {
+    "warmup_cosine_decay": "Warmup+CosineDecay",
+    "cosine_annealing_lr": "CosineAnnealingLR",
+}
 
 
 class DeviceSetup:
@@ -275,7 +293,9 @@ class LossOptimizerFactory:
         - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
         """
         _ = gce_parameter
-        loss_fn_policy = torch.nn.KLDivLoss(reduction="batchmean")
+        loss_fn_policy = torch.nn.KLDivLoss(
+            reduction="batchmean"
+        )
         # BCEWithLogitsLoss: Value headはlogitsを出力
         # Sigmoid + BCE lossを内部で実行（数値的に安定，autocast対応）
         loss_fn_value = torch.nn.BCEWithLogitsLoss()
@@ -308,8 +328,12 @@ class LossOptimizerFactory:
             if not param.requires_grad:
                 continue
 
-            module_name = name.rsplit(".", 1)[0] if "." in name else ""
-            parent_module = modules_by_name.get(module_name, model)
+            module_name = (
+                name.rsplit(".", 1)[0] if "." in name else ""
+            )
+            parent_module = modules_by_name.get(
+                module_name, model
+            )
 
             if isinstance(parent_module, normalization_modules):
                 no_decay_params.append(param)
@@ -329,7 +353,10 @@ class LossOptimizerFactory:
             )
 
         param_groups = [
-            {"params": decay_params, "weight_decay": weight_decay},
+            {
+                "params": decay_params,
+                "weight_decay": weight_decay,
+            },
             {"params": no_decay_params, "weight_decay": 0.0},
         ]
 
@@ -353,6 +380,133 @@ class LossOptimizerFactory:
         raise ValueError(
             f"Unsupported optimizer `{optimizer_name}`. "
             "Expected 'adamw' or 'sgd'."
+        )
+
+
+class WarmupCosineDecayScheduler(LRScheduler):
+    """Linear warmup followed by cosine decay scheduler."""
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        *,
+        warmup_epochs: int,
+        max_epochs: int,
+        min_lr: float = 0.0,
+    ) -> None:
+        if max_epochs <= 0:
+            raise ValueError(
+                "max_epochs must be positive for LR scheduling."
+            )
+        if warmup_epochs < 0:
+            raise ValueError(
+                "warmup_epochs must be non-negative for LR scheduling."
+            )
+
+        warmup_epochs = min(warmup_epochs, max_epochs)
+
+        self.warmup_epochs = warmup_epochs
+        self.max_epochs = max_epochs
+        self.min_lr = min_lr
+
+        super().__init__(optimizer)
+
+    def get_lr(self) -> List[float]:
+        """Return the learning rate for the current epoch."""
+
+        epoch_index = self.last_epoch
+
+        if (
+            self.warmup_epochs > 0
+            and epoch_index < self.warmup_epochs
+        ):
+            warmup_progress = (
+                epoch_index + 1
+            ) / self.warmup_epochs
+            return [
+                base_lr * warmup_progress
+                for base_lr in self.base_lrs
+            ]
+
+        decay_epochs = max(
+            self.max_epochs - self.warmup_epochs, 1
+        )
+        decay_progress = min(
+            max(epoch_index - self.warmup_epochs, 0)
+            / decay_epochs,
+            1.0,
+        )
+        cosine_scale = 0.5 * (
+            1.0 + math.cos(math.pi * decay_progress)
+        )
+
+        return [
+            self.min_lr + (base_lr - self.min_lr) * cosine_scale
+            for base_lr in self.base_lrs
+        ]
+
+
+class SchedulerFactory:
+    """Utility factory for constructing learning rate schedulers."""
+
+    logger: logging.Logger = logging.getLogger(__name__)
+    DEFAULT_WARMUP_RATIO: float = 0.1
+
+    @classmethod
+    def create_scheduler(
+        cls,
+        optimizer: torch.optim.Optimizer,
+        *,
+        lr_scheduler_name: Optional[str] = None,
+        max_epochs: int = 1,
+    ) -> Optional[LRScheduler]:
+        """Create a scheduler for the given optimizer."""
+
+        if lr_scheduler_name is None:
+            return None
+
+        normalized_name = lr_scheduler_name.strip().lower()
+        if not normalized_name:
+            return None
+
+        if max_epochs <= 0:
+            raise ValueError(
+                "max_epochs must be positive for LR scheduling."
+            )
+
+        if normalized_name == "warmup_cosine_decay":
+            warmup_epochs = max(
+                1,
+                math.ceil(
+                    max_epochs * cls.DEFAULT_WARMUP_RATIO
+                ),
+            )
+            warmup_epochs = min(warmup_epochs, max_epochs)
+            cls.logger.info(
+                "Using Warmup+CosineDecay scheduler (warmup_epochs=%d)",
+                warmup_epochs,
+            )
+            return WarmupCosineDecayScheduler(
+                optimizer,
+                warmup_epochs=warmup_epochs,
+                max_epochs=max_epochs,
+            )
+
+        if normalized_name == "cosine_annealing_lr":
+            cls.logger.info(
+                "Using CosineAnnealingLR scheduler (T_max=%d)",
+                max_epochs,
+            )
+            return CosineAnnealingLR(
+                optimizer, T_max=max_epochs
+            )
+
+        supported = ", ".join(
+            LR_SCHEDULER_DISPLAY_NAMES.values()
+        )
+        raise ValueError(
+            "Unsupported learning rate scheduler. "
+            f"Supported options are: {supported}"
         )
 
 
@@ -380,6 +534,8 @@ class TrainingSetup:
         optimizer_beta1: float = 0.9,
         optimizer_beta2: float = 0.999,
         optimizer_eps: float = 1e-8,
+        lr_scheduler_name: Optional[str] = None,
+        max_epochs: int = 1,
     ) -> Tuple[
         DeviceConfig,
         Tuple[DataLoader, DataLoader],
@@ -441,11 +597,18 @@ class TrainingSetup:
             eps=optimizer_eps,
         )
 
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=lr_scheduler_name,
+            max_epochs=max_epochs,
+        )
+
         model_components = ModelComponents(
             model=model,  # type: ignore
             loss_fn_policy=loss_fn_policy,
             loss_fn_value=loss_fn_value,
             optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
         )
 
         cls.logger.info("Training components setup completed")

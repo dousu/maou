@@ -393,6 +393,7 @@ class TrainingBenchmarkConfig:
     optimizer_beta1: float = 0.9
     optimizer_beta2: float = 0.999
     optimizer_eps: float = 1e-8
+    lr_scheduler_name: Optional[str] = None
     warmup_batches: int = 5
     max_batches: Optional[int] = None
     enable_profiling: bool = False
@@ -439,6 +440,8 @@ class TrainingBenchmarkUseCase:
                 optimizer_beta1=config.optimizer_beta1,
                 optimizer_beta2=config.optimizer_beta2,
                 optimizer_eps=config.optimizer_eps,
+                lr_scheduler_name=config.lr_scheduler_name,
+                max_epochs=1,
             )
         )
 
