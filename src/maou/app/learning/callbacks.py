@@ -276,24 +276,21 @@ class ValidationCallback(BaseCallback):
         sorted_values = torch.gather(t, 1, sorted_indices)
 
         total_ratio = 0.0
-        valid_samples = 0
 
         for batch_idx in range(t.size(0)):
             positive_indices = sorted_indices[batch_idx][
                 sorted_values[batch_idx] > 0
             ]
+
             if positive_indices.numel() == 0:
+                total_ratio += 0.0
                 continue
 
             label_topk = positive_indices[: min(5, positive_indices.numel())]
             matches = torch.isin(label_topk, pred_topk[batch_idx])
             total_ratio += matches.float().mean().item()
-            valid_samples += 1
 
-        if valid_samples == 0:
-            return 0.0
-
-        return total_ratio / float(valid_samples)
+        return total_ratio / float(t.size(0))
 
     def _value_accuracy(
         self, y: torch.Tensor, t: torch.Tensor

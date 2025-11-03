@@ -37,6 +37,30 @@ def test_policy_accuracy_top5_overlap() -> None:
     assert accuracy == expected_accuracy
 
 
+def test_policy_accuracy_includes_empty_label_samples() -> None:
+    """Samples without positive labels should contribute zero to the average."""
+
+    callback = ValidationCallback()
+    predictions = torch.tensor(
+        [
+            [0.9, 0.1, 0.3, 0.2, 0.5, 0.4],
+            [0.8, 0.7, 0.6, 0.5, 0.4, 0.3],
+        ]
+    )
+    labels = torch.tensor(
+        [
+            [0.6, 0.2, 0.0, 0.1, 0.0, 0.3],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+
+    expected_accuracy = (0.75 + 0.0) / 2
+
+    accuracy = callback._policy_accuracy(predictions, labels)
+
+    assert accuracy == expected_accuracy
+
+
 def test_policy_accuracy_handles_no_positive_labels() -> None:
     """Accuracy should be zero when no labels have positive probability."""
 
