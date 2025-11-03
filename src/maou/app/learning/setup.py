@@ -16,6 +16,7 @@ from maou.app.learning.network import HeadlessNetwork, Network
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board.shogi import FEATURES_NUM
+from maou.domain.model.resnet import BottleneckBlock
 
 
 def default_worker_init_fn(worker_id: int) -> None:
@@ -196,22 +197,20 @@ class ModelFactory:
     def create_shogi_backbone(
         cls, device: torch.device
     ) -> HeadlessNetwork:
-        """方策・価値ヘッドを含まないVision Transformerバックボーンを作成."""
+        """方策・価値ヘッドを含まないResNetバックボーンを作成."""
 
         backbone = HeadlessNetwork(
             num_channels=FEATURES_NUM,
             board_size=(9, 9),
-            embed_dim=256,
-            num_heads=4,
-            mlp_ratio=3.0,
-            depth=6,
-            dropout_rate=0.1,
-            attention_dropout_rate=0.0,
+            block=BottleneckBlock,
+            layers=(2, 2, 2, 2),
+            strides=(1, 2, 2, 2),
+            out_channels=(64, 128, 256, 512),
         )
 
         backbone.to(device)
         cls.logger.info(
-            "Created shogi-optimized Vision Transformer backbone (%s)",
+            "Created shogi-optimized ResNet backbone (%s)",
             str(device),
         )
 
@@ -221,23 +220,21 @@ class ModelFactory:
     def create_shogi_model(
         cls, device: torch.device
     ) -> Network:
-        """将棋特化のVision Transformerモデルを作成."""
+        """将棋特化のResNetモデルを作成."""
 
         model = Network(
             num_policy_classes=MOVE_LABELS_NUM,
             num_channels=FEATURES_NUM,
             board_size=(9, 9),
-            embed_dim=256,
-            num_heads=4,
-            mlp_ratio=3.0,
-            depth=6,
-            dropout_rate=0.1,
-            attention_dropout_rate=0.0,
+            block=BottleneckBlock,
+            layers=(2, 2, 2, 2),
+            strides=(1, 2, 2, 2),
+            out_channels=(64, 128, 256, 512),
         )
 
         model.to(device)
         cls.logger.info(
-            f"Created shogi-optimized Vision Transformer model ({str(device)})"
+            f"Created shogi-optimized ResNet model ({str(device)})"
         )
 
         return model

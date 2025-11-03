@@ -10,46 +10,44 @@ from torch import nn
 
 from maou.domain.board.shogi import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.model.vision_transformer import (
-    VisionTransformer as DomainVisionTransformer,
-    VisionTransformerConfig,
+from maou.domain.model.resnet import (
+    BottleneckBlock,
+    ResNet as DomainResNet,
 )
 
 
 class HeadlessNetwork(nn.Module):
-    """Headless shogi backbone that wraps the domain VisionTransformer."""
+    """Headless shogi backbone that wraps the domain ResNet."""
 
     def __init__(
         self,
         *,
         num_channels: int = FEATURES_NUM,
         board_size: Tuple[int, int] = (9, 9),
-        embed_dim: int = 512,
-        num_heads: int = 8,
-        mlp_ratio: float = 4.0,
-        depth: int = 6,
-        dropout_rate: float = 0.1,
-        attention_dropout_rate: float = 0.0,
+        block: type[nn.Module] = BottleneckBlock,
+        layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
+        strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
+        out_channels: Tuple[int, int, int, int] = (64, 128, 256, 512),
+        pooling: nn.Module | None = None,
     ) -> None:
         super().__init__()
-        height, width = board_size
-        if height != width:
-            msg = "VisionTransformer requires a square board size."
+        if len(layers) != 4 or len(strides) != 4 or len(out_channels) != 4:
+            msg = "ResNet requires four stages for layers, strides, and out_channels."
             raise ValueError(msg)
 
-        config = VisionTransformerConfig(
-            input_channels=num_channels,
-            board_size=height,
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            mlp_ratio=mlp_ratio,
-            num_layers=depth,
-            dropout=dropout_rate,
-            attention_dropout=attention_dropout_rate,
-            use_head=False,
+        expansion = getattr(block, "expansion", 1)
+
+        self.backbone: DomainResNet = DomainResNet(
+            block=block,
+            in_channels=num_channels,
+            layers=list(layers),
+            strides=list(strides),
+            list_out_channels=list(out_channels),
         )
-        self.backbone: DomainVisionTransformer = DomainVisionTransformer(config)
-        self._embedding_dim = self.backbone.embedding_dim
+        self.pool: nn.Module = (
+            pooling if pooling is not None else nn.AdaptiveAvgPool2d((1, 1))
+        )
+        self._embedding_dim = out_channels[-1] * expansion
         self._num_channels = num_channels
         self._board_size = board_size
 
@@ -60,10 +58,12 @@ class HeadlessNetwork(nn.Module):
         return self._embedding_dim
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        """Return pooled token features from the shared backbone."""
+        """Return pooled convolutional features from the shared backbone."""
 
         self._validate_inputs(x)
-        return self.backbone.forward_features(x)
+        features = self.backbone(x)
+        pooled = self.pool(features)
+        return torch.flatten(pooled, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Alias of :meth:`forward_features` for convenience."""
@@ -73,8 +73,7 @@ class HeadlessNetwork(nn.Module):
     def _validate_inputs(self, x: torch.Tensor) -> None:
         if x.dim() != 4:
             msg = (
-                "VisionTransformer expects inputs of shape (batch, channels,"
-                " height, width)."
+                "ResNet expects inputs of shape (batch, channels, height, width)."
             )
             raise ValueError(msg)
 
@@ -182,7 +181,7 @@ class ValueHead(nn.Module):
 
 
 class Network(HeadlessNetwork):
-    """Dual-head shogi network built on a Vision Transformer backbone."""
+    """Dual-head shogi network built on a ResNet backbone."""
 
     def __init__(
         self,
@@ -190,24 +189,22 @@ class Network(HeadlessNetwork):
         num_policy_classes: int = MOVE_LABELS_NUM,
         num_channels: int = FEATURES_NUM,
         board_size: Tuple[int, int] = (9, 9),
-        embed_dim: int = 512,
-        num_heads: int = 8,
-        mlp_ratio: float = 4.0,
-        depth: int = 6,
-        dropout_rate: float = 0.1,
-        attention_dropout_rate: float = 0.0,
+        block: type[nn.Module] = BottleneckBlock,
+        layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
+        strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
+        out_channels: Tuple[int, int, int, int] = (64, 128, 256, 512),
+        pooling: nn.Module | None = None,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
     ) -> None:
         super().__init__(
             num_channels=num_channels,
-            embed_dim=embed_dim,
-            depth=depth,
-            dropout_rate=dropout_rate,
             board_size=board_size,
-            num_heads=num_heads,
-            mlp_ratio=mlp_ratio,
-            attention_dropout_rate=attention_dropout_rate,
+            block=block,
+            layers=layers,
+            strides=strides,
+            out_channels=out_channels,
+            pooling=pooling,
         )
         self.policy_head = PolicyHead(
             input_dim=self.embedding_dim,

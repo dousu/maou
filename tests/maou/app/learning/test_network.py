@@ -1,4 +1,4 @@
-"""Tests for the shogi Vision Transformer based Network."""
+"""Tests for the shogi ResNet based Network."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def test_backbone_feature_dimension_matches_channels() -> None:
     network = Network()
     inputs = torch.randn(3, FEATURES_NUM, 9, 9)
 
-    features = network.backbone.forward_features(inputs)
+    features = network.forward_features(inputs)
 
     assert features.shape == (3, network.embedding_dim)
 
