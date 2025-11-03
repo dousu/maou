@@ -366,36 +366,62 @@ class ValidationCallback(BaseCallback):
         if topk_pred == 0:
             return 0.0, 0
 
-        prediction_top_indices = torch.topk(logits.detach(), k=topk_pred, dim=1).indices
+        max_label_topk = min(5, int(targets.size(1)))
+        if max_label_topk == 0:
+            return 0.0, 0
+
+        logits_detached = logits.detach()
         targets_detached = targets.detach()
 
-        ratio_sum = 0.0
-        sample_count = 0
+        positive_mask = targets_detached > 0
+        positive_counts = torch.sum(positive_mask, dim=1)
+        effective_label_topk = torch.minimum(
+            positive_counts,
+            torch.tensor(max_label_topk, device=targets_detached.device, dtype=positive_counts.dtype),
+        )
 
-        for sample_idx in range(batch_size):
-            target_values = targets_detached[sample_idx]
-            positive_indices = torch.nonzero(target_values > 0, as_tuple=False).view(-1)
+        label_top_indices = torch.topk(
+            targets_detached.masked_fill(~positive_mask, float("-inf")),
+            k=max_label_topk,
+            dim=1,
+        ).indices
 
-            if int(positive_indices.numel()) == 0:
-                ratio = 0.0
-            else:
-                positive_values = target_values[positive_indices]
-                label_topk = min(5, int(positive_values.numel()))
-                top_label_rel_indices = torch.topk(
-                    positive_values, k=label_topk
-                ).indices
-                label_top_indices = positive_indices[top_label_rel_indices]
-                current_topk = min(label_topk, topk_pred)
-                predicted_indices_set = set(
-                    prediction_top_indices[sample_idx, :current_topk].tolist()
-                )
-                match_count = sum(
-                    1 for idx in label_top_indices.tolist() if idx in predicted_indices_set
-                )
-                ratio = float(match_count) / float(label_topk)
+        prediction_top_indices = torch.topk(
+            logits_detached,
+            k=topk_pred,
+            dim=1,
+        ).indices
 
-            ratio_sum += ratio
-            sample_count += 1
+        current_topk = torch.minimum(
+            effective_label_topk,
+            torch.tensor(topk_pred, device=targets_detached.device, dtype=positive_counts.dtype),
+        )
+
+        label_positions = torch.arange(
+            max_label_topk, device=targets_detached.device, dtype=positive_counts.dtype
+        )
+        pred_positions = torch.arange(
+            topk_pred, device=targets_detached.device, dtype=positive_counts.dtype
+        )
+
+        label_mask = label_positions.unsqueeze(0) < effective_label_topk.unsqueeze(1)
+        pred_mask = pred_positions.unsqueeze(0) < current_topk.unsqueeze(1)
+
+        matches = label_top_indices.unsqueeze(-1) == prediction_top_indices.unsqueeze(-2)
+        valid_matches = matches & label_mask.unsqueeze(-1) & pred_mask.unsqueeze(1)
+        match_counts = torch.sum(valid_matches, dim=(1, 2))
+
+        ratios = torch.zeros(
+            batch_size, device=targets_detached.device, dtype=targets_detached.dtype
+        )
+        positive_samples = effective_label_topk > 0
+        ratios[positive_samples] = (
+            match_counts[positive_samples].to(targets_detached.dtype)
+            / effective_label_topk[positive_samples].to(targets_detached.dtype)
+        )
+
+        ratio_sum = float(torch.sum(ratios).item())
+        sample_count = batch_size
 
         return ratio_sum, sample_count
 
