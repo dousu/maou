@@ -287,10 +287,16 @@ class Learning:
                 )
             )
             writer.add_scalars(
-                "Validation Metrics",
+                "Validation Loss Metrics",
                 {
                     "Policy Cross Entropy": metrics.policy_cross_entropy,
                     "Value Brier Score": metrics.value_brier_score,
+                },
+                epoch_number + 1,
+            )
+            writer.add_scalars(
+                "Validation Accuracy Metrics",
+                {
                     "Policy Top-1 Accuracy": metrics.policy_top1_accuracy,
                     "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
                 },
