@@ -323,9 +323,12 @@ class Learning:
                 self.logger.info(
                     "Uploading tensorboard logs to cloud storage"
                 )
+                cloud_tensorboard_folder = (
+                    f"tensorboard/{summary_writer_log_dir.name}"
+                )
                 self.__cloud_storage.upload_folder_from_local(
                     local_folder=summary_writer_log_dir,
-                    cloud_folder="tensorboard",
+                    cloud_folder=cloud_tensorboard_folder,
                 )
 
             epoch_number += 1
