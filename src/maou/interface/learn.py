@@ -2,7 +2,7 @@ import abc
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from maou.app.learning.dl import (
     CloudStorage,
@@ -16,7 +16,64 @@ from maou.app.learning.network import (
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 
+# Mapping from canonical scheduler keys to CLI display names.
+SUPPORTED_LR_SCHEDULERS: Dict[str, str] = {
+    "warmup_cosine_decay": "Warmup+CosineDecay",
+    "cosine_annealing_lr": "CosineAnnealingLR",
+}
+
+# Cache for normalized lookup values to canonical scheduler keys.
+_LR_SCHEDULER_ALIASES: Dict[str, str] = {}
+for _canonical, _label in SUPPORTED_LR_SCHEDULERS.items():
+    sanitized_canonical = "".join(
+        filter(str.isalnum, _canonical.lower())
+    )
+    sanitized_label = "".join(
+        filter(str.isalnum, _label.lower())
+    )
+    _LR_SCHEDULER_ALIASES[sanitized_canonical] = _canonical
+    _LR_SCHEDULER_ALIASES[sanitized_label] = _canonical
+    _LR_SCHEDULER_ALIASES[_label.lower()] = _canonical
+
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def normalize_lr_scheduler_name(
+    scheduler_name: Optional[str],
+) -> Optional[str]:
+    """Normalize scheduler display names to canonical identifiers.
+
+    Args:
+        scheduler_name: User-provided scheduler name or alias.
+
+    Returns:
+        Canonical scheduler key when ``scheduler_name`` is provided, otherwise
+        ``None`` when no scheduler is requested.
+
+    Raises:
+        ValueError: If ``scheduler_name`` does not match a supported scheduler.
+    """
+
+    if scheduler_name is None:
+        return None
+
+    sanitized = "".join(
+        filter(str.isalnum, scheduler_name.lower())
+    )
+    if not sanitized:
+        return None
+
+    canonical = _LR_SCHEDULER_ALIASES.get(sanitized)
+    if canonical is None:
+        supported_labels = ", ".join(
+            SUPPORTED_LR_SCHEDULERS.values()
+        )
+        raise ValueError(
+            "Unsupported learning rate scheduler. "
+            f"Supported options are: {supported_labels}"
+        )
+
+    return canonical
 
 
 class FileSystem(metaclass=abc.ABCMeta):
@@ -82,6 +139,7 @@ def learn(
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
     learning_ratio: Optional[float] = None,
+    lr_scheduler: Optional[str] = None,
     momentum: Optional[float] = None,
     optimizer_name: Optional[str] = None,
     optimizer_beta1: Optional[float] = None,
@@ -111,6 +169,7 @@ def learn(
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
+        lr_scheduler: Learning rate scheduler selection
         momentum: SGD momentum parameter
         optimizer_name: Optimizer selection ('adamw' or 'sgd')
         optimizer_beta1: AdamW beta1 parameter
@@ -211,6 +270,10 @@ def learn(
         raise ValueError(
             f"learning_ratio must be positive, got {learning_ratio}"
         )
+
+    lr_scheduler_key = normalize_lr_scheduler_name(lr_scheduler)
+    if lr_scheduler_key is None:
+        lr_scheduler_key = "warmup_cosine_decay"
 
     # オプティマイザのパラメータ設定momemtum (デフォルト0.9)
     if momentum is None:
@@ -314,6 +377,7 @@ def learn(
         log_dir=log_dir,
         model_dir=model_dir,
         model_architecture=model_architecture,
+        lr_scheduler_name=lr_scheduler_key,
     )
 
     learning_result = Learning(

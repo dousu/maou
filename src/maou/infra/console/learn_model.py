@@ -45,6 +45,7 @@ S3DataSource: S3DataSourceType | None = getattr(
     common, "S3DataSource", None
 )
 
+
 @click.command("learn-model")
 @click.option(
     "--input-dir",
@@ -266,6 +267,19 @@ S3DataSource: S3DataSourceType | None = getattr(
     default=0.01,
 )
 @click.option(
+    "--lr-scheduler",
+    type=click.Choice(
+        list(learn.SUPPORTED_LR_SCHEDULERS.values()),
+        case_sensitive=False,
+    ),
+    help="Learning rate scheduler to apply.",
+    required=False,
+    default=learn.SUPPORTED_LR_SCHEDULERS[
+        "warmup_cosine_decay"
+    ],
+    show_default=True,
+)
+@click.option(
     "--momentum",
     type=float,
     help="Optimizer momentum.",
@@ -402,6 +416,7 @@ def learn_model(
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
     learning_ratio: Optional[float],
+    lr_scheduler: str,
     momentum: Optional[float],
     optimizer: str,
     optimizer_beta1: float,
@@ -666,6 +681,7 @@ def learn_model(
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,
             learning_ratio=learning_ratio,
+            lr_scheduler=lr_scheduler,
             momentum=momentum,
             optimizer_name=optimizer,
             optimizer_beta1=optimizer_beta1,

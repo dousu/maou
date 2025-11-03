@@ -18,12 +18,24 @@ from maou.app.learning.callbacks import (
 )
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
-from maou.app.learning.network import BackboneArchitecture, Network
+from maou.app.learning.network import (
+    BackboneArchitecture,
+    Network,
+)
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.cloud_storage import CloudStorage
+
+try:
+    from torch.optim.lr_scheduler import LRScheduler
+except (
+    ImportError
+):  # pragma: no cover - PyTorch < 2.0 compatibility
+    from torch.optim.lr_scheduler import (  # type: ignore
+        _LRScheduler as LRScheduler,
+    )
 
 
 class LearningDataSource(DataSource):
@@ -76,6 +88,7 @@ class Learning:
         start_epoch: int = 0
         log_dir: Path
         model_dir: Path
+        lr_scheduler_name: Optional[str] = None
 
     def __init__(
         self,
@@ -130,6 +143,8 @@ class Learning:
                 optimizer_beta1=config.optimizer_beta1,
                 optimizer_beta2=config.optimizer_beta2,
                 optimizer_eps=config.optimizer_eps,
+                lr_scheduler_name=config.lr_scheduler_name,
+                max_epochs=config.epoch,
             )
         )
 
@@ -142,6 +157,9 @@ class Learning:
         self.loss_fn_policy = model_components.loss_fn_policy
         self.loss_fn_value = model_components.loss_fn_value
         self.optimizer = model_components.optimizer
+        self.lr_scheduler: Optional[LRScheduler] = (
+            model_components.lr_scheduler
+        )
         self.policy_loss_ratio = config.policy_loss_ratio
         self.value_loss_ratio = config.value_loss_ratio
         self.log_dir = config.log_dir
@@ -163,7 +181,9 @@ class Learning:
             self.logger.info(
                 "Compiling model with torch.compile (dynamic shapes disabled)"
             )
-            self.model = cast(Network, compile_module(self.model))
+            self.model = cast(
+                Network, compile_module(self.model)
+            )
         self.__train()
 
         learning_result["Data Samples"] = (
@@ -211,12 +231,18 @@ class Learning:
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         parameter_count = sum(
-            parameter.numel() for parameter in self.model.parameters()
+            parameter.numel()
+            for parameter in self.model.parameters()
         )
-        parameter_label = self._format_parameter_count(parameter_count)
-        model_tag = f"{self.model_architecture}-{parameter_label}"
+        parameter_label = self._format_parameter_count(
+            parameter_count
+        )
+        model_tag = (
+            f"{self.model_architecture}-{parameter_label}"
+        )
         summary_writer_log_dir = (
-            self.log_dir / f"{model_tag}_training_log_{timestamp}"
+            self.log_dir
+            / f"{model_tag}_training_log_{timestamp}"
         )
         self.logger.info(
             "TensorBoard log directory: %s (parameters ≈ %s)",
@@ -232,10 +258,12 @@ class Learning:
 
         # resume from checkpoint
         if self.resume_from is not None:
-            state_dict: MutableMapping[str, torch.Tensor] = torch.load(
-                self.resume_from,
-                weights_only=True,
-                map_location=self.device,
+            state_dict: MutableMapping[str, torch.Tensor] = (
+                torch.load(
+                    self.resume_from,
+                    weights_only=True,
+                    map_location=self.device,
+                )
             )
 
             self._load_resume_state_dict(state_dict)
@@ -348,6 +376,16 @@ class Learning:
                 {"Training": avg_loss, "Validation": avg_vloss},
                 epoch_number + 1,
             )
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            writer.add_scalar(
+                "Learning Rate",
+                current_lr,
+                epoch_number + 1,
+            )
+
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+
             writer.flush()
 
             # Track best performance, and save the model's state
@@ -386,11 +424,13 @@ class Learning:
 
         if hasattr(self.model, "_orig_mod"):
             needs_prefix = any(
-                not key.startswith("_orig_mod.") for key in state_dict.keys()
+                not key.startswith("_orig_mod.")
+                for key in state_dict.keys()
             )
             if needs_prefix:
                 state_dict = {
-                    f"_orig_mod.{key}": value for key, value in state_dict.items()
+                    f"_orig_mod.{key}": value
+                    for key, value in state_dict.items()
                 }
 
         try:

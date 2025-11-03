@@ -98,8 +98,12 @@ class _MaskedAutoencoder(nn.Module):
 
         self._feature_shape = feature_shape
         self._flattened_size = int(np.prod(feature_shape))
-        self.encoder = ModelFactory.create_shogi_backbone(device)
-        encoder_output_dim = getattr(self.encoder, "embedding_dim", None)
+        self.encoder = ModelFactory.create_shogi_backbone(
+            device
+        )
+        encoder_output_dim = getattr(
+            self.encoder, "embedding_dim", None
+        )
         if not isinstance(encoder_output_dim, int):
             msg = "Encoder must expose integer embedding_dim"
             raise TypeError(msg)
@@ -217,7 +221,7 @@ class MaskedAutoencoderPretraining:
         )
         training_model: nn.Module
         if resolved_options.compilation:
-            training_model = compile_module(model)
+            training_model = compile_module(model, dynamic=True)
         else:
             training_model = model
         optimizer = torch.optim.Adam(
@@ -331,7 +335,11 @@ class MaskedAutoencoderPretraining:
             "forward_chunk_size",
         }
         float_keys = {"learning_rate", "mask_ratio"}
-        bool_keys = {"pin_memory", "progress_bar", "compilation"}
+        bool_keys = {
+            "pin_memory",
+            "progress_bar",
+            "compilation",
+        }
         if key in path_keys and value is not None:
             return Path(value)
         if key in int_keys and value is not None:
@@ -373,7 +381,8 @@ class MaskedAutoencoderPretraining:
             return
         torch.set_float32_matmul_precision("high")
         self.logger.debug(
-            "Enabled TensorFloat32 matmul precision for CUDA device: %s", device
+            "Enabled TensorFloat32 matmul precision for CUDA device: %s",
+            device,
         )
 
     def _resolve_pin_memory(
@@ -394,7 +403,9 @@ class MaskedAutoencoderPretraining:
     ) -> DataLoader:
         persistent_workers = num_workers > 0
         worker_init_fn = (
-            default_worker_init_fn if persistent_workers else None
+            default_worker_init_fn
+            if persistent_workers
+            else None
         )
         dataloader = DataLoader(
             dataset,
@@ -410,7 +421,9 @@ class MaskedAutoencoderPretraining:
             timeout=120 if persistent_workers else 0,
             worker_init_fn=worker_init_fn,
         )
-        self.logger.info("Training DataLoader: %d batches", len(dataloader))
+        self.logger.info(
+            "Training DataLoader: %d batches", len(dataloader)
+        )
         return dataloader
 
     def _run_epoch(
@@ -459,26 +472,41 @@ class MaskedAutoencoderPretraining:
                 device="cuda",
                 enabled=device.type == "cuda",
             )
-            use_autocast = device.type == "cuda" and scaler.is_enabled()
-            for start in range(0, batch_size, forward_chunk_size):
-                end = min(start + forward_chunk_size, batch_size)
+            use_autocast = (
+                device.type == "cuda" and scaler.is_enabled()
+            )
+            for start in range(
+                0, batch_size, forward_chunk_size
+            ):
+                end = min(
+                    start + forward_chunk_size, batch_size
+                )
                 chunk_inputs = masked_inputs[start:end]
                 chunk_targets = inputs[start:end]
                 chunk_mask = mask[start:end]
                 autocast_context = (
-                    autocast(device_type="cuda", dtype=torch.float16)
+                    autocast(
+                        device_type="cuda", dtype=torch.float16
+                    )
                     if use_autocast
                     else nullcontext()
                 )
                 with autocast_context:
                     reconstructions = model(chunk_inputs)
                     chunk_loss = self._compute_loss(
-                        reconstructions, chunk_targets, chunk_mask, device
+                        reconstructions,
+                        chunk_targets,
+                        chunk_mask,
+                        device,
                     )
                 chunk_batch_size = chunk_inputs.size(0)
-                scaled_loss = chunk_loss * (chunk_batch_size / batch_size)
+                scaled_loss = chunk_loss * (
+                    chunk_batch_size / batch_size
+                )
                 scaler.scale(scaled_loss).backward()
-                chunk_total_loss += float(chunk_loss.item()) * chunk_batch_size
+                chunk_total_loss += (
+                    float(chunk_loss.item()) * chunk_batch_size
+                )
             scaler.step(optimizer)
             scaler.update()
 
