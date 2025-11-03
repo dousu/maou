@@ -2,6 +2,7 @@ import logging
 from typing import List, Optional
 
 import torch
+import torch.nn.functional as F
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
@@ -220,13 +221,7 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
-            policy_targets = torch.argmax(
-                context.labels_policy, dim=1
-            )
-            policy_loss = self.loss_fn_policy(
-                context.outputs_policy,
-                policy_targets,
-            )
+            policy_loss = self._compute_policy_loss(context)
             value_loss = self.loss_fn_value(
                 context.outputs_value, context.labels_value
             )
@@ -324,11 +319,7 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(context.labels_policy, dim=1)
-        policy_loss = self.loss_fn_policy(
-            context.outputs_policy,
-            policy_targets,
-        )
+        policy_loss = self._compute_policy_loss(context)
         value_loss = self.loss_fn_value(
             context.outputs_value, context.labels_value
         )
@@ -418,15 +409,9 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_loss_computation_start(context)
 
-            policy_targets = torch.argmax(
-                context.labels_policy, dim=1
-            )
+            policy_loss = self._compute_policy_loss(context)
             context.loss = (
-                self.policy_loss_ratio
-                * self.loss_fn_policy(
-                    context.outputs_policy,
-                    policy_targets,
-                )
+                self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio
                 * self.loss_fn_value(
                     context.outputs_value, context.labels_value
@@ -471,13 +456,9 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_start(context)
 
-        policy_targets = torch.argmax(context.labels_policy, dim=1)
+        policy_loss = self._compute_policy_loss(context)
         context.loss = (
-            self.policy_loss_ratio
-            * self.loss_fn_policy(
-                context.outputs_policy,
-                policy_targets,
-            )
+            self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio
             * self.loss_fn_value(
                 context.outputs_value, context.labels_value
@@ -493,3 +474,41 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _compute_policy_loss(
+        self, context: TrainingContext
+    ) -> torch.Tensor:
+        if context.outputs_policy is None:
+            raise RuntimeError(
+                "Policy outputs are required before computing the loss"
+            )
+
+        policy_log_probs = F.log_softmax(context.outputs_policy, dim=1)
+        policy_targets = self._normalize_policy_targets(
+            context.labels_policy,
+            context.legal_move_mask,
+            dtype=policy_log_probs.dtype,
+            device=policy_log_probs.device,
+        )
+        context.policy_target_distribution = policy_targets
+        return self.loss_fn_policy(policy_log_probs, policy_targets)
+
+    @staticmethod
+    def _normalize_policy_targets(
+        labels_policy: torch.Tensor,
+        legal_move_mask: Optional[torch.Tensor],
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        targets = labels_policy.to(device=device, dtype=dtype)
+        if legal_move_mask is not None:
+            targets = targets * legal_move_mask.to(device=device, dtype=dtype)
+
+        target_sum = targets.sum(dim=1, keepdim=True)
+        safe_sum = torch.where(
+            target_sum > 0,
+            target_sum,
+            torch.ones_like(target_sum),
+        )
+        return targets / safe_sum

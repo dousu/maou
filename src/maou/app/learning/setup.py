@@ -261,7 +261,7 @@ class LossOptimizerFactory:
         - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
         """
         _ = gce_parameter
-        loss_fn_policy = torch.nn.CrossEntropyLoss()
+        loss_fn_policy = torch.nn.KLDivLoss(reduction="batchmean")
         # BCEWithLogitsLoss: Value headはlogitsを出力
         # Sigmoid + BCE lossを内部で実行（数値的に安定，autocast対応）
         loss_fn_value = torch.nn.BCEWithLogitsLoss()

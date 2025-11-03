@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol
 
 import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import (
     SummaryWriter,  # type: ignore
 )
@@ -29,6 +30,7 @@ class TrainingContext:
     outputs_value: Optional[torch.Tensor] = None
     loss: Optional[torch.Tensor] = None
     batch_size: Optional[int] = None
+    policy_target_distribution: Optional[torch.Tensor] = None
 
 
 class TrainingCallback(Protocol):
@@ -236,10 +238,17 @@ class ValidationCallback(BaseCallback):
             and context.outputs_value is not None
         ):
             self.running_vloss += context.loss.item()
-            self.policy_cross_entropy_sum += self._policy_cross_entropy(
-                context.outputs_policy, context.labels_policy
+            policy_targets = (
+                context.policy_target_distribution
+                if context.policy_target_distribution is not None
+                else self._normalize_policy_targets(
+                    context.labels_policy, context.legal_move_mask
+                )
             )
-            policy_batch_size = int(context.labels_policy.size(0))
+            self.policy_cross_entropy_sum += self._policy_cross_entropy(
+                context.outputs_policy, policy_targets
+            )
+            policy_batch_size = int(policy_targets.size(0))
             value_batch_size = int(context.labels_value.numel())
             self.value_brier_score_sum += self._value_brier_score(
                 context.outputs_value, context.labels_value
@@ -274,12 +283,31 @@ class ValidationCallback(BaseCallback):
         self.value_sample_count = 0
 
     def _policy_cross_entropy(
-        self, y: torch.Tensor, t: torch.Tensor
+        self, logits: torch.Tensor, target_distribution: torch.Tensor
     ) -> float:
         """Calculate sum of policy cross entropy for a batch."""
-        log_probabilities = torch.nn.functional.log_softmax(y, dim=1)
-        cross_entropy = -torch.sum(t * log_probabilities, dim=1)
+        log_probabilities = F.log_softmax(logits, dim=1)
+        cross_entropy = -torch.sum(
+            target_distribution * log_probabilities,
+            dim=1,
+        )
         return float(torch.sum(cross_entropy).item())
+
+    @staticmethod
+    def _normalize_policy_targets(
+        labels_policy: torch.Tensor,
+        legal_move_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        targets = labels_policy.to(dtype=labels_policy.dtype)
+        if legal_move_mask is not None:
+            targets = targets * legal_move_mask.to(labels_policy.dtype)
+        target_sum = targets.sum(dim=1, keepdim=True)
+        safe_sum = torch.where(
+            target_sum > 0,
+            target_sum,
+            torch.ones_like(target_sum),
+        )
+        return targets / safe_sum
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
