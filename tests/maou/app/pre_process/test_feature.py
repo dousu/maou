@@ -3,7 +3,7 @@ import logging
 import numpy as np
 
 from maou.app.pre_process import feature
-from maou.domain.board.shogi import FEATURES_NUM, Board, Turn
+from maou.domain.board.shogi import FEATURES_NUM, Board, PieceId, Turn
 
 logger: logging.Logger = logging.getLogger("TEST")
 
@@ -1736,6 +1736,46 @@ class TestMakeBoardIdPositions:
             result,
             np.rot90(board.get_board_id_positions(), 2),
         )
+
+
+class TestGetBoardIdPositions:
+    def test_returns_piece_ids_for_black_pieces(self) -> None:
+        board = Board()
+        board.set_sfen("9/9/9/9/9/9/9/9/P8 b - 1")
+
+        result = board.get_board_id_positions()
+
+        expected = np.zeros((9, 9), dtype=np.uint8)
+        expected[8, 8] = PieceId.FU.value
+
+        assert result.dtype == np.uint8
+        np.testing.assert_array_equal(result, expected)
+
+    def test_returns_offset_piece_ids_for_white_pieces(self) -> None:
+        board = Board()
+        board.set_sfen("9/9/9/9/9/9/9/9/8p b - 1")
+
+        result = board.get_board_id_positions()
+
+        expected = np.zeros((9, 9), dtype=np.uint8)
+        offset = len(PieceId) - 1
+        expected[0, 8] = PieceId.FU.value + offset
+
+        assert result.dtype == np.uint8
+        np.testing.assert_array_equal(result, expected)
+
+    def test_returns_offset_for_promoted_white_pieces(self) -> None:
+        board = Board()
+        board.set_sfen("9/9/9/9/9/9/9/9/8+p b - 1")
+
+        result = board.get_board_id_positions()
+
+        expected = np.zeros((9, 9), dtype=np.uint8)
+        offset = len(PieceId) - 1
+        expected[0, 8] = PieceId.TO.value + offset
+
+        assert result.dtype == np.uint8
+        np.testing.assert_array_equal(result, expected)
 
 
 class TestMakePiecesInHand:
