@@ -411,6 +411,20 @@ class WarmupCosineDecayScheduler(LRScheduler):
 
         super().__init__(optimizer)
 
+        # Ensure the optimizer starts with the warmup-adjusted learning rate
+        # before the first training iteration runs. Without this adjustment the
+        # first epoch would use the unscaled base learning rate and the warmup
+        # schedule would be shifted by one epoch. By explicitly setting
+        # ``last_epoch`` to the initial epoch and synchronising the parameter
+        # groups, we align the scheduler's state with the intended warm start.
+        self.last_epoch = 0
+        initial_lrs = self.get_lr()
+        for param_group, lr in zip(
+            self.optimizer.param_groups, initial_lrs
+        ):
+            param_group["lr"] = lr
+        self._last_lr = initial_lrs
+
     def get_lr(self) -> List[float]:
         """Return the learning rate for the current epoch."""
 
