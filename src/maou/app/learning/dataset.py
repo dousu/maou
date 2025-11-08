@@ -110,7 +110,7 @@ class KifDataset(Dataset, Sized):
                 data["resultValue"].item(), dtype=torch.float32
             ).reshape((1))
 
-            legal_move_mask_tensor: Optional[torch.Tensor] = None
+            legal_move_mask_tensor = torch.ones_like(move_label_tensor)
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する

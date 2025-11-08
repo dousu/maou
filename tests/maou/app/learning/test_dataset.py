@@ -1,0 +1,58 @@
+"""Tests for dataset handling in the learning module."""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+from maou.app.learning.dataset import DataSource, KifDataset
+
+
+class _ArrayDataSource(DataSource):
+    """Minimal ``DataSource`` backed by a numpy structured array."""
+
+    def __init__(self, data: np.ndarray) -> None:
+        self._data = data
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        return self._data[idx]
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+
+def test_preprocessed_batches_provide_legal_move_masks() -> None:
+    """Collating preprocessed records should yield a tensor mask, not ``None``."""
+
+    dtype = np.dtype(
+        [
+            ("features", np.float32, (3,)),
+            ("moveLabel", np.float32, (5,)),
+            ("resultValue", np.float32),
+        ]
+    )
+    data = np.array(
+        [
+            (
+                np.arange(3, dtype=np.float32),
+                np.array([1, 0, 0, 0, 0], dtype=np.float32),
+                np.float32(1.0),
+            ),
+            (
+                np.arange(3, dtype=np.float32) + 1,
+                np.array([0, 1, 0, 0, 0], dtype=np.float32),
+                np.float32(-1.0),
+            ),
+        ],
+        dtype=dtype,
+    )
+
+    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+
+    loader = DataLoader(dataset, batch_size=2)
+    _, (_, _, legal_move_mask) = next(iter(loader))
+
+    assert isinstance(legal_move_mask, torch.Tensor)
+    assert torch.all(legal_move_mask == 1)
+
