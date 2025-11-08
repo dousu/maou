@@ -210,18 +210,11 @@ class TestPreprocessingRecordPacking:
 
         # Set some test data
         record["features"][:10, :5, :5] = 1
-        record["legalMoveMask"][:100] = 1
 
-        packed_features, packed_legal_moves = (
-            pack_preprocessing_record(record)
-        )
+        packed_features = pack_preprocessing_record(record)
 
         assert packed_features.shape == (FEATURES_PACKED_SIZE,)
-        assert packed_legal_moves.shape == (
-            LEGAL_MOVES_PACKED_SIZE,
-        )
         assert packed_features.dtype == np.uint8
-        assert packed_legal_moves.dtype == np.uint8
 
     def test_unpack_preprocessing_fields_roundtrip(
         self,
@@ -234,23 +227,14 @@ class TestPreprocessingRecordPacking:
         # Set deterministic test data
         record["features"][0, 0, 0] = 1
         record["features"][50, 4, 4] = 1
-        record["legalMoveMask"][0] = 1
-        record["legalMoveMask"][500] = 1
 
-        packed_features, packed_legal_moves = (
-            pack_preprocessing_record(record)
-        )
-        unpacked_features, unpacked_legal_moves = (
-            unpack_preprocessing_fields(
-                packed_features, packed_legal_moves
-            )
+        packed_features = pack_preprocessing_record(record)
+        unpacked_features = unpack_preprocessing_fields(
+            packed_features
         )
 
         assert np.array_equal(
             record["features"], unpacked_features
-        )
-        assert np.array_equal(
-            record["legalMoveMask"], unpacked_legal_moves
         )
 
 
@@ -263,7 +247,6 @@ class TestCompressionStats:
 
         # Check structure
         assert "features" in stats
-        assert "legal_moves" in stats
         assert "total" in stats
 
         # Check features stats
@@ -281,29 +264,10 @@ class TestCompressionStats:
             == (FEATURES_NUM * 9 * 9) / FEATURES_PACKED_SIZE
         )
 
-        # Check legal moves stats
-        legal_moves_stats = stats["legal_moves"]
-        assert (
-            legal_moves_stats["original_size"]
-            == MOVE_LABELS_NUM
-        )
-        assert (
-            legal_moves_stats["packed_size"]
-            == LEGAL_MOVES_PACKED_SIZE
-        )
-        assert (
-            legal_moves_stats["compression_ratio"]
-            == MOVE_LABELS_NUM / LEGAL_MOVES_PACKED_SIZE
-        )
-
         # Check total stats
         total_stats = stats["total"]
-        expected_original = (
-            FEATURES_NUM * 9 * 9 + MOVE_LABELS_NUM
-        )
-        expected_packed = (
-            FEATURES_PACKED_SIZE + LEGAL_MOVES_PACKED_SIZE
-        )
+        expected_original = FEATURES_NUM * 9 * 9
+        expected_packed = FEATURES_PACKED_SIZE
         assert total_stats["original_size"] == expected_original
         assert total_stats["packed_size"] == expected_packed
         assert (

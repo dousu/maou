@@ -166,9 +166,10 @@ class DataLoaderBenchmark:
                 labels_value = labels_value.to(
                     self.config.device, non_blocking=True
                 )
-                legal_move_mask = legal_move_mask.to(
-                    self.config.device, non_blocking=True
-                )
+                if legal_move_mask is not None:
+                    legal_move_mask = legal_move_mask.to(
+                        self.config.device, non_blocking=True
+                    )
                 # Synchronize to ensure all transfers complete
                 torch.cuda.synchronize()
 

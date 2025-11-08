@@ -162,7 +162,6 @@ class TestPreprocessingSchema:
             "features",
             "moveLabel",
             "resultValue",
-            "legalMoveMask",
         }
         if dtype.names is not None:
             assert set(dtype.names) == expected_fields
@@ -178,11 +177,8 @@ class TestPreprocessingSchema:
         assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc,index]
         assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
-        assert dtype["legalMoveMask"].shape == (
-            MOVE_LABELS_NUM,
-        )  # type: ignore[misc]
-        subdtype = dtype["legalMoveMask"].subdtype  # type: ignore[misc]
-        assert subdtype[0] == np.uint8  # type: ignore[index]
+        if dtype.names is not None:
+            assert "legalMoveMask" not in dtype.names
 
     def test_preprocessing_dtype_constant(self) -> None:
         """Test PREPROCESSING_DTYPE constant matches function."""
@@ -225,9 +221,6 @@ class TestPreprocessingSchema:
         # Features should have correct shape
         array["features"] = np.random.randint(
             0, 256, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
-        )
-        array["legalMoveMask"] = np.random.randint(
-            0, 2, (3, MOVE_LABELS_NUM), dtype=np.uint8
         )
 
         # Should not raise any exception
@@ -340,10 +333,7 @@ class TestSchemaIntegration:
         features_shape = preprocessing_dtype["features"].shape
         assert features_shape == (FEATURES_NUM, 9, 9)
 
-        legal_move_mask_shape = preprocessing_dtype[
-            "legalMoveMask"
-        ].shape
-        assert legal_move_mask_shape == (MOVE_LABELS_NUM,)
+        assert "legalMoveMask" not in preprocessing_dtype.names
 
     def test_array_creation_and_validation_integration(
         self,
@@ -397,9 +387,6 @@ class TestSchemaIntegration:
         # Set realistic features and legal move masks
         prep_array["features"] = np.random.randint(
             0, 2, (2, FEATURES_NUM, 9, 9), dtype=np.uint8
-        )
-        prep_array["legalMoveMask"] = np.random.randint(
-            0, 2, (2, MOVE_LABELS_NUM), dtype=np.uint8
         )
 
         assert validate_preprocessing_array(prep_array) is True

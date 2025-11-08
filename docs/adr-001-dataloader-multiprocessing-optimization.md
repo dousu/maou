@@ -121,7 +121,8 @@ for batch in dataloader:
     inputs = inputs.to(device, non_blocking=True)
     labels_policy = labels_policy.to(device, non_blocking=True)
     labels_value = labels_value.to(device, non_blocking=True)
-    legal_move_mask = legal_move_mask.to(device, non_blocking=True)
+    if legal_move_mask is not None:
+        legal_move_mask = legal_move_mask.to(device, non_blocking=True)
 
     # GPU上でモデル実行
     outputs_policy, outputs_value = model(inputs)

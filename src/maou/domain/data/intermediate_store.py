@@ -17,9 +17,7 @@ from maou.domain.data.compression import (
     compress_sparse_int_array,
     decompress_sparse_int_array,
     pack_features_array,
-    pack_legal_moves_mask,
     unpack_features_array,
-    unpack_legal_moves_mask,
 )
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
@@ -175,8 +173,7 @@ class IntermediateDataStore:
                 count INTEGER NOT NULL,
                 win_count REAL NOT NULL,
                 move_label_count BLOB NOT NULL,
-                features BLOB NOT NULL,
-                legal_move_mask BLOB NOT NULL
+                features BLOB NOT NULL
             )
             """
         )
@@ -189,7 +186,7 @@ class IntermediateDataStore:
 
         Args:
             batch: Dictionary mapping hash_id to data dict with keys:
-                   count, winCount, moveLabelCount, features, legalMoveMask
+                   count, winCount, moveLabelCount, features
         """
         # Add to batch buffer
         for hash_id, data in batch.items():
@@ -213,7 +210,6 @@ class IntermediateDataStore:
                         "moveLabelCount"
                     ].copy(),
                     "features": data["features"],
-                    "legalMoveMask": data["legalMoveMask"],
                 }
 
         # Flush buffer if it exceeds batch size
@@ -294,12 +290,9 @@ class IntermediateDataStore:
                     )
                 else:
                     # Insert new record
-                    # Compress features and legalMoveMask using bit packing
+                    # Compress features using bit packing
                     packed_features = pack_features_array(
                         data["features"]
-                    )
-                    packed_legal_mask = pack_legal_moves_mask(
-                        data["legalMoveMask"]
                     )
 
                     # Compress sparse move_label_count
@@ -311,8 +304,8 @@ class IntermediateDataStore:
                         """
                         INSERT INTO intermediate_data
                         (hash_id, count, win_count, move_label_count,
-                         features, legal_move_mask)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                         features)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
                         (
                             hash_id_str,
@@ -327,10 +320,6 @@ class IntermediateDataStore:
                             ),
                             pickle.dumps(
                                 packed_features,
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            pickle.dumps(
-                                packed_legal_mask,
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                         ),
@@ -561,7 +550,7 @@ class IntermediateDataStore:
             cursor.execute(
                 """
                     SELECT hash_id, count, win_count, move_label_count,
-                           features, legal_move_mask
+                           features
                     FROM intermediate_data
                     LIMIT ? OFFSET ?
                     """,
@@ -578,7 +567,6 @@ class IntermediateDataStore:
                     win_count,
                     move_label_count_blob,
                     features_blob,
-                    legal_move_mask_blob,
                 ) = row
 
                 # Track hash_id for deletion
@@ -594,16 +582,10 @@ class IntermediateDataStore:
                 move_label_count = decompress_sparse_int_array(
                     indices, values, 1496
                 )
-                # Decompress features and legalMoveMask from bit-packed format
+                # Decompress features from bit-packed format
                 packed_features = pickle.loads(features_blob)
-                packed_legal_mask = pickle.loads(
-                    legal_move_mask_blob
-                )
                 features = unpack_features_array(
                     packed_features
-                )
-                legal_move_mask = unpack_legal_moves_mask(
-                    packed_legal_mask
                 )
 
                 # Convert to native Python types
@@ -617,7 +599,6 @@ class IntermediateDataStore:
                     move_label_count / count
                 )
                 chunk_data["resultValue"][i] = win_count / count
-                chunk_data["legalMoveMask"][i] = legal_move_mask
 
             processed_count += current_chunk_size
 

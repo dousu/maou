@@ -47,12 +47,9 @@ class TestCompressionConversion:
             )
             array[i]["resultValue"] = 0.5
 
-            # Set binary features and legal moves (only 0s and 1s)
+            # Set binary features (only 0s and 1s)
             array[i]["features"][:10, :3, :3] = (
                 1  # Some features to 1
-            )
-            array[i]["legalMoveMask"][:20] = (
-                1  # Some legal moves to 1
             )
 
         return array
@@ -85,9 +82,7 @@ class TestCompressionConversion:
 
         # Check that packed fields exist and have correct shapes
         assert "features_packed" in packed_array.dtype.names
-        assert (
-            "legalMoveMask_packed" in packed_array.dtype.names
-        )
+        assert "legalMoveMask_packed" not in packed_array.dtype.names
 
     def test_convert_from_packed_format(self) -> None:
         """Test converting packed array back to standard format."""
@@ -117,10 +112,6 @@ class TestCompressionConversion:
         assert np.array_equal(
             reconstructed_array["features"],
             standard_array["features"],
-        )
-        assert np.array_equal(
-            reconstructed_array["legalMoveMask"],
-            standard_array["legalMoveMask"],
         )
 
     def test_roundtrip_conversion(self) -> None:
@@ -158,7 +149,7 @@ class TestBitPackedFileSaveLoad:
 
             # Set some binary features (deterministic pattern)
             array[i]["features"][i : i + 5, :2, :2] = 1
-            array[i]["legalMoveMask"][i * 10 : (i + 1) * 10] = 1
+            # no legal move mask stored in preprocessed data
 
         return array
 
@@ -212,11 +203,8 @@ class TestBitPackedFileSaveLoad:
 
         # Should be in compressed format
         assert "features" in loaded_array.dtype.names
-        assert "legalMoveMask" in loaded_array.dtype.names
+        assert "legalMoveMask" not in loaded_array.dtype.names
         assert np.uint8 == loaded_array["features"].dtype.type
-        assert (
-            np.uint8 == loaded_array["legalMoveMask"].dtype.type
-        )
 
 
 class TestCompressionPerformance:
@@ -237,12 +225,9 @@ class TestCompressionPerformance:
             )
             array[i]["resultValue"] = 0.5
 
-            # Random binary features and legal moves
+            # Random binary features
             array[i]["features"] = np.random.choice(
                 [0, 1], size=(104, 9, 9)
-            ).astype(np.uint8)
-            array[i]["legalMoveMask"] = np.random.choice(
-                [0, 1], size=(1496,)
             ).astype(np.uint8)
 
         standard_path = tmp_path / "standard.raw"
@@ -262,8 +247,8 @@ class TestCompressionPerformance:
 
         compression_ratio = standard_size / packed_size
 
-        # Should achieve significant compression (at least 4x)
-        assert compression_ratio >= 3.0
+        # Should achieve significant compression
+        assert compression_ratio >= 2.5
 
         logger.info(
             f"Compression ratio: {compression_ratio:.2f}x"
@@ -283,9 +268,6 @@ class TestCompressionPerformance:
         for i in range(len(array)):
             array[i]["features"] = np.random.choice(
                 [0, 1], size=(104, 9, 9)
-            ).astype(np.uint8)
-            array[i]["legalMoveMask"] = np.random.choice(
-                [0, 1], size=(1496,)
             ).astype(np.uint8)
 
         # Time standard save/load

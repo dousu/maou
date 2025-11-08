@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 
 
@@ -75,8 +76,8 @@ class KifDataset(Dataset, Sized):
             ).to(torch.float32)
             move_label_tensor = torch.nn.functional.one_hot(
                 torch.tensor(move_label),
-                num_classes=legal_move_mask_tensor.size(1),
-            )
+                num_classes=MOVE_LABELS_NUM,
+            ).to(torch.float32)
             result_value_tensor = torch.tensor(
                 result_value, dtype=torch.float32
             ).reshape((1))
@@ -102,15 +103,14 @@ class KifDataset(Dataset, Sized):
             features_tensor = torch.from_numpy(
                 data["features"].copy()
             ).to(torch.float32)
-            legal_move_mask_tensor = torch.from_numpy(
-                data["legalMoveMask"].copy()
-            ).to(torch.float32)
             move_label_tensor = torch.from_numpy(
                 data["moveLabel"].copy()
             ).to(torch.float32)
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32
             ).reshape((1))
+
+            legal_move_mask_tensor = torch.ones_like(move_label_tensor)
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する

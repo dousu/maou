@@ -17,17 +17,11 @@ class DummyPreprocessedDataSource(DataSource):
         dtype = np.dtype(
             [
                 ("features", np.float32, (FEATURES_NUM, 9, 9)),
-                (
-                    "legalMoveMask",
-                    np.float32,
-                    (MOVE_LABELS_NUM,),
-                ),
                 ("moveLabel", np.float32, (MOVE_LABELS_NUM,)),
                 ("resultValue", np.float32),
             ]
         )
         self._data = np.zeros(length, dtype=dtype)
-        self._data["legalMoveMask"] = 1.0
         self._data["moveLabel"] = 1.0
 
     def __getitem__(self, idx: int) -> np.ndarray:

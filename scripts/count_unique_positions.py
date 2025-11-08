@@ -76,7 +76,6 @@ def count_unique_positions(
     # - winCount: 4 bytes (float32)
     # - moveLabelCount: MOVE_LABELS_NUM * 8 bytes (int64 array)
     # - features: 104 * 9 * 9 * 1 bytes (uint8 array)
-    # - legalMoveMask: MOVE_LABELS_NUM * 1 bytes (uint8 array)
 
     per_entry_size = (
         8  # hash_id
@@ -85,7 +84,6 @@ def count_unique_positions(
         + MOVE_LABELS_NUM
         * 8  # moveLabelCount (numpy defaults to int64 for bincount)
         + 104 * 9 * 9 * 1  # features
-        + MOVE_LABELS_NUM * 1  # legalMoveMask
     )
 
     # Pythonの辞書オーバーヘッド（概算）

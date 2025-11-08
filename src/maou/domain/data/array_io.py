@@ -551,12 +551,7 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
 
     # Pack binary fields for each record
     for i in range(len(array)):
-        packed_features, packed_legal_moves = (
-            pack_preprocessing_record(array[i])
-        )
+        packed_features = pack_preprocessing_record(array[i])
         compressed_array[i]["features_packed"] = packed_features
-        compressed_array[i]["legalMoveMask_packed"] = (
-            packed_legal_moves
-        )
 
     return compressed_array

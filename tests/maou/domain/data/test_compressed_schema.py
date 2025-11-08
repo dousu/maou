@@ -7,7 +7,6 @@ from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.compression import (
     FEATURES_PACKED_SIZE,
-    LEGAL_MOVES_PACKED_SIZE,
 )
 from maou.domain.data.schema import (
     SchemaValidationError,
@@ -34,7 +33,6 @@ class TestCompressedPreprocessingSchema:
             "features_packed",
             "moveLabel",
             "resultValue",
-            "legalMoveMask_packed",
         }
         assert set(dtype.names) == expected_fields
 
@@ -51,12 +49,7 @@ class TestCompressedPreprocessingSchema:
             "("
         )  # It's an array field
         assert dtype["resultValue"] == np.dtype("float16")
-        assert dtype["legalMoveMask_packed"].shape == (
-            LEGAL_MOVES_PACKED_SIZE,
-        )
-        assert str(dtype["legalMoveMask_packed"]).startswith(
-            "("
-        )  # It's an array field
+        assert "legalMoveMask_packed" not in dtype.names
 
     def test_create_empty_compressed_preprocessing_array(
         self,
@@ -73,10 +66,6 @@ class TestCompressedPreprocessingSchema:
             size,
             FEATURES_PACKED_SIZE,
         )
-        assert array["legalMoveMask_packed"].shape == (
-            size,
-            LEGAL_MOVES_PACKED_SIZE,
-        )
 
     def test_packed_field_sizes(self) -> None:
         """Test that packed field sizes are calculated correctly."""
@@ -86,12 +75,6 @@ class TestCompressedPreprocessingSchema:
         ) // 8
         assert FEATURES_PACKED_SIZE == expected_features_packed
 
-        # Legal moves should pack to 1/8th the size (rounded up)
-        expected_legal_moves_packed = (MOVE_LABELS_NUM + 7) // 8
-        assert (
-            LEGAL_MOVES_PACKED_SIZE
-            == expected_legal_moves_packed
-        )
 
 
 class TestCompressedPreprocessingValidation:
@@ -210,8 +193,7 @@ class TestSchemaInfo:
         features_desc = fields["features_packed"]
         assert str(FEATURES_PACKED_SIZE) in features_desc
 
-        legal_moves_desc = fields["legalMoveMask_packed"]
-        assert str(LEGAL_MOVES_PACKED_SIZE) in legal_moves_desc
+        assert "legalMoveMask_packed" not in fields
 
 
 class TestMemoryUsage:
@@ -241,8 +223,8 @@ class TestMemoryUsage:
         # The exact ratio depends on the non-packed fields, but should be substantial
         compression_ratio = standard_bytes / compressed_bytes
 
-        # Should achieve at least 3x compression (conservative estimate)
-        assert compression_ratio >= 3.0
+        # Should achieve substantial compression despite fewer packed fields
+        assert compression_ratio >= 2.5
 
         # Should be less than 10x (sanity check)
         assert compression_ratio <= 10.0
@@ -264,21 +246,7 @@ class TestMemoryUsage:
         # Should be close to 8x compression
         assert 7.5 <= features_ratio <= 8.5
 
-        # Calculate memory for legal moves field
-        standard_legal_moves_bytes = (
-            size * MOVE_LABELS_NUM
-        )  # uint8 per element
-        packed_legal_moves_bytes = (
-            size * LEGAL_MOVES_PACKED_SIZE
-        )
-
-        legal_moves_ratio = (
-            standard_legal_moves_bytes
-            / packed_legal_moves_bytes
-        )
-
-        # Should be close to 8x compression
-        assert 7.5 <= legal_moves_ratio <= 8.5
+        # No legal move mask field is stored in compressed format
 
 
 class TestBackwardCompatibility:
@@ -303,13 +271,12 @@ class TestBackwardCompatibility:
         assert standard_dtype.names is not None
         assert compressed_dtype.names is not None
 
-        # Standard should have 'features' and 'legalMoveMask'
+        # Standard should have 'features'
         assert "features" in standard_dtype.names
-        assert "legalMoveMask" in standard_dtype.names
 
         # Compressed should have packed versions
         assert "features_packed" in compressed_dtype.names
-        assert "legalMoveMask_packed" in compressed_dtype.names
+        assert "legalMoveMask_packed" not in compressed_dtype.names
 
         # They should NOT have each other's fields
         assert "features_packed" not in standard_dtype.names

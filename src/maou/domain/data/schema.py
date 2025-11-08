@@ -97,11 +97,6 @@ def get_intermediate_dtype() -> np.dtype:
                 "winCount",
                 np.int32,
             ),  # Win count
-            (
-                "legalMoveMask",
-                np.uint8,
-                (MOVE_LABELS_NUM,),
-            ),  # Legal move mask
         ]
     )
 
@@ -132,11 +127,6 @@ def get_preprocessing_dtype() -> np.dtype:
                 "resultValue",
                 np.float16,
             ),  # Game result value (0 to 1)
-            (
-                "legalMoveMask",
-                np.uint8,
-                (MOVE_LABELS_NUM,),
-            ),  # Legal move mask
         ]
     )
 
@@ -144,12 +134,8 @@ def get_preprocessing_dtype() -> np.dtype:
 def get_packed_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for bit-packed compressed preprocessed training data.
 
-    This schema uses bit packing to compress the features and legalMoveMask
-    fields, achieving approximately 8x storage reduction for these binary fields.
-
-    The compressed fields are:
-    - features: (104, 9, 9) uint8 → (1053,) uint8 packed bits
-    - legalMoveMask: (1496,) uint8 → (187,) uint8 packed bits
+    This schema uses bit packing to compress the features field,
+    achieving significant storage reduction for this binary field.
 
     Returns:
         numpy.dtype: Structured dtype for compressed preprocessed training data
@@ -158,9 +144,6 @@ def get_packed_preprocessing_dtype() -> np.dtype:
     features_packed_size = (
         FEATURES_NUM * 9 * 9 + 7
     ) // 8  # 1053 bytes
-    legal_moves_packed_size = (
-        MOVE_LABELS_NUM + 7
-    ) // 8  # 187 bytes
 
     return np.dtype(
         [
@@ -179,11 +162,6 @@ def get_packed_preprocessing_dtype() -> np.dtype:
                 "resultValue",
                 np.float16,
             ),  # Game result value (-1 to 1)
-            (
-                "legalMoveMask_packed",
-                np.uint8,
-                (legal_moves_packed_size,),
-            ),  # Bit-packed legal move mask
         ]
     )
 
@@ -455,21 +433,6 @@ def validate_compressed_preprocessing_array(
                 f"{array['features_packed'].shape[1:]}"
             )
 
-        # Check packed legal moves shape
-        legal_moves_packed_size = (MOVE_LABELS_NUM + 7) // 8
-        expected_legal_moves_packed_shape = (
-            legal_moves_packed_size,
-        )
-        if (
-            array["legalMoveMask_packed"].shape[1:]
-            != expected_legal_moves_packed_shape
-        ):
-            raise SchemaValidationError(
-                f"Invalid legalMoveMask_packed shape. Expected: "
-                f"{expected_legal_moves_packed_shape}, Got: "
-                f"{array['legalMoveMask_packed'].shape[1:]}"
-            )
-
     return True
 
 
@@ -507,7 +470,6 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
                 ),
                 "resultValue": "Game result value (0.0 to 1.0)",
-                "legalMoveMask": f"Legal move mask ({MOVE_LABELS_NUM} elements)",
             },
         },
         "packed_preprocessing": {
@@ -526,9 +488,6 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
                 ),
                 "resultValue": "Game result value (0.0 to 1.0)",
-                "legalMoveMask_packed": (
-                    f"Bit-packed legal move mask ({(MOVE_LABELS_NUM + 7) // 8} bytes)"
-                ),
             },
         },
     }
@@ -614,14 +573,8 @@ def convert_array_from_packed_format(
     # Unpack binary fields for each record
     for i in range(len(compressed_array)):
         packed_features = compressed_array[i]["features_packed"]
-        packed_legal_moves = compressed_array[i][
-            "legalMoveMask_packed"
-        ]
-        features, legal_moves = unpack_preprocessing_fields(
-            packed_features, packed_legal_moves
-        )
+        features = unpack_preprocessing_fields(packed_features)
         standard_array[i]["features"] = features
-        standard_array[i]["legalMoveMask"] = legal_moves
 
     return standard_array
 
@@ -654,14 +607,8 @@ def convert_record_from_packed_format(
 
     # Unpack binary fields for each record
     packed_features = compressed_record["features_packed"]
-    packed_legal_moves = compressed_record[
-        "legalMoveMask_packed"
-    ]
-    features, legal_moves = unpack_preprocessing_fields(
-        packed_features, packed_legal_moves
-    )
+    features = unpack_preprocessing_fields(packed_features)
     standard_array["features"] = features
-    standard_array["legalMoveMask"] = legal_moves
 
     return standard_array
 
