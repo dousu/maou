@@ -392,7 +392,7 @@ class ObjectStorageDataSource(
                                 array = load_array_from_bytes(
                                     data=byte_data,
                                     array_type=self.array_type,
-                                    bit_pack=True,
+                                    bit_pack=False,
                                 )
                                 bundler.bundle(array)
                         except Exception as exc:
