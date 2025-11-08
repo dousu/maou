@@ -105,12 +105,9 @@ class TestPreprocessingIO:
         original_array["resultValue"] = [1.0, 0.0, 0.5]
         original_array["id"] = [324552, 38948128, 21312344113]
 
-        # Fill features and legal move masks
+        # Fill features
         original_array["features"] = np.random.randint(
             0, 256, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
-        )
-        original_array["legalMoveMask"] = np.random.randint(
-            0, 2, (3, MOVE_LABELS_NUM), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"
@@ -144,12 +141,9 @@ class TestPreprocessingIO:
         original_array["resultValue"] = [1.0, 0.0, 0.5]
         original_array["id"] = [324552, 38948128, 21312344113]
 
-        # Fill features and legal move masks
+        # Fill features
         original_array["features"] = np.random.randint(
             0, 2, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
-        )
-        original_array["legalMoveMask"] = np.random.randint(
-            0, 2, (3, MOVE_LABELS_NUM), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"

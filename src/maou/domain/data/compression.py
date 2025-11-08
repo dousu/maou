@@ -1,8 +1,9 @@
 """Bit packing compression utilities for Maou project.
 
 This module provides high-performance bit packing compression for binary data
-in the preprocessing dtype, specifically for the 'features' and 'legalMoveMask'
-fields which contain only 0 or 1 values.
+in the preprocessing dtype, primarily targeting the 'features' field that
+contains only 0 or 1 values. Utilities for packing and unpacking legal move
+masks are also provided for compatibility with other workflows.
 
 The compression uses numpy's packbits/unpackbits functions to achieve 8x
 storage reduction while maintaining high performance.
@@ -250,33 +251,12 @@ def unpack_legal_moves_mask(
         ) from e
 
 
-def pack_preprocessing_record(
-    record: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Pack features and legal moves from a preprocessing record.
+def pack_preprocessing_record(record: np.ndarray) -> np.ndarray:
+    """Pack features from a preprocessing record."""
 
-    Extracts and compresses the features and legalMoveMask fields from a
-    preprocessing record, returning the packed arrays separately.
-
-    Args:
-        record: Single preprocessing record (structured array)
-
-    Returns:
-        Tuple of (packed_features, packed_legal_moves)
-
-    Raises:
-        CompressionError: If compression fails
-    """
     try:
-        # Extract features and legal moves
         features = record["features"]
-        legal_moves = record["legalMoveMask"]
-
-        # Pack both arrays
-        packed_features = pack_features_array(features)
-        packed_legal_moves = pack_legal_moves_mask(legal_moves)
-
-        return packed_features, packed_legal_moves
+        return pack_features_array(features)
 
     except Exception as e:
         raise CompressionError(
@@ -284,31 +264,11 @@ def pack_preprocessing_record(
         ) from e
 
 
-def unpack_preprocessing_fields(
-    packed_features: np.ndarray, packed_legal_moves: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Unpack features and legal moves arrays.
+def unpack_preprocessing_fields(packed_features: np.ndarray) -> np.ndarray:
+    """Unpack features array from a packed preprocessing record."""
 
-    Decompresses packed bit arrays back to original preprocessing field formats.
-
-    Args:
-        packed_features: Packed features array
-        packed_legal_moves: Packed legal moves array
-
-    Returns:
-        Tuple of (features, legal_moves) in original format
-
-    Raises:
-        CompressionError: If decompression fails
-    """
     try:
-        # Unpack both arrays
-        features = unpack_features_array(packed_features)
-        legal_moves = unpack_legal_moves_mask(
-            packed_legal_moves
-        )
-
-        return features, legal_moves
+        return unpack_features_array(packed_features)
 
     except Exception as e:
         raise CompressionError(
@@ -329,21 +289,11 @@ def get_compression_stats() -> dict:
             "compression_ratio": (FEATURES_NUM * 9 * 9)
             / FEATURES_PACKED_SIZE,
         },
-        "legal_moves": {
-            "original_size": MOVE_LABELS_NUM,
-            "packed_size": LEGAL_MOVES_PACKED_SIZE,
-            "compression_ratio": MOVE_LABELS_NUM
-            / LEGAL_MOVES_PACKED_SIZE,
-        },
         "total": {
-            "original_size": FEATURES_NUM * 9 * 9
-            + MOVE_LABELS_NUM,
-            "packed_size": FEATURES_PACKED_SIZE
-            + LEGAL_MOVES_PACKED_SIZE,
-            "compression_ratio": (
-                FEATURES_NUM * 9 * 9 + MOVE_LABELS_NUM
-            )
-            / (FEATURES_PACKED_SIZE + LEGAL_MOVES_PACKED_SIZE),
+            "original_size": FEATURES_NUM * 9 * 9,
+            "packed_size": FEATURES_PACKED_SIZE,
+            "compression_ratio": (FEATURES_NUM * 9 * 9)
+            / FEATURES_PACKED_SIZE,
         },
     }
 

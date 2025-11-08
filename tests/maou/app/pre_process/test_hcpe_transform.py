@@ -297,12 +297,6 @@ class TestHCPEConverter:
                 f"Record {i}: resultValueが範囲外 ({result_value})"
             )
 
-            # legalMoveMask二進値検証
-            legal_mask = record["legalMoveMask"]
-            assert np.all(np.isin(legal_mask, [0, 1])), (
-                f"Record {i}: legalMoveMaskに0,1以外の値が存在"
-            )
-
             # moveLabelは非負値であることを確認
             assert np.all(record["moveLabel"] >= 0), (
                 f"Record {i}: moveLabelに負の値が存在"
@@ -407,25 +401,6 @@ class TestHCPEConverter:
                         f"{np.max(np.abs(actual_move_probs - expected_move_probs))}"
                     )
 
-                # legalMoveMaskの検証（元データの任意の1レコードと一致すべき）
-                if matching_records:
-                    expected_legal_mask = (
-                        Transform.board_legal_move_mask(
-                            matching_records[0]["hcp"]
-                        )
-                    )
-                    actual_legal_mask = processed_record[
-                        "legalMoveMask"
-                    ]
-                    assert np.array_equal(
-                        actual_legal_mask, expected_legal_mask
-                    ), (
-                        f"legalMoveMask不一致: "
-                        f"ID={processed_id}, "
-                        f"差分の数="
-                        f"{np.sum(actual_legal_mask != expected_legal_mask)}"
-                    )
-
     def _test_additional_validations(
         self, preprocessed_array: np.ndarray
     ) -> None:
@@ -444,14 +419,6 @@ class TestHCPEConverter:
                 f"(期待={expected_features_shape}, 実際={actual_features_shape})"
             )
 
-            # legalMoveMask形状検証
-            expected_mask_shape = (MOVE_LABELS_NUM,)
-            actual_mask_shape = record["legalMoveMask"].shape
-            assert actual_mask_shape == expected_mask_shape, (
-                f"Record {i}: legalMoveMask形状が不正 "
-                f"(期待={expected_mask_shape}, 実際={actual_mask_shape})"
-            )
-
             # moveLabel形状検証
             expected_move_label_shape = (MOVE_LABELS_NUM,)
             actual_move_label_shape = record["moveLabel"].shape
@@ -461,42 +428,6 @@ class TestHCPEConverter:
             ), (
                 f"Record {i}: moveLabel形状が不正 "
                 f"(期待={expected_move_label_shape}, 実際={actual_move_label_shape})"
-            )
-
-            # legalMoveMaskの設定確認
-            legal_moves = record["legalMoveMask"] == 1
-            illegal_moves = record["legalMoveMask"] == 0
-
-            # legalMoveMaskが設定されていることを確認
-            assert np.sum(legal_moves) > 0, (
-                f"Record {i}: 合法手が1つも設定されていない"
-            )
-
-            # legalMoveMaskとmoveLabelの一貫性検証
-            # 非合法手の位置のmoveLabelは0であるべき
-            illegal_move_labels = record["moveLabel"][
-                illegal_moves
-            ]
-
-            # 非合法手のラベルが全て0であることを確認
-            assert np.allclose(
-                illegal_move_labels, 0.0, atol=1e-6
-            ), (
-                f"Record {i}: 非合法手に対するmoveLabelが0でない "
-                f"(max={np.max(illegal_move_labels)}, "
-                f"非0の数={np.sum(illegal_move_labels > 1e-6)})"
-            )
-
-            # 合法手の方が確率を持つことを確認
-            legal_move_labels = record["moveLabel"][legal_moves]
-            assert np.sum(legal_move_labels) > 0, (
-                f"Record {i}: 合法手のmoveLabelが全て0"
-            )
-
-            # 合法手のmoveLabelの合計が1に近いことを確認
-            legal_sum = np.sum(legal_move_labels)
-            assert np.isclose(legal_sum, 1.0, rtol=1e-3), (
-                f"Record {i}: 合法手のmoveLabel総和が1でない ({legal_sum})"
             )
 
             # featuresが設定されていることを確認（全て0でないこと）

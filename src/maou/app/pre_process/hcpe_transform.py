@@ -178,9 +178,6 @@ class PreProcess:
                 "features": Transform.board_feature(
                     data["hcp"][orig_idx]
                 ),
-                "legalMoveMask": Transform.board_legal_move_mask(
-                    data["hcp"][orig_idx]
-                ),
             }
 
             start_idx = end_idx

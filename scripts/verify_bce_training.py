@@ -88,14 +88,17 @@ def main():
             inputs = inputs.to(device)
             labels_policy = labels_policy.to(device)
             labels_value = labels_value.to(device)
-            legal_move_mask = legal_move_mask.to(device)
+            if legal_move_mask is not None:
+                legal_move_mask = legal_move_mask.to(device)
 
             # Forward pass
             optimizer.zero_grad()
             policy_logits, value_pred = model(inputs)
 
             # Compute losses
-            policy_loss = loss_fn_policy(policy_logits, labels_policy, legal_move_mask)
+            policy_loss = loss_fn_policy(
+                policy_logits, labels_policy, legal_move_mask
+            )
             value_loss = loss_fn_value(value_pred, labels_value)
             loss = policy_loss + value_loss
 
