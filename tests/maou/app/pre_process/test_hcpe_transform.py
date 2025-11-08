@@ -160,7 +160,7 @@ class TestHCPEConverter:
 
             # 実際の前処理済みデータを取得
             preprocessed_array = load_preprocessing_array(
-                output_path / "test.npy", bit_pack=True
+                output_path / "test.npy", bit_pack=False
             )
 
             # 3. 基本整合性検証

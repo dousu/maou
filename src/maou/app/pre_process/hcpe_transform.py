@@ -274,7 +274,7 @@ class PreProcess:
                     chunk_path = output_dir / chunk_filename
 
                     save_preprocessing_array(
-                        chunk_data, chunk_path, bit_pack=True
+                        chunk_data, chunk_path, bit_pack=False
                     )
 
                     self.logger.debug(
@@ -493,7 +493,7 @@ class PreProcess:
                             array,
                             option.output_dir
                             / f"{base_name}.npy",
-                            bit_pack=True,
+                            bit_pack=False,
                         )
             else:
                 # 並列処理（メモリ効率化版）
@@ -688,7 +688,7 @@ class PreProcess:
                             array,
                             option.output_dir
                             / f"{base_name}.npy",
-                            bit_pack=True,
+                            bit_pack=False,
                         )
 
         # クリーンアップ: ディスクストアを閉じて削除

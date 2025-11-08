@@ -157,7 +157,7 @@ class ObjectStorageFeatureStore(
             byte_data = save_array_to_bytes(
                 array=array,
                 array_type=self.array_type,
-                bit_pack=True,
+                bit_pack=False,
             )
             self.queue.put((object_path, byte_data))
             self.bundle_id += 1
