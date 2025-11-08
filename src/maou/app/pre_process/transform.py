@@ -98,7 +98,7 @@ class Transform:
         self, valid_labels: list[int], num_classes: int
     ) -> np.ndarray:
         """有効なラベルのリストから対応するマスクを作成する."""
-        mask = np.zeros((num_classes), dtype=np.uint8)
+        mask = np.zeros((num_classes,), dtype=np.uint8)
         mask[valid_labels] = 1
         return mask
 

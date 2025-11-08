@@ -41,3 +41,29 @@ def make_feature(board: shogi.Board) -> np.ndarray:
             features[i : i + num].fill(1)
             i += max_num
     return features.astype(np.uint8)
+
+
+def make_board_id_positions(board: shogi.Board) -> np.ndarray:
+    """盤面の駒配置をPieceIdで表現する.
+    後手番であれば180度回転する
+    shapeが(9, 9)のuint8のndarrayで返す
+    """
+    board_id_positions = board.get_board_id_positions()
+    if board.get_turn() == shogi.Turn.BLACK:
+        return board_id_positions
+    else:
+        return np.rot90(board_id_positions, 2)
+
+
+def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
+    """持ち駒の各駒種類の枚数を返す.
+    手番の持ち駒が最初に入る
+    shapeが(7,)のuint8のndarrayで返す
+    """
+    if board.get_turn() == shogi.Turn.BLACK:
+        pieces_in_hand = board.get_pieces_in_hand()
+    else:
+        pieces_in_hand = tuple(
+            reversed(board.get_pieces_in_hand())
+        )
+    return np.concatenate(pieces_in_hand).astype(np.uint8)

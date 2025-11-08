@@ -1,16 +1,17 @@
 from collections.abc import Generator
-from enum import IntEnum
+from enum import IntEnum, auto
 
 import cshogi
 import numpy as np
 
 MAX_PIECES_IN_HAND: list[int] = cshogi.MAX_PIECES_IN_HAND  # type: ignore
 # 駒8種類，成駒6種類
-PIECE_TYPES = 14
+PIECE_TYPES = len(cshogi.PIECE_TYPES)  # type: ignore
 
 # MAX_PIECES_IN_HANDの構成
 # 歩18，香車4，桂馬4，銀4，金4，角2，飛車2
 
+# 104
 FEATURES_NUM = PIECE_TYPES * 2 + sum(MAX_PIECES_IN_HAND) * 2
 
 
@@ -23,6 +24,38 @@ class Result(IntEnum):
     BLACK_WIN = cshogi.BLACK_WIN  # type: ignore
     WHITE_WIN = cshogi.WHITE_WIN  # type: ignore
     DRAW = cshogi.DRAW  # type: ignore
+
+
+class PieceId(IntEnum):
+    EMPTY = 0
+    # 歩
+    FU = auto()
+    # 香車
+    KY = auto()
+    # 桂馬
+    KE = auto()
+    # 銀
+    GI = auto()
+    # 金
+    KI = auto()
+    # 角
+    KA = auto()
+    # 飛車
+    HI = auto()
+    # 王
+    OU = auto()
+    # と金
+    TO = auto()
+    # 成香
+    NKY = auto()
+    # 成桂
+    NKE = auto()
+    # 成銀
+    NGI = auto()
+    # 馬
+    UMA = auto()
+    # 龍
+    RYU = auto()
 
 
 def move16(move: int) -> int:
@@ -109,7 +142,10 @@ class Board:
         self.board.piece_planes_rotate(array)
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
-        """手番関係なく常に(先手, 後手)の順にtupleにはいっている"""
+        """手番関係なく常に(先手, 後手)の順にtupleにはいっている
+        歩，香車，桂馬，銀，金，角，飛車の順番
+        例: ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
+        """
         return self.board.pieces_in_hand
 
     def to_pretty_board(self) -> str:
@@ -117,3 +153,24 @@ class Board:
 
     def hash(self) -> int:
         return self.board.zobrist_hash()
+
+    def get_board_id_positions(self) -> np.ndarray:
+        def map_cshogi_to_piece_id(
+            cshogi_piece_id: int,
+        ) -> int:
+            if cshogi_piece_id < len(PieceId):
+                return cshogi_piece_id
+            else:
+                return cshogi_piece_id - 16 + len(PieceId) - 1
+
+        v_map = np.vectorize(
+            map_cshogi_to_piece_id,
+            otypes=[np.uint8],
+        )
+        board_id_pieces = v_map(
+            np.array(
+                self.board.pieces,
+                dtype=np.uint8,
+            )
+        ).reshape((9, 9))
+        return board_id_pieces
