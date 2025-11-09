@@ -549,9 +549,15 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
     compressed_array["moveLabel"] = array["moveLabel"]
     compressed_array["resultValue"] = array["resultValue"]
 
-    # Pack binary fields for each record
+    # Copy structured fields for each record with validation
     for i in range(len(array)):
-        packed_features = pack_preprocessing_record(array[i])
-        compressed_array[i]["features_packed"] = packed_features
+        (
+            board_positions,
+            pieces_in_hand,
+        ) = pack_preprocessing_record(array[i])
+        compressed_array[i]["boardIdPositions"] = (
+            board_positions
+        )
+        compressed_array[i]["piecesInHand"] = pieces_in_hand
 
     return compressed_array

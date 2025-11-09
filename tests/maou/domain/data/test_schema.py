@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.schema import (
     HCPE_DTYPE,
     PREPROCESSING_DTYPE,
@@ -159,7 +158,8 @@ class TestPreprocessingSchema:
         assert isinstance(dtype, np.dtype)
         expected_fields = {
             "id",
-            "features",
+            "boardIdPositions",
+            "piecesInHand",
             "moveLabel",
             "resultValue",
         }
@@ -168,12 +168,10 @@ class TestPreprocessingSchema:
 
         # Check specific field types
         if dtype.names is not None:
-            assert dtype["features"].shape == (
-                FEATURES_NUM,
-                9,
-                9,
-            )  # type: ignore[misc]
-        assert dtype["features"].subdtype[0] == np.uint8  # type: ignore[misc,index]
+            assert dtype["boardIdPositions"].shape == (9, 9)
+            assert dtype["piecesInHand"].shape == (14,)
+        assert dtype["boardIdPositions"].subdtype[0] == np.uint8  # type: ignore[misc,index]
+        assert dtype["piecesInHand"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc,index]
         assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
@@ -217,10 +215,25 @@ class TestPreprocessingSchema:
             334411234131313242,
             3143232423121432423,
         ]
+        array["boardIdPositions"] = np.arange(
+            3 * 81, dtype=np.uint8
+        ).reshape(
+            3,
+            9,
+            9,
+        )
+        array["piecesInHand"] = np.arange(
+            3 * 14, dtype=np.uint8
+        ).reshape(
+            3,
+            14,
+        )
 
-        # Features should have correct shape
-        array["features"] = np.random.randint(
-            0, 256, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
+        array["boardIdPositions"] = np.random.randint(
+            0, 255, (3, 9, 9), dtype=np.uint8
+        )
+        array["piecesInHand"] = np.random.randint(
+            0, 10, (3, 14), dtype=np.uint8
         )
 
         # Should not raise any exception
@@ -275,15 +288,13 @@ class TestPreprocessingSchema:
         ):
             validate_preprocessing_array(array)
 
-    def test_validate_preprocessing_array_wrong_features_shape(
+    def test_validate_preprocessing_array_board_shape(
         self,
     ) -> None:
-        """Test validation with wrong features shape."""
+        """Test boardIdPositions field shape is enforced."""
         array = create_empty_preprocessing_array(1)
-        # This test is tricky because numpy will enforce the dtype shape
-        # But we can test the validation logic by checking the expected shape
-        expected_shape = (FEATURES_NUM, 9, 9)
-        actual_shape = array["features"].shape[1:]
+        expected_shape = (9, 9)
+        actual_shape = array["boardIdPositions"].shape[1:]
         assert actual_shape == expected_shape
 
     def test_validate_empty_preprocessing_array(self) -> None:
@@ -319,7 +330,8 @@ class TestSchemaInfo:
 
         # Check field descriptions
         assert "hcp" in hcpe_info["fields"]
-        assert "features" in prep_info["fields"]
+        assert "boardIdPositions" in prep_info["fields"]
+        assert "piecesInHand" in prep_info["fields"]
 
 
 class TestSchemaIntegration:
@@ -330,8 +342,12 @@ class TestSchemaIntegration:
         # Test that our schemas match the expected number of features and labels
         preprocessing_dtype = get_preprocessing_dtype()
 
-        features_shape = preprocessing_dtype["features"].shape
-        assert features_shape == (FEATURES_NUM, 9, 9)
+        board_shape = preprocessing_dtype[
+            "boardIdPositions"
+        ].shape
+        hand_shape = preprocessing_dtype["piecesInHand"].shape
+        assert board_shape == (9, 9)
+        assert hand_shape == (14,)
 
         assert "legalMoveMask" not in preprocessing_dtype.names
 
@@ -384,9 +400,17 @@ class TestSchemaIntegration:
         prep_array["resultValue"] = [1.0, 0.0]
         prep_array["id"] = [13234435348, 8284929344598382842]
 
-        # Set realistic features and legal move masks
-        prep_array["features"] = np.random.randint(
-            0, 2, (2, FEATURES_NUM, 9, 9), dtype=np.uint8
+        prep_array["boardIdPositions"] = np.random.randint(
+            0,
+            255,
+            (2, 9, 9),
+            dtype=np.uint8,
+        )
+        prep_array["piecesInHand"] = np.random.randint(
+            0,
+            10,
+            (2, 14),
+            dtype=np.uint8,
         )
 
         assert validate_preprocessing_array(prep_array) is True
