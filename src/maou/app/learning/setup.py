@@ -24,12 +24,13 @@ except (
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import (
     BackboneArchitecture,
+    BOARD_EMBEDDING_DIM,
+    DEFAULT_BOARD_VOCAB_SIZE,
     HeadlessNetwork,
     Network,
 )
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.model.resnet import BottleneckBlock
 
 
@@ -224,7 +225,8 @@ class ModelFactory:
         """方策・価値ヘッドを含まないバックボーンを作成."""
 
         backbone = HeadlessNetwork(
-            num_channels=FEATURES_NUM,
+            board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
+            embedding_dim=BOARD_EMBEDDING_DIM,
             board_size=(9, 9),
             architecture=architecture,
             block=BottleneckBlock,
@@ -253,7 +255,8 @@ class ModelFactory:
 
         model = Network(
             num_policy_classes=MOVE_LABELS_NUM,
-            num_channels=FEATURES_NUM,
+            board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
+            embedding_dim=BOARD_EMBEDDING_DIM,
             board_size=(9, 9),
             architecture=architecture,
             block=BottleneckBlock,

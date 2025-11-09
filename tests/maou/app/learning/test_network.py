@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
-from maou.app.learning.network import Network
+from maou.app.learning.network import (
+    BACKBONE_ARCHITECTURES,
+    DEFAULT_BOARD_VOCAB_SIZE,
+    HeadlessNetwork,
+    Network,
+)
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
 
 
 def test_network_outputs_have_expected_shapes() -> None:
     network = Network()
     batch_size = 2
-    inputs = torch.randn(batch_size, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(
+        0, DEFAULT_BOARD_VOCAB_SIZE, (batch_size, 9, 9), dtype=torch.long
+    )
 
     policy, value = network(inputs)
 
@@ -22,7 +29,7 @@ def test_network_outputs_have_expected_shapes() -> None:
 
 def test_backbone_feature_dimension_matches_channels() -> None:
     network = Network()
-    inputs = torch.randn(3, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (3, 9, 9))
 
     features = network.forward_features(inputs)
 
@@ -33,9 +40,20 @@ def test_network_allows_custom_head_configuration() -> None:
     network = Network(
         policy_hidden_dim=128, value_hidden_dim=64
     )
-    inputs = torch.randn(1, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (1, 9, 9))
 
     policy, value = network(inputs)
 
     assert policy.shape == (1, MOVE_LABELS_NUM)
     assert value.shape == (1, 1)
+
+
+@pytest.mark.parametrize("architecture", BACKBONE_ARCHITECTURES)
+def test_headless_network_embeds_board_ids(architecture: str) -> None:
+    model = HeadlessNetwork(architecture=architecture)
+    inputs = torch.randint(0, model.board_vocab_size, (2, 9, 9))
+
+    embedded = model._prepare_inputs(inputs)
+
+    assert embedded.shape == (2, model.input_channels, 9, 9)
+    assert embedded.dtype == model.embedding.weight.dtype

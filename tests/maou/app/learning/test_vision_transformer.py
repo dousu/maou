@@ -7,8 +7,10 @@ import torch
 
 from torchinfo import summary
 
-from maou.app.learning.network import HeadlessNetwork
-from maou.domain.board.shogi import FEATURES_NUM
+from maou.app.learning.network import (
+    DEFAULT_BOARD_VOCAB_SIZE,
+    HeadlessNetwork,
+)
 from maou.domain.model.resnet import ResNet as DomainResNet
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
 from maou.domain.model.vision_transformer import (
@@ -31,7 +33,7 @@ def test_headless_network_forward_returns_embeddings() -> None:
 
     model = HeadlessNetwork()
     batch_size = 4
-    inputs = torch.randn(batch_size, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (batch_size, 9, 9))
 
     outputs = model(inputs)
 
@@ -43,7 +45,7 @@ def test_headless_network_supports_mlp_mixer_backbone() -> None:
 
     model = HeadlessNetwork(architecture="mlp-mixer")
     batch_size = 2
-    inputs = torch.randn(batch_size, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (batch_size, 9, 9))
 
     outputs = model(inputs)
 
@@ -56,7 +58,7 @@ def test_headless_network_supports_vit_backbone() -> None:
 
     model = HeadlessNetwork(architecture="vit")
     batch_size = 2
-    inputs = torch.randn(batch_size, FEATURES_NUM, 9, 9)
+    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (batch_size, 9, 9))
 
     outputs = model(inputs)
 
@@ -68,7 +70,8 @@ def test_headless_network_rejects_invalid_shape() -> None:
     """Invalid spatial dimensions should raise a descriptive error."""
 
     model = HeadlessNetwork()
-    bad_inputs = torch.randn(1, FEATURES_NUM, 8, 8)
+    bad_inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (1, 9, 9))
+    bad_inputs = bad_inputs[:, :, :8]
 
     with pytest.raises(ValueError):
         model(bad_inputs)
