@@ -261,7 +261,7 @@ class TestHCPEConverter:
         ids = preprocessed_array["id"]
         assert len(np.unique(ids)) == len(ids), "IDが一意でない"
 
-        # ID-features一対一関係テスト
+        # ID-盤面情報一対一関係テスト
         for i in range(len(preprocessed_array)):
             for j in range(i + 1, len(preprocessed_array)):
                 if (
@@ -269,9 +269,13 @@ class TestHCPEConverter:
                     == preprocessed_array["id"][j]
                 ):
                     assert np.array_equal(
-                        preprocessed_array["features"][i],
-                        preprocessed_array["features"][j],
-                    ), "同じIDに対して異なるfeaturesが存在"
+                        preprocessed_array["boardIdPositions"][i],
+                        preprocessed_array["boardIdPositions"][j],
+                    ), "同じIDに対して異なるboardIdPositionsが存在"
+                    assert np.array_equal(
+                        preprocessed_array["piecesInHand"][i],
+                        preprocessed_array["piecesInHand"][j],
+                    ), "同じIDに対して異なるpiecesInHandが存在"
 
         # データが空でないことを確認
         assert len(preprocessed_array) > 0, (
@@ -406,17 +410,16 @@ class TestHCPEConverter:
     ) -> None:
         """追加的な検証項目をテストする．"""
         from maou.app.pre_process.label import MOVE_LABELS_NUM
-        from maou.domain.board.shogi import FEATURES_NUM
 
         for i, record in enumerate(preprocessed_array):
-            # features形状検証
-            expected_features_shape = (FEATURES_NUM, 9, 9)
-            actual_features_shape = record["features"].shape
+            # boardIdPositions形状検証
+            expected_board_shape = (9, 9)
+            actual_board_shape = record["boardIdPositions"].shape
             assert (
-                actual_features_shape == expected_features_shape
+                actual_board_shape == expected_board_shape
             ), (
-                f"Record {i}: features形状が不正 "
-                f"(期待={expected_features_shape}, 実際={actual_features_shape})"
+                f"Record {i}: boardIdPositions形状が不正 "
+                f"(期待={expected_board_shape}, 実際={actual_board_shape})"
             )
 
             # moveLabel形状検証
@@ -430,8 +433,19 @@ class TestHCPEConverter:
                 f"(期待={expected_move_label_shape}, 実際={actual_move_label_shape})"
             )
 
-            # featuresが設定されていることを確認（全て0でないこと）
-            features_sum = np.sum(record["features"])
-            assert features_sum > 0, (
-                f"Record {i}: featuresが全て0（設定されていない）"
+            # piecesInHand形状検証
+            expected_pieces_shape = (14,)
+            actual_pieces_shape = record["piecesInHand"].shape
+            assert (
+                actual_pieces_shape == expected_pieces_shape
+            ), (
+                f"Record {i}: piecesInHand形状が不正 "
+                f"(期待={expected_pieces_shape}, 実際={actual_pieces_shape})"
             )
+
+            # 盤面・持ち駒情報が設定されていることを確認
+            board_sum = np.sum(record["boardIdPositions"])
+            pieces_sum = np.sum(record["piecesInHand"])
+            assert (
+                board_sum > 0 or pieces_sum > 0
+            ), f"Record {i}: 盤面および持ち駒情報が全て0"

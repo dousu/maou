@@ -27,7 +27,8 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
 
     dtype = np.dtype(
         [
-            ("features", np.float32, (3,)),
+            ("boardIdPositions", np.uint8, (9, 9)),
+            ("piecesInHand", np.uint8, (14,)),
             ("moveLabel", np.float32, (5,)),
             ("resultValue", np.float32),
         ]
@@ -35,12 +36,14 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
     data = np.array(
         [
             (
-                np.arange(3, dtype=np.float32),
+                np.eye(9, dtype=np.uint8),
+                np.zeros(14, dtype=np.uint8),
                 np.array([1, 0, 0, 0, 0], dtype=np.float32),
                 np.float32(1.0),
             ),
             (
-                np.arange(3, dtype=np.float32) + 1,
+                np.fliplr(np.eye(9, dtype=np.uint8)),
+                np.zeros(14, dtype=np.uint8),
                 np.array([0, 1, 0, 0, 0], dtype=np.float32),
                 np.float32(-1.0),
             ),

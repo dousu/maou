@@ -22,6 +22,7 @@ from maou.app.learning.setup import (
     ModelFactory,
     default_worker_init_fn,
 )
+from maou.app.pre_process.feature import make_feature_from_board_state
 
 
 class _FeatureDataset(Dataset):
@@ -66,15 +67,28 @@ class _FeatureDataset(Dataset):
     def _extract_features(
         self, record: np.ndarray
     ) -> np.ndarray:
-        if (
-            record.dtype.names is None
-            or "features" not in record.dtype.names
-        ):
-            msg = "Record does not contain 'features' field"
+        if record.dtype.names is None:
+            msg = "Structured record is required"
             raise ValueError(msg)
-        features = np.asarray(
-            record["features"], dtype=np.float32
-        )
+
+        if "features" in record.dtype.names:
+            features = np.asarray(
+                record["features"], dtype=np.float32
+            )
+        elif {
+            "boardIdPositions",
+            "piecesInHand",
+        }.issubset(record.dtype.names):
+            reconstructed = make_feature_from_board_state(
+                np.asarray(record["boardIdPositions"], dtype=np.uint8),
+                np.asarray(record["piecesInHand"], dtype=np.uint8),
+            )
+            features = reconstructed.astype(np.float32)
+        else:
+            msg = (
+                "Record does not contain 'features' or board state fields"
+            )
+            raise ValueError(msg)
         if features.ndim < 2:
             msg = "features must be at least 2-dimensional"
             raise ValueError(msg)

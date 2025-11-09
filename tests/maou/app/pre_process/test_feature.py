@@ -1793,6 +1793,22 @@ class TestMakePiecesInHand:
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)
 
+
+class TestMakeFeatureFromBoardState:
+    def test_reconstructs_feature_planes(self) -> None:
+        board = Board()
+        board.set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+
+        board_id_positions = feature.make_board_id_positions(board)
+        pieces_in_hand = feature.make_pieces_in_hand(board)
+        expected = feature.make_feature(board)
+        reconstructed = feature.make_feature_from_board_state(
+            board_id_positions,
+            pieces_in_hand,
+        )
+
+        np.testing.assert_array_equal(reconstructed, expected)
+
     def test_returns_hand_counts_for_white_turn(self) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/9 b 2PLGB3pnr 1")
