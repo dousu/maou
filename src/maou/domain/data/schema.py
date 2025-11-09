@@ -79,10 +79,15 @@ def get_intermediate_dtype() -> np.dtype:
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features",
+                "boardIdPositions",
                 np.uint8,
-                (FEATURES_NUM, 9, 9),
-            ),  # Board feature representation
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand counts for both players
             (
                 "count",
                 np.int32,
@@ -94,8 +99,8 @@ def get_intermediate_dtype() -> np.dtype:
             ),  # Move label for training
             (
                 "winCount",
-                np.int32,
-            ),  # Win count
+                np.float32,
+            ),  # Sum of result values
         ]
     )
 
