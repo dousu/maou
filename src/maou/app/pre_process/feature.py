@@ -58,7 +58,7 @@ def make_board_id_positions(board: shogi.Board) -> np.ndarray:
 def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
     """持ち駒の各駒種類の枚数を返す.
     手番の持ち駒が最初に入る
-    shapeが(7,)のuint8のndarrayで返す
+    shapeが(14,)のuint8のndarrayで返す
     """
     if board.get_turn() == shogi.Turn.BLACK:
         pieces_in_hand = board.get_pieces_in_hand()

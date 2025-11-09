@@ -45,7 +45,7 @@ class TestCompressionConversion:
                 np.arange(81, dtype=np.uint8).reshape(9, 9) + i
             )
             array[i]["piecesInHand"] = (
-                np.arange(7, dtype=np.uint8) + i
+                np.arange(14, dtype=np.uint8) + i
             )
 
         return array
@@ -136,7 +136,7 @@ class TestBitPackedFileSaveLoad:
                 np.arange(81, dtype=np.uint8).reshape(9, 9) + i
             )
             array[i]["piecesInHand"] = (
-                np.arange(7, dtype=np.uint8) + i
+                np.arange(14, dtype=np.uint8) + i
             )
 
         return array

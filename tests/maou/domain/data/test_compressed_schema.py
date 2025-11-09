@@ -74,7 +74,7 @@ class TestCompressedPreprocessingValidation:
             *BOARD_ID_POSITIONS_SHAPE,
         )
         array["piecesInHand"] = np.arange(
-            5 * 7, dtype=np.uint8
+            5 * 14, dtype=np.uint8
         ).reshape(
             5,
             *PIECES_IN_HAND_SHAPE,

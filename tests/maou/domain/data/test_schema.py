@@ -169,7 +169,7 @@ class TestPreprocessingSchema:
         # Check specific field types
         if dtype.names is not None:
             assert dtype["boardIdPositions"].shape == (9, 9)
-            assert dtype["piecesInHand"].shape == (7,)
+            assert dtype["piecesInHand"].shape == (14,)
         assert dtype["boardIdPositions"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["piecesInHand"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc,index]
@@ -223,17 +223,17 @@ class TestPreprocessingSchema:
             9,
         )
         array["piecesInHand"] = np.arange(
-            3 * 7, dtype=np.uint8
+            3 * 14, dtype=np.uint8
         ).reshape(
             3,
-            7,
+            14,
         )
 
         array["boardIdPositions"] = np.random.randint(
             0, 255, (3, 9, 9), dtype=np.uint8
         )
         array["piecesInHand"] = np.random.randint(
-            0, 10, (3, 7), dtype=np.uint8
+            0, 10, (3, 14), dtype=np.uint8
         )
 
         # Should not raise any exception
@@ -347,7 +347,7 @@ class TestSchemaIntegration:
         ].shape
         hand_shape = preprocessing_dtype["piecesInHand"].shape
         assert board_shape == (9, 9)
-        assert hand_shape == (7,)
+        assert hand_shape == (14,)
 
         assert "legalMoveMask" not in preprocessing_dtype.names
 
@@ -409,7 +409,7 @@ class TestSchemaIntegration:
         prep_array["piecesInHand"] = np.random.randint(
             0,
             10,
-            (2, 7),
+            (2, 14),
             dtype=np.uint8,
         )
 

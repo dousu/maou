@@ -108,7 +108,7 @@ class TestPreprocessingIO:
             0, 255, (3, 9, 9), dtype=np.uint8
         )
         original_array["piecesInHand"] = np.random.randint(
-            0, 10, (3, 7), dtype=np.uint8
+            0, 10, (3, 14), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"
@@ -146,7 +146,7 @@ class TestPreprocessingIO:
             0, 255, (3, 9, 9), dtype=np.uint8
         )
         original_array["piecesInHand"] = np.random.randint(
-            0, 10, (3, 7), dtype=np.uint8
+            0, 10, (3, 14), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"

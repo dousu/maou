@@ -111,7 +111,7 @@ class TestPreprocessingRecordPacking:
         record["boardIdPositions"] = np.arange(
             81, dtype=np.uint8
         ).reshape(BOARD_ID_POSITIONS_SHAPE)
-        record["piecesInHand"] = np.arange(7, dtype=np.uint8)
+        record["piecesInHand"] = np.arange(14, dtype=np.uint8)
 
         board_positions, pieces_in_hand = (
             pack_preprocessing_record(record)
@@ -128,7 +128,7 @@ class TestPreprocessingRecordPacking:
         board_positions = np.arange(81, dtype=np.uint8).reshape(
             BOARD_ID_POSITIONS_SHAPE
         )
-        pieces_in_hand = np.arange(7, dtype=np.uint8)
+        pieces_in_hand = np.arange(14, dtype=np.uint8)
 
         unpacked_board, unpacked_hand = (
             unpack_preprocessing_fields(
@@ -146,7 +146,7 @@ class TestPreprocessingRecordPacking:
         wrong_dtype = np.dtype(
             [
                 ("boardIdPositions", np.uint8, (8, 9)),
-                ("piecesInHand", np.uint8, (7,)),
+                ("piecesInHand", np.uint8, (14,)),
             ]
         )
         wrong_record = np.zeros((), dtype=wrong_dtype)
@@ -161,7 +161,7 @@ class TestPreprocessingRecordPacking:
         self,
     ) -> None:
         board_positions = np.zeros((8, 9), dtype=np.uint8)
-        pieces_in_hand = np.zeros(7, dtype=np.uint8)
+        pieces_in_hand = np.zeros(14, dtype=np.uint8)
 
         with pytest.raises(
             CompressionError,
@@ -188,13 +188,13 @@ class TestCompressionStats:
         assert board_stats["compression_ratio"] == 1.0
 
         hand_stats = stats["piecesInHand"]
-        assert hand_stats["original_size"] == 7
-        assert hand_stats["packed_size"] == 7
+        assert hand_stats["original_size"] == 14
+        assert hand_stats["packed_size"] == 14
         assert hand_stats["compression_ratio"] == 1.0
 
         total_stats = stats["total"]
-        assert total_stats["original_size"] == 88
-        assert total_stats["packed_size"] == 88
+        assert total_stats["original_size"] == 95
+        assert total_stats["packed_size"] == 95
         assert total_stats["compression_ratio"] == 1.0
 
 

@@ -120,7 +120,7 @@ def get_preprocessing_dtype() -> np.dtype:
             (
                 "piecesInHand",
                 np.uint8,
-                (7,),
+                (14,),
             ),  # Pieces in hand for both players
             (
                 "moveLabel",
@@ -155,7 +155,7 @@ def get_packed_preprocessing_dtype() -> np.dtype:
             (
                 "piecesInHand",
                 np.uint8,
-                (7,),
+                (14,),
             ),  # Pieces in hand for both players
             (
                 "moveLabel",
@@ -379,7 +379,7 @@ def validate_preprocessing_array(array: np.ndarray) -> bool:
             )
 
         # Check piecesInHand shape
-        expected_hand_shape = (7,)
+        expected_hand_shape = (14,)
         if (
             array["piecesInHand"].shape[1:]
             != expected_hand_shape
@@ -450,7 +450,7 @@ def validate_compressed_preprocessing_array(
             )
 
         # Check piecesInHand shape
-        expected_hand_shape = (7,)
+        expected_hand_shape = (14,)
         if (
             array["piecesInHand"].shape[1:]
             != expected_hand_shape
@@ -493,7 +493,7 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
             "fields": {
                 "id": "Unique identifier",
                 "boardIdPositions": "Board position identifiers (9, 9)",
-                "piecesInHand": "Pieces in hand counts (7,)",
+                "piecesInHand": "Pieces in hand counts (14,)",
                 "moveLabel": (
                     "Move label for training "
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
@@ -509,7 +509,7 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
             "fields": {
                 "id": "Unique identifier",
                 "boardIdPositions": "Board position identifiers (9, 9)",
-                "piecesInHand": "Pieces in hand counts (7,)",
+                "piecesInHand": "Pieces in hand counts (14,)",
                 "moveLabel": (
                     "Move label for training "
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
