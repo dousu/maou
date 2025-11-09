@@ -46,7 +46,7 @@ class KifDataset(Dataset, Sized):
     def __getitem__(
         self, idx: int
     ) -> tuple[
-        torch.Tensor,
+        tuple[torch.Tensor, torch.Tensor],
         tuple[torch.Tensor, torch.Tensor, torch.Tensor],
     ]:
         if self.transform is not None:
@@ -56,7 +56,7 @@ class KifDataset(Dataset, Sized):
             ]  # numpy structured array (0次元)
             (
                 board_id_positions,
-                _pieces_in_hand,
+                pieces_in_hand,
                 move_label,
                 result_value,
                 legal_move_mask,
@@ -72,6 +72,9 @@ class KifDataset(Dataset, Sized):
             board_tensor = torch.from_numpy(
                 board_id_positions.copy()
             ).to(torch.long)
+            pieces_in_hand_tensor = torch.from_numpy(
+                pieces_in_hand.copy()
+            ).to(torch.float32)
             legal_move_mask_tensor = torch.from_numpy(
                 legal_move_mask
             ).to(torch.float32)
@@ -86,7 +89,7 @@ class KifDataset(Dataset, Sized):
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
             return (
-                board_tensor,
+                (board_tensor, pieces_in_hand_tensor),
                 (
                     move_label_tensor,
                     result_value_tensor,
@@ -101,16 +104,25 @@ class KifDataset(Dataset, Sized):
 
             # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            if (
-                data.dtype.names is None
-                or "boardIdPositions" not in data.dtype.names
-            ):
+            if data.dtype.names is None:
+                raise ValueError("Preprocessed record lacks named fields")
+
+            if "boardIdPositions" not in data.dtype.names:
                 raise ValueError("Preprocessed record lacks boardIdPositions")
+
+            if "piecesInHand" not in data.dtype.names:
+                raise ValueError("Preprocessed record lacks piecesInHand")
 
             board_array = np.asarray(
                 data["boardIdPositions"], dtype=np.uint8
             )
             board_tensor = torch.from_numpy(board_array.copy()).to(torch.long)
+            pieces_in_hand_array = np.asarray(
+                data["piecesInHand"], dtype=np.uint8
+            )
+            pieces_in_hand_tensor = torch.from_numpy(
+                pieces_in_hand_array.copy()
+            ).to(torch.float32)
             move_label_tensor = torch.from_numpy(
                 data["moveLabel"].copy()
             ).to(torch.float32)
@@ -123,7 +135,7 @@ class KifDataset(Dataset, Sized):
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
             return (
-                board_tensor,
+                (board_tensor, pieces_in_hand_tensor),
                 (
                     move_label_tensor,
                     result_value_tensor,

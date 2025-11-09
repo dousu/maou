@@ -55,11 +55,14 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
     dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
 
     loader = DataLoader(dataset, batch_size=2)
-    boards, (_, _, legal_move_mask) = next(iter(loader))
+    (boards, pieces), (_, _, legal_move_mask) = next(iter(loader))
 
     assert isinstance(boards, torch.Tensor)
     assert boards.dtype == torch.long
     assert boards.shape == (2, 9, 9)
+    assert isinstance(pieces, torch.Tensor)
+    assert pieces.dtype == torch.float32
+    assert pieces.shape == (2, 14)
     assert isinstance(legal_move_mask, torch.Tensor)
     assert torch.all(legal_move_mask == 1)
 

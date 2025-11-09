@@ -137,9 +137,7 @@ class DataLoaderBenchmark:
                 break
             inputs, _ = batch
             if self.config.device.type == "cuda":
-                inputs = inputs.to(
-                    self.config.device, non_blocking=True
-                )
+                _ = self._move_inputs_to_device(inputs)
                 torch.cuda.synchronize()  # Ensure CUDA operations complete
 
         # Benchmark phase
@@ -157,9 +155,7 @@ class DataLoaderBenchmark:
 
             # Simulate GPU transfer if using CUDA
             if self.config.device.type == "cuda":
-                inputs = inputs.to(
-                    self.config.device, non_blocking=True
-                )
+                inputs = self._move_inputs_to_device(inputs)
                 labels_policy = labels_policy.to(
                     self.config.device, non_blocking=True
                 )
@@ -194,6 +190,18 @@ class DataLoaderBenchmark:
             batches_processed=batches_processed,
             avg_batch_time=avg_batch_time,
         )
+
+    def _move_inputs_to_device(
+        self,
+        inputs: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(inputs, tuple):
+            board, pieces = inputs
+            return (
+                board.to(self.config.device, non_blocking=True),
+                pieces.to(self.config.device, non_blocking=True),
+            )
+        return inputs.to(self.config.device, non_blocking=True)
 
     def run_benchmark(
         self,

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Callable, Literal, Tuple
+from typing import Any, Callable, Literal, Tuple, Union
 
 import torch
 from torch import nn
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.board import shogi
 from maou.domain.model.resnet import (
     BottleneckBlock,
     ResNet as DomainResNet,
@@ -29,6 +30,10 @@ BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (
 
 DEFAULT_BOARD_VOCAB_SIZE = 256
 BOARD_EMBEDDING_DIM = 32
+
+
+ModelInputs = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
+PIECES_IN_HAND_VECTOR_SIZE = len(shogi.MAX_PIECES_IN_HAND) * 2
 
 
 class HeadlessNetwork(nn.Module):
@@ -324,9 +329,12 @@ class Network(HeadlessNetwork):
             input_dim=self.embedding_dim,
             hidden_dim=value_hidden_dim,
         )
+        self._hand_projection = nn.Linear(
+            PIECES_IN_HAND_VECTOR_SIZE, self.embedding_dim
+        )
 
     def forward(
-        self, x: torch.Tensor
+        self, x: ModelInputs
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return policy and value predictions for the given features."""
 
@@ -334,3 +342,26 @@ class Network(HeadlessNetwork):
         policy_logits = self.policy_head(features)
         value_logit = self.value_head(features)
         return policy_logits, value_logit
+
+    def forward_features(self, x: ModelInputs) -> torch.Tensor:
+        board_tensor, hand_tensor = self._separate_inputs(x)
+        features = super().forward_features(board_tensor)
+        if hand_tensor is not None:
+            projected = self._hand_projection(
+                hand_tensor.to(features.dtype)
+            )
+            features = features + projected
+        return features
+
+    @staticmethod
+    def _separate_inputs(
+        inputs: ModelInputs,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if isinstance(inputs, tuple):
+            if len(inputs) != 2:
+                msg = (
+                    "Expected inputs to be a tuple of (board, pieces_in_hand)."
+                )
+                raise ValueError(msg)
+            return inputs[0], inputs[1]
+        return inputs, None

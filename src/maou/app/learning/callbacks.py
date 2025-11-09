@@ -1,7 +1,7 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol, Tuple, Union
 
 import torch
 from torch.utils.tensorboard import (
@@ -16,13 +16,16 @@ from maou.app.learning.resource_monitor import (
 from maou.app.learning.policy_targets import normalize_policy_targets
 
 
+ModelInputs = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
+
+
 @dataclass
 class TrainingContext:
     """Training context passed to callbacks."""
 
     batch_idx: int
     epoch_idx: int
-    inputs: torch.Tensor
+    inputs: ModelInputs
     labels_policy: torch.Tensor
     labels_value: torch.Tensor
     legal_move_mask: Optional[torch.Tensor]

@@ -17,11 +17,12 @@ from maou.app.pre_process.label import MOVE_LABELS_NUM
 def test_network_outputs_have_expected_shapes() -> None:
     network = Network()
     batch_size = 2
-    inputs = torch.randint(
+    boards = torch.randint(
         0, DEFAULT_BOARD_VOCAB_SIZE, (batch_size, 9, 9), dtype=torch.long
     )
+    pieces = torch.randint(0, 3, (batch_size, 14), dtype=torch.float32)
 
-    policy, value = network(inputs)
+    policy, value = network((boards, pieces))
 
     assert policy.shape == (batch_size, MOVE_LABELS_NUM)
     assert value.shape == (batch_size, 1)
@@ -29,9 +30,9 @@ def test_network_outputs_have_expected_shapes() -> None:
 
 def test_backbone_feature_dimension_matches_channels() -> None:
     network = Network()
-    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (3, 9, 9))
+    boards = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (3, 9, 9))
 
-    features = network.forward_features(inputs)
+    features = network.forward_features(boards)
 
     assert features.shape == (3, network.embedding_dim)
 
@@ -40,9 +41,10 @@ def test_network_allows_custom_head_configuration() -> None:
     network = Network(
         policy_hidden_dim=128, value_hidden_dim=64
     )
-    inputs = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (1, 9, 9))
+    boards = torch.randint(0, DEFAULT_BOARD_VOCAB_SIZE, (1, 9, 9))
+    pieces = torch.zeros((1, 14), dtype=torch.float32)
 
-    policy, value = network(inputs)
+    policy, value = network((boards, pieces))
 
     assert policy.shape == (1, MOVE_LABELS_NUM)
     assert value.shape == (1, 1)
