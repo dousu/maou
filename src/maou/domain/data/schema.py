@@ -10,7 +10,6 @@ from typing import Any, Dict
 import numpy as np
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.compression import (
     unpack_preprocessing_fields,
 )
@@ -104,7 +103,7 @@ def get_intermediate_dtype() -> np.dtype:
 def get_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for preprocessed training data.
 
-    This schema is used for storing neural network training features
+    This schema is used for storing neural network training inputs
     after preprocessing HCPE data.
 
     Returns:
@@ -114,10 +113,15 @@ def get_preprocessing_dtype() -> np.dtype:
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features",
+                "boardIdPositions",
                 np.uint8,
-                (FEATURES_NUM, 9, 9),
-            ),  # Board feature representation
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (7,),
+            ),  # Pieces in hand for both players
             (
                 "moveLabel",
                 np.float16,
@@ -134,25 +138,25 @@ def get_preprocessing_dtype() -> np.dtype:
 def get_packed_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for bit-packed compressed preprocessed training data.
 
-    This schema uses bit packing to compress the features field,
-    achieving significant storage reduction for this binary field.
+    This schema maintains compatibility with storage backends that
+    expect the compressed preprocessing representation.
 
     Returns:
         numpy.dtype: Structured dtype for compressed preprocessed training data
     """
-    # Calculate packed sizes (bits rounded up to byte boundary)
-    features_packed_size = (
-        FEATURES_NUM * 9 * 9 + 7
-    ) // 8  # 1053 bytes
-
     return np.dtype(
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features_packed",
+                "boardIdPositions",
                 np.uint8,
-                (features_packed_size,),
-            ),  # Bit-packed board features
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (7,),
+            ),  # Pieces in hand for both players
             (
                 "moveLabel",
                 np.float16,
@@ -362,15 +366,28 @@ def validate_preprocessing_array(array: np.ndarray) -> bool:
                 "resultValue values out of range [0.0, 1.0]"
             )
 
-        # Check features shape
-        expected_features_shape = (FEATURES_NUM, 9, 9)
+        # Check boardIdPositions shape
+        expected_board_shape = (9, 9)
         if (
-            array["features"].shape[1:]
-            != expected_features_shape
+            array["boardIdPositions"].shape[1:]
+            != expected_board_shape
         ):
             raise SchemaValidationError(
-                f"Invalid features shape. Expected: {expected_features_shape}, "
-                f"Got: {array['features'].shape[1:]}"
+                "Invalid boardIdPositions shape. "
+                f"Expected: {expected_board_shape}, "
+                f"Got: {array['boardIdPositions'].shape[1:]}"
+            )
+
+        # Check piecesInHand shape
+        expected_hand_shape = (7,)
+        if (
+            array["piecesInHand"].shape[1:]
+            != expected_hand_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid piecesInHand shape. "
+                f"Expected: {expected_hand_shape}, "
+                f"Got: {array['piecesInHand'].shape[1:]}"
             )
 
     return True
@@ -420,17 +437,28 @@ def validate_compressed_preprocessing_array(
                 "resultValue values out of range [0.0, 1.0]"
             )
 
-        # Check packed features shape
-        features_packed_size = (FEATURES_NUM * 9 * 9 + 7) // 8
-        expected_features_packed_shape = (features_packed_size,)
+        # Check boardIdPositions shape
+        expected_board_shape = (9, 9)
         if (
-            array["features_packed"].shape[1:]
-            != expected_features_packed_shape
+            array["boardIdPositions"].shape[1:]
+            != expected_board_shape
         ):
             raise SchemaValidationError(
-                f"Invalid features_packed shape. Expected: "
-                f"{expected_features_packed_shape}, Got: "
-                f"{array['features_packed'].shape[1:]}"
+                "Invalid boardIdPositions shape. "
+                f"Expected: {expected_board_shape}, "
+                f"Got: {array['boardIdPositions'].shape[1:]}"
+            )
+
+        # Check piecesInHand shape
+        expected_hand_shape = (7,)
+        if (
+            array["piecesInHand"].shape[1:]
+            != expected_hand_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid piecesInHand shape. "
+                f"Expected: {expected_hand_shape}, "
+                f"Got: {array['piecesInHand'].shape[1:]}"
             )
 
     return True
@@ -464,7 +492,8 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
             "description": "Preprocessed training data for neural networks",
             "fields": {
                 "id": "Unique identifier",
-                "features": f"Board feature representation ({FEATURES_NUM}, 9, 9)",
+                "boardIdPositions": "Board position identifiers (9, 9)",
+                "piecesInHand": "Pieces in hand counts (7,)",
                 "moveLabel": (
                     "Move label for training "
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
@@ -475,14 +504,12 @@ def get_schema_info() -> Dict[str, Dict[str, Any]]:
         "packed_preprocessing": {
             "dtype": get_packed_preprocessing_dtype(),
             "description": (
-                "Bit-packed compressed preprocessed training data (8x size reduction)"
+                "Compressed-compatible preprocessed training data representation"
             ),
             "fields": {
                 "id": "Unique identifier",
-                "features_packed": (
-                    f"Bit-packed board features "
-                    f"({(FEATURES_NUM * 9 * 9 + 7) // 8} bytes)"
-                ),
+                "boardIdPositions": "Board position identifiers (9, 9)",
+                "piecesInHand": "Pieces in hand counts (7,)",
                 "moveLabel": (
                     "Move label for training "
                     f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
@@ -570,11 +597,17 @@ def convert_array_from_packed_format(
         "resultValue"
     ]
 
-    # Unpack binary fields for each record
+    # Copy structured fields for each record with validation
     for i in range(len(compressed_array)):
-        packed_features = compressed_array[i]["features_packed"]
-        features = unpack_preprocessing_fields(packed_features)
-        standard_array[i]["features"] = features
+        (
+            board_positions,
+            pieces_in_hand,
+        ) = unpack_preprocessing_fields(
+            compressed_array[i]["boardIdPositions"],
+            compressed_array[i]["piecesInHand"],
+        )
+        standard_array[i]["boardIdPositions"] = board_positions
+        standard_array[i]["piecesInHand"] = pieces_in_hand
 
     return standard_array
 
@@ -605,10 +638,16 @@ def convert_record_from_packed_format(
         "resultValue"
     ]
 
-    # Unpack binary fields for each record
-    packed_features = compressed_record["features_packed"]
-    features = unpack_preprocessing_fields(packed_features)
-    standard_array["features"] = features
+    # Copy structured fields with validation
+    (
+        board_positions,
+        pieces_in_hand,
+    ) = unpack_preprocessing_fields(
+        compressed_record["boardIdPositions"],
+        compressed_record["piecesInHand"],
+    )
+    standard_array["boardIdPositions"] = board_positions
+    standard_array["piecesInHand"] = pieces_in_hand
 
     return standard_array
 

@@ -16,8 +16,7 @@ import numpy as np
 from maou.domain.data.compression import (
     compress_sparse_int_array,
     decompress_sparse_int_array,
-    pack_features_array,
-    unpack_features_array,
+    unpack_preprocessing_fields,
 )
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
@@ -209,7 +208,10 @@ class IntermediateDataStore:
                     "moveLabelCount": data[
                         "moveLabelCount"
                     ].copy(),
-                    "features": data["features"],
+                    "boardIdPositions": data[
+                        "boardIdPositions"
+                    ],
+                    "piecesInHand": data["piecesInHand"],
                 }
 
         # Flush buffer if it exceeds batch size
@@ -290,9 +292,17 @@ class IntermediateDataStore:
                     )
                 else:
                     # Insert new record
-                    # Compress features using bit packing
-                    packed_features = pack_features_array(
-                        data["features"]
+                    (
+                        board_positions,
+                        pieces_in_hand,
+                    ) = unpack_preprocessing_fields(
+                        np.asarray(
+                            data["boardIdPositions"],
+                            dtype=np.uint8,
+                        ),
+                        np.asarray(
+                            data["piecesInHand"], dtype=np.uint8
+                        ),
                     )
 
                     # Compress sparse move_label_count
@@ -319,7 +329,10 @@ class IntermediateDataStore:
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                packed_features,
+                                (
+                                    board_positions,
+                                    pieces_in_hand,
+                                ),
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                         ),
@@ -582,10 +595,16 @@ class IntermediateDataStore:
                 move_label_count = decompress_sparse_int_array(
                     indices, values, 1496
                 )
-                # Decompress features from bit-packed format
-                packed_features = pickle.loads(features_blob)
-                features = unpack_features_array(
-                    packed_features
+                # Load board representation fields
+                board_positions_raw, pieces_in_hand_raw = (
+                    pickle.loads(features_blob)
+                )
+                (
+                    board_positions,
+                    pieces_in_hand,
+                ) = unpack_preprocessing_fields(
+                    board_positions_raw,
+                    pieces_in_hand_raw,
                 )
 
                 # Convert to native Python types
@@ -594,7 +613,10 @@ class IntermediateDataStore:
 
                 # Populate output array (convert hash_id back to uint64)
                 chunk_data["id"][i] = int(hash_id)
-                chunk_data["features"][i] = features
+                chunk_data["boardIdPositions"][i] = (
+                    board_positions
+                )
+                chunk_data["piecesInHand"][i] = pieces_in_hand
                 chunk_data["moveLabel"][i] = (
                     move_label_count / count
                 )

@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.data.array_io import (
     DataIOError,
     load_hcpe_array,
@@ -105,9 +104,11 @@ class TestPreprocessingIO:
         original_array["resultValue"] = [1.0, 0.0, 0.5]
         original_array["id"] = [324552, 38948128, 21312344113]
 
-        # Fill features
-        original_array["features"] = np.random.randint(
-            0, 256, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
+        original_array["boardIdPositions"] = np.random.randint(
+            0, 255, (3, 9, 9), dtype=np.uint8
+        )
+        original_array["piecesInHand"] = np.random.randint(
+            0, 10, (3, 7), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"
@@ -141,9 +142,11 @@ class TestPreprocessingIO:
         original_array["resultValue"] = [1.0, 0.0, 0.5]
         original_array["id"] = [324552, 38948128, 21312344113]
 
-        # Fill features
-        original_array["features"] = np.random.randint(
-            0, 2, (3, FEATURES_NUM, 9, 9), dtype=np.uint8
+        original_array["boardIdPositions"] = np.random.randint(
+            0, 255, (3, 9, 9), dtype=np.uint8
+        )
+        original_array["piecesInHand"] = np.random.randint(
+            0, 10, (3, 7), dtype=np.uint8
         )
 
         file_path = Path(tmp_path) / "test_preprocessing.npy"
