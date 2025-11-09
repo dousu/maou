@@ -4,7 +4,6 @@ import numpy as np
 
 from maou.app.pre_process.feature import (
     make_board_id_positions,
-    make_feature,
     make_pieces_in_hand,
 )
 from maou.app.pre_process.label import (
@@ -31,7 +30,7 @@ class Transform:
         move16: int,
         game_result: int,
         eval: int,
-    ) -> tuple[np.ndarray, int, float, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, int, float, np.ndarray]:
         """Transform HCPE data into training features.
 
         Args:
@@ -41,7 +40,8 @@ class Transform:
             eval: Position evaluation score
 
         Returns:
-            Tuple of (features, move_label, result_value, legal_move_mask)
+            Tuple of (board_id_positions, pieces_in_hand, move_label,
+            result_value, legal_move_mask)
         """
 
         # self.logger.debug(f"hcp type: {type(hcp)}")
@@ -51,8 +51,8 @@ class Transform:
         board.set_hcp(hcp)
 
         try:
-            # 入力特徴量
-            features = make_feature(board)
+            board_id_positions = make_board_id_positions(board)
+            pieces_in_hand = make_pieces_in_hand(board)
 
             # 教師データ
             # move label
@@ -92,7 +92,8 @@ class Transform:
             raise
 
         return (
-            features,
+            board_id_positions,
+            pieces_in_hand,
             move_label,
             result_value,
             legal_move_mask,

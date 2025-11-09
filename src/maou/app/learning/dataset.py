@@ -8,9 +8,6 @@ import torch
 from torch.utils.data import Dataset
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.app.pre_process.feature import (
-    make_feature_from_board_state,
-)
 from maou.app.pre_process.transform import Transform
 
 
@@ -58,7 +55,8 @@ class KifDataset(Dataset, Sized):
                 idx
             ]  # numpy structured array (0次元)
             (
-                features,
+                board_id_positions,
+                _pieces_in_hand,
                 move_label,
                 result_value,
                 legal_move_mask,
@@ -71,9 +69,9 @@ class KifDataset(Dataset, Sized):
 
             # torch.from_numpy()を使用してゼロコピー変換
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
-            features_tensor = torch.from_numpy(features).to(
-                torch.float32
-            )
+            board_tensor = torch.from_numpy(
+                board_id_positions.copy()
+            ).to(torch.long)
             legal_move_mask_tensor = torch.from_numpy(
                 legal_move_mask
             ).to(torch.float32)
@@ -88,7 +86,7 @@ class KifDataset(Dataset, Sized):
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
             return (
-                features_tensor,
+                board_tensor,
                 (
                     move_label_tensor,
                     result_value_tensor,
@@ -105,31 +103,14 @@ class KifDataset(Dataset, Sized):
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
             if (
                 data.dtype.names is None
-                or (
-                    "features" not in data.dtype.names
-                    and (
-                        "boardIdPositions" not in data.dtype.names
-                        or "piecesInHand" not in data.dtype.names
-                    )
-                )
+                or "boardIdPositions" not in data.dtype.names
             ):
-                raise ValueError(
-                    "Preprocessed record lacks required feature fields"
-                )
+                raise ValueError("Preprocessed record lacks boardIdPositions")
 
-            if "features" in data.dtype.names:
-                features_array = np.asarray(
-                    data["features"], dtype=np.uint8
-                )
-            else:
-                features_array = make_feature_from_board_state(
-                    np.asarray(data["boardIdPositions"], dtype=np.uint8),
-                    np.asarray(data["piecesInHand"], dtype=np.uint8),
-                )
-
-            features_tensor = torch.from_numpy(features_array.copy()).to(
-                torch.float32
+            board_array = np.asarray(
+                data["boardIdPositions"], dtype=np.uint8
             )
+            board_tensor = torch.from_numpy(board_array.copy()).to(torch.long)
             move_label_tensor = torch.from_numpy(
                 data["moveLabel"].copy()
             ).to(torch.float32)
@@ -142,7 +123,7 @@ class KifDataset(Dataset, Sized):
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
             return (
-                features_tensor,
+                board_tensor,
                 (
                     move_label_tensor,
                     result_value_tensor,

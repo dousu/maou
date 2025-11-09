@@ -8,7 +8,6 @@ import torch
 from maou.app.learning.network import Network
 from maou.app.learning.setup import ModelFactory
 from maou.domain.cloud_storage import CloudStorage
-from maou.app.pre_process.feature import make_feature_from_board_state
 from maou.domain.data.schema import create_empty_preprocessing_array
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -78,12 +77,11 @@ class ModelIO:
             "Saving model to {}".format(onnx_model_path)
         )
         dummy_data = create_empty_preprocessing_array(1)
-        dummy_features = make_feature_from_board_state(
-            np.asarray(dummy_data[0]["boardIdPositions"], dtype=np.uint8),
-            np.asarray(dummy_data[0]["piecesInHand"], dtype=np.uint8),
+        dummy_board = np.asarray(
+            dummy_data[0]["boardIdPositions"], dtype=np.uint8
         )
         dummy_input = (
-            torch.from_numpy(dummy_features.astype(np.float32))
+            torch.from_numpy(dummy_board.astype(np.int64))
             .unsqueeze(0)
             .to(device)
         )

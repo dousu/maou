@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
@@ -54,8 +55,29 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
     dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
 
     loader = DataLoader(dataset, batch_size=2)
-    _, (_, _, legal_move_mask) = next(iter(loader))
+    boards, (_, _, legal_move_mask) = next(iter(loader))
 
+    assert isinstance(boards, torch.Tensor)
+    assert boards.dtype == torch.long
+    assert boards.shape == (2, 9, 9)
     assert isinstance(legal_move_mask, torch.Tensor)
     assert torch.all(legal_move_mask == 1)
+
+
+def test_dataset_requires_board_identifiers() -> None:
+    """Datasets missing board ID grids should raise a helpful error."""
+
+    dtype = np.dtype(
+        [
+            ("features", np.uint8, (4, 9, 9)),
+            ("moveLabel", np.float32, (5,)),
+            ("resultValue", np.float32),
+        ]
+    )
+    data = np.zeros(1, dtype=dtype)
+
+    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+
+    with pytest.raises(ValueError):
+        dataset[0]
 

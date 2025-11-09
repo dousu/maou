@@ -3,9 +3,45 @@ import logging
 import numpy as np
 
 from maou.app.pre_process import feature
+from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.app.pre_process.transform import Transform
+from maou.domain.board import shogi
 from maou.domain.board.shogi import FEATURES_NUM, Board, PieceId, Turn
 
 logger: logging.Logger = logging.getLogger("TEST")
+
+
+def test_transform_returns_board_ids() -> None:
+    """Transform should emit board identifiers instead of feature planes."""
+
+    board = shogi.Board()
+    board.set_sfen(
+        "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/"
+        "LNSGKGSNL b - 1"
+    )
+    hcp = board.get_hcp()[0]["hcp"]
+    move = next(board.get_legal_moves())
+    move16 = shogi.move16(move)
+
+    transform = Transform()
+    (
+        board_ids,
+        pieces_in_hand,
+        _move_label,
+        _result_value,
+        legal_mask,
+    ) = transform(
+        hcp=hcp,
+        move16=move16,
+        game_result=shogi.Result.DRAW,
+        eval=0,
+    )
+
+    assert board_ids.shape == (9, 9)
+    assert board_ids.dtype == np.uint8
+    assert pieces_in_hand.shape == (14,)
+    assert pieces_in_hand.dtype == np.uint8
+    assert legal_mask.shape == (MOVE_LABELS_NUM,)
 
 
 class TestFeature:

@@ -11,9 +11,6 @@ from maou.app.learning.masked_autoencoder import (
     ModelFactory,
     _MaskedAutoencoder,
 )
-from maou.domain.board.shogi import FEATURES_NUM
-
-
 class _DummyBackbone(torch.nn.Module):
     """Lightweight encoder stub returning a fixed embedding."""
 
@@ -80,7 +77,7 @@ def test_masked_autoencoder_uses_encoder_embedding_dim(
         classmethod(_create_backbone),
     )
 
-    feature_shape = (3, 4, 5)
+    feature_shape = (9, 9)
     model = _MaskedAutoencoder(
         feature_shape=feature_shape,
         hidden_dim=16,
@@ -90,8 +87,8 @@ def test_masked_autoencoder_uses_encoder_embedding_dim(
     decoder_linear = model.decoder[0]
     assert isinstance(decoder_linear, torch.nn.Linear)
     assert decoder_linear.in_features == embedding_dim
-    flattened_size = feature_shape[0] * feature_shape[1] * feature_shape[2]
-    inputs = torch.randn(2, flattened_size)
+    flattened_size = feature_shape[0] * feature_shape[1]
+    inputs = torch.randint(0, 10, (2, flattened_size))
     outputs = model(inputs)
     assert outputs.shape == (2, flattened_size)
 
@@ -155,7 +152,7 @@ def test_persisted_state_dict_matches_training_model(
 
     pretraining = MaskedAutoencoderPretraining()
     autoencoder = _MaskedAutoencoder(
-        feature_shape=(FEATURES_NUM, 9, 9),
+        feature_shape=(9, 9),
         hidden_dim=128,
         device=torch.device("cpu"),
     )
