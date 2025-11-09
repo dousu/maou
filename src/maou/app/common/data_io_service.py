@@ -5,6 +5,7 @@ bridging between the interface and domain layers while maintaining
 Clean Architecture dependency rules.
 """
 
+import errno
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +28,17 @@ from maou.domain.data.array_io import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _is_memory_allocation_error(error: DataIOError) -> bool:
+    """Check whether the provided error originated from memory exhaustion."""
+
+    cause = getattr(error, "__cause__", None)
+    if isinstance(cause, MemoryError):
+        return True
+    if isinstance(cause, OSError) and cause.errno == errno.ENOMEM:
+        return True
+    return "Cannot allocate memory" in str(error)
 
 
 class DataIOService:
@@ -67,28 +79,67 @@ class DataIOService:
                 return load_hcpe_array(
                     file_path, mmap_mode=mmap_mode
                 )
-            elif array_type == "preprocessing":
+            if array_type == "preprocessing":
                 return load_preprocessing_array(
                     file_path,
                     mmap_mode=mmap_mode,
                     bit_pack=bit_pack,
                 )
-            else:
-                logger.error(
-                    f"Unknown array type '{array_type}', "
-                    f"Failed to load array from {file_path}"
-                )
-                raise DataIOArrayTypeError(
-                    f"Unknown array type '{array_type}'"
-                )
 
-        except Exception as e:
             logger.error(
-                f"Failed to load array from {file_path}: {e}"
+                f"Unknown array type '{array_type}', "
+                f"Failed to load array from {file_path}"
+            )
+            raise DataIOArrayTypeError(
+                f"Unknown array type '{array_type}'"
+            )
+
+        except DataIOError as error:
+            if (
+                mmap_mode is None
+                and _is_memory_allocation_error(error)
+            ):
+                logger.warning(
+                    "Memory allocation failed while loading %s; "
+                    "retrying with memory mapping.",
+                    file_path,
+                )
+                try:
+                    if array_type == "hcpe":
+                        return load_hcpe_array(
+                            file_path,
+                            mmap_mode="r",
+                        )
+                    if array_type == "preprocessing":
+                        return load_preprocessing_array(
+                            file_path,
+                            mmap_mode="r",
+                            bit_pack=bit_pack,
+                        )
+                except DataIOError as retry_error:
+                    logger.error(
+                        "Memory mapping retry also failed for %s: %s",
+                        file_path,
+                        retry_error,
+                    )
+                    raise DataIOError(
+                        "Failed to load array from "
+                        f"{file_path}: {retry_error}"
+                    ) from retry_error
+
+            logger.error(
+                f"Failed to load array from {file_path}: {error}"
             )
             raise DataIOError(
-                f"Failed to load array from {file_path}: {e}"
-            ) from e
+                f"Failed to load array from {file_path}: {error}"
+            ) from error
+        except Exception as error:
+            logger.error(
+                f"Failed to load array from {file_path}: {error}"
+            )
+            raise DataIOError(
+                f"Failed to load array from {file_path}: {error}"
+            ) from error
 
     @staticmethod
     def save_array(

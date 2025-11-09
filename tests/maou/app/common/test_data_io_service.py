@@ -1,7 +1,9 @@
 """Tests for data I/O service."""
 
+import errno
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -197,6 +199,42 @@ class TestDataIOService:
                     file_path,
                     array_type="invalid",  # type: ignore
                 )
+
+    def test_load_array_fallback_to_mmap_on_memory_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure memory errors trigger the automatic mmap fallback."""
+
+        hcpe_array = create_empty_hcpe_array(3)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "memory_error.npy"
+
+            from maou.domain.data.array_io import (
+                save_hcpe_array,
+            )
+
+            save_hcpe_array(hcpe_array, file_path)
+
+            def _raise_memory_error(*args: Any, **kwargs: Any) -> np.ndarray:
+                raise OSError(errno.ENOMEM, "Cannot allocate memory")
+
+            monkeypatch.setattr(
+                "numpy.fromfile",
+                _raise_memory_error,
+            )
+
+            loaded_array = DataIOService.load_array(
+                file_path,
+                array_type="hcpe",
+            )
+
+            assert isinstance(loaded_array, np.memmap)
+            np.testing.assert_array_equal(
+                loaded_array,
+                hcpe_array,
+            )
 
     def test_load_file_not_found(self) -> None:
         """Test error handling for non-existent file."""

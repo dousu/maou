@@ -37,6 +37,61 @@ class DataIOArrayTypeError(Exception):
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _load_numpy_memmap(
+    *,
+    file_path: Path,
+    dtype: np.dtype,
+    mmap_mode: Literal["r", "r+", "w+", "c"],
+) -> Optional[Union[np.ndarray, np.memmap]]:
+    """Try loading `.npy` files using numpy's memmap support.
+
+    Args:
+        file_path: Path to the target file.
+        dtype: Expected structured dtype for validation.
+        mmap_mode: Memory mapping mode to request from numpy.
+
+    Returns:
+        Optional[Union[np.ndarray, np.memmap]]: Loaded memmap array when
+        successful, otherwise ``None`` to signal fallback usage.
+    """
+
+    if file_path.suffix.lower() != ".npy":
+        return None
+
+    try:
+        array = np.load(
+            file_path,
+            mmap_mode=mmap_mode,
+            allow_pickle=False,
+        )
+    except ValueError as exc:
+        logger.debug(
+            "numpy.load could not interpret %s as an .npy file: %s",
+            file_path,
+            exc,
+        )
+        return None
+    except OSError as exc:
+        logger.debug(
+            "numpy.load failed to memory-map %s: %s",
+            file_path,
+            exc,
+        )
+        return None
+
+    if array.dtype != dtype:
+        logger.debug(
+            "numpy.load returned dtype %s for %s, expected %s; falling back to "
+            "manual memmap handling.",
+            array.dtype,
+            file_path,
+            dtype,
+        )
+        return None
+
+    return array
+
+
 def save_hcpe_array(
     array: np.ndarray,
     file_path: Path,
@@ -94,12 +149,23 @@ def load_hcpe_array(
         dtype = get_hcpe_dtype()
         array: Union[np.ndarray, np.memmap]
         if mmap_mode:
-            array = np.memmap(
-                file_path, dtype=dtype, mode=mmap_mode
+            array = _load_numpy_memmap(
+                file_path=file_path,
+                dtype=dtype,
+                mmap_mode=mmap_mode,
             )
-            logger.debug(
-                f"Loaded HCPE array as memmap from {file_path}"
-            )
+            if array is None:
+                array = np.memmap(
+                    file_path, dtype=dtype, mode=mmap_mode
+                )
+                logger.debug(
+                    f"Loaded HCPE array as memmap from {file_path}"
+                )
+            else:
+                logger.debug(
+                    "Loaded HCPE array using numpy.load with memory mapping "
+                    f"from {file_path}"
+                )
         else:
             array = np.fromfile(file_path, dtype=dtype)
             logger.debug(
@@ -238,12 +304,24 @@ def load_preprocessing_array(
             dtype = get_preprocessing_dtype()
 
             if mmap_mode:
-                array = np.memmap(
-                    file_path, dtype=dtype, mode=mmap_mode
+                array = _load_numpy_memmap(
+                    file_path=file_path,
+                    dtype=dtype,
+                    mmap_mode=mmap_mode,
                 )
-                logger.debug(
-                    f"Loaded preprocessing array as memmap from {file_path}"
-                )
+                if array is None:
+                    array = np.memmap(
+                        file_path, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        "Loaded preprocessing array as memmap from "
+                        f"{file_path}"
+                    )
+                else:
+                    logger.debug(
+                        "Loaded preprocessing array using numpy.load with "
+                        f"memory mapping from {file_path}"
+                    )
             else:
                 array = np.fromfile(file_path, dtype=dtype)
                 logger.debug(
@@ -287,12 +365,24 @@ def load_packed_preprocessing_array(
         # Load bit-packed format
         dtype = get_packed_preprocessing_dtype()
         if mmap_mode:
-            array = np.memmap(
-                file_path, dtype=dtype, mode=mmap_mode
+            array = _load_numpy_memmap(
+                file_path=file_path,
+                dtype=dtype,
+                mmap_mode=mmap_mode,
             )
-            logger.debug(
-                f"Loaded bit-packed preprocessing array as memmap from {file_path}"
-            )
+            if array is None:
+                array = np.memmap(
+                    file_path, dtype=dtype, mode=mmap_mode
+                )
+                logger.debug(
+                    "Loaded bit-packed preprocessing array as memmap "
+                    f"from {file_path}"
+                )
+            else:
+                logger.debug(
+                    "Loaded bit-packed preprocessing array using numpy.load "
+                    f"with memory mapping from {file_path}"
+                )
         else:
             array = np.fromfile(file_path, dtype=dtype)
             logger.debug(
