@@ -8,7 +8,6 @@ from typing import Any, Callable, Literal, Tuple
 import torch
 from torch import nn
 
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.model.resnet import (
     BottleneckBlock,
@@ -28,6 +27,9 @@ BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (
     "vit",
 )
 
+DEFAULT_BOARD_VOCAB_SIZE = 256
+BOARD_EMBEDDING_DIM = 32
+
 
 class HeadlessNetwork(nn.Module):
     """Headless shogi backbone supporting ResNet, MLP-Mixer, and ViT."""
@@ -35,7 +37,8 @@ class HeadlessNetwork(nn.Module):
     def __init__(
         self,
         *,
-        num_channels: int = FEATURES_NUM,
+        board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
+        embedding_dim: int = BOARD_EMBEDDING_DIM,
         board_size: Tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
@@ -47,8 +50,10 @@ class HeadlessNetwork(nn.Module):
     ) -> None:
         super().__init__()
         self.architecture: BackboneArchitecture = architecture
-        self._num_channels = num_channels
+        self.board_vocab_size = board_vocab_size
         self._board_size = board_size
+        self._embedding_channels = embedding_dim
+        self.embedding = nn.Embedding(board_vocab_size, embedding_dim)
         config: dict[str, Any] = dict(architecture_config or {})
 
         if architecture == "resnet":
@@ -67,7 +72,7 @@ class HeadlessNetwork(nn.Module):
             self.backbone: DomainResNet | ShogiMLPMixer | VisionTransformer = (
                 DomainResNet(
                     block=block,
-                    in_channels=num_channels,
+                    in_channels=embedding_dim,
                     layers=list(layers),
                     strides=list(strides),
                     list_out_channels=list(out_channels),
@@ -80,7 +85,7 @@ class HeadlessNetwork(nn.Module):
         elif architecture == "mlp-mixer":
             mixer_kwargs: dict[str, Any] = {
                 "num_classes": None,
-                "num_channels": num_channels,
+                "num_channels": embedding_dim,
                 "num_tokens": board_size[0] * board_size[1],
             }
             mixer_kwargs.update(config)
@@ -92,7 +97,7 @@ class HeadlessNetwork(nn.Module):
                 msg = "Vision Transformer requires square board dimensions."
                 raise ValueError(msg)
             vit_kwargs: dict[str, Any] = {
-                "input_channels": num_channels,
+                "input_channels": embedding_dim,
                 "board_size": board_size[0],
                 "use_head": False,
             }
@@ -114,9 +119,9 @@ class HeadlessNetwork(nn.Module):
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         """Return pooled convolutional features from the shared backbone."""
 
-        self._validate_inputs(x)
+        inputs = self._prepare_inputs(x)
         if self.architecture == "resnet":
-            features = self.backbone(x)
+            features = self.backbone(inputs)
             pooled = self.pool(features)
             return torch.flatten(pooled, 1)
 
@@ -127,7 +132,7 @@ class HeadlessNetwork(nn.Module):
             )
             raise RuntimeError(msg)
         forward_fn: Callable[[torch.Tensor], torch.Tensor] = backbone_forward
-        return forward_fn(x)
+        return forward_fn(inputs)
 
     def forward(
         self, x: torch.Tensor
@@ -136,26 +141,52 @@ class HeadlessNetwork(nn.Module):
 
         return self.forward_features(x)
 
-    def _validate_inputs(self, x: torch.Tensor) -> None:
-        if x.dim() != 4:
-            msg = (
-                "ResNet expects inputs of shape (batch, channels, height, width)."
-            )
-            raise ValueError(msg)
+    def _prepare_inputs(self, x: torch.Tensor) -> torch.Tensor:
+        input_type, tensor = self._validate_inputs(x)
+        if input_type == "embedded":
+            return tensor
 
-        _, channels, height, width = x.shape
-        if channels != self._num_channels:
-            msg = (
-                f"Expected {self._num_channels} channels but received "
-                f"{channels}."
-            )
-            raise ValueError(msg)
-        if (height, width) != self._board_size:
-            msg = (
-                "Input board dimensions must match the configured board size. "
-                f"Expected {self._board_size} but received {(height, width)}."
-            )
-            raise ValueError(msg)
+        board_tensor = tensor.to(torch.long)
+        embedded = self.embedding(board_tensor)
+        return embedded.permute(0, 3, 1, 2).contiguous()
+
+    def _validate_inputs(
+        self, x: torch.Tensor
+    ) -> tuple[Literal["board", "embedded"], torch.Tensor]:
+        if x.dim() == 3:
+            height, width = x.shape[1:]
+            if (height, width) != self._board_size:
+                msg = (
+                    "Input board dimensions must match the configured board size. "
+                    f"Expected {self._board_size} but received {(height, width)}."
+                )
+                raise ValueError(msg)
+            if torch.is_floating_point(x):
+                msg = "Board identifiers must be integral tensors."
+                raise ValueError(msg)
+            return "board", x
+
+        if x.dim() == 4:
+            _, channels, height, width = x.shape
+            if (height, width) != self._board_size:
+                msg = (
+                    "Input board dimensions must match the configured board size. "
+                    f"Expected {self._board_size} but received {(height, width)}."
+                )
+                raise ValueError(msg)
+            if channels == 1:
+                if torch.is_floating_point(x):
+                    msg = "Board identifiers must be integral tensors."
+                    raise ValueError(msg)
+                return "board", x.squeeze(1)
+            if channels == self._embedding_channels:
+                return "embedded", x
+
+        msg = (
+            "Inputs must be integer board IDs with shape (batch, 9, 9) or "
+            "embedded features shaped (batch, channels, 9, 9)."
+        )
+        raise ValueError(msg)
 
     def load_state_dict(
         self,
@@ -173,11 +204,17 @@ class HeadlessNetwork(nn.Module):
         backbone_state = {
             key: value
             for key, value in state_dict.items()
-            if key.startswith("backbone.")
+            if key.startswith("backbone.") or key.startswith("embedding.")
         }
         return super().load_state_dict(
             backbone_state, strict=strict, assign=assign
         )
+
+    @property
+    def input_channels(self) -> int:
+        """Return the number of channels produced by the board embedding."""
+
+        return self._embedding_channels
 
 
 class PolicyHead(nn.Module):
@@ -253,7 +290,8 @@ class Network(HeadlessNetwork):
         self,
         *,
         num_policy_classes: int = MOVE_LABELS_NUM,
-        num_channels: int = FEATURES_NUM,
+        board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
+        embedding_dim: int = BOARD_EMBEDDING_DIM,
         board_size: Tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
@@ -266,7 +304,8 @@ class Network(HeadlessNetwork):
         architecture_config: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
-            num_channels=num_channels,
+            board_vocab_size=board_vocab_size,
+            embedding_dim=embedding_dim,
             board_size=board_size,
             architecture=architecture,
             block=block,
