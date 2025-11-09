@@ -19,9 +19,16 @@ def _create_dummy_datasource(
 ) -> FileDataSource.FileDataSourceSpliter:
     array = create_empty_preprocessing_array(samples)
     rng = np.random.default_rng(123)
-    array["features"] = (
-        (rng.random((samples, 104, 9, 9)) > 0.5).astype(np.uint8)
+    array["boardIdPositions"] = rng.integers(
+        0, 30, size=(samples, 9, 9), dtype=np.uint8
     )
+    array["piecesInHand"] = rng.integers(
+        0, 2, size=(samples, 14), dtype=np.uint8
+    )
+    move_label = rng.random((samples, array["moveLabel"].shape[1]))
+    move_label /= move_label.sum(axis=1, keepdims=True)
+    array["moveLabel"] = move_label.astype(np.float16)
+    array["resultValue"] = rng.random(samples).astype(np.float16)
     file_path = directory / "preprocessing.npy"
     save_array(
         array,

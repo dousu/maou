@@ -2,7 +2,11 @@ import logging
 
 import numpy as np
 
-from maou.app.pre_process.feature import make_feature
+from maou.app.pre_process.feature import (
+    make_board_id_positions,
+    make_feature,
+    make_pieces_in_hand,
+)
 from maou.app.pre_process.label import (
     MOVE_LABELS_NUM,
     make_move_label,
@@ -149,18 +153,23 @@ class Transform:
         return make_result_value(board.get_turn(), game_result)
 
     @staticmethod
-    def board_feature(hcp: np.ndarray) -> np.ndarray:
-        """HCP形式の盤面から、駒配置の特徴量を取得する.
+    def board_feature(
+        hcp: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """HCP形式の盤面から、盤面IDと持ち駒情報を取得する.
 
         Args:
             hcp: HCP形式の盤面
 
         Returns:
-            駒配置の特徴量 (FEATURES_NUM x 9 x 9)
+            盤面ID (9x9) と持ち駒情報 (14,)
         """
         board = shogi.Board()
         board.set_hcp(hcp)
-        return make_feature(board)
+        return (
+            make_board_id_positions(board),
+            make_pieces_in_hand(board),
+        )
 
     @staticmethod
     def board_legal_move_mask(hcp: np.ndarray) -> np.ndarray:

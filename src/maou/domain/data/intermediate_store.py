@@ -172,7 +172,8 @@ class IntermediateDataStore:
                 count INTEGER NOT NULL,
                 win_count REAL NOT NULL,
                 move_label_count BLOB NOT NULL,
-                features BLOB NOT NULL
+                board_id_positions BLOB NOT NULL,
+                pieces_in_hand BLOB NOT NULL
             )
             """
         )
@@ -314,8 +315,8 @@ class IntermediateDataStore:
                         """
                         INSERT INTO intermediate_data
                         (hash_id, count, win_count, move_label_count,
-                         features)
-                        VALUES (?, ?, ?, ?, ?)
+                         board_id_positions, pieces_in_hand)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (
                             hash_id_str,
@@ -329,10 +330,11 @@ class IntermediateDataStore:
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                             pickle.dumps(
-                                (
-                                    board_positions,
-                                    pieces_in_hand,
-                                ),
+                                board_positions,
+                                protocol=pickle.HIGHEST_PROTOCOL,
+                            ),
+                            pickle.dumps(
+                                pieces_in_hand,
                                 protocol=pickle.HIGHEST_PROTOCOL,
                             ),
                         ),
@@ -563,7 +565,7 @@ class IntermediateDataStore:
             cursor.execute(
                 """
                     SELECT hash_id, count, win_count, move_label_count,
-                           features
+                           board_id_positions, pieces_in_hand
                     FROM intermediate_data
                     LIMIT ? OFFSET ?
                     """,
@@ -579,7 +581,8 @@ class IntermediateDataStore:
                     count,
                     win_count,
                     move_label_count_blob,
-                    features_blob,
+                    board_positions_blob,
+                    pieces_in_hand_blob,
                 ) = row
 
                 # Track hash_id for deletion
@@ -596,8 +599,11 @@ class IntermediateDataStore:
                     indices, values, 1496
                 )
                 # Load board representation fields
-                board_positions_raw, pieces_in_hand_raw = (
-                    pickle.loads(features_blob)
+                board_positions_raw = pickle.loads(
+                    board_positions_blob
+                )
+                pieces_in_hand_raw = pickle.loads(
+                    pieces_in_hand_blob
                 )
                 (
                     board_positions,

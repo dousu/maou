@@ -171,13 +171,16 @@ class PreProcess:
             orig_idx = idx[start_idx]
             board.set_hcp(data["hcp"][orig_idx])
 
+            (
+                board_id_positions,
+                pieces_in_hand,
+            ) = Transform.board_feature(data["hcp"][orig_idx])
             result[int(hash_val)] = {
                 "count": count,
                 "winCount": win_sum,
                 "moveLabelCount": move_counts,
-                "features": Transform.board_feature(
-                    data["hcp"][orig_idx]
-                ),
+                "boardIdPositions": board_id_positions,
+                "piecesInHand": pieces_in_hand,
             }
 
             start_idx = end_idx

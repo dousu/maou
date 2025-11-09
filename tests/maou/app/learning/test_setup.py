@@ -8,7 +8,6 @@ from maou.app.learning.setup import (
     WarmupCosineDecayScheduler,
 )
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
 
 
@@ -16,12 +15,14 @@ class DummyPreprocessedDataSource(DataSource):
     def __init__(self, length: int = 4) -> None:
         dtype = np.dtype(
             [
-                ("features", np.float32, (FEATURES_NUM, 9, 9)),
+                ("boardIdPositions", np.uint8, (9, 9)),
+                ("piecesInHand", np.uint8, (14,)),
                 ("moveLabel", np.float32, (MOVE_LABELS_NUM,)),
                 ("resultValue", np.float32),
             ]
         )
         self._data = np.zeros(length, dtype=dtype)
+        self._data["boardIdPositions"] = np.eye(9, dtype=np.uint8)
         self._data["moveLabel"] = 1.0
 
     def __getitem__(self, idx: int) -> np.ndarray:
