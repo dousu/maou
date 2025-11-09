@@ -70,17 +70,68 @@ def make_feature_from_board_state(
         )
 
     offset = len(PieceId) - 1
+
+    current_hand = pieces_in_hand[: shogi.PIECE_TYPES]
+    opponent_hand = pieces_in_hand[shogi.PIECE_TYPES :]
+
+    current_hand_total = int(current_hand.sum())
+    opponent_hand_total = int(opponent_hand.sum())
+
+    black_on_board = int(
+        np.count_nonzero(
+            (board_id_positions > PieceId.EMPTY.value)
+            & (board_id_positions <= offset)
+        )
+    )
+    white_on_board = int(
+        np.count_nonzero(board_id_positions > offset)
+    )
+
+    total_pieces_per_colour = 20
+    black_missing = total_pieces_per_colour - black_on_board
+    white_missing = total_pieces_per_colour - white_on_board
+
+    if (
+        current_hand_total == white_missing
+        and opponent_hand_total == black_missing
+    ):
+        current_is_black = True
+    elif (
+        current_hand_total == black_missing
+        and opponent_hand_total == white_missing
+    ):
+        current_is_black = False
+    else:
+        weighted_score = 0
+        for rank in range(9):
+            rank_weight = rank - 4
+            row = board_id_positions[rank]
+            black_count = np.count_nonzero(
+                (row > PieceId.EMPTY.value) & (row <= offset)
+            )
+            white_count = np.count_nonzero(row > offset)
+            weighted_score += rank_weight * (black_count - white_count)
+        current_is_black = weighted_score >= 0
+
     for rank in range(9):
         for file in range(9):
             piece_id = int(board_id_positions[rank, file])
             if piece_id == PieceId.EMPTY.value:
                 continue
             if piece_id <= offset:
-                plane_index = piece_id - 1
+                base_index = piece_id - 1
+                is_black_piece = True
             else:
-                plane_index = (
-                    piece_id - offset - 1 + shogi.PIECE_TYPES
-                )
+                base_index = piece_id - offset - 1
+                is_black_piece = False
+
+            if (current_is_black and is_black_piece) or (
+                not current_is_black and not is_black_piece
+            ):
+                plane_index = base_index
+            else:
+                plane_index = base_index + shogi.PIECE_TYPES
+
             features[plane_index, rank, file] = 1
 
     start = shogi.PIECE_TYPES * 2
