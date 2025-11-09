@@ -22,26 +22,23 @@ from maou.app.learning.setup import (
     ModelFactory,
     default_worker_init_fn,
 )
-from maou.app.pre_process.feature import make_feature_from_board_state
-
-
 class _FeatureDataset(Dataset):
-    """Dataset that returns flattened feature tensors from a data source."""
+    """Dataset that returns flattened board identifier tensors."""
 
     def __init__(self, datasource: LearningDataSource) -> None:
         if len(datasource) == 0:
             msg = "Datasource contains no samples"
             raise ValueError(msg)
         first_record = datasource[0]
-        first_features = self._extract_features(first_record)
-        if first_features.ndim != 3:
-            msg = "features must be 3-dimensional (channels, height, width)"
+        first_board = self._extract_board(first_record)
+        if first_board.shape != (9, 9):
+            msg = "boardIdPositions must have shape (9, 9)"
             raise ValueError(msg)
 
-        self.original_shape: tuple[int, ...] = tuple(
-            first_features.shape
+        self.original_shape: tuple[int, int] = tuple(
+            first_board.shape
         )
-        self._num_features = int(first_features.size)
+        self._num_features = int(first_board.size)
         self._datasource = datasource
 
     def __len__(
@@ -51,8 +48,10 @@ class _FeatureDataset(Dataset):
 
     def __getitem__(self, idx: int) -> torch.Tensor:
         record = self._datasource[idx]
-        features = self._extract_features(record)
-        flattened = np.ascontiguousarray(features.reshape(-1))
+        board = self._extract_board(record)
+        flattened = np.ascontiguousarray(
+            board.reshape(-1).astype(np.int64)
+        )
         return torch.from_numpy(flattened)
 
     @property
@@ -60,39 +59,28 @@ class _FeatureDataset(Dataset):
         return self._num_features
 
     @property
-    def feature_shape(self) -> tuple[int, int, int]:
-        channels, height, width = self.original_shape
-        return int(channels), int(height), int(width)
+    def feature_shape(self) -> tuple[int, int]:
+        height, width = self.original_shape
+        return int(height), int(width)
 
-    def _extract_features(
+    def _extract_board(
         self, record: np.ndarray
     ) -> np.ndarray:
         if record.dtype.names is None:
             msg = "Structured record is required"
             raise ValueError(msg)
 
-        if "features" in record.dtype.names:
-            features = np.asarray(
-                record["features"], dtype=np.float32
-            )
-        elif {
-            "boardIdPositions",
-            "piecesInHand",
-        }.issubset(record.dtype.names):
-            reconstructed = make_feature_from_board_state(
-                np.asarray(record["boardIdPositions"], dtype=np.uint8),
-                np.asarray(record["piecesInHand"], dtype=np.uint8),
-            )
-            features = reconstructed.astype(np.float32)
-        else:
-            msg = (
-                "Record does not contain 'features' or board state fields"
-            )
+        if "boardIdPositions" not in record.dtype.names:
+            msg = "Record does not contain 'boardIdPositions'"
             raise ValueError(msg)
-        if features.ndim < 2:
-            msg = "features must be at least 2-dimensional"
+
+        board = np.asarray(
+            record["boardIdPositions"], dtype=np.uint8
+        )
+        if board.shape != (9, 9):
+            msg = "boardIdPositions must have shape (9, 9)"
             raise ValueError(msg)
-        return features
+        return board
 
 
 class _MaskedAutoencoder(nn.Module):
@@ -101,7 +89,7 @@ class _MaskedAutoencoder(nn.Module):
     def __init__(
         self,
         *,
-        feature_shape: tuple[int, int, int],
+        feature_shape: tuple[int, ...],
         hidden_dim: int,
         device: torch.device,
     ) -> None:
@@ -110,8 +98,17 @@ class _MaskedAutoencoder(nn.Module):
             msg = "hidden_dim must be a positive integer"
             raise ValueError(msg)
 
-        self._feature_shape = feature_shape
-        self._flattened_size = int(np.prod(feature_shape))
+        if len(feature_shape) == 2:
+            board_shape = feature_shape
+        elif len(feature_shape) == 3:
+            _, height, width = feature_shape
+            board_shape = (height, width)
+        else:
+            msg = "feature_shape must describe a 2D board"
+            raise ValueError(msg)
+
+        self._feature_shape = board_shape
+        self._flattened_size = int(np.prod(board_shape))
         self.encoder = ModelFactory.create_shogi_backbone(
             device
         )
@@ -131,7 +128,8 @@ class _MaskedAutoencoder(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         reshaped = x.view(batch_size, *self._feature_shape)
-        encoded = self.encoder.forward_features(reshaped)
+        board_tensor = reshaped.to(torch.long)
+        encoded = self.encoder.forward_features(board_tensor)
         decoded = self.decoder(encoded)
         return decoded.view(batch_size, -1)
 

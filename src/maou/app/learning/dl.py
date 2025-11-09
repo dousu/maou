@@ -25,7 +25,6 @@ from maou.app.learning.network import (
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
-from maou.domain.board.shogi import FEATURES_NUM
 from maou.domain.cloud_storage import CloudStorage
 
 try:
@@ -171,10 +170,10 @@ class Learning:
             self.model,
             input_size=(
                 config.batch_size,
-                FEATURES_NUM,
                 9,
                 9,
             ),
+            dtypes=[torch.int64],
         )
 
         if config.compilation:

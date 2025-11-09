@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from maou.app.learning.callbacks import (
+    ModelInputs,
     TrainingCallback,
     TrainingContext,
 )
@@ -140,7 +141,7 @@ class TrainingLoop:
                         legal_move_mask,
                     ),
                 ) = data
-                batch_size = inputs.size(0)
+                batch_size = self._resolve_batch_size(inputs)
 
                 # コンテキストの作成
                 context = TrainingContext(
@@ -205,8 +206,9 @@ class TrainingLoop:
 
         if self.device.type == "cuda":
             # GPU転送（DataLoaderのpin_memoryと非同期転送を活用）
-            context.inputs = context.inputs.to(
-                self.device, non_blocking=True
+            context.inputs = self._move_inputs_to_device(
+                context.inputs,
+                self.device,
             )
             context.labels_policy = context.labels_policy.to(
                 self.device, non_blocking=True
@@ -334,6 +336,28 @@ class TrainingLoop:
 
         for callback in self.callbacks:
             callback.on_optimizer_step_end(context)
+
+    def _move_inputs_to_device(
+        self,
+        inputs: ModelInputs,
+        device: torch.device,
+        *,
+        non_blocking: bool = True,
+    ) -> ModelInputs:
+        if isinstance(inputs, tuple):
+            board, pieces = inputs
+            return (
+                board.to(device, non_blocking=non_blocking),
+                pieces.to(device, non_blocking=non_blocking),
+            )
+        return inputs.to(device, non_blocking=non_blocking)
+
+    @staticmethod
+    def _resolve_batch_size(inputs: ModelInputs) -> int:
+        if isinstance(inputs, tuple):
+            board_tensor = inputs[0]
+            return int(board_tensor.size(0))
+        return int(inputs.size(0))
 
     def _train_batch_full_precision(
         self, context: TrainingContext
