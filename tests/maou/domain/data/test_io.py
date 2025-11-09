@@ -85,6 +85,27 @@ class TestHCPEIO:
         assert isinstance(loaded_array, np.memmap)
         np.testing.assert_array_equal(loaded_array, array)
 
+    def test_load_hcpe_array_from_numpy_saved_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Test loading .npy files created via numpy.save with mmap."""
+
+        array = create_empty_hcpe_array(7)
+        file_path = tmp_path / "numpy_saved.npy"
+
+        np.save(file_path, array)
+
+        loaded_array = load_hcpe_array(
+            file_path,
+            mmap_mode="r",
+        )
+
+        assert isinstance(loaded_array, np.memmap)
+        np.testing.assert_array_equal(
+            loaded_array,
+            array,
+        )
+
 
 class TestPreprocessingIO:
     """Test preprocessing array I/O operations."""
