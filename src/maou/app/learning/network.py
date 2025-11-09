@@ -330,7 +330,7 @@ class Network(HeadlessNetwork):
             hidden_dim=value_hidden_dim,
         )
         self._hand_projection = nn.Linear(
-            PIECES_IN_HAND_VECTOR_SIZE, self.embedding_dim
+            PIECES_IN_HAND_VECTOR_SIZE, self.input_channels
         )
 
     def forward(
@@ -345,13 +345,15 @@ class Network(HeadlessNetwork):
 
     def forward_features(self, x: ModelInputs) -> torch.Tensor:
         board_tensor, hand_tensor = self._separate_inputs(x)
-        features = super().forward_features(board_tensor)
+        embedded_board = self._prepare_inputs(board_tensor)
         if hand_tensor is not None:
             projected = self._hand_projection(
-                hand_tensor.to(features.dtype)
-            )
-            features = features + projected
-        return features
+                hand_tensor.to(
+                    dtype=embedded_board.dtype, device=embedded_board.device
+                )
+            ).view(embedded_board.shape[0], self.input_channels, 1, 1)
+            embedded_board = embedded_board + projected
+        return super().forward_features(embedded_board)
 
     @staticmethod
     def _separate_inputs(
