@@ -30,8 +30,8 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
         [
             ("boardIdPositions", np.uint8, (9, 9)),
             ("piecesInHand", np.uint8, (14,)),
-            ("moveLabel", np.float32, (5,)),
-            ("resultValue", np.float32),
+            ("moveLabel", np.float16, (5,)),
+            ("resultValue", np.float16),
         ]
     )
     data = np.array(
@@ -39,14 +39,14 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
             (
                 np.eye(9, dtype=np.uint8),
                 np.zeros(14, dtype=np.uint8),
-                np.array([1, 0, 0, 0, 0], dtype=np.float32),
-                np.float32(1.0),
+                np.array([1, 0, 0, 0, 0], dtype=np.float16),
+                np.float16(1.0),
             ),
             (
                 np.fliplr(np.eye(9, dtype=np.uint8)),
                 np.zeros(14, dtype=np.uint8),
-                np.array([0, 1, 0, 0, 0], dtype=np.float32),
-                np.float32(-1.0),
+                np.array([0, 1, 0, 0, 0], dtype=np.float16),
+                np.float16(-1.0),
             ),
         ],
         dtype=dtype,
@@ -73,8 +73,8 @@ def test_dataset_requires_board_identifiers() -> None:
     dtype = np.dtype(
         [
             ("features", np.uint8, (4, 9, 9)),
-            ("moveLabel", np.float32, (5,)),
-            ("resultValue", np.float32),
+            ("moveLabel", np.float16, (5,)),
+            ("resultValue", np.float16),
         ]
     )
     data = np.zeros(1, dtype=dtype)

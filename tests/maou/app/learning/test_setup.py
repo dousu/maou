@@ -17,13 +17,13 @@ class DummyPreprocessedDataSource(DataSource):
             [
                 ("boardIdPositions", np.uint8, (9, 9)),
                 ("piecesInHand", np.uint8, (14,)),
-                ("moveLabel", np.float32, (MOVE_LABELS_NUM,)),
-                ("resultValue", np.float32),
+                ("moveLabel", np.float16, (MOVE_LABELS_NUM,)),
+                ("resultValue", np.float16),
             ]
         )
         self._data = np.zeros(length, dtype=dtype)
         self._data["boardIdPositions"] = np.eye(9, dtype=np.uint8)
-        self._data["moveLabel"] = 1.0
+        self._data["moveLabel"] = np.float16(1.0)
 
     def __getitem__(self, idx: int) -> np.ndarray:
         return self._data[idx]
