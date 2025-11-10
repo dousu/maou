@@ -526,7 +526,7 @@ def load_hcpe_array_from_buffer(
                 logger.debug(
                     "Loaded HCPE array as memmap from buffer"
                 )
-            except OSError as exc:
+            except (OSError, TypeError) as exc:
                 logger.warning(
                     "np.memmap failed for in-memory HCPE buffer; falling back to "
                     "np.frombuffer: %s",
@@ -649,7 +649,7 @@ def load_preprocessing_array_from_buffer(
                     logger.debug(
                         "Loaded bit-packed preprocessing array as memmap from buffer"
                     )
-                except OSError as exc:
+                except (OSError, TypeError) as exc:
                     logger.warning(
                         "np.memmap failed for in-memory bit-packed preprocessing "
                         "buffer; falling back to np.frombuffer: %s",
@@ -681,7 +681,7 @@ def load_preprocessing_array_from_buffer(
                     logger.debug(
                         "Loaded preprocessing array as memmap from buffer"
                     )
-                except OSError as exc:
+                except (OSError, TypeError) as exc:
                     logger.warning(
                         "np.memmap failed for in-memory preprocessing buffer; "
                         "falling back to np.frombuffer: %s",
