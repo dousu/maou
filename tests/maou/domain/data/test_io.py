@@ -1,5 +1,6 @@
 """Tests for domain data I/O module."""
 
+import errno
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,28 @@ class TestHCPEIO:
         # Load with memory mapping
         loaded_array = load_hcpe_array(file_path, mmap_mode="r")
         assert isinstance(loaded_array, np.memmap)
+        np.testing.assert_array_equal(loaded_array, array)
+
+    def test_load_hcpe_array_memmap_oserror_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure memmap failures fall back to standard ndarray loading."""
+        array = create_empty_hcpe_array(4)
+        file_path = tmp_path / "memmap_failure.npy"
+        save_hcpe_array(array, file_path)
+
+        memmap_type = np.memmap
+
+        def _raise_oserror(*args: Any, **kwargs: Any) -> Any:
+            raise OSError(errno.ENOMEM, "Cannot allocate memory")
+
+        monkeypatch.setattr(np, "memmap", _raise_oserror)
+
+        loaded_array = load_hcpe_array(file_path, mmap_mode="r")
+
+        assert not isinstance(loaded_array, memmap_type)
         np.testing.assert_array_equal(loaded_array, array)
 
     def test_load_hcpe_array_from_numpy_saved_file(

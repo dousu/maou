@@ -155,12 +155,25 @@ def load_hcpe_array(
                 mmap_mode=mmap_mode,
             )
             if array is None:
-                array = np.memmap(
-                    file_path, dtype=dtype, mode=mmap_mode
-                )
-                logger.debug(
-                    f"Loaded HCPE array as memmap from {file_path}"
-                )
+                try:
+                    array = np.memmap(
+                        file_path, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        f"Loaded HCPE array as memmap from {file_path}"
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "np.memmap failed for %s; falling back to np.fromfile: %s",
+                        file_path,
+                        exc,
+                    )
+                    array = np.fromfile(file_path, dtype=dtype)
+                    logger.debug(
+                        "Loaded HCPE array using fromfile() from %s after memmap "
+                        "failure",
+                        file_path,
+                    )
             else:
                 logger.debug(
                     "Loaded HCPE array using numpy.load with memory mapping "
@@ -287,12 +300,26 @@ def load_preprocessing_array(
                     "Even when bit_pack is enabled, "
                     "the output will be a regular ndarray, not a memmap."
                 )
-                array = np.memmap(
-                    file_path, dtype=dtype, mode=mmap_mode
-                )
-                logger.debug(
-                    f"Loaded bit-packed preprocessing array as memmap from {file_path}"
-                )
+                try:
+                    array = np.memmap(
+                        file_path, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array as memmap from %s",
+                        file_path,
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "np.memmap failed for %s; falling back to np.fromfile: %s",
+                        file_path,
+                        exc,
+                    )
+                    array = np.fromfile(file_path, dtype=dtype)
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array using fromfile() "
+                        "from %s after memmap failure",
+                        file_path,
+                    )
             else:
                 array = np.fromfile(file_path, dtype=dtype)
                 logger.debug(
@@ -310,13 +337,26 @@ def load_preprocessing_array(
                     mmap_mode=mmap_mode,
                 )
                 if array is None:
-                    array = np.memmap(
-                        file_path, dtype=dtype, mode=mmap_mode
-                    )
-                    logger.debug(
-                        "Loaded preprocessing array as memmap from "
-                        f"{file_path}"
-                    )
+                    try:
+                        array = np.memmap(
+                            file_path, dtype=dtype, mode=mmap_mode
+                        )
+                        logger.debug(
+                            "Loaded preprocessing array as memmap from %s",
+                            file_path,
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            "np.memmap failed for %s; falling back to np.fromfile: %s",
+                            file_path,
+                            exc,
+                        )
+                        array = np.fromfile(file_path, dtype=dtype)
+                        logger.debug(
+                            "Loaded preprocessing array using fromfile() from %s "
+                            "after memmap failure",
+                            file_path,
+                        )
                 else:
                     logger.debug(
                         "Loaded preprocessing array using numpy.load with "
@@ -371,13 +411,26 @@ def load_packed_preprocessing_array(
                 mmap_mode=mmap_mode,
             )
             if array is None:
-                array = np.memmap(
-                    file_path, dtype=dtype, mode=mmap_mode
-                )
-                logger.debug(
-                    "Loaded bit-packed preprocessing array as memmap "
-                    f"from {file_path}"
-                )
+                try:
+                    array = np.memmap(
+                        file_path, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array as memmap from %s",
+                        file_path,
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "np.memmap failed for %s; falling back to np.fromfile: %s",
+                        file_path,
+                        exc,
+                    )
+                    array = np.fromfile(file_path, dtype=dtype)
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array using fromfile() "
+                        "from %s after memmap failure",
+                        file_path,
+                    )
             else:
                 logger.debug(
                     "Loaded bit-packed preprocessing array using numpy.load "
@@ -466,12 +519,26 @@ def load_hcpe_array_from_buffer(
                 "Even when bit_pack is enabled, "
                 "the output will be a regular ndarray, not a memmap."
             )
-            array = np.memmap(
-                buffer, dtype=dtype, mode=mmap_mode
-            )
-            logger.debug(
-                "Loaded HCPE array as memmap from buffer"
-            )
+            try:
+                array = np.memmap(
+                    buffer, dtype=dtype, mode=mmap_mode
+                )
+                logger.debug(
+                    "Loaded HCPE array as memmap from buffer"
+                )
+            except OSError as exc:
+                logger.warning(
+                    "np.memmap failed for in-memory HCPE buffer; falling back to "
+                    "np.frombuffer: %s",
+                    exc,
+                )
+                array = np.frombuffer(
+                    buffer.getvalue(), dtype=dtype
+                )
+                logger.debug(
+                    "Loaded HCPE array using frombuffer() from buffer after memmap "
+                    "failure"
+                )
         else:
             array = np.frombuffer(
                 buffer.getvalue(), dtype=dtype
@@ -575,12 +642,26 @@ def load_preprocessing_array_from_buffer(
                     "Even when bit_pack is enabled, "
                     "the output will be a regular ndarray, not a memmap."
                 )
-                array = np.memmap(
-                    buffer, dtype=dtype, mode=mmap_mode
-                )
-                logger.debug(
-                    "Loaded bit-packed preprocessing array as memmap from buffer"
-                )
+                try:
+                    array = np.memmap(
+                        buffer, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array as memmap from buffer"
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "np.memmap failed for in-memory bit-packed preprocessing "
+                        "buffer; falling back to np.frombuffer: %s",
+                        exc,
+                    )
+                    array = np.frombuffer(
+                        buffer.getvalue(), dtype=dtype
+                    )
+                    logger.debug(
+                        "Loaded bit-packed preprocessing array using frombuffer() "
+                        "from buffer after memmap failure"
+                    )
             else:
                 array = np.frombuffer(
                     buffer.getvalue(), dtype=dtype
@@ -593,12 +674,26 @@ def load_preprocessing_array_from_buffer(
             dtype = get_preprocessing_dtype()
 
             if mmap_mode:
-                array = np.memmap(
-                    buffer, dtype=dtype, mode=mmap_mode
-                )
-                logger.debug(
-                    "Loaded preprocessing array as memmap from buffer"
-                )
+                try:
+                    array = np.memmap(
+                        buffer, dtype=dtype, mode=mmap_mode
+                    )
+                    logger.debug(
+                        "Loaded preprocessing array as memmap from buffer"
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "np.memmap failed for in-memory preprocessing buffer; "
+                        "falling back to np.frombuffer: %s",
+                        exc,
+                    )
+                    array = np.frombuffer(
+                        buffer.getvalue(), dtype=dtype
+                    )
+                    logger.debug(
+                        "Loaded preprocessing array using frombuffer() from buffer "
+                        "after memmap failure"
+                    )
             else:
                 array = np.frombuffer(
                     buffer.getvalue(), dtype=dtype
