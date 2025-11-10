@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Optional
 
+from typing import Literal
+
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.masked_autoencoder import (
     MaskedAutoencoderPretraining,
@@ -12,6 +14,7 @@ __all__ = ["pretrain"]
 def pretrain(
     *,
     datasource: LearningDataSource.DataSourceSpliter,
+    datasource_type: Literal["preprocess", "hcpe"],
     config_path: Optional[Path],
     output_path: Optional[Path] = None,
     epochs: int = 5,
@@ -25,11 +28,13 @@ def pretrain(
     prefetch_factor: Optional[int] = None,
     hidden_dim: int = 512,
     forward_chunk_size: Optional[int] = None,
+    cache_transforms: Optional[bool] = None,
 ) -> str:
     """Execute the masked autoencoder pretraining workflow.
 
     Args:
         datasource: Data source factory providing access to training data.
+        datasource_type: Format of the datasource ('preprocess' or 'hcpe').
         config_path: Optional configuration file path.
         output_path: Optional location to store the resulting state_dict.
         epochs: Number of optimisation epochs.
@@ -43,16 +48,29 @@ def pretrain(
         prefetch_factor: Prefetch batches per worker. Defaults to 2 when omitted.
         hidden_dim: Hidden dimension size of the autoencoder MLP.
         forward_chunk_size: Optional limit for forward micro-batch size.
+        cache_transforms: Enable in-memory caching of extracted feature tensors.
 
     Returns:
         A message describing where the trained state_dict was saved.
     """
     resolved_num_workers = num_workers if num_workers is not None else 0
+    normalized_type = datasource_type.lower()
+    if normalized_type not in {"preprocess", "hcpe"}:
+        msg = (
+            "datasource_type must be either 'preprocess' or 'hcpe', "
+            f"got {datasource_type}"
+        )
+        raise ValueError(msg)
+    if cache_transforms is None:
+        cache_transforms_enabled = normalized_type == "hcpe"
+    else:
+        cache_transforms_enabled = cache_transforms
     resolved_prefetch_factor = (
         prefetch_factor if prefetch_factor is not None else 2
     )
     option_kwargs = dict(
         datasource=datasource,
+        cache_transforms=cache_transforms_enabled,
         config_path=config_path,
         output_path=output_path,
         epochs=epochs,

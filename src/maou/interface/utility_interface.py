@@ -157,6 +157,7 @@ def benchmark_training(
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
+    cache_transforms: Optional[bool] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
@@ -186,6 +187,7 @@ def benchmark_training(
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
+        cache_transforms: Enable in-memory caching of dataset transforms
         gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
@@ -238,6 +240,10 @@ def benchmark_training(
 
     if prefetch_factor is None:
         prefetch_factor = 2
+    if cache_transforms is None:
+        cache_transforms_enabled = datasource_type == "hcpe"
+    else:
+        cache_transforms_enabled = cache_transforms
     elif prefetch_factor <= 0:
         raise ValueError(
             f"prefetch_factor must be positive, got {prefetch_factor}"
@@ -359,6 +365,7 @@ def benchmark_training(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        cache_transforms=cache_transforms_enabled,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,

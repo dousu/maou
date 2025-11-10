@@ -49,6 +49,7 @@ def test_pretrain_persists_state_dict(tmp_path: Path) -> None:
 
     result = pretrain(
         datasource=datasource,
+        datasource_type="preprocess",
         config_path=None,
         output_path=output_path,
         epochs=1,
@@ -89,6 +90,7 @@ def test_pretrain_compilation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     pretrain(
         datasource=datasource,
+        datasource_type="preprocess",
         config_path=None,
         output_path=output_path,
         epochs=1,
@@ -102,3 +104,40 @@ def test_pretrain_compilation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     assert compile_called
     assert compile_kwargs.get("dynamic") is True
+
+
+def test_pretrain_cache_transforms_default_hcpe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: Dict[str, Any] = {}
+
+    def _fake_run(
+        self: masked_autoencoder.MaskedAutoencoderPretraining,
+        options: masked_autoencoder.MaskedAutoencoderPretraining.Options,
+    ) -> str:
+        captured["cache_transforms"] = options.cache_transforms
+        return "ok"
+
+    monkeypatch.setattr(
+        masked_autoencoder.MaskedAutoencoderPretraining,
+        "run",
+        _fake_run,
+    )
+
+    datasource = _create_dummy_datasource(tmp_path, samples=4)
+
+    result = pretrain(
+        datasource=datasource,
+        datasource_type="hcpe",
+        config_path=None,
+        output_path=None,
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        pin_memory=True,
+        prefetch_factor=1,
+        hidden_dim=32,
+    )
+
+    assert result == "ok"
+    assert captured["cache_transforms"] is True
