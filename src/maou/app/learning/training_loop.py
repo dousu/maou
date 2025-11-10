@@ -1,5 +1,6 @@
 import logging
-from typing import List, Optional
+from collections.abc import Sequence
+from typing import List, Optional, cast
 
 import torch
 from torch.amp.autocast_mode import autocast
@@ -344,20 +345,35 @@ class TrainingLoop:
         *,
         non_blocking: bool = True,
     ) -> ModelInputs:
-        if isinstance(inputs, tuple):
-            board, pieces = inputs
-            return (
-                board.to(device, non_blocking=non_blocking),
-                pieces.to(device, non_blocking=non_blocking),
-            )
-        return inputs.to(device, non_blocking=non_blocking)
+        def move(value: object) -> object:
+            if isinstance(value, torch.Tensor):
+                return value.to(device, non_blocking=non_blocking)
+            if isinstance(value, tuple):
+                return tuple(move(item) for item in value)
+            if isinstance(value, list):
+                return [move(item) for item in value]
+            return value
+
+        moved = move(inputs)
+        return cast(ModelInputs, moved)
 
     @staticmethod
     def _resolve_batch_size(inputs: ModelInputs) -> int:
-        if isinstance(inputs, tuple):
-            board_tensor = inputs[0]
-            return int(board_tensor.size(0))
-        return int(inputs.size(0))
+        if isinstance(inputs, torch.Tensor):
+            return int(inputs.size(0))
+        if isinstance(inputs, Sequence):
+            for element in inputs:
+                if isinstance(element, torch.Tensor):
+                    return int(element.size(0))
+                if isinstance(element, Sequence):
+                    try:
+                        return TrainingLoop._resolve_batch_size(element)
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+            msg = "Unable to resolve batch size from nested inputs."
+            raise TypeError(msg)
+        msg = f"Unsupported input type for batch size resolution: {type(inputs)!r}"
+        raise TypeError(msg)
 
     def _train_batch_full_precision(
         self, context: TrainingContext
