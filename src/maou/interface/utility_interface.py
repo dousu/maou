@@ -240,14 +240,15 @@ def benchmark_training(
 
     if prefetch_factor is None:
         prefetch_factor = 2
-    if cache_transforms is None:
-        cache_transforms_enabled = datasource_type == "hcpe"
-    else:
-        cache_transforms_enabled = cache_transforms
     elif prefetch_factor <= 0:
         raise ValueError(
             f"prefetch_factor must be positive, got {prefetch_factor}"
         )
+
+    if cache_transforms is None:
+        cache_transforms_enabled = datasource_type == "hcpe"
+    else:
+        cache_transforms_enabled = cache_transforms
 
     if gce_parameter is None:
         gce_parameter = 0.7
