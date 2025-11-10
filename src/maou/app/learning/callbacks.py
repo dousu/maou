@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol, Tuple, Union
 
@@ -16,7 +17,7 @@ from maou.app.learning.resource_monitor import (
 from maou.app.learning.policy_targets import normalize_policy_targets
 
 
-ModelInputs = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
+ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
 
 
 @dataclass

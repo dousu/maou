@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Literal, Tuple, Union
 
 import torch
@@ -32,7 +32,7 @@ DEFAULT_BOARD_VOCAB_SIZE = 256
 BOARD_EMBEDDING_DIM = 32
 
 
-ModelInputs = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
+ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
 PIECES_IN_HAND_VECTOR_SIZE = len(shogi.MAX_PIECES_IN_HAND) * 2
 
 
@@ -359,11 +359,23 @@ class Network(HeadlessNetwork):
     def _separate_inputs(
         inputs: ModelInputs,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        if isinstance(inputs, tuple):
+        if isinstance(inputs, torch.Tensor):
+            return inputs, None
+        if isinstance(inputs, Sequence):
             if len(inputs) != 2:
                 msg = (
-                    "Expected inputs to be a tuple of (board, pieces_in_hand)."
+                    "Expected inputs to contain board and pieces_in_hand tensors."
                 )
                 raise ValueError(msg)
-            return inputs[0], inputs[1]
-        return inputs, None
+            board_tensor, pieces_tensor = inputs[0], inputs[1]
+            if not isinstance(board_tensor, torch.Tensor):
+                msg = "Board input must be a torch.Tensor."
+                raise TypeError(msg)
+            if pieces_tensor is None:
+                return board_tensor, None
+            if not isinstance(pieces_tensor, torch.Tensor):
+                msg = "Pieces-in-hand input must be a torch.Tensor."
+                raise TypeError(msg)
+            return board_tensor, pieces_tensor
+        msg = f"Unsupported input structure: {type(inputs)!r}"
+        raise TypeError(msg)
