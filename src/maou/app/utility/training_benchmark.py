@@ -18,6 +18,8 @@ from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 
+HCPE_DATA_SOURCE = "hcpe"
+
 
 @dataclass(frozen=True)
 class BenchmarkResult:
@@ -384,6 +386,7 @@ class TrainingBenchmarkConfig:
     dataloader_workers: int = 4
     pin_memory: Optional[bool] = None
     prefetch_factor: int = 2
+    cache_transforms: Optional[bool] = None
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
@@ -423,11 +426,18 @@ class TrainingBenchmarkUseCase:
         )
 
         # Setup all training components using shared setup module
+        datasource_type_normalized = config.datasource_type.lower()
+        cache_transforms_enabled = (
+            config.cache_transforms
+            if config.cache_transforms is not None
+            else datasource_type_normalized == HCPE_DATA_SOURCE
+        )
         device_config, dataloaders, model_components = (
             TrainingSetup.setup_training_components(
                 training_datasource=training_datasource,
                 validation_datasource=validation_datasource,
                 datasource_type=config.datasource_type,
+                cache_transforms=cache_transforms_enabled,
                 gpu=config.gpu,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,

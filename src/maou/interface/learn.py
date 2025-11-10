@@ -135,6 +135,7 @@ def learn(
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
+    cache_transforms: Optional[bool] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
@@ -355,6 +356,9 @@ def learn(
         dir_init(model_dir)
     logger.info(f"Input: {datasource}, Output: {model_dir}")
 
+
+    if cache_transforms is None:
+        cache_transforms = datasource_type == "hcpe"
     normalized_cache_mode = input_cache_mode.lower()
     if normalized_cache_mode not in {"mmap", "memory"}:
         raise ValueError(
@@ -373,6 +377,7 @@ def learn(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        cache_transforms=cache_transforms,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
