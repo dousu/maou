@@ -247,6 +247,15 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--cache-transforms/--no-cache-transforms",
+    default=None,
+    help=(
+        "Enable in-memory caching of dataset transforms when supported by the "
+        "input pipeline."
+    ),
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter (default: 0.1).",
@@ -421,6 +430,7 @@ def learn_model(
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
     prefetch_factor: Optional[int],
+    cache_transforms: Optional[bool],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
@@ -687,6 +697,7 @@ def learn_model(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
+            cache_transforms=cache_transforms,
             gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,
