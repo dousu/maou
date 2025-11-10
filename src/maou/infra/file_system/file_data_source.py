@@ -1,10 +1,12 @@
 import logging
 import random
 from collections.abc import Generator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import numpy as np
+from numpy import memmap as NpMemMap
 
 from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array, load_packed_array
@@ -79,6 +81,14 @@ class FileDataSource(
         logger: logging.Logger = logging.getLogger(__name__)
         array_type: Literal["hcpe", "preprocessing"]
 
+        @dataclass
+        class _FileEntry:
+            name: str
+            path: Path
+            dtype: np.dtype[Any]
+            length: int
+            memmap: Optional[NpMemMap]
+
         def __init__(
             self,
             file_paths: list[Path],
@@ -94,8 +104,9 @@ class FileDataSource(
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
-            self.memmap_arrays: list[
-                tuple[str, np.ndarray]
+            self.memmap_arrays: list[tuple[str, NpMemMap]] = []
+            self._file_entries: list[
+                FileDataSource.FileManager._FileEntry
             ] = []
 
             # すべてのファイルパスをmemmapで読み込む
@@ -118,10 +129,27 @@ class FileDataSource(
                             array_type=self.array_type,
                             bit_pack=self.bit_pack,
                         )
-                    self.memmap_arrays.append(
-                        (file_path.name, array)
+                    memmap: Optional[NpMemMap]
+                    if isinstance(array, NpMemMap):
+                        memmap = array
+                        self.memmap_arrays.append(
+                            (file_path.name, memmap)
+                        )
+                    else:
+                        memmap = None
+                    length = int(len(array))
+                    self._file_entries.append(
+                        FileDataSource.FileManager._FileEntry(
+                            name=file_path.name,
+                            path=file_path,
+                            dtype=array.dtype,
+                            length=length,
+                            memmap=memmap,
+                        )
                     )
-                    lengths.append(len(array))
+                    lengths.append(length)
+                    if memmap is None:
+                        del array
                 except Exception as e:
                     self.logger.error(
                         f"Failed to load array {file_path}: {e}"
@@ -147,20 +175,39 @@ class FileDataSource(
                 - 1
             )
             relative_idx = idx - self.cum_lengths[file_idx]
+            entry = self._file_entries[file_idx]
+            if entry.memmap is None:
+                record_array = np.fromfile(
+                    entry.path,
+                    dtype=entry.dtype,
+                    count=1,
+                    offset=int(relative_idx * entry.dtype.itemsize),
+                )
+                if record_array.size == 0:
+                    raise IndexError(
+                        f"Index {idx} could not be loaded from {entry.path}."
+                    )
+                record = np.copy(record_array[0])
+                del record_array
+                if (
+                    self.bit_pack
+                    and self.array_type == "preprocessing"
+                ):
+                    return convert_record_from_packed_schema(
+                        compressed_record=record,
+                        array_type=self.array_type,
+                    )
+                return record
             if (
                 self.bit_pack
                 and self.array_type == "preprocessing"
             ):
                 return convert_record_from_packed_schema(
-                    compressed_record=self.memmap_arrays[
-                        file_idx
-                    ][1][relative_idx],
+                    compressed_record=entry.memmap[relative_idx],
                     array_type=self.array_type,
                 )
             else:
-                return self.memmap_arrays[file_idx][1][
-                    relative_idx
-                ]
+                return entry.memmap[relative_idx]
 
         def iter_batches(
             self,
@@ -169,20 +216,50 @@ class FileDataSource(
                 self.bit_pack
                 and self.array_type == "preprocessing"
             ):
-                for name, array in self.memmap_arrays:
-                    yield (
-                        name,
-                        convert_array_from_packed_schema(
-                            compressed_array=array,
+                for entry in self._file_entries:
+                    if entry.memmap is not None:
+                        yield (
+                            entry.name,
+                            convert_array_from_packed_schema(
+                                compressed_array=entry.memmap,
+                                array_type=self.array_type,
+                            ),
+                        )
+                    else:
+                        loaded_array = np.fromfile(
+                            entry.path,
+                            dtype=entry.dtype,
+                            count=entry.length,
+                        )
+                        unpacked_array = convert_array_from_packed_schema(
+                            compressed_array=loaded_array,
                             array_type=self.array_type,
-                        ),
-                    )
+                        )
+                        del loaded_array
+                        yield (
+                            entry.name,
+                            unpacked_array,
+                        )
             else:
-                for name, array in self.memmap_arrays:
-                    yield (
-                        name,
-                        array,
-                    )
+                for entry in self._file_entries:
+                    if entry.memmap is not None:
+                        yield (
+                            entry.name,
+                            entry.memmap,
+                        )
+                    else:
+                        loaded_array = np.fromfile(
+                            entry.path,
+                            dtype=entry.dtype,
+                            count=entry.length,
+                        )
+                        try:
+                            yield (
+                                entry.name,
+                                loaded_array,
+                            )
+                        finally:
+                            del loaded_array
 
     def __init__(
         self,
