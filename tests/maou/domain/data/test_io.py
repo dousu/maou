@@ -1,5 +1,6 @@
 """Tests for domain data I/O module."""
 
+import errno
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,13 @@ from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.array_io import (
     DataIOError,
     load_hcpe_array,
+    load_hcpe_array_from_buffer,
     load_preprocessing_array,
+    load_preprocessing_array_from_buffer,
     save_hcpe_array,
+    save_hcpe_array_to_buffer,
     save_preprocessing_array,
+    save_preprocessing_array_to_buffer,
 )
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
@@ -83,6 +88,28 @@ class TestHCPEIO:
         # Load with memory mapping
         loaded_array = load_hcpe_array(file_path, mmap_mode="r")
         assert isinstance(loaded_array, np.memmap)
+        np.testing.assert_array_equal(loaded_array, array)
+
+    def test_load_hcpe_array_memmap_oserror_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure memmap failures fall back to standard ndarray loading."""
+        array = create_empty_hcpe_array(4)
+        file_path = tmp_path / "memmap_failure.npy"
+        save_hcpe_array(array, file_path)
+
+        memmap_type = np.memmap
+
+        def _raise_oserror(*args: Any, **kwargs: Any) -> Any:
+            raise OSError(errno.ENOMEM, "Cannot allocate memory")
+
+        monkeypatch.setattr(np, "memmap", _raise_oserror)
+
+        loaded_array = load_hcpe_array(file_path, mmap_mode="r")
+
+        assert not isinstance(loaded_array, memmap_type)
         np.testing.assert_array_equal(loaded_array, array)
 
     def test_load_hcpe_array_from_numpy_saved_file(
@@ -185,6 +212,81 @@ class TestPreprocessingIO:
             loaded_array, original_array
         )
         assert loaded_array.dtype == original_array.dtype
+
+
+class TestBufferIO:
+    """Test buffer-based array loading operations."""
+
+    def test_load_hcpe_array_from_buffer_memmap_typeerror_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure HCPE buffer loading falls back when memmap raises TypeError."""
+
+        array = create_empty_hcpe_array(3)
+        buffer = save_hcpe_array_to_buffer(array)
+
+        memmap_type = np.memmap
+
+        def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
+            raise TypeError("expected str, bytes or os.PathLike object")
+
+        monkeypatch.setattr(np, "memmap", _raise_typeerror)
+
+        loaded_array = load_hcpe_array_from_buffer(buffer, mmap_mode="r")
+
+        assert not isinstance(loaded_array, memmap_type)
+        np.testing.assert_array_equal(loaded_array, array)
+
+    def test_load_preprocessing_array_from_buffer_typeerror_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure preprocessing buffer loading falls back when memmap fails."""
+
+        array = create_empty_preprocessing_array(2)
+        buffer = save_preprocessing_array_to_buffer(array, bit_pack=False)
+
+        memmap_type = np.memmap
+
+        def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
+            raise TypeError("expected str, bytes or os.PathLike object")
+
+        monkeypatch.setattr(np, "memmap", _raise_typeerror)
+
+        loaded_array = load_preprocessing_array_from_buffer(
+            buffer,
+            bit_pack=False,
+            mmap_mode="r",
+        )
+
+        assert not isinstance(loaded_array, memmap_type)
+        np.testing.assert_array_equal(loaded_array, array)
+
+    def test_load_bit_packed_preprocessing_buffer_typeerror_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ensure bit-packed preprocessing buffer load falls back on TypeError."""
+
+        array = create_empty_preprocessing_array(2)
+        buffer = save_preprocessing_array_to_buffer(array, bit_pack=True)
+
+        memmap_type = np.memmap
+
+        def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
+            raise TypeError("expected str, bytes or os.PathLike object")
+
+        monkeypatch.setattr(np, "memmap", _raise_typeerror)
+
+        loaded_array = load_preprocessing_array_from_buffer(
+            buffer,
+            bit_pack=True,
+            mmap_mode="r",
+        )
+
+        assert not isinstance(loaded_array, memmap_type)
+        np.testing.assert_array_equal(loaded_array, array)
 
 
 class TestErrorHandling:
