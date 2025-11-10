@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, MutableMapping, Optional, cast
+from typing import Dict, Literal, MutableMapping, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -88,6 +88,7 @@ class Learning:
         log_dir: Path
         model_dir: Path
         lr_scheduler_name: Optional[str] = None
+        input_cache_mode: Literal["mmap", "memory"] = "mmap"
 
     def __init__(
         self,

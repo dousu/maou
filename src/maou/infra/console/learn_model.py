@@ -95,6 +95,14 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--input-cache-mode",
+    type=click.Choice(["mmap", "memory"], case_sensitive=False),
+    help="Cache strategy for local inputs (default: mmap).",
+    default="mmap",
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
@@ -391,6 +399,7 @@ def learn_model(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -529,6 +538,7 @@ def learn_model(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
             bit_pack=input_file_packed,
+            cache_mode=input_cache_mode.lower(),
         )
     elif (
         input_dataset_id is not None
@@ -692,5 +702,6 @@ def learn_model(
             log_dir=log_dir,
             model_dir=model_dir,
             cloud_storage=cloud_storage,
+            input_cache_mode=input_cache_mode.lower(),
         )
     )

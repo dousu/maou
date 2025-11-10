@@ -2,7 +2,7 @@ import abc
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from maou.app.learning.dl import (
     CloudStorage,
@@ -150,6 +150,7 @@ def learn(
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
+    input_cache_mode: Literal["mmap", "memory"] = "mmap",
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -180,6 +181,7 @@ def learn(
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
+        input_cache_mode: Strategy used by the input datasource cache
 
     Returns:
         JSON string with training results
@@ -352,6 +354,14 @@ def learn(
     if model_dir is not None:
         dir_init(model_dir)
     logger.info(f"Input: {datasource}, Output: {model_dir}")
+
+    normalized_cache_mode = input_cache_mode.lower()
+    if normalized_cache_mode not in {"mmap", "memory"}:
+        raise ValueError(
+            "input_cache_mode must be either 'mmap' or 'memory', "
+            f"got {input_cache_mode}"
+        )
+
     option = Learning.LearningOption(
         datasource=datasource,
         datasource_type=datasource_type,
@@ -378,6 +388,7 @@ def learn(
         model_dir=model_dir,
         model_architecture=model_architecture,
         lr_scheduler_name=lr_scheduler_key,
+        input_cache_mode=normalized_cache_mode,
     )
 
     learning_result = Learning(

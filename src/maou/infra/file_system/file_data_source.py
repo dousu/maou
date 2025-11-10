@@ -3,7 +3,7 @@ import random
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, cast
 
 import numpy as np
 from numpy import memmap as NpMemMap
@@ -23,6 +23,8 @@ class MissingFileDataConfig(Exception):
 class FileDataSource(
     learn.LearningDataSource, preprocess.DataSource
 ):
+    CacheMode = Literal["mmap", "memory"]
+
     class FileDataSourceSpliter(
         learn.LearningDataSource.DataSourceSpliter
     ):
@@ -33,11 +35,13 @@ class FileDataSource(
             file_paths: list[Path],
             array_type: Literal["hcpe", "preprocessing"],
             bit_pack: bool = False,
+            cache_mode: "FileDataSource.CacheMode" = "mmap",
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
                 array_type=array_type,
                 bit_pack=bit_pack,
+                cache_mode=cache_mode,
             )
 
         def train_test_split(
@@ -88,12 +92,14 @@ class FileDataSource(
             dtype: np.dtype[Any]
             length: int
             memmap: Optional[NpMemMap]
+            cached_array: Optional[np.ndarray]
 
         def __init__(
             self,
             file_paths: list[Path],
             array_type: Literal["hcpe", "preprocessing"],
             bit_pack: bool,
+            cache_mode: "FileDataSource.CacheMode" = "mmap",
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -104,10 +110,21 @@ class FileDataSource(
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
+            normalized_cache_mode = cast(
+                FileDataSource.CacheMode, cache_mode.lower()
+            )
+            if normalized_cache_mode not in {"mmap", "memory"}:
+                raise ValueError(
+                    "cache_mode must be either 'mmap' or 'memory', "
+                    f"got {cache_mode}"
+                )
             self.memmap_arrays: list[tuple[str, NpMemMap]] = []
             self._file_entries: list[
                 FileDataSource.FileManager._FileEntry
             ] = []
+            self.cache_mode: FileDataSource.CacheMode = (
+                normalized_cache_mode
+            )
 
             # すべてのファイルパスをmemmapで読み込む
             lengths = []
@@ -130,25 +147,75 @@ class FileDataSource(
                             bit_pack=self.bit_pack,
                         )
                     memmap: Optional[NpMemMap]
+                    cached_array: Optional[np.ndarray] = None
+                    array_length = int(len(array))
+                    array_dtype = array.dtype
                     if isinstance(array, NpMemMap):
                         memmap = array
+                    else:
+                        memmap = None
+
+                    if self.cache_mode == "memory":
+                        array_nbytes = int(
+                            getattr(
+                                array,
+                                "nbytes",
+                                array_length
+                                * array_dtype.itemsize,
+                            )
+                        )
+                        array_size_mib = (
+                            array_nbytes / (1024 * 1024)
+                            if array_nbytes
+                            else 0.0
+                        )
+                        self.logger.info(
+                            "Caching %s into RAM (%.2f MiB)",
+                            file_path,
+                            array_size_mib,
+                        )
+                        try:
+                            cached_array = array.copy()
+                        except MemoryError:
+                            self.logger.exception(
+                                "Failed to allocate memory for %s (%s bytes)",
+                                file_path,
+                                array_nbytes,
+                            )
+                            raise
+                        else:
+                            self.logger.info(
+                                "Cached %s in RAM (%.2f MiB)",
+                                file_path,
+                                array_size_mib,
+                            )
+                            if isinstance(array, NpMemMap):
+                                try:
+                                    array._mmap.close()
+                                except AttributeError:
+                                    pass
+                            memmap = None
+                        array = None
+                    elif isinstance(array, NpMemMap):
                         self.memmap_arrays.append(
                             (file_path.name, memmap)
                         )
-                    else:
-                        memmap = None
-                    length = int(len(array))
                     self._file_entries.append(
                         FileDataSource.FileManager._FileEntry(
                             name=file_path.name,
                             path=file_path,
-                            dtype=array.dtype,
-                            length=length,
+                            dtype=array_dtype,
+                            length=array_length,
                             memmap=memmap,
+                            cached_array=cached_array,
                         )
                     )
-                    lengths.append(length)
-                    if memmap is None:
+                    lengths.append(array_length)
+                    if (
+                        memmap is None
+                        and cached_array is None
+                        and array is not None
+                    ):
                         del array
                 except Exception as e:
                     self.logger.error(
@@ -176,12 +243,25 @@ class FileDataSource(
             )
             relative_idx = idx - self.cum_lengths[file_idx]
             entry = self._file_entries[file_idx]
+            if entry.cached_array is not None:
+                record = entry.cached_array[relative_idx]
+                if (
+                    self.bit_pack
+                    and self.array_type == "preprocessing"
+                ):
+                    return convert_record_from_packed_schema(
+                        compressed_record=record,
+                        array_type=self.array_type,
+                    )
+                return record
             if entry.memmap is None:
                 record_array = np.fromfile(
                     entry.path,
                     dtype=entry.dtype,
                     count=1,
-                    offset=int(relative_idx * entry.dtype.itemsize),
+                    offset=int(
+                        relative_idx * entry.dtype.itemsize
+                    ),
                 )
                 if record_array.size == 0:
                     raise IndexError(
@@ -203,7 +283,9 @@ class FileDataSource(
                 and self.array_type == "preprocessing"
             ):
                 return convert_record_from_packed_schema(
-                    compressed_record=entry.memmap[relative_idx],
+                    compressed_record=entry.memmap[
+                        relative_idx
+                    ],
                     array_type=self.array_type,
                 )
             else:
@@ -217,7 +299,15 @@ class FileDataSource(
                 and self.array_type == "preprocessing"
             ):
                 for entry in self._file_entries:
-                    if entry.memmap is not None:
+                    if entry.cached_array is not None:
+                        yield (
+                            entry.name,
+                            convert_array_from_packed_schema(
+                                compressed_array=entry.cached_array,
+                                array_type=self.array_type,
+                            ),
+                        )
+                    elif entry.memmap is not None:
                         yield (
                             entry.name,
                             convert_array_from_packed_schema(
@@ -231,9 +321,11 @@ class FileDataSource(
                             dtype=entry.dtype,
                             count=entry.length,
                         )
-                        unpacked_array = convert_array_from_packed_schema(
-                            compressed_array=loaded_array,
-                            array_type=self.array_type,
+                        unpacked_array = (
+                            convert_array_from_packed_schema(
+                                compressed_array=loaded_array,
+                                array_type=self.array_type,
+                            )
                         )
                         del loaded_array
                         yield (
@@ -242,7 +334,12 @@ class FileDataSource(
                         )
             else:
                 for entry in self._file_entries:
-                    if entry.memmap is not None:
+                    if entry.cached_array is not None:
+                        yield (
+                            entry.name,
+                            entry.cached_array,
+                        )
+                    elif entry.memmap is not None:
                         yield (
                             entry.name,
                             entry.memmap,
@@ -271,6 +368,7 @@ class FileDataSource(
             Literal["hcpe", "preprocessing"]
         ] = None,
         bit_pack: bool = True,
+        cache_mode: CacheMode = "mmap",
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -289,6 +387,7 @@ class FileDataSource(
                     file_paths=file_paths,
                     array_type=array_type,
                     bit_pack=bit_pack,
+                    cache_mode=cache_mode,
                 )
             else:
                 raise MissingFileDataConfig(
