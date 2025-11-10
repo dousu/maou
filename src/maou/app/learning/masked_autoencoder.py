@@ -25,7 +25,14 @@ from maou.app.learning.setup import (
 class _FeatureDataset(Dataset):
     """Dataset that returns flattened board identifier tensors."""
 
-    def __init__(self, datasource: LearningDataSource) -> None:
+    logger: logging.Logger = logging.getLogger(__name__)
+
+    def __init__(
+        self,
+        datasource: LearningDataSource,
+        *,
+        cache_transforms: bool = False,
+    ) -> None:
         if len(datasource) == 0:
             msg = "Datasource contains no samples"
             raise ValueError(msg)
@@ -40,6 +47,28 @@ class _FeatureDataset(Dataset):
         )
         self._num_features = int(first_board.size)
         self._datasource = datasource
+        self._cached_samples: Optional[list[torch.Tensor]] = None
+        self._cache_transforms_enabled = False
+
+        if cache_transforms:
+            cached_samples: list[torch.Tensor] = []
+            total_bytes = 0
+            for index in range(len(self._datasource)):
+                flattened = self._create_flattened_tensor(
+                    self._datasource[index]
+                )
+                cached_samples.append(flattened)
+                total_bytes += (
+                    flattened.element_size() * flattened.nelement()
+                )
+            self._cached_samples = cached_samples
+            self._cache_transforms_enabled = True
+            memory_mib = total_bytes / float(1024**2)
+            self.logger.info(
+                "Cached %d feature tensors in memory (%.2f MiB)",
+                len(cached_samples),
+                memory_mib,
+            )
 
     def __len__(
         self,
@@ -47,12 +76,16 @@ class _FeatureDataset(Dataset):
         return len(self._datasource)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
+        if self._cached_samples is not None:
+            return self._cached_samples[idx]
         record = self._datasource[idx]
-        board = self._extract_board(record)
-        flattened = np.ascontiguousarray(
-            board.reshape(-1).astype(np.int64)
-        )
-        return torch.from_numpy(flattened)
+        return self._create_flattened_tensor(record)
+
+    @property
+    def cache_transforms_enabled(self) -> bool:
+        """Return whether feature tensors are cached in memory."""
+
+        return self._cache_transforms_enabled
 
     @property
     def num_features(self) -> int:
@@ -81,6 +114,13 @@ class _FeatureDataset(Dataset):
             msg = "boardIdPositions must have shape (9, 9)"
             raise ValueError(msg)
         return board
+
+    def _create_flattened_tensor(self, record: np.ndarray) -> torch.Tensor:
+        board = self._extract_board(record)
+        flattened = np.ascontiguousarray(
+            board.reshape(-1).astype(np.int64)
+        )
+        return torch.from_numpy(flattened.copy())
 
 
 class _MaskedAutoencoder(nn.Module):
@@ -163,6 +203,7 @@ class MaskedAutoencoderPretraining:
         prefetch_factor: int = 2
         forward_chunk_size: Optional[int] = 2048
         progress_bar: bool = True
+        cache_transforms: bool = False
 
     def run(
         self, options: "MaskedAutoencoderPretraining.Options"
@@ -203,7 +244,10 @@ class MaskedAutoencoderPretraining:
             msg = "forward_chunk_size must be greater than zero"
             raise ValueError(msg)
 
-        dataset = _FeatureDataset(training_datasource)
+        dataset = _FeatureDataset(
+            training_datasource,
+            cache_transforms=resolved_options.cache_transforms,
+        )
         output_path = self._resolve_output_path(
             resolved_options.output_path
         )

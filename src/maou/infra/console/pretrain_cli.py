@@ -35,6 +35,13 @@ from maou.interface.pretrain import (
     help="Indicates whether the local files are bit-packed.",
 )
 @click.option(
+    "--input-cache-mode",
+    type=click.Choice(["mmap", "memory"], case_sensitive=False),
+    default="mmap",
+    show_default=True,
+    help="Cache strategy for local inputs (default: mmap).",
+)
+@click.option(
     "--config-path",
     type=click.Path(path_type=Path, exists=True),
     required=False,
@@ -111,6 +118,14 @@ from maou.interface.pretrain import (
     ),
 )
 @click.option(
+    "--cache-transforms/--no-cache-transforms",
+    default=None,
+    help=(
+        "Enable in-memory caching of dataset transforms when supported by the "
+        "input pipeline."
+    ),
+)
+@click.option(
     "--hidden-dim",
     type=int,
     default=512,
@@ -131,6 +146,7 @@ def pretrain(
     input_dir: Optional[Path],
     input_format: str,
     input_file_packed: bool,
+    input_cache_mode: str,
     config_path: Optional[Path],
     output_path: Optional[Path],
     epochs: int,
@@ -142,6 +158,7 @@ def pretrain(
     dataloader_workers: Optional[int],
     prefetch_factor: Optional[int],
     pin_memory: Optional[bool],
+    cache_transforms: Optional[bool],
     hidden_dim: int,
     forward_chunk_size: Optional[int],
 ) -> None:
@@ -168,6 +185,7 @@ def pretrain(
         file_paths=file_paths,
         array_type=array_type,
         bit_pack=input_file_packed,
+        cache_mode=input_cache_mode.lower(),
     )
 
     resolved_workers = dataloader_workers if dataloader_workers is not None else 0
@@ -177,6 +195,7 @@ def pretrain(
 
     message = pretrain_interface(
         datasource=datasource,
+        datasource_type=input_format,
         config_path=config_path,
         output_path=output_path,
         epochs=epochs,
@@ -190,5 +209,6 @@ def pretrain(
         prefetch_factor=resolved_prefetch,
         hidden_dim=hidden_dim,
         forward_chunk_size=forward_chunk_size,
+        cache_transforms=cache_transforms,
     )
     click.echo(message)

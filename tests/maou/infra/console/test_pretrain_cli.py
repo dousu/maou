@@ -59,6 +59,8 @@ def test_pretrain_cli(
         [
             "--input-dir",
             str(tmp_path),
+            "--input-cache-mode",
+            "memory",
             "--output-path",
             str(output_path),
             "--epochs",
@@ -70,6 +72,7 @@ def test_pretrain_cli(
             "--prefetch-factor",
             "1",
             "--pin-memory",
+            "--cache-transforms",
             "--hidden-dim",
             "32",
             "--compilation",

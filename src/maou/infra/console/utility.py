@@ -68,6 +68,13 @@ from maou.interface import utility_interface
     required=False,
 )
 @click.option(
+    "--input-cache-mode",
+    type=click.Choice(["mmap", "memory"], case_sensitive=False),
+    help="Cache strategy for local inputs (default: mmap).",
+    default="mmap",
+    required=False,
+    show_default=True,
+)
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
@@ -455,6 +462,14 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--input-cache-mode",
+    type=click.Choice(["mmap", "memory"], case_sensitive=False),
+    help="Cache strategy for local inputs (default: mmap).",
+    default="mmap",
+    required=False,
+    show_default=True,
+)
+@click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
@@ -583,6 +598,15 @@ def benchmark_dataloader(
     default=2,
 )
 @click.option(
+    "--cache-transforms/--no-cache-transforms",
+    default=None,
+    help=(
+        "Enable in-memory caching of dataset transforms when supported by the "
+        "input pipeline."
+    ),
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter (default: 0.1).",
@@ -699,6 +723,7 @@ def benchmark_training(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -718,6 +743,7 @@ def benchmark_training(
     dataloader_workers: int,
     pin_memory: Optional[bool],
     prefetch_factor: int,
+    cache_transforms: Optional[bool],
     gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
@@ -783,6 +809,7 @@ def benchmark_training(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
             bit_pack=input_file_packed,
+            cache_mode=input_cache_mode.lower(),
         )
     elif (
         input_dataset_id is not None
@@ -930,6 +957,7 @@ def benchmark_training(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        cache_transforms=cache_transforms,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,

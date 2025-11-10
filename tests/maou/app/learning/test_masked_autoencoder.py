@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List
 
+import numpy as np
 import pytest
 import torch
 from torch.utils.data import DataLoader
@@ -11,6 +12,39 @@ from maou.app.learning.masked_autoencoder import (
     ModelFactory,
     _MaskedAutoencoder,
 )
+from maou.domain.data.schema import create_empty_preprocessing_array
+from maou.interface.data_io import save_array
+from maou.infra.file_system.file_data_source import FileDataSource
+
+
+def _create_preprocessing_datasource(
+    directory: Path, samples: int
+) -> FileDataSource.FileDataSourceSpliter:
+    array = create_empty_preprocessing_array(samples)
+    rng = np.random.default_rng(42)
+    array["boardIdPositions"] = rng.integers(
+        0, 30, size=(samples, 9, 9), dtype=np.uint8
+    )
+    array["piecesInHand"] = rng.integers(
+        0, 2, size=(samples, 14), dtype=np.uint8
+    )
+    move_label = rng.random((samples, array["moveLabel"].shape[1]))
+    move_label /= move_label.sum(axis=1, keepdims=True)
+    array["moveLabel"] = move_label.astype(np.float16)
+    array["resultValue"] = rng.random(samples).astype(np.float16)
+    save_array(
+        array,
+        directory / "preprocessing.npy",
+        array_type="preprocessing",
+        bit_pack=False,
+    )
+    return FileDataSource.FileDataSourceSpliter(
+        file_paths=[directory / "preprocessing.npy"],
+        array_type="preprocessing",
+        bit_pack=False,
+    )
+
+
 class _DummyBackbone(torch.nn.Module):
     """Lightweight encoder stub returning a fixed embedding."""
 
@@ -26,6 +60,36 @@ class _DummyBackbone(torch.nn.Module):
         batch_size = x.size(0)
         device = x.device
         return torch.ones((batch_size, self._embedding_dim), device=device)
+
+
+def test_feature_dataset_caches_transforms(tmp_path: Path) -> None:
+    """Enabling cache_transforms should preload flattened tensors into RAM."""
+
+    splitter = _create_preprocessing_datasource(tmp_path, samples=3)
+    datasource, _ = splitter.train_test_split(test_ratio=0.0)
+    dataset = masked_autoencoder._FeatureDataset(
+        datasource,
+        cache_transforms=True,
+    )
+
+    assert dataset.cache_transforms_enabled
+    cached_sample = dataset[0]
+    assert torch.equal(cached_sample, dataset[0])
+
+
+def test_feature_dataset_skips_cache_when_disabled(tmp_path: Path) -> None:
+    """cache_transforms=False should avoid in-memory caching."""
+
+    splitter = _create_preprocessing_datasource(tmp_path, samples=2)
+    datasource, _ = splitter.train_test_split(test_ratio=0.0)
+    dataset = masked_autoencoder._FeatureDataset(
+        datasource,
+        cache_transforms=False,
+    )
+
+    assert not dataset.cache_transforms_enabled
+    first = dataset[0]
+    assert isinstance(first, torch.Tensor)
 
 
 def test_resolve_device_enables_tensorfloat32_for_cuda(
