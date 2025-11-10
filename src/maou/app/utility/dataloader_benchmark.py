@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TypeAlias
 
 import torch
 from torch.utils.data import DataLoader
@@ -59,6 +61,11 @@ class BenchmarkConfig:
             object.__setattr__(
                 self, "prefetch_factors_to_test", [1, 2, 4, 8]
             )
+
+
+InputStructure: TypeAlias = (
+    torch.Tensor | tuple["InputStructure", ...] | list["InputStructure"]
+)
 
 
 class DataLoaderBenchmark:
@@ -193,15 +200,20 @@ class DataLoaderBenchmark:
 
     def _move_inputs_to_device(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        inputs: InputStructure,
+    ) -> InputStructure:
+        if isinstance(inputs, torch.Tensor):
+            return inputs.to(self.config.device, non_blocking=True)
         if isinstance(inputs, tuple):
-            board, pieces = inputs
-            return (
-                board.to(self.config.device, non_blocking=True),
-                pieces.to(self.config.device, non_blocking=True),
+            return tuple(
+                self._move_inputs_to_device(item) for item in inputs
             )
-        return inputs.to(self.config.device, non_blocking=True)
+        if isinstance(inputs, list):
+            return [self._move_inputs_to_device(item) for item in inputs]
+        raise TypeError(
+            "Unsupported input type for device transfer: "
+            f"{type(inputs).__name__}"
+        )
 
     def run_benchmark(
         self,
