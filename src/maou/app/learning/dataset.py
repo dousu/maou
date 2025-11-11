@@ -5,6 +5,7 @@ from collections.abc import Sized
 from typing import Optional
 
 import numpy as np
+from numpy.typing import DTypeLike
 import torch
 from torch.utils.data import Dataset
 
@@ -124,19 +125,21 @@ class KifDataset(Dataset, Sized):
             if "piecesInHand" not in data.dtype.names:
                 raise ValueError("Preprocessed record lacks piecesInHand")
 
-            board_array = np.asarray(
-                data["boardIdPositions"], dtype=np.uint8
+            board_tensor = self._structured_field_to_tensor(
+                data,
+                field_name="boardIdPositions",
+                expected_dtype=np.uint8,
             )
-            board_tensor = torch.from_numpy(board_array.copy()).to(torch.long)
-            pieces_in_hand_array = np.asarray(
-                data["piecesInHand"], dtype=np.uint8
+            pieces_in_hand_tensor = self._structured_field_to_tensor(
+                data,
+                field_name="piecesInHand",
+                expected_dtype=np.uint8,
             )
-            pieces_in_hand_tensor = torch.from_numpy(
-                pieces_in_hand_array.copy()
-            ).to(torch.float32)
-            move_label_tensor = torch.from_numpy(
-                data["moveLabel"].copy()
-            ).to(torch.float32)
+            move_label_tensor = self._structured_field_to_tensor(
+                data,
+                field_name="moveLabel",
+                expected_dtype=(np.float16, np.float32),
+            )
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32
             ).reshape((1))
@@ -170,19 +173,25 @@ class KifDataset(Dataset, Sized):
             eval=data["eval"].item(),
         )
 
-        board_tensor = torch.from_numpy(board_id_positions.copy()).to(
-            torch.long
+        board_tensor = self._numpy_to_tensor(
+            board_id_positions,
+            field_name="boardIdPositions",
+            expected_dtype=np.uint8,
         )
-        pieces_in_hand_tensor = torch.from_numpy(
-            pieces_in_hand.copy()
-        ).to(torch.float32)
-        legal_move_mask_tensor = torch.from_numpy(legal_move_mask).to(
-            torch.float32
+        pieces_in_hand_tensor = self._numpy_to_tensor(
+            pieces_in_hand,
+            field_name="piecesInHand",
+            expected_dtype=np.uint8,
+        )
+        legal_move_mask_tensor = self._numpy_to_tensor(
+            legal_move_mask,
+            field_name="legalMoveMask",
+            expected_dtype=np.uint8,
         )
         move_label_tensor = torch.nn.functional.one_hot(
             torch.tensor(move_label),
             num_classes=MOVE_LABELS_NUM,
-        ).to(torch.float32)
+        )
         result_value_tensor = torch.tensor(
             result_value, dtype=torch.float32
         ).reshape((1))
@@ -195,3 +204,56 @@ class KifDataset(Dataset, Sized):
                 legal_move_mask_tensor,
             ),
         )
+
+    @staticmethod
+    def _structured_field_to_tensor(
+        record: np.ndarray,
+        *,
+        field_name: str,
+        expected_dtype: DTypeLike | tuple[DTypeLike, ...],
+    ) -> torch.Tensor:
+        try:
+            field = record[field_name]
+        except ValueError as exc:  # pragma: no cover - numpy raises ValueError
+            msg = f"Preprocessed record lacks field `{field_name}`"
+            raise ValueError(msg) from exc
+
+        return KifDataset._numpy_to_tensor(
+            field,
+            field_name=field_name,
+            expected_dtype=expected_dtype,
+        )
+
+    @staticmethod
+    def _numpy_to_tensor(
+        array: np.ndarray,
+        *,
+        field_name: str,
+        expected_dtype: DTypeLike | tuple[DTypeLike, ...],
+    ) -> torch.Tensor:
+        np_array = np.asarray(array)
+        expected_dtypes = (
+            tuple(np.dtype(dtype) for dtype in expected_dtype)
+            if isinstance(expected_dtype, tuple)
+            else (np.dtype(expected_dtype),)
+        )
+        if np_array.dtype not in expected_dtypes:
+            expected_desc = (
+                expected_dtypes[0].name
+                if len(expected_dtypes) == 1
+                else " or ".join(dtype.name for dtype in expected_dtypes)
+            )
+            msg = (
+                f"Field `{field_name}` must have dtype {expected_desc}, "
+                f"got {np_array.dtype}"
+            )
+            raise TypeError(msg)
+        if not np_array.flags.c_contiguous:
+            msg = (
+                f"Field `{field_name}` must be C-contiguous to enable zero-copy "
+                "conversion"
+            )
+            raise ValueError(msg)
+        if not np_array.flags.writeable:
+            np_array = np_array.copy()
+        return torch.from_numpy(np_array)

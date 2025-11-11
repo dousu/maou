@@ -212,15 +212,21 @@ class TrainingLoop:
                 self.device,
             )
             context.labels_policy = context.labels_policy.to(
-                self.device, non_blocking=True
+                self.device,
+                dtype=torch.float32,
+                non_blocking=True,
             )
             context.labels_value = context.labels_value.to(
-                self.device, non_blocking=True
+                self.device,
+                dtype=torch.float32,
+                non_blocking=True,
             )
             if context.legal_move_mask is not None:
                 context.legal_move_mask = (
                     context.legal_move_mask.to(
-                        self.device, non_blocking=True
+                        self.device,
+                        dtype=torch.float32,
+                        non_blocking=True,
                     )
                 )
 
@@ -345,17 +351,44 @@ class TrainingLoop:
         *,
         non_blocking: bool = True,
     ) -> ModelInputs:
-        def move(value: object) -> object:
+        def move(value: object, path: tuple[int, ...]) -> object:
             if isinstance(value, torch.Tensor):
-                return value.to(device, non_blocking=non_blocking)
+                target_dtype = self._infer_input_dtype(path, value)
+                to_kwargs: dict[str, object] = {
+                    "device": device,
+                    "non_blocking": non_blocking,
+                }
+                if target_dtype is not None and value.dtype != target_dtype:
+                    to_kwargs["dtype"] = target_dtype
+                return value.to(**to_kwargs)
             if isinstance(value, tuple):
-                return tuple(move(item) for item in value)
+                return tuple(
+                    move(item, path + (index,))
+                    for index, item in enumerate(value)
+                )
             if isinstance(value, list):
-                return [move(item) for item in value]
+                return [
+                    move(item, path + (index,))
+                    for index, item in enumerate(value)
+                ]
             return value
 
-        moved = move(inputs)
+        moved = move(inputs, tuple())
         return cast(ModelInputs, moved)
+
+    @staticmethod
+    def _infer_input_dtype(
+        index_path: tuple[int, ...], tensor: torch.Tensor
+    ) -> torch.dtype | None:
+        if not index_path:
+            return None
+
+        root_index = index_path[0]
+        if root_index == 0 and not torch.is_floating_point(tensor):
+            return torch.long
+        if root_index == 1 and tensor.dtype != torch.float32:
+            return torch.float32
+        return None
 
     @staticmethod
     def _resolve_batch_size(inputs: ModelInputs) -> int:

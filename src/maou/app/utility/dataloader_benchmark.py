@@ -164,14 +164,20 @@ class DataLoaderBenchmark:
             if self.config.device.type == "cuda":
                 inputs = self._move_inputs_to_device(inputs)
                 labels_policy = labels_policy.to(
-                    self.config.device, non_blocking=True
+                    self.config.device,
+                    dtype=torch.float32,
+                    non_blocking=True,
                 )
                 labels_value = labels_value.to(
-                    self.config.device, non_blocking=True
+                    self.config.device,
+                    dtype=torch.float32,
+                    non_blocking=True,
                 )
                 if legal_move_mask is not None:
                     legal_move_mask = legal_move_mask.to(
-                        self.config.device, non_blocking=True
+                        self.config.device,
+                        dtype=torch.float32,
+                        non_blocking=True,
                     )
                 # Synchronize to ensure all transfers complete
                 torch.cuda.synchronize()
@@ -201,19 +207,55 @@ class DataLoaderBenchmark:
     def _move_inputs_to_device(
         self,
         inputs: InputStructure,
+        index_path: tuple[int, ...] | None = None,
     ) -> InputStructure:
+        path = index_path or tuple()
         if isinstance(inputs, torch.Tensor):
-            return inputs.to(self.config.device, non_blocking=True)
+            return self._move_tensor(inputs, index_path=path)
         if isinstance(inputs, tuple):
             return tuple(
-                self._move_inputs_to_device(item) for item in inputs
+                self._move_inputs_to_device(item, path + (index,))
+                for index, item in enumerate(inputs)
             )
         if isinstance(inputs, list):
-            return [self._move_inputs_to_device(item) for item in inputs]
+            return [
+                self._move_inputs_to_device(item, path + (index,))
+                for index, item in enumerate(inputs)
+            ]
         raise TypeError(
             "Unsupported input type for device transfer: "
             f"{type(inputs).__name__}"
         )
+
+    def _move_tensor(
+        self,
+        tensor: torch.Tensor,
+        *,
+        index_path: tuple[int, ...],
+    ) -> torch.Tensor:
+        target_dtype = self._infer_input_dtype(index_path, tensor)
+        to_kwargs: dict[str, object] = {
+            "device": self.config.device,
+            "non_blocking": True,
+        }
+        if target_dtype is not None and tensor.dtype != target_dtype:
+            to_kwargs["dtype"] = target_dtype
+        return tensor.to(**to_kwargs)
+
+    def _infer_input_dtype(
+        self,
+        index_path: tuple[int, ...],
+        tensor: torch.Tensor,
+    ) -> torch.dtype | None:
+        if not index_path:
+            return None
+
+        root_index = index_path[0]
+        if root_index == 0 and not torch.is_floating_point(tensor):
+            return torch.long
+        if root_index == 1 and tensor.dtype != torch.float32:
+            return torch.float32
+        return None
 
     def run_benchmark(
         self,
