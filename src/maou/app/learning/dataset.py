@@ -5,6 +5,7 @@ from collections.abc import Sized
 from typing import Optional
 
 import numpy as np
+from numpy.typing import DTypeLike
 import torch
 from torch.utils.data import Dataset
 
@@ -137,7 +138,7 @@ class KifDataset(Dataset, Sized):
             move_label_tensor = self._structured_field_to_tensor(
                 data,
                 field_name="moveLabel",
-                expected_dtype=np.float32,
+                expected_dtype=(np.float16, np.float32),
             )
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32
@@ -209,7 +210,7 @@ class KifDataset(Dataset, Sized):
         record: np.ndarray,
         *,
         field_name: str,
-        expected_dtype: np.dtype,
+        expected_dtype: DTypeLike | tuple[DTypeLike, ...],
     ) -> torch.Tensor:
         try:
             field = record[field_name]
@@ -228,12 +229,22 @@ class KifDataset(Dataset, Sized):
         array: np.ndarray,
         *,
         field_name: str,
-        expected_dtype: np.dtype,
+        expected_dtype: DTypeLike | tuple[DTypeLike, ...],
     ) -> torch.Tensor:
         np_array = np.asarray(array)
-        if np_array.dtype != expected_dtype:
+        expected_dtypes = (
+            tuple(np.dtype(dtype) for dtype in expected_dtype)
+            if isinstance(expected_dtype, tuple)
+            else (np.dtype(expected_dtype),)
+        )
+        if np_array.dtype not in expected_dtypes:
+            expected_desc = (
+                expected_dtypes[0].name
+                if len(expected_dtypes) == 1
+                else " or ".join(dtype.name for dtype in expected_dtypes)
+            )
             msg = (
-                f"Field `{field_name}` must have dtype {expected_dtype}, "
+                f"Field `{field_name}` must have dtype {expected_desc}, "
                 f"got {np_array.dtype}"
             )
             raise TypeError(msg)
