@@ -104,6 +104,9 @@ class FileDataSource(
             array_type: Literal["hcpe", "preprocessing"],
             bit_pack: bool,
             cache_mode: "FileDataSource.CacheMode" = "mmap",
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
