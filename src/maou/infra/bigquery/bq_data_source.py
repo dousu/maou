@@ -42,6 +42,9 @@ class BigQueryDataSource(
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
             sample_ratio: Optional[float] = None,
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             self.__page_manager = (
                 BigQueryDataSource.PageManager(
@@ -55,6 +58,7 @@ class BigQueryDataSource(
                     use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
                     sample_ratio=sample_ratio,
+                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             )
 
@@ -112,6 +116,9 @@ class BigQueryDataSource(
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
             sample_ratio: Optional[float] = None,
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = (
@@ -129,6 +136,7 @@ class BigQueryDataSource(
                 else None
             )
             self.array_type = array_type
+            self.preprocessing_mmap_mode = preprocessing_mmap_mode
             self.__pruning_info = []
 
             # ローカルキャッシュの設定
@@ -313,9 +321,12 @@ class BigQueryDataSource(
             )
             return load_array(
                 cache_path,
-                mmap_mode="r",
+                mmap_mode=(
+                    "r" if self.array_type == "hcpe" else None
+                ),
                 array_type=self.array_type,
                 bit_pack=False,
+                preprocessing_mmap_mode=self.preprocessing_mmap_mode,
             )
 
         def __save_to_local(
@@ -645,6 +656,9 @@ class BigQueryDataSource(
         use_local_cache: bool = False,
         local_cache_dir: Optional[str] = None,
         sample_ratio: Optional[float] = None,
+        preprocessing_mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = "c",
     ) -> None:
         """
 
@@ -679,6 +693,7 @@ class BigQueryDataSource(
                     use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
                     sample_ratio=sample_ratio,
+                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingBigQueryConfig(

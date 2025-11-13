@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 import torch
 from torch.utils.data import DataLoader
 
+from maou.app.common.data_io_service import DataIOService
 from maou.app.learning.dataset import DataSource, KifDataset
+from maou.domain.data.array_io import save_preprocessing_array
+from maou.domain.data.schema import create_empty_preprocessing_array
 
 
 class _ArrayDataSource(DataSource):
@@ -113,4 +118,62 @@ def test_dataset_requires_board_identifiers() -> None:
 
     with pytest.raises(ValueError):
         dataset[0]
+
+
+def test_numpy_to_tensor_requires_writeable_buffer() -> None:
+    """Read-only buffers should surface actionable guidance."""
+
+    dtype = np.dtype(
+        [
+            ("boardIdPositions", np.uint8, (2, 2)),
+            ("piecesInHand", np.uint8, (2,)),
+            ("moveLabel", np.float32, (1,)),
+            ("resultValue", np.float32),
+        ]
+    )
+    data = np.zeros(1, dtype=dtype)
+    data.setflags(write=False)
+
+    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+
+    with pytest.raises(ValueError, match="read-only"):
+        dataset[0]
+
+
+def test_numpy_to_tensor_preserves_memmap_zero_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Copy-on-write preprocessing memmaps stay writeable for tensors."""
+
+    prep_array = create_empty_preprocessing_array(1)
+    prep_array["boardIdPositions"] = np.ones(
+        prep_array["boardIdPositions"].shape,
+        dtype=np.uint8,
+    )
+
+    file_path = tmp_path / "zero_copy.npy"
+    save_preprocessing_array(prep_array, file_path)
+
+    loaded_array = DataIOService.load_array(
+        file_path,
+        array_type="preprocessing",
+        bit_pack=False,
+    )
+
+    assert isinstance(loaded_array, np.memmap)
+    assert loaded_array.flags.writeable
+
+    record = loaded_array[0]
+    board_np = record["boardIdPositions"]
+    tensor = KifDataset._numpy_to_tensor(
+        board_np,
+        field_name="boardIdPositions",
+        expected_dtype=np.uint8,
+    )
+
+    ptr = tensor.data_ptr()
+    board_np[0, 0] = 9
+
+    assert tensor.data_ptr() == ptr
+    assert int(tensor[0, 0]) == 9
 

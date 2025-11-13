@@ -255,5 +255,10 @@ class KifDataset(Dataset, Sized):
             )
             raise ValueError(msg)
         if not np_array.flags.writeable:
-            np_array = np_array.copy()
+            msg = (
+                f"Field `{field_name}` was loaded as read-only. "
+                "Ensure preprocessing files are opened via copy-on-write "
+                "memory mapping so tensors can share storage."
+            )
+            raise ValueError(msg)
         return torch.from_numpy(np_array)

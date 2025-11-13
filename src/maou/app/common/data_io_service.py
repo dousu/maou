@@ -56,6 +56,9 @@ class DataIOService:
         mmap_mode: Optional[
             Literal["r", "r+", "w+", "c"]
         ] = None,
+        preprocessing_mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = "c",
         bit_pack: bool = True,
     ) -> np.ndarray:
         """Load numpy array with automatic schema handling.
@@ -64,6 +67,7 @@ class DataIOService:
             file_path: Path to numpy file (.npy)
             array_type: Type of array to load ("hcpe", "preprocessing")
             mmap_mode: Memory mapping mode for .npy files
+            preprocessing_mmap_mode: Default mmap mode for preprocessing arrays
             bit_pack: Whether to use bit packing compression for binary fields
 
         Returns:
@@ -72,17 +76,26 @@ class DataIOService:
         Raises:
             DataIOError: If loading fails
         """
+        effective_mmap_mode: Optional[Literal["r", "r+", "w+", "c"]] = (
+            mmap_mode
+        )
+        if (
+            array_type == "preprocessing"
+            and effective_mmap_mode is None
+        ):
+            effective_mmap_mode = preprocessing_mmap_mode
+
         try:
             file_path = Path(file_path)
 
             if array_type == "hcpe":
                 return load_hcpe_array(
-                    file_path, mmap_mode=mmap_mode
+                    file_path, mmap_mode=effective_mmap_mode
                 )
             if array_type == "preprocessing":
                 return load_preprocessing_array(
                     file_path,
-                    mmap_mode=mmap_mode,
+                    mmap_mode=effective_mmap_mode,
                     bit_pack=bit_pack,
                 )
 
@@ -96,7 +109,7 @@ class DataIOService:
 
         except DataIOError as error:
             if (
-                mmap_mode is None
+                effective_mmap_mode is None
                 and _is_memory_allocation_error(error)
             ):
                 logger.warning(
@@ -113,7 +126,7 @@ class DataIOService:
                     if array_type == "preprocessing":
                         return load_preprocessing_array(
                             file_path,
-                            mmap_mode="r",
+                            mmap_mode="c",
                             bit_pack=bit_pack,
                         )
                 except DataIOError as retry_error:

@@ -22,6 +22,9 @@ def load_array(
     file_path: Union[str, Path],
     *,
     mmap_mode: Optional[Literal["r", "r+", "w+", "c"]] = None,
+    preprocessing_mmap_mode: Optional[
+        Literal["r", "r+", "w+", "c"]
+    ] = "c",
     array_type: Literal["hcpe", "preprocessing"],
     bit_pack: bool = True,
 ) -> np.ndarray:
@@ -34,6 +37,7 @@ def load_array(
     Args:
         file_path: Path to numpy file (.npy)
         mmap_mode: Memory mapping mode for .npy files ('r', 'r+', 'w+', 'c')
+        preprocessing_mmap_mode: Default mmap mode for preprocessing arrays
         array_type: Expected array type ("hcpe", "preprocessing")
 
     Returns:
@@ -52,6 +56,7 @@ def load_array(
         file_path,
         array_type=array_type,
         mmap_mode=mmap_mode,
+        preprocessing_mmap_mode=preprocessing_mmap_mode,
         bit_pack=bit_pack,
     )
 

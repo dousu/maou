@@ -89,3 +89,15 @@ poetry run maou pretrain \
   --mask-ratio 0.75 \
   --hidden-dim 512
 ```
+
+## Preprocessingデータのメモリマップ方式
+
+前処理済みの`.npy`ファイルはデフォルトでコピーオンライト(`mmap_mode="c"`)
+としてメモリマップされます。これにより`numpy.memmap`が
+`writeable=True`のまま保持され、`torch.from_numpy()`によるゼロコピー変換が
+可能になります。ファイルを汚染することなくテンソルから値を更新できるため、
+訓練用データセットをGPUへ転送する際のコピーを削減できます。
+
+ファイルシステム／オブジェクトストレージ／BigQueryの各データソースには
+`preprocessing_mmap_mode`引数を追加しており、必要に応じてコピーオンライト以外の
+モードへ切り替えることもできます。
