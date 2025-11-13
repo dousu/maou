@@ -87,6 +87,37 @@ class TestDataIOService:
                 loaded_array, prep_array
             )
 
+    def test_preprocessing_arrays_are_writeable_memmaps(self) -> None:
+        """Preprocessing arrays default to copy-on-write memory maps."""
+
+        prep_array = create_empty_preprocessing_array(1)
+        prep_array["boardIdPositions"] = np.ones(
+            prep_array["boardIdPositions"].shape,
+            dtype=np.uint8,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "cow_preprocessing.npy"
+
+            from maou.domain.data.array_io import (
+                save_preprocessing_array,
+            )
+
+            save_preprocessing_array(prep_array, file_path)
+
+            loaded_array = DataIOService.load_array(
+                file_path,
+                array_type="preprocessing",
+                bit_pack=False,
+            )
+
+            assert isinstance(loaded_array, np.memmap)
+            assert loaded_array.flags.writeable
+
+            board = loaded_array["boardIdPositions"]
+            board[0, 0, 0] = 7
+            assert int(board[0, 0, 0]) == 7
+
     def test_load_array_with_mmap(self) -> None:
         """Test loading array with memory mapping."""
         hcpe_array = create_empty_hcpe_array(5)

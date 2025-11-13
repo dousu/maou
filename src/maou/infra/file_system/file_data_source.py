@@ -36,12 +36,16 @@ class FileDataSource(
             array_type: Literal["hcpe", "preprocessing"],
             bit_pack: bool = False,
             cache_mode: "FileDataSource.CacheMode" = "mmap",
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
                 array_type=array_type,
                 bit_pack=bit_pack,
                 cache_mode=cache_mode,
+                preprocessing_mmap_mode=preprocessing_mmap_mode,
             )
 
         def train_test_split(
@@ -110,6 +114,7 @@ class FileDataSource(
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
+            self.preprocessing_mmap_mode = preprocessing_mmap_mode
             normalized_cache_mode = cast(
                 FileDataSource.CacheMode, cache_mode.lower()
             )
@@ -142,9 +147,14 @@ class FileDataSource(
                     else:
                         array = load_array(
                             file_path,
-                            mmap_mode="r",
+                            mmap_mode=(
+                                "r"
+                                if self.array_type == "hcpe"
+                                else None
+                            ),
                             array_type=self.array_type,
                             bit_pack=self.bit_pack,
+                            preprocessing_mmap_mode=self.preprocessing_mmap_mode,
                         )
                     memmap: Optional[NpMemMap]
                     cached_array: Optional[np.ndarray] = None
@@ -369,6 +379,9 @@ class FileDataSource(
         ] = None,
         bit_pack: bool = True,
         cache_mode: CacheMode = "mmap",
+        preprocessing_mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = "c",
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -388,6 +401,7 @@ class FileDataSource(
                     array_type=array_type,
                     bit_pack=bit_pack,
                     cache_mode=cache_mode,
+                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingFileDataConfig(

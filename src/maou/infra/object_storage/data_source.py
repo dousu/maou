@@ -131,6 +131,9 @@ class ObjectStorageDataSource(
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = True,
             bundle_size_gb: float = 1.0,
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             self.__page_manager = cls_ref.PageManager(
                 bucket_name=bucket_name,
@@ -143,6 +146,7 @@ class ObjectStorageDataSource(
                 array_type=array_type,
                 enable_bundling=enable_bundling,
                 bundle_size_gb=bundle_size_gb,
+                preprocessing_mmap_mode=preprocessing_mmap_mode,
             )
 
         def train_test_split(
@@ -203,6 +207,9 @@ class ObjectStorageDataSource(
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
+            preprocessing_mmap_mode: Optional[
+                Literal["r", "r+", "w+", "c"]
+            ] = "c",
         ) -> None:
             self.bucket_name = bucket_name
             self.prefix = prefix
@@ -215,6 +222,7 @@ class ObjectStorageDataSource(
                 if sample_ratio is not None
                 else None
             )
+            self.preprocessing_mmap_mode = preprocessing_mmap_mode
             if local_cache_dir is None:
                 raise ValueError(
                     "local_cache_dir must be specified"
@@ -248,9 +256,12 @@ class ObjectStorageDataSource(
                 try:
                     array = load_array(
                         file_path,
-                        mmap_mode="r",
+                        mmap_mode=(
+                            "r" if self.array_type == "hcpe" else None
+                        ),
                         array_type=self.array_type,
                         bit_pack=False,
+                        preprocessing_mmap_mode=self.preprocessing_mmap_mode,
                     )
                     self.memmap_arrays.append(
                         (file_path.name, array)
@@ -466,6 +477,9 @@ class ObjectStorageDataSource(
         ] = None,
         enable_bundling: bool = False,
         bundle_size_gb: float = 1.0,
+        preprocessing_mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = "c",
     ) -> None:
         """
         Args:
@@ -502,6 +516,7 @@ class ObjectStorageDataSource(
                     array_type=array_type,
                     enable_bundling=enable_bundling,
                     bundle_size_gb=bundle_size_gb,
+                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingObjectStorageConfig(
