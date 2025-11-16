@@ -7,6 +7,10 @@ production checkpoints. The CLI lives in
 `utility_interface.benchmark_training`, which drives the full training stack and
 produces console-friendly summaries plus machine-readable metrics.
 
+If you only need a quick inference sanity check instead of a full benchmark,
+run [`maou evaluate`](./evaluate.md) to score an arbitrary SFEN board position
+with ONNX or TensorRT backends and inspect the policy/evaluation readout.
+
 ## Input selection & caching flags
 
 The training benchmark shares its datasource options with
