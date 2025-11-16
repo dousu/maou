@@ -363,7 +363,6 @@ def benchmark_training(
         datasource_type=datasource_type,
         gpu=gpu,
         compilation=compilation,
-        detect_anomaly=detect_anomaly,
         test_ratio=test_ratio,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,

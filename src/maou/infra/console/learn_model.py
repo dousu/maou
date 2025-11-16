@@ -700,7 +700,6 @@ def learn_model(
             gpu=gpu,
             model_architecture=architecture_key,
             compilation=compilation,
-            detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,
             epoch=epoch,
             batch_size=batch_size,
