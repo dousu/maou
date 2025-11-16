@@ -559,6 +559,7 @@ class TrainingSetup:
         optimizer_eps: float = 1e-8,
         lr_scheduler_name: Optional[str] = None,
         max_epochs: int = 1,
+        detect_anomaly: bool = False,
     ) -> Tuple[
         DeviceConfig,
         Tuple[DataLoader, DataLoader],
@@ -569,9 +570,10 @@ class TrainingSetup:
         cls.logger.info("Setting up training components")
 
         # Torch config
-        torch.autograd.set_detect_anomaly(
-            mode=True, check_nan=True
-        )
+        if detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
 
         # Device setup
         device_config = DeviceSetup.setup_device(

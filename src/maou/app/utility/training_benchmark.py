@@ -382,6 +382,7 @@ class TrainingBenchmarkConfig:
     datasource_type: str
     gpu: Optional[str] = None
     compilation: bool = False
+    detect_anomaly: bool = False
     batch_size: int = 256
     dataloader_workers: int = 4
     pin_memory: Optional[bool] = None
@@ -452,6 +453,7 @@ class TrainingBenchmarkUseCase:
                 optimizer_eps=config.optimizer_eps,
                 lr_scheduler_name=config.lr_scheduler_name,
                 max_epochs=1,
+                detect_anomaly=config.detect_anomaly,
             )
         )
 

@@ -563,6 +563,14 @@ def benchmark_dataloader(
     default=False,
 )
 @click.option(
+    "--detect-anomaly",
+    type=bool,
+    is_flag=True,
+    help="Enable torch.autograd anomaly detection (default: disabled).",
+    required=False,
+    default=False,
+)
+@click.option(
     "--test-ratio",
     type=float,
     help="Test set ratio for validation benchmark (default: 0.2).",
@@ -738,6 +746,7 @@ def benchmark_training(
     input_max_workers: int,
     gpu: Optional[str],
     compilation: bool,
+    detect_anomaly: bool,
     test_ratio: float,
     batch_size: int,
     dataloader_workers: int,
@@ -952,6 +961,7 @@ def benchmark_training(
         datasource_type=input_format,
         gpu=gpu,
         compilation=compilation,
+        detect_anomaly=detect_anomaly,
         test_ratio=test_ratio,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,

@@ -84,6 +84,7 @@ class Learning:
         optimizer_beta1: float
         optimizer_beta2: float
         optimizer_eps: float
+        detect_anomaly: bool = False
         resume_from: Optional[Path] = None
         start_epoch: int = 0
         log_dir: Path
@@ -147,6 +148,7 @@ class Learning:
                 optimizer_eps=config.optimizer_eps,
                 lr_scheduler_name=config.lr_scheduler_name,
                 max_epochs=config.epoch,
+                detect_anomaly=config.detect_anomaly,
             )
         )
 

@@ -90,6 +90,20 @@ poetry run maou pretrain \
   --hidden-dim 512
 ```
 
+## torch.autogradのAnomaly Detectionを使ったデバッグ
+
+学習中に不安定な勾配を追跡したい場合は，`maou learn-model` や
+`maou utility benchmark-training` に `--detect-anomaly` フラグを付けると
+`torch.autograd.set_detect_anomaly` が有効化される．デフォルトは無効のため，
+推論やベンチマーク時に余計なオーバーヘッドを負うことはない．
+例えば以下のように実行する．
+
+```bash
+poetry run maou learn-model --detect-anomaly [...他の引数]
+
+poetry run maou utility benchmark-training --detect-anomaly [...他の引数]
+```
+
 ## Preprocessingデータのメモリマップ方式
 
 前処理済みの`.npy`ファイルはデフォルトでコピーオンライト(`mmap_mode="c"`)

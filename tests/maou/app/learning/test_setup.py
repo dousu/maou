@@ -69,8 +69,8 @@ class RecordingTransform:
         pieces = np.full((14,), move16, dtype=np.uint8)
         move_label = int(move16 % MOVE_LABELS_NUM)
         result_value = float(game_result)
-        legal_move_mask = np.zeros((MOVE_LABELS_NUM,), dtype=np.float32)
-        legal_move_mask[move_label] = 1.0
+        legal_move_mask = np.zeros((MOVE_LABELS_NUM,), dtype=np.uint8)
+        legal_move_mask[move_label] = 1
         return board, pieces, move_label, result_value, legal_move_mask
 def test_training_setup_uses_adamw_optimizer() -> None:
     datasource = DummyPreprocessedDataSource(length=4)
@@ -328,3 +328,66 @@ def test_training_setup_respects_cache_transforms_override(monkeypatch: pytest.M
     )
 
     assert cache_flags == [False]
+
+
+def test_training_setup_disables_anomaly_detection_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def fake_set_detect_anomaly(*, mode: bool, check_nan: bool) -> None:
+        calls.append((mode, check_nan))
+
+    monkeypatch.setattr(
+        torch.autograd,
+        "set_detect_anomaly",
+        fake_set_detect_anomaly,
+    )
+
+    datasource = DummyPreprocessedDataSource(length=4)
+    TrainingSetup.setup_training_components(
+        training_datasource=datasource,
+        validation_datasource=datasource,
+        datasource_type="preprocess",
+        gpu="cpu",
+        batch_size=2,
+        dataloader_workers=0,
+        pin_memory=False,
+        prefetch_factor=2,
+        optimizer_name="adamw",
+        optimizer_beta1=0.85,
+        optimizer_beta2=0.98,
+        optimizer_eps=1e-7,
+    )
+
+    assert calls == []
+
+
+def test_training_setup_enables_anomaly_detection_when_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def fake_set_detect_anomaly(*, mode: bool, check_nan: bool) -> None:
+        calls.append((mode, check_nan))
+
+    monkeypatch.setattr(
+        torch.autograd,
+        "set_detect_anomaly",
+        fake_set_detect_anomaly,
+    )
+
+    datasource = DummyPreprocessedDataSource(length=4)
+    TrainingSetup.setup_training_components(
+        training_datasource=datasource,
+        validation_datasource=datasource,
+        datasource_type="preprocess",
+        gpu="cpu",
+        batch_size=2,
+        dataloader_workers=0,
+        pin_memory=False,
+        prefetch_factor=2,
+        optimizer_name="adamw",
+        optimizer_beta1=0.85,
+        optimizer_beta2=0.98,
+        optimizer_eps=1e-7,
+        detect_anomaly=True,
+    )
+
+    assert calls == [(True, True)]
