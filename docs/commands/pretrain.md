@@ -1,91 +1,107 @@
 # `maou pretrain`
 
-`maou pretrain` drives the masked autoencoder (MAE) warm‑up that produces an
-encoder checkpoint usable by the downstream learning jobs. The flags exposed by
-the CLI are defined in
-`src/maou/infra/console/pretrain_cli.py` and are forwarded to the interface layer
-(`src/maou/interface/pretrain.py`).【F:src/maou/infra/console/pretrain_cli.py†L1-L146】【F:src/maou/interface/pretrain.py†L1-L49】
+## Overview
 
-## CLI options and behaviors
+- Runs the masked autoencoder (MAE) warm-up loop that produces encoder weights
+  for downstream training. The CLI, defined in
+  `src/maou/infra/console/pretrain_cli.py`, only ingests local `.npz`/`.npy`
+  datasets and exposes all MAE hyperparameters plus optional config-file
+  overrides.【F:src/maou/infra/console/pretrain_cli.py†L1-L185】
+- `maou.interface.pretrain` normalizes cache modes, worker counts, and transform
+  caching before instantiating `MaskedAutoencoderPretraining`, which executes the
+  PyTorch training loop and writes the encoder `state_dict`.【F:src/maou/interface/pretrain.py†L13-L72】【F:src/maou/app/learning/masked_autoencoder.py†L165-L466】
+
+## CLI options
+
+### Dataset and configuration
 
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--input-dir PATH` | ✅ | Folder of local `.npz` or `.npy` files containing the structured records emitted by the preprocessing pipeline. The CLI walks the directory recursively via `FileSystem.collect_files` and aborts when no files are found.【F:src/maou/infra/console/pretrain_cli.py†L16-L60】 |
-| `--input-format {preprocess,hcpe}` | default `preprocess` | Used twice: it decides which parser the `FileDataSourceSpliter` should use (`preprocessing` vs `hcpe`) and feeds the interface so the dataset logic can toggle HCPE-specific defaults.【F:src/maou/infra/console/pretrain_cli.py†L21-L66】【F:src/maou/interface/pretrain.py†L13-L38】 |
-| `--input-file-packed/--no-input-file-packed` | default `--no-input-file-packed` | Flags whether the local files were bit-packed during preprocessing. The bit-pack hint is passed straight into `FileDataSource.FileDataSourceSpliter`.【F:src/maou/infra/console/pretrain_cli.py†L22-L66】 |
-| `--input-cache-mode {mmap,memory}` | default `mmap` | Chooses how the on-disk arrays are cached (memory mapped or eager load). The value is lower-cased before being passed to the datasource builder.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】 |
-| `--config-path FILE` | optional | JSON or TOML file whose fields override the CLI values (everything except the datasource). This path is handed off to the interface and ultimately consumed by `MaskedAutoencoderPretraining._apply_config_overrides`.【F:src/maou/infra/console/pretrain_cli.py†L34-L83】【F:src/maou/app/learning/masked_autoencoder.py†L259-L325】 |
-| `--output-path FILE` | optional | Destination for the serialized encoder `state_dict`. When omitted the workflow writes `masked_autoencoder_state.pt` in the current working directory.【F:src/maou/infra/console/pretrain_cli.py†L36-L99】【F:src/maou/app/learning/masked_autoencoder.py†L342-L356】 |
-| `--epochs INT` | default `5` | Total passes over the dataset. Values ≤0 trigger a validation error before the training loop begins.【F:src/maou/infra/console/pretrain_cli.py†L41-L107】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】 |
-| `--batch-size INT` | default `64` | Mini-batch size supplied to the PyTorch `DataLoader`. Must be positive.【F:src/maou/infra/console/pretrain_cli.py†L46-L107】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】 |
-| `--learning-rate FLOAT` | default `1e-3` | Adam optimizer learning rate.【F:src/maou/infra/console/pretrain_cli.py†L51-L107】【F:src/maou/app/learning/masked_autoencoder.py†L264-L273】 |
-| `--mask-ratio FLOAT` | default `0.75` | Portion of flattened board features that get zeroed before reconstruction. The runner enforces the inclusive `[0,1]` range.【F:src/maou/infra/console/pretrain_cli.py†L56-L114】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】 |
-| `--device STRING` | optional | Explicit device identifier, e.g. `cuda:0` or `cpu`. When omitted, the interface lets the runner auto-detect CUDA availability and default to CPU otherwise.【F:src/maou/infra/console/pretrain_cli.py†L61-L121】【F:src/maou/app/learning/masked_autoencoder.py†L357-L382】 |
-| `--compilation/--no-compilation` | default `--no-compilation` | Enables PyTorch 2.x compilation (`torch.compile`) for the MAE model via `compile_module`. Useful when benchmarking the new backend.【F:src/maou/infra/console/pretrain_cli.py†L66-L132】【F:src/maou/app/learning/masked_autoencoder.py†L180-L203】 |
-| `--dataloader-workers / --num-workers INT` | default `0` | Worker processes for the `DataLoader`. The CLI advertises `None`, but before hitting the interface `None` is resolved to `0` so single-process loading remains the default.【F:src/maou/infra/console/pretrain_cli.py†L71-L146】【F:src/maou/infra/console/pretrain_cli.py†L158-L177】 |
-| `--prefetch-factor INT` | default `2` | How many batches each worker keeps buffered when workers are enabled. The CLI and interface both replace `None` with `2` to preserve deterministic defaults.【F:src/maou/infra/console/pretrain_cli.py†L74-L146】【F:src/maou/interface/pretrain.py†L28-L49】 |
-| `--pin-memory/--no-pin-memory` | default `device dependent` | Passing the flag overrides the Tensor pinning behavior. Otherwise the runner mirrors the selected device (pin memory on CUDA, off on CPU).【F:src/maou/infra/console/pretrain_cli.py†L79-L146】【F:src/maou/app/learning/masked_autoencoder.py†L383-L425】 |
-| `--cache-transforms/--no-cache-transforms` | default `format dependent` | Allows caching the flattened feature tensors in RAM. When omitted the interface auto-enables caching for HCPE inputs (which already come as flattened tensors) and disables it for preprocessing arrays to avoid duplicated work.【F:src/maou/infra/console/pretrain_cli.py†L86-L153】【F:src/maou/interface/pretrain.py†L37-L65】【F:src/maou/app/learning/masked_autoencoder.py†L21-L84】 |
-| `--hidden-dim INT` | default `512` | Size of the decoder MLP bottleneck inside `_MaskedAutoencoder`. Must be positive.【F:src/maou/infra/console/pretrain_cli.py†L91-L153】【F:src/maou/app/learning/masked_autoencoder.py†L93-L147】 |
-| `--forward-chunk-size INT` | default `auto` | Caps the number of samples processed per forward micro-batch. When omitted the runner uses `batch-size` (no additional chunking).【F:src/maou/infra/console/pretrain_cli.py†L97-L153】【F:src/maou/app/learning/masked_autoencoder.py†L300-L337】 |
+| `--input-dir PATH` | ✅ | Folder containing `.npz`/`.npy` artifacts from the preprocessing pipeline. The CLI walks recursively and aborts when no files are found.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】 |
+| `--input-format {preprocess,hcpe}` | default `preprocess` | Selects how `FileDataSourceSpliter` parses the files and informs the interface so HCPE-specific defaults can apply.【F:src/maou/infra/console/pretrain_cli.py†L21-L83】【F:src/maou/interface/pretrain.py†L13-L38】 |
+| `--input-file-packed/--no-input-file-packed` | default `--no-input-file-packed` | Flags whether local shards were bit-packed. Passed directly to `FileDataSource`.【F:src/maou/infra/console/pretrain_cli.py†L22-L66】 |
+| `--input-cache-mode {mmap,memory}` | default `mmap` | Chooses how the on-disk arrays are cached (memory-mapped or copied). Value is lower-cased before reaching the datasource builder.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】 |
+| `--config-path FILE` | optional | JSON/TOML file whose fields override CLI hyperparameters (excluding the datasource). Consumed later by `_apply_config_overrides`.【F:src/maou/infra/console/pretrain_cli.py†L34-L83】【F:src/maou/app/learning/masked_autoencoder.py†L259-L325】 |
+| `--output-path FILE` | optional | Destination for the serialized encoder `state_dict`. Defaults to `masked_autoencoder_state.pt` in the current directory.【F:src/maou/infra/console/pretrain_cli.py†L34-L99】【F:src/maou/app/learning/masked_autoencoder.py†L342-L356】 |
 
-## How the CLI hands off to the interface layer
+### Training hyperparameters and runtime knobs
 
-1. **Local datasource assembly** – After validating that `--input-dir` exists the
-   CLI enumerates the files and instantiates
-   `FileDataSource.FileDataSourceSpliter` with the selected format, pack mode,
-   and cache mode. No remote backends participate yet, so all training data must
-   reside on the local filesystem.【F:src/maou/infra/console/pretrain_cli.py†L16-L83】
-2. **Worker and cache defaults** – The CLI normalizes `None` to `0` workers and
-   `2` prefetched batches before calling the interface. The interface repeats the
-   guard to ensure defaults are preserved even when contributors call it directly
-   (for example from tests). Pin memory remains `None` until the app layer can
-   align it with the actual device.【F:src/maou/infra/console/pretrain_cli.py†L132-L177】【F:src/maou/interface/pretrain.py†L25-L66】
-3. **Interface normalization** – `maou.interface.pretrain.pretrain` verifies that
-   `datasource_type` is either `preprocess` or `hcpe`, picks the cache-transforms
-   default (`True` for HCPE, `False` otherwise), and builds
-   `MaskedAutoencoderPretraining.Options`. Forward chunking is only included when
-   explicitly set so the runner can fall back to adaptive chunk sizes.【F:src/maou/interface/pretrain.py†L25-L72】
-4. **Workflow execution** – `MaskedAutoencoderPretraining.run` performs the
-   training loop and saves the encoder `state_dict`. Progress bars, worker init
-   hooks, caching of flattened tensors, and encoder-state persistence all live in
-   `src/maou/app/learning/masked_autoencoder.py`. The CLI simply echoes the
-   returned status message.【F:src/maou/infra/console/pretrain_cli.py†L146-L185】【F:src/maou/app/learning/masked_autoencoder.py†L165-L466】
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--epochs INT` | `5` | Number of passes over the dataset. Values ≤0 raise before training starts.【F:src/maou/infra/console/pretrain_cli.py†L41-L114】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】 |
+| `--batch-size INT` | `64` | Minibatch size for the PyTorch DataLoader. Must be positive.【F:src/maou/infra/console/pretrain_cli.py†L46-L114】 |
+| `--learning-rate FLOAT` | `1e-3` | Adam learning rate.【F:src/maou/infra/console/pretrain_cli.py†L51-L114】【F:src/maou/app/learning/masked_autoencoder.py†L264-L273】 |
+| `--mask-ratio FLOAT` | `0.75` | Portion of flattened board features masked per sample. Constrained to `[0,1]`.【F:src/maou/infra/console/pretrain_cli.py†L56-L121】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】 |
+| `--device STRING` | auto | Explicit device identifier (`cuda:0`, `cpu`). When omitted the runner auto-detects CUDA and falls back to CPU.【F:src/maou/infra/console/pretrain_cli.py†L61-L132】【F:src/maou/app/learning/masked_autoencoder.py†L357-L425】 |
+| `--compilation/--no-compilation` | default `--no-compilation` | Enables `torch.compile` for the MAE model via `compile_module`. Useful for benchmarking PyTorch 2.x backends.【F:src/maou/infra/console/pretrain_cli.py†L66-L146】【F:src/maou/app/learning/masked_autoencoder.py†L180-L203】 |
+| `--dataloader-workers/--num-workers INT` | default `0` | Number of DataLoader workers. `None` resolves to `0` before reaching the interface.【F:src/maou/infra/console/pretrain_cli.py†L71-L153】 |
+| `--prefetch-factor INT` | default `2` | Batches prefetched per worker when workers are enabled. `None` resolves to `2`.【F:src/maou/infra/console/pretrain_cli.py†L74-L146】【F:src/maou/interface/pretrain.py†L28-L49】 |
+| `--pin-memory/--no-pin-memory` | device-dependent | Overrides Tensor pinning. When unset, the runner mirrors the selected device (pin on CUDA, off on CPU).【F:src/maou/infra/console/pretrain_cli.py†L79-L146】【F:src/maou/app/learning/masked_autoencoder.py†L383-L425】 |
+| `--cache-transforms/--no-cache-transforms` | format-dependent | When omitted, caching defaults to `True` for HCPE inputs and `False` for preprocess arrays. Flags override the heuristic.【F:src/maou/infra/console/pretrain_cli.py†L86-L153】【F:src/maou/interface/pretrain.py†L37-L65】 |
+| `--hidden-dim INT` | `512` | Size of the decoder bottleneck. Must be positive.【F:src/maou/infra/console/pretrain_cli.py†L91-L153】【F:src/maou/app/learning/masked_autoencoder.py†L93-L147】 |
+| `--forward-chunk-size INT` | auto | Caps the number of samples processed per forward micro-batch. When omitted the runner uses the batch size as-is.【F:src/maou/infra/console/pretrain_cli.py†L97-L153】【F:src/maou/app/learning/masked_autoencoder.py†L300-L337】 |
 
-### What remains stubbed?
+## Execution flow
 
-- **Datasets beyond local files** – Even though `maou.infra.console.common`
-  exposes optional imports for GCS/S3/BigQuery, the pretraining CLI currently
-  instantiates `FileDataSource` unconditionally. Remote storage selectors and the
-  ability to stream directly from object stores are still TODOs.【F:src/maou/infra/console/common.py†L1-L135】【F:src/maou/infra/console/pretrain_cli.py†L16-L83】
-- **Train/validation split logic** – `MaskedAutoencoderPretraining` requests a
-  train/test split with `test_ratio=0.0`, meaning there is no validation loop or
-  checkpoint comparison yet. Hooks for evaluation, early stopping, and metric
-  publishing will be added once the MAE is integrated into the end-to-end
-  training schedule.【F:src/maou/app/learning/masked_autoencoder.py†L201-L224】
+1. **Datasource assembly** – After validating `--input-dir`, the CLI enumerates
+   the files and instantiates `FileDataSource.FileDataSourceSpliter` with the
+   selected format, pack mode, and cache mode. Remote datasources are not yet
+   supported, so all training data must live locally.【F:src/maou/infra/console/pretrain_cli.py†L16-L83】
+2. **Default normalization** – Worker counts (`None → 0`), prefetch factors
+   (`None → 2`), and optional pin-memory overrides are normalized before calling
+   the interface to ensure consistent defaults in tests and scripts.【F:src/maou/infra/console/pretrain_cli.py†L132-L177】【F:src/maou/interface/pretrain.py†L25-L49】
+3. **Interface validation** – `maou.interface.pretrain.pretrain` re-validates the
+   datasource type (`preprocess` or `hcpe`), enforces cache-transforms defaults,
+   clamps worker counts to non-negative values, and builds the MAE options
+   dataclass with optional forward chunking or config overrides.【F:src/maou/interface/pretrain.py†L13-L72】
+4. **Training & persistence** – `MaskedAutoencoderPretraining.run` performs the
+   training loop, applies configuration overrides, logs model summaries, and saves
+   the encoder `state_dict` to the requested path. Progress bars and device logic
+   live entirely inside the app layer, and the CLI simply prints the returned
+   status message.【F:src/maou/app/learning/masked_autoencoder.py†L165-L466】【F:src/maou/infra/console/pretrain_cli.py†L146-L185】
 
-## Prerequisites and future integration points
+## Validation and guardrails
 
-1. **Local files only (for now)** – Supply an `--input-dir` that points to
-   preprocessed `.npz`/`.npy` artifacts containing structured arrays with the
-   `boardIdPositions` field; `_FeatureDataset` validates the shape at runtime and
-   aborts otherwise. Large runs benefit from `--input-cache-mode mmap` and the
-   optional `--cache-transforms` flag to reduce repeated decoding work.【F:src/maou/infra/console/pretrain_cli.py†L16-L70】【F:src/maou/app/learning/masked_autoencoder.py†L1-L84】
-2. **Configuration overrides** – Use `--config-path` to capture repeatable MAE
-   settings in JSON/TOML files. Every CLI option except the datasource can be
-   overridden there, so future integrations (e.g., alternative optimizers or
-   telemetry toggles) should add matching fields inside `Options` and the config
-   coercion helper.【F:src/maou/infra/console/pretrain_cli.py†L34-L83】【F:src/maou/app/learning/masked_autoencoder.py†L259-L337】
-3. **Planned remote backends** – The infrastructure layer already exposes
-   placeholders for BigQuery/GCS/S3 datasources; once those connectors gain MAE
-   support you can add mutually exclusive CLI flags mirroring the patterns used
-   by other commands (see `maou utility`). Each backend should still feed a
-   `LearningDataSource.DataSourceSpliter` so the interface contract remains
-   unchanged.【F:src/maou/infra/console/common.py†L1-L135】【F:src/maou/app/learning/dl.py†L1-L120】
-4. **Extended workflow hooks** – There are natural insertion points for
-   experiment tracking (after `_log_model_summary`), validation metrics (inside
-   `_run_epoch`), and alternate encoders (via `ModelFactory`). Contributors adding
-   those capabilities should wire the extra flags through the CLI → interface →
-   `Options` pipeline so downstream tooling automatically documents them here.
-   【F:src/maou/app/learning/masked_autoencoder.py†L95-L466】
+- `--input-dir` must exist and contain files; the CLI aborts early if the folder
+  is empty so GPU resources are never allocated unnecessarily.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】
+- Cache mode strings are lower-cased and validated before building the
+  datasource; invalid values raise descriptive errors.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】
+- Worker counts and prefetch factors must be non-negative/positive. The interface
+  raises `ValueError` when those invariants are violated.【F:src/maou/interface/pretrain.py†L25-L49】
+- Mask ratio, epochs, and batch size are checked for valid ranges; invalid values
+  raise before the training loop begins.【F:src/maou/infra/console/pretrain_cli.py†L41-L121】【F:src/maou/app/learning/masked_autoencoder.py†L210-L236】
+- TensorRT/GPU extras are not required, but the runner auto-detects CUDA and uses
+  CPU when unavailable so contributors can run the MAE locally.【F:src/maou/app/learning/masked_autoencoder.py†L357-L425】
 
+## Outputs and usage
+
+- Successful runs produce `masked_autoencoder_state.pt` (or your custom
+  `--output-path`) containing the encoder `state_dict`. Downstream training jobs
+  can load this file to initialize the backbone before supervised learning.
+- Config files supplied via `--config-path` override matching CLI flags, making
+  it easy to share reproducible MAE setups across machines.【F:src/maou/app/learning/masked_autoencoder.py†L259-L325】
+- The CLI prints whatever message the app layer returns (e.g., "MAE pretraining
+  completed"), so automation scripts can treat success as a zero-exit run.
+
+### Example invocation
+
+```bash
+poetry run maou pretrain \
+  --input-dir artifacts/preprocess \
+  --input-format preprocess \
+  --epochs 10 \
+  --batch-size 128 \
+  --learning-rate 5e-4 \
+  --mask-ratio 0.8 \
+  --device cuda:0 \
+  --compilation \
+  --cache-transforms
+```
+
+## Implementation references
+
+- CLI definition, dataset loading, and config overrides –
+  `src/maou/infra/console/pretrain_cli.py`.【F:src/maou/infra/console/pretrain_cli.py†L1-L185】
+- Interface adapter and normalization rules – `src/maou/interface/pretrain.py`.【F:src/maou/interface/pretrain.py†L13-L72】
+- Masked autoencoder training loop and persistence –
+  `src/maou/app/learning/masked_autoencoder.py`.【F:src/maou/app/learning/masked_autoencoder.py†L165-L466】
