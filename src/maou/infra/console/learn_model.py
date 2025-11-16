@@ -210,6 +210,14 @@ S3DataSource: S3DataSourceType | None = getattr(
     default=False,
 )
 @click.option(
+    "--detect-anomaly",
+    type=bool,
+    is_flag=True,
+    help="Enable torch.autograd anomaly detection (default: disabled).",
+    required=False,
+    default=False,
+)
+@click.option(
     "--test-ratio",
     type=float,
     help="Test set ratio.",
@@ -424,6 +432,7 @@ def learn_model(
     gpu: Optional[str],
     model_architecture: str,
     compilation: bool,
+    detect_anomaly: bool,
     test_ratio: Optional[float],
     epoch: Optional[int],
     batch_size: Optional[int],
@@ -691,6 +700,7 @@ def learn_model(
             gpu=gpu,
             model_architecture=architecture_key,
             compilation=compilation,
+            detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,
             epoch=epoch,
             batch_size=batch_size,
@@ -714,5 +724,6 @@ def learn_model(
             model_dir=model_dir,
             cloud_storage=cloud_storage,
             input_cache_mode=input_cache_mode.lower(),
+            detect_anomaly=detect_anomaly,
         )
     )

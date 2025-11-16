@@ -129,6 +129,7 @@ def learn(
     gpu: Optional[str] = None,
     model_architecture: BackboneArchitecture = "resnet",
     compilation: bool = False,
+    detect_anomaly: bool = False,
     test_ratio: Optional[float] = None,
     epoch: Optional[int] = None,
     batch_size: Optional[int] = None,
@@ -161,6 +162,7 @@ def learn(
         gpu: GPU device to use for training
         model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         compilation: Whether to compile the model
+        detect_anomaly: Enable torch.autograd anomaly detection
         test_ratio: Ratio of data to use for testing
         epoch: Number of training epochs
         batch_size: Training batch size
@@ -387,6 +389,7 @@ def learn(
         optimizer_beta1=optimizer_beta1,
         optimizer_beta2=optimizer_beta2,
         optimizer_eps=optimizer_eps,
+        detect_anomaly=detect_anomaly,
         resume_from=resume_from,
         start_epoch=start_epoch,
         log_dir=log_dir,

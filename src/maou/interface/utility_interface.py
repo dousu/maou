@@ -152,6 +152,7 @@ def benchmark_training(
     *,
     gpu: Optional[str] = None,
     compilation: bool = False,
+    detect_anomaly: bool = False,
     test_ratio: Optional[float] = None,
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
@@ -182,6 +183,7 @@ def benchmark_training(
         datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         compilation: Whether to compile the model
+        detect_anomaly: Enable torch.autograd anomaly detection
         test_ratio: Test set ratio for validation benchmark
         batch_size: Training batch size
         dataloader_workers: Number of DataLoader workers
@@ -361,6 +363,7 @@ def benchmark_training(
         datasource_type=datasource_type,
         gpu=gpu,
         compilation=compilation,
+        detect_anomaly=detect_anomaly,
         test_ratio=test_ratio,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
@@ -382,6 +385,7 @@ def benchmark_training(
         run_validation=run_validation,
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
+        detect_anomaly=detect_anomaly,
     )
 
     use_case = TrainingBenchmarkUseCase()
