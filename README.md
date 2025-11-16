@@ -104,6 +104,29 @@ poetry run maou learn-model --detect-anomaly [...他の引数]
 poetry run maou utility benchmark-training --detect-anomaly [...他の引数]
 ```
 
+## TensorBoardヒストグラムの制御
+
+学習ループではデフォルトで損失や正解率などのスカラー値のみをTensorBoardに
+書き出すため，ログファイルは比較的軽量で扱えます。パラメータ／勾配の分布を
+追跡したい場合は `--tensorboard-histogram-frequency` を設定することで，指定した
+エポック間隔ごとにヒストグラムを追加できます。0を指定するとヒストグラム記録は
+無効化されたままです（従来のスカラー指標は常に出力されます）。
+
+特定モジュールだけを記録したい場合は `--tensorboard-histogram-module` を複数回
+指定してグロブパターン（例: `backbone.*`, `head.value*`）を登録してください。
+
+```bash
+poetry run maou learn-model \
+  --tensorboard-histogram-frequency 5 \
+  --tensorboard-histogram-module "backbone.*" \
+  --tensorboard-histogram-module "head.*" \
+  [...他の引数]
+```
+
+フィルタを指定しない場合は全パラメータ／勾配を記録します。ヒストグラム無効時も
+学習率や検証指標などのスカラー値は引き続き記録されるため，既存のTensorBoard
+ダッシュボードはそのまま利用できます。
+
 ## Preprocessingデータのメモリマップ方式
 
 前処理済みの`.npy`ファイルはデフォルトでコピーオンライト(`mmap_mode="c"`)
