@@ -1,85 +1,114 @@
 # `maou pre-process`
 
-This guide documents how the `pre-process` CLI command wires HCPE data sources
-into feature stores. It summarizes every decision the CLI makes inside
-`src/maou/infra/console/pre_process.py` and how those options reach the
-interface-layer adapter in `src/maou/interface/preprocess.py`.
+## Overview
 
-## Input data-source decision tree
+- Bridges HCPE datasources (local folders, BigQuery, GCS, S3) to feature stores
+  by converting raw `.hcpe` inputs into preprocessed `.npy` shards and optional
+  BigQuery/GCS/S3 uploads. All CLI flags are defined in
+  `src/maou/infra/console/pre_process.py` and feed directly into the interface
+  adapter.【F:src/maou/infra/console/pre_process.py†L1-L400】
+- `maou.interface.preprocess` validates the destination directory, worker count,
+  and caching knobs before instantiating the `PreProcess` use case, which
+  orchestrates batching, intermediate caches, and feature-store writes.【F:src/maou/interface/preprocess.py†L1-L89】【F:src/maou/app/pre_process/hcpe_transform.py†L1-L147】
 
-```mermaid
-flowchart TD
-    start([CLI invocation])
-    local{`--input-path` provided?}
-    bigquery{BigQuery IDs present?}
-    gcs{`--input-gcs` + bucket + prefix + data-name + cache dir?}
-    s3{`--input-s3` + bucket + prefix + data-name + cache dir?}
-    success[Datasource object created]
-    error([Abort with validation error])
+## CLI options
 
-    start --> bigquery
-    bigquery -- yes --> bq[BigQueryDataSource (HCPE arrays)] --> success
-    bigquery -- no --> gcs
-    gcs -- yes --> gcsds[GCSDataSource (HCPE arrays with optional bundling)] --> success
-    gcs -- no --> s3
-    s3 -- yes --> s3ds[S3DataSource (HCPE arrays with optional bundling)] --> success
-    s3 -- no --> local
-    local -- yes --> files[FileDataSource collects `.hcpe` files; `--input-file-packed` toggles bit-pack] --> success
-    local -- no --> error
+### Input selection (HCPE only)
+
+| Source | Required flags | Notes |
+| --- | --- | --- |
+| Local filesystem | `--input-path PATH` (file or directory), optional `--input-file-packed` | Walks recursively via `FileSystem.collect_files` and decodes bit-packed numpy payloads when requested.【F:src/maou/infra/console/pre_process.py†L16-L66】 |
+| BigQuery | `--input-dataset-id` + `--input-table-name` | Streams HCPE rows with configurable batch size, cache limits, clustering, and partition hints. Requires the `gcp` optional extra.【F:src/maou/infra/console/pre_process.py†L66-L200】 |
+| GCS | `--input-gcs` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | Downloads `.npy` shards tagged `array_type="hcpe"`. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional local caching.【F:src/maou/infra/console/pre_process.py†L200-L360】 |
+| S3 | `--input-s3` + bucket metadata | Mirrors the GCS contract using `S3DataSource`. Requires the `aws` optional extra.【F:src/maou/infra/console/pre_process.py†L318-L360】 |
+
+Exactly one datasource may be active; the CLI raises a `ValueError` when multiple
+providers are requested.【F:src/maou/infra/console/pre_process.py†L360-L420】
+
+### Feature-store outputs
+
+| Destination | Required flags | Data layout |
+| --- | --- | --- |
+| Local only | `--output-dir PATH` | Writes `.npy` shards tagged `array_type="preprocessing"` to disk. Directory is created automatically when missing.【F:src/maou/infra/console/pre_process.py†L16-L120】【F:src/maou/interface/preprocess.py†L17-L47】 |
+| BigQuery | `--output-bigquery` + `--dataset-id` + `--table-name` | Streams feature rows via `BigQueryFeatureStore` with cache limits governed by `--output-max-cached-bytes`.【F:src/maou/infra/console/pre_process.py†L360-L487】 |
+| GCS | `--output-gcs` + `--output-bucket-name` + `--output-prefix` + `--output-data-name` | Uploads `.npy` shards as `array_type="preprocessing"` with configurable worker counts and queue sizes.【F:src/maou/infra/console/pre_process.py†L420-L520】 |
+| S3 | `--output-s3` + bucket metadata | Same contract as GCS, requiring the AWS optional extra.【F:src/maou/infra/console/pre_process.py†L420-L540】 |
+
+Only one feature store may be selected per run; the CLI enforces mutual
+exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_process.py†L360-L540】
+
+### Intermediate caching & workers
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--process-max-workers INT` | `4` | Caps CPU workers dedicated to preprocessing. Negative values raise `ValueError`; omitting the flag defaults to `min(4, cpu_count)`.【F:src/maou/infra/console/pre_process.py†L540-L575】【F:src/maou/interface/preprocess.py†L47-L71】 |
+| `--intermediate-cache-dir PATH` | optional | Directory where the app layer spills batched numpy arrays before uploading or finalizing outputs.【F:src/maou/infra/console/pre_process.py†L575-L620】【F:src/maou/app/pre_process/hcpe_transform.py†L93-L147】 |
+| `--intermediate-batch-size INT` | `1000` | Controls how many samples are written per disk flush when using the intermediate cache. Forwarded to `PreProcess`.【F:src/maou/infra/console/pre_process.py†L575-L620】【F:src/maou/app/pre_process/hcpe_transform.py†L93-L147】 |
+
+## Execution flow
+
+1. **Datasource resolution** – The CLI checks provider exclusivity, instantiates
+   a `DataSource` (local `FileDataSource`, `BigQueryDataSource`, `GCSDataSource`,
+   or `S3DataSource`), and pins `array_type="hcpe"` so only HCPE tensors enter
+   the workflow.【F:src/maou/infra/console/pre_process.py†L66-L360】
+2. **Interface normalization** – `maou.interface.preprocess.transform` ensures
+   the optional `--output-dir` is a directory, validates the worker count, and
+   builds `PreProcess.PreProcessOption` plus the optional feature store.
+   Intermediate cache hints are passed through untouched.【F:src/maou/interface/preprocess.py†L17-L89】
+3. **Preprocessing and batching** – `PreProcess.transform` iterates over the HCPE
+   batches, deduplicates board states, writes intermediate bundles to disk or a
+   temporary directory, and emits final `.npy` shards. When a feature store is
+   configured, each shard is reloaded and uploaded with consistent metadata.
+   【F:src/maou/app/pre_process/hcpe_transform.py†L1-L205】
+4. **Result reporting** – The CLI prints the JSON mapping returned by the
+   interface, showing per-batch status strings so operators can audit how many
+   samples were processed locally vs. sent to cloud stores.【F:src/maou/interface/preprocess.py†L47-L89】
+
+## Validation and guardrails
+
+- Datasource and feature-store flags are mutually exclusive; selecting more than
+  one provider raises a descriptive error before any work begins.【F:src/maou/infra/console/pre_process.py†L360-L540】
+- All inputs must already be HCPE tensors. The CLI hard-codes `array_type="hcpe"`
+  for every datasource, so preprocessing never attempts to parse CSA/KIF
+  directly.【F:src/maou/infra/console/pre_process.py†L200-L360】
+- `output_dir_init` raises when the provided path exists but is not a directory,
+  preventing accidental overwrites.【F:src/maou/interface/preprocess.py†L17-L47】
+- Negative `--process-max-workers` values raise immediately with
+  `ValueError("max_workers must be non-negative"...)`, keeping the pipeline from
+  spawning invalid executor settings.【F:src/maou/interface/preprocess.py†L47-L71】
+- When optional extras (GCP/AWS) are missing the CLI logs warnings instead of
+  crashing, so local-only runs remain usable.【F:src/maou/infra/console/pre_process.py†L200-L520】
+
+## Outputs and usage
+
+- Local runs write `.npy` shards derived from HCPE inputs into `--output-dir`
+  (if provided); otherwise the app layer uses a temporary directory purely for
+  uploading to feature stores.【F:src/maou/app/pre_process/hcpe_transform.py†L93-L205】
+- Cloud-enabled runs push structured arrays with `key_columns=["id"]` and
+  `partitioning_key_date="partitioningKey"` to the selected feature store so
+  downstream pipelines can join on consistent keys.【F:src/maou/infra/console/pre_process.py†L360-L520】
+- The JSON summary lists counts per batch, making it easy to script health checks
+  or store logs alongside converted artifacts.【F:src/maou/interface/preprocess.py†L47-L89】
+
+### Example invocation
+
+```bash
+poetry run maou pre-process \
+  --input-gcs \
+  --input-bucket-name maou-hcpe \
+  --input-prefix prod/shards \
+  --input-data-name training \
+  --input-local-cache-dir /tmp/cache \
+  --output-dir artifacts/preprocess \
+  --output-bigquery --dataset-id features --table-name preprocessing \
+  --process-max-workers 8 \
+  --intermediate-cache-dir /tmp/pre-cache \
+  --intermediate-batch-size 2000
 ```
 
-The CLI guards against mutually exclusive cloud options before any objects are
-instantiated: it counts whether BigQuery identifiers, `--input-gcs`, or
-`--input-s3` are supplied and raises `ValueError` when more than one provider is
-selected. The `array_type` is hard-coded to `"hcpe"` for every datasource, so all
-inputs must already be encoded in HCPE format.
+## Implementation references
 
-| Source | Required flags | Expected data format | Notes |
-| --- | --- | --- | --- |
-| Local filesystem | `--input-path PATH` (file or directory) | `.hcpe` files; use `--input-file-packed` when the numpy payloads are bit-packed | Walks directories recursively via `FileSystem.collect_files`. |
-| BigQuery | `--input-dataset-id` + `--input-table-name` | HCPE rows stored in BigQuery, streamed in batches (`--input-batch-size`) | Optional `--input-clustering-key`, `--input-partitioning-key-date`, and `--input-max-cached-bytes` tune fetches; requires `poetry install -E gcp`. |
-| Google Cloud Storage | `--input-gcs` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | `.npy` shards containing HCPE arrays | Supports background download workers (`--input-max-workers`) and optional bundling via `--input-enable-bundling`/`--input-bundle-size-gb`. |
-| Amazon S3 | `--input-s3` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | `.npy` shards containing HCPE arrays | Same contract as GCS but requires the `aws` extra. |
-
-## Feature-store selection
-
-Output destinations follow the same mutually exclusive rule: at most one of
-`--output-bigquery`, `--output-gcs`, or `--output-s3` may be passed. When none is
-chosen the CLI only writes the generated `.npy` files to `--output-dir`.
-
-| Feature store | Required flags | Data layout | Extra knobs |
-| --- | --- | --- | --- |
-| BigQuery | `--output-bigquery` + `--dataset-id` + `--table-name` | Feature rows streamed via `BigQueryFeatureStore` | Uses `--output-max-cached-bytes` for batching. |
-| Google Cloud Storage | `--output-gcs` + `--output-bucket-name` + `--output-prefix` + `--output-data-name` | `.npy` files tagged as `array_type="preprocessing"` | Honors `--output-max-workers`, `--output-max-queue-size`, and `--output-max-cached-bytes`. |
-| Amazon S3 | `--output-s3` + `--output-bucket-name` + `--output-prefix` + `--output-data-name` | `.npy` files tagged as `array_type="preprocessing"` | Shares the same worker, queue, and cache knobs as GCS. |
-
-## Intermediate caching and interface hand-off
-
-The CLI exposes two knobs for staging data between the datasource and feature
-store:
-
-- `--intermediate-cache-dir` – Optional directory where the app layer can spill
-  pre-batched numpy arrays. When omitted, `PreProcess` falls back to a temporary
-  directory.
-- `--intermediate-batch-size` – Controls how many samples are written in each
-  disk flush (default `1000`).
-
-These options, together with `--process-max-workers`, are forwarded to the
-interface layer through `preprocess.transform`. The adapter in
-`src/maou/interface/preprocess.py` initializes a `PreProcess.PreProcessOption`
-with the normalized worker count, then instantiates `PreProcess` with the
-selected datasource, optional feature store, and the intermediate caching
-arguments. Every `PreProcess.transform(...)` call therefore receives the same
-settings that were provided on the CLI, ensuring deterministic cache placement
-and batch sizing regardless of whether the workload is local-only or involves a
-cloud feature store.
-
-## Quick reference
-
-- Data ingestion always expects HCPE tensors, whether they arrive from files,
-  BigQuery, GCS, or S3.
-- Exactly one input provider and at most one feature store may be selected per
-  run. Violations raise a `ValueError` before any processing occurs.
-- Intermediate caching flags control the on-disk staging layer that bridges the
-  datasource (`HCPE` arrays) and the downstream feature stores (`preprocessing`
-  arrays).
+- CLI definition and provider wiring – `src/maou/infra/console/pre_process.py`.【F:src/maou/infra/console/pre_process.py†L1-L540】
+- Interface adapter, directory/worker validation – `src/maou/interface/preprocess.py`.【F:src/maou/interface/preprocess.py†L17-L89】
+- Preprocessing workflow, batching, and feature-store uploads –
+  `src/maou/app/pre_process/hcpe_transform.py`.【F:src/maou/app/pre_process/hcpe_transform.py†L1-L205】
