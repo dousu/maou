@@ -44,3 +44,4 @@ app --> domain
 ## 追加資料
 
 - [HCPE変換コマンドのデータフロー](commands/hcpe_convert.md)
+- [学習コマンドとデータフロー (CLIとシーケンス図)](commands/learn_model.md)
