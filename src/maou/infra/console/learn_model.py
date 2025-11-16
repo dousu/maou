@@ -255,6 +255,24 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--tensorboard-histogram-frequency",
+    type=int,
+    help="Log parameter histograms every N epochs (default: disabled).",
+    default=0,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--tensorboard-histogram-module",
+    "tensorboard_histogram_modules",
+    multiple=True,
+    type=str,
+    help=(
+        "Only log histograms for parameter names matching this glob pattern."
+        " Provide multiple times to add more filters."
+    ),
+)
+@click.option(
     "--cache-transforms/--no-cache-transforms",
     default=None,
     help=(
@@ -439,6 +457,8 @@ def learn_model(
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
     prefetch_factor: Optional[int],
+    tensorboard_histogram_frequency: int,
+    tensorboard_histogram_modules: tuple[str, ...],
     cache_transforms: Optional[bool],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
@@ -706,6 +726,10 @@ def learn_model(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
+            tensorboard_histogram_frequency=tensorboard_histogram_frequency,
+            tensorboard_histogram_modules=(
+                tensorboard_histogram_modules or None
+            ),
             cache_transforms=cache_transforms,
             gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,

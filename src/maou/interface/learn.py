@@ -153,6 +153,8 @@ def learn(
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
     input_cache_mode: Literal["mmap", "memory"] = "mmap",
+    tensorboard_histogram_frequency: int = 0,
+    tensorboard_histogram_modules: Optional[tuple[str, ...]] = None,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -185,6 +187,10 @@ def learn(
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
         input_cache_mode: Strategy used by the input datasource cache
+        tensorboard_histogram_frequency: Number of epochs between parameter
+            histogram dumps (0 disables histogram logging)
+        tensorboard_histogram_modules: Optional glob patterns to filter which
+            module names emit histograms
 
     Returns:
         JSON string with training results
@@ -367,6 +373,15 @@ def learn(
             "input_cache_mode must be either 'mmap' or 'memory', "
             f"got {input_cache_mode}"
         )
+    if tensorboard_histogram_frequency < 0:
+        raise ValueError(
+            "tensorboard_histogram_frequency must be non-negative"
+        )
+    normalized_histogram_modules = (
+        tensorboard_histogram_modules
+        if tensorboard_histogram_modules
+        else None
+    )
 
     option = Learning.LearningOption(
         datasource=datasource,
@@ -397,6 +412,8 @@ def learn(
         model_architecture=model_architecture,
         lr_scheduler_name=lr_scheduler_key,
         input_cache_mode=normalized_cache_mode,
+        tensorboard_histogram_frequency=tensorboard_histogram_frequency,
+        tensorboard_histogram_modules=normalized_histogram_modules,
     )
 
     learning_result = Learning(

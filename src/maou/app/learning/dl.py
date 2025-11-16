@@ -1,4 +1,5 @@
 import abc
+import fnmatch
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +16,7 @@ from torchinfo import summary
 from maou.app.learning.callbacks import (
     LoggingCallback,
     ValidationCallback,
+    ValidationMetrics,
 )
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
@@ -91,6 +93,8 @@ class Learning:
         model_dir: Path
         lr_scheduler_name: Optional[str] = None
         input_cache_mode: Literal["mmap", "memory"] = "mmap"
+        tensorboard_histogram_frequency: int = 0
+        tensorboard_histogram_modules: tuple[str, ...] | None = None
 
     def __init__(
         self,
@@ -171,6 +175,12 @@ class Learning:
         self.model_dir = config.model_dir
         self.resume_from = config.resume_from
         self.start_epoch = config.start_epoch
+        self.tensorboard_histogram_frequency = (
+            config.tensorboard_histogram_frequency
+        )
+        self.tensorboard_histogram_modules = (
+            config.tensorboard_histogram_modules
+        )
         summary(
             self.model,
             input_size=(
@@ -284,28 +294,9 @@ class Learning:
                 epoch_number, writer
             )
 
-            # 学習ごとに各層のパラメータを記録
-            for name, param in self.model.named_parameters():
-                try:
-                    param_np = param.detach().cpu().numpy()
-                    writer.add_histogram(
-                        f"parameters/{name}",
-                        param_np,
-                        epoch_number + 1,
-                    )
-                    if param.grad is not None:
-                        grad_np = (
-                            param.grad.detach().cpu().numpy()
-                        )
-                        writer.add_histogram(
-                            f"gradients/{name}",
-                            grad_np,
-                            epoch_number + 1,
-                        )
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to log histogram for {name}: {e}"
-                    )
+            self._log_parameter_histograms(
+                writer=writer, epoch_number=epoch_number
+            )
 
             # Create validation callback
             validation_callback = ValidationCallback(
@@ -356,35 +347,14 @@ class Learning:
                     metrics.value_high_confidence_rate,
                 )
             )
-            writer.add_scalars(
-                "Validation Loss Metrics",
-                {
-                    "Policy Cross Entropy": metrics.policy_cross_entropy,
-                    "Value Brier Score": metrics.value_brier_score,
-                },
-                epoch_number + 1,
-            )
-            writer.add_scalars(
-                "Validation Accuracy Metrics",
-                {
-                    "Policy Top-5 Accuracy": metrics.policy_top5_accuracy,
-                    "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
-                },
-                epoch_number + 1,
-            )
-
-            # Log the running loss averaged per batch
-            # for both training and validation
-            writer.add_scalars(
-                "Training vs. Validation Loss",
-                {"Training": avg_loss, "Validation": avg_vloss},
-                epoch_number + 1,
-            )
             current_lr = self.optimizer.param_groups[0]["lr"]
-            writer.add_scalar(
-                "Learning Rate",
-                current_lr,
-                epoch_number + 1,
+            self._log_epoch_metrics(
+                writer=writer,
+                metrics=metrics,
+                avg_loss=avg_loss,
+                avg_vloss=avg_vloss,
+                epoch_number=epoch_number,
+                learning_rate=current_lr,
             )
 
             if self.lr_scheduler is not None:
@@ -420,6 +390,91 @@ class Learning:
             epoch_number += 1
 
         writer.close()
+
+    def _log_parameter_histograms(
+        self, writer: SummaryWriter, epoch_number: int
+    ) -> None:
+        """Optionally log model parameter and gradient histograms."""
+
+        frequency = getattr(
+            self, "tensorboard_histogram_frequency", 0
+        )
+        if frequency <= 0:
+            return
+
+        if (epoch_number + 1) % frequency != 0:
+            return
+
+        module_filters = getattr(
+            self, "tensorboard_histogram_modules", None
+        )
+
+        for name, param in self.model.named_parameters():
+            if module_filters is not None and not any(
+                fnmatch.fnmatch(name, pattern)
+                for pattern in module_filters
+            ):
+                continue
+
+            try:
+                param_np = param.detach().cpu().numpy()
+                writer.add_histogram(
+                    f"parameters/{name}",
+                    param_np,
+                    epoch_number + 1,
+                )
+                if param.grad is not None:
+                    grad_np = param.grad.detach().cpu().numpy()
+                    writer.add_histogram(
+                        f"gradients/{name}",
+                        grad_np,
+                        epoch_number + 1,
+                    )
+            except Exception as exc:  # pragma: no cover - log-only path
+                self.logger.warning(
+                    "Failed to log histogram for %s: %s",
+                    name,
+                    exc,
+                )
+
+    def _log_epoch_metrics(
+        self,
+        *,
+        writer: SummaryWriter,
+        metrics: ValidationMetrics,
+        avg_loss: float,
+        avg_vloss: float,
+        epoch_number: int,
+        learning_rate: float,
+    ) -> None:
+        """Log scalar metrics that should always be emitted."""
+
+        writer.add_scalars(
+            "Validation Loss Metrics",
+            {
+                "Policy Cross Entropy": metrics.policy_cross_entropy,
+                "Value Brier Score": metrics.value_brier_score,
+            },
+            epoch_number + 1,
+        )
+        writer.add_scalars(
+            "Validation Accuracy Metrics",
+            {
+                "Policy Top-5 Accuracy": metrics.policy_top5_accuracy,
+                "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
+            },
+            epoch_number + 1,
+        )
+        writer.add_scalars(
+            "Training vs. Validation Loss",
+            {"Training": avg_loss, "Validation": avg_vloss},
+            epoch_number + 1,
+        )
+        writer.add_scalar(
+            "Learning Rate",
+            learning_rate,
+            epoch_number + 1,
+        )
 
     def _load_resume_state_dict(
         self, state_dict: MutableMapping[str, torch.Tensor]
