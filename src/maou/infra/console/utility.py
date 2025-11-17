@@ -75,6 +75,7 @@ from maou.interface import utility_interface
     required=False,
     show_default=True,
 )
+@click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
