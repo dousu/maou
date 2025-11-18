@@ -42,8 +42,9 @@ class _FeatureDataset(Dataset):
             msg = "boardIdPositions must have shape (9, 9)"
             raise ValueError(msg)
 
-        self.original_shape: tuple[int, int] = tuple(
-            first_board.shape
+        self.original_shape: tuple[int, int] = (
+            int(first_board.shape[0]),
+            int(first_board.shape[1]),
         )
         self._num_features = int(first_board.size)
         self._datasource = datasource

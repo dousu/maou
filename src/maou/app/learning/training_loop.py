@@ -354,13 +354,16 @@ class TrainingLoop:
         def move(value: object, path: tuple[int, ...]) -> object:
             if isinstance(value, torch.Tensor):
                 target_dtype = self._infer_input_dtype(path, value)
-                to_kwargs: dict[str, object] = {
-                    "device": device,
-                    "non_blocking": non_blocking,
-                }
                 if target_dtype is not None and value.dtype != target_dtype:
-                    to_kwargs["dtype"] = target_dtype
-                return value.to(**to_kwargs)
+                    return value.to(
+                        device=device,
+                        dtype=target_dtype,
+                        non_blocking=non_blocking,
+                    )
+                return value.to(
+                    device=device,
+                    non_blocking=non_blocking,
+                )
             if isinstance(value, tuple):
                 return tuple(
                     move(item, path + (index,))

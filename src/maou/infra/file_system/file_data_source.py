@@ -203,16 +203,19 @@ class FileDataSource(
                                 array_size_mib,
                             )
                             if isinstance(array, NpMemMap):
-                                try:
-                                    array._mmap.close()
-                                except AttributeError:
-                                    pass
+                                mmap_handle = getattr(array, "_mmap", None)
+                                if mmap_handle is not None:
+                                    try:
+                                        mmap_handle.close()
+                                    except AttributeError:
+                                        pass
                             memmap = None
                         array = None
                     elif isinstance(array, NpMemMap):
-                        self.memmap_arrays.append(
-                            (file_path.name, memmap)
-                        )
+                        if memmap is not None:
+                            self.memmap_arrays.append(
+                                (file_path.name, memmap)
+                            )
                     self._file_entries.append(
                         FileDataSource.FileManager._FileEntry(
                             name=file_path.name,

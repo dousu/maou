@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 import torch
 
 from maou.app.learning import compilation
@@ -17,7 +18,9 @@ class _DummyModule(torch.nn.Module):
         return tuple(inputs)
 
 
-def test_compile_module_uses_static_shapes(monkeypatch) -> None:
+def test_compile_module_uses_static_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``compile_module`` should disable dynamic shape support."""
 
     module = _DummyModule()
@@ -38,7 +41,7 @@ def test_compile_module_uses_static_shapes(monkeypatch) -> None:
 
 
 def test_compile_module_allows_dynamic_override(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Callers can opt into dynamic shape compilation when required."""
 
@@ -60,7 +63,7 @@ def test_compile_module_allows_dynamic_override(
 
 
 def test_compile_module_falls_back_on_failure(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Errors from ``torch.compile`` should trigger a safe fallback."""
 
