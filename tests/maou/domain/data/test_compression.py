@@ -1,7 +1,5 @@
 import numpy as np
 import pytest
-
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.compression import (
     BOARD_ID_POSITIONS_SHAPE,
     LEGAL_MOVES_PACKED_SIZE,

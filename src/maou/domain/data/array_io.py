@@ -147,7 +147,7 @@ def load_hcpe_array(
 
         # Try to detect if it's a standard .npy file with header or raw binary
         dtype = get_hcpe_dtype()
-        array: Union[np.ndarray, np.memmap]
+        array: Union[np.ndarray, np.memmap, None] = None
         if mmap_mode:
             array = _load_numpy_memmap(
                 file_path=file_path,
@@ -183,6 +183,11 @@ def load_hcpe_array(
             array = np.fromfile(file_path, dtype=dtype)
             logger.debug(
                 f"Loaded HCPE array using fromfile() from {file_path}"
+            )
+
+        if array is None:
+            raise DataIOError(
+                f"Failed to load HCPE array from {file_path}"
             )
 
         logger.debug(
@@ -290,7 +295,7 @@ def load_preprocessing_array(
         if not file_path.exists():
             raise DataIOError(f"File not found: {file_path}")
 
-        array: Union[np.ndarray, np.memmap]
+        array: Union[np.ndarray, np.memmap, None] = None
         if bit_pack:
             # Load bit-packed format
             dtype = get_packed_preprocessing_dtype()
@@ -368,6 +373,11 @@ def load_preprocessing_array(
                     f"Loaded preprocessing array using fromfile() from {file_path}"
                 )
 
+        if array is None:
+            raise DataIOError(
+                f"Failed to load preprocessing array from {file_path}"
+            )
+
         logger.debug(
             f"Loaded preprocessing array from {file_path}, shape: {array.shape}"
         )
@@ -401,7 +411,7 @@ def load_packed_preprocessing_array(
         if not file_path.exists():
             raise DataIOError(f"File not found: {file_path}")
 
-        array: Union[np.ndarray, np.memmap]
+        array: Union[np.ndarray, np.memmap, None] = None
         # Load bit-packed format
         dtype = get_packed_preprocessing_dtype()
         if mmap_mode:
@@ -441,6 +451,11 @@ def load_packed_preprocessing_array(
             logger.debug(
                 f"Loaded bit-packed preprocessing array using "
                 f"fromfile() from {file_path}"
+            )
+
+        if array is None:
+            raise DataIOError(
+                f"Failed to load packed preprocessing array from {file_path}"
             )
 
         logger.debug(

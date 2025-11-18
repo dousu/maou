@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 import pytest
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from maou.app.learning import masked_autoencoder
 from maou.app.learning.masked_autoencoder import (
@@ -132,7 +132,9 @@ def test_masked_autoencoder_uses_encoder_embedding_dim(
 
     embedding_dim = 32
 
-    def _create_backbone(cls, device: torch.device) -> _DummyBackbone:
+    def _create_backbone(
+        cls: type[ModelFactory], device: torch.device
+    ) -> _DummyBackbone:
         return _DummyBackbone(embedding_dim=embedding_dim).to(device)
 
     monkeypatch.setattr(
@@ -177,7 +179,17 @@ def test_run_epoch_uses_forward_chunking() -> None:
     """Batches should be split into micro-batches when a chunk size is set."""
 
     batch_tensor = torch.randn(10, 4)
-    dataloader = DataLoader(batch_tensor, batch_size=10)
+
+    class _TensorDataset(Dataset[torch.Tensor]):
+        def __len__(self) -> int:
+            return batch_tensor.size(0)
+
+        def __getitem__(self, idx: int) -> torch.Tensor:
+            return batch_tensor[idx]
+
+    dataloader: DataLoader[torch.Tensor] = DataLoader(
+        _TensorDataset(), batch_size=10
+    )
     model = _RecordingModel(feature_dim=4)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     pretraining = MaskedAutoencoderPretraining()

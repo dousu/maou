@@ -243,7 +243,7 @@ def test_training_setup_enables_cache_for_hcpe_by_default(monkeypatch: pytest.Mo
             return (board, pieces), (move_label, result_value, legal_mask)
 
     def fake_create_datasets(
-        cls,
+        cls: type[DatasetFactory],
         training_datasource: DataSource,
         validation_datasource: DataSource,
         datasource_type: str,
@@ -294,7 +294,7 @@ def test_training_setup_respects_cache_transforms_override(monkeypatch: pytest.M
             return (board, pieces), (move_label, result_value, legal_mask)
 
     def fake_create_datasets(
-        cls,
+        cls: type[DatasetFactory],
         training_datasource: DataSource,
         validation_datasource: DataSource,
         datasource_type: str,

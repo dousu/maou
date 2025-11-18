@@ -234,13 +234,16 @@ class DataLoaderBenchmark:
         index_path: tuple[int, ...],
     ) -> torch.Tensor:
         target_dtype = self._infer_input_dtype(index_path, tensor)
-        to_kwargs: dict[str, object] = {
-            "device": self.config.device,
-            "non_blocking": True,
-        }
         if target_dtype is not None and tensor.dtype != target_dtype:
-            to_kwargs["dtype"] = target_dtype
-        return tensor.to(**to_kwargs)
+            return tensor.to(
+                device=self.config.device,
+                dtype=target_dtype,
+                non_blocking=True,
+            )
+        return tensor.to(
+            device=self.config.device,
+            non_blocking=True,
+        )
 
     def _infer_input_dtype(
         self,
