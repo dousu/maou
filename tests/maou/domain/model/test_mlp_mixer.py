@@ -61,7 +61,7 @@ def test_mlp_mixer_onnx_export_without_tracer_warning(tmp_path: Path) -> None:
         warnings.simplefilter("always", category=TracerWarning)
         torch.onnx.export(
             model,
-            x,
+            (x,),
             tmp_path / "shogi_mixer.onnx",
             opset_version=12,
         )

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from maou.app.learning.callbacks import ValidationCallback
 
-torch = pytest.importorskip("torch")
+pytest.importorskip("torch")
 
 
 def _reference_policy_top5_stats(

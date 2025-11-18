@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import logging
 from pathlib import Path
+from typing import Any
 import weakref
 
 import numpy as np
@@ -75,14 +76,14 @@ def test_iter_batches_uses_metadata_reload(
     ArrayTracker.peak_instances = 0
 
     def raising_memmap(
-        *args: object, **kwargs: object
+        *args: Any, **kwargs: Any
     ) -> np.memmap:
         raise OSError("memmap disabled for testing")
 
     original_fromfile = np.fromfile
 
     def tracking_fromfile(
-        *args: object, **kwargs: object
+        *args: Any, **kwargs: Any
     ) -> np.ndarray:
         result = original_fromfile(*args, **kwargs)
         return ArrayTracker.track(result)

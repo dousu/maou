@@ -2,7 +2,7 @@ import abc
 import logging
 from dataclasses import dataclass
 from collections.abc import Sized
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 from numpy.typing import DTypeLike
@@ -233,9 +233,12 @@ class KifDataset(Dataset, Sized):
     ) -> torch.Tensor:
         np_array = np.asarray(array)
         expected_dtypes = (
-            tuple(np.dtype(dtype) for dtype in expected_dtype)
+            tuple(
+                np.dtype(cast(DTypeLike, dtype))
+                for dtype in expected_dtype
+            )
             if isinstance(expected_dtype, tuple)
-            else (np.dtype(expected_dtype),)
+            else (np.dtype(cast(DTypeLike, expected_dtype)),)
         )
         if np_array.dtype not in expected_dtypes:
             expected_desc = (
