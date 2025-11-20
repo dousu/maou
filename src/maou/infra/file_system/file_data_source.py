@@ -117,7 +117,9 @@ class FileDataSource(
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
-            self.preprocessing_mmap_mode = preprocessing_mmap_mode
+            self.preprocessing_mmap_mode = (
+                preprocessing_mmap_mode
+            )
             normalized_cache_mode = cast(
                 FileDataSource.CacheMode, cache_mode.lower()
             )
@@ -182,7 +184,7 @@ class FileDataSource(
                             if array_nbytes
                             else 0.0
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             "Caching %s into RAM (%.2f MiB)",
                             file_path,
                             array_size_mib,
@@ -197,13 +199,15 @@ class FileDataSource(
                             )
                             raise
                         else:
-                            self.logger.info(
+                            self.logger.debug(
                                 "Cached %s in RAM (%.2f MiB)",
                                 file_path,
                                 array_size_mib,
                             )
                             if isinstance(array, NpMemMap):
-                                mmap_handle = getattr(array, "_mmap", None)
+                                mmap_handle = getattr(
+                                    array, "_mmap", None
+                                )
                                 if mmap_handle is not None:
                                     try:
                                         mmap_handle.close()
