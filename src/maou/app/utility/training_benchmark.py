@@ -11,10 +11,13 @@ from maou.app.learning.callbacks import (
     ResourceMonitoringCallback,
     TimingCallback,
 )
-from maou.app.learning.dl import LearningDataSource
-from maou.app.learning.network import Network
-from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.compilation import compile_module
+from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.network import (
+    BackboneArchitecture,
+    Network,
+)
+from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 
@@ -405,6 +408,7 @@ class TrainingBenchmarkConfig:
     run_validation: bool = False
     sample_ratio: Optional[float] = None
     enable_resource_monitoring: bool = False
+    model_architecture: BackboneArchitecture = "resnet"
 
 
 class TrainingBenchmarkUseCase:
@@ -427,7 +431,9 @@ class TrainingBenchmarkUseCase:
         )
 
         # Setup all training components using shared setup module
-        datasource_type_normalized = config.datasource_type.lower()
+        datasource_type_normalized = (
+            config.datasource_type.lower()
+        )
         cache_transforms_enabled = (
             config.cache_transforms
             if config.cache_transforms is not None
@@ -440,6 +446,7 @@ class TrainingBenchmarkUseCase:
                 datasource_type=config.datasource_type,
                 cache_transforms=cache_transforms_enabled,
                 gpu=config.gpu,
+                model_architecture=config.model_architecture,
                 batch_size=config.batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=config.pin_memory,

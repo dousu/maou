@@ -16,7 +16,7 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import utility_interface
+from maou.interface import learn, utility_interface
 
 
 @click.command("benchmark-dataloader")
@@ -197,6 +197,7 @@ def benchmark_dataloader(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_cache_mode: FileDataSource.CacheMode,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -257,6 +258,7 @@ def benchmark_dataloader(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
             bit_pack=input_file_packed,
+            cache_mode=input_cache_mode,
         )
     elif (
         input_dataset_id is not None
@@ -557,6 +559,20 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--model-architecture",
+    type=click.Choice(
+        list(learn.SUPPORTED_MODEL_ARCHITECTURES),
+        case_sensitive=False,
+    ),
+    help=(
+        "Backbone architecture to use. Supported values: "
+        + ", ".join(learn.SUPPORTED_MODEL_ARCHITECTURES)
+    ),
+    required=False,
+    default="resnet",
+    show_default=True,
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
@@ -732,7 +748,7 @@ def benchmark_training(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
-    input_cache_mode: str,
+    input_cache_mode: FileDataSource.CacheMode,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -746,6 +762,7 @@ def benchmark_training(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
+    model_architecture: utility_interface.BackboneArchitecture,
     compilation: bool,
     detect_anomaly: bool,
     test_ratio: float,
@@ -819,7 +836,7 @@ def benchmark_training(
             file_paths=FileSystem.collect_files(input_dir),
             array_type=array_type,
             bit_pack=input_file_packed,
-            cache_mode=input_cache_mode.lower(),
+            cache_mode=input_cache_mode,
         )
     elif (
         input_dataset_id is not None
@@ -969,6 +986,7 @@ def benchmark_training(
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
         cache_transforms=cache_transforms,
+        model_architecture=model_architecture,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,

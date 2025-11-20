@@ -10,6 +10,7 @@ from maou.app.utility.dataloader_benchmark import (
     DataLoaderBenchmark,
 )
 from maou.app.utility.training_benchmark import (
+    BackboneArchitecture,
     TrainingBenchmarkConfig,
     TrainingBenchmarkUseCase,
 )
@@ -159,6 +160,7 @@ def benchmark_training(
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
     cache_transforms: Optional[bool] = None,
+    model_architecture: Optional[BackboneArchitecture] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
@@ -190,6 +192,7 @@ def benchmark_training(
         pin_memory: Enable pinned memory for GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
         cache_transforms: Enable in-memory caching of dataset transforms
+        model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
@@ -251,6 +254,9 @@ def benchmark_training(
         cache_transforms_enabled = datasource_type == "hcpe"
     else:
         cache_transforms_enabled = cache_transforms
+
+    if model_architecture is None:
+        model_architecture = "resnet"
 
     if gce_parameter is None:
         gce_parameter = 0.7
@@ -385,6 +391,7 @@ def benchmark_training(
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
         detect_anomaly=detect_anomaly,
+        model_architecture=model_architecture,
     )
 
     use_case = TrainingBenchmarkUseCase()
