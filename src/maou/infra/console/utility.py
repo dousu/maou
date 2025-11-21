@@ -667,6 +667,19 @@ def benchmark_dataloader(
     default=0.9,
 )
 @click.option(
+    "--lr-scheduler",
+    type=click.Choice(
+        list(learn.SUPPORTED_LR_SCHEDULERS.values()),
+        case_sensitive=False,
+    ),
+    help="Learning rate scheduler to apply.",
+    required=False,
+    default=learn.SUPPORTED_LR_SCHEDULERS[
+        "warmup_cosine_decay"
+    ],
+    show_default=True,
+)
+@click.option(
     "--optimizer",
     type=click.Choice(["adamw", "sgd"], case_sensitive=False),
     help="Optimizer to use (default: adamw).",
@@ -776,6 +789,7 @@ def benchmark_training(
     value_loss_ratio: float,
     learning_ratio: float,
     momentum: float,
+    lr_scheduler: str,
     optimizer: str,
     optimizer_beta1: float,
     optimizer_beta2: float,
@@ -992,6 +1006,7 @@ def benchmark_training(
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
+        lr_scheduler=lr_scheduler,
         optimizer_name=optimizer,
         optimizer_beta1=optimizer_beta1,
         optimizer_beta2=optimizer_beta2,
