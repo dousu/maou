@@ -13,7 +13,10 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
-from maou.app.learning.gpu_prefetcher import DataPrefetcher
+from maou.app.learning.gpu_prefetcher import (
+    DataPrefetcher,
+    calculate_recommended_buffer_size,
+)
 from maou.app.learning.policy_targets import normalize_policy_targets
 
 
@@ -33,7 +36,7 @@ class TrainingLoop:
         callbacks: Optional[List[TrainingCallback]] = None,
         logger: Optional[logging.Logger] = None,
         enable_gpu_prefetch: bool = True,
-        gpu_prefetch_buffer_size: int = 3,
+        gpu_prefetch_buffer_size: int = 0,
         gradient_accumulation_steps: int = 1,
     ):
         self.model = model
@@ -54,9 +57,15 @@ class TrainingLoop:
         self.gpu_prefetch_buffer_size = gpu_prefetch_buffer_size
 
         if self.enable_gpu_prefetch:
-            self.logger.info(
-                f"GPU prefetching enabled with buffer_size={gpu_prefetch_buffer_size}"
-            )
+            if gpu_prefetch_buffer_size <= 0:
+                self.logger.info(
+                    "GPU prefetching enabled with auto-calculated buffer size "
+                    "(determined per batch size)"
+                )
+            else:
+                self.logger.info(
+                    f"GPU prefetching enabled with buffer_size={gpu_prefetch_buffer_size}"
+                )
 
         # Gradient accumulation設定
         self.gradient_accumulation_steps = max(1, gradient_accumulation_steps)
@@ -139,10 +148,22 @@ class TrainingLoop:
         try:
             # GPU prefetchを有効化している場合はDataPrefetcherでラップ
             if self.enable_gpu_prefetch:
+                # バッファサイズの決定（0以下の場合は自動計算）
+                if self.gpu_prefetch_buffer_size <= 0:
+                    buffer_size = calculate_recommended_buffer_size(
+                        dataloader.batch_size
+                    )
+                    self.logger.info(
+                        f"Auto-calculated GPU prefetch buffer size: {buffer_size} "
+                        f"(based on batch_size={dataloader.batch_size})"
+                    )
+                else:
+                    buffer_size = self.gpu_prefetch_buffer_size
+
                 prefetcher = DataPrefetcher(
                     dataloader,
                     device=self.device,
-                    buffer_size=self.gpu_prefetch_buffer_size,
+                    buffer_size=buffer_size,
                     pin_memory_override=True,
                 )
                 data_iterator = prefetcher

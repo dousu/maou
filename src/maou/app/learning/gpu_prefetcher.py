@@ -27,6 +27,30 @@ import torch
 from torch.utils.data import DataLoader
 
 
+def calculate_recommended_buffer_size(batch_size: int) -> int:
+    """バッチサイズに基づいて推奨バッファサイズを計算する．
+
+    大きなバッチサイズではより多くのバッファが必要．
+    小さなバッチサイズでは少ないバッファで十分．
+
+    Args:
+        batch_size: バッチサイズ
+
+    Returns:
+        推奨バッファサイズ（バッチ数）
+    """
+    if batch_size <= 128:
+        return 3
+    elif batch_size <= 256:
+        return 5
+    elif batch_size <= 512:
+        return 8
+    elif batch_size <= 1024:
+        return 12
+    else:
+        return 16
+
+
 class DataPrefetcher:
     """DataLoaderのGPU prefetchラッパー．
 
