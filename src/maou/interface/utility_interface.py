@@ -14,7 +14,10 @@ from maou.app.utility.training_benchmark import (
     TrainingBenchmarkConfig,
     TrainingBenchmarkUseCase,
 )
-from maou.interface.learn import SUPPORTED_LR_SCHEDULERS
+from maou.interface.learn import (
+    SUPPORTED_LR_SCHEDULERS,
+    normalize_lr_scheduler_name,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -298,15 +301,9 @@ def benchmark_training(
             f"momentum must be between 0 and 1, got {momentum}"
         )
 
-    if lr_scheduler is None:
-        lr_scheduler = SUPPORTED_LR_SCHEDULERS[
-            "warmup_cosine_decay"
-        ]
-    elif lr_scheduler not in SUPPORTED_LR_SCHEDULERS.values():
-        raise ValueError(
-            f"lr_scheduler must be one of {list(SUPPORTED_LR_SCHEDULERS.values())}, "
-            f"got {lr_scheduler}"
-        )
+    lr_scheduler_key = normalize_lr_scheduler_name(lr_scheduler)
+    if lr_scheduler_key is None:
+        lr_scheduler_key = "warmup_cosine_decay"
 
     if optimizer_name is None:
         optimizer_name = "adamw"
@@ -393,7 +390,7 @@ def benchmark_training(
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
-        lr_scheduler_name=lr_scheduler,
+        lr_scheduler_name=lr_scheduler_key,
         optimizer_name=optimizer_key,
         optimizer_beta1=optimizer_beta1,
         optimizer_beta2=optimizer_beta2,
