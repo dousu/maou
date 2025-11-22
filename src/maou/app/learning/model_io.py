@@ -5,10 +5,15 @@ from typing import Optional
 import numpy as np
 import torch
 
-from maou.app.learning.network import Network
+from maou.app.learning.network import (
+    BackboneArchitecture,
+    Network,
+)
 from maou.app.learning.setup import ModelFactory
 from maou.domain.cloud_storage import CloudStorage
-from maou.domain.data.schema import create_empty_preprocessing_array
+from maou.domain.data.schema import (
+    create_empty_preprocessing_array,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -22,6 +27,7 @@ class ModelIO:
         id: str,
         epoch: int,
         device: torch.device,
+        architecture: BackboneArchitecture,
         cloud_storage: Optional[CloudStorage] = None,
     ) -> None:
         try:
@@ -35,7 +41,9 @@ class ModelIO:
                 "`poetry install -E cpu-infer` to enable model export."
             ) from exc
 
-        model = ModelFactory.create_shogi_model(device)
+        model = ModelFactory.create_shogi_model(
+            device, architecture=architecture
+        )
 
         # torch.compile()で生成されたモデルのstate_dictは_orig_mod.プレフィックス付き
         # そのプレフィックスを除去して通常のモデルと互換性を保つ

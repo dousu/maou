@@ -94,7 +94,9 @@ class Learning:
         lr_scheduler_name: Optional[str] = None
         input_cache_mode: Literal["mmap", "memory"] = "mmap"
         tensorboard_histogram_frequency: int = 0
-        tensorboard_histogram_modules: tuple[str, ...] | None = None
+        tensorboard_histogram_modules: (
+            tuple[str, ...] | None
+        ) = None
 
     def __init__(
         self,
@@ -371,6 +373,7 @@ class Learning:
                     id=timestamp,
                     epoch=epoch_number + 1,
                     device=self.device,
+                    architecture=self.model_architecture,
                     cloud_storage=self.__cloud_storage,
                 )
 
@@ -430,7 +433,9 @@ class Learning:
                         grad_np,
                         epoch_number + 1,
                     )
-            except Exception as exc:  # pragma: no cover - log-only path
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - log-only path
                 self.logger.warning(
                     "Failed to log histogram for %s: %s",
                     name,
