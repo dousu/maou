@@ -31,6 +31,7 @@ class BenchmarkResult:
     # 全体的なタイミング
     total_epoch_time: float
     average_batch_time: float
+    actual_average_batch_time: float
     total_batches: int
 
     # 詳細なタイミング分析
@@ -57,6 +58,7 @@ class BenchmarkResult:
         result = {
             "total_epoch_time": self.total_epoch_time,
             "average_batch_time": self.average_batch_time,
+            "actual_average_batch_time": self.actual_average_batch_time,
             "total_batches": float(self.total_batches),
             "data_loading_time": self.data_loading_time,
             "gpu_transfer_time": self.gpu_transfer_time,
@@ -227,6 +229,9 @@ class SingleEpochBenchmark:
             average_batch_time=timing_stats[
                 "average_batch_time"
             ],
+            actual_average_batch_time=performance_metrics[
+                "actual_average_batch_time"
+            ],
             total_batches=int(
                 performance_metrics["total_batches"]
             ),
@@ -351,6 +356,9 @@ class SingleEpochBenchmark:
             ],
             average_batch_time=timing_stats[
                 "average_batch_time"
+            ],
+            actual_average_batch_time=performance_metrics[
+                "actual_average_batch_time"
             ],
             total_batches=int(
                 performance_metrics["total_batches"]
@@ -543,35 +551,36 @@ class TrainingBenchmarkUseCase:
         def format_timing_summary(
             result: BenchmarkResult, label: str
         ) -> str:
-            # Pre-calculate percentages to avoid long lines
+            # Pre-calculate percentages based on actual average batch time
+            # (includes all overhead: data loading, processing, etc.)
             data_pct = (
                 result.data_loading_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             gpu_pct = (
                 result.gpu_transfer_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             forward_pct = (
                 result.forward_pass_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             loss_pct = (
                 result.loss_computation_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             backward_pct = (
                 result.backward_pass_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             opt_pct = (
                 result.optimizer_step_time
-                / result.average_batch_time
+                / result.actual_average_batch_time
                 * 100
             )
             # Format resource usage summary if available
@@ -596,13 +605,18 @@ class TrainingBenchmarkUseCase:
                     resource_summary += f"""
   - GPU Memory Max Usage: {ru.gpu_memory_max_bytes / 1024**3:.1f}GB / {ru.gpu_memory_total_bytes / 1024**3:.1f}GB ({ru.gpu_memory_max_percent:.1f}%)"""
 
+            # 1エポック予測時間を計算（全データセット用）
+            # これはベンチマーク時のバッチ数に基づいて推定
+            # NOTE: sample_ratioを使用している場合は別途計算される
+
             return f"""{label} Performance Summary:
-  Total Time: {result.total_epoch_time:.2f}s
-  Average Batch Time: {result.average_batch_time:.4f}s
+  Total Time: {result.total_epoch_time:.2f}s ({result.total_batches} batches)
+  Actual Average Time per Batch: {result.actual_average_batch_time:.4f}s
+  Processing Time per Batch (excl. data loading): {result.average_batch_time:.4f}s
   Samples per Second: {result.samples_per_second:.1f}
   Batches per Second: {result.batches_per_second:.2f}
 
-  Detailed Timing Breakdown:
+  Detailed Timing Breakdown (per batch, warmup excluded):
   - Data Loading: {result.data_loading_time:.4f}s ({data_pct:.1f}%)
   - GPU Transfer: {result.gpu_transfer_time:.4f}s ({gpu_pct:.1f}%)
   - Forward Pass: {result.forward_pass_time:.4f}s ({forward_pct:.1f}%)

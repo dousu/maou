@@ -606,7 +606,9 @@ class TimingCallback(BaseCallback):
 
         self.previous_batch_end_time = batch_end_time
 
-    def get_timing_statistics(self) -> Dict[str, float]:
+    def get_timing_statistics(
+        self,
+    ) -> Dict[str, float]:
         """Get averaged timing statistics."""
         if not self.timing_stats["total_batch"]:
             raise RuntimeError(
@@ -651,9 +653,16 @@ class TimingCallback(BaseCallback):
         epoch_total_time = (
             time.perf_counter() - self.epoch_start_time
         )
+        # 実際の平均バッチ時間（全てを含む）
+        actual_avg_batch_time = (
+            epoch_total_time / float(total_batches)
+            if total_batches > 0
+            else 0.0
+        )
         return {
             "total_epoch_time": epoch_total_time,
             "total_batches": float(total_batches),
+            "actual_average_batch_time": actual_avg_batch_time,
             "samples_per_second": float(self.total_samples)
             / epoch_total_time,
             "batches_per_second": float(total_batches)
