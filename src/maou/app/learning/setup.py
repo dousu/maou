@@ -69,8 +69,8 @@ class ModelComponents:
 
 
 LR_SCHEDULER_DISPLAY_NAMES: Dict[str, str] = {
-    "warmup_cosine_decay": "Warmup+CosineDecay",
-    "cosine_annealing_lr": "CosineAnnealingLR",
+    "Warmup+CosineDecay": "Warmup+CosineDecay",
+    "CosineAnnealingLR": "CosineAnnealingLR",
 }
 
 
@@ -487,7 +487,7 @@ class SchedulerFactory:
         if lr_scheduler_name is None:
             return None
 
-        normalized_name = lr_scheduler_name.strip().lower()
+        normalized_name = lr_scheduler_name.strip()
         if not normalized_name:
             return None
 
@@ -496,7 +496,7 @@ class SchedulerFactory:
                 "max_epochs must be positive for LR scheduling."
             )
 
-        if normalized_name == "warmup_cosine_decay":
+        if normalized_name == "Warmup+CosineDecay":
             warmup_epochs = max(
                 1,
                 math.ceil(
@@ -514,7 +514,7 @@ class SchedulerFactory:
                 max_epochs=max_epochs,
             )
 
-        if normalized_name == "cosine_annealing_lr":
+        if normalized_name == "CosineAnnealingLR":
             cls.logger.info(
                 "Using CosineAnnealingLR scheduler (T_max=%d)",
                 max_epochs,
