@@ -582,9 +582,11 @@ class TimingCallback(BaseCallback):
             self.timing_stats["data_loading"].append(
                 self._temp_timings["data_loading"]
             )
-            self.timing_stats["gpu_transfer"].append(
-                self._temp_timings["gpu_transfer"]
-            )
+            # GPU prefetch使用時はGPU転送がスキップされるため，存在する場合のみ記録
+            if "gpu_transfer" in self._temp_timings:
+                self.timing_stats["gpu_transfer"].append(
+                    self._temp_timings["gpu_transfer"]
+                )
             self.timing_stats["forward_pass"].append(
                 self._temp_timings["forward_pass"]
             )

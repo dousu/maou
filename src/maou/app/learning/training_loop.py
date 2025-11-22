@@ -13,6 +13,7 @@ from maou.app.learning.callbacks import (
     TrainingCallback,
     TrainingContext,
 )
+from maou.app.learning.gpu_prefetcher import DataPrefetcher
 from maou.app.learning.policy_targets import normalize_policy_targets
 
 
@@ -31,6 +32,9 @@ class TrainingLoop:
         value_loss_ratio: float,
         callbacks: Optional[List[TrainingCallback]] = None,
         logger: Optional[logging.Logger] = None,
+        enable_gpu_prefetch: bool = True,
+        gpu_prefetch_buffer_size: int = 3,
+        gradient_accumulation_steps: int = 1,
     ):
         self.model = model
         self.device = device
@@ -42,6 +46,25 @@ class TrainingLoop:
         self.callbacks = callbacks or []
         self.logger = logger or logging.getLogger(__name__)
         self._cuda_sync_enabled = False
+
+        # GPU prefetch設定
+        self.enable_gpu_prefetch = (
+            enable_gpu_prefetch and device.type == "cuda"
+        )
+        self.gpu_prefetch_buffer_size = gpu_prefetch_buffer_size
+
+        if self.enable_gpu_prefetch:
+            self.logger.info(
+                f"GPU prefetching enabled with buffer_size={gpu_prefetch_buffer_size}"
+            )
+
+        # Gradient accumulation設定
+        self.gradient_accumulation_steps = max(1, gradient_accumulation_steps)
+        if self.gradient_accumulation_steps > 1:
+            self.logger.info(
+                f"Gradient accumulation enabled: {gradient_accumulation_steps} steps "
+                f"(effective batch size multiplied by {gradient_accumulation_steps})"
+            )
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -114,16 +137,28 @@ class TrainingLoop:
             profiler.start()
 
         try:
+            # GPU prefetchを有効化している場合はDataPrefetcherでラップ
+            if self.enable_gpu_prefetch:
+                prefetcher = DataPrefetcher(
+                    dataloader,
+                    device=self.device,
+                    buffer_size=self.gpu_prefetch_buffer_size,
+                    pin_memory_override=True,
+                )
+                data_iterator = prefetcher
+            else:
+                data_iterator = dataloader
+
             dataloader_iter = (
                 tqdm(
-                    enumerate(dataloader),
+                    enumerate(data_iterator),
                     desc="Training"
                     if train_mode
                     else "Validation",
                     total=len(dataloader),
                 )
                 if progress_bar
-                else enumerate(dataloader)
+                else enumerate(data_iterator)
             )
 
             for batch_idx, data in dataloader_iter:
@@ -159,8 +194,9 @@ class TrainingLoop:
                 for callback in self.callbacks:
                     callback.on_batch_start(context)
 
-                # GPU転送
-                self._transfer_to_device(context)
+                # GPU転送（prefetch使用時は既にGPU上にあるためスキップ）
+                if not self.enable_gpu_prefetch:
+                    self._transfer_to_device(context)
 
                 if train_mode:
                     # 学習モード：勾配計算あり
@@ -178,6 +214,10 @@ class TrainingLoop:
                     profiler.step()
 
         finally:
+            # GPU prefetcherのクリーンアップ
+            if self.enable_gpu_prefetch and 'prefetcher' in locals():
+                prefetcher.shutdown()
+
             if (
                 self.device.type == "cuda"
                 and previous_sync_state
@@ -238,17 +278,22 @@ class TrainingLoop:
 
     def _train_batch(self, context: TrainingContext) -> None:
         """Train a single batch with gradient computation."""
-        # 前のバッチの勾配をクリア
-        self.optimizer.zero_grad()
+        # Gradient accumulationのステップを計算
+        accumulation_step = context.batch_idx % self.gradient_accumulation_steps
+        is_accumulation_step = accumulation_step < (self.gradient_accumulation_steps - 1)
+
+        # 勾配蓄積サイクルの最初のステップでのみ勾配をクリア
+        if accumulation_step == 0:
+            self.optimizer.zero_grad()
 
         # Mixed precision training with autocast
         if self.scaler is not None:
-            self._train_batch_mixed_precision(context)
+            self._train_batch_mixed_precision(context, is_accumulation_step)
         else:
-            self._train_batch_full_precision(context)
+            self._train_batch_full_precision(context, is_accumulation_step)
 
     def _train_batch_mixed_precision(
-        self, context: TrainingContext
+        self, context: TrainingContext, is_accumulation_step: bool
     ) -> None:
         """Train batch with mixed precision."""
         if self.scaler is None:
@@ -273,9 +318,11 @@ class TrainingLoop:
             value_loss = self.loss_fn_value(
                 context.outputs_value, context.labels_value
             )
+            # Gradient accumulation: 損失を蓄積ステップ数で正規化
             context.loss = (
-                self.policy_loss_ratio * policy_loss
-                + self.value_loss_ratio * value_loss
+                (self.policy_loss_ratio * policy_loss
+                + self.value_loss_ratio * value_loss)
+                / self.gradient_accumulation_steps
             )
             loss_is_finite = torch.isfinite(context.loss)
             policy_loss_is_finite = torch.isfinite(policy_loss)
@@ -319,30 +366,32 @@ class TrainingLoop:
 
         self.scaler.scale(context.loss).backward()
 
-        # 勾配クリッピング (scaled gradients)
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), max_norm=1.0
-        )
-
         self._maybe_synchronize("post_backward_mixed_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
-        # オプティマイザステップ
-        for callback in self.callbacks:
-            callback.on_optimizer_step_start(context)
+        # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
+        if not is_accumulation_step:
+            # 勾配クリッピング (scaled gradients)
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=1.0
+            )
 
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+            # オプティマイザステップ
+            for callback in self.callbacks:
+                callback.on_optimizer_step_start(context)
 
-        self._maybe_synchronize(
-            "post_optimizer_step_mixed_precision"
-        )
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
-        for callback in self.callbacks:
-            callback.on_optimizer_step_end(context)
+            self._maybe_synchronize(
+                "post_optimizer_step_mixed_precision"
+            )
+
+            for callback in self.callbacks:
+                callback.on_optimizer_step_end(context)
 
     def _move_inputs_to_device(
         self,
@@ -412,7 +461,7 @@ class TrainingLoop:
         raise TypeError(msg)
 
     def _train_batch_full_precision(
-        self, context: TrainingContext
+        self, context: TrainingContext, is_accumulation_step: bool
     ) -> None:
         """Train batch with full precision."""
         # 順伝播
@@ -436,9 +485,11 @@ class TrainingLoop:
         value_loss = self.loss_fn_value(
             context.outputs_value, context.labels_value
         )
+        # Gradient accumulation: 損失を蓄積ステップ数で正規化
         context.loss = (
-            self.policy_loss_ratio * policy_loss
-            + self.value_loss_ratio * value_loss
+            (self.policy_loss_ratio * policy_loss
+            + self.value_loss_ratio * value_loss)
+            / self.gradient_accumulation_steps
         )
         loss_is_finite = torch.isfinite(context.loss)
         policy_loss_is_finite = torch.isfinite(policy_loss)
@@ -473,28 +524,30 @@ class TrainingLoop:
 
         context.loss.backward()
 
-        # 勾配クリッピング
-        torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), max_norm=1.0
-        )
-
         self._maybe_synchronize("post_backward_full_precision")
 
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
-        # オプティマイザステップ
-        for callback in self.callbacks:
-            callback.on_optimizer_step_start(context)
+        # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
+        if not is_accumulation_step:
+            # 勾配クリッピング
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=1.0
+            )
 
-        self.optimizer.step()
+            # オプティマイザステップ
+            for callback in self.callbacks:
+                callback.on_optimizer_step_start(context)
 
-        self._maybe_synchronize(
-            "post_optimizer_step_full_precision"
-        )
+            self.optimizer.step()
 
-        for callback in self.callbacks:
-            callback.on_optimizer_step_end(context)
+            self._maybe_synchronize(
+                "post_optimizer_step_full_precision"
+            )
+
+            for callback in self.callbacks:
+                callback.on_optimizer_step_end(context)
 
     def _eval_batch(self, context: TrainingContext) -> None:
         """Evaluate a single batch without gradient computation."""

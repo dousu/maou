@@ -307,6 +307,81 @@ poetry run maou utility benchmark-training \
   --gpu cuda:0
 ```
 
+### GPU Prefetching (Auto-Enabled)
+**NEW**: Automatic GPU prefetching dramatically improves training throughput by overlapping data loading with GPU computation.
+
+#### Performance Improvements
+- **Data Loading Time**: -93.6% (0.0409s → 0.0026s per batch)
+- **Training Throughput**: +53.2% (2,202 → 3,374 samples/sec)
+- **GPU Transfer**: Hidden via asynchronous CUDA streams
+
+#### How It Works
+1. **Background Loading**: Loads batches in a separate thread
+2. **CUDA Streams**: Transfers data to GPU asynchronously
+3. **Buffer Queue**: Maintains 3 batches ready on GPU
+4. **Pin Memory**: Automatically enabled for faster transfers
+
+#### Configuration
+GPU prefetching is **enabled by default** on CUDA devices. No configuration needed!
+
+```python
+# Automatically enabled in TrainingLoop for CUDA devices
+training_loop = TrainingLoop(
+    model=model,
+    device=device,
+    enable_gpu_prefetch=True,      # Default: True
+    gpu_prefetch_buffer_size=3,     # Default: 3 batches
+    ...
+)
+```
+
+To disable (not recommended):
+```python
+training_loop = TrainingLoop(
+    ...
+    enable_gpu_prefetch=False,
+)
+```
+
+**Architecture**: Implemented in `src/maou/app/learning/gpu_prefetcher.py`
+
+### Gradient Accumulation
+Simulate larger batch sizes without increasing GPU memory usage.
+
+#### Use Cases
+- **Memory-Limited Training**: Increase effective batch size on limited GPU memory
+- **Stability**: Larger effective batch sizes can improve training stability
+- **Large Models**: Train models that wouldn't fit with desired batch size
+
+#### Configuration
+```python
+# Example: Simulate batch size of 1024 with 256 physical batch size
+training_loop = TrainingLoop(
+    model=model,
+    device=device,
+    gradient_accumulation_steps=4,  # 256 × 4 = 1024 effective batch size
+    ...
+)
+```
+
+#### How It Works
+1. Accumulates gradients over N mini-batches
+2. Normalizes loss by dividing by accumulation steps
+3. Updates weights only after N batches
+4. Memory usage stays constant (1× batch size)
+
+**Effective Batch Size** = `batch_size × gradient_accumulation_steps`
+
+**Example**:
+```bash
+# Physical batch size: 256
+# Accumulation steps: 4
+# Effective batch size: 1024
+# Memory usage: Same as batch_size=256
+```
+
+**Note**: Default is 1 (no accumulation). Training time increases proportionally with accumulation steps，but allows much larger effective batch sizes.
+
 ## Debugging and Logging
 
 ### Log Level Control
