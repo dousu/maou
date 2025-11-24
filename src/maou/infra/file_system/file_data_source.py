@@ -256,21 +256,6 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # ファイルサイズが均等かチェック（高速パス用）
-            self._uniform_file_size = False
-            self._records_per_file = 0
-            if lengths:
-                min_len = min(lengths)
-                max_len = max(lengths)
-                # 全ファイルのサイズが同じなら高速パスを使用
-                if min_len == max_len:
-                    self._uniform_file_size = True
-                    self._records_per_file = min_len
-                    self.logger.info(
-                        f"Uniform file size detected: {min_len} records per file. "
-                        "Using fast path for index lookup."
-                    )
-
             # cache_mode="memory"の場合、全ファイルを単一配列に結合
             if (
                 self.cache_mode == "memory"
@@ -323,7 +308,6 @@ class FileDataSource(
 
             最適化:
             - cache_mode="memory"で複数ファイル: 結合配列から直接アクセス
-            - ファイルサイズが均等な場合は除算で直接計算
             - 最後にアクセスしたファイルをキャッシュして局所性を活用
             """
             if idx < 0 or idx >= self.total_rows:
@@ -343,29 +327,24 @@ class FileDataSource(
                 return record
 
             # ファイルインデックスと相対インデックスを計算
-            if self._uniform_file_size:
-                # 高速パス: ファイルサイズが均等な場合は除算で直接計算
-                file_idx = idx // self._records_per_file
-                relative_idx = idx % self._records_per_file
+            # 最後にアクセスしたファイルをチェック（局所性の活用）
+            if (
+                self._last_file_idx < self.total_pages
+                and self.cum_lengths[self._last_file_idx]
+                <= idx
+                < self.cum_lengths[self._last_file_idx + 1]
+            ):
+                file_idx = self._last_file_idx
             else:
-                # 最後にアクセスしたファイルをチェック（局所性の活用）
-                if (
-                    self._last_file_idx < self.total_pages
-                    and self.cum_lengths[self._last_file_idx]
-                    <= idx
-                    < self.cum_lengths[self._last_file_idx + 1]
-                ):
-                    file_idx = self._last_file_idx
-                else:
-                    # searchsortedで検索
-                    file_idx = int(
-                        np.searchsorted(
-                            self.cum_lengths, idx, side="right"
-                        )
-                        - 1
+                # searchsortedで検索
+                file_idx = int(
+                    np.searchsorted(
+                        self.cum_lengths, idx, side="right"
                     )
-                    self._last_file_idx = file_idx
-                relative_idx = idx - self.cum_lengths[file_idx]
+                    - 1
+                )
+                self._last_file_idx = file_idx
+            relative_idx = idx - self.cum_lengths[file_idx]
 
             entry = self._file_entries[file_idx]
 
