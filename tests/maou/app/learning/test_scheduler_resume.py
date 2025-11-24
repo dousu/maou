@@ -48,19 +48,33 @@ def test_warmup_cosine_decay_scheduler_advances() -> None:
         max_epochs=max_epochs,
     )
 
-    # Record learning rates at different epochs
-    lrs = [optimizer.param_groups[0]["lr"]]
+    # Record learning rate after initialization (epoch 0)
+    # At initialization, scheduler sets LR for epoch 0
+    lr_epoch_0 = optimizer.param_groups[0]["lr"]
 
-    # Advance scheduler through warmup and decay phases
-    for epoch in range(10):
+    # Advance to epoch 1
+    scheduler.step()
+    lr_epoch_1 = optimizer.param_groups[0]["lr"]
+
+    # Advance to epoch 2 (end of warmup)
+    scheduler.step()
+    lr_epoch_2 = optimizer.param_groups[0]["lr"]
+
+    # Record more epochs for decay phase
+    lrs = [lr_epoch_0, lr_epoch_1, lr_epoch_2]
+    for _ in range(8):  # epochs 3-10
         scheduler.step()
         lrs.append(optimizer.param_groups[0]["lr"])
 
     # During warmup (epochs 0-1), LR should increase
-    assert lrs[1] < lrs[2]  # Warmup: increasing
+    # epoch 0: (0+1)/2 = 0.5 * 0.1 = 0.05
+    # epoch 1: (1+1)/2 = 1.0 * 0.1 = 0.1
+    assert lr_epoch_0 < lr_epoch_1  # Warmup: increasing
+    assert lr_epoch_1 <= 0.1  # Should reach base LR by end of warmup
 
     # After warmup (epochs 2+), LR should decrease (cosine decay)
-    assert lrs[5] > lrs[10]  # Decay: decreasing
+    # epoch 2 is the start of decay, epoch 10 should have lower LR
+    assert lrs[2] > lrs[10]  # Decay: decreasing
 
 
 def test_scheduler_state_after_multiple_steps() -> None:
