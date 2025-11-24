@@ -1,6 +1,5 @@
 import logging
 import random
-from collections import OrderedDict
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +39,6 @@ class FileDataSource(
             preprocessing_mmap_mode: Optional[
                 Literal["r", "r+", "w+", "c"]
             ] = "c",
-            lru_cache_size: int = 1024,
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
@@ -48,7 +46,6 @@ class FileDataSource(
                 bit_pack=bit_pack,
                 cache_mode=cache_mode,
                 preprocessing_mmap_mode=preprocessing_mmap_mode,
-                lru_cache_size=lru_cache_size,
             )
 
         def train_test_split(
@@ -110,7 +107,6 @@ class FileDataSource(
             preprocessing_mmap_mode: Optional[
                 Literal["r", "r+", "w+", "c"]
             ] = "c",
-            lru_cache_size: int = 1024,
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -120,7 +116,6 @@ class FileDataSource(
                 bit_pack (bool): ビットパッキングを使用するかどうか
                 cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
                 preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
-                lru_cache_size (int): LRUキャッシュのサイズ（0で無効化）
             """
             self.file_paths = file_paths
             self.array_type = array_type
@@ -128,7 +123,6 @@ class FileDataSource(
             self.preprocessing_mmap_mode = (
                 preprocessing_mmap_mode
             )
-            self.lru_cache_size = lru_cache_size
             normalized_cache_mode = cast(
                 FileDataSource.CacheMode, cache_mode.lower()
             )
@@ -144,12 +138,8 @@ class FileDataSource(
             self.cache_mode: FileDataSource.CacheMode = (
                 normalized_cache_mode
             )
-            # LRUキャッシュの初期化
-            self._lru_cache: OrderedDict[int, np.ndarray] = (
-                OrderedDict()
-            )
-            self._cache_hits = 0
-            self._cache_misses = 0
+            # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
+            self._last_file_idx = 0
 
             # すべてのファイルパスをmemmapで読み込む
             lengths = []
@@ -262,6 +252,21 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
+            # ファイルサイズが均等かチェック（高速パス用）
+            self._uniform_file_size = False
+            self._records_per_file = 0
+            if lengths:
+                min_len = min(lengths)
+                max_len = max(lengths)
+                # 全ファイルのサイズが同じなら高速パスを使用
+                if min_len == max_len:
+                    self._uniform_file_size = True
+                    self._records_per_file = min_len
+                    self.logger.info(
+                        f"Uniform file size detected: {min_len} records per file. "
+                        "Using fast path for index lookup."
+                    )
+
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
@@ -269,32 +274,38 @@ class FileDataSource(
         def get_item(self, idx: int) -> np.ndarray:
             """特定のレコードをnumpy structured arrayとして返す．
 
-            LRUキャッシュを使用して，頻繁にアクセスされるレコードを
-            メモリに保持し，アクセス速度を向上させる．
+            最適化:
+            - ファイルサイズが均等な場合は除算で直接計算
+            - 最後にアクセスしたファイルをキャッシュして局所性を活用
             """
             if idx < 0 or idx >= self.total_rows:
                 raise IndexError(f"Index {idx} out of range.")
 
-            # LRUキャッシュをチェック
-            if (
-                self.lru_cache_size > 0
-                and idx in self._lru_cache
-            ):
-                self._cache_hits += 1
-                # アクセスされたアイテムを最新に移動
-                self._lru_cache.move_to_end(idx)
-                return self._lru_cache[idx]
-
-            self._cache_misses += 1
-
             # ファイルインデックスと相対インデックスを計算
-            file_idx = int(
-                np.searchsorted(
-                    self.cum_lengths, idx, side="right"
-                )
-                - 1
-            )
-            relative_idx = idx - self.cum_lengths[file_idx]
+            if self._uniform_file_size:
+                # 高速パス: ファイルサイズが均等な場合は除算で直接計算
+                file_idx = idx // self._records_per_file
+                relative_idx = idx % self._records_per_file
+            else:
+                # 最後にアクセスしたファイルをチェック（局所性の活用）
+                if (
+                    self._last_file_idx < self.total_pages
+                    and self.cum_lengths[self._last_file_idx]
+                    <= idx
+                    < self.cum_lengths[self._last_file_idx + 1]
+                ):
+                    file_idx = self._last_file_idx
+                else:
+                    # searchsortedで検索
+                    file_idx = int(
+                        np.searchsorted(
+                            self.cum_lengths, idx, side="right"
+                        )
+                        - 1
+                    )
+                    self._last_file_idx = file_idx
+                relative_idx = idx - self.cum_lengths[file_idx]
+
             entry = self._file_entries[file_idx]
 
             # データを取得
@@ -346,13 +357,6 @@ class FileDataSource(
                 else:
                     record = entry.memmap[relative_idx]
 
-            # LRUキャッシュに追加
-            if self.lru_cache_size > 0:
-                # キャッシュが満杯の場合，最も古いアイテムを削除
-                if len(self._lru_cache) >= self.lru_cache_size:
-                    self._lru_cache.popitem(last=False)
-                self._lru_cache[idx] = record.copy()
-
             return record
 
         def get_items(
@@ -360,8 +364,8 @@ class FileDataSource(
         ) -> list[np.ndarray]:
             """複数のインデックスのレコードをバッチで取得する．
 
-            ファイル単位でグループ化してアクセスすることで，
-            ランダムアクセスのパフォーマンスを向上させる．
+            PyTorchのDataLoaderでは現在使用されないが，
+            将来的なバッチアクセス最適化のために保持．
 
             Args:
                 indices: 取得するインデックスのリスト
@@ -369,162 +373,7 @@ class FileDataSource(
             Returns:
                 レコードのリスト（入力のインデックス順）
             """
-            if not indices:
-                return []
-
-            # インデックスをファイル単位でグループ化
-            file_groups: dict[int, list[tuple[int, int]]] = {}
-            for input_idx, global_idx in enumerate(indices):
-                if (
-                    global_idx < 0
-                    or global_idx >= self.total_rows
-                ):
-                    raise IndexError(
-                        f"Index {global_idx} out of range."
-                    )
-
-                # LRUキャッシュにある場合はスキップ
-                if (
-                    self.lru_cache_size > 0
-                    and global_idx in self._lru_cache
-                ):
-                    continue
-
-                file_idx = int(
-                    np.searchsorted(
-                        self.cum_lengths,
-                        global_idx,
-                        side="right",
-                    )
-                    - 1
-                )
-                relative_idx = (
-                    global_idx - self.cum_lengths[file_idx]
-                )
-
-                if file_idx not in file_groups:
-                    file_groups[file_idx] = []
-                file_groups[file_idx].append(
-                    (input_idx, relative_idx)
-                )
-
-            # ファイル単位でデータを取得
-            results: list[Optional[np.ndarray]] = [None] * len(
-                indices
-            )
-
-            for file_idx, idx_pairs in file_groups.items():
-                entry = self._file_entries[file_idx]
-                relative_indices = [
-                    rel_idx for _, rel_idx in idx_pairs
-                ]
-
-                # データソースに応じて取得
-                if entry.cached_array is not None:
-                    records = entry.cached_array[
-                        relative_indices
-                    ]
-                elif entry.memmap is not None:
-                    records = entry.memmap[relative_indices]
-                else:
-                    # memmapもcached_arrayもない場合は個別に読み込む
-                    records = []
-                    for rel_idx in relative_indices:
-                        record_array = np.fromfile(
-                            entry.path,
-                            dtype=entry.dtype,
-                            count=1,
-                            offset=int(
-                                rel_idx * entry.dtype.itemsize
-                            ),
-                        )
-                        if record_array.size == 0:
-                            raise IndexError(
-                                f"Index {rel_idx} could not be loaded from {entry.path}."
-                            )
-                        records.append(record_array[0].copy())
-                    records = np.array(records)
-
-                # bit_packの場合は展開
-                if (
-                    self.bit_pack
-                    and self.array_type == "preprocessing"
-                ):
-                    for i, (input_idx, _) in enumerate(
-                        idx_pairs
-                    ):
-                        unpacked_record = (
-                            convert_record_from_packed_schema(
-                                compressed_record=records[i],
-                                array_type=self.array_type,
-                            )
-                        )
-                        results[input_idx] = unpacked_record
-                else:
-                    for i, (input_idx, _) in enumerate(
-                        idx_pairs
-                    ):
-                        results[input_idx] = records[i]
-
-            # キャッシュから取得したデータとマージ
-            for input_idx, global_idx in enumerate(indices):
-                if results[input_idx] is None:
-                    # キャッシュからヒット
-                    if (
-                        self.lru_cache_size > 0
-                        and global_idx in self._lru_cache
-                    ):
-                        self._cache_hits += 1
-                        self._lru_cache.move_to_end(global_idx)
-                        results[input_idx] = self._lru_cache[
-                            global_idx
-                        ]
-                    else:
-                        raise RuntimeError(
-                            f"Index {global_idx} was not loaded"
-                        )
-                else:
-                    self._cache_misses += 1
-                    # LRUキャッシュに追加
-                    if self.lru_cache_size > 0:
-                        result = results[input_idx]
-                        if result is not None:
-                            if (
-                                len(self._lru_cache)
-                                >= self.lru_cache_size
-                            ):
-                                self._lru_cache.popitem(
-                                    last=False
-                                )
-                            self._lru_cache[global_idx] = (
-                                result.copy()
-                            )
-
-            return [r for r in results if r is not None]
-
-        def get_cache_stats(
-            self,
-        ) -> dict[str, Union[int, float]]:
-            """キャッシュ統計を取得する．
-
-            Returns:
-                キャッシュヒット数，ミス数，ヒット率を含む辞書
-            """
-            total_accesses = (
-                self._cache_hits + self._cache_misses
-            )
-            hit_rate = (
-                self._cache_hits / total_accesses
-                if total_accesses > 0
-                else 0.0
-            )
-            return {
-                "cache_hits": self._cache_hits,
-                "cache_misses": self._cache_misses,
-                "total_accesses": total_accesses,
-                "hit_rate": hit_rate,
-                "cache_size": len(self._lru_cache),
-            }
+            return [self.get_item(idx) for idx in indices]
 
         def iter_batches(
             self,
@@ -607,7 +456,6 @@ class FileDataSource(
         preprocessing_mmap_mode: Optional[
             Literal["r", "r+", "w+", "c"]
         ] = "c",
-        lru_cache_size: int = 1024,
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -619,7 +467,6 @@ class FileDataSource(
             bit_pack (bool): ビットパッキングを使用するかどうか
             cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
             preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
-            lru_cache_size (int): LRUキャッシュのサイズ（0で無効化）
         """
         if file_manager is None:
             if (
@@ -632,7 +479,6 @@ class FileDataSource(
                     bit_pack=bit_pack,
                     cache_mode=cache_mode,
                     preprocessing_mmap_mode=preprocessing_mmap_mode,
-                    lru_cache_size=lru_cache_size,
                 )
             else:
                 raise MissingFileDataConfig(
@@ -669,14 +515,6 @@ class FileDataSource(
         # FileDataSourceのインデックスをFileManagerのグローバルインデックスに変換
         global_indices = [self.indicies[idx] for idx in indices]
         return self.__file_manager.get_items(global_indices)
-
-    def get_cache_stats(self) -> dict[str, Union[int, float]]:
-        """キャッシュ統計を取得する．
-
-        Returns:
-            キャッシュヒット数，ミス数，ヒット率を含む辞書
-        """
-        return self.__file_manager.get_cache_stats()
 
     def iter_batches(
         self,

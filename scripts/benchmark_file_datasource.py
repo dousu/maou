@@ -76,7 +76,6 @@ def create_test_data(
 def benchmark_random_access(
     file_paths: list[Path],
     num_accesses: int = 1000,
-    lru_cache_size: int = 1024,
     cache_mode: str = "mmap",
     seed: Optional[int] = 42,
 ) -> dict[str, float]:
@@ -85,7 +84,6 @@ def benchmark_random_access(
     Args:
         file_paths: テストデータのファイルパス
         num_accesses: アクセス回数
-        lru_cache_size: LRUキャッシュのサイズ（0で無効）
         cache_mode: キャッシュモード ("mmap" または "memory")
         seed: 乱数シード
 
@@ -96,8 +94,7 @@ def benchmark_random_access(
         random.seed(seed)
 
     logger.info(
-        f"Creating FileDataSource with cache_mode={cache_mode}, "
-        f"lru_cache_size={lru_cache_size}"
+        f"Creating FileDataSource with cache_mode={cache_mode}"
     )
 
     # FileDataSourceを作成
@@ -106,7 +103,6 @@ def benchmark_random_access(
         array_type="preprocessing",
         bit_pack=False,
         cache_mode=cache_mode,  # type: ignore
-        lru_cache_size=lru_cache_size,
     )
 
     total_records = len(datasource)
@@ -130,17 +126,11 @@ def benchmark_random_access(
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
 
-    # キャッシュ統計を取得
-    cache_stats = datasource.get_cache_stats()
-
     results = {
         "elapsed_time": elapsed_time,
         "accesses_per_second": num_accesses / elapsed_time,
         "avg_access_time_ms": (elapsed_time / num_accesses)
         * 1000,
-        "cache_hits": cache_stats["cache_hits"],
-        "cache_misses": cache_stats["cache_misses"],
-        "cache_hit_rate": cache_stats["hit_rate"],
     }
 
     logger.info(f"Benchmark completed in {elapsed_time:.2f}s")
@@ -149,10 +139,6 @@ def benchmark_random_access(
     )
     logger.info(
         f"Average access time: {results['avg_access_time_ms']:.3f}ms"
-    )
-    logger.info(
-        f"Cache hit rate: {results['cache_hit_rate']:.2%} "
-        f"({cache_stats['cache_hits']}/{cache_stats['total_accesses']})"
     )
 
     return results
@@ -192,20 +178,9 @@ def main() -> None:
     parser.add_argument(
         "--cache-mode",
         type=str,
-        default="mmap",
+        default="memory",
         choices=["mmap", "memory"],
-        help="Cache mode",
-    )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable LRU cache",
-    )
-    parser.add_argument(
-        "--lru-cache-size",
-        type=int,
-        default=1024,
-        help="LRU cache size",
+        help="Cache mode (default: memory)",
     )
     parser.add_argument(
         "--create-data",
@@ -235,12 +210,9 @@ def main() -> None:
     logger.info(f"Found {len(file_paths)} test files")
 
     # ベンチマーク実行
-    lru_cache_size = 0 if args.no_cache else args.lru_cache_size
-
     results = benchmark_random_access(
         file_paths=file_paths,
         num_accesses=args.num_accesses,
-        lru_cache_size=lru_cache_size,
         cache_mode=args.cache_mode,
     )
 
@@ -249,9 +221,6 @@ def main() -> None:
     print("Benchmark Results")
     print("=" * 60)
     print(f"Cache mode: {args.cache_mode}")
-    print(
-        f"LRU cache: {'Disabled' if args.no_cache else f'Enabled (size={lru_cache_size})'}"
-    )
     print(f"Total accesses: {args.num_accesses}")
     print(f"Elapsed time: {results['elapsed_time']:.2f}s")
     print(
@@ -260,9 +229,6 @@ def main() -> None:
     print(
         f"Average access time: {results['avg_access_time_ms']:.3f}ms"
     )
-    print(f"Cache hits: {results['cache_hits']}")
-    print(f"Cache misses: {results['cache_misses']}")
-    print(f"Cache hit rate: {results['cache_hit_rate']:.2%}")
     print("=" * 60)
 
 
