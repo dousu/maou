@@ -196,9 +196,11 @@ class TensorRTInference:
         # inputの転送 host -> gpu
         # np.copyto(self.host[:data.size], data.flat, casting='safe')
         # cudart.cudaMemcpyAsync(inp.device, inp.host, inp.nbytes, cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, stream)
+        # Add batch dimension before flattening: (9, 9) -> (1, 9, 9) -> flat
+        batched_input = np.expand_dims(input_data, axis=0)
         np.copyto(
             host_input_ctype_array,
-            input_data.astype(trt.nptype(trt.float32)).ravel(),
+            batched_input.astype(np.int64).ravel(),
             casting="safe",
         )
         cudart.cudaMemcpyAsync(
