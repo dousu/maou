@@ -287,6 +287,21 @@ class Learning:
         # start epoch設定
         epoch_number = self.start_epoch
 
+        # 学習率スケジューラをstart_epoch分だけ進める
+        if (
+            self.lr_scheduler is not None
+            and self.start_epoch > 0
+        ):
+            self.logger.info(
+                f"Advancing LR scheduler to epoch {self.start_epoch}"
+            )
+            for _ in range(self.start_epoch):
+                self.lr_scheduler.step()
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            self.logger.info(
+                f"LR scheduler advanced: current learning rate = {current_lr}"
+            )
+
         for _ in range(epoch_number, EPOCHS):
             self.logger.info(
                 "EPOCH {}:".format(epoch_number + 1)
