@@ -113,6 +113,9 @@ class FileDataSource(
             Args:
                 file_paths (list[Path]): npyファイルのリスト
                 array_type (Literal["hcpe", "preprocessing"]): 配列のタイプ ("hcpe" または "preprocessing")
+                bit_pack (bool): ビットパッキングを使用するかどうか
+                cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
+                preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
             """
             self.file_paths = file_paths
             self.array_type = array_type
@@ -134,6 +137,12 @@ class FileDataSource(
             ] = []
             self.cache_mode: FileDataSource.CacheMode = (
                 normalized_cache_mode
+            )
+            # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
+            self._last_file_idx = 0
+            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
+            self._concatenated_array: Optional[np.ndarray] = (
+                None
             )
 
             # すべてのファイルパスをmemmapで読み込む
@@ -247,24 +256,96 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
+            # cache_mode="memory"の場合、全ファイルを単一配列に結合
+            if (
+                self.cache_mode == "memory"
+                and self.total_pages > 1
+            ):
+                self.logger.info(
+                    f"Concatenating {self.total_pages} files into single array "
+                    f"({self.total_rows} records)..."
+                )
+
+                # dtypeを最初のエントリから取得
+                first_entry = self._file_entries[0]
+                if first_entry.cached_array is not None:
+                    dtype = first_entry.cached_array.dtype
+                else:
+                    self.logger.warning(
+                        f"First file {first_entry.name} is not cached in memory, "
+                        "concatenation may fail"
+                    )
+                    dtype = first_entry.dtype
+
+                # 結合後のサイズで配列を事前確保（メモリ効率化）
+                try:
+                    self._concatenated_array = np.empty(
+                        self.total_rows, dtype=dtype
+                    )
+                    self.logger.info(
+                        f"Allocated array for {self.total_rows} records "
+                        f"({self._concatenated_array.nbytes / (1024**3):.2f} GB)"
+                    )
+                except MemoryError:
+                    self.logger.exception(
+                        f"Failed to allocate memory for {self.total_rows} records"
+                    )
+                    raise
+
+                # 1ファイルずつコピー→即解放（メモリ使用量削減）
+                offset = 0
+                for i, entry in enumerate(self._file_entries):
+                    if entry.cached_array is not None:
+                        arr_len = len(entry.cached_array)
+                        self._concatenated_array[
+                            offset : offset + arr_len
+                        ] = entry.cached_array
+                        # すぐに解放してメモリを節約
+                        entry.cached_array = None
+                        offset += arr_len
+                        if (i + 1) % 8 == 0 or (i + 1) == len(
+                            self._file_entries
+                        ):
+                            self.logger.debug(
+                                f"Copied {i + 1}/{len(self._file_entries)} files"
+                            )
+                    else:
+                        self.logger.warning(
+                            f"File {entry.name} is not cached in memory, skipping"
+                        )
+
+                if offset == self.total_rows:
+                    self.logger.info(
+                        f"Concatenation complete. "
+                        f"Array shape: {self._concatenated_array.shape}, "
+                        f"dtype: {self._concatenated_array.dtype}"
+                    )
+                    self.logger.info(
+                        "Individual cached arrays released during copy (memory efficient)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Concatenation incomplete: "
+                        f"copied {offset} records, expected {self.total_rows}"
+                    )
+
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
         def get_item(self, idx: int) -> np.ndarray:
-            """特定のレコードをnumpy structured arrayとして返す."""
+            """特定のレコードをnumpy structured arrayとして返す．
+
+            最適化:
+            - cache_mode="memory"で複数ファイル: 結合配列から直接アクセス
+            - 最後にアクセスしたファイルをキャッシュして局所性を活用
+            """
             if idx < 0 or idx >= self.total_rows:
                 raise IndexError(f"Index {idx} out of range.")
-            file_idx = int(
-                np.searchsorted(
-                    self.cum_lengths, idx, side="right"
-                )
-                - 1
-            )
-            relative_idx = idx - self.cum_lengths[file_idx]
-            entry = self._file_entries[file_idx]
-            if entry.cached_array is not None:
-                record = entry.cached_array[relative_idx]
+
+            # 最適化: 結合配列がある場合は直接アクセス
+            if self._concatenated_array is not None:
+                record = self._concatenated_array[idx]
                 if (
                     self.bit_pack
                     and self.array_type == "preprocessing"
@@ -274,7 +355,41 @@ class FileDataSource(
                         array_type=self.array_type,
                     )
                 return record
-            if entry.memmap is None:
+
+            # ファイルインデックスと相対インデックスを計算
+            # 最後にアクセスしたファイルをチェック（局所性の活用）
+            if (
+                self._last_file_idx < self.total_pages
+                and self.cum_lengths[self._last_file_idx]
+                <= idx
+                < self.cum_lengths[self._last_file_idx + 1]
+            ):
+                file_idx = self._last_file_idx
+            else:
+                # searchsortedで検索
+                file_idx = int(
+                    np.searchsorted(
+                        self.cum_lengths, idx, side="right"
+                    )
+                    - 1
+                )
+                self._last_file_idx = file_idx
+            relative_idx = idx - self.cum_lengths[file_idx]
+
+            entry = self._file_entries[file_idx]
+
+            # データを取得
+            if entry.cached_array is not None:
+                record = entry.cached_array[relative_idx]
+                if (
+                    self.bit_pack
+                    and self.array_type == "preprocessing"
+                ):
+                    record = convert_record_from_packed_schema(
+                        compressed_record=record,
+                        array_type=self.array_type,
+                    )
+            elif entry.memmap is None:
                 record_array = np.fromfile(
                     entry.path,
                     dtype=entry.dtype,
@@ -293,23 +408,41 @@ class FileDataSource(
                     self.bit_pack
                     and self.array_type == "preprocessing"
                 ):
-                    return convert_record_from_packed_schema(
+                    record = convert_record_from_packed_schema(
                         compressed_record=record,
                         array_type=self.array_type,
                     )
-                return record
-            if (
-                self.bit_pack
-                and self.array_type == "preprocessing"
-            ):
-                return convert_record_from_packed_schema(
-                    compressed_record=entry.memmap[
-                        relative_idx
-                    ],
-                    array_type=self.array_type,
-                )
             else:
-                return entry.memmap[relative_idx]
+                if (
+                    self.bit_pack
+                    and self.array_type == "preprocessing"
+                ):
+                    record = convert_record_from_packed_schema(
+                        compressed_record=entry.memmap[
+                            relative_idx
+                        ],
+                        array_type=self.array_type,
+                    )
+                else:
+                    record = entry.memmap[relative_idx]
+
+            return record
+
+        def get_items(
+            self, indices: list[int]
+        ) -> list[np.ndarray]:
+            """複数のインデックスのレコードをバッチで取得する．
+
+            PyTorchのDataLoaderでは現在使用されないが，
+            将来的なバッチアクセス最適化のために保持．
+
+            Args:
+                indices: 取得するインデックスのリスト
+
+            Returns:
+                レコードのリスト（入力のインデックス順）
+            """
+            return [self.get_item(idx) for idx in indices]
 
         def iter_batches(
             self,
@@ -400,6 +533,9 @@ class FileDataSource(
             file_manager (Optional[FileManager]): FileManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
             array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
+            bit_pack (bool): ビットパッキングを使用するかどうか
+            cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
+            preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
         """
         if file_manager is None:
             if (
@@ -435,6 +571,19 @@ class FileDataSource(
 
     def __len__(self) -> int:
         return len(self.indicies)
+
+    def get_items(self, indices: list[int]) -> list[np.ndarray]:
+        """複数のインデックスのレコードをバッチで取得する．
+
+        Args:
+            indices: 取得するインデックスのリスト（FileDataSourceのインデックス空間）
+
+        Returns:
+            レコードのリスト（入力のインデックス順）
+        """
+        # FileDataSourceのインデックスをFileManagerのグローバルインデックスに変換
+        global_indices = [self.indicies[idx] for idx in indices]
+        return self.__file_manager.get_items(global_indices)
 
     def iter_batches(
         self,
