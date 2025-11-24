@@ -483,6 +483,9 @@ class TrainingBenchmarkUseCase:
         training_loader, validation_loader = dataloaders
         device = device_config.device
 
+        # Get total number of batches in the full dataset
+        total_batches_in_dataset = len(training_loader)
+
         # Create benchmark instance
         benchmark = SingleEpochBenchmark(
             model=model_components.model,
@@ -549,8 +552,19 @@ class TrainingBenchmarkUseCase:
 
         # Format results for display
         def format_timing_summary(
-            result: BenchmarkResult, label: str
+            result: BenchmarkResult,
+            label: str,
+            total_batches_in_dataset: int,
         ) -> str:
+            # Calculate estimated full epoch time
+            estimated_full_epoch_time_seconds = (
+                result.actual_average_batch_time
+                * total_batches_in_dataset
+            )
+            estimated_full_epoch_time_minutes = (
+                estimated_full_epoch_time_seconds / 60.0
+            )
+
             # Pre-calculate percentages based on actual average batch time
             # (includes all overhead: data loading, processing, etc.)
             data_pct = (
@@ -605,12 +619,10 @@ class TrainingBenchmarkUseCase:
                     resource_summary += f"""
   - GPU Memory Max Usage: {ru.gpu_memory_max_bytes / 1024**3:.1f}GB / {ru.gpu_memory_total_bytes / 1024**3:.1f}GB ({ru.gpu_memory_max_percent:.1f}%)"""
 
-            # 1エポック予測時間を計算（全データセット用）
-            # これはベンチマーク時のバッチ数に基づいて推定
-            # NOTE: sample_ratioを使用している場合は別途計算される
-
             return f"""{label} Performance Summary:
-  Total Time: {result.total_epoch_time:.2f}s ({result.total_batches} batches)
+  Processed Batches: {result.total_batches} / {total_batches_in_dataset}
+  Total Time (Processed): {result.total_epoch_time:.2f}s
+  Estimated Full Epoch Time: {estimated_full_epoch_time_seconds:.2f}s ({estimated_full_epoch_time_minutes:.2f} minutes)
   Actual Average Time per Batch: {result.actual_average_batch_time:.4f}s
   Processing Time per Batch (excl. data loading): {result.average_batch_time:.4f}s
   Samples per Second: {result.samples_per_second:.1f}
@@ -629,7 +641,9 @@ class TrainingBenchmarkUseCase:
   - Average Loss: {result.average_loss:.6f}{resource_summary}"""
 
         training_summary = format_timing_summary(
-            training_result, "Training"
+            training_result,
+            "Training",
+            total_batches_in_dataset,
         )
 
         # Create recommendations based on timing analysis
@@ -706,8 +720,11 @@ class TrainingBenchmarkUseCase:
 
         # Add validation results if available
         if validation_result is not None:
+            total_validation_batches = len(validation_loader)
             validation_summary = format_timing_summary(
-                validation_result, "Validation"
+                validation_result,
+                "Validation",
+                total_validation_batches,
             )
             # Dynamic dict key assignment for validation summary
             output["benchmark_results"]["ValidationSummary"] = (  # type: ignore[index]
