@@ -265,38 +265,68 @@ class FileDataSource(
                     f"Concatenating {self.total_pages} files into single array "
                     f"({self.total_rows} records)..."
                 )
-                arrays_to_concat = []
-                for entry in self._file_entries:
+
+                # dtypeを最初のエントリから取得
+                first_entry = self._file_entries[0]
+                if first_entry.cached_array is not None:
+                    dtype = first_entry.cached_array.dtype
+                else:
+                    self.logger.warning(
+                        f"First file {first_entry.name} is not cached in memory, "
+                        "concatenation may fail"
+                    )
+                    dtype = first_entry.dtype
+
+                # 結合後のサイズで配列を事前確保（メモリ効率化）
+                try:
+                    self._concatenated_array = np.empty(
+                        self.total_rows, dtype=dtype
+                    )
+                    self.logger.info(
+                        f"Allocated array for {self.total_rows} records "
+                        f"({self._concatenated_array.nbytes / (1024**3):.2f} GB)"
+                    )
+                except MemoryError:
+                    self.logger.exception(
+                        f"Failed to allocate memory for {self.total_rows} records"
+                    )
+                    raise
+
+                # 1ファイルずつコピー→即解放（メモリ使用量削減）
+                offset = 0
+                for i, entry in enumerate(self._file_entries):
                     if entry.cached_array is not None:
-                        arrays_to_concat.append(
-                            entry.cached_array
-                        )
+                        arr_len = len(entry.cached_array)
+                        self._concatenated_array[
+                            offset : offset + arr_len
+                        ] = entry.cached_array
+                        # すぐに解放してメモリを節約
+                        entry.cached_array = None
+                        offset += arr_len
+                        if (i + 1) % 8 == 0 or (i + 1) == len(
+                            self._file_entries
+                        ):
+                            self.logger.debug(
+                                f"Copied {i + 1}/{len(self._file_entries)} files"
+                            )
                     else:
                         self.logger.warning(
-                            f"File {entry.name} is not cached in memory, "
-                            "concatenation may fail"
+                            f"File {entry.name} is not cached in memory, skipping"
                         )
 
-                if len(arrays_to_concat) == self.total_pages:
-                    self._concatenated_array = np.concatenate(
-                        arrays_to_concat
-                    )
+                if offset == self.total_rows:
                     self.logger.info(
                         f"Concatenation complete. "
                         f"Array shape: {self._concatenated_array.shape}, "
                         f"dtype: {self._concatenated_array.dtype}"
                     )
-
-                    # 個別のcached_arrayを解放してメモリ節約
-                    for entry in self._file_entries:
-                        entry.cached_array = None
                     self.logger.info(
-                        "Released individual cached arrays to save memory"
+                        "Individual cached arrays released during copy (memory efficient)"
                     )
                 else:
                     self.logger.warning(
-                        f"Could not concatenate all files: "
-                        f"expected {self.total_pages}, got {len(arrays_to_concat)}"
+                        f"Concatenation incomplete: "
+                        f"copied {offset} records, expected {self.total_rows}"
                     )
 
             self.logger.info(
