@@ -35,8 +35,10 @@ class ONNXInference:
         session = ort.InferenceSession(
             path, sess_options=options, providers=providers
         )
+        # Add batch dimension: (9, 9) -> (1, 9, 9)
+        batched_input = np.expand_dims(input_data, axis=0)
         outputs = session.run(
-            ["policy", "value"], {"input": [input_data]}
+            ["policy", "value"], {"input": batched_input}
         )
         policy_labels: list[int] = list(
             np.argsort(outputs[0][0])[::-1][:num]  # type: ignore

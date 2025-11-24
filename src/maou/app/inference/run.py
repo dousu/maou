@@ -8,7 +8,7 @@ import numpy as np
 
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
-from maou.app.pre_process.feature import make_feature
+from maou.app.pre_process.feature import make_board_id_positions
 from maou.app.pre_process.label import (
     IllegalMove,
     make_usi_move_from_label,
@@ -58,7 +58,9 @@ class InferenceRunner:
             raise ValueError(
                 "Either sfen or board must be provided."
             )
-        input_data = make_feature(board).astype(np.float32)
+        input_data = make_board_id_positions(board).astype(
+            np.int64
+        )
 
         # 推論
         policy_labels: list[int] = []
