@@ -97,22 +97,30 @@ def benchmark_random_access(
         f"Creating FileDataSource with cache_mode={cache_mode}"
     )
 
-    # FileDataSourceを作成
+    # FileDataSourceを作成（初期化時間を測定）
+    init_start = time.perf_counter()
     datasource = FileDataSource(
         file_paths=file_paths,
         array_type="preprocessing",
         bit_pack=False,
         cache_mode=cache_mode,  # type: ignore
     )
+    init_time = time.perf_counter() - init_start
 
     total_records = len(datasource)
     logger.info(f"Total records: {total_records}")
+    logger.info(f"Initialization time: {init_time:.2f}s")
 
     # ランダムなインデックスを生成
     indices = [
         random.randint(0, total_records - 1)
         for _ in range(num_accesses)
     ]
+
+    # ウォームアップ（最初の数回のアクセスでキャッシュを暖める）
+    logger.info("Warming up...")
+    for i in range(min(100, num_accesses)):
+        _ = datasource[indices[i]]
 
     # ベンチマーク実行
     logger.info(
@@ -127,10 +135,11 @@ def benchmark_random_access(
     elapsed_time = end_time - start_time
 
     results = {
+        "init_time": init_time,
         "elapsed_time": elapsed_time,
         "accesses_per_second": num_accesses / elapsed_time,
-        "avg_access_time_ms": (elapsed_time / num_accesses)
-        * 1000,
+        "avg_access_time_us": (elapsed_time / num_accesses)
+        * 1_000_000,
     }
 
     logger.info(f"Benchmark completed in {elapsed_time:.2f}s")
@@ -138,7 +147,7 @@ def benchmark_random_access(
         f"Accesses per second: {results['accesses_per_second']:.2f}"
     )
     logger.info(
-        f"Average access time: {results['avg_access_time_ms']:.3f}ms"
+        f"Average access time: {results['avg_access_time_us']:.2f}μs"
     )
 
     return results
@@ -221,13 +230,17 @@ def main() -> None:
     print("Benchmark Results")
     print("=" * 60)
     print(f"Cache mode: {args.cache_mode}")
+    print(f"Number of files: {len(file_paths)}")
     print(f"Total accesses: {args.num_accesses}")
-    print(f"Elapsed time: {results['elapsed_time']:.2f}s")
+    print(f"Initialization time: {results['init_time']:.2f}s")
+    print(
+        f"Benchmark elapsed time: {results['elapsed_time']:.2f}s"
+    )
     print(
         f"Accesses per second: {results['accesses_per_second']:.2f}"
     )
     print(
-        f"Average access time: {results['avg_access_time_ms']:.3f}ms"
+        f"Average access time: {results['avg_access_time_us']:.2f}μs"
     )
     print("=" * 60)
 

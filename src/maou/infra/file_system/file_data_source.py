@@ -140,6 +140,10 @@ class FileDataSource(
             )
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
+            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
+            self._concatenated_array: Optional[np.ndarray] = (
+                None
+            )
 
             # すべてのファイルパスをmemmapで読み込む
             lengths = []
@@ -267,6 +271,49 @@ class FileDataSource(
                         "Using fast path for index lookup."
                     )
 
+            # cache_mode="memory"の場合、全ファイルを単一配列に結合
+            if (
+                self.cache_mode == "memory"
+                and self.total_pages > 1
+            ):
+                self.logger.info(
+                    f"Concatenating {self.total_pages} files into single array "
+                    f"({self.total_rows} records)..."
+                )
+                arrays_to_concat = []
+                for entry in self._file_entries:
+                    if entry.cached_array is not None:
+                        arrays_to_concat.append(
+                            entry.cached_array
+                        )
+                    else:
+                        self.logger.warning(
+                            f"File {entry.name} is not cached in memory, "
+                            "concatenation may fail"
+                        )
+
+                if len(arrays_to_concat) == self.total_pages:
+                    self._concatenated_array = np.concatenate(
+                        arrays_to_concat
+                    )
+                    self.logger.info(
+                        f"Concatenation complete. "
+                        f"Array shape: {self._concatenated_array.shape}, "
+                        f"dtype: {self._concatenated_array.dtype}"
+                    )
+
+                    # 個別のcached_arrayを解放してメモリ節約
+                    for entry in self._file_entries:
+                        entry.cached_array = None
+                    self.logger.info(
+                        "Released individual cached arrays to save memory"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Could not concatenate all files: "
+                        f"expected {self.total_pages}, got {len(arrays_to_concat)}"
+                    )
+
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
@@ -275,11 +322,25 @@ class FileDataSource(
             """特定のレコードをnumpy structured arrayとして返す．
 
             最適化:
+            - cache_mode="memory"で複数ファイル: 結合配列から直接アクセス
             - ファイルサイズが均等な場合は除算で直接計算
             - 最後にアクセスしたファイルをキャッシュして局所性を活用
             """
             if idx < 0 or idx >= self.total_rows:
                 raise IndexError(f"Index {idx} out of range.")
+
+            # 最適化: 結合配列がある場合は直接アクセス
+            if self._concatenated_array is not None:
+                record = self._concatenated_array[idx]
+                if (
+                    self.bit_pack
+                    and self.array_type == "preprocessing"
+                ):
+                    return convert_record_from_packed_schema(
+                        compressed_record=record,
+                        array_type=self.array_type,
+                    )
+                return record
 
             # ファイルインデックスと相対インデックスを計算
             if self._uniform_file_size:
@@ -309,7 +370,6 @@ class FileDataSource(
             entry = self._file_entries[file_idx]
 
             # データを取得
-            record: np.ndarray
             if entry.cached_array is not None:
                 record = entry.cached_array[relative_idx]
                 if (
