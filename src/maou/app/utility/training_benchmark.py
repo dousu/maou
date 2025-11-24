@@ -438,6 +438,9 @@ class TrainingBenchmarkUseCase:
         training_loader, validation_loader = dataloaders
         device = device_config.device
 
+        # Get total number of batches in the full dataset
+        total_batches_in_dataset = len(training_loader)
+
         # Create benchmark instance
         benchmark = SingleEpochBenchmark(
             model=model_components.model,
@@ -504,8 +507,19 @@ class TrainingBenchmarkUseCase:
 
         # Format results for display
         def format_timing_summary(
-            result: BenchmarkResult, label: str
+            result: BenchmarkResult,
+            label: str,
+            total_batches_in_dataset: int,
         ) -> str:
+            # Calculate estimated full epoch time
+            estimated_full_epoch_time_seconds = (
+                result.average_batch_time
+                * total_batches_in_dataset
+            )
+            estimated_full_epoch_time_minutes = (
+                estimated_full_epoch_time_seconds / 60.0
+            )
+
             # Pre-calculate percentages to avoid long lines
             data_pct = (
                 result.data_loading_time
@@ -560,7 +574,9 @@ class TrainingBenchmarkUseCase:
   - GPU Memory Max Usage: {ru.gpu_memory_max_bytes / 1024**3:.1f}GB / {ru.gpu_memory_total_bytes / 1024**3:.1f}GB ({ru.gpu_memory_max_percent:.1f}%)"""
 
             return f"""{label} Performance Summary:
-  Total Time: {result.total_epoch_time:.2f}s
+  Processed Batches: {result.total_batches} / {total_batches_in_dataset}
+  Total Time (Processed): {result.total_epoch_time:.2f}s
+  Estimated Full Epoch Time: {estimated_full_epoch_time_seconds:.2f}s ({estimated_full_epoch_time_minutes:.2f} minutes)
   Average Batch Time: {result.average_batch_time:.4f}s
   Samples per Second: {result.samples_per_second:.1f}
   Batches per Second: {result.batches_per_second:.2f}
@@ -578,7 +594,9 @@ class TrainingBenchmarkUseCase:
   - Average Loss: {result.average_loss:.6f}{resource_summary}"""
 
         training_summary = format_timing_summary(
-            training_result, "Training"
+            training_result,
+            "Training",
+            total_batches_in_dataset,
         )
 
         # Create recommendations based on timing analysis
@@ -655,8 +673,11 @@ class TrainingBenchmarkUseCase:
 
         # Add validation results if available
         if validation_result is not None:
+            total_validation_batches = len(validation_loader)
             validation_summary = format_timing_summary(
-                validation_result, "Validation"
+                validation_result,
+                "Validation",
+                total_validation_batches,
             )
             # Dynamic dict key assignment for validation summary
             output["benchmark_results"]["ValidationSummary"] = (  # type: ignore[index]
