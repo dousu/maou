@@ -9,13 +9,14 @@ from torch.utils.tensorboard import (
     SummaryWriter,  # type: ignore
 )
 
+from maou.app.learning.policy_targets import (
+    normalize_policy_targets,
+)
 from maou.app.learning.resource_monitor import (
     GPUResourceMonitor,
     ResourceUsage,
     SystemResourceMonitor,
 )
-from maou.app.learning.policy_targets import normalize_policy_targets
-
 
 ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
 
@@ -230,6 +231,7 @@ class ValidationMetrics:
     policy_cross_entropy: float
     value_brier_score: float
     policy_top5_accuracy: float
+    policy_f1_score: float
     value_high_confidence_rate: float
 
 
@@ -248,6 +250,9 @@ class ValidationCallback(BaseCallback):
         self.policy_top5_sample_count = 0
         self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
+        self.policy_f1_true_positives = 0
+        self.policy_f1_false_positives = 0
+        self.policy_f1_false_negatives = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -258,37 +263,62 @@ class ValidationCallback(BaseCallback):
             self.running_vloss += context.loss.item()
             policy_targets = (
                 context.policy_target_distribution
-                if context.policy_target_distribution is not None
+                if context.policy_target_distribution
+                is not None
                 else normalize_policy_targets(
-                    context.labels_policy, context.legal_move_mask
+                    context.labels_policy,
+                    context.legal_move_mask,
                 )
             )
-            self.policy_cross_entropy_sum += self._policy_cross_entropy(
-                context.outputs_policy, policy_targets
+            self.policy_cross_entropy_sum += (
+                self._policy_cross_entropy(
+                    context.outputs_policy, policy_targets
+                )
             )
             policy_batch_size = int(policy_targets.size(0))
             value_batch_size = int(context.labels_value.numel())
-            self.value_brier_score_sum += self._value_brier_score(
-                context.outputs_value, context.labels_value
+            self.value_brier_score_sum += (
+                self._value_brier_score(
+                    context.outputs_value, context.labels_value
+                )
             )
             self.policy_sample_count += policy_batch_size
             self.value_sample_count += value_batch_size
-            ratio_sum, sample_count = self._compute_policy_top5_accuracy_stats(
-                logits=context.outputs_policy,
-                targets=policy_targets,
+            ratio_sum, sample_count = (
+                self._compute_policy_top5_accuracy_stats(
+                    logits=context.outputs_policy,
+                    targets=policy_targets,
+                )
             )
             self.policy_top5_ratio_sum += ratio_sum
             self.policy_top5_sample_count += sample_count
+            # Accumulate F1 score components
+            tp, fp, fn = self._compute_policy_f1_components(
+                logits=context.outputs_policy,
+                targets=policy_targets,
+            )
+            self.policy_f1_true_positives += tp
+            self.policy_f1_false_positives += fp
+            self.policy_f1_false_negatives += fn
             labels_value = context.labels_value.view(-1)
-            predicted_value = torch.sigmoid(context.outputs_value).view(-1)
-            prediction_high_confidence_mask = predicted_value >= 0.8
+            predicted_value = torch.sigmoid(
+                context.outputs_value
+            ).view(-1)
+            prediction_high_confidence_mask = (
+                predicted_value >= 0.8
+            )
             self.value_high_confidence_prediction_count += int(
-                torch.sum(prediction_high_confidence_mask).item()
+                torch.sum(
+                    prediction_high_confidence_mask
+                ).item()
             )
             if torch.any(prediction_high_confidence_mask):
                 self.value_high_confidence_correct += int(
                     torch.sum(
-                        labels_value[prediction_high_confidence_mask] >= 0.8
+                        labels_value[
+                            prediction_high_confidence_mask
+                        ]
+                        >= 0.8
                     ).item()
                 )
             self.batch_count += 1
@@ -301,22 +331,30 @@ class ValidationCallback(BaseCallback):
 
     def get_average_metrics(self) -> ValidationMetrics:
         """Get aggregated policy and value metrics for the epoch."""
-        avg_policy_cross_entropy = float(self.policy_cross_entropy_sum) / float(
-            max(1, self.policy_sample_count)
-        )
-        avg_value_brier = float(self.value_brier_score_sum) / float(
-            max(1, self.value_sample_count)
-        )
-        policy_top5_accuracy = float(self.policy_top5_ratio_sum) / float(
-            max(1, self.policy_top5_sample_count)
+        avg_policy_cross_entropy = float(
+            self.policy_cross_entropy_sum
+        ) / float(max(1, self.policy_sample_count))
+        avg_value_brier = float(
+            self.value_brier_score_sum
+        ) / float(max(1, self.value_sample_count))
+        policy_top5_accuracy = float(
+            self.policy_top5_ratio_sum
+        ) / float(max(1, self.policy_top5_sample_count))
+        policy_f1 = self._calculate_f1_from_components(
+            tp=self.policy_f1_true_positives,
+            fp=self.policy_f1_false_positives,
+            fn=self.policy_f1_false_negatives,
         )
         value_high_confidence_rate = float(
             self.value_high_confidence_correct
-        ) / float(max(1, self.value_high_confidence_prediction_count))
+        ) / float(
+            max(1, self.value_high_confidence_prediction_count)
+        )
         return ValidationMetrics(
             policy_cross_entropy=avg_policy_cross_entropy,
             value_brier_score=avg_value_brier,
             policy_top5_accuracy=policy_top5_accuracy,
+            policy_f1_score=policy_f1,
             value_high_confidence_rate=value_high_confidence_rate,
         )
 
@@ -332,23 +370,36 @@ class ValidationCallback(BaseCallback):
         self.policy_top5_sample_count = 0
         self.value_high_confidence_prediction_count = 0
         self.value_high_confidence_correct = 0
+        self.policy_f1_true_positives = 0
+        self.policy_f1_false_positives = 0
+        self.policy_f1_false_negatives = 0
 
     def _policy_cross_entropy(
-        self, logits: torch.Tensor, target_distribution: torch.Tensor
+        self,
+        logits: torch.Tensor,
+        target_distribution: torch.Tensor,
     ) -> float:
         """Calculate total cross entropy between logits and target distribution."""
         if logits.ndim != 2 or target_distribution.ndim != 2:
-            raise ValueError("Tensors y and t must be 2-dimensional.")
+            raise ValueError(
+                "Tensors y and t must be 2-dimensional."
+            )
 
         log_probs = torch.log_softmax(logits, dim=1)
-        cross_entropy = -torch.sum(target_distribution * log_probs, dim=1)
+        cross_entropy = -torch.sum(
+            target_distribution * log_probs, dim=1
+        )
         return float(torch.sum(cross_entropy).item())
 
-    def _policy_accuracy(self, logits: torch.Tensor, targets: torch.Tensor) -> float:
+    def _policy_accuracy(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> float:
         """Calculate average policy Top-5 accuracy for the provided batch."""
 
-        ratio_sum, sample_count = self._compute_policy_top5_accuracy_stats(
-            logits=logits, targets=targets
+        ratio_sum, sample_count = (
+            self._compute_policy_top5_accuracy_stats(
+                logits=logits, targets=targets
+            )
         )
         if sample_count == 0:
             return 0.0
@@ -360,7 +411,9 @@ class ValidationCallback(BaseCallback):
         """Return cumulative ratio sum and sample count for Top-5 accuracy."""
 
         if logits.ndim != 2 or targets.ndim != 2:
-            raise ValueError("Tensors logits and targets must be 2-dimensional.")
+            raise ValueError(
+                "Tensors logits and targets must be 2-dimensional."
+            )
 
         batch_size = int(targets.size(0))
         if batch_size == 0:
@@ -381,11 +434,17 @@ class ValidationCallback(BaseCallback):
         positive_counts = torch.sum(positive_mask, dim=1)
         effective_label_topk = torch.minimum(
             positive_counts,
-            torch.tensor(max_label_topk, device=targets_detached.device, dtype=positive_counts.dtype),
+            torch.tensor(
+                max_label_topk,
+                device=targets_detached.device,
+                dtype=positive_counts.dtype,
+            ),
         )
 
         label_top_indices = torch.topk(
-            targets_detached.masked_fill(~positive_mask, float("-inf")),
+            targets_detached.masked_fill(
+                ~positive_mask, float("-inf")
+            ),
             k=max_label_topk,
             dim=1,
         ).indices
@@ -398,31 +457,52 @@ class ValidationCallback(BaseCallback):
 
         current_topk = torch.minimum(
             effective_label_topk,
-            torch.tensor(topk_pred, device=targets_detached.device, dtype=positive_counts.dtype),
+            torch.tensor(
+                topk_pred,
+                device=targets_detached.device,
+                dtype=positive_counts.dtype,
+            ),
         )
 
         label_positions = torch.arange(
-            max_label_topk, device=targets_detached.device, dtype=positive_counts.dtype
+            max_label_topk,
+            device=targets_detached.device,
+            dtype=positive_counts.dtype,
         )
         pred_positions = torch.arange(
-            topk_pred, device=targets_detached.device, dtype=positive_counts.dtype
+            topk_pred,
+            device=targets_detached.device,
+            dtype=positive_counts.dtype,
         )
 
-        label_mask = label_positions.unsqueeze(0) < effective_label_topk.unsqueeze(1)
-        pred_mask = pred_positions.unsqueeze(0) < current_topk.unsqueeze(1)
+        label_mask = label_positions.unsqueeze(
+            0
+        ) < effective_label_topk.unsqueeze(1)
+        pred_mask = pred_positions.unsqueeze(
+            0
+        ) < current_topk.unsqueeze(1)
 
-        matches = label_top_indices.unsqueeze(-1) == prediction_top_indices.unsqueeze(-2)
-        valid_matches = matches & label_mask.unsqueeze(-1) & pred_mask.unsqueeze(1)
+        matches = label_top_indices.unsqueeze(
+            -1
+        ) == prediction_top_indices.unsqueeze(-2)
+        valid_matches = (
+            matches
+            & label_mask.unsqueeze(-1)
+            & pred_mask.unsqueeze(1)
+        )
         match_counts = torch.sum(valid_matches, dim=(1, 2))
 
         ratios = torch.zeros(
-            batch_size, device=targets_detached.device, dtype=targets_detached.dtype
+            batch_size,
+            device=targets_detached.device,
+            dtype=targets_detached.dtype,
         )
         positive_samples = effective_label_topk > 0
-        ratios[positive_samples] = (
-            match_counts[positive_samples].to(targets_detached.dtype)
-            / effective_label_topk[positive_samples].to(targets_detached.dtype)
-        )
+        ratios[positive_samples] = match_counts[
+            positive_samples
+        ].to(targets_detached.dtype) / effective_label_topk[
+            positive_samples
+        ].to(targets_detached.dtype)
 
         ratio_sum = float(torch.sum(ratios).item())
         sample_count = batch_size
@@ -436,6 +516,115 @@ class ValidationCallback(BaseCallback):
         probabilities = torch.sigmoid(y)
         squared_error = torch.square(probabilities - t)
         return torch.sum(squared_error).item()
+
+    def _compute_policy_f1_components(
+        self, *, logits: torch.Tensor, targets: torch.Tensor
+    ) -> tuple[int, int, int]:
+        """Compute F1 score components (TP, FP, FN) for Top-5 predictions.
+
+        Args:
+            logits: Policy network output logits (batch_size, num_classes).
+            targets: Normalized policy target distribution (batch_size, num_classes).
+
+        Returns:
+            Tuple of (true_positives, false_positives, false_negatives).
+        """
+        if logits.ndim != 2 or targets.ndim != 2:
+            raise ValueError(
+                "Tensors logits and targets must be 2-dimensional."
+            )
+
+        batch_size = int(targets.size(0))
+        if batch_size == 0:
+            return 0, 0, 0
+
+        # Get top-5 predictions
+        topk_pred = min(5, int(logits.size(1)))
+        if topk_pred == 0:
+            return 0, 0, 0
+
+        logits_detached = logits.detach()
+        targets_detached = targets.detach()
+
+        # Extract positive labels (targets > 0)
+        positive_mask = targets_detached > 0
+        positive_counts = torch.sum(
+            positive_mask, dim=1
+        )  # (batch_size,)
+
+        # Get top-5 prediction indices
+        prediction_top_indices = torch.topk(
+            logits_detached,
+            k=topk_pred,
+            dim=1,
+        ).indices  # (batch_size, topk_pred)
+
+        # Create one-hot encoding of predictions
+        pred_one_hot = torch.zeros_like(
+            targets_detached
+        )  # (batch_size, num_classes)
+        pred_one_hot.scatter_(1, prediction_top_indices, 1.0)
+
+        # True Positives: predictions that are also positive labels
+        tp_mask = (
+            pred_one_hot * positive_mask.float()
+        )  # Element-wise AND
+        tp_per_sample = torch.sum(
+            tp_mask, dim=1
+        )  # (batch_size,)
+
+        # False Positives: predictions that are NOT positive labels
+        fp_per_sample = (
+            topk_pred - tp_per_sample
+        )  # Total predictions - TP
+
+        # False Negatives: positive labels that were NOT predicted
+        fn_per_sample = (
+            positive_counts - tp_per_sample
+        )  # Total labels - TP
+
+        # Sum across batch
+        total_tp = int(torch.sum(tp_per_sample).item())
+        total_fp = int(torch.sum(fp_per_sample).item())
+        total_fn = int(torch.sum(fn_per_sample).item())
+
+        return total_tp, total_fp, total_fn
+
+    def _calculate_f1_from_components(
+        self, *, tp: int, fp: int, fn: int
+    ) -> float:
+        """Calculate F1 score from accumulated TP, FP, FN counts.
+
+        Args:
+            tp: Total true positives across all batches.
+            fp: Total false positives across all batches.
+            fn: Total false negatives across all batches.
+
+        Returns:
+            F1 score in range [0.0, 1.0].
+        """
+        # Edge case: no predictions and no labels
+        if tp == 0 and fp == 0 and fn == 0:
+            return 0.0
+
+        # Calculate precision with zero-division protection
+        if tp + fp == 0:
+            precision = 0.0
+        else:
+            precision = float(tp) / float(tp + fp)
+
+        # Calculate recall with zero-division protection
+        if tp + fn == 0:
+            recall = 0.0
+        else:
+            recall = float(tp) / float(tp + fn)
+
+        # Calculate F1 with zero-division protection
+        if precision + recall == 0.0:
+            return 0.0
+
+        f1 = 2.0 * (precision * recall) / (precision + recall)
+        return f1
 
 
 @dataclass(frozen=True)

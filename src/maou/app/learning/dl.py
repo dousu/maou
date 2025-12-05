@@ -18,13 +18,13 @@ from maou.app.learning.callbacks import (
     ValidationCallback,
     ValidationMetrics,
 )
+from maou.app.learning.compilation import compile_module
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
 from maou.app.learning.network import (
     BackboneArchitecture,
     Network,
 )
-from maou.app.learning.compilation import compile_module
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.cloud_storage import CloudStorage
@@ -34,8 +34,8 @@ try:
 except (
     ImportError
 ):  # pragma: no cover - PyTorch < 2.0 compatibility
-    from torch.optim.lr_scheduler import (  # type: ignore
-        _LRScheduler as LRScheduler,
+    from torch.optim.lr_scheduler import (
+        _LRScheduler as LRScheduler,  # type: ignore
     )
 
 
@@ -481,6 +481,7 @@ class Learning:
             "Validation Accuracy Metrics",
             {
                 "Policy Top-5 Accuracy": metrics.policy_top5_accuracy,
+                "Policy F1 Score": metrics.policy_f1_score,
                 "Value ≥0.8 Precision": metrics.value_high_confidence_rate,
             },
             epoch_number + 1,

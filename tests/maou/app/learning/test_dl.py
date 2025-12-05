@@ -30,7 +30,9 @@ class _RecordingWriter:
 
     def __init__(self) -> None:
         self.histograms: list[tuple[str, int]] = []
-        self.scalar_groups: list[tuple[str, dict[str, float], int]] = []
+        self.scalar_groups: list[
+            tuple[str, dict[str, float], int]
+        ] = []
         self.scalars: list[tuple[str, float, int]] = []
 
     def add_histogram(
@@ -39,7 +41,10 @@ class _RecordingWriter:
         self.histograms.append((tag, global_step))
 
     def add_scalars(
-        self, main_tag: str, tag_scalar_dict: dict[str, float], global_step: int
+        self,
+        main_tag: str,
+        tag_scalar_dict: dict[str, float],
+        global_step: int,
     ) -> None:
         self.scalar_groups.append(
             (main_tag, dict(tag_scalar_dict), global_step)
@@ -48,7 +53,9 @@ class _RecordingWriter:
     def add_scalar(
         self, tag: str, scalar_value: float, global_step: int
     ) -> None:
-        self.scalars.append((tag, float(scalar_value), global_step))
+        self.scalars.append(
+            (tag, float(scalar_value), global_step)
+        )
 
 
 def _assert_state_dict_equality(
@@ -59,7 +66,9 @@ def _assert_state_dict_equality(
         assert torch.equal(tensor, second[key])
 
 
-def test_load_resume_state_dict_adds_prefix_for_compiled_models() -> None:
+def test_load_resume_state_dict_adds_prefix_for_compiled_models() -> (
+    None
+):
     """State dicts saved before compilation can be loaded into compiled models."""
 
     source_model = Network()
@@ -73,7 +82,9 @@ def test_load_resume_state_dict_adds_prefix_for_compiled_models() -> None:
 
     learning._load_resume_state_dict(state_dict)
 
-    _assert_state_dict_equality(state_dict, target_model.state_dict())
+    _assert_state_dict_equality(
+        state_dict, target_model.state_dict()
+    )
 
 
 def test_load_resume_state_dict_without_compilation() -> None:
@@ -89,10 +100,14 @@ def test_load_resume_state_dict_without_compilation() -> None:
 
     learning._load_resume_state_dict(state_dict)
 
-    _assert_state_dict_equality(state_dict, target_model.state_dict())
+    _assert_state_dict_equality(
+        state_dict, target_model.state_dict()
+    )
 
 
-def test_load_resume_state_dict_requires_complete_state() -> None:
+def test_load_resume_state_dict_requires_complete_state() -> (
+    None
+):
     """Checkpoints missing head weights should raise a descriptive error."""
 
     source_model = HeadlessNetwork()
@@ -107,7 +122,9 @@ def test_load_resume_state_dict_requires_complete_state() -> None:
         learning._load_resume_state_dict(state_dict)
 
 
-def test_format_parameter_count_generates_human_readable_labels() -> None:
+def test_format_parameter_count_generates_human_readable_labels() -> (
+    None
+):
     """Learning._format_parameter_count should generate readable suffixes."""
 
     assert Learning._format_parameter_count(4_000_000) == "4m"
@@ -116,7 +133,9 @@ def test_format_parameter_count_generates_human_readable_labels() -> None:
     assert Learning._format_parameter_count(512) == "512"
 
 
-def test_histogram_logging_can_be_filtered_and_sampled() -> None:
+def test_histogram_logging_can_be_filtered_and_sampled() -> (
+    None
+):
     """Histogram logging honors frequency and module filters."""
 
     learning = Learning()
@@ -136,7 +155,9 @@ def test_histogram_logging_can_be_filtered_and_sampled() -> None:
     assert writer.histograms == [("parameters/0.weight", 2)]
 
 
-def test_scalar_metrics_still_logged_when_histograms_disabled() -> None:
+def test_scalar_metrics_still_logged_when_histograms_disabled() -> (
+    None
+):
     """Scalar TensorBoard metrics remain available when histograms are off."""
 
     learning = Learning()
@@ -149,6 +170,7 @@ def test_scalar_metrics_still_logged_when_histograms_disabled() -> None:
         policy_cross_entropy=0.5,
         value_brier_score=0.25,
         policy_top5_accuracy=0.75,
+        policy_f1_score=0.7,
         value_high_confidence_rate=0.6,
     )
 
@@ -165,6 +187,9 @@ def test_scalar_metrics_still_logged_when_histograms_disabled() -> None:
     )
 
     assert any(
-        main_tag == "Validation Loss Metrics" for main_tag, _, _ in writer.scalar_groups
+        main_tag == "Validation Loss Metrics"
+        for main_tag, _, _ in writer.scalar_groups
     )
-    assert any(tag == "Learning Rate" for tag, _, _ in writer.scalars)
+    assert any(
+        tag == "Learning Rate" for tag, _, _ in writer.scalars
+    )
