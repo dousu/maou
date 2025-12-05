@@ -62,6 +62,27 @@
 - TensorRT and ONNX outputs share the same format, so scripts can parse the
   CLI's stdout without branching on backend type.【F:src/maou/interface/infer.py†L25-L38】
 
+## 評価値の解釈
+
+### 評価値スコア（Eval）について
+
+評価値スコアは，モデルの生出力（logit）を600倍したものです:
+
+```
+eval = 600 × logit
+```
+
+係数600は，Ponanzaという著名な将棋AIで使われていた定数で，将棋AIコミュニティでは標準的に使用されています．この係数により，評価値が人間にとって直感的な範囲（数百～数千）になります．
+
+**スケールの目安**:
+- `eval = 0`: 互角（勝率50%）
+- `eval = ±600`: やや有利/不利（勝率73%/27%）
+- `eval = ±1200`: 有利/不利（勝率88%/12%）
+- `eval = ±1800`: 勝勢/敗勢（勝率95%/5%）
+- `eval ≥ ±3000`: 勝敗がほぼ決している
+
+**注意**: この評価値は将棋の「点数」（駒の価値）とは異なります．あくまで「勝ちやすさ」を表す指標です．
+
 ### Example invocation
 
 ```bash

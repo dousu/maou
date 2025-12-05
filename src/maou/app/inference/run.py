@@ -98,9 +98,7 @@ class InferenceRunner:
 
         # 推論結果を評価
         result: Dict[str, str] = {}
-        winrate = Evaluation.get_winrate_from_eval(
-            board.get_turn(), value
-        )
+        winrate = Evaluation.get_winrate_from_eval(value)
         eval = Evaluation.get_eval_from_winrate(winrate)
         usis: list[str] = []
         for policy_label in policy_labels:
