@@ -59,6 +59,10 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "epoch",  # benchmarkでは--max-batchesで制御
         "resume-from",  # チェックポイント再開（不要）
         "start-epoch",  # 開始エポック（不要）
+        "resume-backbone-from",  # コンポーネント別再開（不要）
+        "resume-policy-head-from",  # コンポーネント別再開（不要）
+        "resume-value-head-from",  # コンポーネント別再開（不要）
+        "freeze-backbone",  # バックボーン凍結（不要）
         "log-dir",  # TensorBoardログディレクトリ（不要）
         "model-dir",  # モデル出力ディレクトリ（不要）
         "tensorboard-histogram-frequency",  # TensorBoard（不要）
@@ -185,6 +189,10 @@ def test_option_consistency_documentation() -> None:
         "epoch",
         "resume-from",
         "start-epoch",
+        "resume-backbone-from",
+        "resume-policy-head-from",
+        "resume-value-head-from",
+        "freeze-backbone",
         "log-dir",
         "model-dir",
         "tensorboard-histogram-frequency",

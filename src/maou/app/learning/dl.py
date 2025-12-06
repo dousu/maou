@@ -88,6 +88,10 @@ class Learning:
         optimizer_eps: float
         detect_anomaly: bool = False
         resume_from: Optional[Path] = None
+        resume_backbone_from: Optional[Path] = None
+        resume_policy_head_from: Optional[Path] = None
+        resume_value_head_from: Optional[Path] = None
+        freeze_backbone: bool = False
         start_epoch: int = 0
         log_dir: Path
         model_dir: Path
@@ -160,6 +164,14 @@ class Learning:
         self.epoch = config.epoch
         self.model_dir = config.model_dir
         self.resume_from = config.resume_from
+        self.resume_backbone_from = config.resume_backbone_from
+        self.resume_policy_head_from = (
+            config.resume_policy_head_from
+        )
+        self.resume_value_head_from = (
+            config.resume_value_head_from
+        )
+        self.freeze_backbone = config.freeze_backbone
         self.start_epoch = config.start_epoch
         self.tensorboard_histogram_frequency = (
             config.tensorboard_histogram_frequency
@@ -260,6 +272,29 @@ class Learning:
             )
 
             self._load_resume_state_dict(state_dict)
+
+        # resume from component files
+        if self.resume_backbone_from is not None:
+            backbone_dict = ModelIO.load_backbone(
+                self.resume_backbone_from, self.device
+            )
+            self._load_component_state_dict(backbone_dict)
+
+        if self.resume_policy_head_from is not None:
+            policy_dict = ModelIO.load_policy_head(
+                self.resume_policy_head_from, self.device
+            )
+            self._load_component_state_dict(policy_dict)
+
+        if self.resume_value_head_from is not None:
+            value_dict = ModelIO.load_value_head(
+                self.resume_value_head_from, self.device
+            )
+            self._load_component_state_dict(value_dict)
+
+        # freeze backbone if requested
+        if self.freeze_backbone:
+            self._freeze_backbone()
 
         # start epoch設定
         epoch_number = self.start_epoch
@@ -498,3 +533,69 @@ class Learning:
                 exc,
             )
             raise
+
+    def _load_component_state_dict(
+        self, state_dict: MutableMapping[str, torch.Tensor]
+    ) -> None:
+        """Load component state_dict with partial loading support.
+
+        Args:
+            state_dict: Component state_dict (backbone，policy head，or value head)
+        """
+        if hasattr(self.model, "_orig_mod"):
+            needs_prefix = any(
+                not key.startswith("_orig_mod.")
+                for key in state_dict.keys()
+            )
+            if needs_prefix:
+                state_dict = {
+                    f"_orig_mod.{key}": value
+                    for key, value in state_dict.items()
+                }
+
+        try:
+            # strict=Falseで部分読み込みを許可
+            incompatible_keys = self.model.load_state_dict(
+                state_dict, strict=False
+            )
+            if incompatible_keys.missing_keys:
+                self.logger.info(
+                    f"Missing keys (expected for partial load): {incompatible_keys.missing_keys}"
+                )
+            if incompatible_keys.unexpected_keys:
+                self.logger.warning(
+                    f"Unexpected keys in state_dict: {incompatible_keys.unexpected_keys}"
+                )
+        except RuntimeError as exc:
+            self.logger.error(
+                "Failed to load component state_dict into model: %s",
+                exc,
+            )
+            raise
+
+    def _freeze_backbone(self) -> None:
+        """Freeze backbone parameters (embedding，backbone，pool，_hand_projection).
+
+        ヘッド(policy_head，value_head)はtrainableのまま保持する．
+        """
+        frozen_count = 0
+        for name, param in self.model.named_parameters():
+            # torch.compile()の場合は_orig_mod.プレフィックスを除去
+            clean_name = name
+            if name.startswith("_orig_mod."):
+                clean_name = name[len("_orig_mod.") :]
+
+            # Backboneコンポーネントを凍結
+            if (
+                clean_name.startswith("embedding.")
+                or clean_name.startswith("backbone.")
+                or clean_name.startswith("pool.")
+                or clean_name.startswith("_hand_projection.")
+            ):
+                param.requires_grad = False
+                frozen_count += 1
+
+        self.logger.info(
+            f"Frozen {frozen_count} backbone parameters. "
+            f"Policy and value heads remain trainable."
+        )

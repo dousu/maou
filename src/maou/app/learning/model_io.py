@@ -74,6 +74,115 @@ class ModelIO:
         return f"{architecture}-{parameter_label}"
 
     @staticmethod
+    def split_state_dict(
+        state_dict: dict[str, torch.Tensor],
+    ) -> tuple[
+        dict[str, torch.Tensor],
+        dict[str, torch.Tensor],
+        dict[str, torch.Tensor],
+    ]:
+        """Split state_dict into backbone，policy head，and value head components.
+
+        Args:
+            state_dict: Complete model state_dict (may include _orig_mod. prefix)
+
+        Returns:
+            Tuple of (backbone_dict，policy_head_dict，value_head_dict)
+
+        Examples:
+            >>> full_dict = model.state_dict()
+            >>> backbone，policy，value = ModelIO.split_state_dict(full_dict)
+        """
+        backbone_dict: dict[str, torch.Tensor] = {}
+        policy_head_dict: dict[str, torch.Tensor] = {}
+        value_head_dict: dict[str, torch.Tensor] = {}
+
+        # _orig_mod.プレフィックスの除去を検討
+        has_orig_mod_prefix = any(
+            key.startswith("_orig_mod.")
+            for key in state_dict.keys()
+        )
+
+        for key, value in state_dict.items():
+            # _orig_mod.プレフィックスを除去
+            clean_key = key
+            if has_orig_mod_prefix and key.startswith(
+                "_orig_mod."
+            ):
+                clean_key = key[len("_orig_mod.") :]
+
+            # コンポーネントごとに分類
+            if clean_key.startswith("policy_head."):
+                policy_head_dict[key] = value
+            elif clean_key.startswith("value_head."):
+                value_head_dict[key] = value
+            else:
+                # embedding.*, backbone.*, pool.*, _hand_projection.*はすべてbackbone
+                backbone_dict[key] = value
+
+        return backbone_dict, policy_head_dict, value_head_dict
+
+    @staticmethod
+    def load_backbone(
+        file_path: Path, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Load backbone parameters from file.
+
+        Args:
+            file_path: Path to backbone parameter file
+            device: Device to load parameters to
+
+        Returns:
+            Backbone state_dict
+        """
+        logger.info(
+            f"Loading backbone parameters from {file_path}"
+        )
+        return torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+
+    @staticmethod
+    def load_policy_head(
+        file_path: Path, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Load policy head parameters from file.
+
+        Args:
+            file_path: Path to policy head parameter file
+            device: Device to load parameters to
+
+        Returns:
+            Policy head state_dict
+        """
+        logger.info(
+            f"Loading policy head parameters from {file_path}"
+        )
+        return torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+
+    @staticmethod
+    def load_value_head(
+        file_path: Path, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Load value head parameters from file.
+
+        Args:
+            file_path: Path to value head parameter file
+            device: Device to load parameters to
+
+        Returns:
+            Value head state_dict
+        """
+        logger.info(
+            f"Loading value head parameters from {file_path}"
+        )
+        return torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+
+    @staticmethod
     def save_model(
         *,
         trained_model: Network,
@@ -174,28 +283,66 @@ class ModelIO:
             model, architecture
         )
 
-        model_path = dir / "model_{}_{}_{}.pt".format(
-            id, model_tag, epoch
+        # state_dictを3つのコンポーネントに分割
+        full_state_dict = model.state_dict()
+        (
+            backbone_dict,
+            policy_head_dict,
+            value_head_dict,
+        ) = ModelIO.split_state_dict(full_state_dict)
+
+        # 3つの別ファイルに保存
+        backbone_path = (
+            dir
+            / "model_{}_{}_{}_backbone.pt".format(
+                id, model_tag, epoch
+            )
         )
+        policy_head_path = (
+            dir
+            / "model_{}_{}_{}_policy_head.pt".format(
+                id, model_tag, epoch
+            )
+        )
+        value_head_path = (
+            dir
+            / "model_{}_{}_{}_value_head.pt".format(
+                id, model_tag, epoch
+            )
+        )
+
         logger.info(
-            "Saving model to {} (tag: {})".format(
-                model_path, model_tag
-            )
+            f"Saving model components (tag: {model_tag}):\n"
+            f"  Backbone: {backbone_path}\n"
+            f"  Policy Head: {policy_head_path}\n"
+            f"  Value Head: {value_head_path}"
         )
-        torch.save(model.state_dict(), model_path)
+
+        torch.save(backbone_dict, backbone_path)
+        torch.save(policy_head_dict, policy_head_path)
+        torch.save(value_head_dict, value_head_path)
+
+        # クラウドストレージに3つのファイルをアップロード
         if cloud_storage is not None:
-            logger.info(
-                f"Uploading model to cloud storage ({model_path})"
-            )
-            cloud_storage.upload_from_local(
-                local_path=model_path,
-                cloud_path=str(model_path),
-            )
+            for component_path in [
+                backbone_path,
+                policy_head_path,
+                value_head_path,
+            ]:
+                logger.info(
+                    f"Uploading model component to cloud storage ({component_path})"
+                )
+                cloud_storage.upload_from_local(
+                    local_path=component_path,
+                    cloud_path=str(component_path),
+                )
         # AMPのような高速化をしたいので一部FP16にする
         # TensorRTに変換するときはONNXのFP32を利用してBuilderFlag.FP16を指定する
 
-        # torch.onnx.export
-        onnx_model_path = model_path.with_suffix(".onnx")
+        # torch.onnx.export (統合モデルとしてエクスポート)
+        onnx_model_path = dir / "model_{}_{}_{}.onnx".format(
+            id, model_tag, epoch
+        )
         logger.info(
             "Saving model to {}".format(onnx_model_path)
         )
@@ -280,8 +427,11 @@ class ModelIO:
 
         # ONNX FP16バージョン作成
         onnx_model_fp16_path = (
-            dir / (model_path.stem + "_fp16")
-        ).with_suffix(".onnx")
+            dir
+            / "model_{}_{}_{}_fp16.onnx".format(
+                id, model_tag, epoch
+            )
+        )
         logger.info(
             "Saving model to {}".format(onnx_model_fp16_path)
         )

@@ -149,12 +149,18 @@ def learn(
     optimizer_eps: Optional[float] = None,
     resume_from: Optional[Path] = None,
     start_epoch: Optional[int] = None,
+    resume_backbone_from: Optional[Path] = None,
+    resume_policy_head_from: Optional[Path] = None,
+    resume_value_head_from: Optional[Path] = None,
+    freeze_backbone: bool = False,
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
     input_cache_mode: Literal["mmap", "memory"] = "mmap",
     tensorboard_histogram_frequency: int = 0,
-    tensorboard_histogram_modules: Optional[tuple[str, ...]] = None,
+    tensorboard_histogram_modules: Optional[
+        tuple[str, ...]
+    ] = None,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -183,6 +189,10 @@ def learn(
         optimizer_eps: AdamW epsilon parameter
         resume_from: Checkpoint file to resume from
         start_epoch: Starting epoch number for training
+        resume_backbone_from: Backbone parameter file to resume from
+        resume_policy_head_from: Policy head parameter file to resume from
+        resume_value_head_from: Value head parameter file to resume from
+        freeze_backbone: Freeze backbone parameters during training
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
@@ -364,7 +374,6 @@ def learn(
         dir_init(model_dir)
     logger.info(f"Input: {datasource}, Output: {model_dir}")
 
-
     if cache_transforms is None:
         cache_transforms = datasource_type == "hcpe"
     normalized_cache_mode = input_cache_mode.lower()
@@ -407,6 +416,10 @@ def learn(
         detect_anomaly=detect_anomaly,
         resume_from=resume_from,
         start_epoch=start_epoch,
+        resume_backbone_from=resume_backbone_from,
+        resume_policy_head_from=resume_policy_head_from,
+        resume_value_head_from=resume_value_head_from,
+        freeze_backbone=freeze_backbone,
         log_dir=log_dir,
         model_dir=model_dir,
         model_architecture=model_architecture,

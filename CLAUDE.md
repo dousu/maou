@@ -153,7 +153,71 @@ poetry run maou learn-model \
   --batch-size 256
 ```
 
-### 4. Performance Optimization
+### 4. Multi-Stage Training
+
+**New Feature**: 学習済みバックボーンを固定し，出力ヘッドのみを段階的に学習することで，マルチステージトレーニングを実現する．
+
+#### 基本的なワークフロー
+
+```bash
+# Stage 1: 初期学習（フルモデルの学習）
+poetry run maou learn-model \
+  --input-dir /path/to/initial_data \
+  --gpu cuda:0 \
+  --epoch 10 \
+  --batch-size 256
+
+# 学習結果: model_20251206_120000_resnet-1.2m_10_backbone.pt
+#          model_20251206_120000_resnet-1.2m_10_policy_head.pt
+#          model_20251206_120000_resnet-1.2m_10_value_head.pt
+
+# Stage 2: バックボーン固定でヘッドのみをfine-tuning
+poetry run maou learn-model \
+  --input-dir /path/to/new_data \
+  --resume-backbone-from model_20251206_120000_resnet-1.2m_10_backbone.pt \
+  --freeze-backbone \
+  --gpu cuda:0 \
+  --epoch 5 \
+  --batch-size 256
+
+# Stage 3: 異なるcheckpointからコンポーネントを組み合わせ
+poetry run maou learn-model \
+  --input-dir /path/to/another_data \
+  --resume-backbone-from model_A_backbone.pt \
+  --resume-policy-head-from model_B_policy_head.pt \
+  --gpu cuda:0 \
+  --epoch 3
+```
+
+#### コンポーネント別読み込みオプション
+
+- `--resume-backbone-from`: Backbone（embedding，backbone，pool，hand projection）パラメータファイルを指定
+- `--resume-policy-head-from`: Policy headパラメータファイルを指定
+- `--resume-value-head-from`: Value headパラメータファイルを指定
+- `--freeze-backbone`: バックボーンのパラメータを凍結（学習しない）
+
+#### 使用例
+
+**Example 1**: バックボーンのみを事前学習済みモデルから読み込む
+```bash
+poetry run maou learn-model \
+  --input-dir /path/to/data \
+  --resume-backbone-from pretrained_backbone.pt \
+  --epoch 10
+```
+
+**Example 2**: 全コンポーネントを異なるソースから組み立てる
+```bash
+poetry run maou learn-model \
+  --input-dir /path/to/data \
+  --resume-backbone-from model_X_backbone.pt \
+  --resume-policy-head-from model_Y_policy_head.pt \
+  --resume-value-head-from model_Z_value_head.pt \
+  --freeze-backbone \
+  --epoch 5
+```
+
+### 5. Performance Optimization
 ```bash
 # Benchmark DataLoader configurations
 poetry run maou utility benchmark-dataloader \

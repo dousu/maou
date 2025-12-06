@@ -1,20 +1,27 @@
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from maou.infra.console import common
 from maou.interface import learn
 
-
 if TYPE_CHECKING:
+    from maou.infra.console.common import GCS as GCSType
+    from maou.infra.console.common import S3 as S3Type
     from maou.infra.console.common import (
         BigQueryDataSource as BigQueryDataSourceType,
+    )
+    from maou.infra.console.common import (
         FileDataSource as FileDataSourceType,
+    )
+    from maou.infra.console.common import (
         FileSystem as FileSystemType,
-        GCS as GCSType,
+    )
+    from maou.infra.console.common import (
         GCSDataSource as GCSDataSourceType,
-        S3 as S3Type,
+    )
+    from maou.infra.console.common import (
         S3DataSource as S3DataSourceType,
     )
 else:
@@ -376,6 +383,30 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--resume-backbone-from",
+    type=click.Path(exists=True, path_type=Path),
+    help="Backbone parameter file to resume training.",
+    required=False,
+)
+@click.option(
+    "--resume-policy-head-from",
+    type=click.Path(exists=True, path_type=Path),
+    help="Policy head parameter file to resume training.",
+    required=False,
+)
+@click.option(
+    "--resume-value-head-from",
+    type=click.Path(exists=True, path_type=Path),
+    help="Value head parameter file to resume training.",
+    required=False,
+)
+@click.option(
+    "--freeze-backbone",
+    is_flag=True,
+    default=False,
+    help="Freeze backbone parameters (embedding, backbone, pool, hand projection).",
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -472,6 +503,10 @@ def learn_model(
     optimizer_eps: float,
     resume_from: Optional[Path],
     start_epoch: Optional[int],
+    resume_backbone_from: Optional[Path],
+    resume_policy_head_from: Optional[Path],
+    resume_value_head_from: Optional[Path],
+    freeze_backbone: bool,
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
@@ -743,6 +778,10 @@ def learn_model(
             optimizer_eps=optimizer_eps,
             resume_from=resume_from,
             start_epoch=start_epoch,
+            resume_backbone_from=resume_backbone_from,
+            resume_policy_head_from=resume_policy_head_from,
+            resume_value_head_from=resume_value_head_from,
+            freeze_backbone=freeze_backbone,
             log_dir=log_dir,
             model_dir=model_dir,
             cloud_storage=cloud_storage,
