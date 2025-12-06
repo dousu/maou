@@ -12,9 +12,13 @@ from maou.app.learning.masked_autoencoder import (
     ModelFactory,
     _MaskedAutoencoder,
 )
-from maou.domain.data.schema import create_empty_preprocessing_array
+from maou.domain.data.schema import (
+    create_empty_preprocessing_array,
+)
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
 from maou.interface.data_io import save_array
-from maou.infra.file_system.file_data_source import FileDataSource
 
 
 def _create_preprocessing_datasource(
@@ -28,10 +32,14 @@ def _create_preprocessing_datasource(
     array["piecesInHand"] = rng.integers(
         0, 2, size=(samples, 14), dtype=np.uint8
     )
-    move_label = rng.random((samples, array["moveLabel"].shape[1]))
+    move_label = rng.random(
+        (samples, array["moveLabel"].shape[1])
+    )
     move_label /= move_label.sum(axis=1, keepdims=True)
     array["moveLabel"] = move_label.astype(np.float16)
-    array["resultValue"] = rng.random(samples).astype(np.float16)
+    array["resultValue"] = rng.random(samples).astype(
+        np.float16
+    )
     save_array(
         array,
         directory / "preprocessing.npy",
@@ -59,13 +67,19 @@ class _DummyBackbone(torch.nn.Module):
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         device = x.device
-        return torch.ones((batch_size, self._embedding_dim), device=device)
+        return torch.ones(
+            (batch_size, self._embedding_dim), device=device
+        )
 
 
-def test_feature_dataset_caches_transforms(tmp_path: Path) -> None:
+def test_feature_dataset_caches_transforms(
+    tmp_path: Path,
+) -> None:
     """Enabling cache_transforms should preload flattened tensors into RAM."""
 
-    splitter = _create_preprocessing_datasource(tmp_path, samples=3)
+    splitter = _create_preprocessing_datasource(
+        tmp_path, samples=3
+    )
     datasource, _ = splitter.train_test_split(test_ratio=0.0)
     dataset = masked_autoencoder._FeatureDataset(
         datasource,
@@ -77,10 +91,14 @@ def test_feature_dataset_caches_transforms(tmp_path: Path) -> None:
     assert torch.equal(cached_sample, dataset[0])
 
 
-def test_feature_dataset_skips_cache_when_disabled(tmp_path: Path) -> None:
+def test_feature_dataset_skips_cache_when_disabled(
+    tmp_path: Path,
+) -> None:
     """cache_transforms=False should avoid in-memory caching."""
 
-    splitter = _create_preprocessing_datasource(tmp_path, samples=2)
+    splitter = _create_preprocessing_datasource(
+        tmp_path, samples=2
+    )
     datasource, _ = splitter.train_test_split(test_ratio=0.0)
     dataset = masked_autoencoder._FeatureDataset(
         datasource,
@@ -98,7 +116,9 @@ def test_resolve_device_enables_tensorfloat32_for_cuda(
     """TensorFloat32 matmul precision should be enabled when using CUDA devices."""
 
     calls: List[str] = []
-    monkeypatch.setattr(torch, "set_float32_matmul_precision", calls.append)
+    monkeypatch.setattr(
+        torch, "set_float32_matmul_precision", calls.append
+    )
 
     pretraining = MaskedAutoencoderPretraining()
 
@@ -114,8 +134,12 @@ def test_resolve_device_skips_tensorfloat32_on_cpu(
     """TensorFloat32 matmul precision should remain disabled on CPU devices."""
 
     calls: List[str] = []
-    monkeypatch.setattr(torch, "set_float32_matmul_precision", calls.append)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        torch, "set_float32_matmul_precision", calls.append
+    )
+    monkeypatch.setattr(
+        torch.cuda, "is_available", lambda: False
+    )
 
     pretraining = MaskedAutoencoderPretraining()
 
@@ -135,7 +159,9 @@ def test_masked_autoencoder_uses_encoder_embedding_dim(
     def _create_backbone(
         cls: type[ModelFactory], device: torch.device
     ) -> _DummyBackbone:
-        return _DummyBackbone(embedding_dim=embedding_dim).to(device)
+        return _DummyBackbone(embedding_dim=embedding_dim).to(
+            device
+        )
 
     monkeypatch.setattr(
         ModelFactory,
@@ -170,7 +196,9 @@ class _RecordingModel(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
-        self.max_batch_size = max(self.max_batch_size, batch_size)
+        self.max_batch_size = max(
+            self.max_batch_size, batch_size
+        )
         self.forward_calls.append(batch_size)
         return self.linear(x)
 
@@ -216,7 +244,9 @@ def test_forward_chunk_size_resolution() -> None:
 
     pretraining = MaskedAutoencoderPretraining()
 
-    assert pretraining._resolve_forward_chunk_size(None, 32) == 32
+    assert (
+        pretraining._resolve_forward_chunk_size(None, 32) == 32
+    )
     assert pretraining._resolve_forward_chunk_size(16, 32) == 16
     assert pretraining._resolve_forward_chunk_size(64, 32) == 32
 
@@ -241,11 +271,15 @@ def test_persisted_state_dict_matches_training_model(
 
     state_dict = torch.load(checkpoint_path, weights_only=True)
 
-    model = ModelFactory.create_shogi_model(torch.device("cpu"))
+    model = ModelFactory.create_shogi_model(
+        torch.device("cpu"),
+        hand_projection_dim=0,  # MaskedAutoencoder doesn't use hand features
+    )
     model.load_state_dict(state_dict)
 
     assert any(
-        key.startswith("policy_head") or key.startswith("value_head")
+        key.startswith("policy_head")
+        or key.startswith("value_head")
         for key in state_dict
     )
 
@@ -276,15 +310,23 @@ def test_log_model_summary_logs_stats(
         verbose: int,
     ) -> _FakeStats:
         summary_calls.append(
-            {"input_size": input_size, "device": device, "verbose": verbose}
+            {
+                "input_size": input_size,
+                "device": device,
+                "verbose": verbose,
+            }
         )
         return _FakeStats()
 
-    monkeypatch.setattr(masked_autoencoder, "summary", _fake_summary)
+    monkeypatch.setattr(
+        masked_autoencoder, "summary", _fake_summary
+    )
 
     logged_messages: list[str] = []
 
-    def _record(message: str, *args: object, **_: object) -> None:
+    def _record(
+        message: str, *args: object, **_: object
+    ) -> None:
         formatted = message % args if args else message
         logged_messages.append(formatted)
 
@@ -302,4 +344,6 @@ def test_log_model_summary_logs_stats(
     assert summary_call["input_size"] == (2, 10)
     assert summary_call["device"] == "cpu"
     assert summary_call["verbose"] == 0
-    assert any("fake summary" in message for message in logged_messages)
+    assert any(
+        "fake summary" in message for message in logged_messages
+    )

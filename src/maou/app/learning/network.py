@@ -10,16 +10,15 @@ from torch import nn
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.board import shogi
+from maou.domain.model.mlp_mixer import ShogiMLPMixer
 from maou.domain.model.resnet import (
     BottleneckBlock,
-    ResNet as DomainResNet,
 )
-from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.domain.model.resnet import ResNet as DomainResNet
 from maou.domain.model.vision_transformer import (
     VisionTransformer,
     VisionTransformerConfig,
 )
-
 
 BackboneArchitecture = Literal["resnet", "mlp-mixer", "vit"]
 BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (
@@ -30,6 +29,7 @@ BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (
 
 DEFAULT_BOARD_VOCAB_SIZE = 256
 BOARD_EMBEDDING_DIM = 32
+DEFAULT_HAND_PROJECTION_DIM = 32
 
 
 ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
@@ -44,12 +44,18 @@ class HeadlessNetwork(nn.Module):
         *,
         board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
         embedding_dim: int = BOARD_EMBEDDING_DIM,
+        hand_projection_dim: int = 0,
         board_size: Tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
         layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
         strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
-        out_channels: Tuple[int, int, int, int] = (64, 128, 256, 512),
+        out_channels: Tuple[int, int, int, int] = (
+            64,
+            128,
+            256,
+            512,
+        ),
         pooling: nn.Module | None = None,
         architecture_config: Mapping[str, Any] | None = None,
     ) -> None:
@@ -58,8 +64,16 @@ class HeadlessNetwork(nn.Module):
         self.board_vocab_size = board_vocab_size
         self._board_size = board_size
         self._embedding_channels = embedding_dim
-        self.embedding = nn.Embedding(board_vocab_size, embedding_dim)
+        self._hand_projection_dim = hand_projection_dim
+        self.embedding = nn.Embedding(
+            board_vocab_size, embedding_dim
+        )
         config: dict[str, Any] = dict(architecture_config or {})
+
+        # Total input channels to backbone (board embedding + hand projection)
+        backbone_input_channels = (
+            embedding_dim + hand_projection_dim
+        )
 
         if architecture == "resnet":
             if (
@@ -74,23 +88,25 @@ class HeadlessNetwork(nn.Module):
                 raise ValueError(msg)
 
             expansion = getattr(block, "expansion", 1)
-            self.backbone: DomainResNet | ShogiMLPMixer | VisionTransformer = (
-                DomainResNet(
-                    block=block,
-                    in_channels=embedding_dim,
-                    layers=list(layers),
-                    strides=list(strides),
-                    list_out_channels=list(out_channels),
-                )
+            self.backbone: (
+                DomainResNet | ShogiMLPMixer | VisionTransformer
+            ) = DomainResNet(
+                block=block,
+                in_channels=backbone_input_channels,
+                layers=list(layers),
+                strides=list(strides),
+                list_out_channels=list(out_channels),
             )
             self.pool: nn.Module = (
-                pooling if pooling is not None else nn.AdaptiveAvgPool2d((1, 1))
+                pooling
+                if pooling is not None
+                else nn.AdaptiveAvgPool2d((1, 1))
             )
             self._embedding_dim = out_channels[-1] * expansion
         elif architecture == "mlp-mixer":
             mixer_kwargs: dict[str, Any] = {
                 "num_classes": None,
-                "num_channels": embedding_dim,
+                "num_channels": backbone_input_channels,
                 "num_tokens": board_size[0] * board_size[1],
             }
             mixer_kwargs.update(config)
@@ -102,7 +118,7 @@ class HeadlessNetwork(nn.Module):
                 msg = "Vision Transformer requires square board dimensions."
                 raise ValueError(msg)
             vit_kwargs: dict[str, Any] = {
-                "input_channels": embedding_dim,
+                "input_channels": backbone_input_channels,
                 "board_size": board_size[0],
                 "use_head": False,
             }
@@ -130,13 +146,15 @@ class HeadlessNetwork(nn.Module):
             pooled = self.pool(features)
             return torch.flatten(pooled, 1)
 
-        backbone_forward = getattr(self.backbone, "forward_features", None)
+        backbone_forward = getattr(
+            self.backbone, "forward_features", None
+        )
         if backbone_forward is None:
-            msg = (
-                "Configured backbone does not implement forward_features."
-            )
+            msg = "Configured backbone does not implement forward_features."
             raise RuntimeError(msg)
-        forward_fn: Callable[[torch.Tensor], torch.Tensor] = backbone_forward
+        forward_fn: Callable[[torch.Tensor], torch.Tensor] = (
+            backbone_forward
+        )
         return forward_fn(inputs)
 
     def forward(
@@ -201,7 +219,9 @@ class HeadlessNetwork(nn.Module):
     ) -> torch.nn.modules.module._IncompatibleKeys:
         """Load only backbone parameters, ignoring head-specific entries."""
 
-        if hasattr(self, "policy_head") or hasattr(self, "value_head"):
+        if hasattr(self, "policy_head") or hasattr(
+            self, "value_head"
+        ):
             return super().load_state_dict(
                 state_dict, strict=strict, assign=assign
             )
@@ -209,7 +229,8 @@ class HeadlessNetwork(nn.Module):
         backbone_state = {
             key: value
             for key, value in state_dict.items()
-            if key.startswith("backbone.") or key.startswith("embedding.")
+            if key.startswith("backbone.")
+            or key.startswith("embedding.")
         }
         return super().load_state_dict(
             backbone_state, strict=strict, assign=assign
@@ -297,12 +318,18 @@ class Network(HeadlessNetwork):
         num_policy_classes: int = MOVE_LABELS_NUM,
         board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
         embedding_dim: int = BOARD_EMBEDDING_DIM,
+        hand_projection_dim: int = DEFAULT_HAND_PROJECTION_DIM,
         board_size: Tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
         layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
         strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
-        out_channels: Tuple[int, int, int, int] = (64, 128, 256, 512),
+        out_channels: Tuple[int, int, int, int] = (
+            64,
+            128,
+            256,
+            512,
+        ),
         pooling: nn.Module | None = None,
         policy_hidden_dim: int | None = None,
         value_hidden_dim: int | None = None,
@@ -311,6 +338,7 @@ class Network(HeadlessNetwork):
         super().__init__(
             board_vocab_size=board_vocab_size,
             embedding_dim=embedding_dim,
+            hand_projection_dim=hand_projection_dim,
             board_size=board_size,
             architecture=architecture,
             block=block,
@@ -330,7 +358,7 @@ class Network(HeadlessNetwork):
             hidden_dim=value_hidden_dim,
         )
         self._hand_projection = nn.Linear(
-            PIECES_IN_HAND_VECTOR_SIZE, self.input_channels
+            PIECES_IN_HAND_VECTOR_SIZE, hand_projection_dim
         )
 
     def forward(
@@ -346,14 +374,75 @@ class Network(HeadlessNetwork):
     def forward_features(self, x: ModelInputs) -> torch.Tensor:
         board_tensor, hand_tensor = self._separate_inputs(x)
         embedded_board = self._prepare_inputs(board_tensor)
+
+        # Prepare hand features (or zero padding if no hand tensor provided)
+        batch_size = embedded_board.shape[0]
+        height, width = (
+            embedded_board.shape[2],
+            embedded_board.shape[3],
+        )
+
         if hand_tensor is not None:
+            # Project hand features to hand_projection_dim
             projected = self._hand_projection(
                 hand_tensor.to(
-                    dtype=embedded_board.dtype, device=embedded_board.device
+                    dtype=embedded_board.dtype,
+                    device=embedded_board.device,
                 )
-            ).view(embedded_board.shape[0], self.input_channels, 1, 1)
-            embedded_board = embedded_board + projected
-        return super().forward_features(embedded_board)
+            )
+
+            # Architecture-specific hand feature integration
+            if self.architecture == "resnet":
+                # ResNet: Expand hand features to all spatial positions
+                # This allows the convolutional layers to access hand information everywhere
+                hand_features = projected.view(
+                    batch_size, self._hand_projection_dim, 1, 1
+                ).expand(-1, -1, height, width)
+            else:
+                # MLP-Mixer/ViT: Place hand features only at position (0, 0)
+                # Since these architectures convert spatial dimensions to tokens,
+                # we only need one position to contain the hand information
+                hand_features = torch.zeros(
+                    batch_size,
+                    self._hand_projection_dim,
+                    height,
+                    width,
+                    dtype=embedded_board.dtype,
+                    device=embedded_board.device,
+                )
+                hand_features[:, :, 0, 0] = projected
+        else:
+            # Create zero padding if no hand information provided
+            hand_features = torch.zeros(
+                batch_size,
+                self._hand_projection_dim,
+                height,
+                width,
+                dtype=embedded_board.dtype,
+                device=embedded_board.device,
+            )
+
+        # Concatenate board and hand features along channel dimension
+        combined_features = torch.cat(
+            [embedded_board, hand_features], dim=1
+        )
+
+        # Process concatenated features through backbone
+        if self.architecture == "resnet":
+            features = self.backbone(combined_features)
+            pooled = self.pool(features)
+            return torch.flatten(pooled, 1)
+
+        backbone_forward = getattr(
+            self.backbone, "forward_features", None
+        )
+        if backbone_forward is None:
+            msg = "Configured backbone does not implement forward_features."
+            raise RuntimeError(msg)
+        forward_fn: Callable[[torch.Tensor], torch.Tensor] = (
+            backbone_forward
+        )
+        return forward_fn(combined_features)
 
     @staticmethod
     def _separate_inputs(
@@ -363,9 +452,7 @@ class Network(HeadlessNetwork):
             return inputs, None
         if isinstance(inputs, Sequence):
             if len(inputs) != 2:
-                msg = (
-                    "Expected inputs to contain board and pieces_in_hand tensors."
-                )
+                msg = "Expected inputs to contain board and pieces_in_hand tensors."
                 raise ValueError(msg)
             board_tensor, pieces_tensor = inputs[0], inputs[1]
             if not isinstance(board_tensor, torch.Tensor):

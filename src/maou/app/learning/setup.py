@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import torch
-from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 
 try:
     from torch.optim.lr_scheduler import LRScheduler
@@ -23,9 +23,9 @@ except (
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import (
-    BackboneArchitecture,
     BOARD_EMBEDDING_DIM,
     DEFAULT_BOARD_VOCAB_SIZE,
+    BackboneArchitecture,
     HeadlessNetwork,
     Network,
 )
@@ -133,7 +133,9 @@ class DatasetFactory:
             transform = None
 
         # Create base datasets
-        cache_enabled = cache_transforms and transform is not None
+        cache_enabled = (
+            cache_transforms and transform is not None
+        )
         dataset_train = KifDataset(
             datasource=training_datasource,
             transform=transform,
@@ -255,13 +257,21 @@ class ModelFactory:
         device: torch.device,
         *,
         architecture: BackboneArchitecture = "resnet",
+        hand_projection_dim: int | None = None,
     ) -> Network:
         """将棋特化モデルを作成."""
+        from maou.app.learning.network import (
+            DEFAULT_HAND_PROJECTION_DIM,
+        )
+
+        if hand_projection_dim is None:
+            hand_projection_dim = DEFAULT_HAND_PROJECTION_DIM
 
         model = Network(
             num_policy_classes=MOVE_LABELS_NUM,
             board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
             embedding_dim=BOARD_EMBEDDING_DIM,
+            hand_projection_dim=hand_projection_dim,
             board_size=(9, 9),
             architecture=architecture,
             block=BottleneckBlock,

@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
-from tqdm.auto import tqdm
 from torchinfo import summary
+from tqdm.auto import tqdm
 
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
@@ -22,6 +22,8 @@ from maou.app.learning.setup import (
     ModelFactory,
     default_worker_init_fn,
 )
+
+
 class _FeatureDataset(Dataset):
     """Dataset that returns flattened board identifier tensors."""
 
@@ -48,7 +50,9 @@ class _FeatureDataset(Dataset):
         )
         self._num_features = int(first_board.size)
         self._datasource = datasource
-        self._cached_samples: Optional[list[torch.Tensor]] = None
+        self._cached_samples: Optional[list[torch.Tensor]] = (
+            None
+        )
         self._cache_transforms_enabled = False
 
         if cache_transforms:
@@ -60,7 +64,8 @@ class _FeatureDataset(Dataset):
                 )
                 cached_samples.append(flattened)
                 total_bytes += (
-                    flattened.element_size() * flattened.nelement()
+                    flattened.element_size()
+                    * flattened.nelement()
                 )
             self._cached_samples = cached_samples
             self._cache_transforms_enabled = True
@@ -97,9 +102,7 @@ class _FeatureDataset(Dataset):
         height, width = self.original_shape
         return int(height), int(width)
 
-    def _extract_board(
-        self, record: np.ndarray
-    ) -> np.ndarray:
+    def _extract_board(self, record: np.ndarray) -> np.ndarray:
         if record.dtype.names is None:
             msg = "Structured record is required"
             raise ValueError(msg)
@@ -116,7 +119,9 @@ class _FeatureDataset(Dataset):
             raise ValueError(msg)
         return board
 
-    def _create_flattened_tensor(self, record: np.ndarray) -> torch.Tensor:
+    def _create_flattened_tensor(
+        self, record: np.ndarray
+    ) -> torch.Tensor:
         board = self._extract_board(record)
         flattened = np.ascontiguousarray(
             board.reshape(-1).astype(np.int64)
@@ -638,7 +643,8 @@ class MaskedAutoencoderPretraining:
         """Persist encoder weights aligned with the downstream training model."""
 
         reference_model = ModelFactory.create_shogi_model(
-            torch.device("cpu")
+            torch.device("cpu"),
+            hand_projection_dim=0,  # MaskedAutoencoder doesn't use hand features
         )
         state_dict = reference_model.state_dict()
         del reference_model
