@@ -20,6 +20,60 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class ModelIO:
     @staticmethod
+    def format_parameter_count(parameter_count: int) -> str:
+        """Return a compact，human-friendly parameter count label.
+
+        Args:
+            parameter_count: Total number of parameters
+
+        Returns:
+            Formatted parameter count (e.g.，"1.2m"，"45k"，"123")
+
+        Examples:
+            >>> ModelIO.format_parameter_count(1_234_567)
+            '1.2m'
+            >>> ModelIO.format_parameter_count(45_000)
+            '45k'
+            >>> ModelIO.format_parameter_count(123)
+            '123'
+        """
+
+        def _format(value: float) -> str:
+            formatted = f"{value:.1f}"
+            if formatted.endswith(".0"):
+                return formatted[:-2]
+            return formatted
+
+        if parameter_count >= 1_000_000:
+            return f"{_format(parameter_count / 1_000_000)}m"
+        if parameter_count >= 1_000:
+            return f"{_format(parameter_count / 1_000)}k"
+        return str(parameter_count)
+
+    @staticmethod
+    def generate_model_tag(
+        model: Network, architecture: BackboneArchitecture
+    ) -> str:
+        """Generate model tag from architecture and parameter count.
+
+        Args:
+            model: The neural network model
+            architecture: Backbone architecture name
+
+        Returns:
+            Model tag in format "{architecture}-{parameter_count}"
+            (e.g.，"resnet-1.2m"，"mlp-mixer-45k")
+        """
+        parameter_count = sum(
+            parameter.numel()
+            for parameter in model.parameters()
+        )
+        parameter_label = ModelIO.format_parameter_count(
+            parameter_count
+        )
+        return f"{architecture}-{parameter_label}"
+
+    @staticmethod
     def save_model(
         *,
         trained_model: Network,
@@ -114,8 +168,20 @@ class ModelIO:
 
         # Training modeを確実に解除しておく
         model.train(False)
-        model_path = dir / "model_{}_{}.pt".format(id, epoch)
-        logger.info("Saving model to {}".format(model_path))
+
+        # モデルタグの生成 (architecture-parameterCount)
+        model_tag = ModelIO.generate_model_tag(
+            model, architecture
+        )
+
+        model_path = dir / "model_{}_{}_{}.pt".format(
+            id, model_tag, epoch
+        )
+        logger.info(
+            "Saving model to {} (tag: {})".format(
+                model_path, model_tag
+            )
+        )
         torch.save(model.state_dict(), model_path)
         if cloud_storage is not None:
             logger.info(

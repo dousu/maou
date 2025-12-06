@@ -105,22 +105,6 @@ class Learning:
     ):
         self.__cloud_storage = cloud_storage
 
-    @staticmethod
-    def _format_parameter_count(parameter_count: int) -> str:
-        """Return a compact, human-friendly parameter count label."""
-
-        def _format(value: float) -> str:
-            formatted = f"{value:.1f}"
-            if formatted.endswith(".0"):
-                return formatted[:-2]
-            return formatted
-
-        if parameter_count >= 1_000_000:
-            return f"{_format(parameter_count / 1_000_000)}m"
-        if parameter_count >= 1_000:
-            return f"{_format(parameter_count / 1_000)}k"
-        return str(parameter_count)
-
     def learn(self, config: LearningOption) -> Dict[str, str]:
         """機械学習を行う."""
         self.logger.info("start learning")
@@ -246,24 +230,17 @@ class Learning:
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        parameter_count = sum(
-            parameter.numel()
-            for parameter in self.model.parameters()
-        )
-        parameter_label = self._format_parameter_count(
-            parameter_count
-        )
-        model_tag = (
-            f"{self.model_architecture}-{parameter_label}"
+        model_tag = ModelIO.generate_model_tag(
+            self.model, self.model_architecture
         )
         summary_writer_log_dir = (
             self.log_dir
             / f"{model_tag}_training_log_{timestamp}"
         )
         self.logger.info(
-            "TensorBoard log directory: %s (parameters ≈ %s)",
+            "TensorBoard log directory: %s (model: %s)",
             summary_writer_log_dir,
-            parameter_label,
+            model_tag,
         )
         writer = SummaryWriter(summary_writer_log_dir)
         epoch_number = 0
