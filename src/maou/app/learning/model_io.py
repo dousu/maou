@@ -29,6 +29,7 @@ class ModelIO:
         device: torch.device,
         architecture: BackboneArchitecture,
         cloud_storage: Optional[CloudStorage] = None,
+        verify_export: bool = False,
     ) -> None:
         try:
             import onnx
@@ -63,6 +64,54 @@ class ModelIO:
             state_dict = clean_state_dict
 
         model.load_state_dict(state_dict)
+
+        # パラメータ転送の検証
+        if verify_export:
+            from maou.app.learning.onnx_verifier import (
+                ONNXExportVerifier,
+            )
+
+            logger.info(
+                "Verifying parameter transfer from trained model..."
+            )
+            param_report = (
+                ONNXExportVerifier.verify_parameter_transfer(
+                    trained_model=trained_model,
+                    fresh_model=model,
+                    cleaned_state_dict=state_dict,
+                )
+            )
+            logger.info(param_report.summary())
+
+            if not param_report.success:
+                logger.error(
+                    "Parameter transfer verification failed!"
+                )
+                if param_report.missing_parameters:
+                    logger.error(
+                        f"Missing parameters: {param_report.missing_parameters}"
+                    )
+                if param_report.value_mismatches:
+                    logger.error(
+                        f"Value mismatches: {param_report.value_mismatches}"
+                    )
+                raise RuntimeError(
+                    "Parameter transfer verification failed: "
+                    "output head parameters may be lost"
+                )
+
+            # 出力ヘッドの検証
+            head_report = ONNXExportVerifier.verify_output_head_parameters(
+                model
+            )
+            logger.info(head_report.summary())
+
+            if not head_report.success:
+                raise RuntimeError(
+                    "Output head verification failed: "
+                    "policy or value head parameters are invalid"
+                )
+
         # Training modeを確実に解除しておく
         model.train(False)
         model_path = dir / "model_{}_{}.pt".format(id, epoch)
@@ -117,6 +166,43 @@ class ModelIO:
         if not check:
             raise RuntimeError("onnxsim.simplify failed")
         onnx.save(onnx_model_simp, onnx_model_path)
+
+        # ONNX FP32の検証
+        if verify_export:
+            from maou.app.learning.onnx_verifier import (
+                ONNXExportVerifier,
+            )
+
+            logger.info("Verifying ONNX FP32 export...")
+
+            # グラフ構造の検証
+            graph_report = (
+                ONNXExportVerifier.verify_onnx_graph_structure(
+                    onnx_model_path=onnx_model_path
+                )
+            )
+            logger.info(graph_report.summary())
+
+            if not graph_report.success:
+                logger.warning(
+                    f"ONNX graph structure verification failed: {graph_report.summary()}"
+                )
+
+            # 機能的等価性の検証
+            func_report = ONNXExportVerifier.verify_onnx_functional_equivalence(
+                pytorch_model=model,
+                onnx_model_path=onnx_model_path,
+                device=device,
+                num_test_samples=10,
+                fp16=False,
+            )
+            logger.info(func_report.summary())
+
+            if not func_report.success:
+                logger.warning(
+                    f"ONNX FP32 functional equivalence check failed: {func_report.summary()}"
+                )
+
         if cloud_storage is not None:
             logger.info(
                 f"Uploading model to cloud storage ({onnx_model_path})"
@@ -143,6 +229,30 @@ class ModelIO:
             ],  # FP16にしたくない演算 (出力層とか)
         )
         onnx.save(onnx_model_fp16, onnx_model_fp16_path)
+
+        # ONNX FP16の検証
+        if verify_export:
+            from maou.app.learning.onnx_verifier import (
+                ONNXExportVerifier,
+            )
+
+            logger.info("Verifying ONNX FP16 export...")
+
+            # 機能的等価性の検証（FP16用の緩い許容誤差）
+            func_report_fp16 = ONNXExportVerifier.verify_onnx_functional_equivalence(
+                pytorch_model=model,
+                onnx_model_path=onnx_model_fp16_path,
+                device=device,
+                num_test_samples=10,
+                fp16=True,
+            )
+            logger.info(func_report_fp16.summary())
+
+            if not func_report_fp16.success:
+                logger.warning(
+                    f"ONNX FP16 functional equivalence check failed: {func_report_fp16.summary()}"
+                )
+
         # simplifyを挟もうとしたらエラーになったので一旦やめておく
         # onnx_model_fp16 = onnx.shape_inference.infer_shapes(
         #     onnx_model_fp16
