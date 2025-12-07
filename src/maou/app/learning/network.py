@@ -309,6 +309,120 @@ class ValueHead(nn.Module):
         return self.head(features)
 
 
+class ReachableSquaresHead(nn.Module):
+    """Head for predicting reachable squares (9×9 binary output).
+
+    This head is used in Stage 1 training to learn which board squares
+    pieces can move to. Outputs logits for each of the 81 board squares.
+
+    The model learns basic piece movement rules without considering
+    other pieces or complex game state.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        board_size: Tuple[int, int] = (9, 9),
+        hidden_dim: int | None = None,
+    ) -> None:
+        """Initialize ReachableSquaresHead.
+
+        Args:
+            input_dim: Dimension of input features from backbone
+            board_size: Board dimensions (default: (9，9) for Shogi)
+            hidden_dim: Optional hidden layer dimension.
+                If None，uses single linear layer.
+        """
+        super().__init__()
+        self.board_size = board_size
+        output_dim = (
+            board_size[0] * board_size[1]
+        )  # 81 for 9×9 board
+
+        layers: list[nn.Module]
+        if hidden_dim is None:
+            layers = [nn.Linear(input_dim, output_dim)]
+        else:
+            layers = [
+                nn.Linear(input_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, output_dim),
+            ]
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Return reachable squares logits for the provided features.
+
+        Args:
+            features: Backbone features (batch，input_dim)
+
+        Returns:
+            Logits for each board square (batch，81)
+
+        Note: Output is logits，not probabilities.
+        Use BCEWithLogitsLoss for training.
+        Apply sigmoid during inference: torch.sigmoid(logits)
+        """
+        return self.head(features)
+
+
+class LegalMovesHead(nn.Module):
+    """Head for predicting legal moves (multi-label binary classification).
+
+    This head is used in Stage 2 training to learn which moves are legal
+    in a given position. Outputs logits for MOVE_LABELS_NUM classes (2187).
+
+    Unlike the policy head (which outputs a probability distribution)，
+    this performs multi-label classification where multiple moves can be
+    legal simultaneously. Each move is treated as an independent binary
+    classification problem.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        num_move_labels: int = MOVE_LABELS_NUM,
+        hidden_dim: int | None = None,
+    ) -> None:
+        """Initialize LegalMovesHead.
+
+        Args:
+            input_dim: Dimension of input features from backbone
+            num_move_labels: Number of move label classes
+                (default: MOVE_LABELS_NUM = 2187)
+            hidden_dim: Optional hidden layer dimension.
+                If None，uses single linear layer.
+        """
+        super().__init__()
+        layers: list[nn.Module]
+        if hidden_dim is None:
+            layers = [nn.Linear(input_dim, num_move_labels)]
+        else:
+            layers = [
+                nn.Linear(input_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, num_move_labels),
+            ]
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Return legal moves logits for the provided features.
+
+        Args:
+            features: Backbone features (batch，input_dim)
+
+        Returns:
+            Logits for each move label (batch，2187)
+
+        Note: Output is logits for multi-label classification.
+        Use BCEWithLogitsLoss for training.
+        Apply sigmoid during inference: torch.sigmoid(logits)
+        """
+        return self.head(features)
+
+
 class Network(HeadlessNetwork):
     """Dual-head shogi network built on selectable backbones."""
 

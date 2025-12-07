@@ -110,3 +110,101 @@ class GCEwithNegativePenaltyLoss(torch.nn.Module):
         )
 
         return total_loss.sum(dim=1).mean()
+
+
+class ReachableSquaresLoss(torch.nn.Module):
+    """Binary cross-entropy loss for reachable squares prediction.
+
+    This loss function is designed for Stage 1 training where the model
+    learns which board squares pieces can move to (9×9 binary output).
+
+    Uses BCEWithLogitsLoss which combines sigmoid activation and BCE loss
+    for numerical stability，especially important for mixed precision training.
+
+    The pos_weight parameter can be used to handle class imbalance，as there
+    are typically more unreachable squares than reachable ones.
+    """
+
+    def __init__(
+        self, pos_weight: float = 1.0, reduction: str = "mean"
+    ) -> None:
+        """Initialize ReachableSquaresLoss.
+
+        Args:
+            pos_weight: Weight for positive class (reachable squares).
+                Values > 1.0 increase recall，< 1.0 increase precision.
+                Default: 1.0 (balanced)
+            reduction: Reduction method ('mean'，'sum'，or 'none').
+                Default: 'mean'
+        """
+        super(ReachableSquaresLoss, self).__init__()
+        self.pos_weight = torch.tensor([pos_weight])
+        self.reduction = reduction
+
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute binary cross-entropy loss for reachable squares.
+
+        Args:
+            logits: Predicted logits (batch，81) - raw scores before sigmoid
+            targets: Target binary labels (batch，81) with values 0 or 1
+
+        Returns:
+            Scalar loss value (if reduction='mean' or 'sum')
+            or per-element loss (batch，81) if reduction='none'
+        """
+        loss_fn = torch.nn.BCEWithLogitsLoss(
+            pos_weight=self.pos_weight.to(logits.device),
+            reduction=self.reduction,
+        )
+        return loss_fn(logits, targets)
+
+
+class LegalMovesLoss(torch.nn.Module):
+    """Multi-label binary cross-entropy loss for legal moves prediction.
+
+    This loss function is designed for Stage 2 training where the model
+    learns which moves are legal in a given position (2187 binary outputs).
+
+    Unlike policy loss (multi-class classification with softmax)，this is
+    multi-label classification where multiple moves can be legal simultaneously.
+    Each move is treated as an independent binary classification problem.
+
+    Uses BCEWithLogitsLoss for numerical stability and mixed precision compatibility.
+    """
+
+    def __init__(
+        self, pos_weight: float = 1.0, reduction: str = "mean"
+    ) -> None:
+        """Initialize LegalMovesLoss.
+
+        Args:
+            pos_weight: Weight for positive class (legal moves).
+                Values > 1.0 increase recall，< 1.0 increase precision.
+                Default: 1.0 (balanced)
+            reduction: Reduction method ('mean'，'sum'，or 'none').
+                Default: 'mean'
+        """
+        super(LegalMovesLoss, self).__init__()
+        self.pos_weight = torch.tensor([pos_weight])
+        self.reduction = reduction
+
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute multi-label binary cross-entropy loss for legal moves.
+
+        Args:
+            logits: Predicted logits (batch，2187) - raw scores before sigmoid
+            targets: Target binary labels (batch，2187) with values 0 or 1
+
+        Returns:
+            Scalar loss value (if reduction='mean' or 'sum')
+            or per-element loss (batch，2187) if reduction='none'
+        """
+        loss_fn = torch.nn.BCEWithLogitsLoss(
+            pos_weight=self.pos_weight.to(logits.device),
+            reduction=self.reduction,
+        )
+        return loss_fn(logits, targets)

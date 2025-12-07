@@ -80,22 +80,30 @@ class ModelIO:
         dict[str, torch.Tensor],
         dict[str, torch.Tensor],
         dict[str, torch.Tensor],
+        dict[str, torch.Tensor],
+        dict[str, torch.Tensor],
     ]:
-        """Split state_dict into backbone，policy head，and value head components.
+        """Split state_dict into all head components.
+
+        Splits a full model state_dict into backbone and all head components，
+        including the new multi-stage training heads.
 
         Args:
             state_dict: Complete model state_dict (may include _orig_mod. prefix)
 
         Returns:
-            Tuple of (backbone_dict，policy_head_dict，value_head_dict)
+            Tuple of (backbone_dict，policy_head_dict，value_head_dict，
+                     reachable_head_dict，legal_moves_head_dict)
 
         Examples:
             >>> full_dict = model.state_dict()
-            >>> backbone，policy，value = ModelIO.split_state_dict(full_dict)
+            >>> backbone，policy，value，reachable，legal = ModelIO.split_state_dict(full_dict)
         """
         backbone_dict: dict[str, torch.Tensor] = {}
         policy_head_dict: dict[str, torch.Tensor] = {}
         value_head_dict: dict[str, torch.Tensor] = {}
+        reachable_head_dict: dict[str, torch.Tensor] = {}
+        legal_moves_head_dict: dict[str, torch.Tensor] = {}
 
         # _orig_mod.プレフィックスの除去を検討
         has_orig_mod_prefix = any(
@@ -116,11 +124,21 @@ class ModelIO:
                 policy_head_dict[key] = value
             elif clean_key.startswith("value_head."):
                 value_head_dict[key] = value
+            elif clean_key.startswith("reachable_head."):
+                reachable_head_dict[key] = value
+            elif clean_key.startswith("legal_moves_head."):
+                legal_moves_head_dict[key] = value
             else:
                 # embedding.*, backbone.*, pool.*, _hand_projection.*はすべてbackbone
                 backbone_dict[key] = value
 
-        return backbone_dict, policy_head_dict, value_head_dict
+        return (
+            backbone_dict,
+            policy_head_dict,
+            value_head_dict,
+            reachable_head_dict,
+            legal_moves_head_dict,
+        )
 
     @staticmethod
     def load_backbone(
@@ -177,6 +195,50 @@ class ModelIO:
         """
         logger.info(
             f"Loading value head parameters from {file_path}"
+        )
+        return torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+
+    @staticmethod
+    def load_reachable_head(
+        file_path: Path, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Load reachable squares head parameters from file.
+
+        Used for Stage 1 multi-stage training.
+
+        Args:
+            file_path: Path to reachable head parameter file
+            device: Device to load parameters to
+
+        Returns:
+            Reachable head state_dict
+        """
+        logger.info(
+            f"Loading reachable squares head parameters from {file_path}"
+        )
+        return torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+
+    @staticmethod
+    def load_legal_moves_head(
+        file_path: Path, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Load legal moves head parameters from file.
+
+        Used for Stage 2 multi-stage training.
+
+        Args:
+            file_path: Path to legal moves head parameter file
+            device: Device to load parameters to
+
+        Returns:
+            Legal moves head state_dict
+        """
+        logger.info(
+            f"Loading legal moves head parameters from {file_path}"
         )
         return torch.load(
             file_path, weights_only=True, map_location=device
@@ -289,6 +351,8 @@ class ModelIO:
             backbone_dict,
             policy_head_dict,
             value_head_dict,
+            _reachable_head_dict,
+            _legal_moves_head_dict,
         ) = ModelIO.split_state_dict(full_state_dict)
 
         # 3つの別ファイルに保存

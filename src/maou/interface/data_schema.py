@@ -18,7 +18,9 @@ def numpy_dtype_to_bigquery_type(numpy_type: np.dtype) -> str:
 
 
 def get_dtype(
-    array_type: Literal["hcpe", "preprocessing"],
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
     bit_pack: bool = False,
 ) -> np.dtype:
     return DataSchemaService.get_dtype(

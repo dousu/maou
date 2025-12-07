@@ -2,16 +2,33 @@ import abc
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
+import torch
+from torch.utils.data import DataLoader
+
+from maou.app.learning.dataset import (
+    Stage1Dataset,
+    Stage2Dataset,
+)
 from maou.app.learning.dl import (
     CloudStorage,
     Learning,
     LearningDataSource,
 )
+from maou.app.learning.multi_stage_training import (
+    MultiStageTrainingOrchestrator,
+    StageConfig,
+    TrainingStage,
+)
 from maou.app.learning.network import (
     BACKBONE_ARCHITECTURES,
     BackboneArchitecture,
+)
+from maou.app.learning.setup import DeviceSetup, ModelFactory
+from maou.domain.loss.loss_fn import (
+    LegalMovesLoss,
+    ReachableSquaresLoss,
 )
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
@@ -434,3 +451,219 @@ def learn(
     ).learn(option)
 
     return json.dumps(learning_result)
+
+
+def learn_multi_stage(
+    stage: str,
+    *,
+    stage1_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage2_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage3_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage1_threshold: float = 0.99,
+    stage2_threshold: float = 0.95,
+    stage1_max_epochs: int = 10,
+    stage2_max_epochs: int = 10,
+    gpu: Optional[str] = None,
+    model_architecture: BackboneArchitecture = "resnet",
+    batch_size: int = 256,
+    learning_rate: float = 0.001,
+    model_dir: Optional[Path] = None,
+    resume_backbone_from: Optional[Path] = None,
+    resume_reachable_head_from: Optional[Path] = None,
+    resume_legal_moves_head_from: Optional[Path] = None,
+) -> str:
+    """Execute multi-stage training workflow.
+
+    Args:
+        stage: Training stage to execute ("1", "2", "3", or "all")
+        stage1_datasource: Data source for Stage 1 (reachable squares)
+        stage2_datasource: Data source for Stage 2 (legal moves)
+        stage3_datasource: Data source for Stage 3 (policy+value)
+        stage1_threshold: Accuracy threshold for Stage 1 (default: 0.99)
+        stage2_threshold: Accuracy threshold for Stage 2 (default: 0.95)
+        stage1_max_epochs: Maximum epochs for Stage 1 (default: 10)
+        stage2_max_epochs: Maximum epochs for Stage 2 (default: 10)
+        gpu: GPU device to use
+        model_architecture: Backbone architecture
+        batch_size: Training batch size
+        learning_rate: Learning rate
+        model_dir: Model output directory
+        resume_backbone_from: Backbone checkpoint to resume from
+        resume_reachable_head_from: Reachable head checkpoint to resume from
+        resume_legal_moves_head_from: Legal moves head checkpoint to resume from
+
+    Returns:
+        JSON string with training results
+
+    Raises:
+        ValueError: If stage parameter is invalid or required datasources missing
+        RuntimeError: If Stage 1 or 2 fails to meet accuracy threshold
+    """
+    # Validate stage parameter
+    if stage not in ("1", "2", "3", "all"):
+        raise ValueError(
+            f"Invalid stage: {stage}. Must be '1', '2', '3', or 'all'"
+        )
+
+    # Validate datasources based on stage
+    if stage in ("1", "all") and stage1_datasource is None:
+        raise ValueError(
+            "stage1_datasource is required for stage 1 or all"
+        )
+    if stage in ("2", "all") and stage2_datasource is None:
+        raise ValueError(
+            "stage2_datasource is required for stage 2 or all"
+        )
+    if stage in ("3", "all") and stage3_datasource is None:
+        raise ValueError(
+            "stage3_datasource is required for stage 3 or all"
+        )
+
+    # Set model directory default
+    if model_dir is None:
+        model_dir = Path("./models")
+    dir_init(model_dir)
+
+    # Setup device
+    device_config = DeviceSetup.setup_device(gpu=gpu)
+    device = device_config.device
+    logger.info(f"Using device: {device}")
+
+    # Create backbone
+    backbone = ModelFactory.create_headless_model(
+        device=device,
+        architecture=model_architecture,
+    )
+
+    # Load backbone if resuming
+    if resume_backbone_from is not None:
+        from maou.app.learning.model_io import ModelIO
+
+        logger.info(
+            f"Loading backbone from checkpoint: {resume_backbone_from}"
+        )
+        backbone_dict = ModelIO.load_backbone(
+            resume_backbone_from, device
+        )
+        backbone.load_state_dict(backbone_dict)
+
+    # Create orchestrator
+    orchestrator = MultiStageTrainingOrchestrator(
+        backbone=backbone,
+        device=device,
+        model_dir=model_dir,
+    )
+
+    # Prepare stage configurations
+    stage1_config = None
+    stage2_config = None
+    stage3_config = None
+
+    # Stage 1: Reachable Squares
+    if stage in ("1", "all") and stage1_datasource is not None:
+        # Create Stage 1 dataset
+        stage1_dataset = Stage1Dataset(
+            datasource=stage1_datasource.datasource
+        )
+
+        # Create DataLoader
+        stage1_dataloader = DataLoader(
+            stage1_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
+
+        # Create loss function and optimizer
+        stage1_loss_fn = ReachableSquaresLoss()
+        stage1_optimizer = torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        )
+
+        stage1_config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=stage1_max_epochs,
+            accuracy_threshold=stage1_threshold,
+            dataloader=stage1_dataloader,
+            loss_fn=stage1_loss_fn,
+            optimizer=stage1_optimizer,
+            learning_rate=learning_rate,
+        )
+
+    # Stage 2: Legal Moves
+    if stage in ("2", "all") and stage2_datasource is not None:
+        # Create Stage 2 dataset
+        stage2_dataset = Stage2Dataset(
+            datasource=stage2_datasource.datasource
+        )
+
+        # Create DataLoader
+        stage2_dataloader = DataLoader(
+            stage2_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
+
+        # Create loss function and optimizer
+        stage2_loss_fn = LegalMovesLoss()
+        stage2_optimizer = torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        )
+
+        stage2_config = StageConfig(
+            stage=TrainingStage.LEGAL_MOVES,
+            max_epochs=stage2_max_epochs,
+            accuracy_threshold=stage2_threshold,
+            dataloader=stage2_dataloader,
+            loss_fn=stage2_loss_fn,
+            optimizer=stage2_optimizer,
+            learning_rate=learning_rate,
+        )
+
+    # Stage 3: Policy + Value (delegate to existing Learning class)
+    if stage in ("3", "all") and stage3_datasource is not None:
+        logger.info(
+            "Stage 3 would delegate to existing Learning.learn() implementation"
+        )
+        # Note: Actual Stage 3 implementation would be handled separately
+        stage3_config = None  # Placeholder
+
+    # Run all configured stages
+    logger.info(f"Starting multi-stage training: stage={stage}")
+    results = orchestrator.run_all_stages(
+        stage1_config=stage1_config,
+        stage2_config=stage2_config,
+        stage3_config=stage3_config,
+        save_checkpoints=True,
+    )
+
+    # Format results as JSON
+    results_dict: dict[str, Any] = {
+        "stage": stage,
+        "stages_completed": [],
+    }
+
+    for training_stage, stage_result in results.items():
+        results_dict["stages_completed"].append(
+            {
+                "stage": training_stage.value,
+                "stage_name": training_stage.name,
+                "achieved_accuracy": stage_result.achieved_accuracy,
+                "final_loss": stage_result.final_loss,
+                "epochs_trained": stage_result.epochs_trained,
+                "threshold_met": stage_result.threshold_met,
+            }
+        )
+
+    return json.dumps(results_dict)

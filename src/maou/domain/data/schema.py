@@ -577,6 +577,233 @@ def create_empty_packed_preprocessing_array(
     )
 
 
+def get_stage1_dtype() -> np.dtype:
+    """Get numpy dtype for Stage 1 (reachable squares) training data.
+
+    This schema is used for training the reachable squares prediction head，
+    which learns which board squares pieces can move to.
+
+    Returns:
+        numpy.dtype: Structured dtype for Stage 1 data
+    """
+    return np.dtype(
+        [
+            ("id", np.uint64),  # Unique identifier
+            (
+                "boardIdPositions",
+                np.uint8,
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
+            (
+                "reachableSquares",
+                np.uint8,
+                (9, 9),
+            ),  # Binary: 1=reachable，0=not
+        ]
+    )
+
+
+def get_stage2_dtype() -> np.dtype:
+    """Get numpy dtype for Stage 2 (legal moves) training data.
+
+    This schema is used for training the legal moves prediction head，
+    which learns which moves are legal in a given position.
+
+    Returns:
+        numpy.dtype: Structured dtype for Stage 2 data
+    """
+    return np.dtype(
+        [
+            ("id", np.uint64),  # Unique identifier
+            (
+                "boardIdPositions",
+                np.uint8,
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
+            (
+                "legalMovesLabel",
+                np.uint8,
+                (MOVE_LABELS_NUM,),
+            ),  # Binary multi-label: 1=legal，0=illegal
+        ]
+    )
+
+
+def validate_stage1_array(array: np.ndarray) -> bool:
+    """Validate that array conforms to Stage 1 schema.
+
+    Args:
+        array: numpy array to validate
+
+    Returns:
+        bool: True if array is valid
+
+    Raises:
+        SchemaValidationError: If validation fails
+    """
+    expected_dtype = get_stage1_dtype()
+
+    if not isinstance(array, np.ndarray):
+        raise SchemaValidationError("Expected numpy ndarray")
+
+    if array.dtype != expected_dtype:
+        raise SchemaValidationError(
+            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
+        )
+
+    # Validate field constraints
+    if len(array) > 0:
+        # Check reachableSquares is binary
+        if not np.all(
+            np.isin(array["reachableSquares"], [0, 1])
+        ):
+            raise SchemaValidationError(
+                "reachableSquares must contain only 0 or 1"
+            )
+
+        # Check boardIdPositions shape
+        expected_board_shape = (9, 9)
+        if (
+            array["boardIdPositions"].shape[1:]
+            != expected_board_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid boardIdPositions shape. "
+                f"Expected: {expected_board_shape}，"
+                f"Got: {array['boardIdPositions'].shape[1:]}"
+            )
+
+        # Check piecesInHand shape
+        expected_hand_shape = (14,)
+        if (
+            array["piecesInHand"].shape[1:]
+            != expected_hand_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid piecesInHand shape. "
+                f"Expected: {expected_hand_shape}，"
+                f"Got: {array['piecesInHand'].shape[1:]}"
+            )
+
+        # Check reachableSquares shape
+        if (
+            array["reachableSquares"].shape[1:]
+            != expected_board_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid reachableSquares shape. "
+                f"Expected: {expected_board_shape}，"
+                f"Got: {array['reachableSquares'].shape[1:]}"
+            )
+
+    return True
+
+
+def validate_stage2_array(array: np.ndarray) -> bool:
+    """Validate that array conforms to Stage 2 schema.
+
+    Args:
+        array: numpy array to validate
+
+    Returns:
+        bool: True if array is valid
+
+    Raises:
+        SchemaValidationError: If validation fails
+    """
+    expected_dtype = get_stage2_dtype()
+
+    if not isinstance(array, np.ndarray):
+        raise SchemaValidationError("Expected numpy ndarray")
+
+    if array.dtype != expected_dtype:
+        raise SchemaValidationError(
+            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
+        )
+
+    # Validate field constraints
+    if len(array) > 0:
+        # Check legalMovesLabel is binary
+        if not np.all(
+            np.isin(array["legalMovesLabel"], [0, 1])
+        ):
+            raise SchemaValidationError(
+                "legalMovesLabel must contain only 0 or 1"
+            )
+
+        # Check boardIdPositions shape
+        expected_board_shape = (9, 9)
+        if (
+            array["boardIdPositions"].shape[1:]
+            != expected_board_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid boardIdPositions shape. "
+                f"Expected: {expected_board_shape}，"
+                f"Got: {array['boardIdPositions'].shape[1:]}"
+            )
+
+        # Check piecesInHand shape
+        expected_hand_shape = (14,)
+        if (
+            array["piecesInHand"].shape[1:]
+            != expected_hand_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid piecesInHand shape. "
+                f"Expected: {expected_hand_shape}，"
+                f"Got: {array['piecesInHand'].shape[1:]}"
+            )
+
+        # Check legalMovesLabel shape
+        expected_labels_shape = (MOVE_LABELS_NUM,)
+        if (
+            array["legalMovesLabel"].shape[1:]
+            != expected_labels_shape
+        ):
+            raise SchemaValidationError(
+                "Invalid legalMovesLabel shape. "
+                f"Expected: {expected_labels_shape}，"
+                f"Got: {array['legalMovesLabel'].shape[1:]}"
+            )
+
+    return True
+
+
+def create_empty_stage1_array(size: int) -> np.ndarray:
+    """Create empty Stage 1 array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with Stage 1 schema
+    """
+    return np.zeros(size, dtype=get_stage1_dtype())
+
+
+def create_empty_stage2_array(size: int) -> np.ndarray:
+    """Create empty Stage 2 array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with Stage 2 schema
+    """
+    return np.zeros(size, dtype=get_stage2_dtype())
+
+
 def convert_array_from_packed_format(
     compressed_array: np.ndarray,
 ) -> np.ndarray:

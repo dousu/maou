@@ -63,6 +63,16 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "resume-policy-head-from",  # コンポーネント別再開（不要）
         "resume-value-head-from",  # コンポーネント別再開（不要）
         "freeze-backbone",  # バックボーン凍結（不要）
+        "stage",  # マルチステージ学習（不要）
+        "stage1-data-dir",  # Stage 1データディレクトリ（不要）
+        "stage2-data-dir",  # Stage 2データディレクトリ（不要）
+        "stage3-data-dir",  # Stage 3データディレクトリ（不要）
+        "stage1-threshold",  # Stage 1閾値（不要）
+        "stage2-threshold",  # Stage 2閾値（不要）
+        "stage1-max-epochs",  # Stage 1最大エポック（不要）
+        "stage2-max-epochs",  # Stage 2最大エポック（不要）
+        "resume-reachable-head-from",  # Stage 1ヘッド再開（不要）
+        "resume-legal-moves-head-from",  # Stage 2ヘッド再開（不要）
         "log-dir",  # TensorBoardログディレクトリ（不要）
         "model-dir",  # モデル出力ディレクトリ（不要）
         "tensorboard-histogram-frequency",  # TensorBoard（不要）

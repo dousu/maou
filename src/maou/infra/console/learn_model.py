@@ -407,6 +407,73 @@ S3DataSource: S3DataSourceType | None = getattr(
     help="Freeze backbone parameters (embedding, backbone, pool, hand projection).",
 )
 @click.option(
+    "--stage",
+    type=click.Choice(
+        ["1", "2", "3", "all"], case_sensitive=False
+    ),
+    default="3",
+    help="Training stage: 1=Reachable Squares, 2=Legal Moves, 3=Policy+Value, all=Sequential",
+    show_default=True,
+)
+@click.option(
+    "--stage1-data-dir",
+    type=click.Path(exists=True, path_type=Path),
+    help="Directory containing Stage 1 (reachable squares) training data.",
+    required=False,
+)
+@click.option(
+    "--stage2-data-dir",
+    type=click.Path(exists=True, path_type=Path),
+    help="Directory containing Stage 2 (legal moves) training data.",
+    required=False,
+)
+@click.option(
+    "--stage3-data-dir",
+    type=click.Path(exists=True, path_type=Path),
+    help="Directory containing Stage 3 (policy+value) training data.",
+    required=False,
+)
+@click.option(
+    "--stage1-threshold",
+    type=float,
+    default=0.99,
+    help="Accuracy threshold for Stage 1 (default: 0.99 = 99%%).",
+    show_default=True,
+)
+@click.option(
+    "--stage2-threshold",
+    type=float,
+    default=0.95,
+    help="Accuracy threshold for Stage 2 (default: 0.95 = 95%%).",
+    show_default=True,
+)
+@click.option(
+    "--stage1-max-epochs",
+    type=int,
+    default=10,
+    help="Maximum epochs for Stage 1.",
+    show_default=True,
+)
+@click.option(
+    "--stage2-max-epochs",
+    type=int,
+    default=10,
+    help="Maximum epochs for Stage 2.",
+    show_default=True,
+)
+@click.option(
+    "--resume-reachable-head-from",
+    type=click.Path(exists=True, path_type=Path),
+    help="Reachable squares head parameter file to resume training (Stage 1).",
+    required=False,
+)
+@click.option(
+    "--resume-legal-moves-head-from",
+    type=click.Path(exists=True, path_type=Path),
+    help="Legal moves head parameter file to resume training (Stage 2).",
+    required=False,
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -507,6 +574,16 @@ def learn_model(
     resume_policy_head_from: Optional[Path],
     resume_value_head_from: Optional[Path],
     freeze_backbone: bool,
+    stage: str,
+    stage1_data_dir: Optional[Path],
+    stage2_data_dir: Optional[Path],
+    stage3_data_dir: Optional[Path],
+    stage1_threshold: float,
+    stage2_threshold: float,
+    stage1_max_epochs: int,
+    stage2_max_epochs: int,
+    resume_reachable_head_from: Optional[Path],
+    resume_legal_moves_head_from: Optional[Path],
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
@@ -748,44 +825,121 @@ def learn_model(
             "a GCS bucket, or an S3 bucket."
         )
     architecture_key = model_architecture.lower()
-    click.echo(
-        learn.learn(
-            datasource=datasource,
-            datasource_type=input_format,
-            gpu=gpu,
-            model_architecture=architecture_key,
-            compilation=compilation,
-            test_ratio=test_ratio,
-            epoch=epoch,
-            batch_size=batch_size,
-            dataloader_workers=dataloader_workers,
-            pin_memory=pin_memory,
-            prefetch_factor=prefetch_factor,
-            tensorboard_histogram_frequency=tensorboard_histogram_frequency,
-            tensorboard_histogram_modules=(
-                tensorboard_histogram_modules or None
-            ),
-            cache_transforms=cache_transforms,
-            gce_parameter=gce_parameter,
-            policy_loss_ratio=policy_loss_ratio,
-            value_loss_ratio=value_loss_ratio,
-            learning_ratio=learning_ratio,
-            lr_scheduler=lr_scheduler,
-            momentum=momentum,
-            optimizer_name=optimizer,
-            optimizer_beta1=optimizer_beta1,
-            optimizer_beta2=optimizer_beta2,
-            optimizer_eps=optimizer_eps,
-            resume_from=resume_from,
-            start_epoch=start_epoch,
-            resume_backbone_from=resume_backbone_from,
-            resume_policy_head_from=resume_policy_head_from,
-            resume_value_head_from=resume_value_head_from,
-            freeze_backbone=freeze_backbone,
-            log_dir=log_dir,
-            model_dir=model_dir,
-            cloud_storage=cloud_storage,
-            input_cache_mode=input_cache_mode.lower(),
-            detect_anomaly=detect_anomaly,
-        )
+
+    # Check if multi-stage training is requested
+    is_multi_stage = (
+        stage in ("1", "2", "all")
+        or stage1_data_dir is not None
+        or stage2_data_dir is not None
     )
+
+    if is_multi_stage:
+        # Route to multi-stage training
+        app_logger.info(
+            f"Multi-stage training requested: stage={stage}"
+        )
+
+        # Create datasources for each stage
+        stage1_datasource = None
+        stage2_datasource = None
+        stage3_datasource = None
+
+        if stage1_data_dir is not None:
+            stage1_datasource = (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=FileSystem.collect_files(
+                        stage1_data_dir
+                    ),
+                    array_type="stage1",
+                    bit_pack=False,
+                    cache_mode=input_cache_mode.lower(),
+                )
+            )
+
+        if stage2_data_dir is not None:
+            stage2_datasource = (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=FileSystem.collect_files(
+                        stage2_data_dir
+                    ),
+                    array_type="stage2",
+                    bit_pack=False,
+                    cache_mode=input_cache_mode.lower(),
+                )
+            )
+
+        if stage3_data_dir is not None:
+            stage3_datasource = (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=FileSystem.collect_files(
+                        stage3_data_dir
+                    ),
+                    array_type=array_type,
+                    bit_pack=input_file_packed,
+                    cache_mode=input_cache_mode.lower(),
+                )
+            )
+
+        click.echo(
+            learn.learn_multi_stage(
+                stage=stage,
+                stage1_datasource=stage1_datasource,
+                stage2_datasource=stage2_datasource,
+                stage3_datasource=stage3_datasource,
+                stage1_threshold=stage1_threshold,
+                stage2_threshold=stage2_threshold,
+                stage1_max_epochs=stage1_max_epochs,
+                stage2_max_epochs=stage2_max_epochs,
+                gpu=gpu,
+                model_architecture=architecture_key,
+                batch_size=batch_size or 256,
+                learning_rate=learning_ratio or 0.001,
+                model_dir=model_dir,
+                resume_backbone_from=resume_backbone_from,
+                resume_reachable_head_from=resume_reachable_head_from,
+                resume_legal_moves_head_from=resume_legal_moves_head_from,
+            )
+        )
+    else:
+        # Standard single-stage training (existing behavior)
+        click.echo(
+            learn.learn(
+                datasource=datasource,
+                datasource_type=input_format,
+                gpu=gpu,
+                model_architecture=architecture_key,
+                compilation=compilation,
+                test_ratio=test_ratio,
+                epoch=epoch,
+                batch_size=batch_size,
+                dataloader_workers=dataloader_workers,
+                pin_memory=pin_memory,
+                prefetch_factor=prefetch_factor,
+                tensorboard_histogram_frequency=tensorboard_histogram_frequency,
+                tensorboard_histogram_modules=(
+                    tensorboard_histogram_modules or None
+                ),
+                cache_transforms=cache_transforms,
+                gce_parameter=gce_parameter,
+                policy_loss_ratio=policy_loss_ratio,
+                value_loss_ratio=value_loss_ratio,
+                learning_ratio=learning_ratio,
+                lr_scheduler=lr_scheduler,
+                momentum=momentum,
+                optimizer_name=optimizer,
+                optimizer_beta1=optimizer_beta1,
+                optimizer_beta2=optimizer_beta2,
+                optimizer_eps=optimizer_eps,
+                resume_from=resume_from,
+                start_epoch=start_epoch,
+                resume_backbone_from=resume_backbone_from,
+                resume_policy_head_from=resume_policy_head_from,
+                resume_value_head_from=resume_value_head_from,
+                freeze_backbone=freeze_backbone,
+                log_dir=log_dir,
+                model_dir=model_dir,
+                cloud_storage=cloud_storage,
+                input_cache_mode=input_cache_mode.lower(),
+                detect_anomaly=detect_anomaly,
+            )
+        )

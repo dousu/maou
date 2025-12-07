@@ -36,7 +36,10 @@ def _is_memory_allocation_error(error: DataIOError) -> bool:
     cause = getattr(error, "__cause__", None)
     if isinstance(cause, MemoryError):
         return True
-    if isinstance(cause, OSError) and cause.errno == errno.ENOMEM:
+    if (
+        isinstance(cause, OSError)
+        and cause.errno == errno.ENOMEM
+    ):
         return True
     return "Cannot allocate memory" in str(error)
 
@@ -51,7 +54,9 @@ class DataIOService:
     @staticmethod
     def load_array(
         file_path: Union[str, Path],
-        array_type: Literal["hcpe", "preprocessing"],
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
         *,
         mmap_mode: Optional[
             Literal["r", "r+", "w+", "c"]
@@ -65,7 +70,7 @@ class DataIOService:
 
         Args:
             file_path: Path to numpy file (.npy)
-            array_type: Type of array to load ("hcpe", "preprocessing")
+            array_type: Type of array to load ("hcpe", "preprocessing", "stage1", "stage2")
             mmap_mode: Memory mapping mode for .npy files
             preprocessing_mmap_mode: Default mmap mode for preprocessing arrays
             bit_pack: Whether to use bit packing compression for binary fields
@@ -76,9 +81,9 @@ class DataIOService:
         Raises:
             DataIOError: If loading fails
         """
-        effective_mmap_mode: Optional[Literal["r", "r+", "w+", "c"]] = (
-            mmap_mode
-        )
+        effective_mmap_mode: Optional[
+            Literal["r", "r+", "w+", "c"]
+        ] = mmap_mode
         if (
             array_type == "preprocessing"
             and effective_mmap_mode is None
@@ -97,6 +102,13 @@ class DataIOService:
                     file_path,
                     mmap_mode=effective_mmap_mode,
                     bit_pack=bit_pack,
+                )
+            if array_type in ("stage1", "stage2"):
+                # Stage1 and stage2 are simple structured arrays, load directly
+                return np.load(
+                    file_path,
+                    mmap_mode=effective_mmap_mode,
+                    allow_pickle=False,
                 )
 
             logger.error(

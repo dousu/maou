@@ -1,12 +1,12 @@
 import abc
 import logging
-from dataclasses import dataclass
 from collections.abc import Sized
+from dataclasses import dataclass
 from typing import Optional, cast
 
 import numpy as np
-from numpy.typing import DTypeLike
 import torch
+from numpy.typing import DTypeLike
 from torch.utils.data import Dataset
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
@@ -55,10 +55,14 @@ class KifDataset(Dataset, Sized):
         self.__datasource = datasource
         self.transform: Optional[Transform] = transform
         self.logger.info(f"{len(self.__datasource)} samples")
-        self._cached_samples: Optional[list[_CachedSample]] = None
+        self._cached_samples: Optional[list[_CachedSample]] = (
+            None
+        )
         self._cache_transforms_enabled: bool = False
 
-        should_cache = cache_transforms and self.transform is not None
+        should_cache = (
+            cache_transforms and self.transform is not None
+        )
         if cache_transforms and self.transform is None:
             self.logger.warning(
                 "cache_transforms is enabled but transform is None; skipping cache"
@@ -117,34 +121,46 @@ class KifDataset(Dataset, Sized):
             # torch.from_numpy()を使用してゼロコピー変換（read-onlyの場合はcopy()で回避）
             # Dataset内ではCUDA操作を避け、DataLoaderのpin_memory機能を活用
             if data.dtype.names is None:
-                raise ValueError("Preprocessed record lacks named fields")
+                raise ValueError(
+                    "Preprocessed record lacks named fields"
+                )
 
             if "boardIdPositions" not in data.dtype.names:
-                raise ValueError("Preprocessed record lacks boardIdPositions")
+                raise ValueError(
+                    "Preprocessed record lacks boardIdPositions"
+                )
 
             if "piecesInHand" not in data.dtype.names:
-                raise ValueError("Preprocessed record lacks piecesInHand")
+                raise ValueError(
+                    "Preprocessed record lacks piecesInHand"
+                )
 
             board_tensor = self._structured_field_to_tensor(
                 data,
                 field_name="boardIdPositions",
                 expected_dtype=np.uint8,
             )
-            pieces_in_hand_tensor = self._structured_field_to_tensor(
-                data,
-                field_name="piecesInHand",
-                expected_dtype=np.uint8,
+            pieces_in_hand_tensor = (
+                self._structured_field_to_tensor(
+                    data,
+                    field_name="piecesInHand",
+                    expected_dtype=np.uint8,
+                )
             )
-            move_label_tensor = self._structured_field_to_tensor(
-                data,
-                field_name="moveLabel",
-                expected_dtype=(np.float16, np.float32),
+            move_label_tensor = (
+                self._structured_field_to_tensor(
+                    data,
+                    field_name="moveLabel",
+                    expected_dtype=(np.float16, np.float32),
+                )
             )
             result_value_tensor = torch.tensor(
                 data["resultValue"].item(), dtype=torch.float32
             ).reshape((1))
 
-            legal_move_mask_tensor = torch.ones_like(move_label_tensor)
+            legal_move_mask_tensor = torch.ones_like(
+                move_label_tensor
+            )
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
@@ -156,9 +172,14 @@ class KifDataset(Dataset, Sized):
                     legal_move_mask_tensor,
                 ),
             )
-    def _create_cached_sample(self, *, data: np.ndarray) -> _CachedSample:
+
+    def _create_cached_sample(
+        self, *, data: np.ndarray
+    ) -> _CachedSample:
         if self.transform is None:
-            raise ValueError("Transform is required to cache samples")
+            raise ValueError(
+                "Transform is required to cache samples"
+            )
 
         (
             board_id_positions,
@@ -214,7 +235,9 @@ class KifDataset(Dataset, Sized):
     ) -> torch.Tensor:
         try:
             field = record[field_name]
-        except ValueError as exc:  # pragma: no cover - numpy raises ValueError
+        except (
+            ValueError
+        ) as exc:  # pragma: no cover - numpy raises ValueError
             msg = f"Preprocessed record lacks field `{field_name}`"
             raise ValueError(msg) from exc
 
@@ -244,7 +267,9 @@ class KifDataset(Dataset, Sized):
             expected_desc = (
                 expected_dtypes[0].name
                 if len(expected_dtypes) == 1
-                else " or ".join(dtype.name for dtype in expected_dtypes)
+                else " or ".join(
+                    dtype.name for dtype in expected_dtypes
+                )
             )
             msg = (
                 f"Field `{field_name}` must have dtype {expected_desc}, "
@@ -265,3 +290,155 @@ class KifDataset(Dataset, Sized):
             )
             raise ValueError(msg)
         return torch.from_numpy(np_array)
+
+
+class Stage1Dataset(Dataset, Sized):
+    """Dataset for Stage 1 (reachable squares) training.
+
+    This dataset is used for the first stage of multi-stage training，
+    where the model learns which board squares pieces can move to.
+    The target is a 9×9 binary map indicating reachable squares.
+    """
+
+    logger: logging.Logger = logging.getLogger(__name__)
+
+    def __init__(
+        self,
+        *,
+        datasource: DataSource,
+    ):
+        """Initialize Stage 1 dataset.
+
+        Args:
+            datasource: Data source providing Stage 1 training data
+                with schema defined by get_stage1_dtype()
+        """
+        self.__datasource = datasource
+        self.logger.info(
+            f"Stage 1 Dataset: {len(self.__datasource)} samples"
+        )
+
+    def __len__(self) -> int:
+        return len(self.__datasource)
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[
+        tuple[torch.Tensor, torch.Tensor],  # features
+        torch.Tensor,  # target
+    ]:
+        """Get a single training sample.
+
+        Args:
+            idx: Sample index
+
+        Returns:
+            Tuple of (features，target):
+                - features: (board_tensor，pieces_in_hand_tensor)
+                    - board_tensor: (9，9) uint8 tensor
+                    - pieces_in_hand_tensor: (14，) uint8 tensor
+                - target: (81，) float32 tensor of binary labels
+        """
+        data = self.__datasource[idx]
+
+        board_tensor = KifDataset._structured_field_to_tensor(
+            data,
+            field_name="boardIdPositions",
+            expected_dtype=np.uint8,
+        )
+        pieces_in_hand_tensor = (
+            KifDataset._structured_field_to_tensor(
+                data,
+                field_name="piecesInHand",
+                expected_dtype=np.uint8,
+            )
+        )
+        reachable_squares_tensor = (
+            KifDataset._structured_field_to_tensor(
+                data,
+                field_name="reachableSquares",
+                expected_dtype=np.uint8,
+            )
+            .flatten()
+            .float()
+        )  # (9，9) -> (81，) and convert to float for BCE
+
+        return (
+            (board_tensor, pieces_in_hand_tensor),
+            reachable_squares_tensor,
+        )
+
+
+class Stage2Dataset(Dataset, Sized):
+    """Dataset for Stage 2 (legal moves) training.
+
+    This dataset is used for the second stage of multi-stage training，
+    where the model learns which moves are legal in a given position.
+    The target is a 2187-dimensional binary vector indicating legal moves.
+    """
+
+    logger: logging.Logger = logging.getLogger(__name__)
+
+    def __init__(
+        self,
+        *,
+        datasource: DataSource,
+    ):
+        """Initialize Stage 2 dataset.
+
+        Args:
+            datasource: Data source providing Stage 2 training data
+                with schema defined by get_stage2_dtype()
+        """
+        self.__datasource = datasource
+        self.logger.info(
+            f"Stage 2 Dataset: {len(self.__datasource)} samples"
+        )
+
+    def __len__(self) -> int:
+        return len(self.__datasource)
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[
+        tuple[torch.Tensor, torch.Tensor],  # features
+        torch.Tensor,  # target
+    ]:
+        """Get a single training sample.
+
+        Args:
+            idx: Sample index
+
+        Returns:
+            Tuple of (features，target):
+                - features: (board_tensor，pieces_in_hand_tensor)
+                    - board_tensor: (9，9) uint8 tensor
+                    - pieces_in_hand_tensor: (14，) uint8 tensor
+                - target: (2187，) float32 tensor of binary labels
+        """
+        data = self.__datasource[idx]
+
+        board_tensor = KifDataset._structured_field_to_tensor(
+            data,
+            field_name="boardIdPositions",
+            expected_dtype=np.uint8,
+        )
+        pieces_in_hand_tensor = (
+            KifDataset._structured_field_to_tensor(
+                data,
+                field_name="piecesInHand",
+                expected_dtype=np.uint8,
+            )
+        )
+        legal_moves_tensor = (
+            KifDataset._structured_field_to_tensor(
+                data,
+                field_name="legalMovesLabel",
+                expected_dtype=np.uint8,
+            ).float()
+        )  # Convert to float for BCE loss
+
+        return (
+            (board_tensor, pieces_in_hand_tensor),
+            legal_moves_tensor,
+        )

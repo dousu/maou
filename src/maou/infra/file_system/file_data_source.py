@@ -33,7 +33,9 @@ class FileDataSource(
         def __init__(
             self,
             file_paths: list[Path],
-            array_type: Literal["hcpe", "preprocessing"],
+            array_type: Literal[
+                "hcpe", "preprocessing", "stage1", "stage2"
+            ],
             bit_pack: bool = False,
             cache_mode: "FileDataSource.CacheMode" = "mmap",
             preprocessing_mmap_mode: Optional[
@@ -87,7 +89,9 @@ class FileDataSource(
 
     class FileManager:
         logger: logging.Logger = logging.getLogger(__name__)
-        array_type: Literal["hcpe", "preprocessing"]
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ]
 
         @dataclass
         class _FileEntry:
@@ -101,7 +105,9 @@ class FileDataSource(
         def __init__(
             self,
             file_paths: list[Path],
-            array_type: Literal["hcpe", "preprocessing"],
+            array_type: Literal[
+                "hcpe", "preprocessing", "stage1", "stage2"
+            ],
             bit_pack: bool,
             cache_mode: "FileDataSource.CacheMode" = "mmap",
             preprocessing_mmap_mode: Optional[
@@ -112,7 +118,7 @@ class FileDataSource(
 
             Args:
                 file_paths (list[Path]): npyファイルのリスト
-                array_type (Literal["hcpe", "preprocessing"]): 配列のタイプ ("hcpe" または "preprocessing")
+                array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): 配列のタイプ
                 bit_pack (bool): ビットパッキングを使用するかどうか
                 cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
                 preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
@@ -163,7 +169,8 @@ class FileDataSource(
                             file_path,
                             mmap_mode=(
                                 "r"
-                                if self.array_type == "hcpe"
+                                if self.array_type
+                                in ("hcpe", "stage1", "stage2")
                                 else None
                             ),
                             array_type=self.array_type,
@@ -518,7 +525,7 @@ class FileDataSource(
         file_manager: Optional[FileManager] = None,
         indicies: Optional[list[int]] = None,
         array_type: Optional[
-            Literal["hcpe", "preprocessing"]
+            Literal["hcpe", "preprocessing", "stage1", "stage2"]
         ] = None,
         bit_pack: bool = True,
         cache_mode: CacheMode = "mmap",
@@ -532,7 +539,7 @@ class FileDataSource(
             file_paths (list[Path]): npyファイルのリスト
             file_manager (Optional[FileManager]): FileManager
             indicies (Optional[list[int]]): 選択可能なインデックスのリスト
-            array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
+            array_type (Optional[Literal["hcpe", "preprocessing", "stage1", "stage2"]]): 配列のタイプ
             bit_pack (bool): ビットパッキングを使用するかどうか
             cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
             preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード

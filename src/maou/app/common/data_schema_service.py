@@ -9,6 +9,8 @@ from maou.domain.data.schema import (
     get_hcpe_dtype,
     get_packed_preprocessing_dtype,
     get_preprocessing_dtype,
+    get_stage1_dtype,
+    get_stage2_dtype,
     numpy_dtype_to_bigquery_type,
 )
 
@@ -39,7 +41,9 @@ class DataSchemaService:
     @staticmethod
     def get_dtype(
         *,
-        array_type: Literal["hcpe", "preprocessing"],
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
         bit_pack: bool,
     ) -> np.dtype:
         if array_type == "hcpe":
@@ -48,6 +52,10 @@ class DataSchemaService:
             if bit_pack:
                 return get_packed_preprocessing_dtype()
             return get_preprocessing_dtype()
+        elif array_type == "stage1":
+            return get_stage1_dtype()
+        elif array_type == "stage2":
+            return get_stage2_dtype()
         else:
             logger.error(f"Unknown array type '{array_type}'")
             raise ValueError(

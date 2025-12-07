@@ -25,7 +25,9 @@ def load_array(
     preprocessing_mmap_mode: Optional[
         Literal["r", "r+", "w+", "c"]
     ] = "c",
-    array_type: Literal["hcpe", "preprocessing"],
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
     bit_pack: bool = True,
 ) -> np.ndarray:
     """Load numpy array from file with automatic schema handling.
@@ -38,7 +40,7 @@ def load_array(
         file_path: Path to numpy file (.npy)
         mmap_mode: Memory mapping mode for .npy files ('r', 'r+', 'w+', 'c')
         preprocessing_mmap_mode: Default mmap mode for preprocessing arrays
-        array_type: Expected array type ("hcpe", "preprocessing")
+        array_type: Expected array type ("hcpe", "preprocessing", "stage1", "stage2")
 
     Returns:
         numpy.ndarray: Loaded array
@@ -49,7 +51,12 @@ def load_array(
     Example:
         >>> data = load_array("data.npy", mmap_mode="r", array_type="hcpe")
     """
-    if array_type not in ["hcpe", "preprocessing"]:
+    if array_type not in [
+        "hcpe",
+        "preprocessing",
+        "stage1",
+        "stage2",
+    ]:
         raise ValueError(f"Unknown array type: {array_type}")
 
     return DataIOService.load_array(
