@@ -23,6 +23,36 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - **Interface Layer**: Adapters between app and infrastructure
 - **Infrastructure Layer**: External systems (cloud storage, databases, logging)
 
+### Data Pipeline Architecture (NEW: Polars + Rust)
+
+**Modern Data Stack:**
+- **Data Format**: Arrow IPC (.feather) with LZ4 compression
+- **Data Processing**: Polars DataFrames for efficient operations
+- **I/O Backend**: Rust (PyO3 + maturin) for high-performance file I/O
+- **Legacy Support**: Existing numpy .npy format still supported
+
+**Benefits:**
+- **Performance**: 2.9-8.0x faster data loading with Polars + Rust backend
+- **Compression**: LZ4 compression reduces storage by 30x on HCPE game data
+- **Memory Efficiency**: Zero-copy conversions between Polars and Arrow
+- **Modern API**: Polars expressions for readable data transformations
+- **Type Safety**: Full type stubs generated with pyo3-stub-gen
+
+**Performance Benchmarks (50,000 records):**
+
+| Data Type | Metric | Numpy (.npy) | Polars + Rust (.feather) | Improvement |
+|-----------|--------|--------------|--------------------------|-------------|
+| **HCPE** | Load time | 0.0316s | 0.0108s | **2.92x faster** |
+| | File size | 29.90 MB | 1.00 MB | **29.78x compression** |
+| **Preprocessing** | Load time | 0.8754s | 0.1092s | **8.02x faster** |
+| | File size | 147.68 MB | 287.95 MB | 0.51x (random data) |
+
+**Key Findings:**
+- **Read performance**: 3-8x faster loading for training workflows
+- **Storage efficiency**: 30x compression on real game data (HCPE format)
+- **Preprocessing data**: 8x faster loading despite larger file size
+- **Write performance**: Slightly slower due to compression (acceptable tradeoff)
+
 ## Core Development Rules
 
 ### Package Management
@@ -101,6 +131,379 @@ poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run is
 poetry run bash scripts/pre-commit.sh    # Install hooks
 poetry run pre-commit run --all-files    # Run manually
 ```
+
+## Rust Backend Development
+
+### Overview
+
+The project uses Rust for high-performance I/O operations with Arrow IPC format．
+Rust code is located in `rust/maou_io/` and integrated via PyO3 + maturin．
+
+### Initial Rust Setup
+
+```bash
+# Install Rust toolchain (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# Build Rust extension (automatically done during poetry install)
+poetry install
+
+# Verify Rust backend
+poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+# Expected output: "Maou I/O Rust backend initialized"
+```
+
+### Development Workflow
+
+```bash
+# After modifying Rust code
+poetry run maturin develop  # Rebuild extension
+
+# Run Rust tests
+cargo test --manifest-path rust/maou_io/Cargo.toml
+
+# Format Rust code
+cargo fmt --manifest-path rust/maou_io/Cargo.toml
+
+# Lint Rust code
+cargo clippy --manifest-path rust/maou_io/Cargo.toml
+```
+
+### Rust Project Structure
+
+```
+rust/maou_io/
+├── Cargo.toml          # Crate configuration
+├── src/
+│   ├── lib.rs         # PyO3 module entry point
+│   ├── arrow_io.rs    # Arrow IPC I/O implementation
+│   ├── schema.rs      # Arrow schema definitions
+│   └── error.rs       # Error types
+└── benches/           # Performance benchmarks (future)
+```
+
+### Using Polars + Rust I/O
+
+**Basic Usage:**
+
+```python
+import polars as pl
+from maou.domain.data.array_io import save_hcpe_df, load_hcpe_df
+from maou.domain.data.schema import get_hcpe_polars_schema
+
+# Create DataFrame
+schema = get_hcpe_polars_schema()
+df = pl.DataFrame(data, schema=schema)
+
+# Save to .feather file (Rust backend)
+save_hcpe_df(df, "output.feather")
+
+# Load from .feather file
+loaded_df = load_hcpe_df("output.feather")
+```
+
+**HCPE Converter (Polars version):**
+
+```python
+from maou.app.converter.hcpe_converter import HCPEConverter
+
+converter = HCPEConverter()
+
+# Use new Polars-based method
+result = HCPEConverter._process_single_file_polars(
+    file=Path("game.csa"),
+    input_format="csa",
+    output_dir=Path("output/"),
+    min_rating=None,
+    min_moves=None,
+    max_moves=None,
+    allowed_endgame_status=None,
+    exclude_moves=None,
+)
+# Output: .feather file instead of .npy
+```
+
+**Preprocessing Data I/O (Polars version):**
+
+```python
+import polars as pl
+from maou.domain.data.array_io import (
+    save_preprocessing_df,
+    load_preprocessing_df,
+)
+from maou.domain.data.schema import get_preprocessing_polars_schema
+from maou.app.pre_process.label import MOVE_LABELS_NUM
+
+# Create preprocessing DataFrame
+schema = get_preprocessing_polars_schema()
+
+# Example data structure
+data = {
+    "id": [12345, 67890],
+    "boardIdPositions": [
+        [[i for i in range(9)] for _ in range(9)],  # 9x9 board
+        [[i * 2 for i in range(9)] for _ in range(9)],
+    ],
+    "piecesInHand": [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],  # 14 pieces
+        [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    ],
+    "moveLabel": [
+        [0.0] * MOVE_LABELS_NUM,  # 2187 move labels
+        [0.5] * MOVE_LABELS_NUM,
+    ],
+    "resultValue": [0.0, 0.5],
+}
+
+df = pl.DataFrame(data, schema=schema)
+
+# Save to .feather file (Rust backend with zero-copy Arrow conversion)
+save_preprocessing_df(df, "preprocessed.feather")
+
+# Load from .feather file
+loaded_df = load_preprocessing_df("preprocessed.feather")
+
+# DataFrame operations with Polars
+filtered_df = loaded_df.filter(pl.col("resultValue") > 0.3)
+```
+
+**Intermediate Data (Polars schema available):**
+
+```python
+from maou.domain.data.schema import (
+    get_intermediate_polars_schema,
+    create_empty_intermediate_df,
+)
+
+# Intermediate data schema (for future Polars-based aggregation)
+schema = get_intermediate_polars_schema()
+# Fields: id, boardIdPositions, piecesInHand, count, moveLabelCount, winCount
+
+# Create empty DataFrame with proper schema
+df = create_empty_intermediate_df(size=1000)
+```
+
+**Data Format Summary:**
+
+| Data Type | numpy dtype | Polars Schema | File Format | Rust Backend |
+|-----------|-------------|---------------|-------------|--------------|
+| HCPE | `get_hcpe_dtype()` | `get_hcpe_polars_schema()` | .feather | ✅ |
+| Preprocessing | `get_preprocessing_dtype()` | `get_preprocessing_polars_schema()` | .feather | ✅ |
+| Intermediate | `get_intermediate_dtype()` | `get_intermediate_polars_schema()` | (SQLite DB) | N/A |
+
+**DataSource with Polars DataFrames (Phase 4):**
+
+All DataSource implementations now support iterating as Polars DataFrames via `iter_batches_df()`:
+
+```python
+from maou.infra.file_system.file_data_source import FileDataSource
+import polars as pl
+
+# Create DataSource with .feather files (direct DataFrame loading)
+datasource = FileDataSource(
+    file_paths=[Path("data1.feather"), Path("data2.feather")],
+    array_type="hcpe",
+    cache_mode="mmap",
+)
+
+# Iterate as DataFrames (most efficient for .feather files)
+for name, df in datasource.iter_batches_df():
+    print(f"Batch: {name}, Records: {len(df)}")
+    # Process DataFrame with Polars operations
+    filtered = df.filter(pl.col("eval") > 100)
+    high_value = df.filter(pl.col("resultValue") > 0.7)
+
+# Also works with legacy .npy files (automatic conversion)
+legacy_datasource = FileDataSource(
+    file_paths=[Path("legacy_data.npy")],
+    array_type="hcpe",
+    cache_mode="mmap",
+)
+
+# Converts numpy arrays to DataFrames automatically
+for name, df in legacy_datasource.iter_batches_df():
+    # Same DataFrame interface regardless of file format
+    print(df.schema)
+```
+
+**Cloud Storage DataSource with Polars:**
+
+```python
+from maou.infra.s3.s3_data_source import S3DataSource
+from maou.infra.gcs.gcs_data_source import GCSDataSource
+
+# S3 DataSource
+s3_datasource = S3DataSource(
+    bucket_name="my-bucket",
+    prefix="training-data",
+    data_name="hcpe-202412",
+    local_cache_dir="./cache",
+    array_type="hcpe",
+    max_workers=16,
+    enable_bundling=True,
+    bundle_size_gb=1.5,
+)
+
+# Iterate as DataFrames (downloads + converts)
+for name, df in s3_datasource.iter_batches_df():
+    # Process cloud data as DataFrames
+    aggregated = df.group_by("id").agg(pl.col("eval").mean())
+
+# GCS DataSource (same interface)
+gcs_datasource = GCSDataSource(
+    bucket_name="my-gcs-bucket",
+    prefix="training-data",
+    data_name="preprocessing-202412",
+    local_cache_dir="./cache",
+    array_type="preprocessing",
+)
+
+for name, df in gcs_datasource.iter_batches_df():
+    # DataFrame operations work identically
+    print(df.describe())
+```
+
+**Performance Comparison:**
+
+| File Format | iter_batches() | iter_batches_df() | Notes |
+|-------------|----------------|-------------------|-------|
+| `.feather` | ❌ Not supported | ✅ Zero-copy load | Most efficient |
+| `.npy` | ✅ mmap/memory | ✅ Auto-convert | Conversion overhead |
+| Cloud (cached) | ✅ numpy arrays | ✅ Auto-convert | Same as .npy |
+
+**Recommendation:** Use `.feather` files for new data pipelines to take advantage of direct DataFrame loading.
+
+**PyTorch Dataset with Polars DataFrames (Phase 5):**
+
+The project now supports using Polars DataFrames directly with PyTorch Dataset and DataLoader:
+
+```python
+import polars as pl
+from torch.utils.data import DataLoader
+
+from maou.app.learning.polars_datasource import PolarsDataFrameSource
+from maou.app.learning.dataset import KifDataset
+from maou.domain.data.rust_io import load_preprocessing_df
+
+# Load preprocessing data as Polars DataFrame
+df = load_preprocessing_df("training_data.feather")
+
+# Create Polars-backed DataSource
+datasource = PolarsDataFrameSource(
+    dataframe=df,
+    array_type="preprocessing",
+)
+
+# Use with existing KifDataset (no code changes needed!)
+dataset = KifDataset(
+    datasource=datasource,
+    transform=None,  # Preprocessing data doesn't need transform
+    cache_transforms=False,
+)
+
+# Create DataLoader as usual
+dataloader = DataLoader(
+    dataset,
+    batch_size=256,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=True,
+)
+
+# Training loop works identically
+for features, targets in dataloader:
+    board, pieces = features
+    move_label, result_value, legal_move_mask = targets
+    # ... training code ...
+```
+
+**Benefits of Polars Dataset:**
+
+1. **Zero-Copy Efficiency**: Direct conversion from Polars → numpy → PyTorch tensors
+2. **Memory Efficient**: Polars DataFrames use less memory than numpy structured arrays
+3. **Modern API**: Leverage Polars for data filtering/preprocessing before training
+4. **Compatible**: Works with existing Dataset and DataLoader code without changes
+
+**Complete Training Pipeline with Polars:**
+
+```python
+import polars as pl
+from pathlib import Path
+from torch.utils.data import DataLoader
+
+from maou.infra.file_system.file_data_source import FileDataSource
+from maou.app.learning.polars_datasource import PolarsDataFrameSource
+from maou.app.learning.dataset import KifDataset
+from maou.app.learning.training_loop import TrainingLoop
+
+# 1. Load data as DataFrames from .feather files
+file_datasource = FileDataSource(
+    file_paths=list(Path("data/").glob("*.feather")),
+    array_type="preprocessing",
+    cache_mode="memory",  # Load all into RAM
+)
+
+# 2. Collect all DataFrames into one
+dataframes = []
+for name, df in file_datasource.iter_batches_df():
+    dataframes.append(df)
+
+full_df = pl.concat(dataframes)
+
+# 3. Optional: Filter/preprocess with Polars
+filtered_df = full_df.filter(
+    (pl.col("resultValue") > 0.3) &  # High-value positions
+    (pl.col("id") % 10 != 0)  # 90% for training
+)
+
+# 4. Create training dataset
+train_datasource = PolarsDataFrameSource(
+    dataframe=filtered_df,
+    array_type="preprocessing",
+)
+
+train_dataset = KifDataset(
+    datasource=train_datasource,
+    transform=None,
+)
+
+# 5. Create DataLoader
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=256,
+    shuffle=True,
+    num_workers=8,
+    pin_memory=True,
+)
+
+# 6. Train model
+training_loop = TrainingLoop(...)
+training_loop.train(train_loader, ...)
+```
+
+**Supported Data Types:**
+
+| array_type | Schema | Dataset Class | Status |
+|------------|--------|---------------|--------|
+| `"preprocessing"` | Full training data | `KifDataset` | ✅ Tested |
+| `"stage1"` | Reachable squares | `Stage1Dataset` | ✅ Compatible |
+| `"stage2"` | Legal moves | `Stage2Dataset` | ✅ Compatible |
+| `"hcpe"` | Game records | `KifDataset` (with transform) | ✅ Compatible |
+
+### File Format Migration
+
+**Legacy Format:**
+- Extension: `.npy`
+- Backend: numpy binary format
+- Size: Uncompressed
+
+**New Format:**
+- Extension: `.feather`
+- Backend: Arrow IPC (Rust)
+- Size: LZ4 compressed (2-3x compression on typical game data)
+
+**Note**: Both formats are currently supported．Gradual migration recommended．
 
 ## Environment Setup
 
@@ -219,6 +622,11 @@ poetry run maou learn-model \
 
 ### 5. Performance Optimization
 ```bash
+# Benchmark Polars + Rust I/O performance
+poetry run python -m maou.app.utility.benchmark_polars_io \
+  --num-records 50000 \
+  --output-dir /tmp/benchmark
+
 # Benchmark DataLoader configurations
 poetry run maou utility benchmark-dataloader \
   --input-dir /path/to/processed \

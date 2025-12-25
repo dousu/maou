@@ -1,0 +1,16 @@
+[package]
+name = "maou_io"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "maou_io"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+arrow = { workspace = true, features = ["pyarrow"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

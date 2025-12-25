@@ -3,18 +3,25 @@ import contextlib
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
 
 import numpy as np
+import polars as pl
 from tqdm.auto import tqdm
 
 from maou.domain.board import shogi
 from maou.domain.data.array_io import (
     load_hcpe_array,
     save_hcpe_array,
+    save_hcpe_df,
+    RUST_BACKEND_AVAILABLE,
 )
-from maou.domain.data.schema import create_empty_hcpe_array
+from maou.domain.data.schema import (
+    create_empty_hcpe_array,
+    get_hcpe_polars_schema,
+)
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
 from maou.domain.parser.parser import Parser
@@ -234,6 +241,185 @@ class HCPEConverter:
                 output_dir / file.with_suffix(".npy").name,
             )
             return (str(file), f"success {idx + 1} rows")
+
+        except Exception as e:
+            logger.error(f"Error processing file {file}: {e}")
+            return (str(file), f"error: {str(e)}")
+
+    @staticmethod
+    def _process_single_file_polars(
+        file: Path,
+        input_format: str,
+        output_dir: Path,
+        min_rating: Optional[int],
+        min_moves: Optional[int],
+        max_moves: Optional[int],
+        allowed_endgame_status: Optional[list[str]],
+        exclude_moves: Optional[list[int]],
+    ) -> tuple[str, str]:
+        """Process a single file using Polars DataFrames (NEW)．
+
+        This is the new Polars-based implementation that outputs .feather files.
+        """
+        logger = logging.getLogger(__name__)
+
+        def game_filter(
+            parser: Parser,
+            min_rating: Optional[int] = None,
+            min_moves: Optional[int] = None,
+            max_moves: Optional[int] = None,
+            allowed_endgame_status: Optional[list[str]] = None,
+        ) -> bool:
+            """指定された条件を満たす場合Trueを返す"""
+            moves: int = len(parser.moves())
+            if (
+                (
+                    min_rating is not None
+                    and min(parser.ratings()) < min_rating
+                )
+                or (min_moves is not None and moves < min_moves)
+                or (max_moves is not None and moves > max_moves)
+                or (
+                    allowed_endgame_status is not None
+                    and not len(allowed_endgame_status) == 0
+                    and parser.endgame()
+                    not in allowed_endgame_status
+                )
+            ):
+                return False
+            return True
+
+        try:
+            parser: Parser
+            if input_format == "csa":
+                parser = CSAParser()
+                parser.parse(file.read_text())
+            elif input_format == "kif":
+                parser = KifParser()
+                parser.parse(file.read_text())
+            else:
+                raise NotApplicableFormat(
+                    f"undefined format {input_format}"
+                )
+
+            logger.debug(
+                f"棋譜:{file} "
+                f"終局状況:{parser.endgame()} "
+                f"レーティング:{parser.ratings()} "
+                f"手数:{len(parser.moves())}"
+            )
+
+            # 指定された条件を満たしたら変換をスキップ
+            if not game_filter(
+                parser,
+                min_rating,
+                min_moves,
+                max_moves,
+                allowed_endgame_status,
+            ):
+                logger.debug(f"skip the file {file}")
+                return (str(file), "skipped")
+
+            # movesの数が0であればそもそもHCPEは作れないのでスキップ
+            if len(parser.moves()) == 0:
+                logger.debug(
+                    f"skip the file {file} because of no moves"
+                )
+                return (str(file), "skipped (no moves)")
+
+            # Polars用にデータをリストで収集
+            hcpe_data = {
+                "hcp": [],
+                "eval": [],
+                "bestMove16": [],
+                "gameResult": [],
+                "id": [],
+                "partitioningKey": [],
+                "ratings": [],
+                "endgameStatus": [],
+                "moves": [],
+            }
+
+            board = shogi.Board()
+            board.set_sfen(parser.init_pos_sfen())
+
+            # 棋譜共通情報を取得する
+            partitioning_key_value = (
+                parser.partitioning_key_value()
+            )
+            ratings = parser.ratings()
+            endgame = parser.endgame()
+            moves = len(parser.moves())
+
+            # 1手毎に代わる情報を取得する
+            for idx, (move, score, comment) in enumerate(
+                zip(
+                    parser.moves(),
+                    parser.scores(),
+                    parser.comments(),
+                )
+            ):
+                logger.debug(f"{move} : {score} : {comment}")
+
+                if move < 0 or move > 16777215:
+                    raise IllegalMove(
+                        f"moveの値が想定外 path: {file}"
+                    )
+
+                if (
+                    exclude_moves is not None
+                    and move in exclude_moves
+                ):
+                    logger.info(
+                        f"skip the move {move} in {file} at {idx + 1}. "
+                        f"exclude moves: {exclude_moves}"
+                    )
+                    continue
+
+                # HCP (Huffman Coded Position)
+                hcp_bytes = bytearray(32)
+                board.to_hcp(hcp_bytes)
+                hcpe_data["hcp"].append(bytes(hcp_bytes))
+
+                # 評価値（16bitに収める）
+                eval = min(32767, max(score, -32767))
+                # 手番側の評価値にする
+                if board.get_turn() == shogi.Turn.BLACK:
+                    hcpe_data["eval"].append(eval)
+                else:
+                    hcpe_data["eval"].append(-eval)
+
+                # moveは32bitになっているので16bitに変換する
+                hcpe_data["bestMove16"].append(shogi.move16(move))
+                hcpe_data["gameResult"].append(parser.winner())
+                hcpe_data["id"].append(
+                    f"{file.with_suffix('.hcpe').name}_{idx}"
+                )
+
+                # 棋譜共通情報を記録
+                hcpe_data["partitioningKey"].append(
+                    datetime.fromisoformat(
+                        partitioning_key_value.isoformat()
+                    ).date()
+                )
+                hcpe_data["ratings"].append(list(ratings))
+                hcpe_data["endgameStatus"].append(endgame)
+                hcpe_data["moves"].append(moves)
+
+                # 局面に指し手を反映させる
+                board.push_move(move)
+
+            # Polars DataFrameを作成
+            df = pl.DataFrame(
+                hcpe_data, schema=get_hcpe_polars_schema()
+            )
+
+            # ファイルを保存（.feather形式）
+            save_hcpe_df(
+                df,
+                output_dir / file.with_suffix(".feather").name,
+            )
+            return (str(file), f"success {len(df)} rows (Polars)")
 
         except Exception as e:
             logger.error(f"Error processing file {file}: {e}")

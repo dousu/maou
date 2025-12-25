@@ -47,6 +47,8 @@ class DataSource:
 
     Provides iteration over batches of HCPE data for processing
     into neural network training features.
+
+    Supports both numpy arrays (legacy) and Polars DataFrames (modern).
     """
 
     @abc.abstractmethod
@@ -57,7 +59,55 @@ class DataSource:
     def iter_batches(
         self,
     ) -> Generator[tuple[str, np.ndarray], None, None]:
+        """Iterate over batches as numpy structured arrays (legacy)．
+
+        Yields:
+            tuple[str, np.ndarray]: (batch_name, numpy_array)
+        """
         pass
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+        """Iterate over batches as Polars DataFrames (modern)．
+
+        Default implementation converts numpy arrays to DataFrames．
+        Subclasses can override for more efficient implementations．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for DataFrame iteration. "
+                "Install with: poetry add polars"
+            )
+
+        from maou.domain.data.schema import get_hcpe_polars_schema
+
+        schema = get_hcpe_polars_schema()
+
+        # Default: convert numpy arrays to DataFrames
+        import numpy as np
+
+        for name, array in self.iter_batches():
+            # Convert structured array to dict of lists
+            data = {}
+            for field in array.dtype.names:
+                field_data = array[field]
+                field_dtype = array.dtype.fields[field][0]
+
+                # Handle binary fields (convert uint8 arrays to bytes)
+                if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                    # Multi-dimensional uint8 field like hcp - convert to bytes
+                    data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                else:
+                    data[field] = field_data.tolist()
+
+            df = pl.DataFrame(data, schema=schema)
+            yield name, df
 
     @abc.abstractmethod
     def total_pages(self) -> int:

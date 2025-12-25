@@ -761,3 +761,56 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
         compressed_array[i]["piecesInHand"] = pieces_in_hand
 
     return compressed_array
+
+
+# ============================================================================
+# Polars DataFrame I/O Functions (Rust Backend)
+# ============================================================================
+
+# Re-export Polars I/O functions from rust_io module for convenience
+# This allows users to import from array_io directly:
+#   from maou.domain.data.array_io import save_hcpe_df, load_hcpe_df
+
+try:
+    from maou.domain.data.rust_io import (
+        save_hcpe_df,
+        load_hcpe_df,
+        save_preprocessing_df,
+        load_preprocessing_df,
+        RUST_BACKEND_AVAILABLE,
+    )
+
+    __all__ = [
+        # Legacy numpy functions
+        "save_hcpe_array",
+        "load_hcpe_array",
+        "save_preprocessing_array",
+        "load_preprocessing_array",
+        "save_hcpe_array_to_buffer",
+        "load_hcpe_array_from_buffer",
+        "save_preprocessing_array_to_buffer",
+        "load_preprocessing_array_from_buffer",
+        # New Polars functions
+        "save_hcpe_df",
+        "load_hcpe_df",
+        "save_preprocessing_df",
+        "load_preprocessing_df",
+        "RUST_BACKEND_AVAILABLE",
+    ]
+except ImportError as e:
+    logger.warning(
+        f"Rust backend not available, Polars I/O functions disabled: {e}"
+    )
+    RUST_BACKEND_AVAILABLE = False
+
+    __all__ = [
+        # Legacy numpy functions only
+        "save_hcpe_array",
+        "load_hcpe_array",
+        "save_preprocessing_array",
+        "load_preprocessing_array",
+        "save_hcpe_array_to_buffer",
+        "load_hcpe_array_from_buffer",
+        "save_preprocessing_array_to_buffer",
+        "load_preprocessing_array_from_buffer",
+    ]

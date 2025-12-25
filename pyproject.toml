@@ -15,6 +15,7 @@ dependencies = [
     "numpy>=1.19.0",
     "google-crc32c>=1.6.0",
     "psutil>=6.0.0",
+    "polars>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -82,6 +83,13 @@ maou = "maou.infra.console.app:main"
 [tool.poetry]
 packages = [{include = "maou", from = "src"}]
 
+[tool.maturin]
+python-source = "src"
+module-name = "maou._rust.maou_io"
+manifest-path = "rust/maou_io/Cargo.toml"
+binding = "pyo3"
+features = ["pyo3/extension-module"]
+
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.3.0"
 flake8 = "^7.2.0"
@@ -99,6 +107,7 @@ boto3 = "^1.40.54"
 autopep8 = "^2.3.2"
 yapf = "^0.43.0"
 netron = "^8.6.8"
+maturin = "^1.7.0"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -109,8 +118,8 @@ update_changelog_on_bump = true
 major_version_zero = true
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [tool.pytest.ini_options]
 addopts = [

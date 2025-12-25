@@ -888,3 +888,225 @@ def convert_record_from_packed_format(
 HCPE_DTYPE = get_hcpe_dtype()
 PREPROCESSING_DTYPE = get_preprocessing_dtype()
 PACKED_PREPROCESSING_DTYPE = get_packed_preprocessing_dtype()
+
+
+# ============================================================================
+# Polars Schema Definitions
+# ============================================================================
+
+
+try:
+    import polars as pl
+
+    POLARS_AVAILABLE = True
+except ImportError:
+    POLARS_AVAILABLE = False
+
+
+def get_hcpe_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for HCPE format．
+
+    HCPEフォーマット用のPolarsスキーマを返す．
+    Feather形式での保存時にはArrowのFixed-sizeスキーマが使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    return {
+        "hcp": pl.Binary,  # 32-byte fixed in Arrow
+        "eval": pl.Int16,
+        "bestMove16": pl.Int16,
+        "gameResult": pl.Int8,
+        "id": pl.Utf8,
+        "partitioningKey": pl.Date,
+        "ratings": pl.List(pl.UInt16),  # Fixed size 2 in Arrow
+        "endgameStatus": pl.Utf8,
+        "moves": pl.Int16,
+    }
+
+
+def get_preprocessing_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for preprocessing format．
+
+    前処理済みデータ用のPolarsスキーマを返す．
+    学習用の特徴量データ（盤面，持ち駒，指し手ラベル，結果値）を含む．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    return {
+        "id": pl.UInt64,
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board (fixed in Arrow)
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements (fixed in Arrow)
+        "moveLabel": pl.List(
+            pl.Float32
+        ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
+        "resultValue": pl.Float32,
+    }
+
+
+def create_empty_hcpe_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty HCPE DataFrame with proper schema．
+
+    指定されたサイズの空のHCPE DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: HCPEスキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_hcpe_df(100)
+        >>> len(df)
+        100
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    schema = get_hcpe_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    # Create DataFrame with null values
+    return pl.DataFrame(
+        {
+            col: pl.Series(values=[], dtype=dtype).extend_constant(
+                None, size
+            )
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def get_intermediate_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for intermediate data format．
+
+    中間データ用のPolarsスキーマを返す．
+    前処理の中間段階で使用される集計データ（盤面ごとの統計情報）を含む．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    return {
+        "id": pl.UInt64,  # Board hash
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board (fixed in Arrow)
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements (fixed in Arrow)
+        "count": pl.Int32,  # Number of occurrences
+        "moveLabelCount": pl.List(
+            pl.Int32
+        ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
+        "winCount": pl.Float32,  # Sum of win values
+    }
+
+
+def create_empty_intermediate_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty intermediate DataFrame with proper schema．
+
+    指定されたサイズの空の中間DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: 中間データスキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_intermediate_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    schema = get_intermediate_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(values=[], dtype=dtype).extend_constant(
+                None, size
+            )
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def create_empty_preprocessing_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty preprocessing DataFrame with proper schema．
+
+    指定されたサイズの空の前処理済みDataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: 前処理スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_preprocessing_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    schema = get_preprocessing_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(values=[], dtype=dtype).extend_constant(
+                None, size
+            )
+            for col, dtype in schema.items()
+        }
+    )

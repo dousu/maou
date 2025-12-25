@@ -1,0 +1,9 @@
+[workspace]
+members = ["rust/maou_io"]
+resolver = "2"
+
+[workspace.dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+arrow = { version = "53.0", features = ["ipc", "ipc_compression", "prettyprint", "pyarrow"] }
+thiserror = "2.0"
+tempfile = "3.0"

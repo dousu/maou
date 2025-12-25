@@ -155,6 +155,48 @@ class FileDataSource(
             lengths = []
             for file_path in self.file_paths:
                 try:
+                    # .feather files are handled separately (Arrow IPC format)
+                    if file_path.suffix == ".feather":
+                        # Load feather file to get length
+                        # We'll import only when needed to avoid circular imports
+                        try:
+                            import polars as pl
+                            from maou.domain.data.rust_io import (
+                                load_hcpe_df,
+                                load_preprocessing_df,
+                            )
+
+                            if self.array_type == "hcpe":
+                                df = load_hcpe_df(file_path)
+                            elif self.array_type == "preprocessing":
+                                df = load_preprocessing_df(file_path)
+                            else:
+                                raise ValueError(
+                                    f"Unsupported array_type for .feather: {self.array_type}"
+                                )
+
+                            array_length = len(df)
+                            # Store DataFrame directly (will be used in iter_batches_df)
+                            self._file_entries.append(
+                                FileDataSource.FileManager._FileEntry(
+                                    name=file_path.name,
+                                    path=file_path,
+                                    dtype=object,  # Placeholder
+                                    length=array_length,
+                                    memmap=None,
+                                    cached_array=df,  # type: ignore # Store DataFrame
+                                )
+                            )
+                            lengths.append(array_length)
+                            continue  # Skip numpy array processing
+
+                        except ImportError:
+                            raise ImportError(
+                                "polars and rust backend required for .feather files. "
+                                "Install with: poetry install"
+                            )
+
+                    # Load numpy arrays (.npy files)
                     if (
                         self.bit_pack
                         and self.array_type == "preprocessing"
@@ -598,3 +640,92 @@ class FileDataSource(
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__file_manager.iter_batches():
             yield name, batch
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+        """Iterate over batches as Polars DataFrames．
+
+        Optimized implementation that loads .feather files directly as DataFrames
+        when available，or converts numpy arrays otherwise．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for DataFrame iteration. "
+                "Install with: poetry add polars"
+            )
+
+        from maou.domain.data.schema import (
+            get_hcpe_polars_schema,
+            get_preprocessing_polars_schema,
+        )
+
+        schema = (
+            get_hcpe_polars_schema()
+            if self.__file_manager.array_type == "hcpe"
+            else get_preprocessing_polars_schema()
+        )
+
+        # Iterate over entries
+        for entry in self.__file_manager._file_entries:
+            if entry.path.suffix == ".feather":
+                # DataFrame already loaded and cached
+                if isinstance(entry.cached_array, pl.DataFrame):
+                    yield entry.name, entry.cached_array
+                else:
+                    # Shouldn't happen, but handle just in case
+                    from maou.domain.data.rust_io import (
+                        load_hcpe_df,
+                        load_preprocessing_df,
+                    )
+
+                    if self.__file_manager.array_type == "hcpe":
+                        df = load_hcpe_df(entry.path)
+                    elif self.__file_manager.array_type == "preprocessing":
+                        df = load_preprocessing_df(entry.path)
+                    else:
+                        raise ValueError(
+                            f"Unsupported array_type for .feather: {self.__file_manager.array_type}"
+                        )
+                    yield entry.name, df
+            else:
+                # Convert numpy array to DataFrame
+                # Load numpy array
+                if entry.cached_array is not None:
+                    array = entry.cached_array
+                elif entry.memmap is not None:
+                    array = entry.memmap
+                else:
+                    from maou.interface.data_io import load_array
+
+                    array = load_array(
+                        entry.path,
+                        mmap_mode="r",
+                        array_type=self.__file_manager.array_type,
+                        bit_pack=self.__file_manager.bit_pack,
+                    )
+
+                # Convert to DataFrame
+                data = {}
+                for field in array.dtype.names:
+                    field_data = array[field]
+                    field_dtype = array.dtype.fields[field][0]
+
+                    # Handle binary fields (convert uint8 arrays to bytes)
+                    if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                        # Multi-dimensional uint8 field like hcp - convert to bytes
+                        data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                    else:
+                        data[field] = field_data.tolist()
+
+                df = pl.DataFrame(data, schema=schema)
+                yield entry.name, df
+
+    def total_pages(self) -> int:
+        """Return the total number of pages (batches) in the data source."""
+        return self.__file_manager.total_pages
