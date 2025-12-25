@@ -11,7 +11,6 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array
 
 if TYPE_CHECKING:
     import polars as pl
@@ -165,29 +164,36 @@ class ObjectStorageDataSource(
                 bundle_size_gb=bundle_size_gb,
             )
 
-            # すべてのファイルパスをmemmapで読み込む
-            # ここでmemmapで読み込みたいので各ローカルファイルの保存はbit_pack=Falseで行う
+            # Load all .feather files as DataFrames
             lengths = []
             for file_path in self.file_paths:
                 try:
-                    array = load_array(
-                        file_path,
-                        mmap_mode=(
-                            "r"
-                            if self.array_type == "hcpe"
-                            else None
-                        ),
-                        array_type=self.array_type,
-                        bit_pack=False,
-                        preprocessing_mmap_mode=self.preprocessing_mmap_mode,
+                    if file_path.suffix != ".feather":
+                        raise ValueError(
+                            f"Only .feather files are supported. Got: {file_path.suffix}"
+                        )
+
+                    from maou.domain.data.rust_io import (
+                        load_hcpe_df,
+                        load_preprocessing_df,
                     )
+
+                    if self.array_type == "hcpe":
+                        df = load_hcpe_df(file_path)
+                    elif self.array_type == "preprocessing":
+                        df = load_preprocessing_df(file_path)
+                    else:
+                        raise ValueError(
+                            f"Unsupported array_type: {self.array_type}"
+                        )
+
                     self.memmap_arrays.append(
-                        (file_path.name, array)
-                    )
-                    lengths.append(len(array))
+                        (file_path.name, df)
+                    )  # type: ignore
+                    lengths.append(len(df))
                 except Exception as e:
                     self.logger.error(
-                        f"Failed to load array {file_path}: {e}"
+                        f"Failed to load DataFrame {file_path}: {e}"
                     )
                     raise
             self.cum_lengths = np.cumsum([0] + lengths)

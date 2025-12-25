@@ -137,3 +137,71 @@ def load_preprocessing_df(
 
     arrow_batch = load_preprocessing_feather(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
+def save_stage1_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """Stage 1 DataFrameを.featherファイルに保存する（Polars標準I/O使用）．
+
+    Stage1/Stage2データはRustバックエンド不要で，Polars標準I/Oで十分な性能が得られる．
+
+    Args:
+        df: Stage 1スキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Example:
+        >>> from maou.domain.data.schema import get_stage1_polars_schema
+        >>> df = pl.DataFrame(data, schema=get_stage1_polars_schema())
+        >>> save_stage1_df(df, "stage1_data.feather")
+    """
+    df.write_ipc(str(file_path), compression="lz4")
+
+
+def load_stage1_df(file_path: Union[Path, str]) -> pl.DataFrame:
+    """Stage 1 DataFrameを.featherファイルから読み込む（Polars標準I/O使用）．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        Stage 1スキーマを持つPolars DataFrame
+
+    Example:
+        >>> df = load_stage1_df("stage1_data.feather")
+        >>> print(f"Loaded {len(df)} Stage 1 records")
+    """
+    return pl.read_ipc(str(file_path))
+
+
+def save_stage2_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """Stage 2 DataFrameを.featherファイルに保存する（Polars標準I/O使用）．
+
+    Args:
+        df: Stage 2スキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Example:
+        >>> from maou.domain.data.schema import get_stage2_polars_schema
+        >>> df = pl.DataFrame(data, schema=get_stage2_polars_schema())
+        >>> save_stage2_df(df, "stage2_data.feather")
+    """
+    df.write_ipc(str(file_path), compression="lz4")
+
+
+def load_stage2_df(file_path: Union[Path, str]) -> pl.DataFrame:
+    """Stage 2 DataFrameを.featherファイルから読み込む（Polars標準I/O使用）．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        Stage 2スキーマを持つPolars DataFrame
+
+    Example:
+        >>> df = load_stage2_df("stage2_data.feather")
+        >>> print(f"Loaded {len(df)} Stage 2 records")
+    """
+    return pl.read_ipc(str(file_path))

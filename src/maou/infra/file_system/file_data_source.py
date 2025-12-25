@@ -15,14 +15,8 @@ from typing import (
 )
 
 import numpy as np
-from numpy import memmap as NpMemMap
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array, load_packed_array
-from maou.interface.data_schema import (
-    convert_array_from_packed_schema,
-    convert_record_from_packed_schema,
-)
 
 if TYPE_CHECKING:
     import polars as pl
@@ -109,10 +103,16 @@ class FileDataSource(
         class _FileEntry:
             name: str
             path: Path
-            dtype: np.dtype[Any]
+            dtype: np.dtype[
+                Any
+            ]  # Placeholder (not used for DataFrames)
             length: int
-            memmap: Optional[NpMemMap]
-            cached_array: Optional[np.ndarray]
+            memmap: Optional[
+                Any
+            ]  # Placeholder (not used for DataFrames)
+            cached_array: Optional[
+                Any
+            ]  # Can be DataFrame or ndarray
 
         def __init__(
             self,
@@ -126,14 +126,14 @@ class FileDataSource(
                 Literal["r", "r+", "w+", "c"]
             ] = "c",
         ) -> None:
-            """ファイルシステムから複数のファイルに入っているデータを取り出す.
+            """ファイルシステムから複数のファイルに入っているデータを取り出す．
 
             Args:
-                file_paths (list[Path]): npyファイルのリスト
-                array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): 配列のタイプ
-                bit_pack (bool): ビットパッキングを使用するかどうか
+                file_paths (list[Path]): .featherファイルのリスト
+                array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): データのタイプ
+                bit_pack (bool): 未使用（後方互換性のために保持）
                 cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
-                preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
+                preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): 未使用（後方互換性のために保持）
             """
             self.file_paths = file_paths
             self.array_type = array_type
@@ -149,7 +149,9 @@ class FileDataSource(
                     "cache_mode must be either 'mmap' or 'memory', "
                     f"got {cache_mode}"
                 )
-            self.memmap_arrays: list[tuple[str, NpMemMap]] = []
+            self.memmap_arrays: list[
+                tuple[str, Any]
+            ] = []  # Unused (DataFrames only)
             self._file_entries: list[
                 FileDataSource.FileManager._FileEntry
             ] = []
@@ -158,161 +160,65 @@ class FileDataSource(
             )
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
-            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
-            self._concatenated_array: Optional[np.ndarray] = (
-                None
+            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一DataFrame
+            self._concatenated_array: Optional[Any] = (
+                None  # pl.DataFrame when concatenated
             )
 
             # すべてのファイルパスをmemmapで読み込む
             lengths = []
             for file_path in self.file_paths:
                 try:
-                    # .feather files are handled separately (Arrow IPC format)
-                    if file_path.suffix == ".feather":
-                        # Load feather file to get length
-                        # We'll import only when needed to avoid circular imports
-                        try:
-                            from maou.domain.data.rust_io import (
-                                load_hcpe_df,
-                                load_preprocessing_df,
-                            )
-
-                            if self.array_type == "hcpe":
-                                df = load_hcpe_df(file_path)
-                            elif (
-                                self.array_type
-                                == "preprocessing"
-                            ):
-                                df = load_preprocessing_df(
-                                    file_path
-                                )
-                            else:
-                                raise ValueError(
-                                    f"Unsupported array_type for .feather: {self.array_type}"
-                                )
-
-                            array_length = len(df)
-                            # Store DataFrame directly (will be used in iter_batches_df)
-                            self._file_entries.append(
-                                FileDataSource.FileManager._FileEntry(
-                                    name=file_path.name,
-                                    path=file_path,
-                                    dtype=np.dtype(
-                                        "object"
-                                    ),  # Placeholder
-                                    length=array_length,
-                                    memmap=None,
-                                    cached_array=df,  # type: ignore # Store DataFrame
-                                )
-                            )
-                            lengths.append(array_length)
-                            continue  # Skip numpy array processing
-
-                        except ImportError:
-                            raise ImportError(
-                                "polars and rust backend required for .feather files. "
-                                "Install with: poetry install"
-                            )
-
-                    # Load numpy arrays (.npy files)
-                    if (
-                        self.bit_pack
-                        and self.array_type == "preprocessing"
-                    ):
-                        array = load_packed_array(
-                            file_path,
-                            mmap_mode="r",
-                            array_type=self.array_type,
+                    # Load .feather files (Arrow IPC format - only supported format)
+                    if file_path.suffix != ".feather":
+                        raise ValueError(
+                            f"Only .feather files are supported. Got: {file_path.suffix}"
                         )
-                    else:
-                        array = load_array(
-                            file_path,
-                            mmap_mode=(
-                                "r"
-                                if self.array_type
-                                in ("hcpe", "stage1", "stage2")
-                                else None
-                            ),
-                            array_type=self.array_type,
-                            bit_pack=self.bit_pack,
-                            preprocessing_mmap_mode=self.preprocessing_mmap_mode,
-                        )
-                    memmap: Optional[NpMemMap]
-                    cached_array: Optional[np.ndarray] = None
-                    array_length = int(len(array))
-                    array_dtype = array.dtype
-                    if isinstance(array, NpMemMap):
-                        memmap = array
-                    else:
-                        memmap = None
 
-                    if self.cache_mode == "memory":
-                        array_nbytes = int(
-                            getattr(
-                                array,
-                                "nbytes",
-                                array_length
-                                * array_dtype.itemsize,
+                    try:
+                        from maou.domain.data.rust_io import (
+                            load_hcpe_df,
+                            load_preprocessing_df,
+                            load_stage1_df,
+                            load_stage2_df,
+                        )
+
+                        if self.array_type == "hcpe":
+                            df = load_hcpe_df(file_path)
+                        elif self.array_type == "preprocessing":
+                            df = load_preprocessing_df(
+                                file_path
                             )
-                        )
-                        array_size_mib = (
-                            array_nbytes / (1024 * 1024)
-                            if array_nbytes
-                            else 0.0
-                        )
-                        self.logger.debug(
-                            "Caching %s into RAM (%.2f MiB)",
-                            file_path,
-                            array_size_mib,
-                        )
-                        try:
-                            cached_array = array.copy()
-                        except MemoryError:
-                            self.logger.exception(
-                                "Failed to allocate memory for %s (%s bytes)",
-                                file_path,
-                                array_nbytes,
-                            )
-                            raise
+                        elif self.array_type == "stage1":
+                            df = load_stage1_df(file_path)
+                        elif self.array_type == "stage2":
+                            df = load_stage2_df(file_path)
                         else:
-                            self.logger.debug(
-                                "Cached %s in RAM (%.2f MiB)",
-                                file_path,
-                                array_size_mib,
+                            raise ValueError(
+                                f"Unsupported array_type: {self.array_type}"
                             )
-                            if isinstance(array, NpMemMap):
-                                mmap_handle = getattr(
-                                    array, "_mmap", None
-                                )
-                                if mmap_handle is not None:
-                                    try:
-                                        mmap_handle.close()
-                                    except AttributeError:
-                                        pass
-                            memmap = None
-                        array = None
-                    elif isinstance(array, NpMemMap):
-                        if memmap is not None:
-                            self.memmap_arrays.append(
-                                (file_path.name, memmap)
+
+                        array_length = len(df)
+                        # Store DataFrame directly
+                        self._file_entries.append(
+                            FileDataSource.FileManager._FileEntry(
+                                name=file_path.name,
+                                path=file_path,
+                                dtype=np.dtype(
+                                    "object"
+                                ),  # Placeholder
+                                length=array_length,
+                                memmap=None,
+                                cached_array=df,  # type: ignore # Store DataFrame
                             )
-                    self._file_entries.append(
-                        FileDataSource.FileManager._FileEntry(
-                            name=file_path.name,
-                            path=file_path,
-                            dtype=array_dtype,
-                            length=array_length,
-                            memmap=memmap,
-                            cached_array=cached_array,
                         )
-                    )
-                    lengths.append(array_length)
-                    if (
-                        memmap is None
-                        and cached_array is None
-                        and array is not None
-                    ):
-                        del array
+                        lengths.append(array_length)
+
+                    except ImportError as e:
+                        raise ImportError(
+                            f"Polars and Rust backend required for .feather files: {e}"
+                        )
+
                 except Exception as e:
                     self.logger.error(
                         f"Failed to load array {file_path}: {e}"
@@ -323,260 +229,86 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # cache_mode="memory"の場合、全ファイルを単一配列に結合
+            # cache_mode="memory"の場合、全ファイルを単一DataFrameに結合
             if (
                 self.cache_mode == "memory"
                 and self.total_pages > 1
             ):
+                import polars as pl
+
                 self.logger.info(
-                    f"Concatenating {self.total_pages} files into single array "
+                    f"Concatenating {self.total_pages} DataFrames "
                     f"({self.total_rows} records)..."
                 )
 
-                # dtypeを最初のエントリから取得
-                first_entry = self._file_entries[0]
-                if first_entry.cached_array is not None:
-                    dtype = first_entry.cached_array.dtype
-                else:
-                    self.logger.warning(
-                        f"First file {first_entry.name} is not cached in memory, "
-                        "concatenation may fail"
-                    )
-                    dtype = first_entry.dtype
-
-                # 結合後のサイズで配列を事前確保（メモリ効率化）
-                try:
-                    self._concatenated_array = np.empty(
-                        self.total_rows, dtype=dtype
-                    )
-                    self.logger.info(
-                        f"Allocated array for {self.total_rows} records "
-                        f"({self._concatenated_array.nbytes / (1024**3):.2f} GB)"
-                    )
-                except MemoryError:
-                    self.logger.exception(
-                        f"Failed to allocate memory for {self.total_rows} records"
-                    )
-                    raise
-
-                # 1ファイルずつコピー→即解放（メモリ使用量削減）
-                offset = 0
-                for i, entry in enumerate(self._file_entries):
+                # Collect all DataFrames
+                dataframes = []
+                for entry in self._file_entries:
                     if entry.cached_array is not None:
-                        arr_len = len(entry.cached_array)
-                        self._concatenated_array[
-                            offset : offset + arr_len
-                        ] = entry.cached_array
-                        # すぐに解放してメモリを節約
-                        entry.cached_array = None
-                        offset += arr_len
-                        if (i + 1) % 8 == 0 or (i + 1) == len(
-                            self._file_entries
-                        ):
-                            self.logger.debug(
-                                f"Copied {i + 1}/{len(self._file_entries)} files"
-                            )
+                        dataframes.append(entry.cached_array)  # type: ignore
                     else:
                         self.logger.warning(
                             f"File {entry.name} is not cached in memory, skipping"
                         )
 
-                if offset == self.total_rows:
+                # Concatenate all DataFrames
+                try:
+                    self._concatenated_array = pl.concat(
+                        dataframes
+                    )  # type: ignore
                     self.logger.info(
-                        f"Concatenation complete. "
-                        f"Array shape: {self._concatenated_array.shape}, "
-                        f"dtype: {self._concatenated_array.dtype}"
+                        f"Concatenation complete. DataFrame shape: "
+                        f"({len(self._concatenated_array)}, {len(self._concatenated_array.columns)})"
                     )
-                    self.logger.info(
-                        "Individual cached arrays released during copy (memory efficient)"
+                    # Release individual DataFrames to save memory
+                    for entry in self._file_entries:
+                        entry.cached_array = None
+                except Exception as e:
+                    self.logger.exception(
+                        f"Failed to concatenate DataFrames: {e}"
                     )
-                else:
-                    self.logger.warning(
-                        f"Concatenation incomplete: "
-                        f"copied {offset} records, expected {self.total_rows}"
-                    )
+                    raise
 
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
 
         def get_item(self, idx: int) -> np.ndarray:
-            """特定のレコードをnumpy structured arrayとして返す．
+            """Numpy array indexing is no longer supported．
 
-            最適化:
-            - cache_mode="memory"で複数ファイル: 結合配列から直接アクセス
-            - 最後にアクセスしたファイルをキャッシュして局所性を活用
+            Raises:
+                NotImplementedError: Use iter_batches_df() for DataFrame iteration
             """
-            if idx < 0 or idx >= self.total_rows:
-                raise IndexError(f"Index {idx} out of range.")
-
-            # 最適化: 結合配列がある場合は直接アクセス
-            if self._concatenated_array is not None:
-                record = self._concatenated_array[idx]
-                if (
-                    self.bit_pack
-                    and self.array_type == "preprocessing"
-                ):
-                    return convert_record_from_packed_schema(
-                        compressed_record=record,
-                        array_type=self.array_type,
-                    )
-                return record
-
-            # ファイルインデックスと相対インデックスを計算
-            # 最後にアクセスしたファイルをチェック（局所性の活用）
-            if (
-                self._last_file_idx < self.total_pages
-                and self.cum_lengths[self._last_file_idx]
-                <= idx
-                < self.cum_lengths[self._last_file_idx + 1]
-            ):
-                file_idx = self._last_file_idx
-            else:
-                # searchsortedで検索
-                file_idx = int(
-                    np.searchsorted(
-                        self.cum_lengths, idx, side="right"
-                    )
-                    - 1
-                )
-                self._last_file_idx = file_idx
-            relative_idx = idx - self.cum_lengths[file_idx]
-
-            entry = self._file_entries[file_idx]
-
-            # データを取得
-            if entry.cached_array is not None:
-                record = entry.cached_array[relative_idx]
-                if (
-                    self.bit_pack
-                    and self.array_type == "preprocessing"
-                ):
-                    record = convert_record_from_packed_schema(
-                        compressed_record=record,
-                        array_type=self.array_type,
-                    )
-            elif entry.memmap is None:
-                record_array = np.fromfile(
-                    entry.path,
-                    dtype=entry.dtype,
-                    count=1,
-                    offset=int(
-                        relative_idx * entry.dtype.itemsize
-                    ),
-                )
-                if record_array.size == 0:
-                    raise IndexError(
-                        f"Index {idx} could not be loaded from {entry.path}."
-                    )
-                record = np.copy(record_array[0])
-                del record_array
-                if (
-                    self.bit_pack
-                    and self.array_type == "preprocessing"
-                ):
-                    record = convert_record_from_packed_schema(
-                        compressed_record=record,
-                        array_type=self.array_type,
-                    )
-            else:
-                if (
-                    self.bit_pack
-                    and self.array_type == "preprocessing"
-                ):
-                    record = convert_record_from_packed_schema(
-                        compressed_record=entry.memmap[
-                            relative_idx
-                        ],
-                        array_type=self.array_type,
-                    )
-                else:
-                    record = entry.memmap[relative_idx]
-
-            return record
+            raise NotImplementedError(
+                "Numpy array indexing is no longer supported. "
+                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+            )
 
         def get_items(
             self, indices: list[int]
         ) -> list[np.ndarray]:
-            """複数のインデックスのレコードをバッチで取得する．
+            """Numpy array batch indexing is no longer supported．
 
-            PyTorchのDataLoaderでは現在使用されないが，
-            将来的なバッチアクセス最適化のために保持．
-
-            Args:
-                indices: 取得するインデックスのリスト
-
-            Returns:
-                レコードのリスト（入力のインデックス順）
+            Raises:
+                NotImplementedError: Use iter_batches_df() for DataFrame iteration
             """
-            return [self.get_item(idx) for idx in indices]
+            raise NotImplementedError(
+                "Numpy array batch indexing is no longer supported. "
+                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+            )
 
         def iter_batches(
             self,
         ) -> Generator[tuple[str, np.ndarray], None, None]:
-            if (
-                self.bit_pack
-                and self.array_type == "preprocessing"
-            ):
-                for entry in self._file_entries:
-                    if entry.cached_array is not None:
-                        yield (
-                            entry.name,
-                            convert_array_from_packed_schema(
-                                compressed_array=entry.cached_array,
-                                array_type=self.array_type,
-                            ),
-                        )
-                    elif entry.memmap is not None:
-                        yield (
-                            entry.name,
-                            convert_array_from_packed_schema(
-                                compressed_array=entry.memmap,
-                                array_type=self.array_type,
-                            ),
-                        )
-                    else:
-                        loaded_array = np.fromfile(
-                            entry.path,
-                            dtype=entry.dtype,
-                            count=entry.length,
-                        )
-                        unpacked_array = (
-                            convert_array_from_packed_schema(
-                                compressed_array=loaded_array,
-                                array_type=self.array_type,
-                            )
-                        )
-                        del loaded_array
-                        yield (
-                            entry.name,
-                            unpacked_array,
-                        )
-            else:
-                for entry in self._file_entries:
-                    if entry.cached_array is not None:
-                        yield (
-                            entry.name,
-                            entry.cached_array,
-                        )
-                    elif entry.memmap is not None:
-                        yield (
-                            entry.name,
-                            entry.memmap,
-                        )
-                    else:
-                        loaded_array = np.fromfile(
-                            entry.path,
-                            dtype=entry.dtype,
-                            count=entry.length,
-                        )
-                        try:
-                            yield (
-                                entry.name,
-                                loaded_array,
-                            )
-                        finally:
-                            del loaded_array
+            """Numpy array iteration is no longer supported．
+
+            Raises:
+                NotImplementedError: Use iter_batches_df() for DataFrame iteration
+            """
+            raise NotImplementedError(
+                "Numpy array iteration is no longer supported. "
+                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+            )
 
     def __init__(
         self,
@@ -655,17 +387,22 @@ class FileDataSource(
     def iter_batches(
         self,
     ) -> Generator[tuple[str, np.ndarray], None, None]:
-        # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
-        for name, batch in self.__file_manager.iter_batches():
-            yield name, batch
+        """Numpy array iteration is no longer supported．
+
+        Raises:
+            NotImplementedError: Use iter_batches_df() for DataFrame iteration
+        """
+        raise NotImplementedError(
+            "Numpy array iteration is no longer supported. "
+            "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+        )
 
     def iter_batches_df(
         self,
     ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
         """Iterate over batches as Polars DataFrames．
 
-        Optimized implementation that loads .feather files directly as DataFrames
-        when available，or converts numpy arrays otherwise．
+        Yields .feather files directly as DataFrames．
 
         Yields:
             tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
@@ -678,86 +415,35 @@ class FileDataSource(
                 "Install with: poetry add polars"
             )
 
-        from maou.domain.data.schema import (
-            get_hcpe_polars_schema,
-            get_preprocessing_polars_schema,
-        )
-
-        schema = (
-            get_hcpe_polars_schema()
-            if self.__file_manager.array_type == "hcpe"
-            else get_preprocessing_polars_schema()
-        )
-
-        # Iterate over entries
+        # Iterate over entries (all are .feather files)
         for entry in self.__file_manager._file_entries:
-            if entry.path.suffix == ".feather":
-                # DataFrame already loaded and cached
-                if isinstance(entry.cached_array, pl.DataFrame):
-                    yield entry.name, entry.cached_array
-                else:
-                    # Shouldn't happen, but handle just in case
-                    from maou.domain.data.rust_io import (
-                        load_hcpe_df,
-                        load_preprocessing_df,
-                    )
-
-                    if self.__file_manager.array_type == "hcpe":
-                        df = load_hcpe_df(entry.path)
-                    elif (
-                        self.__file_manager.array_type
-                        == "preprocessing"
-                    ):
-                        df = load_preprocessing_df(entry.path)
-                    else:
-                        raise ValueError(
-                            f"Unsupported array_type for .feather: {self.__file_manager.array_type}"
-                        )
-                    yield entry.name, df
+            # DataFrame already loaded and cached
+            if isinstance(entry.cached_array, pl.DataFrame):
+                yield entry.name, entry.cached_array
             else:
-                # Convert numpy array to DataFrame
-                # Load numpy array
-                if entry.cached_array is not None:
-                    array = entry.cached_array
-                elif entry.memmap is not None:
-                    array = entry.memmap
+                # Load DataFrame if not cached
+                from maou.domain.data.rust_io import (
+                    load_hcpe_df,
+                    load_preprocessing_df,
+                    load_stage1_df,
+                    load_stage2_df,
+                )
+
+                if self.__file_manager.array_type == "hcpe":
+                    df = load_hcpe_df(entry.path)
+                elif (
+                    self.__file_manager.array_type
+                    == "preprocessing"
+                ):
+                    df = load_preprocessing_df(entry.path)
+                elif self.__file_manager.array_type == "stage1":
+                    df = load_stage1_df(entry.path)
+                elif self.__file_manager.array_type == "stage2":
+                    df = load_stage2_df(entry.path)
                 else:
-                    from maou.interface.data_io import (
-                        load_array,
+                    raise ValueError(
+                        f"Unsupported array_type: {self.__file_manager.array_type}"
                     )
-
-                    array = load_array(
-                        entry.path,
-                        mmap_mode="r",
-                        array_type=self.__file_manager.array_type,
-                        bit_pack=self.__file_manager.bit_pack,
-                    )
-
-                # Convert to DataFrame
-                data = {}
-                assert array.dtype.names is not None
-                assert array.dtype.fields is not None
-                for field in array.dtype.names:
-                    field_data = array[field]
-                    field_dtype = array.dtype.fields[field][0]
-
-                    # Handle binary fields (convert uint8 arrays to bytes)
-                    if field == "hcp" or (
-                        field_dtype.shape
-                        and field_dtype.base
-                        == np.dtype("uint8")
-                    ):
-                        # Multi-dimensional uint8 field like hcp - convert to bytes
-                        data[field] = [
-                            bytes(row)
-                            if hasattr(row, "__iter__")
-                            else bytes([row])
-                            for row in field_data
-                        ]
-                    else:
-                        data[field] = field_data.tolist()
-
-                df = pl.DataFrame(data, schema=schema)
                 yield entry.name, df
 
     def total_pages(self) -> int:

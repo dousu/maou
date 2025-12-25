@@ -1042,6 +1042,72 @@ def get_intermediate_polars_schema() -> dict[
     }
 
 
+def get_stage1_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for Stage 1 (reachable squares) training data．
+
+    Stage 1学習用のPolarsスキーマを返す．
+    到達可能マス予測ヘッドの学習に使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Stage 1データ用のPolarsスキーマ
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_stage1_polars_schema()
+        >>> df = pl.DataFrame(data, schema=schema)
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements
+        "reachableSquares": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 binary
+    }
+
+
+def get_stage2_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for Stage 2 (legal moves) training data．
+
+    Stage 2学習用のPolarsスキーマを返す．
+    合法手予測ヘッドの学習に使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Stage 2データ用のPolarsスキーマ
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_stage2_polars_schema()
+        >>> df = pl.DataFrame(data, schema=schema)
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements
+        "legalMovesLabel": pl.List(
+            pl.UInt8
+        ),  # MOVE_LABELS_NUM elements
+    }
+
+
 def create_empty_intermediate_df(
     size: int = 0,
 ) -> "pl.DataFrame":

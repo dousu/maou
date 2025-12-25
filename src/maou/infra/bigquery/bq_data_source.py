@@ -1,18 +1,15 @@
 import datetime
 import logging
-import pickle
 import random
 from collections import OrderedDict
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
-import numpy as np
+import polars as pl
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import load_array, save_array
-from maou.interface.data_schema import get_dtype
 
 
 class MissingBigQueryConfig(Exception):
@@ -157,7 +154,7 @@ class BigQueryDataSource(
             # ページ番号をキーにしたLRUキャッシュ (OrderedDict)
             # ローカルキャッシュを使用する場合は不要
             self.__page_cache: Optional[
-                OrderedDict[int, np.ndarray]
+                OrderedDict[int, pl.DataFrame]
             ] = None
             if not self.use_local_cache:
                 self.__page_cache = OrderedDict()
@@ -275,9 +272,11 @@ class BigQueryDataSource(
                 key, evicted_table = self.__page_cache.popitem(
                     last=False
                 )
-                self.total_cached_bytes -= evicted_table.nbytes
+                self.total_cached_bytes -= int(
+                    evicted_table.estimated_size()
+                )
                 self.logger.debug(
-                    f"Evicted cache for page {key} (nbytes: {evicted_table.nbytes}). "
+                    f"Evicted cache for page {key} (nbytes: {int(evicted_table.estimated_size())}). "
                     f"New total cache size: {self.total_cached_bytes} bytes."
                 )
 
@@ -295,12 +294,12 @@ class BigQueryDataSource(
                 )
                 filename = (
                     f"{self.dataset_fqn.replace('.', '_')}"
-                    f"_{self.table_name}_{safe_value}.npy"
+                    f"_{self.table_name}_{safe_value}.feather"
                 )
             else:
                 filename = (
                     f"{self.dataset_fqn.replace('.', '_')}"
-                    f"_{self.table_name}_page_{page_num}.npy"
+                    f"_{self.table_name}_page_{page_num}.feather"
                 )
             return self.local_cache_dir / filename
 
@@ -313,42 +312,60 @@ class BigQueryDataSource(
 
         def __load_from_local(
             self, page_num: int
-        ) -> np.ndarray:
-            """ローカルからデータを読み込む"""
+        ) -> pl.DataFrame:
+            """ローカルキャッシュからDataFrameを読み込む．"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(
                 f"Loading data from local cache: {cache_path}"
             )
-            return load_array(
-                cache_path,
-                mmap_mode=(
-                    "r" if self.array_type == "hcpe" else None
-                ),
-                array_type=self.array_type,
-                bit_pack=False,
-                preprocessing_mmap_mode=self.preprocessing_mmap_mode,
+
+            if cache_path.suffix != ".feather":
+                raise ValueError(
+                    f"Only .feather files are supported. Got: {cache_path.suffix}"
+                )
+
+            from maou.domain.data.rust_io import (
+                load_hcpe_df,
+                load_preprocessing_df,
             )
 
+            if self.array_type == "hcpe":
+                return load_hcpe_df(cache_path)
+            elif self.array_type == "preprocessing":
+                return load_preprocessing_df(cache_path)
+            else:
+                raise ValueError(
+                    f"Unsupported array_type: {self.array_type}"
+                )
+
         def __save_to_local(
-            self, page_num: int, npy_data: np.ndarray
+            self, page_num: int, df: pl.DataFrame
         ) -> None:
-            """データをローカルに保存する"""
+            """DataFrameをローカルキャッシュに保存する．"""
             cache_path = self.__get_local_cache_path(page_num)
             self.logger.debug(
                 f"Saving data to local cache: {cache_path}"
             )
-            save_array(
-                npy_data,
-                cache_path,
-                array_type=self.array_type,
-                bit_pack=False,
+
+            from maou.domain.data.rust_io import (
+                save_hcpe_df,
+                save_preprocessing_df,
             )
+
+            if self.array_type == "hcpe":
+                save_hcpe_df(df, cache_path)
+            elif self.array_type == "preprocessing":
+                save_preprocessing_df(df, cache_path)
+            else:
+                raise ValueError(
+                    f"Unsupported array_type: {self.array_type}"
+                )
 
         def __fetch_from_bigquery(
             self, page_num: int
-        ) -> np.ndarray:
-            """BigQueryからデータを取得する"""
-            # 一旦pandas dataframeとして取得
+        ) -> pl.DataFrame:
+            """BigQueryからデータを取得してPolars DataFrameとして返す．"""
+            # BigQuery → pandas DataFrame → Polars DataFrame
             if bool(self.__pruning_info):
                 # page_num はクラスタグループの番号とする
                 try:
@@ -391,10 +408,9 @@ class BigQueryDataSource(
                     FROM `{self.dataset_fqn}.{self.table_name}` {tablesample_clause}
                     WHERE {filter}
                 """
-                df = (
-                    self.client.query(query)
-                    .result()
-                    .to_dataframe()
+                # BigQuery → Arrow Table (direct, no pandas)
+                arrow_table = (
+                    self.client.query(query).result().to_arrow()
                 )
             else:
                 # クラスタリングキー未指定の場合
@@ -408,10 +424,11 @@ class BigQueryDataSource(
                         LIMIT {self.batch_size}
                         OFFSET {start_index}
                     """
-                    df = (
+                    # BigQuery → Arrow Table (direct, no pandas)
+                    arrow_table = (
                         self.client.query(query)
                         .result()
-                        .to_dataframe()
+                        .to_arrow()
                     )
                 else:
                     # BigQuery の list_rows を使ってpageを実装している
@@ -421,73 +438,18 @@ class BigQueryDataSource(
                         start_index=start_index,
                         max_results=self.batch_size,
                     )
-                    df = rows.to_dataframe()
+                    # BigQuery → Arrow Table (direct, no pandas)
+                    arrow_table = rows.to_arrow()
 
-            # dataframeをto_recordsからnumpy arrayに構築しなおす
-            # このプロセスによって行数も含めてnumpy arrayが構築しなおされる
-            records = df.to_records(index=False)
-            dtype: list[Any] = []
-            data: list[np.ndarray] = []
-            # recordsの中にバイト列が入っていた場合はpickle.loadsしておく
-            # pickle.loadsする場合は必ずnumpy arrayになるものとして扱う
-            for col in records.dtype.names:
-                if records[
-                    col
-                ].dtype == "object" and isinstance(
-                    records[col][0], bytes
-                ):
-                    unpickled_data = np.array(
-                        [pickle.loads(x) for x in records[col]]
-                    )
-                    data.append(unpickled_data)
-                    dtype.append(
-                        (
-                            col,
-                            unpickled_data.dtype,
-                            unpickled_data.shape[1:],
-                        )
-                    )
-                elif records[
-                    col
-                ].dtype == "object" and isinstance(
-                    records[col][0], str
-                ):
-                    data.append(records[col])
-                    # Unicode128バイトで固定しているが検討の余地あり
-                    # 基本的に文字列は学習データとして使わないので足りなくても問題ない
-                    dtype.append((col, "U128"))
-                elif records[
-                    col
-                ].dtype == "object" and isinstance(
-                    records[col][0], datetime.date
-                ):
-                    data.append(records[col])
-                    dtype.append((col, "datetime64[D]"))
-                else:
-                    data.append(records[col])
-                    dtype.append((col, records[col].dtype))
-            # この構築の仕方 (list(zip(...)))あまり効率よくなさそう
-            npy_data = np.array(list(zip(*data)), dtype=dtype)
+            # Arrow Table → Polars DataFrame (zero-copy)
+            polars_df: pl.DataFrame = pl.from_arrow(arrow_table)  # type: ignore
 
-            return self.__convert_dtype(npy_data)
-
-        def __convert_dtype(
-            self, npy_data: np.ndarray
-        ) -> np.ndarray:
-            dtype = get_dtype(
-                array_type=self.array_type, bit_pack=False
+            self.logger.debug(
+                f"Converted BigQuery result to Polars DataFrame: "
+                f"{len(polars_df)} rows, {len(polars_df.columns)} columns"
             )
-            # dtypeが異なる場合は変換する
-            if npy_data.dtype != dtype:
-                self.logger.debug(
-                    f"Converting dtype from {npy_data.dtype} to {dtype}"
-                )
-                npy_data = npy_data.astype(dtype)
-            else:
-                self.logger.debug(
-                    f"No dtype conversion needed: {npy_data.dtype}"
-                )
-            return npy_data
+
+            return polars_df
 
         def __download_all_to_local(self) -> None:
             """すべてのデータをローカルにダウンロードする"""
@@ -542,9 +504,9 @@ class BigQueryDataSource(
                     "No local cache files were created. This might indicate a problem."
                 )
 
-        def get_page(self, page_num: int) -> np.ndarray:
+        def get_page(self, page_num: int) -> pl.DataFrame:
             """
-            指定したページ番号 (0オリジン)のレコードバッチを取得する．
+            指定したページ番号 (0オリジン)のDataFrameバッチを取得する．
             ローカルキャッシュが有効な場合は，ローカルからデータを読み込む．
             ローカルキャッシュが無効な場合は，メモリキャッシュを確認し，
             なければBigQueryから取得する．
@@ -552,20 +514,18 @@ class BigQueryDataSource(
             # ローカルキャッシュが有効な場合
             if self.use_local_cache:
                 if self.__check_local_cache_exists(page_num):
-                    # NumPy形式のキャッシュからデータを読み込む
-                    npy_data = self.__load_from_local(page_num)
-                    return npy_data
+                    # .featherキャッシュからDataFrameを読み込む
+                    df = self.__load_from_local(page_num)
+                    return df
                 else:
                     # 通常はここに来ることはない (初期化時にすべてダウンロード済み)
                     self.logger.warning(
                         f"Local cache not found for page {page_num}, "
                         "fetching from BigQuery"
                     )
-                    npy_data = self.__fetch_from_bigquery(
-                        page_num
-                    )
-                    self.__save_to_local(page_num, npy_data)
-                    return npy_data
+                    df = self.__fetch_from_bigquery(page_num)
+                    self.__save_to_local(page_num, df)
+                    return df
 
             # ローカルキャッシュが無効な場合
             # キャッシュがあれば順序更新
@@ -578,20 +538,22 @@ class BigQueryDataSource(
                 return page
 
             # BigQueryからデータを取得
-            npy_data = self.__fetch_from_bigquery(page_num)
+            df = self.__fetch_from_bigquery(page_num)
 
             # キャッシュに追加
             if self.__page_cache is not None:
-                self.__page_cache[page_num] = npy_data
-                self.total_cached_bytes += npy_data.nbytes
+                self.__page_cache[page_num] = df
+                # Estimate DataFrame size in bytes
+                df_bytes = int(df.estimated_size())
+                self.total_cached_bytes += df_bytes
                 self.logger.debug(
-                    f"Cache for page {page_num} (nbytes: {npy_data.nbytes}). "
+                    f"Cache for page {page_num} (bytes: {df_bytes}). "
                     f"New total cache size: {self.total_cached_bytes} bytes."
                 )
                 self.__evict_cache_if_needed()
-            return npy_data
+            return df
 
-        def get_item(self, idx: int) -> np.ndarray:
+        def get_item(self, idx: int) -> pl.DataFrame:
             """特定のレコードをnumpy structured arrayとして返す."""
             if bool(self.__pruning_info):
                 # idx が属するクラスタグループを探索
@@ -621,7 +583,7 @@ class BigQueryDataSource(
 
         def iter_batches(
             self,
-        ) -> Generator[tuple[str, np.ndarray], None, None]:
+        ) -> Generator[tuple[str, pl.DataFrame], None, None]:
             """
             BigQuery のテーブル全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
@@ -712,7 +674,7 @@ class BigQueryDataSource(
         else:
             self.indicies = indicies
 
-    def __getitem__(self, idx: int) -> np.ndarray:
+    def __getitem__(self, idx: int) -> pl.DataFrame:
         """
         指定されたインデックス idx のレコード (1行)を numpy structured array として返す．
                 必要なページのみオンデマンドに取得する．
@@ -727,7 +689,7 @@ class BigQueryDataSource(
 
     def iter_batches(
         self,
-    ) -> Generator[tuple[str, np.ndarray], None, None]:
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
         for name, batch in self.__page_manager.iter_batches():
             yield name, batch

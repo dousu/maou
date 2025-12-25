@@ -88,16 +88,72 @@ def load_preprocessing_df_from_bytes(
     return pl.read_ipc_stream(buffer)
 
 
+def save_stage1_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize Stage 1 DataFrame to bytes using Arrow IPC Stream format．
+
+    Args:
+        df: Stage 1 Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC stream
+    """
+    buffer = io.BytesIO()
+    df.write_ipc_stream(buffer, compression="lz4")
+    return buffer.getvalue()
+
+
+def load_stage1_df_from_bytes(data: bytes) -> pl.DataFrame:
+    """Deserialize Stage 1 DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC stream bytes
+
+    Returns:
+        pl.DataFrame: Stage 1 DataFrame
+    """
+    buffer = io.BytesIO(data)
+    return pl.read_ipc_stream(buffer)
+
+
+def save_stage2_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize Stage 2 DataFrame to bytes using Arrow IPC Stream format．
+
+    Args:
+        df: Stage 2 Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC stream
+    """
+    buffer = io.BytesIO()
+    df.write_ipc_stream(buffer, compression="lz4")
+    return buffer.getvalue()
+
+
+def load_stage2_df_from_bytes(data: bytes) -> pl.DataFrame:
+    """Deserialize Stage 2 DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC stream bytes
+
+    Returns:
+        pl.DataFrame: Stage 2 DataFrame
+    """
+    buffer = io.BytesIO(data)
+    return pl.read_ipc_stream(buffer)
+
+
 def save_df_to_bytes(
     df: pl.DataFrame,
     *,
-    array_type: Literal["hcpe", "preprocessing"],
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
 ) -> bytes:
     """Generic DataFrame to bytes serialization with array_type dispatch．
 
     Args:
         df: Polars DataFrame
-        array_type: Type of data ("hcpe" or "preprocessing")
+        array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
     Returns:
         bytes: Compressed Arrow IPC stream
@@ -109,6 +165,10 @@ def save_df_to_bytes(
         return save_hcpe_df_to_bytes(df)
     elif array_type == "preprocessing":
         return save_preprocessing_df_to_bytes(df)
+    elif array_type == "stage1":
+        return save_stage1_df_to_bytes(df)
+    elif array_type == "stage2":
+        return save_stage2_df_to_bytes(df)
     else:
         raise ValueError(
             f"Unsupported array_type: {array_type}"
@@ -118,13 +178,15 @@ def save_df_to_bytes(
 def load_df_from_bytes(
     data: bytes,
     *,
-    array_type: Literal["hcpe", "preprocessing"],
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
 ) -> pl.DataFrame:
     """Generic bytes to DataFrame deserialization with array_type dispatch．
 
     Args:
         data: Compressed Arrow IPC stream bytes
-        array_type: Type of data ("hcpe" or "preprocessing")
+        array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
     Returns:
         pl.DataFrame: Deserialized DataFrame
@@ -136,6 +198,10 @@ def load_df_from_bytes(
         return load_hcpe_df_from_bytes(data)
     elif array_type == "preprocessing":
         return load_preprocessing_df_from_bytes(data)
+    elif array_type == "stage1":
+        return load_stage1_df_from_bytes(data)
+    elif array_type == "stage2":
+        return load_stage2_df_from_bytes(data)
     else:
         raise ValueError(
             f"Unsupported array_type: {array_type}"

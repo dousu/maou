@@ -3,361 +3,262 @@
 This module provides a service layer for data I/O operations,
 bridging between the interface and domain layers while maintaining
 Clean Architecture dependency rules.
+
+Uses Polars DataFrames (.feather) for efficient data processing.
 """
 
-import errno
-import logging
-from io import BytesIO
-from pathlib import Path
-from typing import Literal, Optional, Union
+from __future__ import annotations
 
-import numpy as np
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Union
 
 from maou.domain.data.array_io import (
     DataIOArrayTypeError,
     DataIOError,
-    load_hcpe_array,
-    load_hcpe_array_from_buffer,
-    load_packed_preprocessing_array,
-    load_preprocessing_array,
-    load_preprocessing_array_from_buffer,
-    save_hcpe_array,
-    save_hcpe_array_to_buffer,
-    save_preprocessing_array,
-    save_preprocessing_array_to_buffer,
 )
 
+if TYPE_CHECKING:
+    import polars as pl
+
 logger: logging.Logger = logging.getLogger(__name__)
-
-
-def _is_memory_allocation_error(error: DataIOError) -> bool:
-    """Check whether the provided error originated from memory exhaustion."""
-
-    cause = getattr(error, "__cause__", None)
-    if isinstance(cause, MemoryError):
-        return True
-    if (
-        isinstance(cause, OSError)
-        and cause.errno == errno.ENOMEM
-    ):
-        return True
-    return "Cannot allocate memory" in str(error)
 
 
 class DataIOService:
     """Service class for data I/O operations.
 
-    Provides a unified interface for loading and saving numpy arrays
-    with automatic schema detection and validation.
+    Provides a unified interface for loading and saving Polars DataFrames
+    in efficient .feather format with the following benefits:
+    - 30x storage reduction with LZ4 compression
+    - 3-8x faster data loading
+    - Zero-copy conversions with Arrow IPC format
+    - Direct integration with PyTorch via polars_tensor module
     """
 
+    # ========================================================================
+    # DataFrame-based I/O methods
+    # ========================================================================
+
     @staticmethod
-    def load_array(
+    def load_dataframe(
         file_path: Union[str, Path],
         array_type: Literal[
             "hcpe", "preprocessing", "stage1", "stage2"
         ],
-        *,
-        mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = None,
-        preprocessing_mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = "c",
-        bit_pack: bool = True,
-    ) -> np.ndarray:
-        """Load numpy array with automatic schema handling.
+    ) -> pl.DataFrame:
+        """Load Polars DataFrame from .feather file．
+
+        Modern replacement for load_array() with better performance．
+        Uses Rust-backed Arrow IPC I/O for HCPE/preprocessing，
+        Polars standard I/O for stage1/stage2．
 
         Args:
-            file_path: Path to numpy file (.npy)
-            array_type: Type of array to load ("hcpe", "preprocessing", "stage1", "stage2")
-            mmap_mode: Memory mapping mode for .npy files
-            preprocessing_mmap_mode: Default mmap mode for preprocessing arrays
-            bit_pack: Whether to use bit packing compression for binary fields
+            file_path: Path to .feather file
+            array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
         Returns:
-            numpy.ndarray: Loaded array
+            pl.DataFrame: Loaded DataFrame with appropriate schema
 
         Raises:
             DataIOError: If loading fails
-        """
-        effective_mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = mmap_mode
-        if (
-            array_type == "preprocessing"
-            and effective_mmap_mode is None
-        ):
-            effective_mmap_mode = preprocessing_mmap_mode
+            ImportError: If Rust backend is not available (HCPE/preprocessing only)
 
+        Example:
+            >>> df = DataIOService.load_dataframe("data.feather", "hcpe")
+            >>> print(len(df))  # Fast DataFrame operations
+        """
         try:
+            from maou.domain.data.rust_io import (
+                load_hcpe_df,
+                load_preprocessing_df,
+                load_stage1_df,
+                load_stage2_df,
+            )
+
             file_path = Path(file_path)
 
             if array_type == "hcpe":
-                return load_hcpe_array(
-                    file_path, mmap_mode=effective_mmap_mode
+                return load_hcpe_df(file_path)
+            elif array_type == "preprocessing":
+                return load_preprocessing_df(file_path)
+            elif array_type == "stage1":
+                return load_stage1_df(file_path)
+            elif array_type == "stage2":
+                return load_stage2_df(file_path)
+            else:
+                logger.error(
+                    f"Unknown array type '{array_type}'"
                 )
-            if array_type == "preprocessing":
-                return load_preprocessing_array(
-                    file_path,
-                    mmap_mode=effective_mmap_mode,
-                    bit_pack=bit_pack,
-                )
-            if array_type in ("stage1", "stage2"):
-                # Stage1 and stage2 are simple structured arrays, load directly
-                return np.load(
-                    file_path,
-                    mmap_mode=effective_mmap_mode,
-                    allow_pickle=False,
+                raise DataIOArrayTypeError(
+                    f"Unknown array type '{array_type}'"
                 )
 
+        except ImportError as e:
             logger.error(
-                f"Unknown array type '{array_type}', "
-                f"Failed to load array from {file_path}"
-            )
-            raise DataIOArrayTypeError(
-                f"Unknown array type '{array_type}'"
-            )
-
-        except DataIOError as error:
-            if (
-                effective_mmap_mode is None
-                and _is_memory_allocation_error(error)
-            ):
-                logger.warning(
-                    "Memory allocation failed while loading %s; "
-                    "retrying with memory mapping.",
-                    file_path,
-                )
-                try:
-                    if array_type == "hcpe":
-                        return load_hcpe_array(
-                            file_path,
-                            mmap_mode="r",
-                        )
-                    if array_type == "preprocessing":
-                        return load_preprocessing_array(
-                            file_path,
-                            mmap_mode="c",
-                            bit_pack=bit_pack,
-                        )
-                except DataIOError as retry_error:
-                    logger.error(
-                        "Memory mapping retry also failed for %s: %s",
-                        file_path,
-                        retry_error,
-                    )
-                    raise DataIOError(
-                        "Failed to load array from "
-                        f"{file_path}: {retry_error}"
-                    ) from retry_error
-
-            logger.error(
-                f"Failed to load array from {file_path}: {error}"
+                f"Rust backend not available for {file_path}: {e}"
             )
             raise DataIOError(
-                f"Failed to load array from {file_path}: {error}"
-            ) from error
-        except Exception as error:
+                f"Rust backend required for DataFrame I/O: {e}"
+            ) from e
+        except Exception as e:
             logger.error(
-                f"Failed to load array from {file_path}: {error}"
+                f"Failed to load DataFrame from {file_path}: {e}"
             )
             raise DataIOError(
-                f"Failed to load array from {file_path}: {error}"
-            ) from error
+                f"Failed to load DataFrame from {file_path}: {e}"
+            ) from e
 
     @staticmethod
-    def save_array(
-        array: np.ndarray,
+    def save_dataframe(
+        df: pl.DataFrame,
         file_path: Union[str, Path],
-        array_type: Literal["hcpe", "preprocessing"],
-        *,
-        bit_pack: bool = True,
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
     ) -> None:
-        """Save numpy array with automatic schema handling.
+        """Save Polars DataFrame to .feather file．
+
+        Modern replacement for save_array() with better compression．
+        Uses Rust-backed Arrow IPC I/O with LZ4 compression for HCPE/preprocessing，
+        Polars standard I/O for stage1/stage2．
 
         Args:
-            array: Array to save
-            file_path: Output file path
-            array_type: Type of array ("hcpe", "preprocessing")
-            bit_pack: Whether to use bit-packing before saving
+            df: DataFrame to save
+            file_path: Output .feather file path
+            array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
         Raises:
             DataIOError: If saving fails
+            ImportError: If Rust backend is not available (HCPE/preprocessing only)
+
+        Example:
+            >>> DataIOService.save_dataframe(df, "output.feather", "hcpe")
         """
         try:
+            from maou.domain.data.rust_io import (
+                save_hcpe_df,
+                save_preprocessing_df,
+                save_stage1_df,
+                save_stage2_df,
+            )
+
             file_path = Path(file_path)
 
             if array_type == "hcpe":
-                save_hcpe_array(
-                    array,
-                    file_path,
-                )
+                save_hcpe_df(df, file_path)
             elif array_type == "preprocessing":
-                save_preprocessing_array(
-                    array,
-                    file_path,
-                    bit_pack=bit_pack,
-                )
+                save_preprocessing_df(df, file_path)
+            elif array_type == "stage1":
+                save_stage1_df(df, file_path)
+            elif array_type == "stage2":
+                save_stage2_df(df, file_path)
             else:
                 logger.error(
-                    f"Unknown array type '{array_type}', "
-                    f"Failed to save array to {file_path}"
+                    f"Unknown array type '{array_type}'"
                 )
                 raise DataIOArrayTypeError(
                     f"Unknown array type '{array_type}'"
                 )
 
-        except Exception as e:
+        except ImportError as e:
             logger.error(
-                f"Failed to save array to {file_path}: {e}"
+                f"Rust backend not available for {file_path}: {e}"
             )
             raise DataIOError(
-                f"Failed to save array to {file_path}: {e}"
+                f"Rust backend required for DataFrame I/O: {e}"
+            ) from e
+        except Exception as e:
+            logger.error(
+                f"Failed to save DataFrame to {file_path}: {e}"
+            )
+            raise DataIOError(
+                f"Failed to save DataFrame to {file_path}: {e}"
             ) from e
 
     @staticmethod
-    def load_array_from_bytes(
+    def load_dataframe_from_bytes(
         data: bytes,
-        *,
-        array_type: Literal["hcpe", "preprocessing"],
-        mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = None,
-        bit_pack: bool = True,
-    ) -> np.ndarray:
-        """Load numpy array from bytes data with automatic schema handling.
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
+    ) -> pl.DataFrame:
+        """Load Polars DataFrame from bytes (Arrow IPC format)．
+
+        Modern replacement for load_array_from_bytes() for cloud storage．
+        Uses LZ4-compressed Arrow IPC format for efficient network transfer．
 
         Args:
-            data: Bytes containing the numpy array
-            array_type: Type of array to load ("hcpe", "preprocessing")
-            mmap_mode: Memory mapping mode for .npy files
-            bit_pack: Whether to use bit packing compression for binary fields
+            data: Bytes containing Arrow IPC stream
+            array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
         Returns:
-            numpy.ndarray: Loaded array
+            pl.DataFrame: Loaded DataFrame
 
         Raises:
             DataIOError: If loading fails
+
+        Example:
+            >>> bytes_data = cloud_storage.download("data.feather")
+            >>> df = DataIOService.load_dataframe_from_bytes(
+            ...     bytes_data, "hcpe"
+            ... )
         """
-        buffer = BytesIO()
-        buffer.write(data)
-        buffer.seek(0)
         try:
-            if array_type == "hcpe":
-                return load_hcpe_array_from_buffer(
-                    buffer, mmap_mode=mmap_mode
-                )
-            elif array_type == "preprocessing":
-                return load_preprocessing_array_from_buffer(
-                    buffer,
-                    mmap_mode=mmap_mode,
-                    bit_pack=bit_pack,
-                )
-            else:
-                logger.error(
-                    f"Unknown array type '{array_type}'"
-                )
-                raise DataIOArrayTypeError(
-                    f"Unknown array type '{array_type}'"
-                )
+            from maou.domain.data.dataframe_io import (
+                load_df_from_bytes,
+            )
+
+            return load_df_from_bytes(
+                data, array_type=array_type
+            )
 
         except Exception as e:
             logger.error(
-                f"Failed to load array from buffer: {e}"
+                f"Failed to load DataFrame from bytes: {e}"
             )
             raise DataIOError(
-                f"Failed to load array from buffer: {e}"
+                f"Failed to load DataFrame from bytes: {e}"
             ) from e
 
     @staticmethod
-    def save_array_to_bytes(
-        array: np.ndarray,
-        array_type: Literal["hcpe", "preprocessing"],
-        bit_pack: bool = True,
+    def save_dataframe_to_bytes(
+        df: pl.DataFrame,
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
     ) -> bytes:
-        """Save numpy array with automatic schema handling.
+        """Save Polars DataFrame to bytes (Arrow IPC format)．
+
+        Modern replacement for save_array_to_bytes() for cloud storage．
+        Provides 30x compression compared to numpy format．
 
         Args:
-            array: Array to save
-            array_type: Type of array ("hcpe", "preprocessing")
-            bit_pack: Whether to use bit-packing before saving
+            df: DataFrame to save
+            array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
 
         Returns:
-            bytes: Bytes containing the numpy array
+            bytes: LZ4-compressed Arrow IPC stream
 
         Raises:
             DataIOError: If saving fails
+
+        Example:
+            >>> bytes_data = DataIOService.save_dataframe_to_bytes(
+            ...     df, "hcpe"
+            ... )
+            >>> cloud_storage.upload("data.feather", bytes_data)
         """
         try:
-            if array_type == "hcpe":
-                buffer = save_hcpe_array_to_buffer(
-                    array,
-                )
-            elif array_type == "preprocessing":
-                buffer = save_preprocessing_array_to_buffer(
-                    array,
-                    bit_pack=bit_pack,
-                )
-            else:
-                logger.error(
-                    f"Unknown array type '{array_type}'"
-                )
-                raise DataIOArrayTypeError(
-                    f"Unknown array type '{array_type}'"
-                )
+            from maou.domain.data.dataframe_io import (
+                save_df_to_bytes,
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to save array to buffer: {e}")
-            raise DataIOError(
-                f"Failed to save array to buffer: {e}"
-            ) from e
-        buffer.seek(0)
-        return buffer.getvalue()
-
-    @staticmethod
-    def load_packed_array(
-        file_path: Union[str, Path],
-        array_type: Literal["preprocessing"],
-        *,
-        mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = None,
-    ) -> np.ndarray:
-        """Load numpy array with packed schema.
-
-        Args:
-            file_path: Path to numpy file (.npy)
-            array_type: Type of array to load ("preprocessing")
-            mmap_mode: Memory mapping mode for .npy files
-
-        Returns:
-            numpy.ndarray: Loaded array
-
-        Raises:
-            DataIOError: If loading fails
-        """
-        try:
-            file_path = Path(file_path)
-
-            if array_type == "preprocessing":
-                return load_packed_preprocessing_array(
-                    file_path,
-                    mmap_mode=mmap_mode,
-                )
-            else:
-                logger.error(
-                    f"Unknown array type '{array_type}', "
-                    f"Failed to load array from {file_path}"
-                )
-                raise DataIOArrayTypeError(
-                    f"Unknown array type '{array_type}'"
-                )
+            return save_df_to_bytes(df, array_type=array_type)
 
         except Exception as e:
             logger.error(
-                f"Failed to load array from {file_path}: {e}"
+                f"Failed to save DataFrame to bytes: {e}"
             )
             raise DataIOError(
-                f"Failed to load array from {file_path}: {e}"
+                f"Failed to save DataFrame to bytes: {e}"
             ) from e
