@@ -198,3 +198,72 @@ def load_packed_array(
         array_type=array_type,
         mmap_mode=mmap_mode,
     )
+
+
+def load_df_from_bytes(
+    data: bytes,
+    *,
+    array_type: Literal["hcpe", "preprocessing"],
+) -> "pl.DataFrame":
+    """Load Polars DataFrame from bytes (Arrow IPC format)．
+
+    Args:
+        data: Compressed Arrow IPC stream bytes
+        array_type: Type of data ("hcpe" or "preprocessing")
+
+    Returns:
+        pl.DataFrame: Deserialized DataFrame
+
+    Raises:
+        ValueError: If array_type is not supported
+
+    Example:
+        >>> # Download bytes_data from S3/GCS
+        >>> df = load_df_from_bytes(bytes_data, array_type="hcpe")
+    """
+    from maou.domain.data.dataframe_io import (
+        load_hcpe_df_from_bytes,
+        load_preprocessing_df_from_bytes,
+    )
+
+    if array_type == "hcpe":
+        return load_hcpe_df_from_bytes(data)
+    elif array_type == "preprocessing":
+        return load_preprocessing_df_from_bytes(data)
+    else:
+        raise ValueError(f"Unsupported array_type: {array_type}")
+
+
+def save_df_to_bytes(
+    df: "pl.DataFrame",
+    *,
+    array_type: Literal["hcpe", "preprocessing"],
+) -> bytes:
+    """Save Polars DataFrame to bytes (Arrow IPC format)．
+
+    Args:
+        df: Polars DataFrame
+        array_type: Type of data ("hcpe" or "preprocessing")
+
+    Returns:
+        bytes: Compressed Arrow IPC stream
+
+    Raises:
+        ValueError: If array_type is not supported
+
+    Example:
+        >>> df = pl.read_ipc("hcpe_data.feather")
+        >>> bytes_data = save_df_to_bytes(df, array_type="hcpe")
+        >>> # Upload bytes_data to S3/GCS
+    """
+    from maou.domain.data.dataframe_io import (
+        save_hcpe_df_to_bytes,
+        save_preprocessing_df_to_bytes,
+    )
+
+    if array_type == "hcpe":
+        return save_hcpe_df_to_bytes(df)
+    elif array_type == "preprocessing":
+        return save_preprocessing_df_to_bytes(df)
+    else:
+        raise ValueError(f"Unsupported array_type: {array_type}")

@@ -11,100 +11,11 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
-from maou.interface.data_io import (
-    load_array,
-    load_array_from_bytes,
-    save_array,
-)
+from maou.interface.data_io import load_array
 
 
 class MissingObjectStorageConfig(Exception):
     pass
-
-
-class Bundler:
-    logger: logging.Logger = logging.getLogger(__name__)
-
-    def __init__(
-        self,
-        *,
-        bundle_id: int,
-        enable_bundling: bool,
-        bundle_size_gb: float,
-        array_type: Literal["hcpe", "preprocessing"],
-        local_data_path: Path,
-    ) -> None:
-        self.bundle_id: int = bundle_id
-        self.enable_bundling: bool = enable_bundling
-        self.bundle_size_gb: float = bundle_size_gb
-        self.array_type: Literal["hcpe", "preprocessing"] = (
-            array_type
-        )
-        self.local_data_path: Path = local_data_path
-        self.bundle_cache: list[np.ndarray] = []
-        self.__bundle_cache_size: int = 0
-        self.file_paths: list[Path] = []
-
-    def bundle(self, array: np.ndarray) -> None:
-        """ndarrayをキャッシュしてbundleする"""
-        self.bundle_cache.append(array)
-        self.__bundle_cache_size += array.nbytes
-        if not self.enable_bundling or float(
-            self.__bundle_cache_size
-        ) >= self.bundle_size_gb * float(pow(1024, 3)):
-            self.logger.debug(
-                f"Bundling {len(self.bundle_cache)} arrays "
-                f"({self.__bundle_cache_size / pow(1024, 3):.2f} GB)"
-            )
-            self.bundle_flush()
-
-    def bundle_flush(self) -> None:
-        """残っているファイルをbundleにする"""
-        if not self.bundle_cache:
-            self.logger.debug(
-                "No arrays to bundle, skipping flush."
-            )
-            return
-        self.__bundle_files(self.bundle_cache)
-        self.bundle_cache.clear()
-        self.__bundle_cache_size = 0
-
-    def __bundle_files(self, arrays: list[np.ndarray]) -> None:
-        """バンドルの作成.
-        中身を読むときにmemmapで読み込みたいのでbit_pack=Falseで保存する
-        """
-        bundled_array = np.concatenate(arrays)
-        # データが一致していたら同じファイル名にする
-        size_mb = bundled_array.nbytes // pow(1024, 2)
-        schema_key = str(bundled_array.dtype)
-        schema_hash = self.__short_hash(schema_key)
-        file_name = f"batch{self.bundle_id}_{len(arrays)}arrays_{size_mb}MB_{schema_hash}.npy"
-        file_path = self.local_data_path / file_name
-        if file_path.exists():
-            self.logger.warning(
-                f"Bundle file {file_path} already exists. Skipping save."
-            )
-            self.file_paths.append(file_path)
-            self.bundle_id += 1
-            return
-        save_array(
-            array=bundled_array,
-            file_path=file_path,
-            array_type=self.array_type,
-            bit_pack=False,
-        )
-        self.file_paths.append(file_path)
-        self.bundle_id += 1
-
-    def get_file_paths(self) -> list[Path]:
-        return self.file_paths
-
-    def __short_hash(self, text: str, length: int = 4) -> str:
-        digest = hashlib.sha256(text.encode()).digest()
-        b64 = base64.urlsafe_b64encode(digest).decode()
-        # 中央部分を切り出す
-        start = (len(b64) - length) // 2
-        return b64[start : start + length]
 
 
 class ObjectStorageDataSource(
@@ -295,19 +206,16 @@ class ObjectStorageDataSource(
             enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
         ) -> None:
-            """すべてのデータまたはサンプルデータをローカルにダウンロードする"""
+            """すべてのデータまたはサンプルデータをローカルにダウンロードする．
+
+            Note: enable_bundling and bundle_size_gb are ignored for .feather files
+            (kept for API compatibility but not used)
+            """
             try:
                 if self.sample_ratio is not None:
                     self.logger.info(
                         f"Downloading sample data ({self.sample_ratio:.1%}) "
                         f"to local cache: {self.local_cache_dir}"
-                    )
-                    bundler = Bundler(
-                        bundle_id=1,
-                        enable_bundling=enable_bundling,
-                        bundle_size_gb=bundle_size_gb,
-                        array_type=self.array_type,
-                        local_data_path=self.__get_local_data_path(),
                     )
                     all_objects = type(self).list_objects(
                         bucket_name=self.bucket_name,
@@ -335,13 +243,6 @@ class ObjectStorageDataSource(
                 else:
                     self.logger.info(
                         f"Downloading all data to local cache: {self.local_cache_dir}"
-                    )
-                    bundler = Bundler(
-                        bundle_id=1,
-                        enable_bundling=enable_bundling,
-                        bundle_size_gb=bundle_size_gb,
-                        array_type=self.array_type,
-                        local_data_path=self.__get_local_data_path(),
                     )
                     # list_blobsを使用してオブジェクト一覧を取得
                     objects = type(self).list_objects(  # type: ignore
@@ -381,38 +282,52 @@ class ObjectStorageDataSource(
                         }
                     )
 
+                # Download files in parallel
+                self.file_paths = []
+                local_data_path = self.__get_local_data_path()
+                local_data_path.mkdir(parents=True, exist_ok=True)
+
                 with ThreadPoolExecutor(
                     max_workers=self.max_workers
                 ) as executor:
-                    futures = [
+                    # Submit all download tasks
+                    future_to_chunk = {
                         executor.submit(
                             type(self).download_files,
                             str(chunk["bucket_name"]),
                             list(chunk["object_paths"]),
-                        )
+                        ): chunk
                         for chunk in chunks
-                    ]
+                    }
+
+                    # Process downloads as they complete
                     for future in tqdm(
-                        as_completed(futures),
+                        as_completed(future_to_chunk),
                         desc="Downloading",
                         total=len(chunks),
                     ):
                         try:
+                            chunk = future_to_chunk[future]
                             byte_list = future.result()
-                            for byte_data in byte_list:
-                                array = load_array_from_bytes(
-                                    data=byte_data,
-                                    array_type=self.array_type,
-                                    bit_pack=False,
+
+                            # Save .feather files directly (no bundling)
+                            for i, byte_data in enumerate(byte_list):
+                                object_path = chunk["object_paths"][i]
+                                feather_name = Path(object_path).name
+                                feather_path = local_data_path / feather_name
+
+                                feather_path.write_bytes(byte_data)
+                                self.file_paths.append(feather_path)
+
+                                self.logger.debug(
+                                    f"Saved .feather file: {feather_path}"
                                 )
-                                bundler.bundle(array)
+
                         except Exception as exc:
                             self.logger.error(
                                 f"Chunk processing failed: {exc}"
                             )
                             raise
-                bundler.bundle_flush()
-                self.file_paths = bundler.get_file_paths()
             except Exception as e:
                 self.logger.error(
                     f"Error downloading all data: {e}"
@@ -560,6 +475,52 @@ class ObjectStorageDataSource(
         """
         for name, batch in self.__page_manager.iter_batches():
             yield name, batch
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+        """Iterate over batches as Polars DataFrames．
+
+        Converts numpy arrays from cloud storage to DataFrames．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for DataFrame iteration. "
+                "Install with: poetry add polars"
+            )
+
+        from maou.domain.data.schema import (
+            get_hcpe_polars_schema,
+            get_preprocessing_polars_schema,
+        )
+
+        schema = (
+            get_hcpe_polars_schema()
+            if self.__page_manager.array_type == "hcpe"
+            else get_preprocessing_polars_schema()
+        )
+
+        # Convert numpy arrays to DataFrames
+        for name, array in self.__page_manager.iter_batches():
+            data = {}
+            for field in array.dtype.names:
+                field_data = array[field]
+                field_dtype = array.dtype.fields[field][0]
+
+                # Handle binary fields (convert uint8 arrays to bytes)
+                if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                    # Multi-dimensional uint8 field like hcp - convert to bytes
+                    data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                else:
+                    data[field] = field_data.tolist()
+
+            df = pl.DataFrame(data, schema=schema)
+            yield name, df
 
     def total_pages(self) -> int:
         return self.__page_manager.total_pages

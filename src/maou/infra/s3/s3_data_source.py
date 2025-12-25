@@ -32,7 +32,7 @@ class S3DataSource(ObjectStorageDataSource):
                 for page in pages
                 if "Contents" in page
                 for obj in page["Contents"]
-                if obj["Key"].endswith(".npy")
+                if obj["Key"].endswith(".feather")
             ]
 
         @staticmethod
