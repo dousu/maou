@@ -18,7 +18,9 @@ class _DummyDataSource(DataSource):
         return 0
 
 
-def test_move_inputs_to_device_handles_nested_structures() -> None:
+def test_move_inputs_to_device_handles_nested_structures() -> (
+    None
+):
     config = BenchmarkConfig(
         datasource=_DummyDataSource(),
         datasource_type="hcpe",
@@ -46,4 +48,3 @@ def test_move_inputs_to_device_handles_nested_structures() -> None:
     deeper = nested[1]
     assert isinstance(deeper, list)
     assert torch.equal(deeper[0], additional)
-

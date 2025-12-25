@@ -269,9 +269,15 @@ class TestHCPEConverter:
                     == preprocessed_array["id"][j]
                 ):
                     assert np.array_equal(
-                        preprocessed_array["boardIdPositions"][i],
-                        preprocessed_array["boardIdPositions"][j],
-                    ), "同じIDに対して異なるboardIdPositionsが存在"
+                        preprocessed_array["boardIdPositions"][
+                            i
+                        ],
+                        preprocessed_array["boardIdPositions"][
+                            j
+                        ],
+                    ), (
+                        "同じIDに対して異なるboardIdPositionsが存在"
+                    )
                     assert np.array_equal(
                         preprocessed_array["piecesInHand"][i],
                         preprocessed_array["piecesInHand"][j],
@@ -414,10 +420,10 @@ class TestHCPEConverter:
         for i, record in enumerate(preprocessed_array):
             # boardIdPositions形状検証
             expected_board_shape = (9, 9)
-            actual_board_shape = record["boardIdPositions"].shape
-            assert (
-                actual_board_shape == expected_board_shape
-            ), (
+            actual_board_shape = record[
+                "boardIdPositions"
+            ].shape
+            assert actual_board_shape == expected_board_shape, (
                 f"Record {i}: boardIdPositions形状が不正 "
                 f"(期待={expected_board_shape}, 実際={actual_board_shape})"
             )
@@ -446,6 +452,6 @@ class TestHCPEConverter:
             # 盤面・持ち駒情報が設定されていることを確認
             board_sum = np.sum(record["boardIdPositions"])
             pieces_sum = np.sum(record["piecesInHand"])
-            assert (
-                board_sum > 0 or pieces_sum > 0
-            ), f"Record {i}: 盤面および持ち駒情報が全て0"
+            assert board_sum > 0 or pieces_sum > 0, (
+                f"Record {i}: 盤面および持ち駒情報が全て0"
+            )

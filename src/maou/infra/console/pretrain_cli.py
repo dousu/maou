@@ -4,9 +4,9 @@ from typing import Optional
 import click
 
 from maou.infra.console.common import (
-    app_logger,
     FileDataSource,
     FileSystem,
+    app_logger,
     handle_exception,
 )
 from maou.interface.pretrain import (
@@ -173,7 +173,9 @@ def pretrain(
         )
 
     array_type = (
-        "preprocessing" if input_format == "preprocess" else "hcpe"
+        "preprocessing"
+        if input_format == "preprocess"
+        else "hcpe"
     )
     file_paths = FileSystem.collect_files(input_dir)
     if not file_paths:
@@ -188,7 +190,11 @@ def pretrain(
         cache_mode=input_cache_mode.lower(),
     )
 
-    resolved_workers = dataloader_workers if dataloader_workers is not None else 0
+    resolved_workers = (
+        dataloader_workers
+        if dataloader_workers is not None
+        else 0
+    )
     resolved_prefetch = (
         prefetch_factor if prefetch_factor is not None else 2
     )

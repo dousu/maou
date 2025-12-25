@@ -32,9 +32,13 @@ class _FeedForward(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)
         x = self.activation(x)
-        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        x = F.dropout(
+            x, p=self.dropout_rate, training=self.training
+        )
         x = self.fc2(x)
-        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        x = F.dropout(
+            x, p=self.dropout_rate, training=self.training
+        )
         return x
 
 
@@ -54,11 +58,15 @@ class _MixerBlock(nn.Module):
         super().__init__()
         self.token_norm = nn.LayerNorm(config.num_channels)
         self.token_mlp = _FeedForward(
-            config.num_tokens, config.token_dim, config.dropout_rate
+            config.num_tokens,
+            config.token_dim,
+            config.dropout_rate,
         )
         self.channel_norm = nn.LayerNorm(config.num_channels)
         self.channel_mlp = _FeedForward(
-            config.num_channels, config.channel_dim, config.dropout_rate
+            config.num_channels,
+            config.channel_dim,
+            config.dropout_rate,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -137,16 +145,19 @@ class ShogiMLPMixer(nn.Module):
     def _flatten_tokens(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.shape
         tokens = height * width
-        token_error = (
-            "Spatial dimensions do not match the configured number of tokens"
+        token_error = "Spatial dimensions do not match the configured number of tokens"
+        channel_error = "Input channels do not match the configured channel dimension"
+        tracing = (
+            torch.jit.is_tracing()
+            or torch.onnx.is_in_onnx_export()
         )
-        channel_error = (
-            "Input channels do not match the configured channel dimension"
-        )
-        tracing = torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
         if tracing:
-            torch._assert(tokens == self.num_tokens, token_error)
-            torch._assert(channels == self.input_channels, channel_error)
+            torch._assert(
+                tokens == self.num_tokens, token_error
+            )
+            torch._assert(
+                channels == self.input_channels, channel_error
+            )
         else:
             if tokens != self.num_tokens:
                 raise ValueError(token_error)
@@ -167,11 +178,15 @@ class ShogiMLPMixer(nn.Module):
         tokens = self._flatten_tokens(x)
         tokens = self.input_norm(tokens)
         tokens = self.embedding(tokens)
-        tokens = F.dropout(tokens, p=self.dropout_rate, training=self.training)
+        tokens = F.dropout(
+            tokens, p=self.dropout_rate, training=self.training
+        )
         for block in self.blocks:
             tokens = block(tokens)
         tokens = self.norm(tokens)
-        tokens = F.dropout(tokens, p=self.dropout_rate, training=self.training)
+        tokens = F.dropout(
+            tokens, p=self.dropout_rate, training=self.training
+        )
 
         if token_mask is not None:
             if token_mask.shape != (
@@ -221,7 +236,9 @@ class ShogiMLPMixer(nn.Module):
 def print_model_summary(model: ShogiMLPMixer) -> None:
     """Print a concise summary with parameter count for the given model."""
 
-    param_count = sum(parameter.numel() for parameter in model.parameters())
+    param_count = sum(
+        parameter.numel() for parameter in model.parameters()
+    )
     print(
         "ShogiMLPMixer Summary\n"
         f"Parameters: {param_count:,}\n"

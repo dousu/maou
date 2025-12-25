@@ -1,7 +1,5 @@
 from pathlib import Path
-from typing import Optional
-
-from typing import Literal
+from typing import Literal, Optional
 
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.masked_autoencoder import (
@@ -53,7 +51,9 @@ def pretrain(
     Returns:
         A message describing where the trained state_dict was saved.
     """
-    resolved_num_workers = num_workers if num_workers is not None else 0
+    resolved_num_workers = (
+        num_workers if num_workers is not None else 0
+    )
     normalized_type = datasource_type.lower()
     if normalized_type not in {"preprocess", "hcpe"}:
         msg = (
@@ -86,5 +86,7 @@ def pretrain(
     )
     if forward_chunk_size is not None:
         option_kwargs["forward_chunk_size"] = forward_chunk_size
-    options = MaskedAutoencoderPretraining.Options(**option_kwargs)
+    options = MaskedAutoencoderPretraining.Options(
+        **option_kwargs
+    )
     return MaskedAutoencoderPretraining().run(options)

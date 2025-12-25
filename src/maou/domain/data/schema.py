@@ -921,19 +921,21 @@ def get_hcpe_polars_schema() -> dict[str, "pl.DataType"]:
         )
 
     return {
-        "hcp": pl.Binary,  # 32-byte fixed in Arrow
-        "eval": pl.Int16,
-        "bestMove16": pl.Int16,
-        "gameResult": pl.Int8,
-        "id": pl.Utf8,
-        "partitioningKey": pl.Date,
+        "hcp": pl.Binary(),  # 32-byte fixed in Arrow
+        "eval": pl.Int16(),
+        "bestMove16": pl.Int16(),
+        "gameResult": pl.Int8(),
+        "id": pl.Utf8(),
+        "partitioningKey": pl.Date(),
         "ratings": pl.List(pl.UInt16),  # Fixed size 2 in Arrow
-        "endgameStatus": pl.Utf8,
-        "moves": pl.Int16,
+        "endgameStatus": pl.Utf8(),
+        "moves": pl.Int16(),
     }
 
 
-def get_preprocessing_polars_schema() -> dict[str, "pl.DataType"]:
+def get_preprocessing_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
     """Get Polars schema for preprocessing format．
 
     前処理済みデータ用のPolarsスキーマを返す．
@@ -951,15 +953,17 @@ def get_preprocessing_polars_schema() -> dict[str, "pl.DataType"]:
         )
 
     return {
-        "id": pl.UInt64,
+        "id": pl.UInt64(),
         "boardIdPositions": pl.List(
             pl.List(pl.UInt8)
         ),  # 9x9 board (fixed in Arrow)
-        "piecesInHand": pl.List(pl.UInt8),  # 14 elements (fixed in Arrow)
+        "piecesInHand": pl.List(
+            pl.UInt8
+        ),  # 14 elements (fixed in Arrow)
         "moveLabel": pl.List(
             pl.Float32
         ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
-        "resultValue": pl.Float32,
+        "resultValue": pl.Float32(),
     }
 
 
@@ -995,15 +999,17 @@ def create_empty_hcpe_df(size: int = 0) -> "pl.DataFrame":
     # Create DataFrame with null values
     return pl.DataFrame(
         {
-            col: pl.Series(values=[], dtype=dtype).extend_constant(
-                None, size
-            )
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
             for col, dtype in schema.items()
         }
     )
 
 
-def get_intermediate_polars_schema() -> dict[str, "pl.DataType"]:
+def get_intermediate_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
     """Get Polars schema for intermediate data format．
 
     中間データ用のPolarsスキーマを返す．
@@ -1021,20 +1027,24 @@ def get_intermediate_polars_schema() -> dict[str, "pl.DataType"]:
         )
 
     return {
-        "id": pl.UInt64,  # Board hash
+        "id": pl.UInt64(),  # Board hash
         "boardIdPositions": pl.List(
             pl.List(pl.UInt8)
         ),  # 9x9 board (fixed in Arrow)
-        "piecesInHand": pl.List(pl.UInt8),  # 14 elements (fixed in Arrow)
-        "count": pl.Int32,  # Number of occurrences
+        "piecesInHand": pl.List(
+            pl.UInt8
+        ),  # 14 elements (fixed in Arrow)
+        "count": pl.Int32(),  # Number of occurrences
         "moveLabelCount": pl.List(
             pl.Int32
         ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
-        "winCount": pl.Float32,  # Sum of win values
+        "winCount": pl.Float32(),  # Sum of win values
     }
 
 
-def create_empty_intermediate_df(size: int = 0) -> "pl.DataFrame":
+def create_empty_intermediate_df(
+    size: int = 0,
+) -> "pl.DataFrame":
     """Create empty intermediate DataFrame with proper schema．
 
     指定されたサイズの空の中間DataFrameを作成する．
@@ -1065,15 +1075,17 @@ def create_empty_intermediate_df(size: int = 0) -> "pl.DataFrame":
 
     return pl.DataFrame(
         {
-            col: pl.Series(values=[], dtype=dtype).extend_constant(
-                None, size
-            )
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
             for col, dtype in schema.items()
         }
     )
 
 
-def create_empty_preprocessing_df(size: int = 0) -> "pl.DataFrame":
+def create_empty_preprocessing_df(
+    size: int = 0,
+) -> "pl.DataFrame":
     """Create empty preprocessing DataFrame with proper schema．
 
     指定されたサイズの空の前処理済みDataFrameを作成する．
@@ -1104,9 +1116,9 @@ def create_empty_preprocessing_df(size: int = 0) -> "pl.DataFrame":
 
     return pl.DataFrame(
         {
-            col: pl.Series(values=[], dtype=dtype).extend_constant(
-                None, size
-            )
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
             for col, dtype in schema.items()
         }
     )

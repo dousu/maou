@@ -16,7 +16,6 @@ from maou.domain.data.array_io import (
     load_hcpe_array,
     save_hcpe_array,
     save_hcpe_df,
-    RUST_BACKEND_AVAILABLE,
 )
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
@@ -328,7 +327,7 @@ class HCPEConverter:
                 return (str(file), "skipped (no moves)")
 
             # Polars用にデータをリストで収集
-            hcpe_data = {
+            hcpe_data: dict[str, list] = {
                 "hcp": [],
                 "eval": [],
                 "bestMove16": [],
@@ -390,7 +389,9 @@ class HCPEConverter:
                     hcpe_data["eval"].append(-eval)
 
                 # moveは32bitになっているので16bitに変換する
-                hcpe_data["bestMove16"].append(shogi.move16(move))
+                hcpe_data["bestMove16"].append(
+                    shogi.move16(move)
+                )
                 hcpe_data["gameResult"].append(parser.winner())
                 hcpe_data["id"].append(
                     f"{file.with_suffix('.hcpe').name}_{idx}"
@@ -419,7 +420,10 @@ class HCPEConverter:
                 df,
                 output_dir / file.with_suffix(".feather").name,
             )
-            return (str(file), f"success {len(df)} rows (Polars)")
+            return (
+                str(file),
+                f"success {len(df)} rows (Polars)",
+            )
 
         except Exception as e:
             logger.error(f"Error processing file {file}: {e}")

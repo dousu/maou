@@ -10,7 +10,9 @@ from maou.interface import utility_interface
 class _DummyDataSource:
     """Minimal stub for learning data source."""
 
-    def train_test_split(self, *, test_ratio: float) -> tuple[Any, Any]:
+    def train_test_split(
+        self, *, test_ratio: float
+    ) -> tuple[Any, Any]:
         return self, self
 
 

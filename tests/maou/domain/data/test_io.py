@@ -103,7 +103,9 @@ class TestHCPEIO:
         memmap_type = np.memmap
 
         def _raise_oserror(*args: Any, **kwargs: Any) -> Any:
-            raise OSError(errno.ENOMEM, "Cannot allocate memory")
+            raise OSError(
+                errno.ENOMEM, "Cannot allocate memory"
+            )
 
         monkeypatch.setattr(np, "memmap", _raise_oserror)
 
@@ -229,11 +231,15 @@ class TestBufferIO:
         memmap_type = np.memmap
 
         def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
-            raise TypeError("expected str, bytes or os.PathLike object")
+            raise TypeError(
+                "expected str, bytes or os.PathLike object"
+            )
 
         monkeypatch.setattr(np, "memmap", _raise_typeerror)
 
-        loaded_array = load_hcpe_array_from_buffer(buffer, mmap_mode="r")
+        loaded_array = load_hcpe_array_from_buffer(
+            buffer, mmap_mode="r"
+        )
 
         assert not isinstance(loaded_array, memmap_type)
         np.testing.assert_array_equal(loaded_array, array)
@@ -245,12 +251,16 @@ class TestBufferIO:
         """Ensure preprocessing buffer loading falls back when memmap fails."""
 
         array = create_empty_preprocessing_array(2)
-        buffer = save_preprocessing_array_to_buffer(array, bit_pack=False)
+        buffer = save_preprocessing_array_to_buffer(
+            array, bit_pack=False
+        )
 
         memmap_type = np.memmap
 
         def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
-            raise TypeError("expected str, bytes or os.PathLike object")
+            raise TypeError(
+                "expected str, bytes or os.PathLike object"
+            )
 
         monkeypatch.setattr(np, "memmap", _raise_typeerror)
 
@@ -270,12 +280,16 @@ class TestBufferIO:
         """Ensure bit-packed preprocessing buffer load falls back on TypeError."""
 
         array = create_empty_preprocessing_array(2)
-        buffer = save_preprocessing_array_to_buffer(array, bit_pack=True)
+        buffer = save_preprocessing_array_to_buffer(
+            array, bit_pack=True
+        )
 
         memmap_type = np.memmap
 
         def _raise_typeerror(*args: Any, **kwargs: Any) -> Any:
-            raise TypeError("expected str, bytes or os.PathLike object")
+            raise TypeError(
+                "expected str, bytes or os.PathLike object"
+            )
 
         monkeypatch.setattr(np, "memmap", _raise_typeerror)
 

@@ -16,7 +16,9 @@ def _reference_policy_top5_stats(
     """Reference implementation mirroring the pre-optimization logic."""
 
     if logits.ndim != 2 or targets.ndim != 2:
-        raise ValueError("Tensors logits and targets must be 2-dimensional.")
+        raise ValueError(
+            "Tensors logits and targets must be 2-dimensional."
+        )
 
     batch_size = int(targets.size(0))
     if batch_size == 0:
@@ -26,28 +28,40 @@ def _reference_policy_top5_stats(
     if topk_pred == 0:
         return 0.0, 0
 
-    prediction_top_indices = torch.topk(logits, k=topk_pred, dim=1).indices
+    prediction_top_indices = torch.topk(
+        logits, k=topk_pred, dim=1
+    ).indices
 
     ratio_sum = 0.0
     sample_count = 0
 
     for sample_idx in range(batch_size):
         target_values = targets[sample_idx]
-        positive_indices = torch.nonzero(target_values > 0, as_tuple=False).view(-1)
+        positive_indices = torch.nonzero(
+            target_values > 0, as_tuple=False
+        ).view(-1)
 
         if int(positive_indices.numel()) == 0:
             ratio = 0.0
         else:
             positive_values = target_values[positive_indices]
             label_topk = min(5, int(positive_values.numel()))
-            top_label_rel_indices = torch.topk(positive_values, k=label_topk).indices
-            label_top_indices = positive_indices[top_label_rel_indices]
+            top_label_rel_indices = torch.topk(
+                positive_values, k=label_topk
+            ).indices
+            label_top_indices = positive_indices[
+                top_label_rel_indices
+            ]
             current_topk = min(label_topk, topk_pred)
             predicted_indices_set = set(
-                prediction_top_indices[sample_idx, :current_topk].tolist()
+                prediction_top_indices[
+                    sample_idx, :current_topk
+                ].tolist()
             )
             match_count = sum(
-                1 for idx in label_top_indices.tolist() if idx in predicted_indices_set
+                1
+                for idx in label_top_indices.tolist()
+                if idx in predicted_indices_set
             )
             ratio = float(match_count) / float(label_topk)
 
@@ -176,10 +190,14 @@ def test_policy_top5_stats_matches_reference(
 
     callback = ValidationCallback()
 
-    ratio_sum, sample_count = callback._compute_policy_top5_accuracy_stats(
-        logits=logits, targets=targets
+    ratio_sum, sample_count = (
+        callback._compute_policy_top5_accuracy_stats(
+            logits=logits, targets=targets
+        )
     )
-    ref_ratio_sum, ref_sample_count = _reference_policy_top5_stats(logits, targets)
+    ref_ratio_sum, ref_sample_count = (
+        _reference_policy_top5_stats(logits, targets)
+    )
 
     assert ratio_sum == pytest.approx(ref_ratio_sum)
     assert sample_count == ref_sample_count

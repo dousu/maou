@@ -344,7 +344,9 @@ def load_preprocessing_array(
                 if array is None:
                     try:
                         array = np.memmap(
-                            file_path, dtype=dtype, mode=mmap_mode
+                            file_path,
+                            dtype=dtype,
+                            mode=mmap_mode,
                         )
                         logger.debug(
                             "Loaded preprocessing array as memmap from %s",
@@ -356,7 +358,9 @@ def load_preprocessing_array(
                             file_path,
                             exc,
                         )
-                        array = np.fromfile(file_path, dtype=dtype)
+                        array = np.fromfile(
+                            file_path, dtype=dtype
+                        )
                         logger.debug(
                             "Loaded preprocessing array using fromfile() from %s "
                             "after memmap failure",
@@ -773,11 +777,11 @@ def _convert_to_packed_format(array: np.ndarray) -> np.ndarray:
 
 try:
     from maou.domain.data.rust_io import (
-        save_hcpe_df,
-        load_hcpe_df,
-        save_preprocessing_df,
-        load_preprocessing_df,
         RUST_BACKEND_AVAILABLE,
+        load_hcpe_df,
+        load_preprocessing_df,
+        save_hcpe_df,
+        save_preprocessing_df,
     )
 
     __all__ = [

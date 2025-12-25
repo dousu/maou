@@ -8,12 +8,12 @@ import logging
 import time
 from datetime import date
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import polars as pl
 import psutil
 
+from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.array_io import (
     load_hcpe_array,
     load_preprocessing_array,
@@ -32,8 +32,9 @@ from maou.domain.data.schema import (
     get_preprocessing_dtype,
     get_preprocessing_polars_schema,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.infra.file_system.file_data_source import FileDataSource
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +62,20 @@ class PerformanceBenchmark:
 
         for i in range(self.num_records):
             data[i]["hcp"] = np.frombuffer(
-                bytes([i % 256 for _ in range(32)]), dtype=np.uint8
+                bytes([i % 256 for _ in range(32)]),
+                dtype=np.uint8,
             )
             data[i]["eval"] = (i % 1000) - 500
             data[i]["bestMove16"] = i % 10000
             data[i]["gameResult"] = i % 3
             data[i]["id"] = f"id_{i:08d}"
-            data[i]["partitioningKey"] = np.datetime64("2025-12-25")
-            data[i]["ratings"] = [1500 + (i % 500), 1500 - (i % 500)]
+            data[i]["partitioningKey"] = np.datetime64(
+                "2025-12-25"
+            )
+            data[i]["ratings"] = [
+                1500 + (i % 500),
+                1500 - (i % 500),
+            ]
             data[i]["endgameStatus"] = "Toryo"
             data[i]["moves"] = 100 + (i % 100)
 
@@ -79,51 +86,90 @@ class PerformanceBenchmark:
         schema = get_hcpe_polars_schema()
 
         data = {
-            "hcp": [bytes([i % 256 for _ in range(32)]) for i in range(self.num_records)],
-            "eval": [(i % 1000) - 500 for i in range(self.num_records)],
-            "bestMove16": [i % 10000 for i in range(self.num_records)],
-            "gameResult": [i % 3 for i in range(self.num_records)],
-            "id": [f"id_{i:08d}" for i in range(self.num_records)],
-            "partitioningKey": [date(2025, 12, 25) for _ in range(self.num_records)],
-            "ratings": [[1500 + (i % 500), 1500 - (i % 500)] for i in range(self.num_records)],
-            "endgameStatus": ["Toryo" for _ in range(self.num_records)],
-            "moves": [100 + (i % 100) for i in range(self.num_records)],
+            "hcp": [
+                bytes([i % 256 for _ in range(32)])
+                for i in range(self.num_records)
+            ],
+            "eval": [
+                (i % 1000) - 500
+                for i in range(self.num_records)
+            ],
+            "bestMove16": [
+                i % 10000 for i in range(self.num_records)
+            ],
+            "gameResult": [
+                i % 3 for i in range(self.num_records)
+            ],
+            "id": [
+                f"id_{i:08d}" for i in range(self.num_records)
+            ],
+            "partitioningKey": [
+                date(2025, 12, 25)
+                for _ in range(self.num_records)
+            ],
+            "ratings": [
+                [1500 + (i % 500), 1500 - (i % 500)]
+                for i in range(self.num_records)
+            ],
+            "endgameStatus": [
+                "Toryo" for _ in range(self.num_records)
+            ],
+            "moves": [
+                100 + (i % 100) for i in range(self.num_records)
+            ],
         }
 
         return pl.DataFrame(data, schema=schema)
 
-    def _create_preprocessing_test_data_numpy(self) -> np.ndarray:
+    def _create_preprocessing_test_data_numpy(
+        self,
+    ) -> np.ndarray:
         """Create preprocessing test data as numpy array．"""
         dtype = get_preprocessing_dtype()
         data = np.zeros(self.num_records, dtype=dtype)
 
         for i in range(self.num_records):
             data[i]["id"] = i
-            data[i]["boardIdPositions"] = np.arange(81, dtype=np.uint8).reshape(9, 9)
-            data[i]["piecesInHand"] = np.arange(14, dtype=np.uint8)
-            data[i]["moveLabel"] = np.random.rand(MOVE_LABELS_NUM).astype(np.float32)
+            data[i]["boardIdPositions"] = np.arange(
+                81, dtype=np.uint8
+            ).reshape(9, 9)
+            data[i]["piecesInHand"] = np.arange(
+                14, dtype=np.uint8
+            )
+            data[i]["moveLabel"] = np.random.rand(
+                MOVE_LABELS_NUM
+            ).astype(np.float32)
             data[i]["resultValue"] = float(i % 2)
 
         return data
 
-    def _create_preprocessing_test_data_polars(self) -> pl.DataFrame:
+    def _create_preprocessing_test_data_polars(
+        self,
+    ) -> pl.DataFrame:
         """Create preprocessing test data as Polars DataFrame．"""
         schema = get_preprocessing_polars_schema()
 
         data = {
             "id": list(range(self.num_records)),
             "boardIdPositions": [
-                np.arange(81, dtype=np.uint8).reshape(9, 9).tolist()
+                np.arange(81, dtype=np.uint8)
+                .reshape(9, 9)
+                .tolist()
                 for _ in range(self.num_records)
             ],
             "piecesInHand": [
-                np.arange(14, dtype=np.uint8).tolist() for _ in range(self.num_records)
-            ],
-            "moveLabel": [
-                np.random.rand(MOVE_LABELS_NUM).astype(np.float32).tolist()
+                np.arange(14, dtype=np.uint8).tolist()
                 for _ in range(self.num_records)
             ],
-            "resultValue": [float(i % 2) for i in range(self.num_records)],
+            "moveLabel": [
+                np.random.rand(MOVE_LABELS_NUM)
+                .astype(np.float32)
+                .tolist()
+                for _ in range(self.num_records)
+            ],
+            "resultValue": [
+                float(i % 2) for i in range(self.num_records)
+            ],
         }
 
         return pl.DataFrame(data, schema=schema)
@@ -140,7 +186,9 @@ class PerformanceBenchmark:
         output_dir.mkdir(parents=True, exist_ok=True)
         results = {}
 
-        logger.info(f"Benchmarking HCPE I/O with {self.num_records} records")
+        logger.info(
+            f"Benchmarking HCPE I/O with {self.num_records} records"
+        )
 
         # Numpy baseline
         numpy_data = self._create_hcpe_test_data_numpy()
@@ -152,7 +200,7 @@ class PerformanceBenchmark:
         numpy_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        loaded_numpy = load_hcpe_array(numpy_path)
+        _ = load_hcpe_array(numpy_path)
         numpy_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -168,7 +216,7 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Numpy: save={numpy_save_time:.4f}s, load={numpy_load_time:.4f}s, "
-            f"size={numpy_file_size/1024/1024:.2f}MB"
+            f"size={numpy_file_size / 1024 / 1024:.2f}MB"
         )
 
         # Polars + Rust
@@ -181,7 +229,7 @@ class PerformanceBenchmark:
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        loaded_polars = load_hcpe_df(str(polars_path))
+        _ = load_hcpe_df(str(polars_path))
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -197,14 +245,15 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Polars: save={polars_save_time:.4f}s, load={polars_load_time:.4f}s, "
-            f"size={polars_file_size/1024/1024:.2f}MB"
+            f"size={polars_file_size / 1024 / 1024:.2f}MB"
         )
 
         # Calculate improvements
         results["improvement"] = {
             "save_speedup": numpy_save_time / polars_save_time,
             "load_speedup": numpy_load_time / polars_load_time,
-            "compression_ratio": numpy_file_size / polars_file_size,
+            "compression_ratio": numpy_file_size
+            / polars_file_size,
         }
 
         logger.info(
@@ -215,7 +264,9 @@ class PerformanceBenchmark:
 
         return results
 
-    def benchmark_preprocessing_io(self, output_dir: Path) -> dict:
+    def benchmark_preprocessing_io(
+        self, output_dir: Path
+    ) -> dict:
         """Benchmark preprocessing I/O performance．
 
         Args:
@@ -227,19 +278,25 @@ class PerformanceBenchmark:
         output_dir.mkdir(parents=True, exist_ok=True)
         results = {}
 
-        logger.info(f"Benchmarking preprocessing I/O with {self.num_records} records")
+        logger.info(
+            f"Benchmarking preprocessing I/O with {self.num_records} records"
+        )
 
         # Numpy baseline
-        numpy_data = self._create_preprocessing_test_data_numpy()
+        numpy_data = (
+            self._create_preprocessing_test_data_numpy()
+        )
         numpy_path = output_dir / "preprocessing_test.npy"
 
         mem_before = self._get_memory_mb()
         start = time.perf_counter()
-        save_preprocessing_array(numpy_data, numpy_path, bit_pack=True)
+        save_preprocessing_array(
+            numpy_data, numpy_path, bit_pack=True
+        )
         numpy_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        loaded_numpy = load_preprocessing_array(numpy_path, bit_pack=True)
+        _ = load_preprocessing_array(numpy_path, bit_pack=True)
         numpy_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -255,11 +312,13 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Numpy: save={numpy_save_time:.4f}s, load={numpy_load_time:.4f}s, "
-            f"size={numpy_file_size/1024/1024:.2f}MB"
+            f"size={numpy_file_size / 1024 / 1024:.2f}MB"
         )
 
         # Polars + Rust
-        polars_data = self._create_preprocessing_test_data_polars()
+        polars_data = (
+            self._create_preprocessing_test_data_polars()
+        )
         polars_path = output_dir / "preprocessing_test.feather"
 
         mem_before = self._get_memory_mb()
@@ -268,7 +327,7 @@ class PerformanceBenchmark:
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        loaded_polars = load_preprocessing_df(str(polars_path))
+        _ = load_preprocessing_df(str(polars_path))
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -284,14 +343,15 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Polars: save={polars_save_time:.4f}s, load={polars_load_time:.4f}s, "
-            f"size={polars_file_size/1024/1024:.2f}MB"
+            f"size={polars_file_size / 1024 / 1024:.2f}MB"
         )
 
         # Calculate improvements
         results["improvement"] = {
             "save_speedup": numpy_save_time / polars_save_time,
             "load_speedup": numpy_load_time / polars_load_time,
-            "compression_ratio": numpy_file_size / polars_file_size,
+            "compression_ratio": numpy_file_size
+            / polars_file_size,
         }
 
         logger.info(
@@ -302,7 +362,9 @@ class PerformanceBenchmark:
 
         return results
 
-    def benchmark_datasource_iteration(self, output_dir: Path) -> dict:
+    def benchmark_datasource_iteration(
+        self, output_dir: Path
+    ) -> dict:
         """Benchmark DataSource iteration performance．
 
         Args:
@@ -320,11 +382,17 @@ class PerformanceBenchmark:
         polars_path = output_dir / "iteration_test.feather"
 
         if not numpy_path.exists():
-            numpy_data = self._create_preprocessing_test_data_numpy()
-            save_preprocessing_array(numpy_data, numpy_path, bit_pack=True)
+            numpy_data = (
+                self._create_preprocessing_test_data_numpy()
+            )
+            save_preprocessing_array(
+                numpy_data, numpy_path, bit_pack=True
+            )
 
         if not polars_path.exists():
-            polars_data = self._create_preprocessing_test_data_polars()
+            polars_data = (
+                self._create_preprocessing_test_data_polars()
+            )
             save_preprocessing_df(polars_data, str(polars_path))
 
         # Benchmark numpy iteration
@@ -348,7 +416,7 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Numpy iteration: {numpy_iter_time:.4f}s, "
-            f"throughput={count/numpy_iter_time:.0f} records/s"
+            f"throughput={count / numpy_iter_time:.0f} records/s"
         )
 
         # Benchmark Polars iteration
@@ -372,7 +440,7 @@ class PerformanceBenchmark:
 
         logger.info(
             f"Polars iteration: {polars_iter_time:.4f}s, "
-            f"throughput={count/polars_iter_time:.0f} records/s"
+            f"throughput={count / polars_iter_time:.0f} records/s"
         )
 
         # Calculate improvement
@@ -380,11 +448,18 @@ class PerformanceBenchmark:
             "speedup": numpy_iter_time / polars_iter_time,
         }
 
-        logger.info(f"Speedup: {results['improvement']['speedup']:.2f}x")
+        logger.info(
+            f"Speedup: {results['improvement']['speedup']:.2f}x"
+        )
 
         return results
 
-    def print_summary(self, hcpe_results: dict, preprocessing_results: dict, iteration_results: dict):
+    def print_summary(
+        self,
+        hcpe_results: dict,
+        preprocessing_results: dict,
+        iteration_results: dict,
+    ) -> None:
         """Print benchmark summary．
 
         Args:
@@ -398,54 +473,103 @@ class PerformanceBenchmark:
 
         print("\n### HCPE Data I/O ###")
         print(f"Records: {self.num_records:,}")
-        print(f"\nNumpy (.npy):")
-        print(f"  Save: {hcpe_results['numpy']['save_time']:.4f}s")
-        print(f"  Load: {hcpe_results['numpy']['load_time']:.4f}s")
-        print(f"  Size: {hcpe_results['numpy']['file_size_mb']:.2f} MB")
+        print("\nNumpy (.npy):")
+        print(
+            f"  Save: {hcpe_results['numpy']['save_time']:.4f}s"
+        )
+        print(
+            f"  Load: {hcpe_results['numpy']['load_time']:.4f}s"
+        )
+        print(
+            f"  Size: {hcpe_results['numpy']['file_size_mb']:.2f} MB"
+        )
 
-        print(f"\nPolars + Rust (.feather):")
-        print(f"  Save: {hcpe_results['polars']['save_time']:.4f}s")
-        print(f"  Load: {hcpe_results['polars']['load_time']:.4f}s")
-        print(f"  Size: {hcpe_results['polars']['file_size_mb']:.2f} MB")
+        print("\nPolars + Rust (.feather):")
+        print(
+            f"  Save: {hcpe_results['polars']['save_time']:.4f}s"
+        )
+        print(
+            f"  Load: {hcpe_results['polars']['load_time']:.4f}s"
+        )
+        print(
+            f"  Size: {hcpe_results['polars']['file_size_mb']:.2f} MB"
+        )
 
-        print(f"\nImprovement:")
-        print(f"  Save speedup: {hcpe_results['improvement']['save_speedup']:.2f}x")
-        print(f"  Load speedup: {hcpe_results['improvement']['load_speedup']:.2f}x")
-        print(f"  Compression: {hcpe_results['improvement']['compression_ratio']:.2f}x")
+        print("\nImprovement:")
+        print(
+            f"  Save speedup: {hcpe_results['improvement']['save_speedup']:.2f}x"
+        )
+        print(
+            f"  Load speedup: {hcpe_results['improvement']['load_speedup']:.2f}x"
+        )
+        print(
+            f"  Compression: {hcpe_results['improvement']['compression_ratio']:.2f}x"
+        )
 
         print("\n### Preprocessing Data I/O ###")
         print(f"Records: {self.num_records:,}")
-        print(f"\nNumpy (.npy):")
-        print(f"  Save: {preprocessing_results['numpy']['save_time']:.4f}s")
-        print(f"  Load: {preprocessing_results['numpy']['load_time']:.4f}s")
-        print(f"  Size: {preprocessing_results['numpy']['file_size_mb']:.2f} MB")
+        print("\nNumpy (.npy):")
+        print(
+            f"  Save: {preprocessing_results['numpy']['save_time']:.4f}s"
+        )
+        print(
+            f"  Load: {preprocessing_results['numpy']['load_time']:.4f}s"
+        )
+        print(
+            f"  Size: {preprocessing_results['numpy']['file_size_mb']:.2f} MB"
+        )
 
-        print(f"\nPolars + Rust (.feather):")
-        print(f"  Save: {preprocessing_results['polars']['save_time']:.4f}s")
-        print(f"  Load: {preprocessing_results['polars']['load_time']:.4f}s")
-        print(f"  Size: {preprocessing_results['polars']['file_size_mb']:.2f} MB")
+        print("\nPolars + Rust (.feather):")
+        print(
+            f"  Save: {preprocessing_results['polars']['save_time']:.4f}s"
+        )
+        print(
+            f"  Load: {preprocessing_results['polars']['load_time']:.4f}s"
+        )
+        print(
+            f"  Size: {preprocessing_results['polars']['file_size_mb']:.2f} MB"
+        )
 
-        print(f"\nImprovement:")
-        print(f"  Save speedup: {preprocessing_results['improvement']['save_speedup']:.2f}x")
-        print(f"  Load speedup: {preprocessing_results['improvement']['load_speedup']:.2f}x")
-        print(f"  Compression: {preprocessing_results['improvement']['compression_ratio']:.2f}x")
+        print("\nImprovement:")
+        print(
+            f"  Save speedup: {preprocessing_results['improvement']['save_speedup']:.2f}x"
+        )
+        print(
+            f"  Load speedup: {preprocessing_results['improvement']['load_speedup']:.2f}x"
+        )
+        print(
+            f"  Compression: {preprocessing_results['improvement']['compression_ratio']:.2f}x"
+        )
 
         print("\n### DataSource Iteration ###")
-        print(f"\nNumpy:")
-        print(f"  Time: {iteration_results['numpy']['iteration_time']:.4f}s")
-        print(f"  Throughput: {iteration_results['numpy']['throughput']:.0f} records/s")
+        print("\nNumpy:")
+        print(
+            f"  Time: {iteration_results['numpy']['iteration_time']:.4f}s"
+        )
+        print(
+            f"  Throughput: {iteration_results['numpy']['throughput']:.0f} records/s"
+        )
 
-        print(f"\nPolars:")
-        print(f"  Time: {iteration_results['polars']['iteration_time']:.4f}s")
-        print(f"  Throughput: {iteration_results['polars']['throughput']:.0f} records/s")
+        print("\nPolars:")
+        print(
+            f"  Time: {iteration_results['polars']['iteration_time']:.4f}s"
+        )
+        print(
+            f"  Throughput: {iteration_results['polars']['throughput']:.0f} records/s"
+        )
 
-        print(f"\nImprovement:")
-        print(f"  Speedup: {iteration_results['improvement']['speedup']:.2f}x")
+        print("\nImprovement:")
+        print(
+            f"  Speedup: {iteration_results['improvement']['speedup']:.2f}x"
+        )
 
         print("\n" + "=" * 80)
 
 
-def main(output_dir: Path = Path("/tmp/benchmark_polars"), num_records: int = 10000):
+def main(
+    output_dir: Path = Path("/tmp/benchmark_polars"),
+    num_records: int = 10000,
+) -> None:
     """Run all benchmarks．
 
     Args:
@@ -460,16 +584,24 @@ def main(output_dir: Path = Path("/tmp/benchmark_polars"), num_records: int = 10
     benchmark = PerformanceBenchmark(num_records=num_records)
 
     hcpe_results = benchmark.benchmark_hcpe_io(output_dir)
-    preprocessing_results = benchmark.benchmark_preprocessing_io(output_dir)
-    iteration_results = benchmark.benchmark_datasource_iteration(output_dir)
+    preprocessing_results = (
+        benchmark.benchmark_preprocessing_io(output_dir)
+    )
+    iteration_results = (
+        benchmark.benchmark_datasource_iteration(output_dir)
+    )
 
-    benchmark.print_summary(hcpe_results, preprocessing_results, iteration_results)
+    benchmark.print_summary(
+        hcpe_results, preprocessing_results, iteration_results
+    )
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Benchmark Polars + Rust I/O performance")
+    parser = argparse.ArgumentParser(
+        description="Benchmark Polars + Rust I/O performance"
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -484,4 +616,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    main(output_dir=args.output_dir, num_records=args.num_records)
+    main(
+        output_dir=args.output_dir, num_records=args.num_records
+    )

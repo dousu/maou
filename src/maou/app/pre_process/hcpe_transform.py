@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import abc
 import contextlib
 import logging
@@ -5,7 +7,13 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ContextManager, Dict, Generator, Optional
+from typing import (
+    TYPE_CHECKING,
+    ContextManager,
+    Dict,
+    Generator,
+    Optional,
+)
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -13,6 +21,10 @@ from tqdm.auto import tqdm
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_array
+
+if TYPE_CHECKING:
+    import polars as pl
+
 from maou.domain.data.intermediate_store import (
     IntermediateDataStore,
 )
@@ -85,7 +97,9 @@ class DataSource:
                 "Install with: poetry add polars"
             )
 
-        from maou.domain.data.schema import get_hcpe_polars_schema
+        from maou.domain.data.schema import (
+            get_hcpe_polars_schema,
+        )
 
         schema = get_hcpe_polars_schema()
 
@@ -95,14 +109,24 @@ class DataSource:
         for name, array in self.iter_batches():
             # Convert structured array to dict of lists
             data = {}
+            assert array.dtype.names is not None
+            assert array.dtype.fields is not None
             for field in array.dtype.names:
                 field_data = array[field]
                 field_dtype = array.dtype.fields[field][0]
 
                 # Handle binary fields (convert uint8 arrays to bytes)
-                if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                if field == "hcp" or (
+                    field_dtype.shape
+                    and field_dtype.base == np.dtype("uint8")
+                ):
                     # Multi-dimensional uint8 field like hcp - convert to bytes
-                    data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                    data[field] = [
+                        bytes(row)
+                        if hasattr(row, "__iter__")
+                        else bytes([row])
+                        for row in field_data
+                    ]
                 else:
                     data[field] = field_data.tolist()
 

@@ -12,7 +12,9 @@ from torch.utils.data import DataLoader
 from maou.app.common.data_io_service import DataIOService
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.domain.data.array_io import save_preprocessing_array
-from maou.domain.data.schema import create_empty_preprocessing_array
+from maou.domain.data.schema import (
+    create_empty_preprocessing_array,
+)
 
 
 class _ArrayDataSource(DataSource):
@@ -28,7 +30,9 @@ class _ArrayDataSource(DataSource):
         return len(self._data)
 
 
-def test_preprocessed_batches_provide_legal_move_masks() -> None:
+def test_preprocessed_batches_provide_legal_move_masks() -> (
+    None
+):
     """Collating preprocessed records should yield a tensor mask, not ``None``."""
 
     dtype = np.dtype(
@@ -57,10 +61,14 @@ def test_preprocessed_batches_provide_legal_move_masks() -> None:
         dtype=dtype,
     )
 
-    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
 
     loader = DataLoader(dataset, batch_size=2)
-    (boards, pieces), (_, _, legal_move_mask) = next(iter(loader))
+    (boards, pieces), (_, _, legal_move_mask) = next(
+        iter(loader)
+    )
 
     assert isinstance(boards, torch.Tensor)
     assert boards.dtype == torch.uint8
@@ -95,7 +103,9 @@ def test_dataset_accepts_float16_move_labels() -> None:
         dtype=dtype,
     )
 
-    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
 
     (_, _), (policy, _, _) = dataset[0]
 
@@ -114,7 +124,9 @@ def test_dataset_requires_board_identifiers() -> None:
     )
     data = np.zeros(1, dtype=dtype)
 
-    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
 
     with pytest.raises(ValueError):
         dataset[0]
@@ -134,7 +146,9 @@ def test_numpy_to_tensor_requires_writeable_buffer() -> None:
     data = np.zeros(1, dtype=dtype)
     data.setflags(write=False)
 
-    dataset = KifDataset(datasource=_ArrayDataSource(data), transform=None)
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
 
     with pytest.raises(ValueError, match="read-only"):
         dataset[0]
@@ -176,4 +190,3 @@ def test_numpy_to_tensor_preserves_memmap_zero_copy(
 
     assert tensor.data_ptr() == ptr
     assert int(tensor[0, 0]) == 9
-

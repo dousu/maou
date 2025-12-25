@@ -65,9 +65,7 @@ def make_feature_from_board_state(
             "board_id_positions must have shape (9, 9)"
         )
     if pieces_in_hand.shape != (14,):
-        raise ValueError(
-            "pieces_in_hand must have shape (14,)"
-        )
+        raise ValueError("pieces_in_hand must have shape (14,)")
 
     offset = len(PieceId) - 1
 
@@ -110,7 +108,9 @@ def make_feature_from_board_state(
                 (row > PieceId.EMPTY.value) & (row <= offset)
             )
             white_count = np.count_nonzero(row > offset)
-            weighted_score += rank_weight * (black_count - white_count)
+            weighted_score += int(
+                rank_weight * (black_count - white_count)
+            )
         current_is_black = weighted_score >= 0
 
     for rank in range(9):

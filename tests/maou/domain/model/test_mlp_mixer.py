@@ -7,8 +7,13 @@ import pytest
 import torch
 
 try:  # pragma: no cover - import location varies across PyTorch versions
-    from torch.onnx import TracerWarning  # type: ignore[attr-defined]
-except (ImportError, AttributeError):  # pragma: no cover - fallback path
+    from torch.onnx import (
+        TracerWarning,  # type: ignore[attr-defined]
+    )
+except (
+    ImportError,
+    AttributeError,
+):  # pragma: no cover - fallback path
     from torch.onnx.errors import (
         OnnxExporterWarning as TracerWarning,
     )
@@ -44,7 +49,9 @@ def test_mlp_mixer_parameter_count() -> None:
     assert 8_500_000 <= param_count <= 9_500_000
 
 
-def test_mlp_mixer_summary_prints(capsys: pytest.CaptureFixture[str]) -> None:
+def test_mlp_mixer_summary_prints(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     model = ShogiMLPMixer(num_classes=2)
     print_model_summary(model)
     captured = capsys.readouterr().out
@@ -52,7 +59,9 @@ def test_mlp_mixer_summary_prints(capsys: pytest.CaptureFixture[str]) -> None:
     assert "Embedding dimension" in captured
 
 
-def test_mlp_mixer_onnx_export_without_tracer_warning(tmp_path: Path) -> None:
+def test_mlp_mixer_onnx_export_without_tracer_warning(
+    tmp_path: Path,
+) -> None:
     model = ShogiMLPMixer(num_classes=2)
     model.eval()
     x = torch.randn(1, 104, 9, 9)
@@ -66,5 +75,11 @@ def test_mlp_mixer_onnx_export_without_tracer_warning(tmp_path: Path) -> None:
             opset_version=12,
         )
 
-    tracer_warnings = [w for w in caught if issubclass(w.category, TracerWarning)]
-    assert not tracer_warnings, "Expected no TracerWarning during ONNX export"
+    tracer_warnings = [
+        w
+        for w in caught
+        if issubclass(w.category, TracerWarning)
+    ]
+    assert not tracer_warnings, (
+        "Expected no TracerWarning during ONNX export"
+    )

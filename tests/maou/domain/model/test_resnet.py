@@ -10,7 +10,9 @@ from maou.domain.model.resnet import (
 )
 
 
-def test_residual_block_preserves_shape_without_downsample() -> None:
+def test_residual_block_preserves_shape_without_downsample() -> (
+    None
+):
     block = ResidualBlock(in_channels=16, out_channels=16)
     x = torch.randn(2, 16, 8, 8)
 
@@ -70,7 +72,9 @@ def test_resnet_forward_shape_basic_configuration() -> None:
     assert out.shape == (2, 512, 7, 7)
 
 
-def test_resnet_forward_shape_bottleneck_configuration() -> None:
+def test_resnet_forward_shape_bottleneck_configuration() -> (
+    None
+):
     model = ResNet(
         block=BottleneckBlock,
         in_channels=64,

@@ -29,7 +29,9 @@ def test_scheduler_advances_with_start_epoch() -> None:
     # Learning rate should have changed
     advanced_lr = optimizer.param_groups[0]["lr"]
     assert advanced_lr != initial_lr
-    assert advanced_lr < initial_lr  # Cosine annealing decreases LR
+    assert (
+        advanced_lr < initial_lr
+    )  # Cosine annealing decreases LR
 
 
 def test_warmup_cosine_decay_scheduler_advances() -> None:
@@ -70,7 +72,9 @@ def test_warmup_cosine_decay_scheduler_advances() -> None:
     # epoch 0: (0+1)/2 = 0.5 * 0.1 = 0.05
     # epoch 1: (1+1)/2 = 1.0 * 0.1 = 0.1
     assert lr_epoch_0 < lr_epoch_1  # Warmup: increasing
-    assert lr_epoch_1 <= 0.1  # Should reach base LR by end of warmup
+    assert (
+        lr_epoch_1 <= 0.1
+    )  # Should reach base LR by end of warmup
 
     # After warmup (epochs 2+), LR should decrease (cosine decay)
     # epoch 2 is the start of decay, epoch 10 should have lower LR

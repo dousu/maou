@@ -87,7 +87,9 @@ class TestDataIOService:
                 loaded_array, prep_array
             )
 
-    def test_preprocessing_arrays_are_writeable_memmaps(self) -> None:
+    def test_preprocessing_arrays_are_writeable_memmaps(
+        self,
+    ) -> None:
         """Preprocessing arrays default to copy-on-write memory maps."""
 
         prep_array = create_empty_preprocessing_array(1)
@@ -248,8 +250,12 @@ class TestDataIOService:
 
             save_hcpe_array(hcpe_array, file_path)
 
-            def _raise_memory_error(*args: Any, **kwargs: Any) -> np.ndarray:
-                raise OSError(errno.ENOMEM, "Cannot allocate memory")
+            def _raise_memory_error(
+                *args: Any, **kwargs: Any
+            ) -> np.ndarray:
+                raise OSError(
+                    errno.ENOMEM, "Cannot allocate memory"
+                )
 
             monkeypatch.setattr(
                 "numpy.fromfile",

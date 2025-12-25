@@ -18,16 +18,23 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 try:
-    torch_attention_module: ModuleType | None = importlib.import_module(
-        "torch.nn.attention"
+    torch_attention_module: ModuleType | None = (
+        importlib.import_module("torch.nn.attention")
     )
-except (ImportError, AttributeError):  # pragma: no cover - fallback for older PyTorch
+except (
+    ImportError,
+    AttributeError,
+):  # pragma: no cover - fallback for older PyTorch
     torch_attention_module = None
 
-_SDPAKernelType = Callable[[list[Any]], AbstractContextManager[None]]
+_SDPAKernelType = Callable[
+    [list[Any]], AbstractContextManager[None]
+]
 
 if torch_attention_module is not None:
-    SDPBackend: Any | None = getattr(torch_attention_module, "SDPBackend", None)
+    SDPBackend: Any | None = getattr(
+        torch_attention_module, "SDPBackend", None
+    )
     torch_sdpa_kernel: _SDPAKernelType | None = cast(
         _SDPAKernelType | None,
         getattr(torch_attention_module, "sdpa_kernel", None),
@@ -106,9 +113,7 @@ class _FlashSelfAttention(nn.Module):
     ) -> None:
         super().__init__()
         if embed_dim % num_heads != 0:
-            msg = (
-                "embed_dim must be divisible by num_heads for multi-head attention"
-            )
+            msg = "embed_dim must be divisible by num_heads for multi-head attention"
             raise ValueError(msg)
 
         self.embed_dim = embed_dim
@@ -125,16 +130,27 @@ class _FlashSelfAttention(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         batch_size, seq_len, _ = x.shape
         qkv = self.qkv(x)
-        qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
+        qkv = qkv.view(
+            batch_size,
+            seq_len,
+            3,
+            self.num_heads,
+            self.head_dim,
+        )
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(dim=0)
 
         use_cuda = x.device.type == "cuda"
-        has_new_sdpa = torch_sdpa_kernel is not None and SDPBackend is not None
-        has_legacy_sdpa = hasattr(torch.backends, "cuda") and hasattr(
-            torch.backends.cuda, "sdp_kernel"
+        has_new_sdpa = (
+            torch_sdpa_kernel is not None
+            and SDPBackend is not None
         )
-        supports_specialized_kernels = use_cuda and (has_new_sdpa or has_legacy_sdpa)
+        has_legacy_sdpa = hasattr(
+            torch.backends, "cuda"
+        ) and hasattr(torch.backends.cuda, "sdp_kernel")
+        supports_specialized_kernels = use_cuda and (
+            has_new_sdpa or has_legacy_sdpa
+        )
         kernel_context: AbstractContextManager[None]
         if use_cuda and has_new_sdpa:
             assert torch_sdpa_kernel is not None
@@ -170,13 +186,18 @@ class _FlashSelfAttention(nn.Module):
                 assert torch_sdpa_kernel is not None
                 assert SDPBackend is not None
                 fallback_context = torch_sdpa_kernel(
-                    [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+                    [
+                        SDPBackend.EFFICIENT_ATTENTION,
+                        SDPBackend.MATH,
+                    ]
                 )
             else:
-                fallback_context = torch.backends.cuda.sdp_kernel(
-                    enable_flash=False,
-                    enable_mem_efficient=True,
-                    enable_math=True,
+                fallback_context = (
+                    torch.backends.cuda.sdp_kernel(
+                        enable_flash=False,
+                        enable_mem_efficient=True,
+                        enable_math=True,
+                    )
                 )
             with fallback_context:
                 attn = F.scaled_dot_product_attention(
@@ -187,14 +208,20 @@ class _FlashSelfAttention(nn.Module):
                     is_causal=False,
                 )
 
-        attn = attn.transpose(1, 2).contiguous().view(batch_size, seq_len, self.embed_dim)
+        attn = (
+            attn.transpose(1, 2)
+            .contiguous()
+            .view(batch_size, seq_len, self.embed_dim)
+        )
         return self.proj(attn)
 
 
 class VisionTransformer(nn.Module):
     """Vision Transformer designed around small board-shaped inputs."""
 
-    def __init__(self, config: VisionTransformerConfig | None = None) -> None:
+    def __init__(
+        self, config: VisionTransformerConfig | None = None
+    ) -> None:
         super().__init__()
         self.config = config or VisionTransformerConfig()
         self.embedding_dim = self.config.embed_dim
@@ -202,11 +229,18 @@ class VisionTransformer(nn.Module):
             self.config.input_channels, self.config.embed_dim
         )
         self.positional_embedding = nn.Parameter(
-            torch.zeros(1, self.config.num_tokens, self.config.embed_dim)
+            torch.zeros(
+                1, self.config.num_tokens, self.config.embed_dim
+            )
         )
-        self.embedding_dropout = nn.Dropout(p=self.config.dropout)
+        self.embedding_dropout = nn.Dropout(
+            p=self.config.dropout
+        )
         self.encoder: nn.ModuleList = nn.ModuleList(
-            [ViTEncoderBlock(self.config) for _ in range(self.config.num_layers)]
+            [
+                ViTEncoderBlock(self.config)
+                for _ in range(self.config.num_layers)
+            ]
         )
         self.norm = nn.LayerNorm(self.config.embed_dim)
         self.head: Optional[nn.Linear]
@@ -219,8 +253,12 @@ class VisionTransformer(nn.Module):
     def _reset_parameters(self) -> None:
         """Initialize learnable parameters."""
 
-        nn.init.trunc_normal_(self.positional_embedding, std=0.02)
-        nn.init.trunc_normal_(self.token_projection.weight, std=0.02)
+        nn.init.trunc_normal_(
+            self.positional_embedding, std=0.02
+        )
+        nn.init.trunc_normal_(
+            self.token_projection.weight, std=0.02
+        )
         if self.token_projection.bias is not None:
             nn.init.zeros_(self.token_projection.bias)
         if self.head is not None:

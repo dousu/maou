@@ -5,11 +5,16 @@ that can be used by infrastructure layer components while maintaining
 Clean Architecture dependency rules.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import polars as pl
 
 from maou.app.common.data_io_service import (
     DataIOService,
@@ -231,7 +236,9 @@ def load_df_from_bytes(
     elif array_type == "preprocessing":
         return load_preprocessing_df_from_bytes(data)
     else:
-        raise ValueError(f"Unsupported array_type: {array_type}")
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )
 
 
 def save_df_to_bytes(
@@ -266,4 +273,6 @@ def save_df_to_bytes(
     elif array_type == "preprocessing":
         return save_preprocessing_df_to_bytes(df)
     else:
-        raise ValueError(f"Unsupported array_type: {array_type}")
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )

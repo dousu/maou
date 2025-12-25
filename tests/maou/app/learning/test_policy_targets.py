@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import torch
 
-from maou.app.learning.policy_targets import normalize_policy_targets
+from maou.app.learning.policy_targets import (
+    normalize_policy_targets,
+)
 
 
 def test_normalize_policy_targets_without_mask() -> None:
@@ -13,7 +15,9 @@ def test_normalize_policy_targets_without_mask() -> None:
         dtype=torch.float32,
     )
 
-    normalized = normalize_policy_targets(labels, legal_move_mask=None)
+    normalized = normalize_policy_targets(
+        labels, legal_move_mask=None
+    )
 
     expected = torch.tensor(
         [[0.125, 0.375, 0.5], [0.5, 0.25, 0.25]],

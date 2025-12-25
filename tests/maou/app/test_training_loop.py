@@ -21,7 +21,9 @@ def test_network_separate_inputs_accepts_list() -> None:
     board = torch.zeros((2, 9, 9), dtype=torch.long)
     pieces = torch.zeros((2, 14), dtype=torch.float32)
 
-    separated_board, separated_pieces = Network._separate_inputs([board, pieces])
+    separated_board, separated_pieces = (
+        Network._separate_inputs([board, pieces])
+    )
 
     assert separated_board is board
     assert separated_pieces is pieces

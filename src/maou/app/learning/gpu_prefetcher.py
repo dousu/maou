@@ -21,7 +21,7 @@ GPU prefetchラッパーを提供する．
 import logging
 import queue
 import threading
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader
@@ -86,6 +86,7 @@ class DataPrefetcher:
         self.logger = logging.getLogger(__name__)
 
         # CUDA streamを作成（非同期転送用）
+        self.stream: torch.cuda.Stream | None
         if self.device.type == "cuda":
             self.stream = torch.cuda.Stream(device=self.device)
         else:
@@ -96,7 +97,10 @@ class DataPrefetcher:
             )
 
         # pin_memoryの設定を確認・上書き
-        if pin_memory_override is not None and pin_memory_override:
+        if (
+            pin_memory_override is not None
+            and pin_memory_override
+        ):
             if hasattr(loader, "pin_memory"):
                 if not loader.pin_memory:
                     self.logger.info(
@@ -110,7 +114,9 @@ class DataPrefetcher:
                 )
 
         # バッファリング用のキュー
-        self.queue: queue.Queue = queue.Queue(maxsize=buffer_size)
+        self.queue: queue.Queue = queue.Queue(
+            maxsize=buffer_size
+        )
         self.thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.exception: Optional[Exception] = None

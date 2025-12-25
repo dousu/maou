@@ -1,17 +1,20 @@
-import base64
-import hashlib
+from __future__ import annotations
+
 import logging
 import random
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import numpy as np
 from tqdm.auto import tqdm
 
 from maou.interface import learn, preprocess
 from maou.interface.data_io import load_array
+
+if TYPE_CHECKING:
+    import polars as pl
 
 
 class MissingObjectStorageConfig(Exception):
@@ -133,7 +136,9 @@ class ObjectStorageDataSource(
                 if sample_ratio is not None
                 else None
             )
-            self.preprocessing_mmap_mode = preprocessing_mmap_mode
+            self.preprocessing_mmap_mode = (
+                preprocessing_mmap_mode
+            )
             if local_cache_dir is None:
                 raise ValueError(
                     "local_cache_dir must be specified"
@@ -168,7 +173,9 @@ class ObjectStorageDataSource(
                     array = load_array(
                         file_path,
                         mmap_mode=(
-                            "r" if self.array_type == "hcpe" else None
+                            "r"
+                            if self.array_type == "hcpe"
+                            else None
                         ),
                         array_type=self.array_type,
                         bit_pack=False,
@@ -285,7 +292,9 @@ class ObjectStorageDataSource(
                 # Download files in parallel
                 self.file_paths = []
                 local_data_path = self.__get_local_data_path()
-                local_data_path.mkdir(parents=True, exist_ok=True)
+                local_data_path.mkdir(
+                    parents=True, exist_ok=True
+                )
 
                 with ThreadPoolExecutor(
                     max_workers=self.max_workers
@@ -311,13 +320,26 @@ class ObjectStorageDataSource(
                             byte_list = future.result()
 
                             # Save .feather files directly (no bundling)
-                            for i, byte_data in enumerate(byte_list):
-                                object_path = chunk["object_paths"][i]
-                                feather_name = Path(object_path).name
-                                feather_path = local_data_path / feather_name
+                            for i, byte_data in enumerate(
+                                byte_list
+                            ):
+                                object_path = chunk[
+                                    "object_paths"
+                                ][i]
+                                feather_name = Path(
+                                    object_path
+                                ).name
+                                feather_path = (
+                                    local_data_path
+                                    / feather_name
+                                )
 
-                                feather_path.write_bytes(byte_data)
-                                self.file_paths.append(feather_path)
+                                feather_path.write_bytes(
+                                    byte_data
+                                )
+                                self.file_paths.append(
+                                    feather_path
+                                )
 
                                 self.logger.debug(
                                     f"Saved .feather file: {feather_path}"
@@ -508,14 +530,24 @@ class ObjectStorageDataSource(
         # Convert numpy arrays to DataFrames
         for name, array in self.__page_manager.iter_batches():
             data = {}
+            assert array.dtype.names is not None
+            assert array.dtype.fields is not None
             for field in array.dtype.names:
                 field_data = array[field]
                 field_dtype = array.dtype.fields[field][0]
 
                 # Handle binary fields (convert uint8 arrays to bytes)
-                if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                if field == "hcp" or (
+                    field_dtype.shape
+                    and field_dtype.base == np.dtype("uint8")
+                ):
                     # Multi-dimensional uint8 field like hcp - convert to bytes
-                    data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                    data[field] = [
+                        bytes(row)
+                        if hasattr(row, "__iter__")
+                        else bytes([row])
+                        for row in field_data
+                    ]
                 else:
                     data[field] = field_data.tolist()
 

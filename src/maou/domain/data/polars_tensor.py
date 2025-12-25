@@ -4,8 +4,10 @@
 ユーティリティ関数を提供する．
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Union
+from typing import Any, Union, cast
 
 import numpy as np
 import polars as pl
@@ -35,7 +37,7 @@ def polars_row_to_preprocessing_tensors(
     """
     if from_dict:
         # Dict-based access (named=True)
-        data = row
+        data = cast(dict[str, Any], row)
         board_id_positions = data["boardIdPositions"]
         pieces_in_hand = data["piecesInHand"]
         move_label = data["moveLabel"]
@@ -58,14 +60,20 @@ def polars_row_to_preprocessing_tensors(
     board_tensor = torch.from_numpy(board_array)
     pieces_in_hand_tensor = torch.from_numpy(pieces_array)
     move_label_tensor = torch.from_numpy(move_label_array)
-    result_value_tensor = torch.tensor(result_value, dtype=torch.float32).reshape((1,))
+    result_value_tensor = torch.tensor(
+        result_value, dtype=torch.float32
+    ).reshape((1,))
 
     # Create legal move mask (all ones for preprocessing data)
     legal_move_mask_tensor = torch.ones_like(move_label_tensor)
 
     return (
         (board_tensor, pieces_in_hand_tensor),
-        (move_label_tensor, result_value_tensor, legal_move_mask_tensor),
+        (
+            move_label_tensor,
+            result_value_tensor,
+            legal_move_mask_tensor,
+        ),
     )
 
 
@@ -84,7 +92,7 @@ def polars_row_to_hcpe_arrays(
         Tuple of (hcp, bestMove16, gameResult, eval)
     """
     if from_dict:
-        data = row
+        data = cast(dict[str, Any], row)
         hcp = data["hcp"]
         best_move16 = data["bestMove16"]
         game_result = data["gameResult"]
@@ -120,7 +128,7 @@ def polars_row_to_stage1_tensors(
             - target: reachable_squares_tensor (81-dimensional)
     """
     if from_dict:
-        data = row
+        data = cast(dict[str, Any], row)
         board_id_positions = data["boardIdPositions"]
         pieces_in_hand = data["piecesInHand"]
         reachable_squares = data["reachableSquares"]
@@ -134,12 +142,16 @@ def polars_row_to_stage1_tensors(
     # Convert to numpy arrays
     board_array = np.array(board_id_positions, dtype=np.uint8)
     pieces_array = np.array(pieces_in_hand, dtype=np.uint8)
-    reachable_array = np.array(reachable_squares, dtype=np.uint8).flatten()
+    reachable_array = np.array(
+        reachable_squares, dtype=np.uint8
+    ).flatten()
 
     # Convert to tensors
     board_tensor = torch.from_numpy(board_array)
     pieces_in_hand_tensor = torch.from_numpy(pieces_array)
-    reachable_squares_tensor = torch.from_numpy(reachable_array).float()
+    reachable_squares_tensor = torch.from_numpy(
+        reachable_array
+    ).float()
 
     return (
         (board_tensor, pieces_in_hand_tensor),
@@ -167,7 +179,7 @@ def polars_row_to_stage2_tensors(
             - target: legal_moves_tensor (2187-dimensional)
     """
     if from_dict:
-        data = row
+        data = cast(dict[str, Any], row)
         board_id_positions = data["boardIdPositions"]
         pieces_in_hand = data["piecesInHand"]
         legal_moves = data["legalMovesLabel"]
@@ -186,7 +198,9 @@ def polars_row_to_stage2_tensors(
     # Convert to tensors
     board_tensor = torch.from_numpy(board_array)
     pieces_in_hand_tensor = torch.from_numpy(pieces_array)
-    legal_moves_tensor = torch.from_numpy(legal_moves_array).float()
+    legal_moves_tensor = torch.from_numpy(
+        legal_moves_array
+    ).float()
 
     return (
         (board_tensor, pieces_in_hand_tensor),
@@ -199,7 +213,10 @@ def dataframe_to_tensor_batch(
     *,
     array_type: str,
 ) -> Union[
-    tuple[tuple[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+    tuple[
+        tuple[torch.Tensor, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    ],
     tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor],
 ]:
     """Convert an entire Polars DataFrame to batched tensors．
@@ -211,8 +228,6 @@ def dataframe_to_tensor_batch(
     Returns:
         Batched tensors depending on array_type
     """
-    batch_size = len(df)
-
     if array_type == "preprocessing":
         # Extract columns
         board_list = df["boardIdPositions"].to_list()
@@ -221,15 +236,29 @@ def dataframe_to_tensor_batch(
         result_value_list = df["resultValue"].to_list()
 
         # Convert to batched tensors
-        board_tensor = torch.tensor(board_list, dtype=torch.uint8)
-        pieces_tensor = torch.tensor(pieces_list, dtype=torch.uint8)
-        move_label_tensor = torch.tensor(move_label_list, dtype=torch.float32)
-        result_value_tensor = torch.tensor(result_value_list, dtype=torch.float32).reshape(-1, 1)
-        legal_move_mask_tensor = torch.ones_like(move_label_tensor)
+        board_tensor = torch.tensor(
+            board_list, dtype=torch.uint8
+        )
+        pieces_tensor = torch.tensor(
+            pieces_list, dtype=torch.uint8
+        )
+        move_label_tensor = torch.tensor(
+            move_label_list, dtype=torch.float32
+        )
+        result_value_tensor = torch.tensor(
+            result_value_list, dtype=torch.float32
+        ).reshape(-1, 1)
+        legal_move_mask_tensor = torch.ones_like(
+            move_label_tensor
+        )
 
         return (
             (board_tensor, pieces_tensor),
-            (move_label_tensor, result_value_tensor, legal_move_mask_tensor),
+            (
+                move_label_tensor,
+                result_value_tensor,
+                legal_move_mask_tensor,
+            ),
         )
 
     elif array_type == "stage1":
@@ -237,9 +266,17 @@ def dataframe_to_tensor_batch(
         pieces_list = df["piecesInHand"].to_list()
         reachable_list = df["reachableSquares"].to_list()
 
-        board_tensor = torch.tensor(board_list, dtype=torch.uint8)
-        pieces_tensor = torch.tensor(pieces_list, dtype=torch.uint8)
-        reachable_tensor = torch.tensor(reachable_list, dtype=torch.uint8).flatten(1).float()
+        board_tensor = torch.tensor(
+            board_list, dtype=torch.uint8
+        )
+        pieces_tensor = torch.tensor(
+            pieces_list, dtype=torch.uint8
+        )
+        reachable_tensor = (
+            torch.tensor(reachable_list, dtype=torch.uint8)
+            .flatten(1)
+            .float()
+        )
 
         return (
             (board_tensor, pieces_tensor),
@@ -251,9 +288,15 @@ def dataframe_to_tensor_batch(
         pieces_list = df["piecesInHand"].to_list()
         legal_moves_list = df["legalMovesLabel"].to_list()
 
-        board_tensor = torch.tensor(board_list, dtype=torch.uint8)
-        pieces_tensor = torch.tensor(pieces_list, dtype=torch.uint8)
-        legal_moves_tensor = torch.tensor(legal_moves_list, dtype=torch.uint8).float()
+        board_tensor = torch.tensor(
+            board_list, dtype=torch.uint8
+        )
+        pieces_tensor = torch.tensor(
+            pieces_list, dtype=torch.uint8
+        )
+        legal_moves_tensor = torch.tensor(
+            legal_moves_list, dtype=torch.uint8
+        ).float()
 
         return (
             (board_tensor, pieces_tensor),
@@ -261,4 +304,6 @@ def dataframe_to_tensor_batch(
         )
 
     else:
-        raise ValueError(f"Unsupported array_type: {array_type}")
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )

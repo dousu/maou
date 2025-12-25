@@ -28,7 +28,9 @@ def normalize_policy_targets(
 
     target_dtype = dtype or labels_policy.dtype
     target_device = device or labels_policy.device
-    targets = labels_policy.to(device=target_device, dtype=target_dtype)
+    targets = labels_policy.to(
+        device=target_device, dtype=target_dtype
+    )
 
     if legal_move_mask is not None:
         targets = targets * legal_move_mask.to(
@@ -42,4 +44,3 @@ def normalize_policy_targets(
         torch.ones_like(target_sum),
     )
     return targets / safe_sum
-

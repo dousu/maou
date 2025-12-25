@@ -9,16 +9,17 @@ Polars DataFrameとして扱うためのPythonラッパーを提供する．
 - 型安全なインターフェース
 """
 
-import polars as pl
 from pathlib import Path
-from typing import Union
+from typing import Union, cast
+
+import polars as pl
 
 try:
     from maou._rust.maou_io import (
-        save_hcpe_feather,
         load_hcpe_feather,
-        save_preprocessing_feather,
         load_preprocessing_feather,
+        save_hcpe_feather,
+        save_preprocessing_feather,
     )
 
     RUST_BACKEND_AVAILABLE = True
@@ -36,7 +37,9 @@ def _check_rust_backend() -> None:
         )
 
 
-def save_hcpe_df(df: pl.DataFrame, file_path: Union[Path, str]) -> None:
+def save_hcpe_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
     """HCPE DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
     Polars DataFrameをArrow RecordBatchに変換し，Rustで実装された
@@ -55,7 +58,11 @@ def save_hcpe_df(df: pl.DataFrame, file_path: Union[Path, str]) -> None:
     # Polars → Arrow Table → RecordBatch（ゼロコピー）
     arrow_table = df.to_arrow()
     # Convert Table to RecordBatch (combine all batches)
-    arrow_batch = arrow_table.to_batches()[0] if len(arrow_table) > 0 else arrow_table.to_batches(max_chunksize=None)[0]
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
 
     # Rust関数を呼び出し
     save_hcpe_feather(arrow_batch, str(file_path))
@@ -83,10 +90,12 @@ def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
     arrow_batch = load_hcpe_feather(str(file_path))
 
     # Arrow → Polars（ゼロコピー）
-    return pl.from_arrow(arrow_batch)
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
-def save_preprocessing_df(df: pl.DataFrame, file_path: Union[Path, str]) -> None:
+def save_preprocessing_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
     """前処理済みDataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
     Args:
@@ -101,11 +110,17 @@ def save_preprocessing_df(df: pl.DataFrame, file_path: Union[Path, str]) -> None
 
     # Polars → Arrow Table → RecordBatch
     arrow_table = df.to_arrow()
-    arrow_batch = arrow_table.to_batches()[0] if len(arrow_table) > 0 else arrow_table.to_batches(max_chunksize=None)[0]
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
     save_preprocessing_feather(arrow_batch, str(file_path))
 
 
-def load_preprocessing_df(file_path: Union[Path, str]) -> pl.DataFrame:
+def load_preprocessing_df(
+    file_path: Union[Path, str],
+) -> pl.DataFrame:
     """前処理済みDataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
     Args:
@@ -121,4 +136,4 @@ def load_preprocessing_df(file_path: Union[Path, str]) -> pl.DataFrame:
     _check_rust_backend()
 
     arrow_batch = load_preprocessing_feather(str(file_path))
-    return pl.from_arrow(arrow_batch)
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))

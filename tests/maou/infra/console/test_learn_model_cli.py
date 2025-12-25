@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
 
 from maou.domain.data.schema import get_hcpe_dtype
 from maou.infra.console import learn_model
@@ -67,7 +67,11 @@ def test_learn_model_detect_anomaly_flag(
 
         result = runner.invoke(
             learn_model.learn_model,
-            ["--input-dir", str(input_path), "--detect-anomaly"],
+            [
+                "--input-dir",
+                str(input_path),
+                "--detect-anomaly",
+            ],
         )
 
     assert result.exit_code == 0, result.output

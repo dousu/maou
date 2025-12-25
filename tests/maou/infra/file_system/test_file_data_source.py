@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import gc
 import logging
+import weakref
 from pathlib import Path
 from typing import Any
-import weakref
 
 import numpy as np
 import pytest
@@ -79,15 +79,21 @@ def _create_preprocessing_files(
         array = np.zeros(rows_per_file, dtype=dtype)
         # Set unique values for each record to verify data integrity
         for row_index in range(rows_per_file):
-            global_index = file_index * rows_per_file + row_index
+            global_index = (
+                file_index * rows_per_file + row_index
+            )
             # Use global index to make each record unique
             array[row_index]["id"] = global_index
-            array[row_index]["resultValue"] = float(
-                global_index % 100
-            ) / 100.0
+            array[row_index]["resultValue"] = (
+                float(global_index % 100) / 100.0
+            )
             # Set some board positions to verify array structure
-            array[row_index]["boardIdPositions"][0, 0] = file_index
-            array[row_index]["boardIdPositions"][0, 1] = row_index
+            array[row_index]["boardIdPositions"][0, 0] = (
+                file_index
+            )
+            array[row_index]["boardIdPositions"][0, 1] = (
+                row_index
+            )
 
         path = directory / f"preprocessing_{file_index}.npy"
         np.save(path, array)
@@ -111,9 +117,7 @@ def test_iter_batches_uses_metadata_reload(
     ArrayTracker.active_instances = 0
     ArrayTracker.peak_instances = 0
 
-    def raising_memmap(
-        *args: Any, **kwargs: Any
-    ) -> np.memmap:
+    def raising_memmap(*args: Any, **kwargs: Any) -> np.memmap:
         raise OSError("memmap disabled for testing")
 
     original_fromfile = np.fromfile
@@ -270,7 +274,9 @@ def test_memory_mode_concatenates_multiple_files(
 
     # Verify concatenated array was created
     assert manager._concatenated_array is not None
-    assert len(manager._concatenated_array) == 400  # 4 files × 100 rows
+    assert (
+        len(manager._concatenated_array) == 400
+    )  # 4 files × 100 rows
 
     # Verify individual file caches were released
     for entry in manager._file_entries:
@@ -323,7 +329,9 @@ def test_concatenated_array_data_integrity(
     )
 
     # Verify each record matches the original
-    for file_idx, reference_array in enumerate(reference_arrays):
+    for file_idx, reference_array in enumerate(
+        reference_arrays
+    ):
         start_idx = file_idx * 20
         for row_idx in range(20):
             global_idx = start_idx + row_idx
@@ -332,13 +340,17 @@ def test_concatenated_array_data_integrity(
 
             # Compare all fields
             assert retrieved["id"] == expected["id"]
-            assert retrieved["resultValue"] == expected["resultValue"]
+            assert (
+                retrieved["resultValue"]
+                == expected["resultValue"]
+            )
             np.testing.assert_array_equal(
                 retrieved["boardIdPositions"],
                 expected["boardIdPositions"],
             )
             np.testing.assert_array_equal(
-                retrieved["piecesInHand"], expected["piecesInHand"]
+                retrieved["piecesInHand"],
+                expected["piecesInHand"],
             )
 
 
@@ -496,7 +508,20 @@ def test_file_data_source_integration_with_concatenation(
     assert len(datasource) == 150
 
     # Test random access
-    test_indices = [0, 1, 29, 30, 31, 59, 60, 89, 90, 119, 120, 149]
+    test_indices = [
+        0,
+        1,
+        29,
+        30,
+        31,
+        59,
+        60,
+        89,
+        90,
+        119,
+        120,
+        149,
+    ]
     for idx in test_indices:
         record = datasource[idx]
         assert record["id"] == idx

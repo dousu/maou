@@ -17,7 +17,9 @@ from maou.app.learning.gpu_prefetcher import (
     DataPrefetcher,
     calculate_recommended_buffer_size,
 )
-from maou.app.learning.policy_targets import normalize_policy_targets
+from maou.app.learning.policy_targets import (
+    normalize_policy_targets,
+)
 
 
 class TrainingLoop:
@@ -68,7 +70,9 @@ class TrainingLoop:
                 )
 
         # Gradient accumulation設定
-        self.gradient_accumulation_steps = max(1, gradient_accumulation_steps)
+        self.gradient_accumulation_steps = max(
+            1, gradient_accumulation_steps
+        )
         if self.gradient_accumulation_steps > 1:
             self.logger.info(
                 f"Gradient accumulation enabled: {gradient_accumulation_steps} steps "
@@ -150,8 +154,10 @@ class TrainingLoop:
             if self.enable_gpu_prefetch:
                 # バッファサイズの決定（0以下の場合は自動計算）
                 if self.gpu_prefetch_buffer_size <= 0:
-                    buffer_size = calculate_recommended_buffer_size(
-                        dataloader.batch_size
+                    buffer_size = (
+                        calculate_recommended_buffer_size(
+                            dataloader.batch_size
+                        )
                     )
                     self.logger.info(
                         f"Auto-calculated GPU prefetch buffer size: {buffer_size} "
@@ -236,7 +242,10 @@ class TrainingLoop:
 
         finally:
             # GPU prefetcherのクリーンアップ
-            if self.enable_gpu_prefetch and 'prefetcher' in locals():
+            if (
+                self.enable_gpu_prefetch
+                and "prefetcher" in locals()
+            ):
                 prefetcher.shutdown()
 
             if (
@@ -300,8 +309,12 @@ class TrainingLoop:
     def _train_batch(self, context: TrainingContext) -> None:
         """Train a single batch with gradient computation."""
         # Gradient accumulationのステップを計算
-        accumulation_step = context.batch_idx % self.gradient_accumulation_steps
-        is_accumulation_step = accumulation_step < (self.gradient_accumulation_steps - 1)
+        accumulation_step = (
+            context.batch_idx % self.gradient_accumulation_steps
+        )
+        is_accumulation_step = accumulation_step < (
+            self.gradient_accumulation_steps - 1
+        )
 
         # 勾配蓄積サイクルの最初のステップでのみ勾配をクリア
         if accumulation_step == 0:
@@ -309,12 +322,18 @@ class TrainingLoop:
 
         # Mixed precision training with autocast
         if self.scaler is not None:
-            self._train_batch_mixed_precision(context, is_accumulation_step)
+            self._train_batch_mixed_precision(
+                context, is_accumulation_step
+            )
         else:
-            self._train_batch_full_precision(context, is_accumulation_step)
+            self._train_batch_full_precision(
+                context, is_accumulation_step
+            )
 
     def _train_batch_mixed_precision(
-        self, context: TrainingContext, is_accumulation_step: bool
+        self,
+        context: TrainingContext,
+        is_accumulation_step: bool,
     ) -> None:
         """Train batch with mixed precision."""
         if self.scaler is None:
@@ -341,10 +360,9 @@ class TrainingLoop:
             )
             # Gradient accumulation: 損失を蓄積ステップ数で正規化
             context.loss = (
-                (self.policy_loss_ratio * policy_loss
-                + self.value_loss_ratio * value_loss)
-                / self.gradient_accumulation_steps
-            )
+                self.policy_loss_ratio * policy_loss
+                + self.value_loss_ratio * value_loss
+            ) / self.gradient_accumulation_steps
             loss_is_finite = torch.isfinite(context.loss)
             policy_loss_is_finite = torch.isfinite(policy_loss)
             value_loss_is_finite = torch.isfinite(value_loss)
@@ -421,10 +439,17 @@ class TrainingLoop:
         *,
         non_blocking: bool = True,
     ) -> ModelInputs:
-        def move(value: object, path: tuple[int, ...]) -> object:
+        def move(
+            value: object, path: tuple[int, ...]
+        ) -> object:
             if isinstance(value, torch.Tensor):
-                target_dtype = self._infer_input_dtype(path, value)
-                if target_dtype is not None and value.dtype != target_dtype:
+                target_dtype = self._infer_input_dtype(
+                    path, value
+                )
+                if (
+                    target_dtype is not None
+                    and value.dtype != target_dtype
+                ):
                     return value.to(
                         device=device,
                         dtype=target_dtype,
@@ -457,7 +482,9 @@ class TrainingLoop:
             return None
 
         root_index = index_path[0]
-        if root_index == 0 and not torch.is_floating_point(tensor):
+        if root_index == 0 and not torch.is_floating_point(
+            tensor
+        ):
             return torch.long
         if root_index == 1 and tensor.dtype != torch.float32:
             return torch.float32
@@ -473,8 +500,14 @@ class TrainingLoop:
                     return int(element.size(0))
                 if isinstance(element, Sequence):
                     try:
-                        return TrainingLoop._resolve_batch_size(element)
-                    except (AttributeError, TypeError, ValueError):
+                        return TrainingLoop._resolve_batch_size(
+                            element
+                        )
+                    except (
+                        AttributeError,
+                        TypeError,
+                        ValueError,
+                    ):
                         continue
             msg = "Unable to resolve batch size from nested inputs."
             raise TypeError(msg)
@@ -482,7 +515,9 @@ class TrainingLoop:
         raise TypeError(msg)
 
     def _train_batch_full_precision(
-        self, context: TrainingContext, is_accumulation_step: bool
+        self,
+        context: TrainingContext,
+        is_accumulation_step: bool,
     ) -> None:
         """Train batch with full precision."""
         # 順伝播
@@ -508,10 +543,9 @@ class TrainingLoop:
         )
         # Gradient accumulation: 損失を蓄積ステップ数で正規化
         context.loss = (
-            (self.policy_loss_ratio * policy_loss
-            + self.value_loss_ratio * value_loss)
-            / self.gradient_accumulation_steps
-        )
+            self.policy_loss_ratio * policy_loss
+            + self.value_loss_ratio * value_loss
+        ) / self.gradient_accumulation_steps
         loss_is_finite = torch.isfinite(context.loss)
         policy_loss_is_finite = torch.isfinite(policy_loss)
         value_loss_is_finite = torch.isfinite(value_loss)
@@ -697,5 +731,9 @@ class TrainingLoop:
             dtype=policy_log_probs.dtype,
             device=policy_log_probs.device,
         )
-        context.policy_target_distribution = policy_targets.detach()
-        return self.loss_fn_policy(policy_log_probs, policy_targets)
+        context.policy_target_distribution = (
+            policy_targets.detach()
+        )
+        return self.loss_fn_policy(
+            policy_log_probs, policy_targets
+        )

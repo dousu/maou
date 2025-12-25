@@ -46,7 +46,9 @@ def test_transform_returns_board_features() -> None:
     assert isinstance(move_label, int)
     assert isinstance(result_value, float)
     np.testing.assert_array_equal(board_ids, expected_board_ids)
-    np.testing.assert_array_equal(pieces_in_hand, expected_pieces_in_hand)
+    np.testing.assert_array_equal(
+        pieces_in_hand, expected_pieces_in_hand
+    )
 
 
 class TestMakeBoardIdPositions:
@@ -92,7 +94,9 @@ class TestGetBoardIdPositions:
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)
 
-    def test_returns_offset_piece_ids_for_white_pieces(self) -> None:
+    def test_returns_offset_piece_ids_for_white_pieces(
+        self,
+    ) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/8p b - 1")
 
@@ -105,7 +109,9 @@ class TestGetBoardIdPositions:
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)
 
-    def test_returns_offset_for_promoted_white_pieces(self) -> None:
+    def test_returns_offset_for_promoted_white_pieces(
+        self,
+    ) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/8+p b - 1")
 
@@ -157,7 +163,9 @@ class TestMakeFeatureFromBoardState:
             "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
         )
 
-        board_id_positions = feature.make_board_id_positions(board)
+        board_id_positions = feature.make_board_id_positions(
+            board
+        )
         pieces_in_hand = feature.make_pieces_in_hand(board)
         expected = feature.make_feature(board)
         reconstructed = feature.make_feature_from_board_state(
@@ -167,12 +175,16 @@ class TestMakeFeatureFromBoardState:
 
         np.testing.assert_array_equal(reconstructed, expected)
 
-    def test_reconstructs_feature_planes_for_white_turn(self) -> None:
+    def test_reconstructs_feature_planes_for_white_turn(
+        self,
+    ) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/9 b 2PLGB3pnr 1")
         board.set_turn(Turn.WHITE)
 
-        board_id_positions = feature.make_board_id_positions(board)
+        board_id_positions = feature.make_board_id_positions(
+            board
+        )
         pieces_in_hand = feature.make_pieces_in_hand(board)
         expected = feature.make_feature(board)
         reconstructed = feature.make_feature_from_board_state(
@@ -186,7 +198,9 @@ class TestMakeFeatureFromBoardState:
         board_id_positions = np.zeros((8, 9), dtype=np.uint8)
         pieces_in_hand = np.zeros((14,), dtype=np.uint8)
 
-        with pytest.raises(ValueError, match="board_id_positions"):
+        with pytest.raises(
+            ValueError, match="board_id_positions"
+        ):
             feature.make_feature_from_board_state(
                 board_id_positions,
                 pieces_in_hand,
@@ -221,14 +235,16 @@ class TestMakeFeatureFromBoardState:
 
         offset = 0
         for max_count in shogi.MAX_PIECES_IN_HAND:
-            block = current_hand_planes[offset : offset + max_count]
+            block = current_hand_planes[
+                offset : offset + max_count
+            ]
             assert np.all(block == 1)
             offset += max_count
 
         offset = 0
         for max_count in shogi.MAX_PIECES_IN_HAND:
-            block = opponent_hand_planes[offset : offset + max_count]
+            block = opponent_hand_planes[
+                offset : offset + max_count
+            ]
             assert np.all(block == 1)
             offset += max_count
-
-

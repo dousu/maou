@@ -104,7 +104,7 @@ class ObjectStorageFeatureStore(
 
         # バッファに追加
         self.__buffer.append(dataframe)
-        self.__buffer_size += dataframe.estimated_size()
+        self.__buffer_size += int(dataframe.estimated_size())
         self.logger.debug(
             f"Buffered table size: {self.__buffer_size} bytes"
         )

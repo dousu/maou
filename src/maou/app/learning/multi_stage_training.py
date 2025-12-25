@@ -106,6 +106,7 @@ class SingleStageTrainingLoop:
         self.head.to(device)
 
         # Mixed precision scaler for GPU training
+        self.scaler: torch.amp.GradScaler | None
         if self.device.type == "cuda":
             self.scaler = torch.amp.GradScaler("cuda")
         else:

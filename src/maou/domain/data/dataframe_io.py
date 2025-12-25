@@ -69,7 +69,9 @@ def save_preprocessing_df_to_bytes(df: pl.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
-def load_preprocessing_df_from_bytes(data: bytes) -> pl.DataFrame:
+def load_preprocessing_df_from_bytes(
+    data: bytes,
+) -> pl.DataFrame:
     """Deserialize preprocessing DataFrame from bytes．
 
     Args:
@@ -108,7 +110,9 @@ def save_df_to_bytes(
     elif array_type == "preprocessing":
         return save_preprocessing_df_to_bytes(df)
     else:
-        raise ValueError(f"Unsupported array_type: {array_type}")
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )
 
 
 def load_df_from_bytes(
@@ -133,4 +137,6 @@ def load_df_from_bytes(
     elif array_type == "preprocessing":
         return load_preprocessing_df_from_bytes(data)
     else:
-        raise ValueError(f"Unsupported array_type: {array_type}")
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )

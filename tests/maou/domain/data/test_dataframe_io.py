@@ -1,5 +1,7 @@
 """Tests for DataFrame byte serialization．"""
 
+from __future__ import annotations
+
 import time
 from datetime import date
 
@@ -23,18 +25,23 @@ from maou.domain.data.schema import (
 class TestHCPEDataFrameSerialization:
     """Test HCPE DataFrame serialization to bytes．"""
 
-    def test_save_load_hcpe_df_roundtrip(self):
+    def test_save_load_hcpe_df_roundtrip(self) -> None:
         """Test DataFrame → bytes → DataFrame preserves data．"""
         schema = get_hcpe_polars_schema()
 
         # Create test DataFrame
-        data = {
-            "hcp": [bytes([i % 256 for _ in range(32)]) for i in range(100)],
+        data: dict[str, list] = {
+            "hcp": [
+                bytes([i % 256 for _ in range(32)])
+                for i in range(100)
+            ],
             "eval": [i - 50 for i in range(100)],
             "bestMove16": [i * 10 for i in range(100)],
             "gameResult": [i % 3 for i in range(100)],
             "id": [f"id_{i:08d}" for i in range(100)],
-            "partitioningKey": [date(2025, 12, 25) for _ in range(100)],
+            "partitioningKey": [
+                date(2025, 12, 25) for _ in range(100)
+            ],
             "ratings": [[1500, 1500] for _ in range(100)],
             "endgameStatus": ["Toryo" for _ in range(100)],
             "moves": [100 + i for i in range(100)],
@@ -56,7 +63,7 @@ class TestHCPEDataFrameSerialization:
         assert df_loaded["bestMove16"][0] == 0
         assert df_loaded["hcp"][0] == data["hcp"][0]
 
-    def test_compression_reduces_size(self):
+    def test_compression_reduces_size(self) -> None:
         """Verify LZ4 compression reduces byte size．"""
         schema = get_hcpe_polars_schema()
 
@@ -81,21 +88,31 @@ class TestHCPEDataFrameSerialization:
         # Check size (should be significantly smaller than uncompressed)
         # Estimated uncompressed: ~60KB for 1000 records
         # With LZ4 compression: should be < 30KB
-        assert len(bytes_data) < 30000, f"Compressed size: {len(bytes_data)} bytes"
+        assert len(bytes_data) < 30000, (
+            f"Compressed size: {len(bytes_data)} bytes"
+        )
 
-    def test_serialization_performance(self):
+    def test_serialization_performance(self) -> None:
         """Benchmark: <1ms for 10K rows．"""
         schema = get_hcpe_polars_schema()
 
         # Create 10K records
         data = {
-            "hcp": [bytes([i % 256 for _ in range(32)]) for i in range(10000)],
+            "hcp": [
+                bytes([i % 256 for _ in range(32)])
+                for i in range(10000)
+            ],
             "eval": [i - 5000 for i in range(10000)],
             "bestMove16": [i % 10000 for i in range(10000)],
             "gameResult": [i % 3 for i in range(10000)],
             "id": [f"id_{i:08d}" for i in range(10000)],
-            "partitioningKey": [date(2025, 12, 25) for _ in range(10000)],
-            "ratings": [[1500 + i % 500, 1500 - i % 500] for i in range(10000)],
+            "partitioningKey": [
+                date(2025, 12, 25) for _ in range(10000)
+            ],
+            "ratings": [
+                [1500 + i % 500, 1500 - i % 500]
+                for i in range(10000)
+            ],
             "endgameStatus": ["Toryo" for _ in range(10000)],
             "moves": [100 + i % 100 for i in range(10000)],
         }
@@ -109,36 +126,51 @@ class TestHCPEDataFrameSerialization:
 
         # Benchmark deserialization
         start = time.perf_counter()
-        df_loaded = load_hcpe_df_from_bytes(bytes_data)
+        _ = load_hcpe_df_from_bytes(bytes_data)
         deserialize_time = time.perf_counter() - start
 
         # Verify performance
         # Note: This may vary based on hardware, so we use a generous threshold
-        assert serialize_time < 0.01, f"Serialization took {serialize_time:.4f}s"
-        assert deserialize_time < 0.01, f"Deserialization took {deserialize_time:.4f}s"
+        assert serialize_time < 0.01, (
+            f"Serialization took {serialize_time:.4f}s"
+        )
+        assert deserialize_time < 0.01, (
+            f"Deserialization took {deserialize_time:.4f}s"
+        )
 
-        print(f"Serialization: {serialize_time:.4f}s, Deserialization: {deserialize_time:.4f}s")
+        print(
+            f"Serialization: {serialize_time:.4f}s, Deserialization: {deserialize_time:.4f}s"
+        )
 
 
 class TestPreprocessingDataFrameSerialization:
     """Test preprocessing DataFrame serialization to bytes．"""
 
-    def test_save_load_preprocessing_df_roundtrip(self):
+    def test_save_load_preprocessing_df_roundtrip(self) -> None:
         """Test DataFrame → bytes → DataFrame preserves data．"""
         schema = get_preprocessing_polars_schema()
 
         # Create test DataFrame
-        from maou.app.pre_process.label import MOVE_LABELS_NUM
         import numpy as np
+
+        from maou.app.pre_process.label import MOVE_LABELS_NUM
 
         data = {
             "id": list(range(100)),
             "boardIdPositions": [
-                np.arange(81, dtype=np.uint8).reshape(9, 9).tolist() for _ in range(100)
+                np.arange(81, dtype=np.uint8)
+                .reshape(9, 9)
+                .tolist()
+                for _ in range(100)
             ],
-            "piecesInHand": [np.arange(14, dtype=np.uint8).tolist() for _ in range(100)],
+            "piecesInHand": [
+                np.arange(14, dtype=np.uint8).tolist()
+                for _ in range(100)
+            ],
             "moveLabel": [
-                np.random.rand(MOVE_LABELS_NUM).astype(np.float32).tolist()
+                np.random.rand(MOVE_LABELS_NUM)
+                .astype(np.float32)
+                .tolist()
                 for _ in range(100)
             ],
             "resultValue": [float(i % 2) for i in range(100)],
@@ -162,7 +194,7 @@ class TestPreprocessingDataFrameSerialization:
 class TestGenericDataFrameSerialization:
     """Test generic save_df_to_bytes and load_df_from_bytes functions．"""
 
-    def test_save_load_with_array_type_hcpe(self):
+    def test_save_load_with_array_type_hcpe(self) -> None:
         """Test generic functions with array_type='hcpe'．"""
         schema = get_hcpe_polars_schema()
 
@@ -172,7 +204,9 @@ class TestGenericDataFrameSerialization:
             "bestMove16": [0] * 10,
             "gameResult": [0] * 10,
             "id": [f"id_{i}" for i in range(10)],
-            "partitioningKey": [date(2025, 12, 25) for _ in range(10)],
+            "partitioningKey": [
+                date(2025, 12, 25) for _ in range(10)
+            ],
             "ratings": [[1500, 1500] for _ in range(10)],
             "endgameStatus": ["Toryo"] * 10,
             "moves": [100] * 10,
@@ -182,25 +216,38 @@ class TestGenericDataFrameSerialization:
 
         # Use generic functions
         bytes_data = save_df_to_bytes(df, array_type="hcpe")
-        df_loaded = load_df_from_bytes(bytes_data, array_type="hcpe")
+        df_loaded = load_df_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
 
         assert len(df_loaded) == 10
 
-    def test_save_load_with_array_type_preprocessing(self):
+    def test_save_load_with_array_type_preprocessing(
+        self,
+    ) -> None:
         """Test generic functions with array_type='preprocessing'．"""
         schema = get_preprocessing_polars_schema()
 
-        from maou.app.pre_process.label import MOVE_LABELS_NUM
         import numpy as np
+
+        from maou.app.pre_process.label import MOVE_LABELS_NUM
 
         data = {
             "id": list(range(10)),
             "boardIdPositions": [
-                np.arange(81, dtype=np.uint8).reshape(9, 9).tolist() for _ in range(10)
+                np.arange(81, dtype=np.uint8)
+                .reshape(9, 9)
+                .tolist()
+                for _ in range(10)
             ],
-            "piecesInHand": [np.arange(14, dtype=np.uint8).tolist() for _ in range(10)],
+            "piecesInHand": [
+                np.arange(14, dtype=np.uint8).tolist()
+                for _ in range(10)
+            ],
             "moveLabel": [
-                np.random.rand(MOVE_LABELS_NUM).astype(np.float32).tolist()
+                np.random.rand(MOVE_LABELS_NUM)
+                .astype(np.float32)
+                .tolist()
                 for _ in range(10)
             ],
             "resultValue": [0.0] * 10,
@@ -209,12 +256,16 @@ class TestGenericDataFrameSerialization:
         df = pl.DataFrame(data, schema=schema)
 
         # Use generic functions
-        bytes_data = save_df_to_bytes(df, array_type="preprocessing")
-        df_loaded = load_df_from_bytes(bytes_data, array_type="preprocessing")
+        bytes_data = save_df_to_bytes(
+            df, array_type="preprocessing"
+        )
+        df_loaded = load_df_from_bytes(
+            bytes_data, array_type="preprocessing"
+        )
 
         assert len(df_loaded) == 10
 
-    def test_invalid_array_type_raises_error(self):
+    def test_invalid_array_type_raises_error(self) -> None:
         """Test that invalid array_type raises ValueError．"""
         schema = get_hcpe_polars_schema()
 
@@ -232,8 +283,12 @@ class TestGenericDataFrameSerialization:
 
         df = pl.DataFrame(data, schema=schema)
 
-        with pytest.raises(ValueError, match="Unsupported array_type"):
+        with pytest.raises(
+            ValueError, match="Unsupported array_type"
+        ):
             save_df_to_bytes(df, array_type="invalid")  # type: ignore
 
-        with pytest.raises(ValueError, match="Unsupported array_type"):
+        with pytest.raises(
+            ValueError, match="Unsupported array_type"
+        ):
             load_df_from_bytes(b"dummy", array_type="invalid")  # type: ignore

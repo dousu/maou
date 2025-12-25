@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Final, Optional, Tuple, Type, TYPE_CHECKING, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Optional,
+    Tuple,
+    Type,
+    cast,
+)
 
 import torch
 from torch._dynamo.exc import (
@@ -12,15 +19,23 @@ from torch._dynamo.exc import (
 )
 
 if TYPE_CHECKING:
-    from torch._inductor.exc import InductorError as InductorErrorType
+    from torch._inductor.exc import (
+        InductorError as InductorErrorType,
+    )
 else:  # pragma: no cover - optional import for CUDA builds only
     try:
-        from torch._inductor.exc import InductorError as InductorErrorType
-    except Exception:  # pragma: no cover - CPU builds omit torch._inductor
+        from torch._inductor.exc import (
+            InductorError as InductorErrorType,
+        )
+    except (
+        Exception
+    ):  # pragma: no cover - CPU builds omit torch._inductor
+
         class InductorErrorType(RuntimeError):
             """Fallback when torch._inductor is unavailable."""
 
             pass
+
 
 InductorError = InductorErrorType
 

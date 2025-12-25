@@ -64,7 +64,9 @@ class BenchmarkConfig:
 
 
 InputStructure: TypeAlias = (
-    torch.Tensor | tuple["InputStructure", ...] | list["InputStructure"]
+    torch.Tensor
+    | tuple["InputStructure", ...]
+    | list["InputStructure"]
 )
 
 
@@ -214,12 +216,16 @@ class DataLoaderBenchmark:
             return self._move_tensor(inputs, index_path=path)
         if isinstance(inputs, tuple):
             return tuple(
-                self._move_inputs_to_device(item, path + (index,))
+                self._move_inputs_to_device(
+                    item, path + (index,)
+                )
                 for index, item in enumerate(inputs)
             )
         if isinstance(inputs, list):
             return [
-                self._move_inputs_to_device(item, path + (index,))
+                self._move_inputs_to_device(
+                    item, path + (index,)
+                )
                 for index, item in enumerate(inputs)
             ]
         raise TypeError(
@@ -233,8 +239,13 @@ class DataLoaderBenchmark:
         *,
         index_path: tuple[int, ...],
     ) -> torch.Tensor:
-        target_dtype = self._infer_input_dtype(index_path, tensor)
-        if target_dtype is not None and tensor.dtype != target_dtype:
+        target_dtype = self._infer_input_dtype(
+            index_path, tensor
+        )
+        if (
+            target_dtype is not None
+            and tensor.dtype != target_dtype
+        ):
             return tensor.to(
                 device=self.config.device,
                 dtype=target_dtype,
@@ -254,7 +265,9 @@ class DataLoaderBenchmark:
             return None
 
         root_index = index_path[0]
-        if root_index == 0 and not torch.is_floating_point(tensor):
+        if root_index == 0 and not torch.is_floating_point(
+            tensor
+        ):
             return torch.long
         if root_index == 1 and tensor.dtype != torch.float32:
             return torch.float32

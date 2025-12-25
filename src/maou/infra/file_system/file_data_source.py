@@ -1,9 +1,18 @@
+from __future__ import annotations
+
 import logging
 import random
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Optional,
+    Union,
+    cast,
+)
 
 import numpy as np
 from numpy import memmap as NpMemMap
@@ -14,6 +23,9 @@ from maou.interface.data_schema import (
     convert_array_from_packed_schema,
     convert_record_from_packed_schema,
 )
+
+if TYPE_CHECKING:
+    import polars as pl
 
 
 class MissingFileDataConfig(Exception):
@@ -160,7 +172,6 @@ class FileDataSource(
                         # Load feather file to get length
                         # We'll import only when needed to avoid circular imports
                         try:
-                            import polars as pl
                             from maou.domain.data.rust_io import (
                                 load_hcpe_df,
                                 load_preprocessing_df,
@@ -168,8 +179,13 @@ class FileDataSource(
 
                             if self.array_type == "hcpe":
                                 df = load_hcpe_df(file_path)
-                            elif self.array_type == "preprocessing":
-                                df = load_preprocessing_df(file_path)
+                            elif (
+                                self.array_type
+                                == "preprocessing"
+                            ):
+                                df = load_preprocessing_df(
+                                    file_path
+                                )
                             else:
                                 raise ValueError(
                                     f"Unsupported array_type for .feather: {self.array_type}"
@@ -181,7 +197,9 @@ class FileDataSource(
                                 FileDataSource.FileManager._FileEntry(
                                     name=file_path.name,
                                     path=file_path,
-                                    dtype=object,  # Placeholder
+                                    dtype=np.dtype(
+                                        "object"
+                                    ),  # Placeholder
                                     length=array_length,
                                     memmap=None,
                                     cached_array=df,  # type: ignore # Store DataFrame
@@ -686,7 +704,10 @@ class FileDataSource(
 
                     if self.__file_manager.array_type == "hcpe":
                         df = load_hcpe_df(entry.path)
-                    elif self.__file_manager.array_type == "preprocessing":
+                    elif (
+                        self.__file_manager.array_type
+                        == "preprocessing"
+                    ):
                         df = load_preprocessing_df(entry.path)
                     else:
                         raise ValueError(
@@ -701,7 +722,9 @@ class FileDataSource(
                 elif entry.memmap is not None:
                     array = entry.memmap
                 else:
-                    from maou.interface.data_io import load_array
+                    from maou.interface.data_io import (
+                        load_array,
+                    )
 
                     array = load_array(
                         entry.path,
@@ -712,14 +735,25 @@ class FileDataSource(
 
                 # Convert to DataFrame
                 data = {}
+                assert array.dtype.names is not None
+                assert array.dtype.fields is not None
                 for field in array.dtype.names:
                     field_data = array[field]
                     field_dtype = array.dtype.fields[field][0]
 
                     # Handle binary fields (convert uint8 arrays to bytes)
-                    if field == "hcp" or (field_dtype.shape and field_dtype.base == np.dtype('uint8')):
+                    if field == "hcp" or (
+                        field_dtype.shape
+                        and field_dtype.base
+                        == np.dtype("uint8")
+                    ):
                         # Multi-dimensional uint8 field like hcp - convert to bytes
-                        data[field] = [bytes(row) if hasattr(row, '__iter__') else bytes([row]) for row in field_data]
+                        data[field] = [
+                            bytes(row)
+                            if hasattr(row, "__iter__")
+                            else bytes([row])
+                            for row in field_data
+                        ]
                     else:
                         data[field] = field_data.tolist()
 

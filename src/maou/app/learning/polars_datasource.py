@@ -4,13 +4,17 @@
 変換するDataSourceラッパーを提供する．
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Literal, Union
+from typing import Any, Literal
 
-import polars as pl
 import numpy as np
+import polars as pl
 
-from maou.domain.data.polars_tensor import polars_row_to_hcpe_arrays
+from maou.domain.data.polars_tensor import (
+    polars_row_to_hcpe_arrays,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,9 @@ class PolarsDataFrameSource:
         self,
         *,
         dataframe: pl.DataFrame,
-        array_type: Literal["hcpe", "preprocessing", "stage1", "stage2"],
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
     ):
         """Initialize Polars DataFrame source．
 
@@ -46,7 +52,7 @@ class PolarsDataFrameSource:
     def __len__(self) -> int:
         return self._length
 
-    def __getitem__(self, idx: int) -> Union[np.ndarray, dict]:
+    def __getitem__(self, idx: int) -> _PolarsRow:
         """Get a single row as numpy-compatible format．
 
         For preprocessing/stage1/stage2 data，returns a dict that mimics
@@ -58,18 +64,22 @@ class PolarsDataFrameSource:
             idx: Row index
 
         Returns:
-            Dict mimicking numpy structured array access
+            _PolarsRow mimicking numpy structured array access
         """
         if idx < 0 or idx >= self._length:
-            raise IndexError(f"Index {idx} out of range [0, {self._length})")
+            raise IndexError(
+                f"Index {idx} out of range [0, {self._length})"
+            )
 
         # Get row as tuple (faster than named dict)
         row_tuple = self.dataframe.row(idx)
 
         if self.array_type == "hcpe":
             # HCPE data: Return dict with fields needed by Transform
-            hcp, best_move16, game_result, eval_value = polars_row_to_hcpe_arrays(
-                row_tuple, from_dict=False
+            hcp, best_move16, game_result, eval_value = (
+                polars_row_to_hcpe_arrays(
+                    row_tuple, from_dict=False
+                )
             )
 
             # Create a dict that mimics numpy structured array
@@ -117,7 +127,9 @@ class PolarsDataFrameSource:
             )
 
         else:
-            raise ValueError(f"Unsupported array_type: {self.array_type}")
+            raise ValueError(
+                f"Unsupported array_type: {self.array_type}"
+            )
 
 
 class _PolarsRow:
@@ -127,11 +139,11 @@ class _PolarsRow:
     that expects numpy structured arrays．
     """
 
-    def __init__(self, data: dict):
+    def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
         self.dtype = _FakeDtype(list(data.keys()))
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> _PolarsField:
         """Get field value．
 
         Returns a _PolarsField wrapper that provides .item() method
@@ -140,14 +152,14 @@ class _PolarsRow:
         value = self._data[key]
         return _PolarsField(value)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"_PolarsRow({self._data})"
 
 
 class _PolarsField:
     """Wrapper for Polars field values that mimics numpy array/scalar behavior．"""
 
-    def __init__(self, value):
+    def __init__(self, value: Any) -> None:
         self._value = value
         # Convert Polars list to numpy array for tensor conversion
         if isinstance(value, list):
@@ -155,7 +167,9 @@ class _PolarsField:
             # For board/pieces: uint8, for moveLabel: float32
             if value and isinstance(value[0], list):
                 # Nested list (e.g., boardIdPositions)
-                self._array = np.array(value, dtype=np.uint8)
+                self._array: np.ndarray[Any, Any] | None = (
+                    np.array(value, dtype=np.uint8)
+                )
             elif value and isinstance(value[0], float):
                 # Float list (e.g., moveLabel)
                 self._array = np.array(value, dtype=np.float32)
@@ -166,55 +180,61 @@ class _PolarsField:
             # Scalar value
             self._array = None
 
-    def item(self):
+    def item(self) -> Any:
         """Return scalar value (mimics numpy scalar .item() method)．"""
         if self._array is not None:
-            raise ValueError("Cannot call .item() on array field")
+            raise ValueError(
+                "Cannot call .item() on array field"
+            )
         return self._value
 
-    def tolist(self):
+    def tolist(self) -> list[Any]:
         """Convert to list (for array fields)．"""
         if self._array is not None:
             return self._array.tolist()
         return [self._value]
 
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype[Any]:
         """Return dtype (mimics numpy array)．"""
         if self._array is not None:
             return self._array.dtype
         # Return dtype for scalar
         if isinstance(self._value, int):
-            return np.dtype('int64')
+            return np.dtype("int64")
         elif isinstance(self._value, float):
-            return np.dtype('float64')
-        return np.dtype('object')
+            return np.dtype("float64")
+        return np.dtype("object")
 
     @property
-    def flags(self):
+    def flags(self) -> Any:
         """Return flags (mimics numpy array)．"""
         if self._array is not None:
             return self._array.flags
         # For scalars, create fake flags
-        return type('FakeFlags', (), {
-            'c_contiguous': True,
-            'writeable': True,
-        })()
+        return type(
+            "FakeFlags",
+            (),
+            {
+                "c_contiguous": True,
+                "writeable": True,
+            },
+        )()
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...]:
         """Return shape (mimics numpy array)．"""
         if self._array is not None:
             return self._array.shape
         return ()
 
-    def __array__(self):
+    def __array__(self) -> np.ndarray[Any, Any]:
         """Return numpy array (allows np.asarray() to work)．"""
         if self._array is not None:
             return self._array
         return np.array(self._value)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self._array is not None:
             return repr(self._array)
         return repr(self._value)

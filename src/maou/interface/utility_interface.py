@@ -15,7 +15,6 @@ from maou.app.utility.training_benchmark import (
     TrainingBenchmarkUseCase,
 )
 from maou.interface.learn import (
-    SUPPORTED_LR_SCHEDULERS,
     normalize_lr_scheduler_name,
 )
 
