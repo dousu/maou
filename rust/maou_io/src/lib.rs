@@ -5,6 +5,7 @@ use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 mod arrow_io;
 mod error;
 mod schema;
+mod sparse_array;
 
 #[pyfunction]
 fn hello() -> PyResult<String> {
@@ -48,5 +49,11 @@ fn maou_io(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_hcpe_feather, m)?)?;
     m.add_function(wrap_pyfunction!(save_preprocessing_feather, m)?)?;
     m.add_function(wrap_pyfunction!(load_preprocessing_feather, m)?)?;
+
+    // Sparse array compression functions
+    m.add_function(wrap_pyfunction!(sparse_array::compress_sparse_array_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_array::expand_sparse_array_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_array::add_sparse_arrays_rust, m)?)?;
+
     Ok(())
 }

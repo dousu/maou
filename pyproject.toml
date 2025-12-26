@@ -16,6 +16,7 @@ dependencies = [
     "google-crc32c>=1.6.0",
     "psutil>=6.0.0",
     "polars>=1.0.0",
+    "duckdb (>=1.4.3,<2.0.0)",
 ]
 
 [project.optional-dependencies]

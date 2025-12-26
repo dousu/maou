@@ -427,7 +427,7 @@ class PreProcess:
             temp_dir = tempfile.mkdtemp(
                 prefix="maou_preprocess_"
             )
-            db_path = Path(temp_dir) / "intermediate.db"
+            db_path = Path(temp_dir) / "intermediate.duckdb"
             self.logger.info(
                 f"Using temporary directory: {temp_dir}"
             )
@@ -437,7 +437,7 @@ class PreProcess:
             )
             db_path = (
                 self.__intermediate_cache_dir
-                / "intermediate.db"
+                / "intermediate.duckdb"
             )
             self.logger.info(
                 f"Using cache directory: {self.__intermediate_cache_dir}"
