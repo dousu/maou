@@ -16,7 +16,14 @@ def test_transform_returns_board_features() -> None:
         "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/"
         "LNSGKGSNL b - 1"
     )
-    hcp = board.get_hcp()[0]["hcp"]
+    hcp_df = board.get_hcp_df()
+    hcp_bytes = hcp_df["hcp"][0]
+
+    # Convert bytes to numpy array for Transform
+    import cshogi
+
+    hcp = np.frombuffer(hcp_bytes, dtype=cshogi.HuffmanCodedPos)  # type: ignore
+
     move = next(board.get_legal_moves())
     move16 = shogi.move16(move)
 
@@ -63,10 +70,11 @@ class TestMakeBoardIdPositions:
 
         assert result.shape == (9, 9)
         assert result.dtype == np.uint8
-        np.testing.assert_array_equal(
-            result,
-            board.get_board_id_positions(),
+        df = board.get_board_id_positions_df()
+        expected = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
         )
+        np.testing.assert_array_equal(result, expected)
 
     def test_white_turn_rotates_board_positions(self) -> None:
         board = Board()
@@ -75,18 +83,23 @@ class TestMakeBoardIdPositions:
 
         result = feature.make_board_id_positions(board)
 
-        np.testing.assert_array_equal(
-            result,
-            np.rot90(board.get_board_id_positions(), 2),
+        df = board.get_board_id_positions_df()
+        positions = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
         )
+        expected = np.rot90(positions, 2)
+        np.testing.assert_array_equal(result, expected)
 
 
-class TestGetBoardIdPositions:
+class TestGetBoardIdPositionsDF:
     def test_returns_piece_ids_for_black_pieces(self) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/P8 b - 1")
 
-        result = board.get_board_id_positions()
+        df = board.get_board_id_positions_df()
+        result = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
+        )
 
         expected = np.zeros((9, 9), dtype=np.uint8)
         expected[8, 8] = PieceId.FU.value
@@ -100,7 +113,10 @@ class TestGetBoardIdPositions:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/8p b - 1")
 
-        result = board.get_board_id_positions()
+        df = board.get_board_id_positions_df()
+        result = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
+        )
 
         expected = np.zeros((9, 9), dtype=np.uint8)
         offset = len(PieceId) - 1
@@ -115,7 +131,10 @@ class TestGetBoardIdPositions:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/8+p b - 1")
 
-        result = board.get_board_id_positions()
+        df = board.get_board_id_positions_df()
+        result = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
+        )
 
         expected = np.zeros((9, 9), dtype=np.uint8)
         offset = len(PieceId) - 1
@@ -123,6 +142,77 @@ class TestGetBoardIdPositions:
 
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)
+
+
+class TestMakeBoardIdPositionsDF:
+    """Tests for DataFrame version of make_board_id_positions．"""
+
+    def test_black_turn_returns_board_positions_df(
+        self,
+    ) -> None:
+        """Test that DataFrame version returns correct data for black turn．"""
+        board = Board()
+        board.set_sfen("9/9/9/9/4k4/9/9/9/4K4 b - 1")
+
+        result_df = feature.make_board_id_positions_df(board)
+
+        # Verify it's a DataFrame with correct schema
+        assert len(result_df) == 1
+
+        from maou.domain.data.schema import (
+            get_board_position_polars_schema,
+        )
+
+        assert (
+            result_df.schema
+            == get_board_position_polars_schema()
+        )
+
+        # Verify data matches numpy version
+        result_np = feature.make_board_id_positions(board)
+        df_positions = np.array(
+            result_df["boardIdPositions"].to_list()[0],
+            dtype=np.uint8,
+        )
+        np.testing.assert_array_equal(result_np, df_positions)
+
+    def test_white_turn_rotates_board_positions_df(
+        self,
+    ) -> None:
+        """Test that DataFrame version rotates board for white turn．"""
+        board = Board()
+        board.set_sfen("8k/9/9/9/9/9/9/9/K8 b - 1")
+        board.set_turn(Turn.WHITE)
+
+        result_df = feature.make_board_id_positions_df(board)
+
+        # Verify data matches numpy version (both should rotate)
+        result_np = feature.make_board_id_positions(board)
+        df_positions = np.array(
+            result_df["boardIdPositions"].to_list()[0],
+            dtype=np.uint8,
+        )
+        np.testing.assert_array_equal(result_np, df_positions)
+
+    def test_df_version_matches_numpy_version(self) -> None:
+        """Test DataFrame and numpy versions produce equivalent output．"""
+        board = Board()
+        board.set_sfen(
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+        )
+
+        # Get both versions
+        result_np = feature.make_board_id_positions(board)
+        result_df = feature.make_board_id_positions_df(board)
+
+        # Convert DataFrame to numpy
+        df_positions = np.array(
+            result_df["boardIdPositions"].to_list()[0],
+            dtype=np.uint8,
+        )
+
+        # Should be identical
+        np.testing.assert_array_equal(result_np, df_positions)
 
 
 class TestMakePiecesInHand:

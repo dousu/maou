@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from maou.domain.board import shogi
 from maou.domain.board.shogi import PieceId
+
+if TYPE_CHECKING:
+    import polars as pl
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -155,7 +161,10 @@ def make_board_id_positions(board: shogi.Board) -> np.ndarray:
     後手番であれば180度回転する
     shapeが(9, 9)のuint8のndarrayで返す
     """
-    board_id_positions = board.get_board_id_positions()
+    df = board.get_board_id_positions_df()
+    board_id_positions = np.array(
+        df["boardIdPositions"].to_list()[0], dtype=np.uint8
+    )
     if board.get_turn() == shogi.Turn.BLACK:
         return board_id_positions
     else:
@@ -174,3 +183,54 @@ def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
             reversed(board.get_pieces_in_hand())
         )
     return np.concatenate(pieces_in_hand).astype(np.uint8)
+
+
+def make_board_id_positions_df(
+    board: shogi.Board,
+) -> "pl.DataFrame":
+    """盤面の駒配置をPolars DataFrameで返す．
+    後手番であれば180度回転する．
+
+    Args:
+        board: 盤面オブジェクト
+
+    Returns:
+        pl.DataFrame: boardIdPositions列を持つ1行のDataFrame
+
+    Example:
+        >>> board = shogi.Board()
+        >>> df = make_board_id_positions_df(board)
+        >>> len(df)
+        1
+        >>> df.schema
+        {'boardIdPositions': List(List(UInt8))}
+    """
+    try:
+        import polars as pl
+    except ImportError as e:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        ) from e
+
+    # Get positions as DataFrame
+    df = board.get_board_id_positions_df()
+
+    # Rotate if white turn
+    if board.get_turn() == shogi.Turn.WHITE:
+        positions = np.array(
+            df["boardIdPositions"].to_list()[0], dtype=np.uint8
+        )
+        rotated = np.rot90(positions, 2)
+        positions_list = rotated.tolist()
+
+        from maou.domain.data.schema import (
+            get_board_position_polars_schema,
+        )
+
+        schema = get_board_position_polars_schema()
+        return pl.DataFrame(
+            {"boardIdPositions": [positions_list]},
+            schema=schema,
+        )
+
+    return df

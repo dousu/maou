@@ -1188,3 +1188,98 @@ def create_empty_preprocessing_df(
             for col, dtype in schema.items()
         }
     )
+
+
+def get_board_position_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Polars schema for board piece positions (9x9 grid)．
+
+    盤面の駒配置を表すPolarsスキーマ．
+    9x9のネストされたリストでPieceId値を格納する．
+
+    Returns:
+        dict[str, pl.DataType]: boardIdPositions列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_board_position_polars_schema()
+        >>> schema["boardIdPositions"]
+        List(List(UInt8))
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 nested lists
+    }
+
+
+def get_hcp_polars_schema() -> dict[str, "pl.DataType"]:
+    """Polars schema for HuffmanCodedPos binary data．
+
+    HuffmanCodedPos形式の局面データを表すPolarsスキーマ．
+    32バイトのバイナリデータとして格納する．
+
+    Returns:
+        dict[str, pl.DataType]: hcp列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_hcp_polars_schema()
+        >>> schema["hcp"]
+        Binary
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "hcp": pl.Binary(),  # 32-byte binary blob
+    }
+
+
+def get_piece_planes_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Polars schema for piece feature planes (104x9x9)．
+
+    駒の特徴平面を表すPolarsスキーマ．
+    104チャンネル×9×9のネストされたリストでfloat32値を格納する．
+
+    Returns:
+        dict[str, pl.DataType]: piecePlanes列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_piece_planes_polars_schema()
+        >>> schema["piecePlanes"]
+        List(List(List(Float32)))
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "piecePlanes": pl.List(
+            pl.List(pl.List(pl.Float32))
+        ),  # 104x9x9 nested lists
+    }

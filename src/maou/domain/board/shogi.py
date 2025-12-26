@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 from collections.abc import Generator
 from enum import IntEnum, auto
+from typing import TYPE_CHECKING
 
 import cshogi
 import numpy as np
+
+if TYPE_CHECKING:
+    import polars as pl
 
 MAX_PIECES_IN_HAND: list[int] = cshogi.MAX_PIECES_IN_HAND  # type: ignore
 # 駒8種類，成駒6種類
@@ -105,11 +111,6 @@ class Board:
     def set_hcp(self, hcp: np.ndarray) -> None:
         self.board.set_hcp(hcp)
 
-    def get_hcp(self) -> np.ndarray:
-        array = np.empty(1, dtype=cshogi.HuffmanCodedPos)  # type: ignore
-        self.board.to_hcp(array)
-        return array
-
     def to_hcp(self, array: np.ndarray) -> None:
         self.board.to_hcp(array)
 
@@ -123,20 +124,8 @@ class Board:
     def push_move(self, move: int) -> None:
         self.board.push(move)
 
-    def get_piece_planes(self) -> np.ndarray:
-        array = np.empty((FEATURES_NUM, 9, 9), dtype=np.float32)
-        array.fill(0)
-        self.to_piece_planes(array)
-        return array
-
     def to_piece_planes(self, array: np.ndarray) -> None:
         self.board.piece_planes(array)
-
-    def get_piece_planes_rotate(self) -> np.ndarray:
-        array = np.empty((FEATURES_NUM, 9, 9), dtype=np.float32)
-        array.fill(0)
-        self.to_piece_planes_rotate(array)
-        return array
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
         self.board.piece_planes_rotate(array)
@@ -154,10 +143,36 @@ class Board:
     def hash(self) -> int:
         return self.board.zobrist_hash()
 
-    def get_board_id_positions(self) -> np.ndarray:
-        def map_cshogi_to_piece_id(
-            cshogi_piece_id: int,
-        ) -> int:
+    def get_board_id_positions_df(self) -> "pl.DataFrame":
+        """Get board piece positions as 1-row Polars DataFrame．
+
+        盤面の駒配置をPolars DataFrameで取得する．
+        9x9のネストされたリストとして返す．
+
+        Returns:
+            pl.DataFrame: boardIdPositions列を持つ1行のDataFrame
+
+        Example:
+            >>> board = Board()
+            >>> df = board.get_board_id_positions_df()
+            >>> len(df)
+            1
+            >>> df.schema
+            {'boardIdPositions': List(List(UInt8))}
+        """
+        from maou.domain.data.schema import (
+            get_board_position_polars_schema,
+        )
+
+        try:
+            import polars as pl
+        except ImportError as e:
+            raise ImportError(
+                "polars is not installed. Install with: poetry add polars"
+            ) from e
+
+        # Map cshogi piece IDs to PieceId enum values
+        def map_cshogi_to_piece_id(cshogi_piece_id: int) -> int:
             if cshogi_piece_id < len(PieceId):
                 return cshogi_piece_id
             else:
@@ -167,10 +182,135 @@ class Board:
             map_cshogi_to_piece_id,
             otypes=[np.uint8],
         )
-        board_id_pieces = v_map(
+        positions = v_map(
             np.array(
                 self.board.pieces,
                 dtype=np.uint8,
             )
         ).reshape((9, 9))
-        return board_id_pieces
+        positions_list = positions.tolist()  # Fast conversion
+
+        schema = get_board_position_polars_schema()
+        return pl.DataFrame(
+            {"boardIdPositions": [positions_list]},
+            schema=schema,
+        )
+
+    def get_hcp_df(self) -> "pl.DataFrame":
+        """Get HuffmanCodedPos as 1-row Polars DataFrame．
+
+        HuffmanCodedPos形式の局面データをPolars DataFrameで取得する．
+        32バイトのバイナリデータとして返す．
+
+        Returns:
+            pl.DataFrame: hcp列を持つ1行のDataFrame
+
+        Example:
+            >>> board = Board()
+            >>> board.set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+            >>> df = board.get_hcp_df()
+            >>> len(df)
+            1
+            >>> df.schema
+            {'hcp': Binary}
+        """
+        from maou.domain.data.schema import (
+            get_hcp_polars_schema,
+        )
+
+        try:
+            import polars as pl
+        except ImportError as e:
+            raise ImportError(
+                "polars is not installed. Install with: poetry add polars"
+            ) from e
+
+        # Get HCP data from cshogi board
+        hcp_array = np.empty(1, dtype=cshogi.HuffmanCodedPos)  # type: ignore
+        self.board.to_hcp(hcp_array)
+        hcp_bytes = hcp_array.tobytes()  # Convert to bytes
+
+        schema = get_hcp_polars_schema()
+        return pl.DataFrame({"hcp": [hcp_bytes]}, schema=schema)
+
+    def get_piece_planes_df(self) -> "pl.DataFrame":
+        """Get piece feature planes as 1-row Polars DataFrame．
+
+        駒の特徴平面をPolars DataFrameで取得する．
+        104x9x9のネストされたリストとして返す．
+
+        Returns:
+            pl.DataFrame: piecePlanes列を持つ1行のDataFrame
+
+        Example:
+            >>> board = Board()
+            >>> df = board.get_piece_planes_df()
+            >>> len(df)
+            1
+            >>> df.schema
+            {'piecePlanes': List(List(List(Float32)))}
+        """
+        from maou.domain.data.schema import (
+            get_piece_planes_polars_schema,
+        )
+
+        try:
+            import polars as pl
+        except ImportError as e:
+            raise ImportError(
+                "polars is not installed. Install with: poetry add polars"
+            ) from e
+
+        # Get piece planes from cshogi board
+        planes = np.empty(
+            (FEATURES_NUM, 9, 9), dtype=np.float32
+        )
+        planes.fill(0)
+        self.board.piece_planes(planes)
+        planes_list = planes.tolist()  # Fast conversion
+
+        schema = get_piece_planes_polars_schema()
+        return pl.DataFrame(
+            {"piecePlanes": [planes_list]}, schema=schema
+        )
+
+    def get_piece_planes_rotate_df(self) -> "pl.DataFrame":
+        """Get rotated piece feature planes as 1-row Polars DataFrame．
+
+        回転された駒の特徴平面をPolars DataFrameで取得する．
+        後手視点の104x9x9のネストされたリストとして返す．
+
+        Returns:
+            pl.DataFrame: piecePlanes列を持つ1行のDataFrame
+
+        Example:
+            >>> board = Board()
+            >>> df = board.get_piece_planes_rotate_df()
+            >>> len(df)
+            1
+            >>> df.schema
+            {'piecePlanes': List(List(List(Float32)))}
+        """
+        from maou.domain.data.schema import (
+            get_piece_planes_polars_schema,
+        )
+
+        try:
+            import polars as pl
+        except ImportError as e:
+            raise ImportError(
+                "polars is not installed. Install with: poetry add polars"
+            ) from e
+
+        # Get rotated piece planes from cshogi board
+        planes = np.empty(
+            (FEATURES_NUM, 9, 9), dtype=np.float32
+        )
+        planes.fill(0)
+        self.board.piece_planes_rotate(planes)
+        planes_list = planes.tolist()  # Fast conversion
+
+        schema = get_piece_planes_polars_schema()
+        return pl.DataFrame(
+            {"piecePlanes": [planes_list]}, schema=schema
+        )
