@@ -45,7 +45,7 @@ repos:
     types: [python]
     pass_filenames: false
     always_run: false
-    args: ["src/"]
+    args: ["src/", "tests/"]
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.12.11
   hooks:
