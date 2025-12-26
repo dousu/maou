@@ -21,9 +21,6 @@ from tqdm.auto import tqdm
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_df
-from maou.domain.data.schema import (
-    convert_numpy_to_preprocessing_df,
-)
 
 if TYPE_CHECKING:
     import polars as pl
@@ -279,28 +276,59 @@ class PreProcess:
             )
 
         # ディスクストアに追加/更新
-        self.intermediate_store.add_or_update_batch(
-            batch_result
-        )
+        # Convert batch_result (dict) to Polars DataFrame
+        # Note: This is a temporary conversion - ideally batch_result
+        # should already be a DataFrame
+        import polars as pl
 
-    def aggregate_intermediate_data(self) -> np.ndarray:
+        records = []
+        for hash_id, data in batch_result.items():
+            records.append(
+                {
+                    "hash_id": hash_id,
+                    "count": data["count"],
+                    "win_count": data["winCount"],
+                    "move_label_count": data[
+                        "moveLabelCount"
+                    ].tolist()
+                    if hasattr(data["moveLabelCount"], "tolist")
+                    else data["moveLabelCount"],
+                    "board_id_positions": data[
+                        "boardIdPositions"
+                    ].tolist()
+                    if hasattr(
+                        data["boardIdPositions"], "tolist"
+                    )
+                    else data["boardIdPositions"],
+                    "pieces_in_hand": data[
+                        "piecesInHand"
+                    ].tolist()
+                    if hasattr(data["piecesInHand"], "tolist")
+                    else data["piecesInHand"],
+                }
+            )
+        batch_df = pl.DataFrame(records)
+        self.intermediate_store.add_dataframe_batch(batch_df)
+
+    def aggregate_intermediate_data(self) -> "pl.DataFrame":
         """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．
 
         Returns:
-            前処理済みデータの構造化配列
+            前処理済みデータのPolars DataFrame
 
         Note:
             This method loads all data into memory at once.
             For large datasets, this may cause memory exhaustion.
             Use aggregate_intermediate_data_chunked() for better memory efficiency.
         """
+
         if self.intermediate_store is None:
             raise RuntimeError(
                 "Intermediate store not initialized"
             )
 
-        # ディスクストアから最終配列を生成
-        return self.intermediate_store.finalize_to_array()
+        # ディスクストアから最終DataFrameを生成
+        return self.intermediate_store.finalize_to_dataframe()
 
     def aggregate_intermediate_data_chunked(
         self,
@@ -342,43 +370,48 @@ class PreProcess:
             desc="Aggregating chunks",
             unit="chunk",
         ) as pbar:
-            for (
-                chunk_data
-            ) in self.intermediate_store.iter_finalize_chunks(
-                chunk_size=chunk_size,
-                delete_after_yield=False,
+            for chunk_df in (
+                self.intermediate_store.iter_finalize_chunks_df(
+                    chunk_size=chunk_size,
+                    delete_after_yield=False,
+                )
             ):
                 # ローカルファイル出力（output_dirが指定されている場合）
                 if output_dir is not None:
                     chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.feather"
                     chunk_path = output_dir / chunk_filename
 
-                    # Convert numpy array to Polars DataFrame and save as .feather
-                    chunk_df = (
-                        convert_numpy_to_preprocessing_df(
-                            chunk_data
-                        )
-                    )
+                    # chunk_df is already a Polars DataFrame - no conversion needed
                     save_preprocessing_df(chunk_df, chunk_path)
 
                     self.logger.debug(
                         f"Saved chunk {chunk_idx} to local file: {chunk_path} "
-                        f"({len(chunk_data)} positions)"
+                        f"({len(chunk_df)} positions)"
                     )
 
                 # feature_storeへの出力（feature_storeが指定されている場合）
                 if self.__feature_store is not None:
+                    # Convert DataFrame to numpy array for feature store
+                    from maou.domain.data.schema import (
+                        convert_preprocessing_df_to_numpy,
+                    )
+
+                    chunk_array = (
+                        convert_preprocessing_df_to_numpy(
+                            chunk_df
+                        )
+                    )
                     self.__feature_store.store_features(
                         name=output_filename,
                         key_columns=["id"],
-                        structured_array=chunk_data,
+                        structured_array=chunk_array,
                     )
                     self.logger.debug(
                         f"Stored chunk {chunk_idx} to feature store "
-                        f"({len(chunk_data)} positions)"
+                        f"({len(chunk_df)} positions)"
                     )
 
-                total_processed += len(chunk_data)
+                total_processed += len(chunk_df)
                 chunk_idx += 1
 
                 # プログレスバーを更新（チャンクごと）
@@ -386,12 +419,12 @@ class PreProcess:
                 pbar.set_postfix(
                     {
                         "positions": f"{total_processed:,}",
-                        "chunk_size": len(chunk_data),
+                        "chunk_size": len(chunk_df),
                     }
                 )
 
                 # 明示的にメモリ解放
-                del chunk_data
+                del chunk_df
 
         self.logger.info(
             f"Aggregation complete: {total_processed} positions "
@@ -558,13 +591,23 @@ class PreProcess:
                     )
                 else:
                     # 小規模データ: 従来の一括処理
-                    array = self.aggregate_intermediate_data()
+                    df = self.aggregate_intermediate_data()
                     pre_process_result["aggregated"] = (
-                        f"success {len(array)} rows"
+                        f"success {len(df)} rows"
                     )
 
                     # Store results
                     if self.__feature_store is not None:
+                        # Convert DataFrame to numpy array for feature store
+                        from maou.domain.data.schema import (
+                            convert_preprocessing_df_to_numpy,
+                        )
+
+                        array = (
+                            convert_preprocessing_df_to_numpy(
+                                df
+                            )
+                        )
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
@@ -573,10 +616,7 @@ class PreProcess:
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        # Convert numpy array to Polars DataFrame and save as .feather
-                        df = convert_numpy_to_preprocessing_df(
-                            array
-                        )
+                        # df is already a Polars DataFrame - no conversion needed
                         save_preprocessing_df(
                             df,
                             option.output_dir
@@ -757,12 +797,22 @@ class PreProcess:
                     )
                 else:
                     # 小規模データ: 従来の一括処理
-                    array = self.aggregate_intermediate_data()
+                    df = self.aggregate_intermediate_data()
                     pre_process_result["aggregated"] = (
-                        f"success {len(array)} rows"
+                        f"success {len(df)} rows"
                     )
                     # Store results
                     if self.__feature_store is not None:
+                        # Convert DataFrame to numpy array for feature store
+                        from maou.domain.data.schema import (
+                            convert_preprocessing_df_to_numpy,
+                        )
+
+                        array = (
+                            convert_preprocessing_df_to_numpy(
+                                df
+                            )
+                        )
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
@@ -771,10 +821,7 @@ class PreProcess:
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        # Convert numpy array to Polars DataFrame and save as .feather
-                        df = convert_numpy_to_preprocessing_df(
-                            array
-                        )
+                        # df is already a Polars DataFrame - no conversion needed
                         save_preprocessing_df(
                             df,
                             option.output_dir

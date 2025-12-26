@@ -308,15 +308,16 @@ from maou.domain.data.intermediate_store import IntermediateDataStore
 
 # Create intermediate store for memory-efficient preprocessing
 with IntermediateDataStore(db_path=Path("temp.duckdb")) as store:
-    # Add/aggregate duplicate positions
-    for batch in hcpe_batches:
-        aggregated = aggregate_by_hash(batch)  # Group by board position hash
-        store.add_or_update_batch(aggregated)  # UPSERT with Rust sparse compression
+    # Add/aggregate duplicate positions (Polars DataFrame API)
+    for batch_df in hcpe_batches:
+        # batch_df is a Polars DataFrame with columns:
+        # hash_id, count, win_count, move_label_count, board_id_positions, pieces_in_hand
+        store.add_dataframe_batch(batch_df)  # UPSERT with Rust sparse compression
 
     # Finalize in chunks (memory-efficient for large datasets)
-    for chunk in store.iter_finalize_chunks(chunk_size=1_000_000):
-        # chunk is numpy structured array with normalized data
-        save_preprocessing_df(convert_numpy_to_preprocessing_df(chunk), output_path)
+    for chunk_df in store.iter_finalize_chunks_df(chunk_size=1_000_000):
+        # chunk_df is already a Polars DataFrame with normalized data
+        save_preprocessing_df(chunk_df, output_path)
 
 # Database automatically deleted on context exit
 ```

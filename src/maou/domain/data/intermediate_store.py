@@ -8,10 +8,10 @@ datasets larger than available RAM．
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, Generator, Optional
+from typing import Dict, Generator, List, Optional
 
 import duckdb
-import numpy as np
+import polars as pl
 
 from maou._rust.maou_io import (
     add_sparse_arrays_rust,
@@ -19,7 +19,7 @@ from maou._rust.maou_io import (
     expand_sparse_array_rust,
 )
 from maou.domain.data.schema import (
-    create_empty_preprocessing_array,
+    get_preprocessing_polars_schema,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -168,40 +168,54 @@ class IntermediateDataStore:
             f"Initialized DuckDB intermediate store at {self.db_path}"
         )
 
-    def add_or_update_batch(
-        self, batch: Dict[int, dict]
-    ) -> None:
-        """Add or update a batch of intermediate data.
+    def add_dataframe_batch(self, df: pl.DataFrame) -> None:
+        """Add or update batch data from Polars DataFrame (zero-copy Arrow).
 
         Args:
-            batch: Dictionary mapping hash_id to data dict with keys:
-                   count, winCount, moveLabelCount, boardIdPositions, piecesInHand
+            df: Polars DataFrame with columns:
+                - hash_id: uint64
+                - count: int32
+                - win_count: float64
+                - move_label_count: list[int32]  # 1496 elements
+                - board_id_positions: list[list[uint8]]  # 9x9 board
+                - pieces_in_hand: list[uint8]  # 14 elements
+
+        Expected DataFrame structure (aggregated by hash_id):
+            Each row represents one unique board position with aggregated statistics
         """
-        # Add to batch buffer
-        for hash_id, data in batch.items():
+        # Add to batch buffer (convert DataFrame rows to dict format)
+        for row in df.iter_rows(named=True):
+            hash_id = row["hash_id"]
+
             if hash_id in self._batch_buffer:
                 # Merge with existing buffer entry
-                self._batch_buffer[hash_id]["count"] += data[
+                self._batch_buffer[hash_id]["count"] += row[
                     "count"
                 ]
-                self._batch_buffer[hash_id]["winCount"] += data[
-                    "winCount"
+                self._batch_buffer[hash_id]["win_count"] += row[
+                    "win_count"
                 ]
+                # For lists, we need to add element-wise
+                existing_move = self._batch_buffer[hash_id][
+                    "move_label_count"
+                ]
+                new_move = row["move_label_count"]
                 self._batch_buffer[hash_id][
-                    "moveLabelCount"
-                ] += data["moveLabelCount"]
+                    "move_label_count"
+                ] = [
+                    a + b
+                    for a, b in zip(existing_move, new_move)
+                ]
             else:
                 # Add new buffer entry
                 self._batch_buffer[hash_id] = {
-                    "count": data["count"],
-                    "winCount": data["winCount"],
-                    "moveLabelCount": data[
-                        "moveLabelCount"
-                    ].copy(),
-                    "boardIdPositions": data[
-                        "boardIdPositions"
+                    "count": row["count"],
+                    "win_count": row["win_count"],
+                    "move_label_count": row["move_label_count"],
+                    "board_id_positions": row[
+                        "board_id_positions"
                     ],
-                    "piecesInHand": data["piecesInHand"],
+                    "pieces_in_hand": row["pieces_in_hand"],
                 }
 
         # Flush buffer if it exceeds batch size
@@ -237,10 +251,10 @@ class IntermediateDataStore:
                     existing_indices = existing[2]
                     existing_values = existing[3]
 
-                    # Compress new moveLabelCount to sparse format
+                    # Compress new move_label_count to sparse format
                     new_indices, new_values = (
                         compress_sparse_array_rust(
-                            data["moveLabelCount"].tolist()
+                            data["move_label_count"]
                         )
                     )
 
@@ -256,7 +270,7 @@ class IntermediateDataStore:
 
                     new_count = existing_count + data["count"]
                     new_win_count = (
-                        existing_win_count + data["winCount"]
+                        existing_win_count + data["win_count"]
                     )
 
                     self._conn.execute(
@@ -277,18 +291,14 @@ class IntermediateDataStore:
                         ),
                     )
                 else:
-                    # Insert new record
-                    board_positions = np.asarray(
-                        data["boardIdPositions"], dtype=np.uint8
-                    ).tolist()
-                    pieces_in_hand = np.asarray(
-                        data["piecesInHand"], dtype=np.uint8
-                    ).tolist()
+                    # Insert new record (data already contains Python lists)
+                    board_positions = data["board_id_positions"]
+                    pieces_in_hand = data["pieces_in_hand"]
 
-                    # Compress sparse moveLabelCount
+                    # Compress sparse move_label_count
                     indices, values = (
                         compress_sparse_array_rust(
-                            data["moveLabelCount"].tolist()
+                            data["move_label_count"]
                         )
                     )
 
@@ -303,7 +313,7 @@ class IntermediateDataStore:
                         (
                             hash_id,
                             data["count"],
-                            data["winCount"],
+                            data["win_count"],
                             indices,
                             values,
                             board_positions,
@@ -413,53 +423,102 @@ class IntermediateDataStore:
 
         return result
 
-    def finalize_to_array(self) -> np.ndarray:
-        """Convert all stored data to final preprocessing array.
+    def finalize_to_dataframe(self) -> pl.DataFrame:
+        """Convert all stored data to final preprocessing Polars DataFrame.
 
         Returns:
-            numpy.ndarray: Preprocessing array with all aggregated data
+            pl.DataFrame: Preprocessing DataFrame with all aggregated data
 
         Note:
             This method loads all data into memory at once.
-            For large datasets (>1M positions), use iter_finalize_chunks() instead
+            For large datasets (>1M positions), use iter_finalize_chunks_df() instead
             to avoid memory exhaustion.
 
             This method does NOT delete intermediate data during processing
-            since all data needs to be available until the final array is complete.
+            since all data needs to be available until the final DataFrame is complete.
         """
+        assert self._conn is not None, (
+            "Database connection not initialized"
+        )
+
         total_count = self.get_total_count()
 
         logger.info(
             f"Finalizing {total_count} unique positions from DuckDB database"
         )
 
-        # Create output array
-        target_data = create_empty_preprocessing_array(
-            total_count
+        if total_count == 0:
+            # Return empty DataFrame with correct schema
+            return pl.DataFrame(
+                schema=get_preprocessing_polars_schema()
+            )
+
+        # Build Python dict of lists
+        data_lists: Dict[str, List] = {
+            "id": [],
+            "boardIdPositions": [],
+            "piecesInHand": [],
+            "moveLabel": [],
+            "resultValue": [],
+        }
+
+        # Populate lists from DuckDB (no numpy)
+        for row in self._conn.execute(
+            "SELECT * FROM intermediate_data ORDER BY hash_id"
+        ).fetchall():
+            (
+                hash_id,
+                count,
+                win_count,
+                move_label_indices,
+                move_label_values,
+                board_positions,
+                pieces_in_hand,
+            ) = row
+
+            # Expand sparse array using Rust
+            move_label_count_dense = expand_sparse_array_rust(
+                list(move_label_indices),
+                list(move_label_values),
+                1496,
+            )
+
+            # Normalize to move probabilities (pure Python)
+            move_label_normalized = [
+                val / count for val in move_label_count_dense
+            ]
+            result_value = win_count / count
+
+            # Append to lists
+            data_lists["id"].append(hash_id)
+            data_lists["boardIdPositions"].append(
+                board_positions
+            )
+            data_lists["piecesInHand"].append(pieces_in_hand)
+            data_lists["moveLabel"].append(
+                move_label_normalized
+            )
+            data_lists["resultValue"].append(result_value)
+
+        # Convert to Polars DataFrame (NO numpy conversion)
+        df = pl.DataFrame(
+            data_lists, schema=get_preprocessing_polars_schema()
         )
 
-        # Process all chunks into the single array
-        # Don't delete during processing since we need all data in memory
-        offset = 0
-        for chunk in self.iter_finalize_chunks(
-            chunk_size=total_count, delete_after_yield=False
-        ):
-            chunk_size = len(chunk)
-            target_data[offset : offset + chunk_size] = chunk
-            offset += chunk_size
+        logger.info(
+            f"Finalized {total_count} records to DataFrame"
+        )
+        return df
 
-        logger.info(f"Finalized {total_count} records to array")
-        return target_data
-
-    def iter_finalize_chunks(
+    def iter_finalize_chunks_df(
         self,
         chunk_size: int = 1_000_000,
         delete_after_yield: bool = True,
-    ) -> Generator[np.ndarray, None, None]:
-        """Iterate over finalized chunks of preprocessing data.
+    ) -> Generator[pl.DataFrame, None, None]:
+        """Iterate over finalized chunks of preprocessing data as Polars DataFrames.
 
         This is a memory-efficient way to process large datasets.
-        Each chunk is yielded as a separate array, allowing for
+        Each chunk is yielded as a separate DataFrame, allowing for
         chunked file output without loading all data into memory.
 
         Args:
@@ -468,7 +527,7 @@ class IntermediateDataStore:
                               after yielding to save disk space (default: True)
 
         Yields:
-            numpy.ndarray: Chunks of preprocessing array
+            pl.DataFrame: Chunks of preprocessing DataFrame
 
         Note:
             When delete_after_yield=True, processed records are deleted from
@@ -501,10 +560,14 @@ class IntermediateDataStore:
                 chunk_size, total_count - processed_count
             )
 
-            # Create output array for this chunk
-            chunk_data = create_empty_preprocessing_array(
-                current_chunk_size
-            )
+            # Build dict of lists for this chunk
+            chunk_data_lists: Dict[str, List] = {
+                "id": [],
+                "boardIdPositions": [],
+                "piecesInHand": [],
+                "moveLabel": [],
+                "resultValue": [],
+            }
 
             # Read chunk from database (always from offset 0 if deleting)
             read_offset = (
@@ -525,7 +588,7 @@ class IntermediateDataStore:
 
             hash_ids_to_delete = []
 
-            for i, row in enumerate(rows):
+            for row in rows:
                 (
                     hash_id,
                     count,
@@ -549,34 +612,38 @@ class IntermediateDataStore:
                     )
                 )
 
-                # Convert to numpy arrays
-                board_positions_array = np.array(
-                    board_positions, dtype=np.uint8
-                )
-                pieces_in_hand_array = np.array(
-                    pieces_in_hand, dtype=np.uint8
-                )
-                move_label_count_array = np.array(
-                    move_label_count_dense, dtype=np.int32
-                )
+                # Normalize to move probabilities (pure Python)
+                move_label_normalized = [
+                    val / count
+                    for val in move_label_count_dense
+                ]
+                result_value = win_count / count
 
-                # Populate output array
-                chunk_data["id"][i] = hash_id
-                chunk_data["boardIdPositions"][i] = (
-                    board_positions_array
+                # Append to lists
+                chunk_data_lists["id"].append(hash_id)
+                chunk_data_lists["boardIdPositions"].append(
+                    board_positions
                 )
-                chunk_data["piecesInHand"][i] = (
-                    pieces_in_hand_array
+                chunk_data_lists["piecesInHand"].append(
+                    pieces_in_hand
                 )
-                chunk_data["moveLabel"][i] = (
-                    move_label_count_array / count
+                chunk_data_lists["moveLabel"].append(
+                    move_label_normalized
                 )
-                chunk_data["resultValue"][i] = win_count / count
+                chunk_data_lists["resultValue"].append(
+                    result_value
+                )
 
             processed_count += current_chunk_size
 
+            # Convert to Polars DataFrame (NO numpy)
+            chunk_df = pl.DataFrame(
+                chunk_data_lists,
+                schema=get_preprocessing_polars_schema(),
+            )
+
             # Yield the chunk before deletion to ensure data is safely written
-            yield chunk_data
+            yield chunk_df
 
             # Delete processed records to free disk space
             if delete_after_yield and hash_ids_to_delete:
