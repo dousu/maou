@@ -10,9 +10,6 @@ from typing import Any, Dict
 import numpy as np
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.data.compression import (
-    unpack_preprocessing_fields,
-)
 
 
 class SchemaValidationError(Exception):
@@ -804,86 +801,6 @@ def create_empty_stage2_array(size: int) -> np.ndarray:
     return np.zeros(size, dtype=get_stage2_dtype())
 
 
-def convert_array_from_packed_format(
-    compressed_array: np.ndarray,
-) -> np.ndarray:
-    """Convert compressed preprocessing array to standard format.
-
-    Args:
-        compressed_array: Compressed preprocessing array
-
-    Returns:
-        Standard preprocessing array with unpacked fields
-    """
-
-    # Create empty standard array
-    standard_dtype = get_preprocessing_dtype()
-    standard_array = np.empty(
-        len(compressed_array), dtype=standard_dtype
-    )
-
-    # Copy non-packed fields directly
-    standard_array["id"] = compressed_array["id"]
-    standard_array["moveLabel"] = compressed_array["moveLabel"]
-    standard_array["resultValue"] = compressed_array[
-        "resultValue"
-    ]
-
-    # Copy structured fields for each record with validation
-    for i in range(len(compressed_array)):
-        (
-            board_positions,
-            pieces_in_hand,
-        ) = unpack_preprocessing_fields(
-            compressed_array[i]["boardIdPositions"],
-            compressed_array[i]["piecesInHand"],
-        )
-        standard_array[i]["boardIdPositions"] = board_positions
-        standard_array[i]["piecesInHand"] = pieces_in_hand
-
-    return standard_array
-
-
-def convert_record_from_packed_format(
-    compressed_record: np.ndarray,
-) -> np.ndarray:
-    """Convert compressed preprocessing record to standard format.
-
-    Args:
-        compressed_record: Compressed preprocessing record
-
-    Returns:
-        Standard preprocessing record with unpacked fields
-    """
-
-    # Create empty standard array
-    standard_dtype = get_preprocessing_dtype()
-    standard_array = np.empty(
-        (),
-        dtype=standard_dtype,
-    )
-
-    # Copy non-packed fields directly
-    standard_array["id"] = compressed_record["id"]
-    standard_array["moveLabel"] = compressed_record["moveLabel"]
-    standard_array["resultValue"] = compressed_record[
-        "resultValue"
-    ]
-
-    # Copy structured fields with validation
-    (
-        board_positions,
-        pieces_in_hand,
-    ) = unpack_preprocessing_fields(
-        compressed_record["boardIdPositions"],
-        compressed_record["piecesInHand"],
-    )
-    standard_array["boardIdPositions"] = board_positions
-    standard_array["piecesInHand"] = pieces_in_hand
-
-    return standard_array
-
-
 # Constants for backward compatibility
 HCPE_DTYPE = get_hcpe_dtype()
 PREPROCESSING_DTYPE = get_preprocessing_dtype()
@@ -1352,7 +1269,6 @@ def convert_preprocessing_df_to_numpy(
         raise ImportError(
             "polars is not installed. Install with: poetry add polars"
         )
-
 
     # Get target dtype
     dtype = get_preprocessing_dtype()

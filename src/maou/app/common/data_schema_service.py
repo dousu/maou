@@ -4,8 +4,6 @@ from typing import Literal
 import numpy as np
 
 from maou.domain.data.schema import (
-    convert_array_from_packed_format,
-    convert_record_from_packed_format,
     get_hcpe_dtype,
     get_packed_preprocessing_dtype,
     get_preprocessing_dtype,
@@ -56,38 +54,6 @@ class DataSchemaService:
             return get_stage1_dtype()
         elif array_type == "stage2":
             return get_stage2_dtype()
-        else:
-            logger.error(f"Unknown array type '{array_type}'")
-            raise ValueError(
-                f"Unknown array type '{array_type}'"
-            )
-
-    @staticmethod
-    def convert_array_from_packed_format(
-        *,
-        compressed_array: np.ndarray,
-        array_type: Literal["preprocessing"],
-    ) -> np.ndarray:
-        if array_type == "preprocessing":
-            return convert_array_from_packed_format(
-                compressed_array=compressed_array
-            )
-        else:
-            logger.error(f"Unknown array type '{array_type}'")
-            raise ValueError(
-                f"Unknown array type '{array_type}'"
-            )
-
-    @staticmethod
-    def convert_record_from_packed_format(
-        *,
-        compressed_record: np.ndarray,
-        array_type: Literal["preprocessing"],
-    ) -> np.ndarray:
-        if array_type == "preprocessing":
-            return convert_record_from_packed_format(
-                compressed_record=compressed_record
-            )
         else:
             logger.error(f"Unknown array type '{array_type}'")
             raise ValueError(
