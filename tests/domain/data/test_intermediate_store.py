@@ -49,7 +49,10 @@ class TestIntermediateDataStore:
                 }
             }
             # Set one non-zero move
-            batch[12345]["moveLabelCount"][100] = 5
+            move_counts: np.ndarray = batch[12345][
+                "moveLabelCount"
+            ]  # type: ignore[assignment]
+            move_counts[100] = 5
 
             store.add_or_update_batch(batch)
 
@@ -107,8 +110,11 @@ class TestIntermediateDataStore:
                     ),
                 }
             }
-            batch1[hash_id]["moveLabelCount"][50] = 3
-            batch1[hash_id]["moveLabelCount"][100] = 5
+            move_counts1: np.ndarray = batch1[hash_id][
+                "moveLabelCount"
+            ]  # type: ignore[assignment]
+            move_counts1[50] = 3
+            move_counts1[100] = 5
 
             # Second insert (same hash_id)
             batch2 = {
@@ -126,12 +132,11 @@ class TestIntermediateDataStore:
                     ],
                 }
             }
-            batch2[hash_id]["moveLabelCount"][50] = (
-                2  # Add to existing
-            )
-            batch2[hash_id]["moveLabelCount"][200] = (
-                4  # New index
-            )
+            move_counts2: np.ndarray = batch2[hash_id][
+                "moveLabelCount"
+            ]  # type: ignore[assignment]
+            move_counts2[50] = 2  # Add to existing
+            move_counts2[200] = 4  # New index
 
             store.add_or_update_batch(batch1)
             store.add_or_update_batch(batch2)
