@@ -12,13 +12,9 @@ import polars as pl
 from tqdm.auto import tqdm
 
 from maou.domain.board import shogi
-from maou.domain.data.array_io import (
-    load_hcpe_array,
-    save_hcpe_array,
-    save_hcpe_df,
-)
+from maou.domain.data.array_io import save_hcpe_df
+from maou.domain.data.rust_io import load_hcpe_df
 from maou.domain.data.schema import (
-    create_empty_hcpe_array,
     get_hcpe_polars_schema,
 )
 from maou.domain.parser.csa_parser import CSAParser
@@ -101,165 +97,7 @@ class HCPEConverter:
         allowed_endgame_status: Optional[list[str]],
         exclude_moves: Optional[list[int]],
     ) -> tuple[str, str]:
-        """Process a single file and return (file_path, result)."""
-        logger = logging.getLogger(__name__)
-
-        def game_filter(
-            parser: Parser,
-            min_rating: Optional[int] = None,
-            min_moves: Optional[int] = None,
-            max_moves: Optional[int] = None,
-            allowed_endgame_status: Optional[list[str]] = None,
-        ) -> bool:
-            """指定された条件を満たす場合Trueを返す"""
-            moves: int = len(parser.moves())
-            if (
-                (
-                    min_rating is not None
-                    and min(parser.ratings()) < min_rating
-                )
-                or (min_moves is not None and moves < min_moves)
-                or (max_moves is not None and moves > max_moves)
-                or (
-                    allowed_endgame_status is not None
-                    and not len(allowed_endgame_status) == 0
-                    and parser.endgame()
-                    not in allowed_endgame_status
-                )
-            ):
-                return False
-            return True
-
-        try:
-            parser: Parser
-            if input_format == "csa":
-                parser = CSAParser()
-                parser.parse(file.read_text())
-            elif input_format == "kif":
-                parser = KifParser()
-                parser.parse(file.read_text())
-            else:
-                raise NotApplicableFormat(
-                    f"undefined format {input_format}"
-                )
-
-            logger.debug(
-                f"棋譜:{file} "
-                f"終局状況:{parser.endgame()} "
-                f"レーティング:{parser.ratings()} "
-                f"手数:{len(parser.moves())}"
-            )
-
-            # 指定された条件を満たしたら変換をスキップ
-            if not game_filter(
-                parser,
-                min_rating,
-                min_moves,
-                max_moves,
-                allowed_endgame_status,
-            ):
-                logger.debug(f"skip the file {file}")
-                return (str(file), "skipped")
-
-            # movesの数が0であればそもそもHCPEは作れないのでスキップ
-            if len(parser.moves()) == 0:
-                logger.debug(
-                    f"skip the file {file} because of no moves"
-                )
-                return (str(file), "skipped (no moves)")
-
-            # HCPE配列の初期化
-            hcpes = create_empty_hcpe_array(1024)
-            board = shogi.Board()
-            board.set_sfen(parser.init_pos_sfen())
-
-            # 棋譜共通情報を取得する
-            partitioning_key_value = (
-                parser.partitioning_key_value()
-            )
-            ratings = parser.ratings()
-            endgame = parser.endgame()
-            moves = len(parser.moves())
-
-            # 1手毎に代わる情報を取得する
-            for idx, (move, score, comment) in enumerate(
-                zip(
-                    parser.moves(),
-                    parser.scores(),
-                    parser.comments(),
-                )
-            ):
-                logger.debug(f"{move} : {score} : {comment}")
-
-                if move < 0 or move > 16777215:
-                    raise IllegalMove(
-                        f"moveの値が想定外 path: {file}"
-                    )
-
-                if (
-                    exclude_moves is not None
-                    and move in exclude_moves
-                ):
-                    logger.info(
-                        f"skip the move {move} in {file} at {idx + 1}. "
-                        f"exclude moves: {exclude_moves}"
-                    )
-                    continue
-
-                hcpe = hcpes[idx]
-                board.to_hcp(hcpe["hcp"])
-                # 16bitに収める
-                eval = min(32767, max(score, -32767))
-                # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
-                if board.get_turn() == shogi.Turn.BLACK:
-                    hcpe["eval"] = eval
-                else:
-                    hcpe["eval"] = -eval
-                # moveは32bitになっているので16bitに変換する
-                # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
-                # 特に動かす駒の種類の情報が抜けているので注意
-                hcpe["bestMove16"] = shogi.move16(move)
-                hcpe["gameResult"] = parser.winner()
-                hcpe["id"] = (
-                    f"{file.with_suffix('.hcpe').name}_{idx}"
-                )
-                # 棋譜共通情報を記録
-                hcpe["partitioningKey"] = np.datetime64(
-                    partitioning_key_value.isoformat()
-                )
-                hcpe["ratings"] = ratings
-                hcpe["endgameStatus"] = endgame
-                hcpe["moves"] = moves
-
-                # 局面に指し手を反映させる
-                board.push_move(move)
-
-            # ファイルを保存
-            save_hcpe_array(
-                hcpes[: idx + 1],
-                output_dir / file.with_suffix(".npy").name,
-            )
-            return (str(file), f"success {idx + 1} rows")
-
-        except Exception as e:
-            logger.error(f"Error processing file {file}: {e}")
-            return (str(file), f"error: {str(e)}")
-
-    @staticmethod
-    def _process_single_file_polars(
-        file: Path,
-        input_format: str,
-        output_dir: Path,
-        min_rating: Optional[int],
-        min_moves: Optional[int],
-        max_moves: Optional[int],
-        allowed_endgame_status: Optional[list[str]],
-        exclude_moves: Optional[list[int]],
-    ) -> tuple[str, str]:
-        """Process a single file using Polars DataFrames (NEW)．
-
-        This is the new Polars-based implementation that outputs .feather files.
-        """
+        """Process a single file using Polars DataFrames (outputs .feather files)．"""
         logger = logging.getLogger(__name__)
 
         def game_filter(
@@ -420,10 +258,7 @@ class HCPEConverter:
                 df,
                 output_dir / file.with_suffix(".feather").name,
             )
-            return (
-                str(file),
-                f"success {len(df)} rows (Polars)",
-            )
+            return (str(file), f"success {len(df)} rows")
 
         except Exception as e:
             logger.error(f"Error processing file {file}: {e}")
@@ -484,14 +319,20 @@ class HCPEConverter:
                         self.__feature_store is not None
                         and result.startswith("success")
                     ):
-                        # Load the saved file and store it in feature store
-                        npy_file = (
+                        # Load the saved .feather file and convert to numpy array for feature store
+                        feather_file = (
                             option.output_dir
-                            / file.with_suffix(".npy").name
+                            / file.with_suffix(".feather").name
                         )
-                        if npy_file.exists():
-                            structured_array = load_hcpe_array(
-                                npy_file, mmap_mode="r"
+                        if feather_file.exists():
+                            df = load_hcpe_df(feather_file)
+                            # Convert Polars DataFrame to numpy structured array
+                            from maou.domain.data.schema import (
+                                convert_hcpe_df_to_numpy,
+                            )
+
+                            structured_array = (
+                                convert_hcpe_df_to_numpy(df)
                             )
                             self.__feature_store.store_features(
                                 name=file.name,
@@ -539,19 +380,24 @@ class HCPEConverter:
                                 self.__feature_store is not None
                                 and result.startswith("success")
                             ):
-                                # Load the saved file and store it in feature store
-                                npy_file = (
+                                # Load the saved .feather file and convert to numpy array for feature store
+                                feather_file = (
                                     option.output_dir
                                     / file.with_suffix(
-                                        ".npy"
+                                        ".feather"
                                     ).name
                                 )
-                                if npy_file.exists():
-                                    structured_array = (
-                                        load_hcpe_array(
-                                            npy_file,
-                                            mmap_mode="r",
-                                        )
+                                if feather_file.exists():
+                                    df = load_hcpe_df(
+                                        feather_file
+                                    )
+                                    # Convert Polars DataFrame to numpy structured array
+                                    from maou.domain.data.schema import (
+                                        convert_hcpe_df_to_numpy,
+                                    )
+
+                                    structured_array = convert_hcpe_df_to_numpy(
+                                        df
                                     )
                                     self.__feature_store.store_features(
                                         name=file.with_suffix(

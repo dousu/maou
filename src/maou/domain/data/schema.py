@@ -1283,3 +1283,132 @@ def get_piece_planes_polars_schema() -> dict[
             pl.List(pl.List(pl.Float32))
         ),  # 104x9x9 nested lists
     }
+
+
+# ============================================================================
+# Polars DataFrame ↔ numpy structured array conversions
+# ============================================================================
+
+
+def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+    """Convert HCPE Polars DataFrame to numpy structured array．
+
+    Args:
+        df: Polars DataFrame with HCPE schema
+
+    Returns:
+        numpy.ndarray: Structured array with HCPE dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    import polars as pl
+
+    # Get target dtype
+    dtype = get_hcpe_dtype()
+    array = np.empty(len(df), dtype=dtype)
+
+    # Convert fields
+    array["hcp"] = np.array(
+        [bytes(row) for row in df["hcp"].to_list()],
+        dtype=(np.uint8, 32),
+    )
+    array["eval"] = df["eval"].to_numpy()
+    array["bestMove16"] = df["bestMove16"].to_numpy()
+    array["gameResult"] = df["gameResult"].to_numpy()
+    array["id"] = df["id"].to_numpy()
+    array["partitioningKey"] = (
+        df["partitioningKey"].cast(pl.Date).to_numpy()
+    )
+    array["ratings"] = np.array(
+        df["ratings"].to_list(), dtype=(np.uint16, 2)
+    )
+    array["endgameStatus"] = df["endgameStatus"].to_numpy()
+    array["moves"] = df["moves"].to_numpy()
+
+    return array
+
+
+def convert_preprocessing_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
+    """Convert preprocessing Polars DataFrame to numpy structured array．
+
+    Args:
+        df: Polars DataFrame with preprocessing schema
+
+    Returns:
+        numpy.ndarray: Structured array with preprocessing dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+
+    # Get target dtype
+    dtype = get_preprocessing_dtype()
+    array = np.empty(len(df), dtype=dtype)
+
+    # Convert fields
+    array["id"] = df["id"].to_numpy()
+    array["boardIdPositions"] = np.array(
+        df["boardIdPositions"].to_list(),
+        dtype=(np.uint8, (9, 9)),
+    )
+    array["piecesInHand"] = np.array(
+        df["piecesInHand"].to_list(), dtype=(np.uint8, 14)
+    )
+    array["moveLabel"] = np.array(
+        df["moveLabel"].to_list(),
+        dtype=(np.float32, MOVE_LABELS_NUM),
+    )
+    array["resultValue"] = df["resultValue"].to_numpy()
+
+    return array
+
+
+def convert_numpy_to_preprocessing_df(
+    array: np.ndarray,
+) -> "pl.DataFrame":
+    """Convert numpy structured array to preprocessing Polars DataFrame．
+
+    Args:
+        array: numpy structured array with preprocessing dtype
+
+    Returns:
+        pl.DataFrame: Polars DataFrame with preprocessing schema
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    import polars as pl
+
+    # Convert numpy structured array to dict
+    data = {
+        "id": array["id"].tolist(),
+        "boardIdPositions": array["boardIdPositions"].tolist(),
+        "piecesInHand": array["piecesInHand"].tolist(),
+        "moveLabel": array["moveLabel"].tolist(),
+        "resultValue": array["resultValue"].tolist(),
+    }
+
+    # Create DataFrame with proper schema
+    df = pl.DataFrame(
+        data, schema=get_preprocessing_polars_schema()
+    )
+
+    return df

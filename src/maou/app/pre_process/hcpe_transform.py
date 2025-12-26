@@ -20,7 +20,10 @@ from tqdm.auto import tqdm
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
-from maou.domain.data.array_io import save_preprocessing_array
+from maou.domain.data.array_io import save_preprocessing_df
+from maou.domain.data.schema import (
+    convert_numpy_to_preprocessing_df,
+)
 
 if TYPE_CHECKING:
     import polars as pl
@@ -347,12 +350,16 @@ class PreProcess:
             ):
                 # ローカルファイル出力（output_dirが指定されている場合）
                 if output_dir is not None:
-                    chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.npy"
+                    chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.feather"
                     chunk_path = output_dir / chunk_filename
 
-                    save_preprocessing_array(
-                        chunk_data, chunk_path, bit_pack=False
+                    # Convert numpy array to Polars DataFrame and save as .feather
+                    chunk_df = (
+                        convert_numpy_to_preprocessing_df(
+                            chunk_data
+                        )
                     )
+                    save_preprocessing_df(chunk_df, chunk_path)
 
                     self.logger.debug(
                         f"Saved chunk {chunk_idx} to local file: {chunk_path} "
@@ -566,11 +573,14 @@ class PreProcess:
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        save_preprocessing_array(
-                            array,
+                        # Convert numpy array to Polars DataFrame and save as .feather
+                        df = convert_numpy_to_preprocessing_df(
+                            array
+                        )
+                        save_preprocessing_df(
+                            df,
                             option.output_dir
-                            / f"{base_name}.npy",
-                            bit_pack=False,
+                            / f"{base_name}.feather",
                         )
             else:
                 # 並列処理（メモリ効率化版）
@@ -761,11 +771,14 @@ class PreProcess:
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        save_preprocessing_array(
-                            array,
+                        # Convert numpy array to Polars DataFrame and save as .feather
+                        df = convert_numpy_to_preprocessing_df(
+                            array
+                        )
+                        save_preprocessing_df(
+                            df,
                             option.output_dir
-                            / f"{base_name}.npy",
-                            bit_pack=False,
+                            / f"{base_name}.feather",
                         )
 
         # クリーンアップ: ディスクストアを閉じて削除

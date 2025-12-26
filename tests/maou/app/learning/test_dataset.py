@@ -11,7 +11,10 @@ from torch.utils.data import DataLoader
 
 from maou.app.common.data_io_service import DataIOService
 from maou.app.learning.dataset import DataSource, KifDataset
-from maou.domain.data.array_io import save_preprocessing_array
+from maou.domain.data.array_io import save_preprocessing_df
+from maou.domain.data.schema import (
+    convert_numpy_to_preprocessing_df,
+)
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
 )
@@ -166,8 +169,10 @@ def test_numpy_to_tensor_preserves_memmap_zero_copy(
         dtype=np.uint8,
     )
 
-    file_path = tmp_path / "zero_copy.npy"
-    save_preprocessing_array(prep_array, file_path)
+    file_path = tmp_path / "zero_copy.feather"
+    # Convert numpy array to Polars DataFrame and save as .feather
+    df = convert_numpy_to_preprocessing_df(prep_array)
+    save_preprocessing_df(df, file_path)
 
     loaded_array = DataIOService.load_array(
         file_path,

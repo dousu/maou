@@ -10,7 +10,8 @@ from tqdm.auto import tqdm
 # maouモジュールのimport
 from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.board import shogi
-from maou.domain.data.array_io import load_hcpe_array
+from maou.domain.data.rust_io import load_hcpe_df
+from maou.domain.data.schema import convert_hcpe_df_to_numpy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,14 +28,14 @@ def count_unique_positions(
     Returns:
         (ユニーク局面数, 総局面数, 推定メモリ使用量バイト数)
     """
-    # 全てのnpyファイルを検索
-    npy_files = sorted(input_path.glob("**/*.npy"))
+    # 全ての.featherファイルを検索
+    feather_files = sorted(input_path.glob("**/*.feather"))
     logger.info(
-        f"Found {len(npy_files)} npy files in {input_path}"
+        f"Found {len(feather_files)} feather files in {input_path}"
     )
 
-    if not npy_files:
-        logger.error("No npy files found")
+    if not feather_files:
+        logger.error("No feather files found")
         return 0, 0, 0
 
     # ハッシュ値を収集（重複を許可）
@@ -42,9 +43,13 @@ def count_unique_positions(
     total_positions = 0
     board = shogi.Board()
 
-    for npy_file in tqdm(npy_files, desc="Processing files"):
+    for feather_file in tqdm(
+        feather_files, desc="Processing files"
+    ):
         try:
-            data = load_hcpe_array(npy_file)
+            # Load .feather file and convert to numpy for processing
+            df = load_hcpe_df(feather_file)
+            data = convert_hcpe_df_to_numpy(df)
             n = len(data)
             total_positions += n
 
@@ -53,7 +58,9 @@ def count_unique_positions(
                 board.set_hcp(data["hcp"][i])
                 all_hashes.append(board.hash())
         except Exception as e:
-            logger.error(f"Error processing {npy_file}: {e}")
+            logger.error(
+                f"Error processing {feather_file}: {e}"
+            )
             continue
 
     # ユニーク局面数を計算
