@@ -16,7 +16,6 @@ import numpy as np
 from maou.domain.data.compression import (
     compress_sparse_int_array,
     decompress_sparse_int_array,
-    unpack_preprocessing_fields,
 )
 from maou.domain.data.schema import (
     create_empty_preprocessing_array,
@@ -293,17 +292,11 @@ class IntermediateDataStore:
                     )
                 else:
                     # Insert new record
-                    (
-                        board_positions,
-                        pieces_in_hand,
-                    ) = unpack_preprocessing_fields(
-                        np.asarray(
-                            data["boardIdPositions"],
-                            dtype=np.uint8,
-                        ),
-                        np.asarray(
-                            data["piecesInHand"], dtype=np.uint8
-                        ),
+                    board_positions = np.asarray(
+                        data["boardIdPositions"], dtype=np.uint8
+                    )
+                    pieces_in_hand = np.asarray(
+                        data["piecesInHand"], dtype=np.uint8
                     )
 
                     # Compress sparse move_label_count
@@ -605,12 +598,11 @@ class IntermediateDataStore:
                 pieces_in_hand_raw = pickle.loads(
                     pieces_in_hand_blob
                 )
-                (
-                    board_positions,
-                    pieces_in_hand,
-                ) = unpack_preprocessing_fields(
-                    board_positions_raw,
-                    pieces_in_hand_raw,
+                board_positions = np.asarray(
+                    board_positions_raw, dtype=np.uint8
+                )
+                pieces_in_hand = np.asarray(
+                    pieces_in_hand_raw, dtype=np.uint8
                 )
 
                 # Convert to native Python types
