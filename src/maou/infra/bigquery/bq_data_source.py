@@ -9,7 +9,8 @@ from typing import Literal, Optional, Union
 import polars as pl
 from google.cloud import bigquery
 
-from maou.interface import learn, preprocess
+import maou.interface.learn as learn
+import maou.interface.preprocess as preprocess
 
 
 class MissingBigQueryConfig(Exception):

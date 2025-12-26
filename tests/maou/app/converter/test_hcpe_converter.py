@@ -62,7 +62,7 @@ class TestHCPEConverter:
         assert output_dir.exists()
         for p in input_paths:
             output_file = (
-                output_dir / p.with_suffix(".npy").name
+                output_dir / p.with_suffix(".feather").name
             )
             assert output_file.exists()
 
@@ -183,11 +183,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_min_moves(
@@ -223,11 +223,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_max_moves(
@@ -263,11 +263,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert not (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_allowed_endgame_status(
@@ -306,15 +306,15 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_3").with_suffix(".npy").name
+            / Path("test_data_3").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_composite_filter_(
@@ -353,15 +353,15 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert not (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_3").with_suffix(".npy").name
+            / Path("test_data_3").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_no_moves(
@@ -398,11 +398,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
             / Path("test_data_no_moves")
-            .with_suffix(".npy")
+            .with_suffix(".feather")
             .name
         ).exists()

@@ -2,10 +2,10 @@ from pathlib import Path
 
 import click
 
+import maou.interface.infer as infer
 from maou.infra.console.common import (
     handle_exception,
 )
-from maou.interface import infer
 
 
 @click.command("evaluate")

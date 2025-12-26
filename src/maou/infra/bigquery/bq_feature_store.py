@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 from google.cloud import bigquery
 
-from maou.interface import converter, data_schema, preprocess
+import maou.interface.converter as converter
+import maou.interface.data_schema as data_schema
+import maou.interface.preprocess as preprocess
 
 
 class SchemaConflictError(Exception):

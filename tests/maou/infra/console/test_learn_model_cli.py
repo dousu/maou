@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+import maou.infra.console.learn_model as learn_model
 from maou.domain.data.schema import get_hcpe_dtype
-from maou.infra.console import learn_model
 
 
 def _create_sample_file(path: Path) -> None:

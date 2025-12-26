@@ -3,6 +3,7 @@ from typing import Optional
 
 import click
 
+import maou.interface.converter as converter
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -14,7 +15,6 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import converter
 
 
 @click.command("hcpe-convert")

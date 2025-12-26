@@ -1,11 +1,17 @@
 """Debug script to investigate training issues."""
-import torch
-import numpy as np
+
 from pathlib import Path
-from maou.app.learning.network import Network
-from maou.app.learning.dataset import KifDataset
-from maou.infra.file_system.file_data_source import FileDataSource
+
+import numpy as np
+import torch
 from torch.utils.data import DataLoader
+
+from maou.app.learning.dataset import KifDataset
+from maou.app.learning.network import Network
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
+
 
 def main():
     print("=" * 80)
@@ -15,7 +21,9 @@ def main():
     # Load a small sample of data
     data_dir = Path("preprocess/floodgate/2020")
     if not data_dir.exists():
-        print(f"Error: Data directory {data_dir} does not exist")
+        print(
+            f"Error: Data directory {data_dir} does not exist"
+        )
         return
 
     # Get file paths
@@ -29,8 +37,7 @@ def main():
 
     # Load data source
     datasource = FileDataSource(
-        file_paths=[file_paths[0]],
-        array_type="preprocessing"
+        file_paths=[file_paths[0]], array_type="preprocessing"
     )
 
     # Create dataset
@@ -44,7 +51,9 @@ def main():
 
     # Sample 10000 points to check distribution
     sample_size = min(10000, len(dataset))
-    indices = np.random.choice(len(dataset), sample_size, replace=False)
+    indices = np.random.choice(
+        len(dataset), sample_size, replace=False
+    )
 
     value_labels = []
 
@@ -66,7 +75,9 @@ def main():
     hist, bins = np.histogram(value_labels, bins=10)
     for i in range(len(hist)):
         bar = "█" * int(hist[i] / hist.max() * 50)
-        print(f"  [{bins[i]:.3f}, {bins[i+1]:.3f}): {hist[i]:4d} {bar}")
+        print(
+            f"  [{bins[i]:.3f}, {bins[i + 1]:.3f}): {hist[i]:4d} {bar}"
+        )
 
     # Test model predictions
     print("\n" + "=" * 80)
@@ -83,11 +94,15 @@ def main():
         value_hidden_dim=None,
     )
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda:0" if torch.cuda.is_available() else "cpu"
+    )
     model = model.to(device)
 
     print(f"\nModel device: {device}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(
+        f"Model parameters: {sum(p.numel() for p in model.parameters()):,}"
+    )
 
     # Create a small dataloader
     dataloader = DataLoader(
@@ -99,7 +114,9 @@ def main():
 
     # Get one batch
     batch = next(iter(dataloader))
-    inputs, (labels_policy, labels_value, legal_move_mask) = batch
+    inputs, (labels_policy, labels_value, legal_move_mask) = (
+        batch
+    )
 
     inputs = inputs.to(device)
     labels_value = labels_value.to(device)
@@ -107,7 +124,9 @@ def main():
     print("\nBatch shapes:")
     print(f"  inputs: {inputs.shape}")
     print(f"  labels_value: {labels_value.shape}")
-    print(f"  labels_value range: [{labels_value.min():.6f}, {labels_value.max():.6f}]")
+    print(
+        f"  labels_value range: [{labels_value.min():.6f}, {labels_value.max():.6f}]"
+    )
     print(f"  labels_value mean: {labels_value.mean():.6f}")
 
     # Forward pass
@@ -117,7 +136,9 @@ def main():
 
     print("\nModel predictions:")
     print(f"  value_pred shape: {value_pred.shape}")
-    print(f"  value_pred range: [{value_pred.min():.6f}, {value_pred.max():.6f}]")
+    print(
+        f"  value_pred range: [{value_pred.min():.6f}, {value_pred.max():.6f}]"
+    )
     print(f"  value_pred mean: {value_pred.mean():.6f}")
     print(f"  value_pred std: {value_pred.std():.6f}")
 
@@ -132,7 +153,9 @@ def main():
     print("=" * 80)
 
     model.train()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=0.01, momentum=0.9
+    )
 
     # Single training step
     optimizer.zero_grad()
@@ -149,7 +172,9 @@ def main():
             print(f"  {name}: grad_norm = {grad_norm:.6f}")
 
     if value_head_grads:
-        print(f"\nValue head gradient norms: min={min(value_head_grads):.6f}, max={max(value_head_grads):.6f}")
+        print(
+            f"\nValue head gradient norms: min={min(value_head_grads):.6f}, max={max(value_head_grads):.6f}"
+        )
     else:
         print("\nWARNING: No gradients found for value head!")
 
@@ -173,7 +198,9 @@ def main():
         value_preds_over_time.append(value_pred.mean().item())
 
         if step % 3 == 0:
-            print(f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.6f}")
+            print(
+                f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.6f}"
+            )
 
     print("\nLoss over 10 steps:")
     print(f"  Initial: {losses[0]:.6f}")
@@ -183,11 +210,14 @@ def main():
     print("\nValue prediction mean over 10 steps:")
     print(f"  Initial: {value_preds_over_time[0]:.6f}")
     print(f"  Final:   {value_preds_over_time[-1]:.6f}")
-    print(f"  Change:  {value_preds_over_time[-1] - value_preds_over_time[0]:.6f}")
+    print(
+        f"  Change:  {value_preds_over_time[-1] - value_preds_over_time[0]:.6f}"
+    )
 
     print("\n" + "=" * 80)
     print("Debug investigation complete")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

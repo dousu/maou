@@ -1,11 +1,17 @@
 """Verify BCE loss training with real data."""
-import torch
+
 from pathlib import Path
-from maou.app.learning.network import Network
-from maou.app.learning.dataset import KifDataset
-from maou.app.learning.setup import LossOptimizerFactory
-from maou.infra.file_system.file_data_source import FileDataSource
+
+import torch
 from torch.utils.data import DataLoader
+
+from maou.app.learning.dataset import KifDataset
+from maou.app.learning.network import Network
+from maou.app.learning.setup import LossOptimizerFactory
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
+
 
 def main():
     print("=" * 80)
@@ -14,14 +20,15 @@ def main():
 
     # Load small sample from real data
     data_dir = Path("preprocess/floodgate/2020")
-    file_paths = sorted(data_dir.glob("*.npy"))[:1]  # Use only first file
+    file_paths = sorted(data_dir.glob("*.npy"))[
+        :1
+    ]  # Use only first file
 
     print(f"\nUsing data file: {file_paths[0]}")
 
     # Load data source
     datasource = FileDataSource(
-        file_paths=file_paths,
-        array_type="preprocessing"
+        file_paths=file_paths, array_type="preprocessing"
     )
 
     # Create dataset (limit to 10000 samples)
@@ -49,19 +56,29 @@ def main():
         dropout_rate=0.1,
     )
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda:0" if torch.cuda.is_available() else "cpu"
+    )
     model = model.to(device)
 
     print(f"\nDevice: {device}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(
+        f"Model parameters: {sum(p.numel() for p in model.parameters()):,}"
+    )
 
     # Create loss functions and optimizer
-    loss_fn_policy, loss_fn_value = LossOptimizerFactory.create_loss_functions(
-        gce_parameter=0.7
+    loss_fn_policy, loss_fn_value = (
+        LossOptimizerFactory.create_loss_functions(
+            gce_parameter=0.7
+        )
     )
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=0.001, momentum=0.9
+    )
 
-    print(f"\nLoss function: {loss_fn_value.__class__.__name__}")
+    print(
+        f"\nLoss function: {loss_fn_value.__class__.__name__}"
+    )
     print("Learning rate: 0.001")
     print("Optimizer: SGD(momentum=0.9)")
 
@@ -83,7 +100,10 @@ def main():
         all_value_preds = []
         all_value_labels = []
 
-        for batch_idx, (inputs, (labels_policy, labels_value, legal_move_mask)) in enumerate(dataloader):
+        for batch_idx, (
+            inputs,
+            (labels_policy, labels_value, legal_move_mask),
+        ) in enumerate(dataloader):
             # Move to device
             inputs = inputs.to(device)
             labels_policy = labels_policy.to(device)
@@ -104,7 +124,9 @@ def main():
 
             # Backward pass
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=1.0
+            )
             optimizer.step()
 
             # Track losses
@@ -115,10 +137,16 @@ def main():
 
             # Collect predictions for first few batches
             if batch_idx < 5:
-                all_value_preds.append(value_pred.detach().cpu())
-                all_value_labels.append(labels_value.detach().cpu())
+                all_value_preds.append(
+                    value_pred.detach().cpu()
+                )
+                all_value_labels.append(
+                    labels_value.detach().cpu()
+                )
 
-            if batch_idx >= 10:  # Limit to 10 batches for quick verification
+            if (
+                batch_idx >= 10
+            ):  # Limit to 10 batches for quick verification
                 break
 
         # Epoch summary
@@ -134,11 +162,21 @@ def main():
         print(f"  Total Loss:  {avg_loss:.6f}")
         print(f"  Value Loss:  {avg_value_loss:.6f}")
         print(f"  Policy Loss: {avg_policy_loss:.6f}")
-        print(f"  Value Pred Mean: {all_value_preds.mean().item():.4f}")
-        print(f"  Value Pred Std:  {all_value_preds.std().item():.4f}")
-        print(f"  Value Pred Min:  {all_value_preds.min().item():.4f}")
-        print(f"  Value Pred Max:  {all_value_preds.max().item():.4f}")
-        print(f"  Value Label Mean: {all_value_labels.mean().item():.4f}")
+        print(
+            f"  Value Pred Mean: {all_value_preds.mean().item():.4f}"
+        )
+        print(
+            f"  Value Pred Std:  {all_value_preds.std().item():.4f}"
+        )
+        print(
+            f"  Value Pred Min:  {all_value_preds.min().item():.4f}"
+        )
+        print(
+            f"  Value Pred Max:  {all_value_preds.max().item():.4f}"
+        )
+        print(
+            f"  Value Label Mean: {all_value_labels.mean().item():.4f}"
+        )
 
     # Final analysis
     print("\n" + "=" * 80)
@@ -146,7 +184,9 @@ def main():
     print("=" * 80)
 
     # Check value label distribution
-    value_hist = torch.histc(all_value_labels, bins=5, min=0, max=1)
+    value_hist = torch.histc(
+        all_value_labels, bins=5, min=0, max=1
+    )
     print("\nValue label distribution:")
     print(f"  [0.0-0.2]: {value_hist[0].item():.0f}")
     print(f"  [0.2-0.4]: {value_hist[1].item():.0f}")
@@ -155,7 +195,9 @@ def main():
     print(f"  [0.8-1.0]: {value_hist[4].item():.0f}")
 
     # Check prediction distribution
-    pred_hist = torch.histc(all_value_preds, bins=5, min=0, max=1)
+    pred_hist = torch.histc(
+        all_value_preds, bins=5, min=0, max=1
+    )
     print("\nValue prediction distribution:")
     print(f"  [0.0-0.2]: {pred_hist[0].item():.0f}")
     print(f"  [0.2-0.4]: {pred_hist[1].item():.0f}")
@@ -190,6 +232,7 @@ poetry run maou learn-model \\
   --gce-parameter 0.7 \\
   --momentum 0.9
 """)
+
 
 if __name__ == "__main__":
     main()

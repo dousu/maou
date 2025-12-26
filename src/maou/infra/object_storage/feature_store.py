@@ -6,7 +6,8 @@ from typing import Literal, Optional
 
 import polars as pl
 
-from maou.interface import converter, preprocess
+import maou.interface.converter as converter
+import maou.interface.preprocess as preprocess
 
 # Use 'spawn' start method to avoid fork() issues in multi-threaded environments
 # This is required for compatibility with cloud storage clients (GCS, S3)

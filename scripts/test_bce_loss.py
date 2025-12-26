@@ -1,7 +1,10 @@
 """Test BCE Loss implementation for value head."""
+
 import torch
+
 from maou.app.learning.network import Network
 from maou.app.learning.setup import LossOptimizerFactory
+
 
 def main():
     print("=" * 80)
@@ -17,11 +20,15 @@ def main():
     )
 
     # Create loss functions
-    loss_fn_policy, loss_fn_value = LossOptimizerFactory.create_loss_functions(
-        gce_parameter=0.7
+    loss_fn_policy, loss_fn_value = (
+        LossOptimizerFactory.create_loss_functions(
+            gce_parameter=0.7
+        )
     )
 
-    print(f"\nValue loss function: {loss_fn_value.__class__.__name__}")
+    print(
+        f"\nValue loss function: {loss_fn_value.__class__.__name__}"
+    )
     print("Expected: BCELoss")
 
     # Create sample data
@@ -34,7 +41,9 @@ def main():
     labels_value[50:] = 1.0  # 50% wins
 
     print("\nLabel distribution:")
-    print(f"  Zeros (loss): {(labels_value == 0.0).sum().item()}")
+    print(
+        f"  Zeros (loss): {(labels_value == 0.0).sum().item()}"
+    )
     print(f"  Ones (win): {(labels_value == 1.0).sum().item()}")
     print(f"  Mean: {labels_value.mean().item():.4f}")
 
@@ -44,7 +53,9 @@ def main():
         policy_logits, value_pred = model(inputs)
 
     print("\nValue predictions:")
-    print(f"  Range: [{value_pred.min().item():.4f}, {value_pred.max().item():.4f}]")
+    print(
+        f"  Range: [{value_pred.min().item():.4f}, {value_pred.max().item():.4f}]"
+    )
     print(f"  Mean: {value_pred.mean().item():.4f}")
     print(f"  Std: {value_pred.std().item():.4f}")
 
@@ -79,7 +90,9 @@ def main():
         pred_means.append(value_pred.mean().item())
 
         if step % 3 == 0:
-            print(f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.4f}")
+            print(
+                f"  Step {step}: loss={loss.item():.6f}, pred_mean={value_pred.mean().item():.4f}"
+            )
 
     print("\nLoss progression:")
     print(f"  Initial: {losses_bce[0]:.6f}")
@@ -110,13 +123,18 @@ def main():
         print("✗ Loss did not decrease enough")
 
     if abs(pred_means[-1] - 0.5) > 0.05:
-        print(f"✓ Predictions moved away from 0.5 (mean={pred_means[-1]:.4f})")
+        print(
+            f"✓ Predictions moved away from 0.5 (mean={pred_means[-1]:.4f})"
+        )
     else:
-        print(f"✗ Predictions stuck near 0.5 (mean={pred_means[-1]:.4f})")
+        print(
+            f"✗ Predictions stuck near 0.5 (mean={pred_means[-1]:.4f})"
+        )
 
     print("\n" + "=" * 80)
     print("Test Complete")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

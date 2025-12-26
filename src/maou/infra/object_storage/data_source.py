@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Union
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.interface import learn, preprocess
+import maou.interface.learn as learn
+import maou.interface.preprocess as preprocess
 
 if TYPE_CHECKING:
     import polars as pl

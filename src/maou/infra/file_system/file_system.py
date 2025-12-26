@@ -1,7 +1,9 @@
 from pathlib import Path
 from typing import Optional
 
-from maou.interface import converter, learn, preprocess
+import maou.interface.converter as converter
+import maou.interface.learn as learn
+import maou.interface.preprocess as preprocess
 
 
 class FileSystem(

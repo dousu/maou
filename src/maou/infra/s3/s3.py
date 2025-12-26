@@ -5,8 +5,8 @@ from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 
+import maou.interface.learn as learn
 from maou.infra.file_system.file_system import FileSystem
-from maou.interface import learn
 
 
 class BucketNotFound(Exception):

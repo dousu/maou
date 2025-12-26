@@ -9,7 +9,8 @@ from __future__ import annotations
 import click
 import pytest
 
-from maou.infra.console import learn_model, utility
+import maou.infra.console.learn_model as learn_model
+import maou.infra.console.utility as utility
 
 
 def get_command_options(command: click.Command) -> set[str]:

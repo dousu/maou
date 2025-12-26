@@ -214,9 +214,11 @@ class HCPEConverter:
                     continue
 
                 # HCP (Huffman Coded Position)
-                hcp_bytes = bytearray(32)
-                board.to_hcp(hcp_bytes)
-                hcpe_data["hcp"].append(bytes(hcp_bytes))
+                # to_hcp() expects numpy array, not bytearray
+                hcp_array = np.zeros(32, dtype=np.uint8)
+                board.to_hcp(hcp_array)
+                # Convert to bytes for Polars Binary type
+                hcpe_data["hcp"].append(hcp_array.tobytes())
 
                 # 評価値（16bitに収める）
                 eval = min(32767, max(score, -32767))
@@ -241,7 +243,10 @@ class HCPEConverter:
                         partitioning_key_value.isoformat()
                     ).date()
                 )
-                hcpe_data["ratings"].append(list(ratings))
+                # Convert ratings to uint16
+                hcpe_data["ratings"].append(
+                    [int(r) for r in ratings]
+                )
                 hcpe_data["endgameStatus"].append(endgame)
                 hcpe_data["moves"].append(moves)
 

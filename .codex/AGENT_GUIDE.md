@@ -1,6 +1,6 @@
 # Codex Agent Guide (Short & Mandatory)
 
-**🚨 RULE ZERO:** Never run tools directly.  
+**🚨 RULE ZERO:** Never run tools directly.
 **Always** prefix commands with `poetry run`.
 
 ✅ Correct:

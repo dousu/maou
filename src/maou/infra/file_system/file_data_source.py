@@ -16,7 +16,8 @@ from typing import (
 
 import numpy as np
 
-from maou.interface import learn, preprocess
+import maou.interface.learn as learn
+import maou.interface.preprocess as preprocess
 
 if TYPE_CHECKING:
     import polars as pl

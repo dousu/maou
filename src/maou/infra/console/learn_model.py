@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
-from maou.infra.console import common
-from maou.interface import learn
+import maou.infra.console.common as common
+import maou.interface.learn as learn
 
 if TYPE_CHECKING:
     from maou.infra.console.common import GCS as GCSType

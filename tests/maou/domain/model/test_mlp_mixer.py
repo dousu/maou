@@ -2,21 +2,24 @@
 
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import torch
 
-try:  # pragma: no cover - import location varies across PyTorch versions
-    from torch.onnx import (
-        TracerWarning,  # type: ignore[attr-defined]
-    )
-except (
-    ImportError,
-    AttributeError,
-):  # pragma: no cover - fallback path
-    from torch.onnx.errors import (
-        OnnxExporterWarning as TracerWarning,
-    )
+if TYPE_CHECKING:
+    # For type checking, use Any to avoid import errors
+    TracerWarning: Any = Warning
+else:
+    try:  # pragma: no cover - import location varies across PyTorch versions
+        from torch.onnx import TracerWarning
+    except (
+        ImportError,
+        AttributeError,
+    ):  # pragma: no cover - fallback path
+        from torch.onnx.errors import (
+            OnnxExporterWarning as TracerWarning,
+        )
 
 from maou.domain.model.mlp_mixer import (
     ShogiMLPMixer,

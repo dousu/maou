@@ -4,6 +4,8 @@ from typing import Optional
 
 import click
 
+import maou.interface.learn as learn
+import maou.interface.utility_interface as utility_interface
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -16,7 +18,6 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import learn, utility_interface
 
 
 @click.command("benchmark-dataloader")

@@ -14,8 +14,6 @@ from maou.app.learning.dataset import DataSource, KifDataset
 from maou.domain.data.array_io import save_preprocessing_df
 from maou.domain.data.schema import (
     convert_numpy_to_preprocessing_df,
-)
-from maou.domain.data.schema import (
     create_empty_preprocessing_array,
 )
 
