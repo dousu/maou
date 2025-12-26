@@ -1,15 +1,48 @@
-"""Centralized numpy dtype schemas for Maou project.
+"""Centralized data schemas for Maou project.
 
-This module defines all numpy structured array schemas used throughout
-the project for HCPE data and preprocessing features, ensuring consistency
-and type safety across all layers.
+This module defines Polars-based schemas for all data structures:
+
+**Polars Schemas (Primary)**:
+- HCPE format: Game records with positions and evaluations
+- Preprocessing format: Neural network training features
+- Intermediate format: Aggregation data for preprocessing
+- Stage1/Stage2 formats: Multi-stage training data
+
+**Data Pipeline**:
+- Arrow IPC (.feather) files for high-performance I/O
+- Polars DataFrames for all processing
+- Zero-copy integration with Rust backend
+- Direct Polars → Parquet for BigQuery uploads
+
+**Legacy Numpy Support (Minimal)**:
+- Conversion functions for PyTorch Dataset compatibility
+- Kept for stable Polars → numpy → PyTorch pipeline
+- ONNX export utilities require numpy structured arrays
+
+**Migration Status** (Phase 2-3 Complete):
+- ✅ BigQueryFeatureStore: Now uses Polars → Parquet directly
+- ✅ ObjectStorageFeatureStore: Accepts Polars DataFrames
+- ✅ HCPE Converter: Outputs Polars DataFrames (.feather)
+- ✅ Preprocessing: Outputs Polars DataFrames (.feather)
+- ✅ Validation functions: Removed (use schema enforcement)
+- ⚠️  PyTorch Dataset: Intentionally uses numpy (zero-copy to tensors)
 """
-
-from typing import Any, Dict
 
 import numpy as np
 
 from maou.app.pre_process.label import MOVE_LABELS_NUM
+
+# ============================================================================
+# Numpy dtype definitions (Required for BigQuery and cloud storage)
+# ============================================================================
+# These numpy schemas are maintained for:
+# 1. BigQuery integration (numpy_dtype_to_bigquery_type)
+# 2. Cloud storage FeatureStore (BigQuery, GCS, S3 expect numpy arrays)
+# 3. Polars ↔ numpy conversions (convert_*_df_to_numpy)
+# 4. Backward compatibility with existing cloud storage formats
+#
+# DO NOT DELETE unless all cloud storage backends are migrated to Polars.
+# ============================================================================
 
 
 class SchemaValidationError(Exception):
@@ -172,57 +205,6 @@ def get_packed_preprocessing_dtype() -> np.dtype:
     )
 
 
-def validate_hcpe_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to HCPE schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_hcpe_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check eval range
-        if np.any(
-            (array["eval"] < -32767) | (array["eval"] > 32767)
-        ):
-            raise SchemaValidationError(
-                "eval values out of range [-32767, 32767]"
-            )
-
-        # Check gameResult values
-        valid_results = {-1, 0, 1}  # BLACK_WIN, DRAW, WHITE_WIN
-        if not all(
-            result in valid_results
-            for result in array["gameResult"]
-        ):
-            raise SchemaValidationError(
-                "Invalid gameResult values"
-            )
-
-        # Check moves count
-        if np.any(array["moves"] < 0):
-            raise SchemaValidationError(
-                "moves count cannot be negative"
-            )
-
-    return True
-
-
 def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
     """Convert numpy dtype to BigQuery type string.
 
@@ -267,259 +249,6 @@ def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
         raise ValueError(
             f"Unsupported numpy dtype: {numpy_dtype.name} (kind: {numpy_dtype.kind})"
         )
-
-
-def get_bigquery_schema_for_hcpe() -> list[dict]:
-    """Get BigQuery schema definition for HCPE data.
-
-    Returns:
-        list: BigQuery schema fields as dictionaries
-    """
-    hcpe_dtype = get_hcpe_dtype()
-    schema = []
-
-    if hcpe_dtype.fields is not None:
-        for field_name, field_info in hcpe_dtype.fields.items():
-            field_dtype = field_info[
-                0
-            ]  # First element is always dtype
-            schema.append(
-                {
-                    "name": field_name,
-                    "type": numpy_dtype_to_bigquery_type(
-                        field_dtype
-                    ),
-                    "mode": "REQUIRED",
-                }
-            )
-
-    return schema
-
-
-def get_bigquery_schema_for_preprocessing() -> list[dict]:
-    """Get BigQuery schema definition for preprocessing data.
-
-    Returns:
-        list: BigQuery schema fields as dictionaries
-    """
-    preprocessing_dtype = get_preprocessing_dtype()
-    schema = []
-
-    if preprocessing_dtype.fields is not None:
-        for (
-            field_name,
-            field_info,
-        ) in preprocessing_dtype.fields.items():
-            field_dtype = field_info[
-                0
-            ]  # First element is always dtype
-            schema.append(
-                {
-                    "name": field_name,
-                    "type": numpy_dtype_to_bigquery_type(
-                        field_dtype
-                    ),
-                    "mode": "REQUIRED",
-                }
-            )
-
-    return schema
-
-
-def validate_preprocessing_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to preprocessing schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_preprocessing_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check moveLabel range
-        if np.any(
-            (array["moveLabel"] < 0)
-            | (array["moveLabel"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "moveLabel values out of range [0, 1]"
-            )
-
-        # Check resultValue range
-        if np.any(
-            (array["resultValue"] < 0.0)
-            | (array["resultValue"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "resultValue values out of range [0.0, 1.0]"
-            )
-
-        # Check boardIdPositions shape
-        expected_board_shape = (9, 9)
-        if (
-            array["boardIdPositions"].shape[1:]
-            != expected_board_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid boardIdPositions shape. "
-                f"Expected: {expected_board_shape}, "
-                f"Got: {array['boardIdPositions'].shape[1:]}"
-            )
-
-        # Check piecesInHand shape
-        expected_hand_shape = (14,)
-        if (
-            array["piecesInHand"].shape[1:]
-            != expected_hand_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid piecesInHand shape. "
-                f"Expected: {expected_hand_shape}, "
-                f"Got: {array['piecesInHand'].shape[1:]}"
-            )
-
-    return True
-
-
-def validate_compressed_preprocessing_array(
-    array: np.ndarray,
-) -> bool:
-    """Validate that array conforms to compressed preprocessing schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_packed_preprocessing_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check moveLabel range
-        if np.any(
-            (array["moveLabel"] < 0)
-            | (array["moveLabel"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "moveLabel values out of range [0, 1]"
-            )
-
-        # Check resultValue range
-        if np.any(
-            (array["resultValue"] < 0.0)
-            | (array["resultValue"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "resultValue values out of range [0.0, 1.0]"
-            )
-
-        # Check boardIdPositions shape
-        expected_board_shape = (9, 9)
-        if (
-            array["boardIdPositions"].shape[1:]
-            != expected_board_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid boardIdPositions shape. "
-                f"Expected: {expected_board_shape}, "
-                f"Got: {array['boardIdPositions'].shape[1:]}"
-            )
-
-        # Check piecesInHand shape
-        expected_hand_shape = (14,)
-        if (
-            array["piecesInHand"].shape[1:]
-            != expected_hand_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid piecesInHand shape. "
-                f"Expected: {expected_hand_shape}, "
-                f"Got: {array['piecesInHand'].shape[1:]}"
-            )
-
-    return True
-
-
-def get_schema_info() -> Dict[str, Dict[str, Any]]:
-    """Get information about all available schemas.
-
-    Returns:
-        Dict containing schema information including field names,
-        types, and descriptions for documentation purposes.
-    """
-    return {
-        "hcpe": {
-            "dtype": get_hcpe_dtype(),
-            "description": "HCPE format for game positions and evaluations",
-            "fields": {
-                "hcp": "Huffman coded position (32 bytes)",
-                "eval": "Position evaluation (-32767 to 32767)",
-                "bestMove16": "Best move in 16-bit format",
-                "gameResult": "Game result (BLACK_WIN, WHITE_WIN, DRAW)",
-                "id": "Unique identifier for position",
-                "partitioningKey": "Date for partitioning",
-                "ratings": "Player ratings [black, white]",
-                "endgameStatus": "Endgame status description",
-                "moves": "Number of moves in game",
-            },
-        },
-        "preprocessing": {
-            "dtype": get_preprocessing_dtype(),
-            "description": "Preprocessed training data for neural networks",
-            "fields": {
-                "id": "Unique identifier",
-                "boardIdPositions": "Board position identifiers (9, 9)",
-                "piecesInHand": "Pieces in hand counts (14,)",
-                "moveLabel": (
-                    "Move label for training "
-                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
-                ),
-                "resultValue": "Game result value (0.0 to 1.0)",
-            },
-        },
-        "packed_preprocessing": {
-            "dtype": get_packed_preprocessing_dtype(),
-            "description": (
-                "Compressed-compatible preprocessed training data representation"
-            ),
-            "fields": {
-                "id": "Unique identifier",
-                "boardIdPositions": "Board position identifiers (9, 9)",
-                "piecesInHand": "Pieces in hand counts (14,)",
-                "moveLabel": (
-                    "Move label for training "
-                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
-                ),
-                "resultValue": "Game result value (0.0 to 1.0)",
-            },
-        },
-    }
 
 
 def create_empty_hcpe_array(size: int) -> np.ndarray:
@@ -636,147 +365,6 @@ def get_stage2_dtype() -> np.dtype:
     )
 
 
-def validate_stage1_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to Stage 1 schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_stage1_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check reachableSquares is binary
-        if not np.all(
-            np.isin(array["reachableSquares"], [0, 1])
-        ):
-            raise SchemaValidationError(
-                "reachableSquares must contain only 0 or 1"
-            )
-
-        # Check boardIdPositions shape
-        expected_board_shape = (9, 9)
-        if (
-            array["boardIdPositions"].shape[1:]
-            != expected_board_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid boardIdPositions shape. "
-                f"Expected: {expected_board_shape}，"
-                f"Got: {array['boardIdPositions'].shape[1:]}"
-            )
-
-        # Check piecesInHand shape
-        expected_hand_shape = (14,)
-        if (
-            array["piecesInHand"].shape[1:]
-            != expected_hand_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid piecesInHand shape. "
-                f"Expected: {expected_hand_shape}，"
-                f"Got: {array['piecesInHand'].shape[1:]}"
-            )
-
-        # Check reachableSquares shape
-        if (
-            array["reachableSquares"].shape[1:]
-            != expected_board_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid reachableSquares shape. "
-                f"Expected: {expected_board_shape}，"
-                f"Got: {array['reachableSquares'].shape[1:]}"
-            )
-
-    return True
-
-
-def validate_stage2_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to Stage 2 schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_stage2_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check legalMovesLabel is binary
-        if not np.all(
-            np.isin(array["legalMovesLabel"], [0, 1])
-        ):
-            raise SchemaValidationError(
-                "legalMovesLabel must contain only 0 or 1"
-            )
-
-        # Check boardIdPositions shape
-        expected_board_shape = (9, 9)
-        if (
-            array["boardIdPositions"].shape[1:]
-            != expected_board_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid boardIdPositions shape. "
-                f"Expected: {expected_board_shape}，"
-                f"Got: {array['boardIdPositions'].shape[1:]}"
-            )
-
-        # Check piecesInHand shape
-        expected_hand_shape = (14,)
-        if (
-            array["piecesInHand"].shape[1:]
-            != expected_hand_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid piecesInHand shape. "
-                f"Expected: {expected_hand_shape}，"
-                f"Got: {array['piecesInHand'].shape[1:]}"
-            )
-
-        # Check legalMovesLabel shape
-        expected_labels_shape = (MOVE_LABELS_NUM,)
-        if (
-            array["legalMovesLabel"].shape[1:]
-            != expected_labels_shape
-        ):
-            raise SchemaValidationError(
-                "Invalid legalMovesLabel shape. "
-                f"Expected: {expected_labels_shape}，"
-                f"Got: {array['legalMovesLabel'].shape[1:]}"
-            )
-
-    return True
-
-
 def create_empty_stage1_array(size: int) -> np.ndarray:
     """Create empty Stage 1 array with proper schema.
 
@@ -799,12 +387,6 @@ def create_empty_stage2_array(size: int) -> np.ndarray:
         numpy.ndarray: Empty array with Stage 2 schema
     """
     return np.zeros(size, dtype=get_stage2_dtype())
-
-
-# Constants for backward compatibility
-HCPE_DTYPE = get_hcpe_dtype()
-PREPROCESSING_DTYPE = get_preprocessing_dtype()
-PACKED_PREPROCESSING_DTYPE = get_packed_preprocessing_dtype()
 
 
 # ============================================================================

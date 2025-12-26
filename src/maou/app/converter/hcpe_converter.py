@@ -39,7 +39,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -331,18 +331,10 @@ class HCPEConverter:
                         )
                         if feather_file.exists():
                             df = load_hcpe_df(feather_file)
-                            # Convert Polars DataFrame to numpy structured array
-                            from maou.domain.data.schema import (
-                                convert_hcpe_df_to_numpy,
-                            )
-
-                            structured_array = (
-                                convert_hcpe_df_to_numpy(df)
-                            )
                             self.__feature_store.store_features(
                                 name=file.name,
                                 key_columns=["id"],
-                                structured_array=structured_array,
+                                dataframe=df,
                                 clustering_key=None,
                                 partitioning_key_date="partitioningKey",
                             )
@@ -396,20 +388,12 @@ class HCPEConverter:
                                     df = load_hcpe_df(
                                         feather_file
                                     )
-                                    # Convert Polars DataFrame to numpy structured array
-                                    from maou.domain.data.schema import (
-                                        convert_hcpe_df_to_numpy,
-                                    )
-
-                                    structured_array = convert_hcpe_df_to_numpy(
-                                        df
-                                    )
                                     self.__feature_store.store_features(
                                         name=file.with_suffix(
                                             ".hcpe"
                                         ).name,
                                         key_columns=["id"],
-                                        structured_array=structured_array,
+                                        dataframe=df,
                                         clustering_key=None,
                                         partitioning_key_date="partitioningKey",
                                     )

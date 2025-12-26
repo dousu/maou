@@ -47,7 +47,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -391,20 +391,10 @@ class PreProcess:
 
                 # feature_storeへの出力（feature_storeが指定されている場合）
                 if self.__feature_store is not None:
-                    # Convert DataFrame to numpy array for feature store
-                    from maou.domain.data.schema import (
-                        convert_preprocessing_df_to_numpy,
-                    )
-
-                    chunk_array = (
-                        convert_preprocessing_df_to_numpy(
-                            chunk_df
-                        )
-                    )
                     self.__feature_store.store_features(
                         name=output_filename,
                         key_columns=["id"],
-                        structured_array=chunk_array,
+                        dataframe=chunk_df,
                     )
                     self.logger.debug(
                         f"Stored chunk {chunk_idx} to feature store "
@@ -598,20 +588,10 @@ class PreProcess:
 
                     # Store results
                     if self.__feature_store is not None:
-                        # Convert DataFrame to numpy array for feature store
-                        from maou.domain.data.schema import (
-                            convert_preprocessing_df_to_numpy,
-                        )
-
-                        array = (
-                            convert_preprocessing_df_to_numpy(
-                                df
-                            )
-                        )
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
-                            structured_array=array,
+                            dataframe=df,
                         )
 
                     if option.output_dir is not None:
@@ -803,20 +783,10 @@ class PreProcess:
                     )
                     # Store results
                     if self.__feature_store is not None:
-                        # Convert DataFrame to numpy array for feature store
-                        from maou.domain.data.schema import (
-                            convert_preprocessing_df_to_numpy,
-                        )
-
-                        array = (
-                            convert_preprocessing_df_to_numpy(
-                                df
-                            )
-                        )
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
-                            structured_array=array,
+                            dataframe=df,
                         )
 
                     if option.output_dir is not None:

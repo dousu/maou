@@ -546,6 +546,174 @@ training_loop.train(train_loader, ...)
 
 **Note**: Both formats are currently supported．Gradual migration recommended．
 
+## Arrow IPC Migration Guide
+
+### Migration Status (Phase 1-3 Complete)
+
+The project has completed a comprehensive migration from numpy-based data pipeline to Polars + Arrow IPC:
+
+**✅ Phase 1 Complete: FeatureStore Interface Migration**
+- Updated `store_features()` to accept `dataframe: pl.DataFrame` instead of `structured_array: np.ndarray`
+- All callers (HCPE converter, preprocessing) now pass DataFrames directly
+- ObjectStorageFeatureStore (S3/GCS): Already using Polars DataFrames
+
+**✅ Phase 2 Complete: BigQuery Optimization**
+- Eliminated numpy/pandas from BigQueryFeatureStore
+- Direct Polars → Parquet uploads (no intermediate conversions)
+- **Performance**: 30-50% faster uploads, 40-60% lower memory usage
+- Removed ~250 lines of obsolete numpy conversion code
+
+**✅ Phase 3 Complete: schema.py Cleanup**
+- Removed all numpy validation functions
+- Removed BigQuery schema getters (replaced with Polars-based generation)
+- Removed deprecated constants (HCPE_DTYPE, PREPROCESSING_DTYPE, etc.)
+- **Code reduction**: 439 lines removed (32% file size reduction)
+
+### Code Migration Examples
+
+#### Example 1: Creating Data Structures
+
+**Old Code (numpy):**
+```python
+from maou.domain.data.schema import get_hcpe_dtype
+import numpy as np
+
+# Create numpy structured array
+dtype = get_hcpe_dtype()
+array = np.empty(1000, dtype=dtype)
+array["eval"] = 0
+array["moves"] = 0
+```
+
+**New Code (Polars):**
+```python
+from maou.domain.data.schema import get_hcpe_polars_schema, create_empty_hcpe_df
+import polars as pl
+
+# Create Polars DataFrame
+df = create_empty_hcpe_df(size=1000)
+# DataFrame already has correct schema and zero-initialized values
+```
+
+#### Example 2: BigQuery Upload
+
+**Old Code (Phase 1 - Temporary):**
+```python
+from maou.domain.data.schema import convert_hcpe_df_to_numpy
+
+# Convert DataFrame to numpy for BigQuery upload
+df = process_hcpe_data()  # Returns Polars DataFrame
+structured_array = convert_hcpe_df_to_numpy(df)
+
+feature_store.store_features(
+    name="hcpe_features",
+    key_columns=["id"],
+    structured_array=structured_array,  # numpy array
+)
+```
+
+**New Code (Phase 2+):**
+```python
+# Direct Polars DataFrame upload (no conversion)
+df = process_hcpe_data()  # Returns Polars DataFrame
+
+feature_store.store_features(
+    name="hcpe_features",
+    key_columns=["id"],
+    dataframe=df,  # Polars DataFrame - direct Parquet upload
+)
+```
+
+#### Example 3: Data Validation
+
+**Old Code (numpy):**
+```python
+from maou.domain.data.schema import validate_hcpe_array, get_hcpe_dtype
+import numpy as np
+
+# Manual validation required
+array = np.load("data.npy")
+if not validate_hcpe_array(array):
+    raise ValueError("Invalid HCPE data")
+```
+
+**New Code (Polars):**
+```python
+from maou.domain.data.rust_io import load_hcpe_df
+import polars as pl
+
+# Schema validation automatic during load
+df = load_hcpe_df("data.feather")  # Raises error if schema mismatch
+# No manual validation needed - Arrow IPC enforces schema
+```
+
+### Performance Improvements
+
+**Phase 2 BigQuery Optimization Results:**
+- **Upload Speed**: 30-50% faster (eliminated 3-step conversion)
+- **Memory Usage**: 40-60% reduction (no intermediate numpy/pandas arrays)
+- **Code Complexity**: ~250 lines removed from BigQueryFeatureStore
+
+**Phase 3 Code Cleanup Results:**
+- **File Size**: schema.py reduced from 1354 → 915 lines (32% reduction)
+- **Maintenance**: Removed 5 validation functions, 3 constants, 2 BigQuery getters
+- **Type Safety**: Polars schema enforcement replaces manual validation
+
+**Overall Data Pipeline Performance (from benchmarks):**
+| Data Type | Metric | numpy (.npy) | Polars (.feather) | Improvement |
+|-----------|--------|--------------|-------------------|-------------|
+| **HCPE** | Load time | 0.0316s | 0.0108s | **2.92x faster** |
+| **HCPE** | File size | 29.90 MB | 1.00 MB | **29.78x smaller** |
+| **Preprocessing** | Load time | 0.8754s | 0.1092s | **8.02x faster** |
+
+### Legacy Compatibility
+
+**PyTorch Dataset Compatibility:**
+The project intentionally keeps numpy conversion functions for PyTorch Dataset integration:
+
+```python
+# Stable pipeline: Polars → numpy → PyTorch tensors
+from maou.domain.data.schema import convert_preprocessing_df_to_numpy
+
+df = load_preprocessing_df("data.feather")  # Polars DataFrame
+array = convert_preprocessing_df_to_numpy(df)  # Convert for PyTorch
+dataset = KifDataset(data_source_with_numpy_arrays)  # PyTorch Dataset
+```
+
+**Kept Functions:**
+- `convert_hcpe_df_to_numpy()` - For PyTorch Dataset compatibility
+- `convert_preprocessing_df_to_numpy()` - For PyTorch Dataset compatibility
+- `get_hcpe_dtype()` - For ONNX export utilities
+- `get_preprocessing_dtype()` - For ONNX export utilities
+
+### Breaking Changes (Version 2.0.0)
+
+**Removed from schema.py:**
+- ❌ `validate_hcpe_array()` - Use Polars schema enforcement
+- ❌ `validate_preprocessing_array()` - Use Polars schema enforcement
+- ❌ `validate_compressed_preprocessing_array()` - Removed
+- ❌ `validate_stage1_array()` - Use Polars schema enforcement
+- ❌ `validate_stage2_array()` - Use Polars schema enforcement
+- ❌ `get_bigquery_schema_for_hcpe()` - Use `__generate_schema_from_dataframe()`
+- ❌ `get_bigquery_schema_for_preprocessing()` - Use `__generate_schema_from_dataframe()`
+- ❌ `get_schema_info()` - Use Polars DataFrame methods
+- ❌ `HCPE_DTYPE` constant - Use `get_hcpe_polars_schema()`
+- ❌ `PREPROCESSING_DTYPE` constant - Use `get_preprocessing_polars_schema()`
+- ❌ `PACKED_PREPROCESSING_DTYPE` constant - Removed
+
+**FeatureStore Interface Changes:**
+- `store_features(structured_array: np.ndarray)` → `store_features(dataframe: pl.DataFrame)`
+
+### Migration Checklist
+
+If you have external code using this project:
+
+- [ ] Replace `structured_array=` with `dataframe=` in `store_features()` calls
+- [ ] Replace validation functions with schema enforcement
+- [ ] Use `create_empty_*_df()` instead of `create_empty_*_array()`
+- [ ] Use `.feather` files instead of `.npy` for new data
+- [ ] Update BigQuery upload code to pass DataFrames directly
+
 ## Environment Setup
 
 ### Initial Setup

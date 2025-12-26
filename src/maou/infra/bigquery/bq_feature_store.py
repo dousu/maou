@@ -1,16 +1,14 @@
 import contextlib
 import datetime
 import logging
-import pickle
 from io import BytesIO
-from typing import Any, Generator, Optional, Union
+from typing import Generator, Optional, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from google.cloud import bigquery
 
 import maou.interface.converter as converter
-import maou.interface.data_schema as data_schema
 import maou.interface.preprocess as preprocess
 
 
@@ -76,7 +74,7 @@ class BigQueryFeatureStore(
             )
         # 特徴量書き込み周りの設定
         # バッファを初期化
-        self.__buffer: list[np.ndarray] = []
+        self.__buffer: list[pl.DataFrame] = []
         self.__buffer_size: int = 0
         # 最大値指定
         self.max_cached_bytes = max_cached_bytes
@@ -85,169 +83,77 @@ class BigQueryFeatureStore(
         # 書き込み先テーブルをプルーニングするためのパーティショニングキーの値
         self.partitioning_date_keys: set[datetime.date] = set()
 
-    def __convert_float16_to_float32(
-        self, structured_array: np.ndarray
-    ) -> np.ndarray:
-        """Convert float16 fields to float32 for BigQuery/Parquet compatibility.
+    @staticmethod
+    def __polars_dtype_to_bigquery_type(
+        polars_dtype: pl.DataType,
+    ) -> str:
+        """Convert Polars dtype to BigQuery type string.
 
         Args:
-            structured_array: Input numpy structured array
+            polars_dtype: Polars data type
 
         Returns:
-            numpy.ndarray: Array with float16 fields converted to float32
+            BigQuery type string
+
+        Raises:
+            ValueError: If dtype is not supported
         """
-        if structured_array.dtype.names is None:
-            return structured_array
+        # Check for numeric types
+        if polars_dtype in (
+            pl.Int8,
+            pl.Int16,
+            pl.Int32,
+            pl.Int64,
+            pl.UInt8,
+            pl.UInt16,
+            pl.UInt32,
+        ):
+            return "INTEGER"
+        if polars_dtype == pl.UInt64:
+            return "STRING"  # Avoid overflow for hash IDs
+        if polars_dtype in (pl.Float32, pl.Float64):
+            return "FLOAT"
+        if polars_dtype == pl.Utf8:
+            return "STRING"
+        if polars_dtype == pl.Binary:
+            return "BYTES"
+        if polars_dtype == pl.Date:
+            return "DATE"
+        if polars_dtype == pl.Datetime:
+            return "TIMESTAMP"
+        if polars_dtype == pl.Boolean:
+            return "BOOLEAN"
+        if isinstance(polars_dtype, pl.List):
+            return "BYTES"  # Serialize nested lists
 
-        # Check if any fields are float16
-        has_float16 = any(
-            dtype.kind == "f"
-            and dtype.itemsize == 2  # float16 has 2 bytes
-            for _, (
-                dtype,
-                _,
-                *_,
-            ) in (
-                structured_array.dtype.fields.items()
-                if structured_array.dtype.fields
-                else []
-            )
+        raise ValueError(
+            f"Unsupported Polars dtype: {polars_dtype}"
         )
 
-        if not has_float16:
-            return structured_array
-
-        # Create new dtype with float16 -> float32 conversion
-        new_dtypes: list[tuple[str, Any]] = []
-        if structured_array.dtype.fields is None:
-            return structured_array
-
-        for field_name, (
-            dtype,
-            offset,
-            *_,
-        ) in structured_array.dtype.fields.items():
-            if (
-                dtype.kind == "f" and dtype.itemsize == 2
-            ):  # float16
-                # Convert to float32
-                if dtype.shape:  # Array field
-                    new_dtypes.append(
-                        (field_name, (np.float32, dtype.shape))
-                    )
-                else:  # Scalar field
-                    new_dtypes.append(
-                        (field_name, np.float32)  # type: ignore[arg-type]
-                    )
-            else:
-                # Keep original dtype specification
-                if dtype.shape:  # Array field
-                    new_dtypes.append(
-                        (field_name, (dtype.base, dtype.shape))
-                    )
-                else:  # Scalar field
-                    new_dtypes.append((field_name, dtype.base))
-
-        # Create new array with converted types
-        new_array = np.empty(
-            structured_array.shape, dtype=new_dtypes
-        )
-
-        # Copy data with type conversion
-        if structured_array.dtype.fields is None:
-            return new_array
-
-        for field_name, (
-            dtype,
-            _,
-            *_,
-        ) in structured_array.dtype.fields.items():
-            if (
-                dtype.kind == "f" and dtype.itemsize == 2
-            ):  # float16
-                # Convert float16 to float32
-                new_array[field_name] = structured_array[
-                    field_name
-                ].astype(np.float32)
-            else:
-                new_array[field_name] = structured_array[
-                    field_name
-                ]
-
-        return new_array
-
-    def __generate_schema(
-        self,
-        structured_array: np.ndarray,
+    def __generate_schema_from_dataframe(
+        self, df: pl.DataFrame
     ) -> list[bigquery.SchemaField]:
-        # REPEATEDやNULLABLEには対応していない
-        return [
-            bigquery.SchemaField(
-                name=name,
-                field_type=data_schema.numpy_dtype_to_bigquery_type(
-                    type
-                ),
-                mode="REQUIRED",
+        """Generate BigQuery schema from Polars DataFrame.
+
+        Args:
+            df: Polars DataFrame
+
+        Returns:
+            List of BigQuery SchemaField objects
+        """
+        schema = []
+        for col, dtype in df.schema.items():
+            bq_type = self.__polars_dtype_to_bigquery_type(
+                dtype
             )
-            for name, (
-                type,
-                _,
-                *_,
-            ) in (
-                structured_array.dtype.fields.items()
-                if structured_array.dtype.fields
-                else []
+            schema.append(
+                bigquery.SchemaField(
+                    name=col,
+                    field_type=bq_type,
+                    mode="REQUIRED",
+                )
             )
-        ]
-
-    def __numpy_flatten_nested_column(
-        self, structured_array: np.ndarray
-    ) -> np.ndarray:
-        """NumpyのStructured Arrayの中にNumpy NDArrayが入っている場合はpickleでbinaryにする."""
-        # 入力が structured array でない場合はそのまま返す
-        if structured_array.dtype.names is None:
-            return structured_array
-        new_dtypes: list[tuple[str, Any]] = []
-        if structured_array.dtype.fields is None:
-            return structured_array
-
-        for name, (
-            dtype,
-            size,
-            *_,
-        ) in structured_array.dtype.fields.items():
-            subarray_shape = dtype.shape
-            kind = dtype.kind
-
-            if kind == "V" and subarray_shape:
-                new_dtypes.append((name, np.dtype(np.object_)))
-            else:
-                new_dtypes.append((name, dtype))
-
-        new_array = np.empty(
-            structured_array.shape, dtype=new_dtypes
-        )
-
-        if structured_array.dtype.fields is None:
-            return new_array
-
-        for name, (
-            dtype,
-            size,
-            *_,
-        ) in structured_array.dtype.fields.items():
-            subarray_shape = dtype.shape
-            kind = dtype.kind
-
-            if kind == "V" and subarray_shape:
-                for idx in np.ndindex(structured_array.shape):
-                    new_array[idx][name] = pickle.dumps(
-                        structured_array[idx][name]
-                    )
-            else:
-                new_array[name] = structured_array[name]
-
-        return new_array
+        return schema
 
     def __create_table_if_not_exists(
         self,
@@ -361,88 +267,68 @@ class BigQueryFeatureStore(
         except Exception:
             raise
 
-    def load_from_numpy_array(
+    def load_from_dataframe(
         self,
         *,
         dataset_id: str,
         table_name: str,
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
     ) -> bigquery.Table:
+        """Load Polars DataFrame to BigQuery via Parquet.
+
+        Args:
+            dataset_id: BigQuery dataset ID
+            table_name: BigQuery table name
+            dataframe: Polars DataFrame to load
+
+        Returns:
+            BigQuery Table object
+
+        Raises:
+            BigQueryJobError: If the load job fails
+        """
         table_id = (
             f"{self.client.project}.{dataset_id}.{table_name}"
         )
         self.logger.debug(f"Load data to {table_id}")
-        # float16をfloat32に変換（BigQuery/Parquetとの互換性のため）
-        structured_array = self.__convert_float16_to_float32(
-            structured_array
-        )
 
-        # Numpy Structured Arrayをpandasに変換する
-        # pandasへの変換では1-dimensionalでないといけない
-        df = pd.DataFrame(
-            data=self.__numpy_flatten_nested_column(
-                structured_array
-            )
-        )
+        # Convert uint64 to string (avoid overflow in BigQuery INT64)
+        df = dataframe
+        for col, dtype in df.schema.items():
+            if dtype == pl.UInt64:
+                df = df.with_columns(pl.col(col).cast(pl.Utf8))
 
-        # pandasへの変換で型が変わることがあるので調整する
-        if structured_array.dtype.fields is None:
-            raise ValueError(
-                "structured_array must have named fields"
-            )
-
-        for name, (
-            dtype,
-            _,
-            *_,
-        ) in structured_array.dtype.fields.items():
-            if (
-                dtype.kind == "M"
-                and dtype.name == "datetime64[D]"
-            ):
-                df[name] = df[name].dt.date
-            elif dtype.name == "uint64":
-                # Convert uint64 to string to avoid overflow in BigQuery INT64
-                df[name] = df[name].astype(str)
-
-        # numpyの型
-        self.logger.debug(
-            f"Data type: {structured_array.dtype}"
-        )
-
-        # pandasの型
-        self.logger.debug(f"DataFrame type: {df.dtypes}")
-
-        schema = self.__generate_schema(
-            structured_array=structured_array
-        )
+        # Generate BigQuery schema from DataFrame
+        schema = self.__generate_schema_from_dataframe(df)
         self.logger.debug(f"BigQuery schema: {schema}")
 
-        # Parquet形式にシリアライズしてファイルとしてbigqueryに送る
-        # テーブルすべてをparquetにしてメモリで一旦持てないのであればストリーミングできる工夫が必要
-        with BytesIO() as buffer:
-            df.to_parquet(path=buffer)
-            buffer.seek(0)
+        # Write Polars → Parquet in memory
+        buffer = BytesIO()
+        df.write_parquet(
+            buffer, compression="snappy", use_pyarrow=False
+        )
+        buffer.seek(0)
 
-            # job_configでParquetフォーマットを指定
-            job_config = bigquery.LoadJobConfig(
-                source_format=bigquery.SourceFormat.PARQUET,
-                schema=schema,
+        # Upload to BigQuery
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.PARQUET,
+            schema=schema,
+        )
+        job = self.client.load_table_from_file(
+            file_obj=buffer,
+            destination=table_id,
+            job_config=job_config,
+            location=self.location,
+        )
+        job.result()
+
+        if job.errors:
+            self.logger.error(
+                f"Failed to insert rows: {job.errors}"
             )
-            job = self.client.load_table_from_file(
-                file_obj=buffer,
-                destination=table_id,
-                job_config=job_config,
-                location=self.location,
+            raise BigQueryJobError(
+                f"Failed to insert rows: {job.errors}"
             )
-            job.result()
-            if job.errors:
-                self.logger.error(
-                    f"Failed to insert rows: {job.errors}"
-                )
-                raise BigQueryJobError(
-                    f"Failed to insert rows: {job.errors}"
-                )
         return self.client.get_table(table_id)
 
     def select_all(
@@ -476,7 +362,7 @@ class BigQueryFeatureStore(
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -484,65 +370,35 @@ class BigQueryFeatureStore(
         すでに同じIDが存在する場合は更新する (MERGEクエリで実装)
         受け取ったデータを一旦アップロードする
         recordsの中にはkey_columnで指定されたカラムが必ず入っていることが条件
-        一般的なテーブル形式データではPyArrowに対応した方がよさそうだが
-        結局numpyで扱うことが多いのでnumpyでやり取りすることにした
         データがそれなりに大きくてもいいようにbigqueryに
         一時用のテーブル (temporary tableではない)を作成してMERGEする
         """
 
         # カラム指定に矛盾がないか確認
-        if not (
-            set(key_columns)
-            <= set(
-                [
-                    name
-                    for name, _ in (
-                        structured_array.dtype.fields.items()
-                        if structured_array.dtype.fields
-                        else []
-                    )
-                ]
-            )
-        ):
+        if not set(key_columns) <= set(dataframe.columns):
             self.logger.error(
                 f"キーカラムが存在しない: {key_columns},"
-                f" {[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
+                f" {dataframe.columns}"
             )
             raise NotFoundKeyColumns("Not found key columns")
         if (
             clustering_key is not None
-            and clustering_key
-            not in [
-                name
-                for name, _ in (
-                    structured_array.dtype.fields.items()
-                    if structured_array.dtype.fields
-                    else []
-                )
-            ]
+            and clustering_key not in dataframe.columns
         ):
             self.logger.error(
                 f"クラスタリングキーが存在しない: {clustering_key}, "
-                f"{[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
+                f"{dataframe.columns}"
             )
             raise NotFoundKeyColumns(
                 "Not found clustering key columns"
             )
         if (
             partitioning_key_date is not None
-            and partitioning_key_date
-            not in [
-                name
-                for name, _ in (
-                    structured_array.dtype.fields.items()
-                    if structured_array.dtype.fields
-                    else []
-                )
-            ]
+            and partitioning_key_date not in dataframe.columns
         ):
             self.logger.error(
                 f"パーティショニングキーが存在しない: {partitioning_key_date}, "
-                f"{[name for name, _ in (structured_array.dtype.fields.items() if structured_array.dtype.fields else [])]}"
+                f"{dataframe.columns}"
             )
             raise NotFoundKeyColumns(
                 "Not found clustering key columns"
@@ -571,18 +427,18 @@ class BigQueryFeatureStore(
             # プルーニングをするためにクラスタリングキーの集合を管理する
             # クラスタリングキーの集合をupdateする
             self.clustering_keys.update(
-                structured_array[clustering_key]
+                dataframe[clustering_key].to_list()
             )
         if partitioning_key_date is not None:
             # プルーニングをするためにパーティショニングキーの集合を管理する
             # 日付パーティショニングキーの集合をupdateする
             self.partitioning_date_keys.update(
-                structured_array[partitioning_key_date]
+                dataframe[partitioning_key_date].to_list()
             )
 
         # バッファに追加
-        self.__buffer.append(structured_array)
-        self.__buffer_size += structured_array.nbytes
+        self.__buffer.append(dataframe)
+        self.__buffer_size += int(dataframe.estimated_size())
         self.logger.debug(
             f"Buffered table size: {self.__buffer_size} bytes"
         )
@@ -609,15 +465,15 @@ class BigQueryFeatureStore(
             )
             return
 
-        # バッファ内のテーブルを結合
-        combined_array = np.concatenate(self.__buffer)
+        # バッファ内のDataFrameを結合
+        combined_df = pl.concat(self.__buffer)
         self.__buffer.clear()
         self.__buffer_size = 0
 
         # 追加先テーブルのリファレンス獲得
-        # 渡されたデータからbigquery schema作成
-        schema = self.__generate_schema(
-            structured_array=combined_array
+        # DataFrameからbigquery schema作成
+        schema = self.__generate_schema_from_dataframe(
+            combined_df
         )
         # データ追加先のテーブルが存在しない場合は作成する
         table = self.__create_table_if_not_exists(
@@ -654,10 +510,10 @@ class BigQueryFeatureStore(
         )
 
         try:
-            temp_table = self.load_from_numpy_array(
+            temp_table = self.load_from_dataframe(
                 dataset_id=temp_table.dataset_id,
                 table_name=temp_table.table_id,
-                structured_array=combined_array,
+                dataframe=combined_df,
             )
             temp_table_bytes = temp_table.num_bytes
             self.logger.debug(

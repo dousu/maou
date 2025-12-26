@@ -1,25 +1,36 @@
 import logging
+from typing import Union
 
 import numpy as np
+import numpy.typing as npt
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 class Evaluation:
     @staticmethod
-    def get_winrate_from_eval(eval: float) -> float:
+    def get_winrate_from_eval(
+        eval: Union[
+            float, np.floating, npt.NDArray[np.floating]
+        ],
+    ) -> Union[float, np.floating, npt.NDArray[np.floating]]:
         """evalをsigmoidで勝率に変換する．
 
         Args:
             eval: モデル出力のlogit値（現在プレイヤー視点）
+                  スカラーまたはnumpy配列
 
         Returns:
             現在プレイヤーの勝率（0-1）
+            入力と同じ型（スカラーまたは配列）
         """
         return 1 / (1 + np.exp(-eval))
 
     @staticmethod
-    def get_eval_from_winrate(r: float, a: int = 600) -> float:
+    def get_eval_from_winrate(
+        r: Union[float, np.floating, npt.NDArray[np.floating]],
+        a: int = 600,
+    ) -> Union[float, np.floating, npt.NDArray[np.floating]]:
         """勝率を評価値スコアに変換する．
 
         評価値スコアは，モデル出力のlogitを600倍したもの:
@@ -37,11 +48,12 @@ class Evaluation:
           - eval ≥ 3000: 勝敗がほぼ決している
 
         Args:
-            r: 勝率（0-1）
+            r: 勝率（0-1），スカラーまたはnumpy配列
             a: スケーリング係数（デフォルト: 600，Ponanza由来）
 
         Returns:
             評価値スコア（unbounded，典型的には-4000～4000）
+            入力と同じ型（スカラーまたは配列）
         """
         r = np.clip(r, 1e-12, 1 - 1e-12)
         return -a * np.log(1 / r - 1)
