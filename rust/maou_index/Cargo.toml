@@ -1,0 +1,12 @@
+[package]
+name = "maou_index"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "maou_index"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+thiserror = { workspace = true }

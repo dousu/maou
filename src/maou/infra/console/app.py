@@ -148,6 +148,14 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     "pretrain": LazyCommandSpec(
         "maou.infra.console.pretrain_cli", "pretrain"
     ),
+    "visualize": LazyCommandSpec(
+        "maou.infra.console.visualize",
+        "visualize",
+        missing_help=(
+            "Command 'visualize' requires visualization dependencies. "
+            "Install with `poetry install -E visualize`."
+        ),
+    ),
 }
 
 
