@@ -1,13 +1,224 @@
 """Tests for the file-system based data source.
 
-DEPRECATED: Tests use numpy array-based I/O which has been removed.
-TODO: Update tests to use DataFrame-based methods with .feather files.
+Updated to use DataFrame-based I/O with Polars.
+Simplified from original numpy-based tests to focus on DataFrame functionality.
 """
 
+from pathlib import Path
+
+import numpy as np
+import polars as pl
 import pytest
 
+from maou.domain.data.rust_io import save_hcpe_df, save_preprocessing_df
+from maou.domain.data.schema import (
+    create_empty_hcpe_df,
+    create_empty_preprocessing_df,
+)
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
 
-@pytest.mark.skip(reason="Needs update for DataFrame-based I/O")
-def test_deprecated() -> None:
-    """Placeholder for deprecated tests."""
-    pass
+
+def _create_hcpe_files(
+    directory: Path,
+    *,
+    file_count: int,
+    rows_per_file: int,
+) -> tuple[list[Path], list[pl.DataFrame]]:
+    """Create multiple HCPE .feather files for testing."""
+    file_paths: list[Path] = []
+    dataframes: list[pl.DataFrame] = []
+
+    for i in range(file_count):
+        df = create_empty_hcpe_df(rows_per_file)
+
+        # Add some test data
+        eval_values = list(range(i * rows_per_file, (i + 1) * rows_per_file))
+        ids = [f"file{i}_row{j}" for j in range(rows_per_file)]
+
+        df = df.with_columns([
+            pl.Series("eval", eval_values),
+            pl.Series("id", ids),
+        ])
+
+        file_path = directory / f"hcpe_{i}.feather"
+        save_hcpe_df(df, file_path)
+
+        file_paths.append(file_path)
+        dataframes.append(df)
+
+    return file_paths, dataframes
+
+
+def _create_preprocessing_files(
+    directory: Path,
+    *,
+    file_count: int,
+    rows_per_file: int,
+) -> tuple[list[Path], list[pl.DataFrame]]:
+    """Create multiple preprocessing .feather files for testing."""
+    file_paths: list[Path] = []
+    dataframes: list[pl.DataFrame] = []
+
+    for i in range(file_count):
+        df = create_empty_preprocessing_df(rows_per_file)
+
+        # Add some test data
+        result_values = [float(i * rows_per_file + j) for j in range(rows_per_file)]
+        ids = list(range(i * rows_per_file, (i + 1) * rows_per_file))
+
+        df = df.with_columns([
+            pl.Series("resultValue", result_values),
+            pl.Series("id", ids),
+        ])
+
+        file_path = directory / f"preprocessing_{i}.feather"
+        save_preprocessing_df(df, file_path)
+
+        file_paths.append(file_path)
+        dataframes.append(df)
+
+    return file_paths, dataframes
+
+
+def test_file_data_source_basic_loading(tmp_path: Path) -> None:
+    """Test basic FileDataSource loading functionality."""
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=2, rows_per_file=3
+    )
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="hcpe",
+    )
+
+    # Should have 6 total records (2 files * 3 rows)
+    assert len(datasource) == 6
+
+
+def test_file_data_source_indexing(tmp_path: Path) -> None:
+    """Test FileDataSource indexing."""
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=2, rows_per_file=5
+    )
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    # Test indexing
+    first_record = datasource[0]
+    assert first_record is not None
+
+    last_record = datasource[9]
+    assert last_record is not None
+
+
+def test_file_data_source_train_test_split(tmp_path: Path) -> None:
+    """Test FileDataSource train/test split functionality."""
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=1, rows_per_file=10
+    )
+
+    splitter = FileDataSource.FileDataSourceSpliter(
+        file_paths=file_paths,
+        array_type="hcpe",
+    )
+
+    train_ds, test_ds = splitter.train_test_split(test_ratio=0.3)
+
+    # Verify split sizes (approximately)
+    total_size = len(train_ds) + len(test_ds)
+    assert total_size == 10
+    assert len(test_ds) >= 2  # At least 30% of 10
+
+
+def test_file_data_source_iter_batches(tmp_path: Path) -> None:
+    """Test FileDataSource batch iteration."""
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=2, rows_per_file=4
+    )
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    # Iterate through batches
+    batch_count = 0
+    total_records = 0
+
+    for file_path, batch in datasource.iter_batches():
+        assert file_path in file_paths
+        assert len(batch) > 0
+        total_records += len(batch)
+        batch_count += 1
+
+    assert batch_count == 2  # 2 files
+    assert total_records == 8  # 2 files * 4 rows
+
+
+def test_file_data_source_memory_cache(tmp_path: Path) -> None:
+    """Test FileDataSource with memory cache mode."""
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=1, rows_per_file=5
+    )
+
+    datasource = FileDataSource.FileDataSourceSpliter(
+        file_paths=file_paths,
+        array_type="preprocessing",
+        cache_mode="memory",
+    )
+
+    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
+
+    # Access records multiple times (should use cache)
+    record1_first = train_ds[0]
+    record1_second = train_ds[0]
+
+    # Both accesses should return valid data
+    assert record1_first is not None
+    assert record1_second is not None
+
+
+def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
+    """Test FileDataSource with mmap cache mode."""
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=1, rows_per_file=4
+    )
+
+    datasource = FileDataSource.FileDataSourceSpliter(
+        file_paths=file_paths,
+        array_type="preprocessing",
+        cache_mode="mmap",
+    )
+
+    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
+
+    # Access records
+    record = train_ds[0]
+    assert record is not None
+
+
+def test_file_data_source_empty_file_list() -> None:
+    """Test FileDataSource with empty file list."""
+    with pytest.raises((ValueError, AssertionError)):
+        FileDataSource(
+            file_paths=[],
+            array_type="hcpe",
+        )
+
+
+def test_file_data_source_nonexistent_file(tmp_path: Path) -> None:
+    """Test FileDataSource with non-existent file."""
+    fake_path = tmp_path / "nonexistent.feather"
+
+    with pytest.raises((FileNotFoundError, Exception)):
+        datasource = FileDataSource(
+            file_paths=[fake_path],
+            array_type="hcpe",
+        )
+        # Try to access data
+        len(datasource)
