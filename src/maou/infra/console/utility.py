@@ -1055,6 +1055,46 @@ def benchmark_training(
     click.echo(result["benchmark_results"]["Recommendations"])
 
 
+@click.command("generate-stage1-data")
+@click.option(
+    "--output-dir",
+    help="Output directory for Stage 1 training data.",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@handle_exception
+def generate_stage1_data(output_dir: Path) -> None:
+    """Generate Stage 1 training data for learning piece movement rules.
+
+    Creates minimal board positions with single pieces to learn basic movement:
+
+    \b
+    - Board patterns: 1 piece on board (normal or promoted)
+    - Hand patterns: 1 piece in hand (normal pieces only)
+
+    \b
+    Total patterns: ~1,105
+    Output format: Arrow IPC (.feather) with LZ4 compression
+
+    \b
+    Example:
+        maou utility generate-stage1-data --output-dir ./stage1_data/
+    """
+    app_logger.info("Generating Stage 1 training data...")
+
+    result_json = utility_interface.generate_stage1_data(
+        output_dir=output_dir
+    )
+    result = json.loads(result_json)
+
+    click.echo(
+        f"✓ Generated {result['total_patterns']} patterns"
+    )
+    click.echo(f"✓ Saved to: {result['output_file']}")
+    click.echo()
+    click.echo("Stage 1 data generation complete!")
+
+
 @click.group()
 def utility() -> None:
     """Utility commands for ML development experiments."""
@@ -1063,3 +1103,4 @@ def utility() -> None:
 
 utility.add_command(benchmark_dataloader)
 utility.add_command(benchmark_training)
+utility.add_command(generate_stage1_data)

@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 from maou.domain.data.schema import (
     create_empty_hcpe_df,
@@ -26,13 +25,17 @@ class TestInterfaceDataIO:
     def test_save_and_load_hcpe_bytes(self) -> None:
         """Test saving and loading HCPE DataFrame to/from bytes."""
         hcpe_df = create_empty_hcpe_df(5)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("eval", [10, 20, 30, 40, 50]),
-            pl.Series("id", ["a", "b", "c", "d", "e"]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [10, 20, 30, 40, 50]),
+                pl.Series("id", ["a", "b", "c", "d", "e"]),
+            ]
+        )
 
         # Save to bytes
-        bytes_data = save_df_to_bytes(hcpe_df, array_type="hcpe")
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
 
         # Load from bytes
         loaded_df = load_df_from_bytes(
@@ -41,7 +44,13 @@ class TestInterfaceDataIO:
 
         # Verify
         assert loaded_df.shape == hcpe_df.shape
-        assert loaded_df["eval"].to_list() == [10, 20, 30, 40, 50]
+        assert loaded_df["eval"].to_list() == [
+            10,
+            20,
+            30,
+            40,
+            50,
+        ]
         assert loaded_df["id"].to_list() == [
             "a",
             "b",
@@ -53,10 +62,12 @@ class TestInterfaceDataIO:
     def test_save_and_load_preprocessing_bytes(self) -> None:
         """Test saving and loading preprocessing DataFrame to/from bytes."""
         prep_df = create_empty_preprocessing_df(3)
-        prep_df = prep_df.with_columns([
-            pl.Series("id", [100, 200, 300]),
-            pl.Series("resultValue", [0.5, -0.5, 0.0]),
-        ])
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("id", [100, 200, 300]),
+                pl.Series("resultValue", [0.5, -0.5, 0.0]),
+            ]
+        )
 
         # Save to bytes
         bytes_data = save_df_to_bytes(
@@ -80,13 +91,17 @@ class TestInterfaceDataIO:
     def test_hcpe_bytes_roundtrip_preserves_data(self) -> None:
         """Test that HCPE roundtrip preserves all data."""
         hcpe_df = create_empty_hcpe_df(2)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("eval", [500, -250]),
-            pl.Series("id", ["x", "y"]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [500, -250]),
+                pl.Series("id", ["x", "y"]),
+            ]
+        )
 
         # Roundtrip
-        bytes_data = save_df_to_bytes(hcpe_df, array_type="hcpe")
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
         loaded_df = load_df_from_bytes(
             bytes_data, array_type="hcpe"
         )
@@ -107,10 +122,12 @@ class TestInterfaceDataIO:
             for _ in range(4)
         ]
 
-        prep_df = prep_df.with_columns([
-            pl.Series("boardIdPositions", board_positions),
-            pl.Series("resultValue", [0.1, 0.2, 0.3, 0.4]),
-        ])
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("boardIdPositions", board_positions),
+                pl.Series("resultValue", [0.1, 0.2, 0.3, 0.4]),
+            ]
+        )
 
         # Roundtrip
         bytes_data = save_df_to_bytes(
@@ -148,7 +165,9 @@ class TestInterfaceDataIO:
         """Test that empty DataFrames can be serialized and deserialized."""
         hcpe_df = create_empty_hcpe_df(0)
 
-        bytes_data = save_df_to_bytes(hcpe_df, array_type="hcpe")
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
         loaded_df = load_df_from_bytes(
             bytes_data, array_type="hcpe"
         )
@@ -163,9 +182,11 @@ class TestInterfaceDataIO:
         )
 
         stage1_df = create_empty_stage1_df(2)
-        stage1_df = stage1_df.with_columns([
-            pl.Series("id", [1, 2]),
-        ])
+        stage1_df = stage1_df.with_columns(
+            [
+                pl.Series("id", [1, 2]),
+            ]
+        )
 
         bytes_data = save_df_to_bytes(
             stage1_df, array_type="stage1"
@@ -183,9 +204,11 @@ class TestInterfaceDataIO:
         )
 
         stage2_df = create_empty_stage2_df(3)
-        stage2_df = stage2_df.with_columns([
-            pl.Series("id", [10, 20, 30]),
-        ])
+        stage2_df = stage2_df.with_columns(
+            [
+                pl.Series("id", [10, 20, 30]),
+            ]
+        )
 
         bytes_data = save_df_to_bytes(
             stage2_df, array_type="stage2"
@@ -199,11 +222,15 @@ class TestInterfaceDataIO:
     def test_bytes_can_be_written_to_file(self) -> None:
         """Test that bytes output can be written to file and read back."""
         hcpe_df = create_empty_hcpe_df(1)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("id", ["test"]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("id", ["test"]),
+            ]
+        )
 
-        bytes_data = save_df_to_bytes(hcpe_df, array_type="hcpe")
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.bytes"

@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -406,3 +407,24 @@ def benchmark_training(
 
     use_case = TrainingBenchmarkUseCase()
     return use_case.execute(config)
+
+
+def generate_stage1_data(output_dir: Path) -> str:
+    """Generate Stage 1 training data for piece movement learning.
+
+    Args:
+        output_dir: Output directory for generated data
+
+    Returns:
+        JSON string with generation results
+    """
+    from maou.app.utility.stage1_data_generation import (
+        Stage1DataGenerationConfig,
+        Stage1DataGenerationUseCase,
+    )
+
+    config = Stage1DataGenerationConfig(output_dir=output_dir)
+    use_case = Stage1DataGenerationUseCase()
+    result = use_case.execute(config)
+
+    return json.dumps(result, indent=2)

@@ -27,13 +27,17 @@ class TestDataIOService:
         """Test loading of HCPE DataFrame."""
         # Create test HCPE data
         hcpe_df = create_empty_hcpe_df(3)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("eval", [100, -50, 0]),
-            pl.Series("id", ["test1", "test2", "test3"]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [100, -50, 0]),
+                pl.Series("id", ["test1", "test2", "test3"]),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_hcpe_game.feather"
+            file_path = (
+                Path(temp_dir) / "test_hcpe_game.feather"
+            )
 
             # Save using service
             DataIOService.save_dataframe(
@@ -68,17 +72,23 @@ class TestDataIOService:
         move_label_2 = np.zeros(2187, dtype=np.float16)
         move_label_2[100] = 1.0
 
-        prep_df = prep_df.with_columns([
-            pl.Series(
-                "moveLabel",
-                [move_label_1.tolist(), move_label_2.tolist()],
-            ),
-            pl.Series("resultValue", [1.0, 0.0]),
-        ])
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series(
+                    "moveLabel",
+                    [
+                        move_label_1.tolist(),
+                        move_label_2.tolist(),
+                    ],
+                ),
+                pl.Series("resultValue", [1.0, 0.0]),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = (
-                Path(temp_dir) / "test_preprocessing_data.feather"
+                Path(temp_dir)
+                / "test_preprocessing_data.feather"
             )
 
             # Save using service
@@ -96,14 +106,19 @@ class TestDataIOService:
 
             # Verify data
             assert loaded_df.shape == prep_df.shape
-            assert loaded_df["resultValue"].to_list() == [1.0, 0.0]
+            assert loaded_df["resultValue"].to_list() == [
+                1.0,
+                0.0,
+            ]
 
     def test_save_dataframe_hcpe(self) -> None:
         """Test saving of HCPE DataFrame."""
         hcpe_df = create_empty_hcpe_df(2)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_save_hcpe.feather"
+            file_path = (
+                Path(temp_dir) / "test_save_hcpe.feather"
+            )
 
             # Save using service
             DataIOService.save_dataframe(
@@ -126,7 +141,8 @@ class TestDataIOService:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = (
-                Path(temp_dir) / "test_save_preprocessing.feather"
+                Path(temp_dir)
+                / "test_save_preprocessing.feather"
             )
 
             # Save using service
@@ -147,15 +163,19 @@ class TestDataIOService:
     def test_roundtrip_hcpe_dataframe(self) -> None:
         """Test roundtrip save/load for HCPE DataFrame preserves data."""
         hcpe_df = create_empty_hcpe_df(5)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("eval", [10, -20, 30, -40, 50]),
-            pl.Series(
-                "id", ["id1", "id2", "id3", "id4", "id5"]
-            ),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [10, -20, 30, -40, 50]),
+                pl.Series(
+                    "id", ["id1", "id2", "id3", "id4", "id5"]
+                ),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "roundtrip_hcpe.feather"
+            file_path = (
+                Path(temp_dir) / "roundtrip_hcpe.feather"
+            )
 
             # Save
             DataIOService.save_dataframe(
@@ -194,14 +214,19 @@ class TestDataIOService:
             for i in range(9)
         ]
 
-        prep_df = prep_df.with_columns([
-            pl.Series("boardIdPositions", [board_1, board_2]),
-            pl.Series("resultValue", [0.5, -0.5]),
-        ])
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series(
+                    "boardIdPositions", [board_1, board_2]
+                ),
+                pl.Series("resultValue", [0.5, -0.5]),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = (
-                Path(temp_dir) / "roundtrip_preprocessing.feather"
+                Path(temp_dir)
+                / "roundtrip_preprocessing.feather"
             )
 
             # Save
@@ -220,10 +245,12 @@ class TestDataIOService:
                 -0.5,
             ]
             assert (
-                loaded_df["boardIdPositions"].to_list()[0] == board_1
+                loaded_df["boardIdPositions"].to_list()[0]
+                == board_1
             )
             assert (
-                loaded_df["boardIdPositions"].to_list()[1] == board_2
+                loaded_df["boardIdPositions"].to_list()[1]
+                == board_2
             )
 
     def test_load_dataframe_file_not_found(self) -> None:
@@ -281,9 +308,11 @@ class TestDataFrameBytes:
     def test_load_dataframe_from_bytes_hcpe(self) -> None:
         """Test loading HCPE DataFrame from bytes."""
         hcpe_df = create_empty_hcpe_df(2)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("eval", [100, -50]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [100, -50]),
+            ]
+        )
 
         # Convert to bytes
         bytes_data = DataIOService.save_dataframe_to_bytes(
@@ -302,9 +331,11 @@ class TestDataFrameBytes:
     ) -> None:
         """Test loading preprocessing DataFrame from bytes."""
         prep_df = create_empty_preprocessing_df(1)
-        prep_df = prep_df.with_columns([
-            pl.Series("resultValue", [0.75]),
-        ])
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("resultValue", [0.75]),
+            ]
+        )
 
         # Convert to bytes
         bytes_data = DataIOService.save_dataframe_to_bytes(
@@ -321,10 +352,12 @@ class TestDataFrameBytes:
     def test_bytes_roundtrip_preserves_data(self) -> None:
         """Test that bytes serialization roundtrip preserves data."""
         hcpe_df = create_empty_hcpe_df(3)
-        hcpe_df = hcpe_df.with_columns([
-            pl.Series("id", ["a", "b", "c"]),
-            pl.Series("eval", [1, 2, 3]),
-        ])
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("id", ["a", "b", "c"]),
+                pl.Series("eval", [1, 2, 3]),
+            ]
+        )
 
         # Roundtrip
         bytes_data = DataIOService.save_dataframe_to_bytes(
