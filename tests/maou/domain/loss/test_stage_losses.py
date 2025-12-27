@@ -3,11 +3,11 @@
 import numpy as np
 import torch
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.loss.loss_fn import (
     LegalMovesLoss,
     ReachableSquaresLoss,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class TestReachableSquaresLoss:

@@ -8,7 +8,6 @@ from typing import Any, Callable, Literal, Tuple, Union
 import torch
 from torch import nn
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.board import shogi
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
 from maou.domain.model.resnet import (
@@ -19,6 +18,7 @@ from maou.domain.model.vision_transformer import (
     VisionTransformer,
     VisionTransformerConfig,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 BackboneArchitecture = Literal["resnet", "mlp-mixer", "vit"]
 BACKBONE_ARCHITECTURES: tuple[BackboneArchitecture, ...] = (

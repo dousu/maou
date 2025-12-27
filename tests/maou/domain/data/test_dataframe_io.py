@@ -153,7 +153,7 @@ class TestPreprocessingDataFrameSerialization:
         # Create test DataFrame
         import numpy as np
 
-        from maou.app.pre_process.label import MOVE_LABELS_NUM
+        from maou.domain.move.label import MOVE_LABELS_NUM
 
         data = {
             "id": list(range(100)),
@@ -230,7 +230,7 @@ class TestGenericDataFrameSerialization:
 
         import numpy as np
 
-        from maou.app.pre_process.label import MOVE_LABELS_NUM
+        from maou.domain.move.label import MOVE_LABELS_NUM
 
         data = {
             "id": list(range(10)),

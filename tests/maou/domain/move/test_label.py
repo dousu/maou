@@ -1,7 +1,7 @@
 import logging
 
-from maou.app.pre_process import label
 from maou.domain.board import shogi
+from maou.domain.move import label
 
 logger: logging.Logger = logging.getLogger("TEST")
 

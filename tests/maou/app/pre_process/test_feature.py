@@ -2,10 +2,10 @@ import numpy as np
 import pytest
 
 from maou.app.pre_process import feature
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.board import shogi
 from maou.domain.board.shogi import Board, PieceId, Turn
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 def test_transform_returns_board_features() -> None:

@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 
 from maou.app.inference.run import InferenceRunner, ModelType
-from maou.app.pre_process.label import IllegalMove
 from maou.domain.board.shogi import Board
+from maou.domain.move.label import IllegalMove
 
 logger: logging.Logger = logging.getLogger("TEST")
 

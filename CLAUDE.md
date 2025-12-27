@@ -233,7 +233,7 @@ from maou.domain.data.array_io import (
     load_preprocessing_df,
 )
 from maou.domain.data.schema import get_preprocessing_polars_schema
-from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 # Create preprocessing DataFrame
 schema = get_preprocessing_polars_schema()
@@ -832,7 +832,7 @@ poetry run maou learn-model \
 ### 5. Performance Optimization
 ```bash
 # Benchmark Polars + Rust I/O performance
-poetry run python -m maou.app.utility.benchmark_polars_io \
+poetry run python -m maou.infra.utility.benchmark_polars_io \
   --num-records 50000 \
   --output-dir /tmp/benchmark
 

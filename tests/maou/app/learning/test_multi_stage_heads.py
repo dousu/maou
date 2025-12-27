@@ -6,7 +6,7 @@ from maou.app.learning.network import (
     LegalMovesHead,
     ReachableSquaresHead,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class TestReachableSquaresHead:

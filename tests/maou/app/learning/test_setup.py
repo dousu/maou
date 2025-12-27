@@ -10,8 +10,8 @@ from maou.app.learning.setup import (
     TrainingSetup,
     WarmupCosineDecayScheduler,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class DummyPreprocessedDataSource(DataSource):

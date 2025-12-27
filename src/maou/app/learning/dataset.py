@@ -9,8 +9,8 @@ import torch
 from numpy.typing import DTypeLike
 from torch.utils.data import Dataset
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class DataSource:

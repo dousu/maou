@@ -29,9 +29,9 @@ from maou.app.learning.network import (
     HeadlessNetwork,
     Network,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.model.resnet import BottleneckBlock
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 def default_worker_init_fn(worker_id: int) -> None:

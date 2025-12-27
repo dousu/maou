@@ -2,13 +2,13 @@
 
 import numpy as np
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.schema import (
     create_empty_stage1_array,
     create_empty_stage2_array,
     get_stage1_dtype,
     get_stage2_dtype,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class TestStage1Schema:

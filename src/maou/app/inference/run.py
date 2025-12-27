@@ -9,11 +9,11 @@ import numpy as np
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
 from maou.app.pre_process.feature import make_board_id_positions
-from maou.app.pre_process.label import (
+from maou.domain.board.shogi import Board
+from maou.domain.move.label import (
     IllegalMove,
     make_usi_move_from_label,
 )
-from maou.domain.board.shogi import Board
 
 if TYPE_CHECKING:
     pass

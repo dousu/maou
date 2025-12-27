@@ -13,13 +13,6 @@ import numpy as np
 import polars as pl
 import psutil
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.data.array_io import (
-    load_hcpe_array,
-    load_preprocessing_array,
-    save_hcpe_array,
-    save_preprocessing_array,
-)
 from maou.domain.data.rust_io import (
     load_hcpe_df,
     load_preprocessing_df,
@@ -32,9 +25,36 @@ from maou.domain.data.schema import (
     get_preprocessing_dtype,
     get_preprocessing_polars_schema,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.file_system.file_data_source import (
     FileDataSource,
 )
+
+
+# Numpy I/O functions for benchmarking
+def save_hcpe_array(array: np.ndarray, path: Path) -> None:
+    """Save HCPE numpy array to .npy file."""
+    np.save(path, array)
+
+
+def load_hcpe_array(path: Path) -> np.ndarray:
+    """Load HCPE numpy array from .npy file."""
+    return np.load(path)
+
+
+def save_preprocessing_array(
+    array: np.ndarray, path: Path, bit_pack: bool = False
+) -> None:
+    """Save preprocessing numpy array to .npy file."""
+    np.save(path, array)
+
+
+def load_preprocessing_array(
+    path: Path, bit_pack: bool = False
+) -> np.ndarray:
+    """Load preprocessing numpy array from .npy file."""
+    return np.load(path)
+
 
 logger = logging.getLogger(__name__)
 

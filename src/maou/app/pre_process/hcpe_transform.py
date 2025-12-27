@@ -18,9 +18,9 @@ from typing import (
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_df
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 if TYPE_CHECKING:
     import polars as pl

@@ -11,7 +11,7 @@ from maou.app.learning.network import (
     HeadlessNetwork,
     Network,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 def test_network_outputs_have_expected_shapes() -> None:

@@ -2,13 +2,13 @@
 
 import numpy as np
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.schema import (
     create_empty_hcpe_array,
     create_empty_preprocessing_array,
     get_hcpe_dtype,
     get_preprocessing_dtype,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class TestHCPESchema:

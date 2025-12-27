@@ -6,12 +6,12 @@ from maou.app.pre_process.feature import (
     make_board_id_positions,
     make_pieces_in_hand,
 )
-from maou.app.pre_process.label import (
+from maou.domain.board import shogi
+from maou.domain.move.label import (
     MOVE_LABELS_NUM,
     make_move_label,
     make_result_value,
 )
-from maou.domain.board import shogi
 
 
 class Transform:
