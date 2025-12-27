@@ -55,6 +55,14 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 
 ## Core Development Rules
 
+### Critical Development Policies
+
+**IMPORTANT: The following rules must be strictly followed:**
+
+1. **Minimal `__init__.py` Creation**: Do NOT create `__init__.py` files unless absolutely necessary for package functionality. Python 3.3+ supports implicit namespace packages, so `__init__.py` files are only needed when you need to execute package-level initialization code or control what gets imported with `from package import *`.
+
+2. **Pre-commit Hook Enforcement**: NEVER skip pre-commit hooks when running `git push` or `git commit`. The hooks enforce code quality standards and must always run. Do NOT use `--no-verify` flag unless explicitly requested by the user.
+
 ### Package Management
 
 **ONLY use Poetry. NEVER use pip directly.**
