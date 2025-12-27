@@ -30,7 +30,7 @@ repos:
   hooks:
   - id: test
     name: test
-    entry: pytest -v -s
+    entry: poetry run pytest -v -s
     stages:
     - "pre-push"
     language: system
