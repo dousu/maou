@@ -150,8 +150,9 @@ def test_file_data_source_iter_batches(tmp_path: Path) -> None:
     batch_count = 0
     total_records = 0
 
-    for file_path, batch in datasource.iter_batches():
-        assert file_path in file_paths
+    for file_name, batch in datasource.iter_batches():
+        # file_name is just the filename (str), not the full path
+        assert isinstance(file_name, str)
         assert len(batch) > 0
         total_records += len(batch)
         batch_count += 1
@@ -204,11 +205,12 @@ def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
 
 def test_file_data_source_empty_file_list() -> None:
     """Test FileDataSource with empty file list."""
-    with pytest.raises((ValueError, AssertionError)):
-        FileDataSource(
-            file_paths=[],
-            array_type="hcpe",
-        )
+    # Empty file list is now allowed (creates empty datasource)
+    datasource = FileDataSource(
+        file_paths=[],
+        array_type="hcpe",
+    )
+    assert len(datasource) == 0
 
 
 def test_file_data_source_nonexistent_file(tmp_path: Path) -> None:

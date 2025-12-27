@@ -10,6 +10,15 @@ import numpy as np
 if TYPE_CHECKING:
     import polars as pl
 
+# Eager import for performance-critical paths
+try:
+    import polars as _pl
+
+    _POLARS_AVAILABLE = True
+except ImportError:
+    _POLARS_AVAILABLE = False
+    _pl = None  # type: ignore
+
 MAX_PIECES_IN_HAND: list[int] = cshogi.MAX_PIECES_IN_HAND  # type: ignore
 # 駒8種類，成駒6種類
 PIECE_TYPES = len(cshogi.PIECE_TYPES)  # type: ignore
@@ -160,16 +169,10 @@ class Board:
             >>> df.schema
             {'boardIdPositions': List(List(UInt8))}
         """
-        from maou.domain.data.schema import (
-            get_board_position_polars_schema,
-        )
-
-        try:
-            import polars as pl
-        except ImportError as e:
+        if not _POLARS_AVAILABLE:
             raise ImportError(
                 "polars is not installed. Install with: poetry add polars"
-            ) from e
+            )
 
         # Map cshogi piece IDs to PieceId enum values
         def map_cshogi_to_piece_id(cshogi_piece_id: int) -> int:
@@ -190,10 +193,10 @@ class Board:
         ).reshape((9, 9))
         positions_list = positions.tolist()  # Fast conversion
 
-        schema = get_board_position_polars_schema()
-        return pl.DataFrame(
+        # Use pre-imported polars for performance
+        return _pl.DataFrame(
             {"boardIdPositions": [positions_list]},
-            schema=schema,
+            schema={"boardIdPositions": _pl.List(_pl.List(_pl.UInt8))},
         )
 
     def get_hcp_df(self) -> "pl.DataFrame":
@@ -214,24 +217,20 @@ class Board:
             >>> df.schema
             {'hcp': Binary}
         """
-        from maou.domain.data.schema import (
-            get_hcp_polars_schema,
-        )
-
-        try:
-            import polars as pl
-        except ImportError as e:
+        if not _POLARS_AVAILABLE:
             raise ImportError(
                 "polars is not installed. Install with: poetry add polars"
-            ) from e
+            )
 
         # Get HCP data from cshogi board
         hcp_array = np.empty(1, dtype=cshogi.HuffmanCodedPos)  # type: ignore
         self.board.to_hcp(hcp_array)
         hcp_bytes = hcp_array.tobytes()  # Convert to bytes
 
-        schema = get_hcp_polars_schema()
-        return pl.DataFrame({"hcp": [hcp_bytes]}, schema=schema)
+        # Use pre-imported polars for performance
+        return _pl.DataFrame(
+            {"hcp": [hcp_bytes]}, schema={"hcp": _pl.Binary()}
+        )
 
     def get_piece_planes_df(self) -> "pl.DataFrame":
         """Get piece feature planes as 1-row Polars DataFrame．
@@ -250,16 +249,10 @@ class Board:
             >>> df.schema
             {'piecePlanes': List(List(List(Float32)))}
         """
-        from maou.domain.data.schema import (
-            get_piece_planes_polars_schema,
-        )
-
-        try:
-            import polars as pl
-        except ImportError as e:
+        if not _POLARS_AVAILABLE:
             raise ImportError(
                 "polars is not installed. Install with: poetry add polars"
-            ) from e
+            )
 
         # Get piece planes from cshogi board
         planes = np.empty(
@@ -269,9 +262,14 @@ class Board:
         self.board.piece_planes(planes)
         planes_list = planes.tolist()  # Fast conversion
 
-        schema = get_piece_planes_polars_schema()
-        return pl.DataFrame(
-            {"piecePlanes": [planes_list]}, schema=schema
+        # Use pre-imported polars for performance
+        return _pl.DataFrame(
+            {"piecePlanes": [planes_list]},
+            schema={
+                "piecePlanes": _pl.List(
+                    _pl.List(_pl.List(_pl.Float32))
+                )
+            },
         )
 
     def get_piece_planes_rotate_df(self) -> "pl.DataFrame":
@@ -291,16 +289,10 @@ class Board:
             >>> df.schema
             {'piecePlanes': List(List(List(Float32)))}
         """
-        from maou.domain.data.schema import (
-            get_piece_planes_polars_schema,
-        )
-
-        try:
-            import polars as pl
-        except ImportError as e:
+        if not _POLARS_AVAILABLE:
             raise ImportError(
                 "polars is not installed. Install with: poetry add polars"
-            ) from e
+            )
 
         # Get rotated piece planes from cshogi board
         planes = np.empty(
@@ -310,7 +302,12 @@ class Board:
         self.board.piece_planes_rotate(planes)
         planes_list = planes.tolist()  # Fast conversion
 
-        schema = get_piece_planes_polars_schema()
-        return pl.DataFrame(
-            {"piecePlanes": [planes_list]}, schema=schema
+        # Use pre-imported polars for performance
+        return _pl.DataFrame(
+            {"piecePlanes": [planes_list]},
+            schema={
+                "piecePlanes": _pl.List(
+                    _pl.List(_pl.List(_pl.Float32))
+                )
+            },
         )

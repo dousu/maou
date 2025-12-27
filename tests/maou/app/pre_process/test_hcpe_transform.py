@@ -29,9 +29,19 @@ def _create_test_hcpe_data(
     ids = [f"test_id_{i}" for i in range(samples)]
     eval_values = rng.integers(-100, 100, size=samples).tolist()
 
+    # Use a valid move from initial position (1g1f)
+    # This is the first legal move in standard shogi position
+    valid_move16 = 66309  # 0x10305
+    best_moves = [valid_move16] * samples
+
+    # Set game results (1 = first player wins)
+    game_results = [1] * samples
+
     df = df.with_columns([
         pl.Series("id", ids),
         pl.Series("eval", eval_values),
+        pl.Series("bestMove16", best_moves),
+        pl.Series("gameResult", game_results),
     ])
 
     file_path = directory / "test_hcpe.feather"
@@ -80,10 +90,13 @@ def test_preprocess_with_multiple_input_files(
 
     # Create multiple input files
     input_paths = []
+    valid_move16 = 66309  # 0x10305 (1g1f - valid move from initial position)
     for i in range(3):
         df = create_empty_hcpe_df(2)
         df = df.with_columns([
             pl.Series("id", [f"file{i}_id{j}" for j in range(2)]),
+            pl.Series("bestMove16", [valid_move16] * 2),
+            pl.Series("gameResult", [1] * 2),
         ])
 
         file_path = input_dir / f"hcpe_{i}.feather"

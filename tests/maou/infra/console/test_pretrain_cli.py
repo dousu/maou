@@ -18,6 +18,7 @@ from maou.domain.data.rust_io import save_preprocessing_df
 from maou.domain.data.schema import (
     create_empty_preprocessing_df,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.console.pretrain_cli import pretrain
 
 
@@ -43,9 +44,9 @@ def _write_preprocessing_file(
     # Create normalized move labels
     move_labels = []
     for _ in range(samples):
-        label = rng.random(2187)
+        label = rng.random(MOVE_LABELS_NUM)
         label = label / label.sum()
-        move_labels.append(label.astype(np.float16).tolist())
+        move_labels.append(label.astype(np.float32).tolist())
 
     # Create random result values
     result_values = rng.random(samples).astype(np.float16).tolist()

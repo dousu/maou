@@ -31,6 +31,8 @@ def _create_preprocessing_datasource(
     directory: Path, samples: int
 ) -> FileDataSource.FileDataSourceSpliter:
     """Create preprocessing datasource with random data using DataFrame."""
+    from maou.domain.move.label import MOVE_LABELS_NUM
+
     df = create_empty_preprocessing_df(samples)
     rng = np.random.default_rng(42)
 
@@ -47,15 +49,14 @@ def _create_preprocessing_datasource(
     ]
 
     # Create normalized move labels
-    move_label_shape = 2187  # Default move label size
     move_labels = []
     for _ in range(samples):
-        label = rng.random(move_label_shape)
+        label = rng.random(MOVE_LABELS_NUM)
         label = label / label.sum()
-        move_labels.append(label.astype(np.float16).tolist())
+        move_labels.append(label.astype(np.float32).tolist())
 
     # Create random result values
-    result_values = rng.random(samples).astype(np.float16).tolist()
+    result_values = rng.random(samples).astype(np.float32).tolist()
 
     # Update DataFrame
     df = df.with_columns([

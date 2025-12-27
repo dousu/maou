@@ -275,41 +275,161 @@ class FileDataSource(
             )
 
         def get_item(self, idx: int) -> np.ndarray:
-            """Numpy array indexing is no longer supported．
+            """Get single item as numpy structured array．
 
-            Raises:
-                NotImplementedError: Use iter_batches_df() for DataFrame iteration
+            Converts DataFrame row to numpy format for backward compatibility．
+
+            Args:
+                idx: Global index across all files
+
+            Returns:
+                numpy structured array (single record)
             """
-            raise NotImplementedError(
-                "Numpy array indexing is no longer supported. "
-                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+            import polars as pl
+
+            from maou.domain.data.schema import (
+                convert_hcpe_df_to_numpy,
+                convert_preprocessing_df_to_numpy,
+                convert_stage1_df_to_numpy,
+                convert_stage2_df_to_numpy,
             )
+
+            # Handle concatenated DataFrame (cache_mode="memory")
+            if self._concatenated_array is not None:
+                # Extract single row as DataFrame
+                row_df = self._concatenated_array[idx : idx + 1]
+
+                # Convert to numpy
+                if self.array_type == "hcpe":
+                    array = convert_hcpe_df_to_numpy(row_df)
+                elif self.array_type == "preprocessing":
+                    array = convert_preprocessing_df_to_numpy(
+                        row_df
+                    )
+                elif self.array_type == "stage1":
+                    array = convert_stage1_df_to_numpy(row_df)
+                elif self.array_type == "stage2":
+                    array = convert_stage2_df_to_numpy(row_df)
+                else:
+                    raise ValueError(
+                        f"Unknown array_type: {self.array_type}"
+                    )
+
+                return array[0]  # Return single record
+
+            # Handle individual files (cache_mode="mmap")
+            # Find which file contains this index
+            file_idx = np.searchsorted(
+                self.cum_lengths[1:], idx, side="right"
+            )
+            local_idx = idx - self.cum_lengths[file_idx]
+
+            # Get DataFrame for this file
+            entry = self._file_entries[file_idx]
+            if entry.cached_array is None:
+                raise RuntimeError(
+                    f"DataFrame not loaded for file {entry.name}"
+                )
+
+            df = entry.cached_array  # type: pl.DataFrame
+            row_df = df[local_idx : local_idx + 1]
+
+            # Convert to numpy
+            if self.array_type == "hcpe":
+                array = convert_hcpe_df_to_numpy(row_df)
+            elif self.array_type == "preprocessing":
+                array = convert_preprocessing_df_to_numpy(row_df)
+            elif self.array_type == "stage1":
+                array = convert_stage1_df_to_numpy(row_df)
+            elif self.array_type == "stage2":
+                array = convert_stage2_df_to_numpy(row_df)
+            else:
+                raise ValueError(
+                    f"Unknown array_type: {self.array_type}"
+                )
+
+            return array[0]  # Return single record
 
         def get_items(
             self, indices: list[int]
         ) -> list[np.ndarray]:
-            """Numpy array batch indexing is no longer supported．
+            """Get multiple items as numpy structured arrays．
 
-            Raises:
-                NotImplementedError: Use iter_batches_df() for DataFrame iteration
+            Converts DataFrame rows to numpy format for backward compatibility．
+
+            Args:
+                indices: List of global indices
+
+            Returns:
+                List of numpy structured arrays
             """
-            raise NotImplementedError(
-                "Numpy array batch indexing is no longer supported. "
-                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
-            )
+            return [self.get_item(idx) for idx in indices]
 
         def iter_batches(
             self,
         ) -> Generator[tuple[str, np.ndarray], None, None]:
-            """Numpy array iteration is no longer supported．
+            """Iterate over batches as numpy structured arrays．
 
-            Raises:
-                NotImplementedError: Use iter_batches_df() for DataFrame iteration
+            Converts DataFrames to numpy format for backward compatibility．
+
+            Yields:
+                Tuple of (filename, numpy array)
             """
-            raise NotImplementedError(
-                "Numpy array iteration is no longer supported. "
-                "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
+            from maou.domain.data.schema import (
+                convert_hcpe_df_to_numpy,
+                convert_preprocessing_df_to_numpy,
+                convert_stage1_df_to_numpy,
+                convert_stage2_df_to_numpy,
             )
+
+            # If concatenated, yield as single batch
+            if self._concatenated_array is not None:
+                # Convert entire DataFrame to numpy
+                if self.array_type == "hcpe":
+                    array = convert_hcpe_df_to_numpy(
+                        self._concatenated_array
+                    )
+                elif self.array_type == "preprocessing":
+                    array = convert_preprocessing_df_to_numpy(
+                        self._concatenated_array
+                    )
+                elif self.array_type == "stage1":
+                    array = convert_stage1_df_to_numpy(
+                        self._concatenated_array
+                    )
+                elif self.array_type == "stage2":
+                    array = convert_stage2_df_to_numpy(
+                        self._concatenated_array
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown array_type: {self.array_type}"
+                    )
+
+                yield ("concatenated", array)
+                return
+
+            # Iterate over individual files
+            for entry in self._file_entries:
+                if entry.cached_array is None:
+                    continue
+
+                df = entry.cached_array
+                # Convert DataFrame to numpy
+                if self.array_type == "hcpe":
+                    array = convert_hcpe_df_to_numpy(df)
+                elif self.array_type == "preprocessing":
+                    array = convert_preprocessing_df_to_numpy(df)
+                elif self.array_type == "stage1":
+                    array = convert_stage1_df_to_numpy(df)
+                elif self.array_type == "stage2":
+                    array = convert_stage2_df_to_numpy(df)
+                else:
+                    raise ValueError(
+                        f"Unknown array_type: {self.array_type}"
+                    )
+
+                yield (entry.name, array)
 
     def __init__(
         self,
@@ -388,15 +508,14 @@ class FileDataSource(
     def iter_batches(
         self,
     ) -> Generator[tuple[str, np.ndarray], None, None]:
-        """Numpy array iteration is no longer supported．
+        """Iterate over batches as numpy structured arrays．
 
-        Raises:
-            NotImplementedError: Use iter_batches_df() for DataFrame iteration
+        Converts DataFrames to numpy format for backward compatibility．
+
+        Yields:
+            Tuple of (filename, numpy array)
         """
-        raise NotImplementedError(
-            "Numpy array iteration is no longer supported. "
-            "Use iter_batches_df() to iterate over Polars DataFrames from .feather files."
-        )
+        return self.__file_manager.iter_batches()
 
     def iter_batches_df(
         self,

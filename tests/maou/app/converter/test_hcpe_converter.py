@@ -126,14 +126,21 @@ class TestHCPEConverter:
         self,
         default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
+        import shutil
+
         input_paths = [
             Path(
                 "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
             ),
         ]
         output_dir = Path(
-            "tests/maou/app/converter/resources/test_dir/output_not_exists"
+            "tests/maou/app/converter/resources/test_dir/output_auto_created"
         )
+
+        # Clean up if exists from previous run
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -147,8 +154,15 @@ class TestHCPEConverter:
             )
         )
 
-        with pytest.raises(FileNotFoundError):
-            self.test_class.convert(option)
+        # Output directory is now auto-created, so no error should be raised
+        self.test_class.convert(option)
+
+        # Verify output directory was created
+        assert output_dir.exists()
+
+        # Clean up
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
 
     def test_conversion_filter_min_rating(
         self,

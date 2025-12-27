@@ -144,6 +144,9 @@ class DataIOService:
 
             file_path = Path(file_path)
 
+            # Create parent directories if they don't exist
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
             if array_type == "hcpe":
                 save_hcpe_df(df, file_path)
             elif array_type == "preprocessing":

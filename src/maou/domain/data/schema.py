@@ -689,6 +689,84 @@ def create_empty_preprocessing_df(
     )
 
 
+def create_empty_stage1_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty Stage 1 DataFrame with proper schema．
+
+    指定されたサイズの空のStage 1 DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: Stage 1スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_stage1_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    schema = get_stage1_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def create_empty_stage2_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty Stage 2 DataFrame with proper schema．
+
+    指定されたサイズの空のStage 2 DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: Stage 2スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_stage2_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    schema = get_stage2_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
 def get_board_position_polars_schema() -> dict[
     str, "pl.DataType"
 ]:
@@ -812,21 +890,37 @@ def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     dtype = get_hcpe_dtype()
     array = np.empty(len(df), dtype=dtype)
 
-    # Convert fields
-    array["hcp"] = np.array(
-        [bytes(row) for row in df["hcp"].to_list()],
-        dtype=(np.uint8, 32),
-    )
+    # Convert fields with null handling
+    # hcp: binary data (32 bytes)
+    hcp_list = df["hcp"].to_list()
+    # Convert each bytes object to list of uint8
+    hcp_arrays = []
+    for row in hcp_list:
+        if row is None:
+            hcp_arrays.append([0] * 32)
+        elif isinstance(row, bytes):
+            hcp_arrays.append(list(row))
+        else:
+            # Try to convert to bytes first
+            hcp_arrays.append(list(bytes(row)))
+    array["hcp"] = np.array(hcp_arrays, dtype=np.uint8)
+
     array["eval"] = df["eval"].to_numpy()
     array["bestMove16"] = df["bestMove16"].to_numpy()
     array["gameResult"] = df["gameResult"].to_numpy()
     array["id"] = df["id"].to_numpy()
-    array["partitioningKey"] = (
-        df["partitioningKey"].cast(pl.Date).to_numpy()
-    )
-    array["ratings"] = np.array(
-        df["ratings"].to_list(), dtype=(np.uint16, 2)
-    )
+
+    # partitioningKey: handle nulls
+    partitioning_key = df["partitioningKey"].cast(pl.Date).to_numpy()
+    array["partitioningKey"] = partitioning_key
+
+    # ratings: list of 2 uint16 values
+    ratings_list = df["ratings"].to_list()
+    ratings_arrays = [
+        item if item is not None else [0, 0] for item in ratings_list
+    ]
+    array["ratings"] = np.array(ratings_arrays, dtype=np.uint16)
+
     array["endgameStatus"] = df["endgameStatus"].to_numpy()
     array["moves"] = df["moves"].to_numpy()
 
@@ -857,18 +951,53 @@ def convert_preprocessing_df_to_numpy(
     array = np.empty(len(df), dtype=dtype)
 
     # Convert fields
-    array["id"] = df["id"].to_numpy()
+    # Handle potential null values in id field
+    id_values = df["id"].to_numpy()
+    # Fill nulls with 0 for uint64
+    if id_values.dtype == np.float64:
+        # Polars converts null uint64 to float64 NaN
+        id_values = np.nan_to_num(
+            id_values, nan=0.0
+        ).astype(np.uint64)
+    array["id"] = id_values
+
+    # Convert nested lists to numpy arrays
+    # boardIdPositions: List[List[List[int]]] -> (N, 9, 9)
+    board_list = df["boardIdPositions"].to_list()
+    # Replace None with zero arrays
+    board_list = [
+        item if item is not None else [[0] * 9 for _ in range(9)]
+        for item in board_list
+    ]
     array["boardIdPositions"] = np.array(
-        df["boardIdPositions"].to_list(),
-        dtype=(np.uint8, (9, 9)),
+        board_list,
+        dtype=np.uint8,
     )
+
+    # piecesInHand: List[List[int]] -> (N, 14)
+    pieces_list = df["piecesInHand"].to_list()
+    # Replace None with zero arrays
+    pieces_list = [
+        item if item is not None else [0] * 14
+        for item in pieces_list
+    ]
     array["piecesInHand"] = np.array(
-        df["piecesInHand"].to_list(), dtype=(np.uint8, 14)
+        pieces_list,
+        dtype=np.uint8,
     )
+
+    # moveLabel: List[List[float]] -> (N, MOVE_LABELS_NUM)
+    move_list = df["moveLabel"].to_list()
+    # Replace None with zero arrays
+    move_list = [
+        item if item is not None else [0.0] * MOVE_LABELS_NUM
+        for item in move_list
+    ]
     array["moveLabel"] = np.array(
-        df["moveLabel"].to_list(),
-        dtype=(np.float32, MOVE_LABELS_NUM),
+        move_list,
+        dtype=np.float32,
     )
+
     array["resultValue"] = df["resultValue"].to_numpy()
 
     return array
@@ -910,3 +1039,137 @@ def convert_numpy_to_preprocessing_df(
     )
 
     return df
+
+
+def convert_stage1_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+    """Convert Stage 1 Polars DataFrame to numpy structured array．
+
+    Args:
+        df: Polars DataFrame with Stage 1 schema
+
+    Returns:
+        numpy.ndarray: Structured array with Stage 1 dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    # Get target dtype
+    dtype = get_stage1_dtype()
+    array = np.empty(len(df), dtype=dtype)
+
+    # Convert fields
+    # Handle potential null values in id field
+    id_values = df["id"].to_numpy()
+    if id_values.dtype == np.float64:
+        id_values = np.nan_to_num(
+            id_values, nan=0.0
+        ).astype(np.uint64)
+    array["id"] = id_values
+
+    # Convert nested lists to numpy arrays
+    board_list = df["boardIdPositions"].to_list()
+    # Replace None with zero arrays
+    board_list = [
+        item if item is not None else [[0] * 9 for _ in range(9)]
+        for item in board_list
+    ]
+    array["boardIdPositions"] = np.array(
+        board_list,
+        dtype=np.uint8,
+    )
+
+    pieces_list = df["piecesInHand"].to_list()
+    # Replace None with zero arrays
+    pieces_list = [
+        item if item is not None else [0] * 14
+        for item in pieces_list
+    ]
+    array["piecesInHand"] = np.array(
+        pieces_list,
+        dtype=np.uint8,
+    )
+
+    reachable_list = df["reachableSquares"].to_list()
+    # Replace None with zero arrays
+    reachable_list = [
+        item if item is not None else [[0] * 9 for _ in range(9)]
+        for item in reachable_list
+    ]
+    array["reachableSquares"] = np.array(
+        reachable_list,
+        dtype=np.uint8,
+    )
+
+    return array
+
+
+def convert_stage2_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+    """Convert Stage 2 Polars DataFrame to numpy structured array．
+
+    Args:
+        df: Polars DataFrame with Stage 2 schema
+
+    Returns:
+        numpy.ndarray: Structured array with Stage 2 dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: poetry add polars"
+        )
+
+    # Get target dtype
+    dtype = get_stage2_dtype()
+    array = np.empty(len(df), dtype=dtype)
+
+    # Convert fields
+    # Handle potential null values in id field
+    id_values = df["id"].to_numpy()
+    if id_values.dtype == np.float64:
+        id_values = np.nan_to_num(
+            id_values, nan=0.0
+        ).astype(np.uint64)
+    array["id"] = id_values
+
+    # Convert nested lists to numpy arrays
+    board_list = df["boardIdPositions"].to_list()
+    # Replace None with zero arrays
+    board_list = [
+        item if item is not None else [[0] * 9 for _ in range(9)]
+        for item in board_list
+    ]
+    array["boardIdPositions"] = np.array(
+        board_list,
+        dtype=np.uint8,
+    )
+
+    pieces_list = df["piecesInHand"].to_list()
+    # Replace None with zero arrays
+    pieces_list = [
+        item if item is not None else [0] * 14
+        for item in pieces_list
+    ]
+    array["piecesInHand"] = np.array(
+        pieces_list,
+        dtype=np.uint8,
+    )
+
+    legal_moves_list = df["legalMovesLabel"].to_list()
+    # Replace None with zero arrays
+    legal_moves_list = [
+        item if item is not None else [0] * MOVE_LABELS_NUM
+        for item in legal_moves_list
+    ]
+    array["legalMovesLabel"] = np.array(
+        legal_moves_list,
+        dtype=np.uint8,
+    )
+
+    return array

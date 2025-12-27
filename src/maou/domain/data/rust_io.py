@@ -55,6 +55,10 @@ def save_hcpe_df(
     """
     _check_rust_backend()
 
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Polars → Arrow Table → RecordBatch（ゼロコピー）
     arrow_table = df.to_arrow()
     # Convert Table to RecordBatch (combine all batches)
@@ -108,6 +112,10 @@ def save_preprocessing_df(
     """
     _check_rust_backend()
 
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Polars → Arrow Table → RecordBatch
     arrow_table = df.to_arrow()
     arrow_batch = (
@@ -155,6 +163,10 @@ def save_stage1_df(
         >>> df = pl.DataFrame(data, schema=get_stage1_polars_schema())
         >>> save_stage1_df(df, "stage1_data.feather")
     """
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
     df.write_ipc(str(file_path), compression="lz4")
 
 
@@ -188,6 +200,10 @@ def save_stage2_df(
         >>> df = pl.DataFrame(data, schema=get_stage2_polars_schema())
         >>> save_stage2_df(df, "stage2_data.feather")
     """
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
     df.write_ipc(str(file_path), compression="lz4")
 
 
