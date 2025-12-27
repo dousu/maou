@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-import pytest
 
 from maou.app.pre_process.hcpe_transform import PreProcess
 from maou.domain.data.rust_io import save_hcpe_df
@@ -37,12 +36,14 @@ def _create_test_hcpe_data(
     # Set game results (1 = first player wins)
     game_results = [1] * samples
 
-    df = df.with_columns([
-        pl.Series("id", ids),
-        pl.Series("eval", eval_values),
-        pl.Series("bestMove16", best_moves),
-        pl.Series("gameResult", game_results),
-    ])
+    df = df.with_columns(
+        [
+            pl.Series("id", ids),
+            pl.Series("eval", eval_values),
+            pl.Series("bestMove16", best_moves),
+            pl.Series("gameResult", game_results),
+        ]
+    )
 
     file_path = directory / "test_hcpe.feather"
     save_hcpe_df(df, file_path)
@@ -50,9 +51,13 @@ def _create_test_hcpe_data(
     return [file_path]
 
 
-def test_preprocess_basic_transformation(tmp_path: Path) -> None:
+def test_preprocess_basic_transformation(
+    tmp_path: Path,
+) -> None:
     """Test basic HCPE preprocessing transformation."""
-    input_paths = _create_test_hcpe_data(tmp_path / "input", samples=5)
+    input_paths = _create_test_hcpe_data(
+        tmp_path / "input", samples=5
+    )
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -93,11 +98,15 @@ def test_preprocess_with_multiple_input_files(
     valid_move16 = 66309  # 0x10305 (1g1f - valid move from initial position)
     for i in range(3):
         df = create_empty_hcpe_df(2)
-        df = df.with_columns([
-            pl.Series("id", [f"file{i}_id{j}" for j in range(2)]),
-            pl.Series("bestMove16", [valid_move16] * 2),
-            pl.Series("gameResult", [1] * 2),
-        ])
+        df = df.with_columns(
+            [
+                pl.Series(
+                    "id", [f"file{i}_id{j}" for j in range(2)]
+                ),
+                pl.Series("bestMove16", [valid_move16] * 2),
+                pl.Series("gameResult", [1] * 2),
+            ]
+        )
 
         file_path = input_dir / f"hcpe_{i}.feather"
         save_hcpe_df(df, file_path)
@@ -132,7 +141,9 @@ def test_preprocess_with_multiple_input_files(
 
 def test_preprocess_parallel_workers(tmp_path: Path) -> None:
     """Test preprocessing with multiple workers."""
-    input_paths = _create_test_hcpe_data(tmp_path / "input", samples=10)
+    input_paths = _create_test_hcpe_data(
+        tmp_path / "input", samples=10
+    )
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 

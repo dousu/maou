@@ -33,7 +33,9 @@ def _create_dummy_datasource(
 
     # Create random board positions
     board_positions = [
-        rng.integers(0, 30, size=(9, 9), dtype=np.uint8).tolist()
+        rng.integers(
+            0, 30, size=(9, 9), dtype=np.uint8
+        ).tolist()
         for _ in range(samples)
     ]
 
@@ -51,15 +53,19 @@ def _create_dummy_datasource(
         move_labels.append(label.astype(np.float32).tolist())
 
     # Create random result values
-    result_values = rng.random(samples).astype(np.float16).tolist()
+    result_values = (
+        rng.random(samples).astype(np.float16).tolist()
+    )
 
     # Update DataFrame
-    df = df.with_columns([
-        pl.Series("boardIdPositions", board_positions),
-        pl.Series("piecesInHand", pieces_in_hand),
-        pl.Series("moveLabel", move_labels),
-        pl.Series("resultValue", result_values),
-    ])
+    df = df.with_columns(
+        [
+            pl.Series("boardIdPositions", board_positions),
+            pl.Series("piecesInHand", pieces_in_hand),
+            pl.Series("moveLabel", move_labels),
+            pl.Series("resultValue", result_values),
+        ]
+    )
 
     # Save to .feather file
     file_path = directory / "preprocessing.feather"

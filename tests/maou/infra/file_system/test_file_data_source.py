@@ -6,11 +6,13 @@ Simplified from original numpy-based tests to focus on DataFrame functionality.
 
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 import pytest
 
-from maou.domain.data.rust_io import save_hcpe_df, save_preprocessing_df
+from maou.domain.data.rust_io import (
+    save_hcpe_df,
+    save_preprocessing_df,
+)
 from maou.domain.data.schema import (
     create_empty_hcpe_df,
     create_empty_preprocessing_df,
@@ -34,13 +36,17 @@ def _create_hcpe_files(
         df = create_empty_hcpe_df(rows_per_file)
 
         # Add some test data
-        eval_values = list(range(i * rows_per_file, (i + 1) * rows_per_file))
+        eval_values = list(
+            range(i * rows_per_file, (i + 1) * rows_per_file)
+        )
         ids = [f"file{i}_row{j}" for j in range(rows_per_file)]
 
-        df = df.with_columns([
-            pl.Series("eval", eval_values),
-            pl.Series("id", ids),
-        ])
+        df = df.with_columns(
+            [
+                pl.Series("eval", eval_values),
+                pl.Series("id", ids),
+            ]
+        )
 
         file_path = directory / f"hcpe_{i}.feather"
         save_hcpe_df(df, file_path)
@@ -65,13 +71,20 @@ def _create_preprocessing_files(
         df = create_empty_preprocessing_df(rows_per_file)
 
         # Add some test data
-        result_values = [float(i * rows_per_file + j) for j in range(rows_per_file)]
-        ids = list(range(i * rows_per_file, (i + 1) * rows_per_file))
+        result_values = [
+            float(i * rows_per_file + j)
+            for j in range(rows_per_file)
+        ]
+        ids = list(
+            range(i * rows_per_file, (i + 1) * rows_per_file)
+        )
 
-        df = df.with_columns([
-            pl.Series("resultValue", result_values),
-            pl.Series("id", ids),
-        ])
+        df = df.with_columns(
+            [
+                pl.Series("resultValue", result_values),
+                pl.Series("id", ids),
+            ]
+        )
 
         file_path = directory / f"preprocessing_{i}.feather"
         save_preprocessing_df(df, file_path)
@@ -116,7 +129,9 @@ def test_file_data_source_indexing(tmp_path: Path) -> None:
     assert last_record is not None
 
 
-def test_file_data_source_train_test_split(tmp_path: Path) -> None:
+def test_file_data_source_train_test_split(
+    tmp_path: Path,
+) -> None:
     """Test FileDataSource train/test split functionality."""
     file_paths, _ = _create_hcpe_files(
         tmp_path, file_count=1, rows_per_file=10
@@ -127,7 +142,9 @@ def test_file_data_source_train_test_split(tmp_path: Path) -> None:
         array_type="hcpe",
     )
 
-    train_ds, test_ds = splitter.train_test_split(test_ratio=0.3)
+    train_ds, test_ds = splitter.train_test_split(
+        test_ratio=0.3
+    )
 
     # Verify split sizes (approximately)
     total_size = len(train_ds) + len(test_ds)
@@ -213,7 +230,9 @@ def test_file_data_source_empty_file_list() -> None:
     assert len(datasource) == 0
 
 
-def test_file_data_source_nonexistent_file(tmp_path: Path) -> None:
+def test_file_data_source_nonexistent_file(
+    tmp_path: Path,
+) -> None:
     """Test FileDataSource with non-existent file."""
     fake_path = tmp_path / "nonexistent.feather"
 

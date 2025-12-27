@@ -196,7 +196,11 @@ class Board:
         # Use pre-imported polars for performance
         return _pl.DataFrame(
             {"boardIdPositions": [positions_list]},
-            schema={"boardIdPositions": _pl.List(_pl.List(_pl.UInt8))},
+            schema={
+                "boardIdPositions": _pl.List(
+                    _pl.List(_pl.UInt8)
+                )
+            },
         )
 
     def get_hcp_df(self) -> "pl.DataFrame":

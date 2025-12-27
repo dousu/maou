@@ -285,7 +285,6 @@ class FileDataSource(
             Returns:
                 numpy structured array (single record)
             """
-            import polars as pl
 
             from maou.domain.data.schema import (
                 convert_hcpe_df_to_numpy,
@@ -338,7 +337,9 @@ class FileDataSource(
             if self.array_type == "hcpe":
                 array = convert_hcpe_df_to_numpy(row_df)
             elif self.array_type == "preprocessing":
-                array = convert_preprocessing_df_to_numpy(row_df)
+                array = convert_preprocessing_df_to_numpy(
+                    row_df
+                )
             elif self.array_type == "stage1":
                 array = convert_stage1_df_to_numpy(row_df)
             elif self.array_type == "stage2":
@@ -419,7 +420,9 @@ class FileDataSource(
                 if self.array_type == "hcpe":
                     array = convert_hcpe_df_to_numpy(df)
                 elif self.array_type == "preprocessing":
-                    array = convert_preprocessing_df_to_numpy(df)
+                    array = convert_preprocessing_df_to_numpy(
+                        df
+                    )
                 elif self.array_type == "stage1":
                     array = convert_stage1_df_to_numpy(df)
                 elif self.array_type == "stage2":

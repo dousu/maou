@@ -911,13 +911,16 @@ def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     array["id"] = df["id"].to_numpy()
 
     # partitioningKey: handle nulls
-    partitioning_key = df["partitioningKey"].cast(pl.Date).to_numpy()
+    partitioning_key = (
+        df["partitioningKey"].cast(pl.Date).to_numpy()
+    )
     array["partitioningKey"] = partitioning_key
 
     # ratings: list of 2 uint16 values
     ratings_list = df["ratings"].to_list()
     ratings_arrays = [
-        item if item is not None else [0, 0] for item in ratings_list
+        item if item is not None else [0, 0]
+        for item in ratings_list
     ]
     array["ratings"] = np.array(ratings_arrays, dtype=np.uint16)
 
@@ -956,9 +959,9 @@ def convert_preprocessing_df_to_numpy(
     # Fill nulls with 0 for uint64
     if id_values.dtype == np.float64:
         # Polars converts null uint64 to float64 NaN
-        id_values = np.nan_to_num(
-            id_values, nan=0.0
-        ).astype(np.uint64)
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
     array["id"] = id_values
 
     # Convert nested lists to numpy arrays
@@ -966,7 +969,9 @@ def convert_preprocessing_df_to_numpy(
     board_list = df["boardIdPositions"].to_list()
     # Replace None with zero arrays
     board_list = [
-        item if item is not None else [[0] * 9 for _ in range(9)]
+        item
+        if item is not None
+        else [[0] * 9 for _ in range(9)]
         for item in board_list
     ]
     array["boardIdPositions"] = np.array(
@@ -1041,7 +1046,9 @@ def convert_numpy_to_preprocessing_df(
     return df
 
 
-def convert_stage1_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+def convert_stage1_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
     """Convert Stage 1 Polars DataFrame to numpy structured array．
 
     Args:
@@ -1066,16 +1073,18 @@ def convert_stage1_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     # Handle potential null values in id field
     id_values = df["id"].to_numpy()
     if id_values.dtype == np.float64:
-        id_values = np.nan_to_num(
-            id_values, nan=0.0
-        ).astype(np.uint64)
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
     array["id"] = id_values
 
     # Convert nested lists to numpy arrays
     board_list = df["boardIdPositions"].to_list()
     # Replace None with zero arrays
     board_list = [
-        item if item is not None else [[0] * 9 for _ in range(9)]
+        item
+        if item is not None
+        else [[0] * 9 for _ in range(9)]
         for item in board_list
     ]
     array["boardIdPositions"] = np.array(
@@ -1097,7 +1106,9 @@ def convert_stage1_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     reachable_list = df["reachableSquares"].to_list()
     # Replace None with zero arrays
     reachable_list = [
-        item if item is not None else [[0] * 9 for _ in range(9)]
+        item
+        if item is not None
+        else [[0] * 9 for _ in range(9)]
         for item in reachable_list
     ]
     array["reachableSquares"] = np.array(
@@ -1108,7 +1119,9 @@ def convert_stage1_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     return array
 
 
-def convert_stage2_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+def convert_stage2_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
     """Convert Stage 2 Polars DataFrame to numpy structured array．
 
     Args:
@@ -1133,16 +1146,18 @@ def convert_stage2_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     # Handle potential null values in id field
     id_values = df["id"].to_numpy()
     if id_values.dtype == np.float64:
-        id_values = np.nan_to_num(
-            id_values, nan=0.0
-        ).astype(np.uint64)
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
     array["id"] = id_values
 
     # Convert nested lists to numpy arrays
     board_list = df["boardIdPositions"].to_list()
     # Replace None with zero arrays
     board_list = [
-        item if item is not None else [[0] * 9 for _ in range(9)]
+        item
+        if item is not None
+        else [[0] * 9 for _ in range(9)]
         for item in board_list
     ]
     array["boardIdPositions"] = np.array(
