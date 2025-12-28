@@ -38,7 +38,7 @@ class TestVisualizationInterface:
         """VisualizationInterfaceが正常に初期化される．"""
         assert viz_interface.search_index is not None
         assert viz_interface.data_retriever is not None
-        assert viz_interface.board_display is not None
+        assert viz_interface.renderer is not None
 
     def test_search_by_id_valid(
         self, viz_interface: VisualizationInterface
@@ -95,6 +95,7 @@ class TestVisualizationInterface:
             page_info,
             board_svg,
             record_details,
+            cached_records,
         ) = viz_interface.search_by_eval_range(
             min_eval=-1000,
             max_eval=1000,
@@ -107,6 +108,7 @@ class TestVisualizationInterface:
         assert "ページ 1" in page_info
         assert "<svg" in board_svg
         assert isinstance(record_details, dict)
+        assert isinstance(cached_records, list)
 
     def test_search_by_eval_range_invalid_range(
         self, viz_interface: VisualizationInterface
@@ -117,6 +119,7 @@ class TestVisualizationInterface:
             page_info,
             board_svg,
             record_details,
+            cached_records,
         ) = viz_interface.search_by_eval_range(
             min_eval=100,
             max_eval=-100,
@@ -128,6 +131,7 @@ class TestVisualizationInterface:
         assert "エラー" in page_info
         assert "無効な範囲" in board_svg
         assert "error" in record_details
+        assert cached_records == []
 
     def test_search_by_eval_range_pagination(
         self, viz_interface: VisualizationInterface
@@ -137,6 +141,7 @@ class TestVisualizationInterface:
         (
             table1,
             page_info1,
+            _,
             _,
             _,
         ) = viz_interface.search_by_eval_range(
@@ -150,6 +155,7 @@ class TestVisualizationInterface:
         (
             table2,
             page_info2,
+            _,
             _,
             _,
         ) = viz_interface.search_by_eval_range(
@@ -173,6 +179,7 @@ class TestVisualizationInterface:
             page_info,
             board_svg,
             record_details,
+            cached_records,
         ) = viz_interface.search_by_eval_range(
             min_eval=9000,
             max_eval=10000,
@@ -184,6 +191,7 @@ class TestVisualizationInterface:
         assert "結果なし" in page_info
         assert "検索結果がありません" in board_svg
         assert record_details == {}
+        assert cached_records == []
 
     def test_get_dataset_stats(
         self, viz_interface: VisualizationInterface
@@ -202,6 +210,7 @@ class TestVisualizationInterface:
         """テーブルデータが正しいフォーマットである．"""
         (
             table_data,
+            _,
             _,
             _,
             _,

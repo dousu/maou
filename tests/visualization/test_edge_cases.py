@@ -68,6 +68,7 @@ class TestEdgeCases:
             page_info,
             _,
             _,
+            _,
         ) = viz_interface.search_by_eval_range(
             min_eval=-1000,
             max_eval=1000,
@@ -102,6 +103,7 @@ class TestEdgeCases:
             page_info,
             _,
             _,
+            _,
         ) = viz_interface.search_by_eval_range(
             min_eval=-1000,
             max_eval=1000,
@@ -132,6 +134,7 @@ class TestEdgeCases:
         # 極端な評価値範囲
         (
             table_data,
+            _,
             _,
             _,
             _,
@@ -292,6 +295,7 @@ class TestErrorHandling:
         # 検索結果が空
         (
             table_data,
+            _,
             _,
             _,
             _,

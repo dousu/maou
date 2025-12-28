@@ -5,7 +5,6 @@
 """
 
 import logging
-import numpy as np
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type
 
@@ -104,7 +103,9 @@ class RecordRenderer(ABC):
             BoardPosition インスタンス
         """
         return BoardPosition(
-            board_id_positions=record.get("boardIdPositions", []),
+            board_id_positions=record.get(
+                "boardIdPositions", []
+            ),
             pieces_in_hand=record.get("piecesInHand", []),
         )
 
@@ -199,9 +200,7 @@ class RecordRenderer(ABC):
                     if empty_count > 0:
                         rank_str += str(empty_count)
                         empty_count = 0
-                    piece_char = piece_to_sfen.get(
-                        piece_id, ""
-                    )
+                    piece_char = piece_to_sfen.get(piece_id, "")
                     rank_str += piece_char
 
             if empty_count > 0:
@@ -427,14 +426,18 @@ class Stage2RecordRenderer(RecordRenderer):
 
         # Board 再構築
         board = self._create_board_from_record(record)
-        usi_moves = self.move_converter.convert_labels_to_usi_list(
-            board, legal_indices, limit=20
+        usi_moves = (
+            self.move_converter.convert_labels_to_usi_list(
+                board, legal_indices, limit=20
+            )
         )
 
         return {
             "id": record.get("id"),
             "legal_moves_count": len(legal_indices),
-            "legal_moves": ", ".join(usi_moves[:10]),  # 最初の10手
+            "legal_moves": ", ".join(
+                usi_moves[:10]
+            ),  # 最初の10手
             "array_type": "stage2",
         }
 
@@ -499,10 +502,8 @@ class PreprocessingRecordRenderer(RecordRenderer):
 
         # Board 再構築
         board = self._create_board_from_record(record)
-        top_moves = (
-            self.move_converter.convert_probability_labels_to_usi(
-                board, move_labels, threshold=0.01, top_k=5
-            )
+        top_moves = self.move_converter.convert_probability_labels_to_usi(
+            board, move_labels, threshold=0.01, top_k=5
         )
 
         return {
@@ -585,6 +586,8 @@ class RecordRendererFactory:
 
         renderer_class = renderers.get(array_type)
         if not renderer_class:
-            raise ValueError(f"Unknown array_type: {array_type}")
+            raise ValueError(
+                f"Unknown array_type: {array_type}"
+            )
 
         return renderer_class(board_renderer, move_converter)

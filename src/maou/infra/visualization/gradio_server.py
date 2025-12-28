@@ -148,7 +148,9 @@ class GradioVisualizationServer:
 
                     # ページ内レコードナビゲーション（新規）
                     with gr.Group():
-                        gr.Markdown("### レコードナビゲーション")
+                        gr.Markdown(
+                            "### レコードナビゲーション"
+                        )
                         with gr.Row():
                             prev_record_btn = gr.Button(
                                 "← 前のレコード", size="sm"
@@ -204,9 +206,7 @@ class GradioVisualizationServer:
                     # 検索結果テーブル
                     with gr.Accordion("検索結果", open=False):
                         # Rendererから動的にヘッダーを取得
-                        table_headers = (
-                            self.viz_interface.get_table_columns()
-                        )
+                        table_headers = self.viz_interface.get_table_columns()
 
                         results_table = gr.Dataframe(
                             headers=table_headers,
@@ -267,7 +267,11 @@ class GradioVisualizationServer:
             )
 
             # ページネーション（常に_search_and_cacheを使用）
-            paginate_fn = self._search_and_cache if self.supports_eval_search else self._paginate_all_data
+            paginate_fn = (
+                self._search_and_cache
+                if self.supports_eval_search
+                else self._paginate_all_data
+            )
 
             next_btn.click(
                 fn=lambda page: page + 1,
@@ -320,14 +324,21 @@ class GradioVisualizationServer:
                 fn=lambda idx, records: min(
                     idx + 1, len(records) - 1
                 ),
-                inputs=[current_record_index, current_page_records],
+                inputs=[
+                    current_record_index,
+                    current_page_records,
+                ],
                 outputs=[current_record_index],
             ).then(
                 fn=self.viz_interface.navigate_within_page,
-                inputs=[current_page_records, current_record_index],
+                inputs=[
+                    current_page_records,
+                    current_record_index,
+                ],
                 outputs=[board_display, record_details],
             ).then(
-                fn=lambda idx, records: f"Record {idx + 1} / {len(records)}",
+                fn=lambda idx,
+                records: f"Record {idx + 1} / {len(records)}",
                 inputs=[
                     current_record_index,
                     current_page_records,
@@ -341,10 +352,14 @@ class GradioVisualizationServer:
                 outputs=[current_record_index],
             ).then(
                 fn=self.viz_interface.navigate_within_page,
-                inputs=[current_page_records, current_record_index],
+                inputs=[
+                    current_page_records,
+                    current_record_index,
+                ],
                 outputs=[board_display, record_details],
             ).then(
-                fn=lambda idx, records: f"Record {idx + 1} / {len(records)}",
+                fn=lambda idx,
+                records: f"Record {idx + 1} / {len(records)}",
                 inputs=[
                     current_record_index,
                     current_page_records,

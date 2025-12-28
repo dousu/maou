@@ -91,6 +91,7 @@ class TestVisualizationIntegration:
             page_info,
             board_svg,
             record_details,
+            cached_records,
         ) = viz_interface.search_by_eval_range(
             min_eval=-1000,
             max_eval=1000,
@@ -104,6 +105,8 @@ class TestVisualizationIntegration:
         assert len(table_data) <= 10
         assert "ページ 1" in page_info
         assert "<svg" in board_svg
+        assert isinstance(cached_records, list)
+        assert len(cached_records) == len(table_data)
 
     def test_layer_communication(
         self, test_data_dir: Path

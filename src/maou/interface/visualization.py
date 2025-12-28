@@ -98,7 +98,9 @@ class VisualizationInterface:
 
         # Rendererに委譲してボード描画と詳細抽出
         board_svg = self.renderer.render_board(record)
-        record_details = self.renderer.extract_display_fields(record)
+        record_details = self.renderer.extract_display_fields(
+            record
+        )
 
         logger.info(
             f"Successfully retrieved and rendered record: {record_id}"
@@ -168,15 +170,19 @@ class VisualizationInterface:
 
         # Rendererを使ってテーブルデータを作成
         table_data = [
-            self.renderer.format_table_row(i + offset + 1, record)
+            self.renderer.format_table_row(
+                i + offset + 1, record
+            )
             for i, record in enumerate(records)
         ]
 
         # 最初のレコードをRendererで描画
         first_record = records[0]
-        first_board_svg = self.renderer.render_board(first_record)
-        first_record_details = self.renderer.extract_display_fields(
+        first_board_svg = self.renderer.render_board(
             first_record
+        )
+        first_record_details = (
+            self.renderer.extract_display_fields(first_record)
         )
 
         # ページ情報
@@ -228,7 +234,9 @@ class VisualizationInterface:
         # インデックスバリデーション
         if not (0 <= record_index < len(cached_records)):
             return (
-                self._render_empty_message("無効なインデックスです"),
+                self._render_empty_message(
+                    "無効なインデックスです"
+                ),
                 {},
             )
 
