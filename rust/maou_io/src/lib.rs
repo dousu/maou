@@ -1,62 +1,14 @@
-use pyo3::prelude::*;
-use arrow::array::RecordBatch;
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
+//! Maou I/O - High-performance data I/O library for Shogi AI
+//!
+//! This crate provides pure Rust implementations for:
+//! - Arrow IPC file I/O with LZ4 compression
+//! - Schema definitions for HCPE and preprocessing data
+//! - Sparse array compression utilities
 
-mod arrow_io;
-mod error;
-mod schema;
-mod sparse_array;
+pub mod arrow_io;
+pub mod error;
+pub mod schema;
+pub mod sparse_array;
 
-#[pyfunction]
-fn hello() -> PyResult<String> {
-    Ok("Maou I/O Rust backend initialized".to_string())
-}
-
-#[pyfunction]
-fn save_hcpe_feather(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
-    let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    arrow_io::save_feather(&batch, &file_path)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
-    Ok(())
-}
-
-#[pyfunction]
-fn load_hcpe_feather(py: Python, file_path: String) -> PyResult<PyObject> {
-    let batch = arrow_io::load_feather(&file_path)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
-    batch.to_pyarrow(py)
-}
-
-#[pyfunction]
-fn save_preprocessing_feather(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
-    let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    arrow_io::save_feather(&batch, &file_path)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
-    Ok(())
-}
-
-#[pyfunction]
-fn load_preprocessing_feather(py: Python, file_path: String) -> PyResult<PyObject> {
-    let batch = arrow_io::load_feather(&file_path)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
-    batch.to_pyarrow(py)
-}
-
-#[pymodule]
-fn maou_io(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(hello, m)?)?;
-    m.add_function(wrap_pyfunction!(save_hcpe_feather, m)?)?;
-    m.add_function(wrap_pyfunction!(load_hcpe_feather, m)?)?;
-    m.add_function(wrap_pyfunction!(save_preprocessing_feather, m)?)?;
-    m.add_function(wrap_pyfunction!(load_preprocessing_feather, m)?)?;
-
-    // Sparse array compression functions
-    m.add_function(wrap_pyfunction!(sparse_array::compress_sparse_array_rust, m)?)?;
-    m.add_function(wrap_pyfunction!(sparse_array::expand_sparse_array_rust, m)?)?;
-    m.add_function(wrap_pyfunction!(sparse_array::add_sparse_arrays_rust, m)?)?;
-
-    // SearchIndex class from maou_index
-    m.add_class::<maou_index::SearchIndex>()?;
-
-    Ok(())
-}
+// Re-export commonly used types
+pub use error::MaouIOError;

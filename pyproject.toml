@@ -91,8 +91,8 @@ packages = [{include = "maou", from = "src"}]
 
 [tool.maturin]
 python-source = "src"
-module-name = "maou._rust.maou_io"
-manifest-path = "rust/maou_io/Cargo.toml"
+module-name = "maou._rust"
+manifest-path = "rust/maou_rust/Cargo.toml"
 binding = "pyo3"
 features = ["pyo3/extension-module"]
 

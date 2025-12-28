@@ -3,7 +3,7 @@
 //! This module provides high-performance sparse array operations for move label
 //! count arrays which are typically 99% zeros (only ~20 non-zero elements out of 1496).
 
-use pyo3::prelude::*;
+use crate::error::MaouIOError;
 
 /// Compress a dense integer array to sparse format (indices + values).
 ///
@@ -18,13 +18,14 @@ use pyo3::prelude::*;
 ///
 /// # Example
 /// ```
+/// use maou_io::sparse_array::compress_sparse_array;
+///
 /// let dense = vec![0, 5, 0, 0, 10, 0];
-/// let (indices, values) = compress_sparse_array_rust(dense);
+/// let (indices, values) = compress_sparse_array(&dense).unwrap();
 /// assert_eq!(indices, vec![1, 4]);
 /// assert_eq!(values, vec![5, 10]);
 /// ```
-#[pyfunction]
-pub fn compress_sparse_array_rust(dense: Vec<i32>) -> PyResult<(Vec<u16>, Vec<i32>)> {
+pub fn compress_sparse_array(dense: &[i32]) -> Result<(Vec<u16>, Vec<i32>), MaouIOError> {
     let mut indices = Vec::new();
     let mut values = Vec::new();
 
@@ -32,7 +33,7 @@ pub fn compress_sparse_array_rust(dense: Vec<i32>) -> PyResult<(Vec<u16>, Vec<i3
         if val != 0 {
             // Check if index fits in u16 (max 65535)
             if idx > u16::MAX as usize {
-                return Err(pyo3::exceptions::PyValueError::new_err(
+                return Err(MaouIOError::CompressionError(
                     format!("Index {} exceeds u16::MAX (65535)", idx)
                 ));
             }
@@ -59,15 +60,16 @@ pub fn compress_sparse_array_rust(dense: Vec<i32>) -> PyResult<(Vec<u16>, Vec<i3
 ///
 /// # Example
 /// ```
+/// use maou_io::sparse_array::expand_sparse_array;
+///
 /// let indices = vec![1, 4];
 /// let values = vec![5, 10];
-/// let dense = expand_sparse_array_rust(indices, values, 6);
+/// let dense = expand_sparse_array(&indices, &values, 6).unwrap();
 /// assert_eq!(dense, vec![0, 5, 0, 0, 10, 0]);
 /// ```
-#[pyfunction]
-pub fn expand_sparse_array_rust(indices: Vec<u16>, values: Vec<i32>, size: usize) -> PyResult<Vec<i32>> {
+pub fn expand_sparse_array(indices: &[u16], values: &[i32], size: usize) -> Result<Vec<i32>, MaouIOError> {
     if indices.len() != values.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(MaouIOError::CompressionError(
             format!("indices length ({}) != values length ({})", indices.len(), values.len())
         ));
     }
@@ -77,7 +79,7 @@ pub fn expand_sparse_array_rust(indices: Vec<u16>, values: Vec<i32>, size: usize
     for (idx, val) in indices.iter().zip(values.iter()) {
         let idx_usize = *idx as usize;
         if idx_usize >= size {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
+            return Err(MaouIOError::CompressionError(
                 format!("Index {} out of bounds for array of size {}", idx_usize, size)
             ));
         }
@@ -105,31 +107,32 @@ pub fn expand_sparse_array_rust(indices: Vec<u16>, values: Vec<i32>, size: usize
 ///
 /// # Example
 /// ```
+/// use maou_io::sparse_array::add_sparse_arrays;
+///
 /// // Array 1: [0, 5, 0, 10] → indices=[1,3], values=[5,10]
 /// // Array 2: [0, 3, 7, 0]  → indices=[1,2], values=[3,7]
 /// // Sum:     [0, 8, 7, 10] → indices=[1,2,3], values=[8,7,10]
-/// let (indices, values) = add_sparse_arrays_rust(
-///     vec![1, 3], vec![5, 10],
-///     vec![1, 2], vec![3, 7]
-/// );
+/// let (indices, values) = add_sparse_arrays(
+///     &[1, 3], &[5, 10],
+///     &[1, 2], &[3, 7]
+/// ).unwrap();
 /// assert_eq!(indices, vec![1, 2, 3]);
 /// assert_eq!(values, vec![8, 7, 10]);
 /// ```
-#[pyfunction]
-pub fn add_sparse_arrays_rust(
-    indices1: Vec<u16>,
-    values1: Vec<i32>,
-    indices2: Vec<u16>,
-    values2: Vec<i32>,
-) -> PyResult<(Vec<u16>, Vec<i32>)> {
+pub fn add_sparse_arrays(
+    indices1: &[u16],
+    values1: &[i32],
+    indices2: &[u16],
+    values2: &[i32],
+) -> Result<(Vec<u16>, Vec<i32>), MaouIOError> {
     if indices1.len() != values1.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "indices1 and values1 must have same length"
+        return Err(MaouIOError::CompressionError(
+            "indices1 and values1 must have same length".to_string()
         ));
     }
     if indices2.len() != values2.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "indices2 and values2 must have same length"
+        return Err(MaouIOError::CompressionError(
+            "indices2 and values2 must have same length".to_string()
         ));
     }
 
@@ -166,7 +169,7 @@ mod tests {
     #[test]
     fn test_compress_sparse_array() {
         let dense = vec![0, 5, 0, 0, 10, 0, -3];
-        let (indices, values) = compress_sparse_array_rust(dense).unwrap();
+        let (indices, values) = compress_sparse_array(&dense).unwrap();
         assert_eq!(indices, vec![1, 4, 6]);
         assert_eq!(values, vec![5, 10, -3]);
     }
@@ -174,7 +177,7 @@ mod tests {
     #[test]
     fn test_compress_all_zeros() {
         let dense = vec![0, 0, 0, 0];
-        let (indices, values) = compress_sparse_array_rust(dense).unwrap();
+        let (indices, values) = compress_sparse_array(&dense).unwrap();
         assert_eq!(indices.len(), 0);
         assert_eq!(values.len(), 0);
     }
@@ -183,7 +186,7 @@ mod tests {
     fn test_expand_sparse_array() {
         let indices = vec![1, 4, 6];
         let values = vec![5, 10, -3];
-        let dense = expand_sparse_array_rust(indices, values, 8).unwrap();
+        let dense = expand_sparse_array(&indices, &values, 8).unwrap();
         assert_eq!(dense, vec![0, 5, 0, 0, 10, 0, -3, 0]);
     }
 
@@ -191,7 +194,7 @@ mod tests {
     fn test_expand_empty() {
         let indices: Vec<u16> = vec![];
         let values: Vec<i32> = vec![];
-        let dense = expand_sparse_array_rust(indices, values, 5).unwrap();
+        let dense = expand_sparse_array(&indices, &values, 5).unwrap();
         assert_eq!(dense, vec![0, 0, 0, 0, 0]);
     }
 
@@ -199,17 +202,17 @@ mod tests {
     fn test_expand_index_out_of_bounds() {
         let indices = vec![1, 10];
         let values = vec![5, 10];
-        let result = expand_sparse_array_rust(indices, values, 5);
+        let result = expand_sparse_array(&indices, &values, 5);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_add_sparse_arrays_no_overlap() {
-        let (indices, values) = add_sparse_arrays_rust(
-            vec![1, 3],
-            vec![5, 10],
-            vec![2, 4],
-            vec![7, 20],
+        let (indices, values) = add_sparse_arrays(
+            &[1, 3],
+            &[5, 10],
+            &[2, 4],
+            &[7, 20],
         ).unwrap();
         assert_eq!(indices, vec![1, 2, 3, 4]);
         assert_eq!(values, vec![5, 7, 10, 20]);
@@ -217,11 +220,11 @@ mod tests {
 
     #[test]
     fn test_add_sparse_arrays_with_overlap() {
-        let (indices, values) = add_sparse_arrays_rust(
-            vec![1, 3],
-            vec![5, 10],
-            vec![1, 2],
-            vec![3, 7],
+        let (indices, values) = add_sparse_arrays(
+            &[1, 3],
+            &[5, 10],
+            &[1, 2],
+            &[3, 7],
         ).unwrap();
         assert_eq!(indices, vec![1, 2, 3]);
         assert_eq!(values, vec![8, 7, 10]);
@@ -230,11 +233,11 @@ mod tests {
     #[test]
     fn test_add_sparse_arrays_cancel_out() {
         // Values cancel out at index 1
-        let (indices, values) = add_sparse_arrays_rust(
-            vec![1, 3],
-            vec![5, 10],
-            vec![1, 2],
-            vec![-5, 7],
+        let (indices, values) = add_sparse_arrays(
+            &[1, 3],
+            &[5, 10],
+            &[1, 2],
+            &[-5, 7],
         ).unwrap();
         assert_eq!(indices, vec![2, 3]);
         assert_eq!(values, vec![7, 10]);
@@ -242,11 +245,11 @@ mod tests {
 
     #[test]
     fn test_add_empty_arrays() {
-        let (indices, values) = add_sparse_arrays_rust(
-            vec![],
-            vec![],
-            vec![],
-            vec![],
+        let (indices, values) = add_sparse_arrays(
+            &[],
+            &[],
+            &[],
+            &[],
         ).unwrap();
         assert_eq!(indices.len(), 0);
         assert_eq!(values.len(), 0);
@@ -256,8 +259,8 @@ mod tests {
     fn test_roundtrip() {
         // Compress → Expand should give original array
         let original = vec![0, 5, 0, 0, 10, 0, -3, 0, 0, 0];
-        let (indices, values) = compress_sparse_array_rust(original.clone()).unwrap();
-        let expanded = expand_sparse_array_rust(indices, values, original.len()).unwrap();
+        let (indices, values) = compress_sparse_array(&original).unwrap();
+        let expanded = expand_sparse_array(&indices, &values, original.len()).unwrap();
         assert_eq!(expanded, original);
     }
 }

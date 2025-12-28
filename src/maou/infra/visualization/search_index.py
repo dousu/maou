@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from maou._rust.maou_io import SearchIndex as RustSearchIndex
+from maou._rust.maou_index import SearchIndex as RustSearchIndex
 
 logger = logging.getLogger(__name__)
 
