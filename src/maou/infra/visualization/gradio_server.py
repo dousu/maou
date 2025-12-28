@@ -322,8 +322,10 @@ class GradioVisualizationServer:
             # ページ内レコードナビゲーション（新規）
             next_record_btn.click(
                 fn=lambda idx, records: min(
-                    idx + 1, len(records) - 1
-                ),
+                    idx + 1, max(0, len(records) - 1)
+                )
+                if records
+                else 0,
                 inputs=[
                     current_record_index,
                     current_page_records,
@@ -337,8 +339,11 @@ class GradioVisualizationServer:
                 ],
                 outputs=[board_display, record_details],
             ).then(
-                fn=lambda idx,
-                records: f"Record {idx + 1} / {len(records)}",
+                fn=lambda idx, records: (
+                    f"Record {idx + 1} / {len(records)}"
+                    if records
+                    else "Record 0 / 0"
+                ),
                 inputs=[
                     current_record_index,
                     current_page_records,
@@ -347,8 +352,13 @@ class GradioVisualizationServer:
             )
 
             prev_record_btn.click(
-                fn=lambda idx: max(0, idx - 1),
-                inputs=[current_record_index],
+                fn=lambda idx, records: max(0, idx - 1)
+                if records
+                else 0,
+                inputs=[
+                    current_record_index,
+                    current_page_records,
+                ],
                 outputs=[current_record_index],
             ).then(
                 fn=self.viz_interface.navigate_within_page,
@@ -358,8 +368,11 @@ class GradioVisualizationServer:
                 ],
                 outputs=[board_display, record_details],
             ).then(
-                fn=lambda idx,
-                records: f"Record {idx + 1} / {len(records)}",
+                fn=lambda idx, records: (
+                    f"Record {idx + 1} / {len(records)}"
+                    if records
+                    else "Record 0 / 0"
+                ),
                 inputs=[
                     current_record_index,
                     current_page_records,
@@ -530,7 +543,13 @@ class GradioVisualizationServer:
         max_eval: int,
         page: int,
         page_size: int,
-    ) -> Tuple[List[List[Any]], str, str, Dict[str, Any]]:
+    ) -> Tuple[
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+    ]:
         """評価値範囲検索のモック実装．
 
         Args:
@@ -540,7 +559,7 @@ class GradioVisualizationServer:
             page_size: ページサイズ
 
         Returns:
-            (results_table_data, page_info, board_svg, record_details)
+            (results_table_data, page_info, board_svg, record_details, cached_records)
         """
         logger.info(
             f"Mock eval range search: [{min_eval}, {max_eval}], page={page}"
@@ -551,6 +570,40 @@ class GradioVisualizationServer:
             [i, f"mock_id_{i}", min_eval + i * 10, 50 + i]
             for i in range(page_size)
         ]
+
+        # モックレコードデータ（ナビゲーション用）
+        mock_records = []
+        for i in range(page_size):
+            mock_board = [
+                [0 for _ in range(9)] for _ in range(9)
+            ]
+            mock_hand = [0 for _ in range(14)]
+
+            # 簡易的な盤面（各レコードで少し異なる配置）
+            mock_board[0][4] = 16 + 8  # 後手王
+            mock_board[8][4] = 8  # 先手王
+
+            # レコードごとに駒配置を変える
+            if i % 3 == 0:
+                mock_board[0][1] = 16 + 6  # 後手角
+                mock_board[8][7] = 6  # 先手角
+            elif i % 3 == 1:
+                mock_board[0][7] = 16 + 7  # 後手飛車
+                mock_board[8][1] = 7  # 先手飛車
+            else:
+                mock_board[0][1] = 16 + 6  # 後手角
+                mock_board[0][7] = 16 + 7  # 後手飛車
+                mock_board[8][7] = 6  # 先手角
+                mock_board[8][1] = 7  # 先手飛車
+
+            mock_record = {
+                "id": f"mock_id_{i}",
+                "eval": min_eval + i * 10,
+                "moves": 50 + i,
+                "boardIdPositions": mock_board,
+                "piecesInHand": mock_hand,
+            }
+            mock_records.append(mock_record)
 
         page_info = f"ページ {page} （モックデータ）"
         board_svg = self._get_default_board_svg()
@@ -566,6 +619,7 @@ class GradioVisualizationServer:
             page_info,
             board_svg,
             record_details,
+            mock_records,
         )
 
 
