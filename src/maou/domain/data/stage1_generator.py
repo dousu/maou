@@ -14,12 +14,11 @@ from typing import Generator
 
 import polars as pl
 
-from maou.domain.board.shogi import (
-    Board,
-    PieceId,
-    Turn,
-    move_to,
+from maou.domain.board.legal_moves import (
+    get_legal_drop_squares_for_piece,
+    get_legal_moves_for_piece,
 )
+from maou.domain.board.shogi import PieceId
 from maou.domain.data.schema import get_stage1_polars_schema
 
 
@@ -145,47 +144,37 @@ class Stage1DataGenerator:
         Returns:
             Record dict for DataFrame construction
         """
-        # Create empty board
-        board = Board()
+        # Use custom legal move generation (no cshogi dependency for move calculation)
+        legal_move_coords = get_legal_moves_for_piece(
+            piece_id=PieceId(pattern.piece_id),
+            row=pattern.row,
+            col=pattern.col,
+        )
 
-        # Create pieces array (81 squares, all empty initially)
-        pieces = [0] * 81
+        # Convert legal moves to reachable squares grid
+        reachable_squares = [[0] * 9 for _ in range(9)]
+        for to_row, to_col in legal_move_coords:
+            reachable_squares[to_row][to_col] = 1
 
-        # Place piece on board
-        square_idx = pattern.row * 9 + pattern.col
-        pieces[square_idx] = pattern.piece_id
+        # Create board positions (only the test piece exists)
+        # No kings needed since we're using custom move generation
+        board_positions = [[0] * 9 for _ in range(9)]
+        board_positions[pattern.row][pattern.col] = (
+            pattern.piece_id
+        )
 
         # Empty pieces in hand
-        pieces_in_hand = ([0] * 7, [0] * 7)
-
-        # Set pieces and pieces in hand using set_pieces
-        board.board.set_pieces(pieces, pieces_in_hand)
-        board.set_turn(Turn.BLACK)
-
-        # Extract legal moves and generate target
-        legal_moves = list(board.get_legal_moves())
-        reachable_squares = [[0] * 9 for _ in range(9)]
-
-        for move in legal_moves:
-            to_square = move_to(move)
-            if to_square < 81:  # Valid board square
-                to_row, to_col = to_square // 9, to_square % 9
-                reachable_squares[to_row][to_col] = 1
-
-        # Extract board data
-        board_df = board.get_board_id_positions_df()
-        board_positions = board_df["boardIdPositions"][
+        pieces_in_hand_flat = [
             0
-        ].to_list()
+        ] * 14  # 7 for Black + 7 for White
 
-        # Get pieces in hand (should be empty for board patterns)
-        pieces_in_hand_result = board.get_pieces_in_hand()
-        pieces_in_hand_flat = list(
-            pieces_in_hand_result[0]
-        ) + list(pieces_in_hand_result[1])
-
-        # Generate ID (Zobrist hash)
-        position_id = board.hash()
+        # Generate ID based on piece position (simple hash)
+        # Format: piece_id * 100 + row * 10 + col
+        position_id = (
+            pattern.piece_id * 100
+            + pattern.row * 10
+            + pattern.col
+        )
 
         return {
             "id": position_id,
@@ -206,45 +195,27 @@ class Stage1DataGenerator:
         Returns:
             Record dict for DataFrame construction
         """
-        # Create empty board
-        board = Board()
+        # Use custom drop move generation (no cshogi dependency)
+        drop_squares = get_legal_drop_squares_for_piece(
+            piece_type_idx=pattern.piece_type_idx
+        )
 
-        # Create empty pieces array (all squares empty)
-        pieces = [0] * 81
+        # Convert drop squares to reachable squares grid
+        reachable_squares = [[0] * 9 for _ in range(9)]
+        for to_row, to_col in drop_squares:
+            reachable_squares[to_row][to_col] = 1
+
+        # Empty board (no pieces on board)
+        board_positions = [[0] * 9 for _ in range(9)]
 
         # Set piece in hand (black player)
         pieces_in_hand_black = [0] * 7
         pieces_in_hand_black[pattern.piece_type_idx] = 1
-        pieces_in_hand = (pieces_in_hand_black, [0] * 7)
+        pieces_in_hand_flat = pieces_in_hand_black + [0] * 7
 
-        # Set pieces and pieces in hand using set_pieces
-        board.board.set_pieces(pieces, pieces_in_hand)
-        board.set_turn(Turn.BLACK)
-
-        # Extract legal moves (drop moves)
-        legal_moves = list(board.get_legal_moves())
-        reachable_squares = [[0] * 9 for _ in range(9)]
-
-        for move in legal_moves:
-            to_square = move_to(move)
-            if to_square < 81:  # Valid board square
-                to_row, to_col = to_square // 9, to_square % 9
-                reachable_squares[to_row][to_col] = 1
-
-        # Extract board data (should be empty)
-        board_df = board.get_board_id_positions_df()
-        board_positions = board_df["boardIdPositions"][
-            0
-        ].to_list()
-
-        # Get pieces in hand
-        pieces_in_hand_result = board.get_pieces_in_hand()
-        pieces_in_hand_flat = list(
-            pieces_in_hand_result[0]
-        ) + list(pieces_in_hand_result[1])
-
-        # Generate ID (Zobrist hash)
-        position_id = board.hash()
+        # Generate ID based on hand piece
+        # Format: 10000 + piece_type_idx (to differentiate from board patterns)
+        position_id = 10000 + pattern.piece_type_idx
 
         return {
             "id": position_id,

@@ -73,6 +73,12 @@ class PieceId(IntEnum):
     RYU = auto()
 
 
+# cshogi piece ID constants (for board setup)
+# Black pieces: 1-14, White pieces: 17-30 (black + 16)
+CSHOGI_BLACK_KING = 8  # cshogi.BKING
+CSHOGI_WHITE_KING = 24  # cshogi.WKING
+
+
 def move16(move: int) -> int:
     return cshogi.move16(move)  # type: ignore
 
@@ -151,6 +157,14 @@ class Board:
 
     def hash(self) -> int:
         return self.board.zobrist_hash()
+
+    def is_ok(self) -> bool:
+        """Check if the board state is valid.
+
+        Returns:
+            bool: True if the board is in a valid state (両方の王が存在する等)
+        """
+        return self.board.is_ok()
 
     def get_board_id_positions_df(self) -> "pl.DataFrame":
         """Get board piece positions as 1-row Polars DataFrame．

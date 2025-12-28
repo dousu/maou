@@ -381,7 +381,7 @@ class SVGBoardRenderer:
 
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
-                f'class="coord" text-anchor="middle">{9 - col}</text>'
+                f'class="coord" text-anchor="middle">{col + 1}</text>'
             )
 
         # 行記号（a-i，左側）
