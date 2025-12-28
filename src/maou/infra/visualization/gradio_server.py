@@ -318,65 +318,49 @@ class GradioVisualizationServer:
                 ],
             )
 
-            # ページ内レコードナビゲーション（新規）
+            # ページ内レコードナビゲーション（ページ境界を跨ぐ）
             next_record_btn.click(
-                fn=lambda idx, records: min(
-                    idx + 1, max(0, len(records) - 1)
-                )
-                if records
-                else 0,
+                fn=self._navigate_next_record,
                 inputs=[
+                    current_page,
                     current_record_index,
                     current_page_records,
+                    page_size,
+                    min_eval,
+                    max_eval,
                 ],
-                outputs=[current_record_index],
-            ).then(
-                fn=self.viz_interface.navigate_within_page,
-                inputs=[
-                    current_page_records,
+                outputs=[
+                    current_page,
                     current_record_index,
-                ],
-                outputs=[board_display, record_details],
-            ).then(
-                fn=lambda idx, records: (
-                    f"Record {idx + 1} / {len(records)}"
-                    if records
-                    else "Record 0 / 0"
-                ),
-                inputs=[
-                    current_record_index,
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
                     current_page_records,
+                    record_indicator,
                 ],
-                outputs=[record_indicator],
             )
 
             prev_record_btn.click(
-                fn=lambda idx, records: max(0, idx - 1)
-                if records
-                else 0,
+                fn=self._navigate_prev_record,
                 inputs=[
+                    current_page,
                     current_record_index,
                     current_page_records,
+                    page_size,
+                    min_eval,
+                    max_eval,
                 ],
-                outputs=[current_record_index],
-            ).then(
-                fn=self.viz_interface.navigate_within_page,
-                inputs=[
-                    current_page_records,
+                outputs=[
+                    current_page,
                     current_record_index,
-                ],
-                outputs=[board_display, record_details],
-            ).then(
-                fn=lambda idx, records: (
-                    f"Record {idx + 1} / {len(records)}"
-                    if records
-                    else "Record 0 / 0"
-                ),
-                inputs=[
-                    current_record_index,
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
                     current_page_records,
+                    record_indicator,
                 ],
-                outputs=[record_indicator],
             )
 
         return demo
@@ -619,6 +603,268 @@ class GradioVisualizationServer:
             board_svg,
             record_details,
             mock_records,
+        )
+
+    def _calculate_total_pages(
+        self,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page_size: int,
+    ) -> int:
+        """総ページ数を計算する．
+
+        Args:
+            min_eval: 最小評価値（HCPEのみ）
+            max_eval: 最大評価値（HCPEのみ）
+            page_size: ページサイズ
+
+        Returns:
+            総ページ数
+        """
+        if self.supports_eval_search:
+            # HCPEの場合は評価値範囲でカウント
+            total_records = self.search_index.count_eval_range(
+                min_eval, max_eval
+            )
+        else:
+            # その他のデータ型は全レコード
+            total_records = self.search_index.total_records()
+
+        if total_records == 0:
+            return 1
+
+        return (total_records + page_size - 1) // page_size
+
+    def _navigate_next_record(
+        self,
+        current_page: int,
+        current_record_index: int,
+        current_page_records: List[Dict[str, Any]],
+        page_size: int,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+    ) -> Tuple[
+        int,
+        int,
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+        str,
+    ]:
+        """次のレコードへナビゲート（ページ境界を跨ぐ）．
+
+        Args:
+            current_page: 現在のページ番号
+            current_record_index: 現在のレコードインデックス
+            current_page_records: 現在のページのレコードキャッシュ
+            page_size: ページサイズ
+            min_eval: 最小評価値（HCPEのみ）
+            max_eval: 最大評価値（HCPEのみ）
+
+        Returns:
+            (new_page, new_index, table_data, page_info,
+             board_svg, details, cached_records, record_indicator)
+        """
+        num_records = len(current_page_records)
+        total_pages = self._calculate_total_pages(
+            min_eval, max_eval, page_size
+        )
+
+        # ページ内で次のレコードがある場合
+        if current_record_index < num_records - 1:
+            new_index = current_record_index + 1
+            board_svg, details = (
+                self.viz_interface.navigate_within_page(
+                    current_page_records, new_index
+                )
+            )
+            record_indicator = (
+                f"Record {new_index + 1} / {num_records}"
+            )
+
+            # ページは変わらないので，現在のデータを返す
+            table_data = [
+                self.viz_interface.renderer.format_table_row(
+                    i + (current_page - 1) * page_size + 1,
+                    record,
+                )
+                for i, record in enumerate(current_page_records)
+            ]
+            page_info_str = (
+                f"ページ {current_page} / {total_pages}"
+            )
+
+            return (
+                current_page,
+                new_index,
+                table_data,
+                page_info_str,
+                board_svg,
+                details,
+                current_page_records,
+                record_indicator,
+            )
+
+        # ページ境界：次のページへ移動
+        next_page = current_page + 1
+        if next_page > total_pages:
+            # 最後のページなら最初のページに循環
+            next_page = 1
+
+        # 新しいページのデータを取得
+        paginate_fn = (
+            self._search_and_cache
+            if self.supports_eval_search
+            else self._paginate_all_data
+        )
+
+        (
+            table_data,
+            page_info_str,
+            board_svg,
+            details,
+            cached_records,
+            _,  # record_indexは0にリセットされる
+            record_indicator,
+        ) = paginate_fn(
+            min_eval, max_eval, next_page, page_size
+        )
+
+        return (
+            next_page,
+            0,  # 新しいページの最初のレコード
+            table_data,
+            page_info_str,
+            board_svg,
+            details,
+            cached_records,
+            record_indicator,
+        )
+
+    def _navigate_prev_record(
+        self,
+        current_page: int,
+        current_record_index: int,
+        current_page_records: List[Dict[str, Any]],
+        page_size: int,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+    ) -> Tuple[
+        int,
+        int,
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+        str,
+    ]:
+        """前のレコードへナビゲート（ページ境界を跨ぐ）．
+
+        Args:
+            current_page: 現在のページ番号
+            current_record_index: 現在のレコードインデックス
+            current_page_records: 現在のページのレコードキャッシュ
+            page_size: ページサイズ
+            min_eval: 最小評価値（HCPEのみ）
+            max_eval: 最大評価値（HCPEのみ）
+
+        Returns:
+            (new_page, new_index, table_data, page_info,
+             board_svg, details, cached_records, record_indicator)
+        """
+        num_records = len(current_page_records)
+        total_pages = self._calculate_total_pages(
+            min_eval, max_eval, page_size
+        )
+
+        # ページ内で前のレコードがある場合
+        if current_record_index > 0:
+            new_index = current_record_index - 1
+            board_svg, details = (
+                self.viz_interface.navigate_within_page(
+                    current_page_records, new_index
+                )
+            )
+            record_indicator = (
+                f"Record {new_index + 1} / {num_records}"
+            )
+
+            # ページは変わらないので，現在のデータを返す
+            table_data = [
+                self.viz_interface.renderer.format_table_row(
+                    i + (current_page - 1) * page_size + 1,
+                    record,
+                )
+                for i, record in enumerate(current_page_records)
+            ]
+            page_info_str = (
+                f"ページ {current_page} / {total_pages}"
+            )
+
+            return (
+                current_page,
+                new_index,
+                table_data,
+                page_info_str,
+                board_svg,
+                details,
+                current_page_records,
+                record_indicator,
+            )
+
+        # ページ境界：前のページへ移動
+        prev_page = current_page - 1
+        if prev_page < 1:
+            # 最初のページなら最後のページに循環
+            prev_page = total_pages
+
+        # 新しいページのデータを取得
+        paginate_fn = (
+            self._search_and_cache
+            if self.supports_eval_search
+            else self._paginate_all_data
+        )
+
+        (
+            table_data,
+            page_info_str,
+            board_svg,
+            details,
+            cached_records,
+            _,  # record_indexは最後に設定される
+            _,  # record_indicatorは後で更新
+        ) = paginate_fn(
+            min_eval, max_eval, prev_page, page_size
+        )
+
+        # 新しいページの最後のレコードを表示
+        new_num_records = len(cached_records)
+        if new_num_records > 0:
+            new_index = new_num_records - 1
+            board_svg, details = (
+                self.viz_interface.navigate_within_page(
+                    cached_records, new_index
+                )
+            )
+            record_indicator = (
+                f"Record {new_index + 1} / {new_num_records}"
+            )
+        else:
+            new_index = 0
+            record_indicator = "Record 0 / 0"
+
+        return (
+            prev_page,
+            new_index,
+            table_data,
+            page_info_str,
+            board_svg,
+            details,
+            cached_records,
+            record_indicator,
         )
 
 

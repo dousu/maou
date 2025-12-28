@@ -204,12 +204,9 @@ class SVGBoardRenderer:
         for row in range(9):
             for col in range(9):
                 piece_id = board_id_positions[row][col]
-
-                if piece_id == PieceId.EMPTY:
-                    continue
-
-                # マスのハイライト（該当する場合）
                 square_idx = row * 9 + col
+
+                # マスのハイライト（駒の有無に関係なく描画）
                 if square_idx in highlight_set:
                     x_rect = (
                         self.MARGIN
@@ -222,6 +219,10 @@ class SVGBoardRenderer:
                         f'width="{self.CELL_SIZE}" height="{self.CELL_SIZE}" '
                         f'fill="{self.COLOR_HIGHLIGHT}" opacity="0.5"/>'
                     )
+
+                # 駒がない場合はスキップ
+                if piece_id == PieceId.EMPTY:
+                    continue
 
                 # 駒の描画
                 is_white = (
@@ -322,6 +323,13 @@ class SVGBoardRenderer:
             is_black: 先手（黒）の持ち駒かどうか
         """
         parts = []
+
+        # 持ち駒エリアの背景（視認性向上のため）
+        parts.append(
+            f'<rect x="{x_base}" y="{y_base}" '
+            f'width="{self.HAND_AREA_WIDTH}" height="{self.BOARD_HEIGHT}" '
+            f'fill="#ffffff" stroke="{self.COLOR_GRID}" stroke-width="1" opacity="0.9"/>'
+        )
 
         # タイトル
         parts.append(
