@@ -220,26 +220,25 @@ class GradioVisualizationServer:
             current_page_records = gr.State(value=[])
             current_record_index = gr.State(value=0)
 
-            # 非HCPEデータの場合，初回表示時にページ1をロード
-            if not self.supports_eval_search:
-                demo.load(
-                    fn=self._paginate_all_data,
-                    inputs=[
-                        min_eval,
-                        max_eval,
-                        current_page,
-                        page_size,
-                    ],
-                    outputs=[
-                        results_table,
-                        page_info,
-                        board_display,
-                        record_details,
-                        current_page_records,  # キャッシュ
-                        current_record_index,  # インデックス
-                        record_indicator,  # インジケーター
-                    ],
-                )
+            # 初回表示時にページ1をロード（全データ型で実行）
+            demo.load(
+                fn=self._paginate_all_data,
+                inputs=[
+                    min_eval,
+                    max_eval,
+                    current_page,
+                    page_size,
+                ],
+                outputs=[
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
+                    current_page_records,  # キャッシュ
+                    current_record_index,  # インデックス
+                    record_indicator,  # インジケーター
+                ],
+            )
 
             id_search_btn.click(
                 fn=self.viz_interface.search_by_id,
