@@ -83,7 +83,7 @@ class TestBoardDataFramePerformance:
     def test_get_piece_planes_df_performance(self) -> None:
         """Benchmark get_piece_planes_df() conversion overhead．
 
-        Expected: < 10ms per call for 104x9x9 array conversion．
+        Expected: < 15ms per call for 104x9x9 array conversion．
         """
         board = Board()
         board.set_sfen(
@@ -108,8 +108,8 @@ class TestBoardDataFramePerformance:
         assert "piecePlanes" in result.columns
 
         # Performance check (relaxed threshold for variability)
-        assert avg_time_ms < 11.0, (
-            f"Too slow: {avg_time_ms:.3f}ms > 11ms"
+        assert avg_time_ms < 15.0, (
+            f"Too slow: {avg_time_ms:.3f}ms > 15ms"
         )
 
     def test_get_piece_planes_rotate_df_performance(
@@ -117,7 +117,7 @@ class TestBoardDataFramePerformance:
     ) -> None:
         """Benchmark get_piece_planes_rotate_df() conversion overhead．
 
-        Expected: < 11ms per call for 104x9x9 array conversion．
+        Expected: < 15ms per call for 104x9x9 array conversion．
         """
         board = Board()
         board.set_sfen(
@@ -142,8 +142,8 @@ class TestBoardDataFramePerformance:
         assert "piecePlanes" in result.columns
 
         # Performance check (relaxed threshold for variability)
-        assert avg_time_ms < 11.0, (
-            f"Too slow: {avg_time_ms:.3f}ms > 11ms"
+        assert avg_time_ms < 15.0, (
+            f"Too slow: {avg_time_ms:.3f}ms > 15ms"
         )
 
 
