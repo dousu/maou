@@ -5,7 +5,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from maou.app.visualization.board_display import (
     BoardDisplayService,
@@ -95,12 +95,19 @@ class VisualizationInterface:
             record
         )
 
-        # レコード詳細
-        record_details = {
-            "id": record.get("id"),
-            "eval": record.get("eval"),
-            "moves": record.get("moves"),
-        }
+        # レコード詳細（データ型に応じて調整）
+        if self.array_type == "hcpe":
+            record_details = {
+                "id": record.get("id"),
+                "eval": record.get("eval"),
+                "moves": record.get("moves"),
+            }
+        else:
+            # stage1, stage2, preprocessing: IDのみ
+            record_details = {
+                "id": record.get("id"),
+                "array_type": self.array_type,
+            }
 
         logger.info(
             f"Successfully retrieved and rendered record: {record_id}"
@@ -110,24 +117,28 @@ class VisualizationInterface:
 
     def search_by_eval_range(
         self,
-        min_eval: int,
-        max_eval: int,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
         page: int,
         page_size: int,
     ) -> Tuple[List[List[Any]], str, str, Dict[str, Any]]:
         """評価値範囲で検索し，結果を表示．
 
         Args:
-            min_eval: 最小評価値
-            max_eval: 最大評価値
+            min_eval: 最小評価値（Noneで全データ取得）
+            max_eval: 最大評価値（Noneで全データ取得）
             page: ページ番号（1始まり）
             page_size: ページサイズ
 
         Returns:
             (results_table_data, page_info, first_board_svg, first_record_details)
         """
-        # パラメータバリデーション
-        if min_eval > max_eval:
+        # パラメータバリデーション（両方がNoneでない場合のみチェック）
+        if (
+            min_eval is not None
+            and max_eval is not None
+            and min_eval > max_eval
+        ):
             return (
                 [],
                 "エラー: 最小評価値 > 最大評価値",
@@ -155,27 +166,47 @@ class VisualizationInterface:
                 {},
             )
 
-        # テーブルデータ作成
-        table_data = [
-            [
-                i + offset + 1,  # インデックス（1始まり）
-                record.get("id", ""),
-                record.get("eval", 0),
-                record.get("moves", 0),
+        # テーブルデータ作成（データ型に応じてフィールドを調整）
+        if self.array_type == "hcpe":
+            # HCPEデータ: ID, eval, moves
+            table_data = [
+                [
+                    i + offset + 1,  # インデックス（1始まり）
+                    record.get("id", ""),
+                    record.get("eval", 0),
+                    record.get("moves", 0),
+                ]
+                for i, record in enumerate(records)
             ]
-            for i, record in enumerate(records)
-        ]
+        else:
+            # stage1, stage2, preprocessing: IDのみ
+            table_data = [
+                [
+                    i + offset + 1,  # インデックス（1始まり）
+                    record.get("id", ""),
+                ]
+                for i, record in enumerate(records)
+            ]
 
         # 最初のレコードのボード描画
         first_record = records[0]
         first_board_svg = self.board_display.render_from_record(
             first_record
         )
-        first_record_details = {
-            "id": first_record.get("id"),
-            "eval": first_record.get("eval"),
-            "moves": first_record.get("moves"),
-        }
+
+        # レコード詳細（データ型に応じて調整）
+        if self.array_type == "hcpe":
+            first_record_details = {
+                "id": first_record.get("id"),
+                "eval": first_record.get("eval"),
+                "moves": first_record.get("moves"),
+            }
+        else:
+            # stage1, stage2, preprocessing: IDのみ
+            first_record_details = {
+                "id": first_record.get("id"),
+                "array_type": self.array_type,
+            }
 
         # ページ情報
         total_matches = self.search_index.count_eval_range(

@@ -109,14 +109,20 @@ class SearchIndex:
         """評価値範囲でレコードを検索．
 
         Args:
-            min_eval: 最小評価値（Noneで-∞）
-            max_eval: 最大評価値（Noneで+∞）
+            min_eval: 最小評価値（Noneで-∞，または全データ取得）
+            max_eval: 最大評価値（Noneで+∞，または全データ取得）
             offset: スキップする件数
             limit: 取得する最大件数
 
         Returns:
             [(file_index, row_number), ...]のリスト
+
+        Note:
+            非HCPEデータの場合，min_eval/max_evalの両方がNoneの場合のみ
+            全データのページネーションとして使用可能．
+            評価値フィルタを指定するとValueErrorが発生する．
         """
+        # 非HCPEデータで評価値フィルタを使おうとした場合はエラー
         if self.array_type != "hcpe" and (
             min_eval is not None or max_eval is not None
         ):
@@ -124,6 +130,9 @@ class SearchIndex:
                 f"Eval range search only supported for HCPE data, "
                 f"got: {self.array_type}"
             )
+
+        # 非HCPEデータの場合，min_eval=None, max_eval=Noneで全データを取得
+        # （ページネーション用）
 
         # Rustの型に合わせてi16に変換（必要に応じて）
         min_eval_i16 = (
@@ -151,12 +160,19 @@ class SearchIndex:
         """評価値範囲内のレコード総数をカウント．
 
         Args:
-            min_eval: 最小評価値（Noneで-∞）
-            max_eval: 最大評価値（Noneで+∞）
+            min_eval: 最小評価値（Noneで-∞，または全データカウント）
+            max_eval: 最大評価値（Noneで+∞，または全データカウント）
 
         Returns:
             レコード数
+
+        Note:
+            非HCPEデータの場合，min_eval/max_evalの両方がNoneの場合のみ
+            全データのカウントとして使用可能（ページネーション用）．
+            評価値フィルタを指定すると0を返す．
         """
+        # 非HCPEデータで評価値フィルタを使った場合は0を返す
+        # （min_eval=None, max_eval=Noneの場合は全データカウント）
         if self.array_type != "hcpe" and (
             min_eval is not None or max_eval is not None
         ):

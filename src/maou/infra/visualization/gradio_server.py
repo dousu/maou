@@ -46,6 +46,9 @@ class GradioVisualizationServer:
         self.use_mock_data = use_mock_data
         self.renderer = SVGBoardRenderer()
 
+        # 評価値検索をサポートするかどうかを判定
+        self.supports_eval_search = self._supports_eval_search()
+
         # SearchIndexを初期化
         self.search_index = SearchIndex.build(
             file_paths=file_paths,
@@ -71,6 +74,14 @@ class GradioVisualizationServer:
             f"{len(file_paths)} files, type={array_type}, "
             f"{self.search_index.total_records()} records indexed"
         )
+
+    def _supports_eval_search(self) -> bool:
+        """評価値範囲検索をサポートするデータ型かどうかを判定．
+
+        Returns:
+            bool: hcpeの場合はTrue，それ以外はFalse
+        """
+        return self.array_type == "hcpe"
 
     def create_demo(self) -> gr.Blocks:
         """Gradio UIデモを作成．
@@ -110,21 +121,29 @@ class GradioVisualizationServer:
                             "ID検索", variant="primary"
                         )
 
-                    # 評価値範囲検索
-                    with gr.Group():
-                        gr.Markdown("### 評価値範囲検索")
-                        min_eval = gr.Number(
-                            label="最小評価値",
-                            value=-1000,
-                            precision=0,
-                        )
-                        max_eval = gr.Number(
-                            label="最大評価値",
-                            value=1000,
-                            precision=0,
-                        )
+                    # 評価値範囲検索（HCPEデータのみ）
+                    if self.supports_eval_search:
+                        with gr.Group():
+                            gr.Markdown("### 評価値範囲検索")
+                            min_eval = gr.Number(
+                                label="最小評価値",
+                                value=-1000,
+                                precision=0,
+                            )
+                            max_eval = gr.Number(
+                                label="最大評価値",
+                                value=1000,
+                                precision=0,
+                            )
+                            eval_search_btn = gr.Button(
+                                "範囲検索", variant="secondary"
+                            )
+                    else:
+                        # 評価値検索非対応の場合はダミーコンポーネント
+                        min_eval = gr.Number(visible=False)
+                        max_eval = gr.Number(visible=False)
                         eval_search_btn = gr.Button(
-                            "範囲検索", variant="secondary"
+                            visible=False
                         )
 
                     # ページネーション
@@ -170,19 +189,46 @@ class GradioVisualizationServer:
 
                     # 検索結果テーブル
                     with gr.Accordion("検索結果", open=False):
-                        results_table = gr.Dataframe(
-                            headers=[
+                        # データ型に応じたヘッダーを設定
+                        if self.supports_eval_search:
+                            table_headers = [
                                 "インデックス",
                                 "ID",
                                 "評価値",
                                 "手数",
-                            ],
+                            ]
+                        else:
+                            table_headers = [
+                                "インデックス",
+                                "ID",
+                            ]
+
+                        results_table = gr.Dataframe(
+                            headers=table_headers,
                             label="結果一覧",
                             interactive=False,
                         )
 
             # イベントハンドラ
             current_page = gr.State(value=1)
+
+            # 非HCPEデータの場合，初回表示時にページ1をロード
+            if not self.supports_eval_search:
+                demo.load(
+                    fn=self._paginate_all_data,
+                    inputs=[
+                        min_eval,
+                        max_eval,
+                        current_page,
+                        page_size,
+                    ],
+                    outputs=[
+                        results_table,
+                        page_info,
+                        board_display,
+                        record_details,
+                    ],
+                )
 
             id_search_btn.click(
                 fn=self.viz_interface.search_by_id,
@@ -207,12 +253,22 @@ class GradioVisualizationServer:
             )
 
             # ページネーション
+            # HCPEと非HCPEで異なるページネーション関数を使用
+            if self.supports_eval_search:
+                # HCPE: 評価値範囲付きページネーション
+                paginate_fn = (
+                    self.viz_interface.search_by_eval_range
+                )
+            else:
+                # stage1等: 全データのページネーション（評価値範囲なし）
+                paginate_fn = self._paginate_all_data
+
             next_btn.click(
                 fn=lambda page: page + 1,
                 inputs=[current_page],
                 outputs=[current_page],
             ).then(
-                fn=self.viz_interface.search_by_eval_range,
+                fn=paginate_fn,
                 inputs=[
                     min_eval,
                     max_eval,
@@ -232,7 +288,7 @@ class GradioVisualizationServer:
                 inputs=[current_page],
                 outputs=[current_page],
             ).then(
-                fn=self.viz_interface.search_by_eval_range,
+                fn=paginate_fn,
                 inputs=[
                     min_eval,
                     max_eval,
@@ -248,6 +304,36 @@ class GradioVisualizationServer:
             )
 
         return demo
+
+    def _paginate_all_data(
+        self,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page: int,
+        page_size: int,
+    ) -> Tuple[List[List[Any]], str, str, Dict[str, Any]]:
+        """全データをページネーション（評価値フィルタなし）．
+
+        stage1, stage2, preprocessingなどの非HCPEデータ用．
+        min_eval, max_evalパラメータは無視される（Gradio UIの互換性のため）．
+
+        Args:
+            min_eval: 無視される（互換性のため，常にNoneとして扱う）
+            max_eval: 無視される（互換性のため，常にNoneとして扱う）
+            page: ページ番号（1始まり）
+            page_size: ページサイズ
+
+        Returns:
+            (results_table_data, page_info, first_board_svg, first_record_details)
+        """
+        # 評価値パラメータを明示的にNoneにして全データを取得
+        # （引数のmin_eval, max_evalは無視）
+        return self.viz_interface.search_by_eval_range(
+            min_eval=None,  # 評価値フィルタなし
+            max_eval=None,  # 評価値フィルタなし
+            page=page,
+            page_size=page_size,
+        )
 
     def _get_default_board_svg(self) -> str:
         """デフォルトの盤面SVGを生成（平手初期配置）．"""
