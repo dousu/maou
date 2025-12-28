@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 @click.command("visualize")
 @click.option(
     "--input-dir",
-    help="データファイルを含むディレクトリパス．",
+    help="データファイルを含むディレクトリパス（--use-mock-dataの場合は不要）．",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
 @click.option(
     "--input-files",
-    help="カンマ区切りのデータファイルパスリスト．",
+    help="カンマ区切りのデータファイルパスリスト（--use-mock-dataの場合は不要）．",
     type=str,
     required=False,
 )
@@ -88,6 +88,9 @@ def visualize(
     """Gradioデータ可視化サーバーを起動する．
 
     Examples:
+        # モックデータでUIをテスト
+        maou visualize --use-mock-data --array-type hcpe
+
         # ディレクトリからHCPEデータを可視化
         maou visualize --input-dir ./data/hcpe --array-type hcpe
 
@@ -115,12 +118,19 @@ def visualize(
         raise click.ClickException(error_msg) from e
 
     # ファイルパス解決
-    file_paths = _resolve_file_paths(input_dir, input_files)
-
-    if not file_paths:
-        raise click.ClickException(
-            "No input files found. Specify --input-dir or --input-files."
+    if use_mock_data:
+        # モックデータモードの場合はダミーファイルパスを使用
+        file_paths = [Path("mock_data.feather")]
+        app_logger.info(
+            "Using mock data mode - no actual files will be read"
         )
+    else:
+        file_paths = _resolve_file_paths(input_dir, input_files)
+
+        if not file_paths:
+            raise click.ClickException(
+                "No input files found. Specify --input-dir or --input-files."
+            )
 
     app_logger.info(
         f"Launching visualization server with {len(file_paths)} files"
