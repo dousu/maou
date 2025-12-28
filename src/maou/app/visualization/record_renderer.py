@@ -1,0 +1,590 @@
+"""レコード描画のStrategy Pattern実装（アプリケーション層）．
+
+このモジュールは，array_type固有の描画戦略を定義するRecordRendererと
+その具象実装（HCPE, Stage1, Stage2, Preprocessing）を提供する．
+"""
+
+import logging
+import numpy as np
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Type
+
+from maou.domain.board.shogi import Board, PieceId
+from maou.domain.visualization.board_renderer import (
+    BoardPosition,
+    SVGBoardRenderer,
+)
+from maou.domain.visualization.move_label_converter import (
+    MoveLabelConverter,
+)
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+class RecordRenderer(ABC):
+    """array_type固有の描画戦略を定義する抽象基底クラス．
+
+    各array_type（HCPE, Stage1, Stage2, Preprocessing）は，
+    このクラスを継承して型固有の描画ロジックを実装する．
+    """
+
+    def __init__(
+        self,
+        board_renderer: SVGBoardRenderer,
+        move_converter: MoveLabelConverter,
+    ):
+        """RecordRendererを初期化する．
+
+        Args:
+            board_renderer: SVG描画エンジン
+            move_converter: 駒移動ラベル変換サービス
+        """
+        self.board_renderer = board_renderer
+        self.move_converter = move_converter
+
+    @abstractmethod
+    def render_board(self, record: Dict[str, Any]) -> str:
+        """盤面SVGを型固有の拡張込みで描画する．
+
+        Args:
+            record: レコードデータ（boardIdPositions, piecesInHandを含む）
+
+        Returns:
+            SVG文字列
+        """
+        pass
+
+    @abstractmethod
+    def extract_display_fields(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """UIに表示するフィールドを抽出する．
+
+        Args:
+            record: レコードデータ
+
+        Returns:
+            表示フィールドの辞書
+        """
+        pass
+
+    @abstractmethod
+    def get_table_columns(self) -> List[str]:
+        """検索結果テーブルのカラム名を取得する．
+
+        Returns:
+            カラム名のリスト
+        """
+        pass
+
+    @abstractmethod
+    def format_table_row(
+        self, index: int, record: Dict[str, Any]
+    ) -> List[Any]:
+        """テーブル行データをフォーマットする．
+
+        Args:
+            index: 行インデックス（表示用）
+            record: レコードデータ
+
+        Returns:
+            セル値のリスト
+        """
+        pass
+
+    def _create_board_position(
+        self, record: Dict[str, Any]
+    ) -> BoardPosition:
+        """レコードからBoardPositionを作成する共通ヘルパー．
+
+        Args:
+            record: レコードデータ
+
+        Returns:
+            BoardPosition インスタンス
+        """
+        return BoardPosition(
+            board_id_positions=record.get("boardIdPositions", []),
+            pieces_in_hand=record.get("piecesInHand", []),
+        )
+
+    def _create_board_from_record(
+        self, record: Dict[str, Any]
+    ) -> Board:
+        """レコードからBoardインスタンスを再構築する．
+
+        boardIdPositions（9x9配列）とpiecesInHand（14要素配列）から
+        cshogi.Boardインスタンスを生成する．
+
+        Args:
+            record: レコードデータ
+
+        Returns:
+            Board インスタンス
+
+        Note:
+            この実装は簡易版であり，完全なHCP変換は今後の改善課題．
+            現在はSFEN形式経由での変換を試みる．
+        """
+        board = Board()
+
+        # boardIdPositions と piecesInHand から SFEN 形式を構築
+        try:
+            sfen = self._convert_to_sfen(
+                board_id_positions=record.get(
+                    "boardIdPositions", []
+                ),
+                pieces_in_hand=record.get("piecesInHand", []),
+            )
+            board.set_sfen(sfen)
+        except Exception as e:
+            logger.warning(
+                f"Failed to reconstruct board from record: {e}"
+            )
+            # フォールバック: 初期局面
+            board.set_sfen(
+                "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+            )
+
+        return board
+
+    def _convert_to_sfen(
+        self,
+        board_id_positions: List[List[int]],
+        pieces_in_hand: List[int],
+    ) -> str:
+        """boardIdPositionsとpiecesInHandからSFEN形式に変換する．
+
+        Args:
+            board_id_positions: 9x9の駒配置（PieceId値）
+            pieces_in_hand: 持ち駒配列（14要素）
+
+        Returns:
+            SFEN形式の文字列
+
+        Note:
+            これは簡易実装であり，正確なSFEN生成には
+            駒の所属（先手/後手）判定が必要．
+            現状は基本的な変換のみ実装．
+        """
+        # PieceId → SFEN文字マッピング
+        piece_to_sfen = {
+            PieceId.EMPTY: "",
+            PieceId.FU: "P",
+            PieceId.KY: "L",
+            PieceId.KE: "N",
+            PieceId.GI: "S",
+            PieceId.KI: "G",
+            PieceId.KA: "B",
+            PieceId.HI: "R",
+            PieceId.OU: "K",
+            PieceId.TO: "+P",
+            PieceId.NKY: "+L",
+            PieceId.NKE: "+N",
+            PieceId.NGI: "+S",
+            PieceId.UMA: "+B",
+            PieceId.RYU: "+R",
+        }
+
+        # 盤面をSFEN形式に変換（簡易版）
+        # 注: 現在は先手/後手の区別を完全には実装していない
+        ranks = []
+        for row in board_id_positions:
+            rank_str = ""
+            empty_count = 0
+            for piece_id in row:
+                if piece_id == PieceId.EMPTY:
+                    empty_count += 1
+                else:
+                    if empty_count > 0:
+                        rank_str += str(empty_count)
+                        empty_count = 0
+                    piece_char = piece_to_sfen.get(
+                        piece_id, ""
+                    )
+                    rank_str += piece_char
+
+            if empty_count > 0:
+                rank_str += str(empty_count)
+
+            ranks.append(rank_str if rank_str else "9")
+
+        board_sfen = "/".join(ranks)
+
+        # 持ち駒（簡易版: 先手のみ）
+        hand_sfen = "-"
+        if len(pieces_in_hand) >= 7:
+            hand_parts = []
+            piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
+            for i, count in enumerate(pieces_in_hand[:7]):
+                if count > 0:
+                    if count > 1:
+                        hand_parts.append(
+                            f"{count}{piece_chars[i]}"
+                        )
+                    else:
+                        hand_parts.append(piece_chars[i])
+            if hand_parts:
+                hand_sfen = "".join(hand_parts)
+
+        # 手番（デフォルト: 先手）
+        turn = "b"
+
+        # 手数（デフォルト: 1）
+        move_count = "1"
+
+        return f"{board_sfen} {turn} {hand_sfen} {move_count}"
+
+
+class HCPERecordRenderer(RecordRenderer):
+    """HCPE（棋譜データ）の描画戦略．
+
+    評価値（eval）と手数（moves）を表示する．
+    """
+
+    def render_board(self, record: Dict[str, Any]) -> str:
+        """盤面SVGを描画する（ハイライトなし）．
+
+        Args:
+            record: HCPEレコードデータ
+
+        Returns:
+            SVG文字列
+        """
+        position = self._create_board_position(record)
+        return self.board_renderer.render(position)
+
+    def extract_display_fields(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """表示フィールドを抽出する．
+
+        Args:
+            record: HCPEレコードデータ
+
+        Returns:
+            id, eval, movesを含む辞書
+        """
+        return {
+            "id": record.get("id"),
+            "eval": record.get("eval"),
+            "moves": record.get("moves"),
+        }
+
+    def get_table_columns(self) -> List[str]:
+        """テーブルカラム名を取得する．
+
+        Returns:
+            ["Index", "ID", "Eval", "Moves"]
+        """
+        return ["Index", "ID", "Eval", "Moves"]
+
+    def format_table_row(
+        self, index: int, record: Dict[str, Any]
+    ) -> List[Any]:
+        """テーブル行をフォーマットする．
+
+        Args:
+            index: 行インデックス
+            record: HCPEレコードデータ
+
+        Returns:
+            [index, id, eval, moves]のリスト
+        """
+        return [
+            index,
+            record.get("id"),
+            record.get("eval"),
+            record.get("moves"),
+        ]
+
+
+class Stage1RecordRenderer(RecordRenderer):
+    """Stage1（到達可能マス）の描画戦略．
+
+    reachableSquares（9x9 binary）をハイライト表示する．
+    """
+
+    def render_board(self, record: Dict[str, Any]) -> str:
+        """盤面SVGを描画する（到達可能マスをハイライト）．
+
+        Args:
+            record: Stage1レコードデータ
+
+        Returns:
+            SVG文字列
+        """
+        # reachableSquares を抽出してハイライト
+        reachable = record.get("reachableSquares", [])
+        highlight_squares = self._extract_reachable_squares(
+            reachable
+        )
+
+        position = self._create_board_position(record)
+        return self.board_renderer.render(
+            position, highlight_squares
+        )
+
+    def _extract_reachable_squares(
+        self, reachable: List[List[int]]
+    ) -> List[int]:
+        """9x9 binary matrix → square indices (0-80)に変換する．
+
+        Args:
+            reachable: 9x9のバイナリ配列
+
+        Returns:
+            到達可能なマスのインデックスリスト（0-80）
+        """
+        squares = []
+        for row in range(min(9, len(reachable))):
+            for col in range(min(9, len(reachable[row]))):
+                if reachable[row][col] == 1:
+                    squares.append(row * 9 + col)
+        return squares
+
+    def extract_display_fields(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """表示フィールドを抽出する．
+
+        Args:
+            record: Stage1レコードデータ
+
+        Returns:
+            id, reachable_count, array_typeを含む辞書
+        """
+        reachable = record.get("reachableSquares", [])
+        num_reachable = sum(sum(row) for row in reachable)
+
+        return {
+            "id": record.get("id"),
+            "reachable_count": num_reachable,
+            "array_type": "stage1",
+        }
+
+    def get_table_columns(self) -> List[str]:
+        """テーブルカラム名を取得する．
+
+        Returns:
+            ["Index", "ID", "Reachable Squares"]
+        """
+        return ["Index", "ID", "Reachable Squares"]
+
+    def format_table_row(
+        self, index: int, record: Dict[str, Any]
+    ) -> List[Any]:
+        """テーブル行をフォーマットする．
+
+        Args:
+            index: 行インデックス
+            record: Stage1レコードデータ
+
+        Returns:
+            [index, id, reachable_count]のリスト
+        """
+        reachable = record.get("reachableSquares", [])
+        num_reachable = sum(sum(row) for row in reachable)
+        return [index, record.get("id"), num_reachable]
+
+
+class Stage2RecordRenderer(RecordRenderer):
+    """Stage2（合法手）の描画戦略．
+
+    legalMovesLabel（2187 binary）をUSI表記で表示する．
+    """
+
+    def render_board(self, record: Dict[str, Any]) -> str:
+        """盤面SVGを描画する（ハイライトなし）．
+
+        Args:
+            record: Stage2レコードデータ
+
+        Returns:
+            SVG文字列
+        """
+        position = self._create_board_position(record)
+        return self.board_renderer.render(position)
+
+    def extract_display_fields(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """表示フィールドを抽出する．
+
+        legalMovesLabelからUSI表記の合法手リストを生成する．
+
+        Args:
+            record: Stage2レコードデータ
+
+        Returns:
+            id, legal_moves_count, legal_moves, array_typeを含む辞書
+        """
+        # legalMovesLabel (2187 binary) → USI notation
+        legal_labels = record.get("legalMovesLabel", [])
+        legal_indices = [
+            i for i, val in enumerate(legal_labels) if val == 1
+        ]
+
+        # Board 再構築
+        board = self._create_board_from_record(record)
+        usi_moves = self.move_converter.convert_labels_to_usi_list(
+            board, legal_indices, limit=20
+        )
+
+        return {
+            "id": record.get("id"),
+            "legal_moves_count": len(legal_indices),
+            "legal_moves": ", ".join(usi_moves[:10]),  # 最初の10手
+            "array_type": "stage2",
+        }
+
+    def get_table_columns(self) -> List[str]:
+        """テーブルカラム名を取得する．
+
+        Returns:
+            ["Index", "ID", "Legal Moves Count"]
+        """
+        return ["Index", "ID", "Legal Moves Count"]
+
+    def format_table_row(
+        self, index: int, record: Dict[str, Any]
+    ) -> List[Any]:
+        """テーブル行をフォーマットする．
+
+        Args:
+            index: 行インデックス
+            record: Stage2レコードデータ
+
+        Returns:
+            [index, id, legal_moves_count]のリスト
+        """
+        legal_labels = record.get("legalMovesLabel", [])
+        num_legal = sum(legal_labels)
+        return [index, record.get("id"), num_legal]
+
+
+class PreprocessingRecordRenderer(RecordRenderer):
+    """Preprocessing（訓練データ）の描画戦略．
+
+    moveLabel（2187 probabilities）を上位USI手として表示する．
+    """
+
+    def render_board(self, record: Dict[str, Any]) -> str:
+        """盤面SVGを描画する（ハイライトなし）．
+
+        Args:
+            record: Preprocessingレコードデータ
+
+        Returns:
+            SVG文字列
+        """
+        position = self._create_board_position(record)
+        return self.board_renderer.render(position)
+
+    def extract_display_fields(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """表示フィールドを抽出する．
+
+        moveLabelから確率上位のUSI手リストを生成する．
+
+        Args:
+            record: Preprocessingレコードデータ
+
+        Returns:
+            id, result_value, top_moves, array_typeを含む辞書
+        """
+        # moveLabel (2187 probabilities) → Top-K USI moves
+        move_labels = record.get("moveLabel", [])
+
+        # Board 再構築
+        board = self._create_board_from_record(record)
+        top_moves = (
+            self.move_converter.convert_probability_labels_to_usi(
+                board, move_labels, threshold=0.01, top_k=5
+            )
+        )
+
+        return {
+            "id": record.get("id"),
+            "result_value": record.get("resultValue"),
+            "top_moves": ", ".join(
+                f"{usi}({prob:.1%})" for usi, prob in top_moves
+            ),
+            "array_type": "preprocessing",
+        }
+
+    def get_table_columns(self) -> List[str]:
+        """テーブルカラム名を取得する．
+
+        Returns:
+            ["Index", "ID", "Result Value"]
+        """
+        return ["Index", "ID", "Result Value"]
+
+    def format_table_row(
+        self, index: int, record: Dict[str, Any]
+    ) -> List[Any]:
+        """テーブル行をフォーマットする．
+
+        Args:
+            index: 行インデックス
+            record: Preprocessingレコードデータ
+
+        Returns:
+            [index, id, result_value]のリスト
+        """
+        return [
+            index,
+            record.get("id"),
+            f"{record.get('resultValue', 0):.2f}",
+        ]
+
+
+class RecordRendererFactory:
+    """array_typeから適切なRendererを生成するファクトリ．
+
+    Strategy Patternの具象クラスを選択するファクトリクラス．
+    """
+
+    @staticmethod
+    def create(
+        array_type: str,
+        board_renderer: SVGBoardRenderer,
+        move_converter: MoveLabelConverter,
+    ) -> RecordRenderer:
+        """array_typeに応じたRendererインスタンスを生成する．
+
+        Args:
+            array_type: データ型（"hcpe", "stage1", "stage2", "preprocessing"）
+            board_renderer: SVG描画エンジン
+            move_converter: 駒移動ラベル変換サービス
+
+        Returns:
+            array_type対応のRecordRendererインスタンス
+
+        Raises:
+            ValueError: 未知のarray_typeの場合
+
+        Example:
+            >>> factory = RecordRendererFactory()
+            >>> renderer = factory.create(
+            ...     "stage1",
+            ...     SVGBoardRenderer(),
+            ...     MoveLabelConverter(),
+            ... )
+            >>> isinstance(renderer, Stage1RecordRenderer)
+            True
+        """
+        renderers: Dict[str, Type[RecordRenderer]] = {
+            "hcpe": HCPERecordRenderer,
+            "stage1": Stage1RecordRenderer,
+            "stage2": Stage2RecordRenderer,
+            "preprocessing": PreprocessingRecordRenderer,
+        }
+
+        renderer_class = renderers.get(array_type)
+        if not renderer_class:
+            raise ValueError(f"Unknown array_type: {array_type}")
+
+        return renderer_class(board_renderer, move_converter)

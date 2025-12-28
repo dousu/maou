@@ -146,6 +146,20 @@ class GradioVisualizationServer:
                             visible=False
                         )
 
+                    # ページ内レコードナビゲーション（新規）
+                    with gr.Group():
+                        gr.Markdown("### レコードナビゲーション")
+                        with gr.Row():
+                            prev_record_btn = gr.Button(
+                                "← 前のレコード", size="sm"
+                            )
+                            record_indicator = gr.Markdown(
+                                "Record 0 / 0"
+                            )
+                            next_record_btn = gr.Button(
+                                "次のレコード →", size="sm"
+                            )
+
                     # ページネーション
                     with gr.Group():
                         gr.Markdown("### ページネーション")
@@ -189,19 +203,10 @@ class GradioVisualizationServer:
 
                     # 検索結果テーブル
                     with gr.Accordion("検索結果", open=False):
-                        # データ型に応じたヘッダーを設定
-                        if self.supports_eval_search:
-                            table_headers = [
-                                "インデックス",
-                                "ID",
-                                "評価値",
-                                "手数",
-                            ]
-                        else:
-                            table_headers = [
-                                "インデックス",
-                                "ID",
-                            ]
+                        # Rendererから動的にヘッダーを取得
+                        table_headers = (
+                            self.viz_interface.get_table_columns()
+                        )
 
                         results_table = gr.Dataframe(
                             headers=table_headers,
@@ -209,8 +214,11 @@ class GradioVisualizationServer:
                             interactive=False,
                         )
 
-            # イベントハンドラ
+            # イベントハンドラとState変数
             current_page = gr.State(value=1)
+            # ページ内ナビゲーション用のState
+            current_page_records = gr.State(value=[])
+            current_record_index = gr.State(value=0)
 
             # 非HCPEデータの場合，初回表示時にページ1をロード
             if not self.supports_eval_search:
@@ -227,6 +235,9 @@ class GradioVisualizationServer:
                         page_info,
                         board_display,
                         record_details,
+                        current_page_records,  # キャッシュ
+                        current_record_index,  # インデックス
+                        record_indicator,  # インジケーター
                     ],
                 )
 
@@ -237,7 +248,7 @@ class GradioVisualizationServer:
             )
 
             eval_search_btn.click(
-                fn=self.viz_interface.search_by_eval_range,
+                fn=self._search_and_cache,
                 inputs=[
                     min_eval,
                     max_eval,
@@ -249,19 +260,14 @@ class GradioVisualizationServer:
                     page_info,
                     board_display,
                     record_details,
+                    current_page_records,  # キャッシュ
+                    current_record_index,  # インデックス
+                    record_indicator,  # インジケーター
                 ],
             )
 
-            # ページネーション
-            # HCPEと非HCPEで異なるページネーション関数を使用
-            if self.supports_eval_search:
-                # HCPE: 評価値範囲付きページネーション
-                paginate_fn = (
-                    self.viz_interface.search_by_eval_range
-                )
-            else:
-                # stage1等: 全データのページネーション（評価値範囲なし）
-                paginate_fn = self._paginate_all_data
+            # ページネーション（常に_search_and_cacheを使用）
+            paginate_fn = self._search_and_cache if self.supports_eval_search else self._paginate_all_data
 
             next_btn.click(
                 fn=lambda page: page + 1,
@@ -280,6 +286,9 @@ class GradioVisualizationServer:
                     page_info,
                     board_display,
                     record_details,
+                    current_page_records,  # キャッシュ
+                    current_record_index,  # インデックス
+                    record_indicator,  # インジケーター
                 ],
             )
 
@@ -300,10 +309,110 @@ class GradioVisualizationServer:
                     page_info,
                     board_display,
                     record_details,
+                    current_page_records,  # キャッシュ
+                    current_record_index,  # インデックス
+                    record_indicator,  # インジケーター
                 ],
             )
 
+            # ページ内レコードナビゲーション（新規）
+            next_record_btn.click(
+                fn=lambda idx, records: min(
+                    idx + 1, len(records) - 1
+                ),
+                inputs=[current_record_index, current_page_records],
+                outputs=[current_record_index],
+            ).then(
+                fn=self.viz_interface.navigate_within_page,
+                inputs=[current_page_records, current_record_index],
+                outputs=[board_display, record_details],
+            ).then(
+                fn=lambda idx, records: f"Record {idx + 1} / {len(records)}",
+                inputs=[
+                    current_record_index,
+                    current_page_records,
+                ],
+                outputs=[record_indicator],
+            )
+
+            prev_record_btn.click(
+                fn=lambda idx: max(0, idx - 1),
+                inputs=[current_record_index],
+                outputs=[current_record_index],
+            ).then(
+                fn=self.viz_interface.navigate_within_page,
+                inputs=[current_page_records, current_record_index],
+                outputs=[board_display, record_details],
+            ).then(
+                fn=lambda idx, records: f"Record {idx + 1} / {len(records)}",
+                inputs=[
+                    current_record_index,
+                    current_page_records,
+                ],
+                outputs=[record_indicator],
+            )
+
         return demo
+
+    def _search_and_cache(
+        self,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page: int,
+        page_size: int,
+    ) -> Tuple[
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+        int,
+        str,
+    ]:
+        """検索を実行し，レコードをキャッシュするラッパー関数．
+
+        ページ内ナビゲーション用にレコードをキャッシュし，
+        レコードインジケーターを初期化する．
+
+        Args:
+            min_eval: 最小評価値
+            max_eval: 最大評価値
+            page: ページ番号
+            page_size: ページサイズ
+
+        Returns:
+            (table_data, page_info, board_svg, details,
+             cached_records, record_index, record_indicator)
+        """
+        (
+            table_data,
+            page_info,
+            board_svg,
+            details,
+            cached_records,
+        ) = self.viz_interface.search_by_eval_range(
+            min_eval=min_eval,
+            max_eval=max_eval,
+            page=page,
+            page_size=page_size,
+        )
+
+        # レコードインジケーター初期化
+        num_records = len(cached_records)
+        if num_records > 0:
+            record_indicator = f"Record 1 / {num_records}"
+        else:
+            record_indicator = "Record 0 / 0"
+
+        return (
+            table_data,
+            page_info,
+            board_svg,
+            details,
+            cached_records,  # キャッシュ
+            0,  # record_indexをリセット
+            record_indicator,  # インジケーター
+        )
 
     def _paginate_all_data(
         self,
@@ -311,7 +420,15 @@ class GradioVisualizationServer:
         max_eval: Optional[int],
         page: int,
         page_size: int,
-    ) -> Tuple[List[List[Any]], str, str, Dict[str, Any]]:
+    ) -> Tuple[
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+        int,
+        str,
+    ]:
         """全データをページネーション（評価値フィルタなし）．
 
         stage1, stage2, preprocessingなどの非HCPEデータ用．
@@ -324,11 +441,12 @@ class GradioVisualizationServer:
             page_size: ページサイズ
 
         Returns:
-            (results_table_data, page_info, first_board_svg, first_record_details)
+            (table_data, page_info, board_svg, details,
+             cached_records, record_index, record_indicator)
         """
         # 評価値パラメータを明示的にNoneにして全データを取得
         # （引数のmin_eval, max_evalは無視）
-        return self.viz_interface.search_by_eval_range(
+        return self._search_and_cache(
             min_eval=None,  # 評価値フィルタなし
             max_eval=None,  # 評価値フィルタなし
             page=page,

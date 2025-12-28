@@ -7,12 +7,15 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from maou.app.visualization.board_display import (
-    BoardDisplayService,
-)
 from maou.app.visualization.data_retrieval import DataRetriever
+from maou.app.visualization.record_renderer import (
+    RecordRendererFactory,
+)
 from maou.domain.visualization.board_renderer import (
     SVGBoardRenderer,
+)
+from maou.domain.visualization.move_label_converter import (
+    MoveLabelConverter,
 )
 from maou.infra.visualization.search_index import SearchIndex
 
@@ -49,8 +52,11 @@ class VisualizationInterface:
             array_type=array_type,
         )
 
-        self.board_display = BoardDisplayService(
-            renderer=SVGBoardRenderer()
+        # RecordRendererをファクトリで生成
+        self.renderer = RecordRendererFactory.create(
+            array_type=array_type,
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
         )
 
         logger.info("VisualizationInterface initialized")
@@ -90,24 +96,9 @@ class VisualizationInterface:
                 },
             )
 
-        # ボード描画
-        board_svg = self.board_display.render_from_record(
-            record
-        )
-
-        # レコード詳細（データ型に応じて調整）
-        if self.array_type == "hcpe":
-            record_details = {
-                "id": record.get("id"),
-                "eval": record.get("eval"),
-                "moves": record.get("moves"),
-            }
-        else:
-            # stage1, stage2, preprocessing: IDのみ
-            record_details = {
-                "id": record.get("id"),
-                "array_type": self.array_type,
-            }
+        # Rendererに委譲してボード描画と詳細抽出
+        board_svg = self.renderer.render_board(record)
+        record_details = self.renderer.extract_display_fields(record)
 
         logger.info(
             f"Successfully retrieved and rendered record: {record_id}"
@@ -121,7 +112,13 @@ class VisualizationInterface:
         max_eval: Optional[int],
         page: int,
         page_size: int,
-    ) -> Tuple[List[List[Any]], str, str, Dict[str, Any]]:
+    ) -> Tuple[
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+    ]:
         """評価値範囲で検索し，結果を表示．
 
         Args:
@@ -131,7 +128,8 @@ class VisualizationInterface:
             page_size: ページサイズ
 
         Returns:
-            (results_table_data, page_info, first_board_svg, first_record_details)
+            (table_data, page_info, first_board_svg, first_details, cached_records)
+            cached_recordsはページ内ナビゲーション用のレコードキャッシュ
         """
         # パラメータバリデーション（両方がNoneでない場合のみチェック）
         if (
@@ -144,6 +142,7 @@ class VisualizationInterface:
                 "エラー: 最小評価値 > 最大評価値",
                 self._render_empty_message("無効な範囲です"),
                 {"error": "Invalid range"},
+                [],  # 空のレコードキャッシュ
             )
 
         offset = (page - 1) * page_size
@@ -164,49 +163,21 @@ class VisualizationInterface:
                     "検索結果がありません"
                 ),
                 {},
+                [],  # 空のレコードキャッシュ
             )
 
-        # テーブルデータ作成（データ型に応じてフィールドを調整）
-        if self.array_type == "hcpe":
-            # HCPEデータ: ID, eval, moves
-            table_data = [
-                [
-                    i + offset + 1,  # インデックス（1始まり）
-                    record.get("id", ""),
-                    record.get("eval", 0),
-                    record.get("moves", 0),
-                ]
-                for i, record in enumerate(records)
-            ]
-        else:
-            # stage1, stage2, preprocessing: IDのみ
-            table_data = [
-                [
-                    i + offset + 1,  # インデックス（1始まり）
-                    record.get("id", ""),
-                ]
-                for i, record in enumerate(records)
-            ]
+        # Rendererを使ってテーブルデータを作成
+        table_data = [
+            self.renderer.format_table_row(i + offset + 1, record)
+            for i, record in enumerate(records)
+        ]
 
-        # 最初のレコードのボード描画
+        # 最初のレコードをRendererで描画
         first_record = records[0]
-        first_board_svg = self.board_display.render_from_record(
+        first_board_svg = self.renderer.render_board(first_record)
+        first_record_details = self.renderer.extract_display_fields(
             first_record
         )
-
-        # レコード詳細（データ型に応じて調整）
-        if self.array_type == "hcpe":
-            first_record_details = {
-                "id": first_record.get("id"),
-                "eval": first_record.get("eval"),
-                "moves": first_record.get("moves"),
-            }
-        else:
-            # stage1, stage2, preprocessing: IDのみ
-            first_record_details = {
-                "id": first_record.get("id"),
-                "array_type": self.array_type,
-            }
 
         # ページ情報
         total_matches = self.search_index.count_eval_range(
@@ -230,7 +201,61 @@ class VisualizationInterface:
             page_info,
             first_board_svg,
             first_record_details,
+            records,  # ページ内ナビゲーション用のレコードキャッシュ
         )
+
+    def navigate_within_page(
+        self,
+        cached_records: List[Dict[str, Any]],
+        record_index: int,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """ページ内レコード間をナビゲートする．
+
+        Gradio Stateにキャッシュされたレコードを使用して，
+        ファイルI/Oなしで高速にレコード間を移動する．
+
+        Args:
+            cached_records: 現在ページのレコード（Gradio Stateから渡される）
+            record_index: ページ内インデックス（0-based）
+
+        Returns:
+            (board_svg, record_details)のタプル
+
+        Example:
+            >>> interface.navigate_within_page(records, 2)
+            ("<svg>...</svg>", {"id": 123, "eval": 456})
+        """
+        # インデックスバリデーション
+        if not (0 <= record_index < len(cached_records)):
+            return (
+                self._render_empty_message("無効なインデックスです"),
+                {},
+            )
+
+        # Rendererに委譲して描画
+        record = cached_records[record_index]
+        board_svg = self.renderer.render_board(record)
+        details = self.renderer.extract_display_fields(record)
+
+        logger.debug(
+            f"Navigate to record {record_index} in current page"
+        )
+
+        return (board_svg, details)
+
+    def get_table_columns(self) -> List[str]:
+        """検索結果テーブルのカラム名を取得する．
+
+        array_typeに応じたカラム名をRendererから取得する．
+
+        Returns:
+            カラム名のリスト
+
+        Example:
+            >>> interface.get_table_columns()
+            ["Index", "ID", "Eval", "Moves"]  # HCPE の場合
+        """
+        return self.renderer.get_table_columns()
 
     def get_dataset_stats(self) -> Dict[str, Any]:
         """データセット統計情報を取得．
