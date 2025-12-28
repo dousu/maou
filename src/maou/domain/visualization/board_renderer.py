@@ -197,6 +197,9 @@ class SVGBoardRenderer:
 
         Args:
             board_id_positions: 9×9の駒配置
+                配列インデックス [row][col] は以下のように対応:
+                - col: 0=右端(筋9), 8=左端(筋1) ← 将棋の筋は右から左
+                - row: 0=上端(段a), 8=下端(段i) ← 段は上から下
             highlight_set: ハイライトするマスのセット
         """
         piece_parts = []
@@ -206,12 +209,15 @@ class SVGBoardRenderer:
                 piece_id = board_id_positions[row][col]
                 square_idx = row * 9 + col
 
+                # 将棋の筋は右から左なので，描画時に列を反転
+                visual_col = 8 - col  # col 0 → visual 8 (右端)
+
                 # マスのハイライト（駒の有無に関係なく描画）
                 if square_idx in highlight_set:
                     x_rect = (
                         self.MARGIN
                         + self.HAND_AREA_WIDTH
-                        + col * self.CELL_SIZE
+                        + visual_col * self.CELL_SIZE
                     )
                     y_rect = self.MARGIN + row * self.CELL_SIZE
                     piece_parts.append(
@@ -238,7 +244,7 @@ class SVGBoardRenderer:
                 x = (
                     self.MARGIN
                     + self.HAND_AREA_WIDTH
-                    + col * self.CELL_SIZE
+                    + visual_col * self.CELL_SIZE
                     + self.CELL_SIZE / 2
                 )
                 y = (
@@ -366,22 +372,37 @@ class SVGBoardRenderer:
         return "\n".join(parts)
 
     def _draw_coordinates(self) -> str:
-        """盤面の座標（1-9, a-i）を描画．"""
+        """盤面の座標（1-9, a-i）を描画．
+
+        将棋の標準的な符号表記に従い，列番号は右から左へ（9→1）だが，
+        配列では col=0 が右端（筋9），col=8 が左端（筋1）となっている．
+        描画時に列を反転させているため，ラベルも左から右へ（1→9）と表示する．
+        """
         coord_parts = []
 
-        # 列番号（1-9，上から順）
-        for col in range(9):
+        # 列番号（1-9，左から右へ）
+        # 描画時に列を反転させているため，ラベルも反転させる
+        for visual_col in range(9):
             x = (
                 self.MARGIN
                 + self.HAND_AREA_WIDTH
-                + col * self.CELL_SIZE
+                + visual_col * self.CELL_SIZE
                 + self.CELL_SIZE / 2
             )
             y = self.MARGIN - 5
 
+            # visual_col=0（左端）→ 筋1，visual_col=8（右端）→ 筋9
+            col_number = visual_col + 1
+
+            # 背景を追加して視認性向上
+            coord_parts.append(
+                f'<rect x="{x - 8}" y="{y - 12}" '
+                f'width="16" height="16" '
+                f'fill="white" opacity="0.8" rx="2"/>'
+            )
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
-                f'class="coord" text-anchor="middle">{col + 1}</text>'
+                f'class="coord" text-anchor="middle">{col_number}</text>'
             )
 
         # 行記号（a-i，左側）
@@ -394,9 +415,17 @@ class SVGBoardRenderer:
                 + 5
             )
 
+            row_letter = chr(ord("a") + row)
+
+            # 背景を追加して視認性向上
+            coord_parts.append(
+                f'<rect x="{x - 14}" y="{y - 10}" '
+                f'width="12" height="16" '
+                f'fill="white" opacity="0.8" rx="2"/>'
+            )
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
-                f'class="coord" text-anchor="end">{chr(ord("a") + row)}</text>'
+                f'class="coord" text-anchor="end">{row_letter}</text>'
             )
 
         return "\n".join(coord_parts)
