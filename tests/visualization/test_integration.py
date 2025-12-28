@@ -42,6 +42,7 @@ class TestVisualizationIntegration:
             file_paths=file_paths,
             array_type="hcpe",
             num_mock_records=50,
+            use_mock_data=True,
         )
 
         # 2. VisualizationInterfaceを作成
@@ -74,6 +75,7 @@ class TestVisualizationIntegration:
             file_paths=file_paths,
             array_type="hcpe",
             num_mock_records=100,
+            use_mock_data=True,
         )
 
         # 2. VisualizationInterfaceを作成
@@ -117,6 +119,7 @@ class TestVisualizationIntegration:
             file_paths=file_paths,
             array_type="preprocessing",
             num_mock_records=30,
+            use_mock_data=True,
         )
 
         # App layer
@@ -162,6 +165,7 @@ class TestVisualizationIntegration:
             file_paths=file_paths,
             array_type="hcpe",
             num_mock_records=100,
+            use_mock_data=True,
         )
 
         assert len(search_index.file_paths) == 3
@@ -186,6 +190,7 @@ class TestVisualizationIntegration:
                 file_paths=[dummy_file],
                 array_type=array_type,
                 num_mock_records=20,
+                use_mock_data=True,
             )
 
             viz_interface = VisualizationInterface(

@@ -1,0 +1,32 @@
+# Cargo build configuration for faster builds
+
+[build]
+# Use sccache for caching compiled artifacts
+rustc-wrapper = "/home/vscode/.cargo/bin/sccache"
+
+# Incremental compilation (enabled by default in dev builds)
+incremental = true
+
+# Parallel build jobs (default is number of CPUs)
+# Uncomment and adjust if needed for memory-constrained environments
+# jobs = 1
+
+[target.x86_64-unknown-linux-gnu]
+# Use lld linker for faster linking
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[profile.dev]
+# Development profile optimizations
+incremental = true
+# Reduce debuginfo to save disk space and build time
+debug = 1  # Line tables only (faster than debug = 2)
+
+[profile.release]
+# Release profile settings
+# Strip symbols for smaller binaries (maturin does this automatically)
+strip = "debuginfo"
+# Enable link-time optimization for better performance
+lto = false  # LTO increases build time significantly
+# Codegen units (1 = best optimization, slower build)
+codegen-units = 16  # Balance between build time and runtime performance

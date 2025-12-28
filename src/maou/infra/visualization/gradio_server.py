@@ -30,6 +30,7 @@ class GradioVisualizationServer:
         file_paths: List[Path],
         array_type: str,
         model_path: Optional[Path] = None,
+        use_mock_data: bool = False,
     ) -> None:
         """サーバーを初期化．
 
@@ -37,16 +38,19 @@ class GradioVisualizationServer:
             file_paths: データファイルのパスリスト
             array_type: データ型（hcpe, preprocessing, stage1, stage2）
             model_path: オプショナルなモデルファイルパス
+            use_mock_data: Trueの場合はモックデータを使用
         """
         self.file_paths = file_paths
         self.array_type = array_type
         self.model_path = model_path
+        self.use_mock_data = use_mock_data
         self.renderer = SVGBoardRenderer()
 
-        # SearchIndexを初期化（モックデータ）
+        # SearchIndexを初期化
         self.search_index = SearchIndex.build(
             file_paths=file_paths,
             array_type=array_type,
+            use_mock_data=use_mock_data,
             num_mock_records=1000,
         )
 
@@ -57,9 +61,15 @@ class GradioVisualizationServer:
             array_type=array_type,
         )
 
+        mode_msg = (
+            "MOCK MODE (fake data)"
+            if use_mock_data
+            else "REAL MODE (actual data)"
+        )
         logger.info(
-            f"Initializing visualization server: {len(file_paths)} files, "
-            f"type={array_type}, {self.search_index.total_records()} records indexed"
+            f"🎯 Visualization server initialized: {mode_msg}, "
+            f"{len(file_paths)} files, type={array_type}, "
+            f"{self.search_index.total_records()} records indexed"
         )
 
     def create_demo(self) -> gr.Blocks:
@@ -72,8 +82,16 @@ class GradioVisualizationServer:
             title="Maou Shogi Data Visualizer"
         ) as demo:
             gr.Markdown("# Maou将棋データ可視化ツール")
+
+            # Mode indicator
+            mode_indicator = (
+                "🔴 MOCK MODE (表示データは実データではありません)"
+                if self.use_mock_data
+                else "🟢 REAL MODE"
+            )
             gr.Markdown(
-                f"**データセット**: {len(self.file_paths)}ファイル，型={self.array_type}"
+                f"**{mode_indicator}** | "
+                f"データセット: {len(self.file_paths)}ファイル，型={self.array_type}"
             )
 
             with gr.Row():
@@ -340,6 +358,7 @@ def launch_server(
     server_name: str,
     model_path: Optional[Path],
     debug: bool,
+    use_mock_data: bool = False,
 ) -> None:
     """Gradioサーバーを起動．
 
@@ -351,11 +370,13 @@ def launch_server(
         server_name: サーバーバインドアドレス
         model_path: モデルファイルパス
         debug: デバッグモード
+        use_mock_data: Trueの場合はモックデータを使用
     """
     server = GradioVisualizationServer(
         file_paths=file_paths,
         array_type=array_type,
         model_path=model_path,
+        use_mock_data=use_mock_data,
     )
 
     demo = server.create_demo()

@@ -41,6 +41,15 @@ class DataRetriever:
         # FileDataSourceは後で必要に応じて初期化
         self._data_source: Optional[FileDataSource] = None
 
+        if search_index.use_mock_data:
+            logger.warning(
+                "⚠️  DataRetriever in MOCK MODE - will return fake data"
+            )
+        else:
+            logger.info(
+                "✅ DataRetriever in REAL MODE - will load actual records"
+            )
+
         logger.info(
             f"DataRetriever initialized: {len(file_paths)} files, "
             f"type={array_type}"
@@ -84,14 +93,29 @@ class DataRetriever:
 
         file_index, row_number = location
 
-        # データソースから実データを取得
-        # 注意: 現在はモック実装のため，実際のファイル読み込みは行わない
-        logger.info(
-            f"Found record {record_id} at file={file_index}, row={row_number}"
+        # Mock mode
+        if self.search_index.use_mock_data:
+            logger.debug(
+                f"⚠️  MOCK: Returning fake record for {record_id}"
+            )
+            return self._create_mock_record(
+                record_id, row_number
+            )
+
+        # Real mode
+        logger.debug(
+            f"✅ REAL: Loading record {record_id} from "
+            f"file={self.file_paths[file_index].name}, row={row_number}"
         )
 
-        # モックデータを返す
-        return self._create_mock_record(record_id, row_number)
+        try:
+            record = self._load_record_at_location(
+                file_index, row_number
+            )
+            return record
+        except Exception as e:
+            logger.exception(f"Failed to load record: {e}")
+            return None
 
     def get_by_eval_range(
         self,
@@ -121,17 +145,89 @@ class DataRetriever:
             f"[{min_eval}, {max_eval}], offset={offset}, limit={limit}"
         )
 
-        # 各レコードのデータを取得
+        # Mock mode
+        if self.search_index.use_mock_data:
+            logger.debug(
+                f"⚠️  MOCK: Returning {len(locations)} fake records"
+            )
+            records = []
+            for file_index, row_number in locations:
+                record_id = f"mock_id_{row_number}"
+                record = self._create_mock_record(
+                    record_id, row_number
+                )
+                records.append(record)
+            return records
+
+        # Real mode
+        logger.debug(
+            f"✅ REAL: Loading {len(locations)} records from files"
+        )
+
         records = []
         for file_index, row_number in locations:
-            # モックデータを生成
-            record_id = f"mock_id_{row_number}"
-            record = self._create_mock_record(
-                record_id, row_number
-            )
-            records.append(record)
+            try:
+                record = self._load_record_at_location(
+                    file_index, row_number
+                )
+                records.append(record)
+            except Exception as e:
+                logger.error(
+                    f"Failed to load record at ({file_index}, {row_number}): {e}"
+                )
+                continue  # Skip failed records
 
         return records
+
+    def _load_record_at_location(
+        self, file_index: int, row_number: int
+    ) -> Dict[str, Any]:
+        """指定位置から実際のレコードをロード．
+
+        Args:
+            file_index: ファイルインデックス
+            row_number: 行番号
+
+        Returns:
+            レコードデータの辞書
+
+        Raises:
+            Exception: ファイル読み込みエラー
+        """
+        from maou.domain.data.rust_io import (
+            load_hcpe_df,
+            load_preprocessing_df,
+            load_stage1_df,
+            load_stage2_df,
+        )
+
+        loader_map = {
+            "hcpe": load_hcpe_df,
+            "preprocessing": load_preprocessing_df,
+            "stage1": load_stage1_df,
+            "stage2": load_stage2_df,
+        }
+
+        load_df = loader_map[self.array_type]
+        file_path = self.file_paths[file_index]
+
+        # DataFrameをロード
+        df = load_df(file_path)
+
+        # 行を抽出して辞書に変換
+        # df[row_number]は1行のDataFrameを返す
+        row = df[row_number]
+        record = {}
+        for col in df.columns:
+            value = row[col]
+            # Polars Seriesの場合，最初の要素を取得
+            if hasattr(value, "to_list"):
+                # Seriesから値を取り出す（長さ1のSeriesなので[0]）
+                record[col] = value.to_list()[0]
+            else:
+                record[col] = value.item()
+
+        return record
 
     def _create_mock_record(
         self, record_id: str, row_number: int

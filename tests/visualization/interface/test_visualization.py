@@ -23,6 +23,7 @@ class TestVisualizationInterface:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=100,
+            use_mock_data=True,
         )
 
         return VisualizationInterface(

@@ -4,6 +4,19 @@ resolver = "2"
 
 [workspace.dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3-polars = { version = "0.19" }
+polars = { version = "0.45", features = ["lazy", "ipc", "dtype-full"] }
 arrow = { version = "53.0", features = ["ipc", "ipc_compression", "prettyprint", "pyarrow"] }
 thiserror = "2.0"
 tempfile = "3.0"
+
+# Build profile optimizations for faster builds
+[profile.dev]
+incremental = true
+# Reduce debuginfo to save disk space and build time
+debug = 1  # Line tables only
+
+[profile.release]
+incremental = true
+# Strip debuginfo for smaller binaries (maturin handles this)
+strip = "debuginfo"

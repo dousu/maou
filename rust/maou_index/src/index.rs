@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+use polars::prelude::*;
+
 use crate::error::IndexError;
 
 /// レコードの位置情報．
@@ -160,6 +162,87 @@ impl DataIndex {
     /// ファイルパスリストを取得．
     pub fn file_paths(&self) -> &[PathBuf] {
         &self.file_paths
+    }
+
+    /// .featherファイルをスキャンしてインデックスを構築．
+    ///
+    /// # Returns
+    /// 成功時はOk(())，エラー時はErr
+    pub fn build_from_files(&mut self) -> Result<(), IndexError> {
+        for (file_idx, file_path) in self.file_paths.clone().iter().enumerate() {
+            // Featherファイルを読み込み
+            let df = LazyFrame::scan_ipc(
+                file_path,
+                ScanArgsIpc::default(),
+            )
+            .map_err(|e| {
+                IndexError::BuildFailed(format!(
+                    "Failed to read {}: {}",
+                    file_path.display(),
+                    e
+                ))
+            })?
+            .collect()
+            .map_err(|e| {
+                IndexError::BuildFailed(format!(
+                    "Failed to collect DataFrame: {}",
+                    e
+                ))
+            })?;
+
+            let num_rows = df.height();
+
+            // IDカラムを取得
+            let id_column = df
+                .column("id")
+                .map_err(|e| {
+                    IndexError::InvalidFormat(format!(
+                        "Missing 'id' column: {}",
+                        e
+                    ))
+                })?;
+
+            // IDインデックスを構築
+            for row_num in 0..num_rows {
+                let id_value = id_column.get(row_num).map_err(|e| {
+                    IndexError::BuildFailed(format!(
+                        "Failed to get id at row {}: {}",
+                        row_num, e
+                    ))
+                })?;
+
+                let id_str = id_value.to_string();
+
+                let location = RecordLocation {
+                    file_index: file_idx as u32,
+                    row_number: row_num as u32,
+                };
+
+                // HCPEの場合はeval値も登録
+                if matches!(self.array_type, ArrayType::HCPE) {
+                    if let Ok(eval_column) = df.column("eval") {
+                        if let Ok(eval_value) = eval_column.get(row_num)
+                        {
+                            if let Ok(eval_i16) =
+                                eval_value.try_extract::<i16>()
+                            {
+                                self.add_record(
+                                    id_str,
+                                    eval_i16,
+                                    location,
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // HCPE以外，またはeval取得失敗時はeval=0で登録
+                self.add_record(id_str, 0, location);
+            }
+        }
+
+        Ok(())
     }
 }
 

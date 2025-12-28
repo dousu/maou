@@ -62,6 +62,16 @@ impl SearchIndex {
         }
     }
 
+    /// .featherファイルをスキャンしてインデックスを構築．
+    ///
+    /// # Returns
+    /// 成功時はOk(())，エラー時はErr
+    pub fn build_from_files(&mut self) -> PyResult<()> {
+        self.index
+            .build_from_files()
+            .map_err(|e| PyErr::from(e))
+    }
+
     /// IDでレコードを検索．
     ///
     /// # Arguments

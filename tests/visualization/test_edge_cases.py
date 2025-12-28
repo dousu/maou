@@ -24,6 +24,7 @@ class TestEdgeCases:
             file_paths=[],
             array_type="hcpe",
             num_mock_records=0,
+            use_mock_data=True,
         )
 
         assert search_index.total_records() == 0
@@ -37,6 +38,7 @@ class TestEdgeCases:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=10,
+            use_mock_data=True,
         )
 
         assert search_index.total_records() == 10
@@ -51,6 +53,7 @@ class TestEdgeCases:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=50,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -84,6 +87,7 @@ class TestEdgeCases:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=20,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -116,6 +120,7 @@ class TestEdgeCases:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=50,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -149,6 +154,7 @@ class TestEdgeCases:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=10,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -181,6 +187,7 @@ class TestErrorHandling:
                 file_paths=[dummy_file],
                 array_type="invalid_type",
                 num_mock_records=10,
+                use_mock_data=True,
             )
 
     def test_board_position_validation_row_count(self) -> None:
@@ -218,6 +225,7 @@ class TestErrorHandling:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=10,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -242,6 +250,7 @@ class TestErrorHandling:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=10,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -267,6 +276,7 @@ class TestErrorHandling:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=0,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(
@@ -303,6 +313,7 @@ class TestErrorHandling:
             file_paths=[dummy_file],
             array_type="hcpe",
             num_mock_records=10,
+            use_mock_data=True,
         )
 
         viz_interface = VisualizationInterface(

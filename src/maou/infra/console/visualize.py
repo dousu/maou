@@ -67,6 +67,12 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     default=False,
 )
+@click.option(
+    "--use-mock-data",
+    help="モックデータを使用する（UIテスト用）．",
+    is_flag=True,
+    default=False,
+)
 @handle_exception
 def visualize(
     input_dir: Optional[Path],
@@ -77,6 +83,7 @@ def visualize(
     server_name: str,
     model_path: Optional[Path],
     debug_mode: bool,
+    use_mock_data: bool,
 ) -> None:
     """Gradioデータ可視化サーバーを起動する．
 
@@ -131,6 +138,7 @@ def visualize(
             server_name=server_name,
             model_path=model_path,
             debug=debug_mode,
+            use_mock_data=use_mock_data,
         )
     except Exception as e:
         app_logger.exception("Failed to launch Gradio server")

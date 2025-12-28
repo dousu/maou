@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 pyo3 = { workspace = true }
 arrow = { workspace = true, features = ["pyarrow"] }
 thiserror = { workspace = true }
+maou_index = { path = "../maou_index" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

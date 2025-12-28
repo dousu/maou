@@ -55,5 +55,8 @@ fn maou_io(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sparse_array::expand_sparse_array_rust, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_array::add_sparse_arrays_rust, m)?)?;
 
+    // SearchIndex class from maou_index
+    m.add_class::<maou_index::SearchIndex>()?;
+
     Ok(())
 }
