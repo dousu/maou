@@ -17,6 +17,7 @@ dependencies = [
     "psutil>=6.0.0",
     "polars>=1.0.0",
     "duckdb (>=1.4.3,<2.0.0)",
+    "plotly[visualize] (>=6.5.0,<7.0.0)",
 ]
 
 [project.optional-dependencies]

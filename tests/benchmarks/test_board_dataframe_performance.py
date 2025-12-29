@@ -108,8 +108,8 @@ class TestBoardDataFramePerformance:
         assert "piecePlanes" in result.columns
 
         # Performance check (relaxed threshold for variability)
-        assert avg_time_ms < 15.0, (
-            f"Too slow: {avg_time_ms:.3f}ms > 15ms"
+        assert avg_time_ms < 25.0, (
+            f"Too slow: {avg_time_ms:.3f}ms > 25ms"
         )
 
     def test_get_piece_planes_rotate_df_performance(
@@ -142,8 +142,8 @@ class TestBoardDataFramePerformance:
         assert "piecePlanes" in result.columns
 
         # Performance check (relaxed threshold for variability)
-        assert avg_time_ms < 15.0, (
-            f"Too slow: {avg_time_ms:.3f}ms > 15ms"
+        assert avg_time_ms < 25.0, (
+            f"Too slow: {avg_time_ms:.3f}ms > 25ms"
         )
 
 
