@@ -91,6 +91,20 @@ class RecordRenderer(ABC):
         """
         pass
 
+    @abstractmethod
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """レコード群からデータ分析用のPlotlyチャートHTMLを生成する．
+
+        Args:
+            records: 分析対象のレコードリスト
+
+        Returns:
+            PlotlyチャートのHTML文字列
+        """
+        pass
+
     def _create_board_position(
         self, record: Dict[str, Any]
     ) -> BoardPosition:
@@ -297,6 +311,87 @@ class HCPERecordRenderer(RecordRenderer):
             record.get("moves"),
         ]
 
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """HCPEデータから評価値と手数の分布チャートを生成する．
+
+        Args:
+            records: HCPEレコードのリスト
+
+        Returns:
+            Plotlyチャート2つを含むHTML文字列
+        """
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+        except ImportError:
+            return "<p>Plotlyがインストールされていません．</p>"
+
+        if not records:
+            return "<p>データがありません．</p>"
+
+        # データ抽出
+        evals = [
+            r.get("eval", 0)
+            for r in records
+            if r.get("eval") is not None
+        ]
+        moves = [
+            r.get("moves", 0)
+            for r in records
+            if r.get("moves") is not None
+        ]
+
+        # 2つのサブプロットを作成
+        fig = make_subplots(
+            rows=1,
+            cols=2,
+            subplot_titles=("評価値分布", "手数分布"),
+        )
+
+        # 評価値ヒストグラム
+        fig.add_trace(
+            go.Histogram(
+                x=evals,
+                marker_color="rgba(0,112,243,0.6)",
+                nbinsx=30,
+                name="評価値",
+            ),
+            row=1,
+            col=1,
+        )
+
+        # 手数ヒストグラム
+        fig.add_trace(
+            go.Histogram(
+                x=moves,
+                marker_color="rgba(0,200,83,0.6)",
+                nbinsx=30,
+                name="手数",
+            ),
+            row=1,
+            col=2,
+        )
+
+        # レイアウト設定
+        fig.update_layout(
+            template="plotly_white",
+            font=dict(family="system-ui", size=12),
+            height=400,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+
+        fig.update_xaxes(title_text="評価値", row=1, col=1)
+        fig.update_xaxes(title_text="手数", row=1, col=2)
+        fig.update_yaxes(title_text="頻度", row=1, col=1)
+        fig.update_yaxes(title_text="頻度", row=1, col=2)
+
+        return fig.to_html(
+            include_plotlyjs="cdn", div_id="hcpe-analytics"
+        )
+
 
 class Stage1RecordRenderer(RecordRenderer):
     """Stage1（到達可能マス）の描画戦略．
@@ -386,6 +481,59 @@ class Stage1RecordRenderer(RecordRenderer):
         num_reachable = sum(sum(row) for row in reachable)
         return [index, record.get("id"), num_reachable]
 
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """Stage1データから到達可能マス数の分布チャートを生成する．
+
+        Args:
+            records: Stage1レコードのリスト
+
+        Returns:
+            Plotlyチャートを含むHTML文字列
+        """
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            return "<p>Plotlyがインストールされていません．</p>"
+
+        if not records:
+            return "<p>データがありません．</p>"
+
+        # 到達可能マス数を集計
+        reachable_counts = []
+        for r in records:
+            reachable = r.get("reachableSquares", [])
+            count = sum(sum(row) for row in reachable)
+            reachable_counts.append(count)
+
+        # ヒストグラム作成
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=reachable_counts,
+                    marker_color="rgba(76,175,80,0.6)",
+                    nbinsx=20,
+                    name="到達可能マス数",
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title="到達可能マス数の分布",
+            xaxis_title="到達可能マス数",
+            yaxis_title="頻度",
+            template="plotly_white",
+            font=dict(family="system-ui", size=12),
+            height=400,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+
+        return fig.to_html(
+            include_plotlyjs="cdn", div_id="stage1-analytics"
+        )
+
 
 class Stage2RecordRenderer(RecordRenderer):
     """Stage2（合法手）の描画戦略．
@@ -465,6 +613,59 @@ class Stage2RecordRenderer(RecordRenderer):
         num_legal = sum(legal_labels)
         return [index, record.get("id"), num_legal]
 
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """Stage2データから合法手数の分布チャートを生成する．
+
+        Args:
+            records: Stage2レコードのリスト
+
+        Returns:
+            Plotlyチャートを含むHTML文字列
+        """
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            return "<p>Plotlyがインストールされていません．</p>"
+
+        if not records:
+            return "<p>データがありません．</p>"
+
+        # 合法手数を集計
+        legal_counts = []
+        for r in records:
+            legal_labels = r.get("legalMovesLabel", [])
+            count = sum(legal_labels)
+            legal_counts.append(count)
+
+        # ヒストグラム作成
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=legal_counts,
+                    marker_color="rgba(255,152,0,0.6)",
+                    nbinsx=30,
+                    name="合法手数",
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title="合法手数の分布",
+            xaxis_title="合法手数",
+            yaxis_title="頻度",
+            template="plotly_white",
+            font=dict(family="system-ui", size=12),
+            height=400,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+
+        return fig.to_html(
+            include_plotlyjs="cdn", div_id="stage2-analytics"
+        )
+
 
 class PreprocessingRecordRenderer(RecordRenderer):
     """Preprocessing（訓練データ）の描画戦略．
@@ -540,6 +741,60 @@ class PreprocessingRecordRenderer(RecordRenderer):
             record.get("id"),
             f"{record.get('resultValue', 0):.2f}",
         ]
+
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """Preprocessingデータから勝率分布チャートを生成する．
+
+        Args:
+            records: Preprocessingレコードのリスト
+
+        Returns:
+            Plotlyチャートを含むHTML文字列
+        """
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            return "<p>Plotlyがインストールされていません．</p>"
+
+        if not records:
+            return "<p>データがありません．</p>"
+
+        # resultValueを集計
+        result_values = [
+            r.get("resultValue", 0.0)
+            for r in records
+            if r.get("resultValue") is not None
+        ]
+
+        # ヒストグラム作成
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=result_values,
+                    marker_color="rgba(0,112,243,0.6)",
+                    nbinsx=30,
+                    name="勝率",
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title="勝率（Result Value）の分布",
+            xaxis_title="勝率",
+            yaxis_title="頻度",
+            template="plotly_white",
+            font=dict(family="system-ui", size=12),
+            height=400,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+
+        return fig.to_html(
+            include_plotlyjs="cdn",
+            div_id="preprocessing-analytics",
+        )
 
 
 class RecordRendererFactory:

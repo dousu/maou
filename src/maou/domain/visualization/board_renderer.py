@@ -84,12 +84,14 @@ class SVGBoardRenderer:
         "飛",
     ]
 
-    # 色設定
-    COLOR_BOARD_BG = "#f4d58d"  # 盤面背景（薄い黄土色）
-    COLOR_GRID = "#8b4513"  # グリッド線（茶色）
-    COLOR_BLACK_PIECE = "#000000"  # 先手駒（黒）
-    COLOR_WHITE_PIECE = "#c41e3a"  # 後手駒（赤）
-    COLOR_HIGHLIGHT = "#90ee90"  # ハイライト（薄緑）
+    # 色設定（モダン・ミニマリストパレット）
+    COLOR_BOARD_BG = "#f9f6f0"  # 盤面背景（微妙な暖色）
+    COLOR_GRID = "#d4c5a9"  # グリッド線（ソフトな茶）
+    COLOR_BLACK_PIECE = "#2c2c2c"  # 先手駒（コントラスト強化）
+    COLOR_WHITE_PIECE = "#c41e3a"  # 後手駒（伝統的赤）
+    COLOR_HIGHLIGHT = (
+        "rgba(0,112,243,0.12)"  # ハイライト（モダンブルー）
+    )
 
     def render(
         self,
@@ -132,12 +134,42 @@ class SVGBoardRenderer:
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
                     width="{total_width}"
                     height="{total_height}"
-                    viewBox="0 0 {total_width} {total_height}">
+                    viewBox="0 0 {total_width} {total_height}"
+                    style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.07);">
+    <defs>
+        <filter id="piece-shadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.3"/>
+        </filter>
+    </defs>
     <style>
-        .piece {{ font-family: serif; font-weight: bold; text-anchor: middle; }}
-        .black-piece {{ fill: {self.COLOR_BLACK_PIECE}; }}
-        .white-piece {{ fill: {self.COLOR_WHITE_PIECE}; }}
-        .coord {{ font-family: monospace; font-size: 12px; fill: #333; }}
+        .piece {{
+            font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+            font-weight: 700;
+            text-anchor: middle;
+            transition: transform 0.2s ease, filter 0.2s ease;
+            filter: url(#piece-shadow);
+        }}
+        .piece:hover {{
+            transform: scale(1.15);
+            filter: url(#piece-shadow) brightness(1.1);
+        }}
+        .black-piece {{
+            fill: {self.COLOR_BLACK_PIECE};
+        }}
+        .white-piece {{
+            fill: {self.COLOR_WHITE_PIECE};
+        }}
+        .coord {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 12px;
+            fill: #666666;
+        }}
+        .board-square {{
+            transition: fill 0.15s ease;
+        }}
+        .board-square:hover {{
+            fill: rgba(0,112,243,0.08);
+        }}
     </style>"""
 
     def _svg_footer(self) -> str:
@@ -157,6 +189,22 @@ class SVGBoardRenderer:
             f'fill="{self.COLOR_BOARD_BG}" '
             f'stroke="{self.COLOR_GRID}" stroke-width="2"/>'
         )
+
+        # ホバーターゲット（各マスに透明な矩形を配置）
+        for row in range(9):
+            for col in range(9):
+                x = (
+                    self.MARGIN
+                    + self.HAND_AREA_WIDTH
+                    + col * self.CELL_SIZE
+                )
+                y = self.MARGIN + row * self.CELL_SIZE
+                grid_parts.append(
+                    f'<rect class="board-square" '
+                    f'x="{x}" y="{y}" '
+                    f'width="{self.CELL_SIZE}" height="{self.CELL_SIZE}" '
+                    f'fill="transparent" />'
+                )
 
         # 縦線（10本: 0-9列の境界）
         for i in range(10):
@@ -334,14 +382,24 @@ class SVGBoardRenderer:
         parts.append(
             f'<rect x="{x_base}" y="{y_base}" '
             f'width="{self.HAND_AREA_WIDTH}" height="{self.BOARD_HEIGHT}" '
-            f'fill="#ffffff" stroke="{self.COLOR_GRID}" stroke-width="1" opacity="0.9"/>'
+            f'fill="#fafafa" stroke="#d4c5a9" stroke-width="2" '
+            f'rx="6" opacity="0.98"/>'
+        )
+
+        # タイトル背景バー
+        parts.append(
+            f'<rect x="{x_base}" y="{y_base}" '
+            f'width="{self.HAND_AREA_WIDTH}" height="30" '
+            f'fill="#f5f5f5" stroke="#d4c5a9" stroke-width="1" '
+            f'rx="6"/>'
         )
 
         # タイトル
         parts.append(
             f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
-            f'y="{y_base + 15}" '
-            f'class="coord" text-anchor="middle" font-weight="bold">{title}</text>'
+            f'y="{y_base + 20}" '
+            f'class="coord" text-anchor="middle" font-weight="700" '
+            f'font-size="14">{title}</text>'
         )
 
         # 各駒種の表示
@@ -394,15 +452,17 @@ class SVGBoardRenderer:
             # visual_col=0（左端）→ 筋9，visual_col=8（右端）→ 筋1
             col_number = 9 - visual_col
 
-            # 背景を追加して視認性向上
+            # 洗練された背景バッジ
             coord_parts.append(
-                f'<rect x="{x - 8}" y="{y - 12}" '
-                f'width="16" height="16" '
-                f'fill="white" opacity="0.8" rx="2"/>'
+                f'<rect x="{x - 10}" y="{y - 14}" '
+                f'width="20" height="18" '
+                f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
+                f'rx="3" opacity="0.95"/>'
             )
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
-                f'class="coord" text-anchor="middle">{col_number}</text>'
+                f'class="coord" text-anchor="middle" '
+                f'font-weight="600">{col_number}</text>'
             )
 
         # 行記号（a-i，左側）
@@ -417,15 +477,17 @@ class SVGBoardRenderer:
 
             row_letter = chr(ord("a") + row)
 
-            # 背景を追加して視認性向上
+            # 洗練された背景バッジ
             coord_parts.append(
-                f'<rect x="{x - 14}" y="{y - 10}" '
-                f'width="12" height="16" '
-                f'fill="white" opacity="0.8" rx="2"/>'
+                f'<rect x="{x - 16}" y="{y - 12}" '
+                f'width="18" height="18" '
+                f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
+                f'rx="3" opacity="0.95"/>'
             )
             coord_parts.append(
-                f'<text x="{x}" y="{y}" '
-                f'class="coord" text-anchor="end">{row_letter}</text>'
+                f'<text x="{x - 7}" y="{y}" '
+                f'class="coord" text-anchor="middle" '
+                f'font-weight="600">{row_letter}</text>'
             )
 
         return "\n".join(coord_parts)

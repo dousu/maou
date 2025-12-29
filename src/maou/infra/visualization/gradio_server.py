@@ -19,6 +19,274 @@ from maou.interface.visualization import VisualizationInterface
 logger = logging.getLogger(__name__)
 
 
+def _load_custom_css() -> str:
+    """カスタムCSSファイルを読み込む．
+
+    Returns:
+        str: 結合されたCSS文字列
+    """
+    static_dir = Path(__file__).parent / "static"
+    css_files = ["theme.css", "components.css"]
+
+    css_parts = []
+    for css_file in css_files:
+        css_path = static_dir / css_file
+        if css_path.exists():
+            css_parts.append(
+                css_path.read_text(encoding="utf-8")
+            )
+        else:
+            logger.warning(f"CSS file not found: {css_path}")
+
+    return "\n\n".join(css_parts)
+
+
+def create_loading_spinner(
+    message: str = "データ読み込み中...",
+) -> str:
+    """ローディングスピナーHTMLを生成．
+
+    Args:
+        message: 表示するメッセージ
+
+    Returns:
+        str: ローディングスピナーのHTML文字列
+    """
+    return f"""
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>{message}</p>
+    </div>
+    """
+
+
+def create_toast_notification_script() -> str:
+    """トースト通知用JavaScriptを生成．
+
+    Returns:
+        str: JavaScriptコード文字列
+    """
+    return """
+    <script>
+    (function() {
+        // Toast notification system
+        let toastContainer = null;
+
+        function initToastContainer() {
+            if (!toastContainer) {
+                toastContainer = document.createElement('div');
+                toastContainer.className = 'toast-container';
+                document.body.appendChild(toastContainer);
+            }
+        }
+
+        function showToast(title, message, type = 'info', duration = 5000) {
+            initToastContainer();
+
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+
+            const icons = {
+                success: '✓',
+                error: '✕',
+                warning: '⚠',
+                info: 'ℹ'
+            };
+
+            toast.innerHTML = `
+                <div class="toast-icon">${icons[type] || icons.info}</div>
+                <div class="toast-content">
+                    <div class="toast-title">${title}</div>
+                    ${message ? `<div class="toast-message">${message}</div>` : ''}
+                </div>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            if (duration > 0) {
+                setTimeout(() => {
+                    toast.style.animation = 'toast-slide-in 0.3s ease-out reverse';
+                    setTimeout(() => toast.remove(), 300);
+                }, duration);
+            }
+        }
+
+        // Expose toast function globally
+        window.showToast = showToast;
+
+        console.log('🔔 Toast notification system initialized');
+    })();
+    </script>
+    """
+
+
+def create_keyboard_shortcuts_script() -> str:
+    """キーボードショートカット用JavaScriptを生成．
+
+    Returns:
+        str: JavaScriptコード文字列
+    """
+    return """
+    <script>
+    (function() {
+        // Help modal state
+        let helpModalVisible = false;
+
+        // Create help modal element
+        const helpModal = document.createElement('div');
+        helpModal.id = 'keyboard-help-modal';
+        helpModal.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 32px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 10000;
+            max-width: 500px;
+            width: 90%;
+        `;
+        helpModal.innerHTML = `
+            <h2 style="margin: 0 0 24px 0; font-size: 24px; font-weight: 600; color: #1a1a1a;">
+                ⌨️ キーボードショートカット
+            </h2>
+            <div style="display: grid; gap: 12px;">
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">/</span>
+                    <span style="color: #1a1a1a;">検索にフォーカス</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">Esc</span>
+                    <span style="color: #1a1a1a;">検索クリア/閉じる</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">J / ↓</span>
+                    <span style="color: #1a1a1a;">次のレコード</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">K / ↑</span>
+                    <span style="color: #1a1a1a;">前のレコード</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">Ctrl + →</span>
+                    <span style="color: #1a1a1a;">次のページ</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e5e5;">
+                    <span style="font-weight: 600; color: #666;">Ctrl + ←</span>
+                    <span style="color: #1a1a1a;">前のページ</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px;">
+                    <span style="font-weight: 600; color: #666;">?</span>
+                    <span style="color: #1a1a1a;">ヘルプ表示</span>
+                </div>
+            </div>
+            <button id="close-help-modal" style="
+                margin-top: 24px;
+                width: 100%;
+                padding: 12px;
+                background: #0070f3;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s ease;
+            ">閉じる</button>
+        `;
+
+        // Create backdrop
+        const backdrop = document.createElement('div');
+        backdrop.id = 'keyboard-help-backdrop';
+        backdrop.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+        `;
+
+        // Add to DOM
+        document.body.appendChild(backdrop);
+        document.body.appendChild(helpModal);
+
+        // Toggle help modal
+        function toggleHelpModal() {
+            helpModalVisible = !helpModalVisible;
+            helpModal.style.display = helpModalVisible ? 'block' : 'none';
+            backdrop.style.display = helpModalVisible ? 'block' : 'none';
+        }
+
+        // Close modal button
+        document.getElementById('close-help-modal').addEventListener('click', toggleHelpModal);
+        backdrop.addEventListener('click', toggleHelpModal);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            // Don't trigger shortcuts when typing in input fields
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                if (e.key === 'Escape') {
+                    e.target.value = '';
+                    e.target.blur();
+                }
+                return;
+            }
+
+            // Close help modal with Escape
+            if (e.key === 'Escape' && helpModalVisible) {
+                toggleHelpModal();
+                return;
+            }
+
+            switch(e.key.toLowerCase()) {
+                case 'j':
+                case 'arrowdown':
+                    e.preventDefault();
+                    document.getElementById('next-record')?.click();
+                    break;
+                case 'k':
+                case 'arrowup':
+                    e.preventDefault();
+                    document.getElementById('prev-record')?.click();
+                    break;
+                case '/':
+                    e.preventDefault();
+                    const searchInput = document.getElementById('id-search-input')?.querySelector('input');
+                    if (searchInput) {
+                        searchInput.focus();
+                    }
+                    break;
+                case '?':
+                    e.preventDefault();
+                    toggleHelpModal();
+                    break;
+                case 'arrowright':
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        document.getElementById('next-page')?.click();
+                    }
+                    break;
+                case 'arrowleft':
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        document.getElementById('prev-page')?.click();
+                    }
+                    break;
+            }
+        });
+
+        console.log('⌨️ Keyboard shortcuts initialized');
+    })();
+    </script>
+    """
+
+
 class GradioVisualizationServer:
     """Gradio可視化サーバークラス．
 
@@ -89,26 +357,48 @@ class GradioVisualizationServer:
         Returns:
             設定済みのGradio Blocksインスタンス
         """
-        with gr.Blocks(
-            title="Maou Shogi Data Visualizer"
-        ) as demo:
-            gr.Markdown("# Maou将棋データ可視化ツール")
+        # カスタムCSSを読み込み
+        custom_css = _load_custom_css()
 
-            # Mode indicator
-            mode_indicator = (
-                "🔴 MOCK MODE (表示データは実データではありません)"
+        with gr.Blocks(
+            title="Maou Shogi Data Visualizer", css=custom_css
+        ) as demo:
+            # Header with mode badge
+            with gr.Row():
+                gr.Markdown("# ⚡ Maou将棋データ可視化ツール")
+
+            # Mode indicator with badge
+            badge_class = (
+                "warning" if self.use_mock_data else "success"
+            )
+            badge_text = (
+                "MOCK MODE"
                 if self.use_mock_data
-                else "🟢 REAL MODE"
+                else "REAL MODE"
             )
-            gr.Markdown(
-                f"**{mode_indicator}** | "
-                f"データセット: {len(self.file_paths)}ファイル，型={self.array_type}"
+            badge_icon = "🔴" if self.use_mock_data else "🟢"
+
+            gr.HTML(
+                f"""
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
+                    <span class="badge {badge_class}">{badge_icon} {badge_text}</span>
+                    <span style="color: var(--text-secondary); font-size: var(--text-sm);">
+                        データセット: {len(self.file_paths)}ファイル | 型={self.array_type}
+                    </span>
+                </div>
+                """
             )
+
+            # Toast notifications
+            gr.HTML(create_toast_notification_script())
+
+            # Keyboard shortcuts
+            gr.HTML(create_keyboard_shortcuts_script())
 
             with gr.Row():
                 # 左パネル: 検索コントロール
                 with gr.Column(scale=1):
-                    gr.Markdown("## 検索機能")
+                    gr.Markdown("## 🔍 検索機能")
 
                     # ID検索
                     with gr.Group():
@@ -116,9 +406,12 @@ class GradioVisualizationServer:
                         id_input = gr.Textbox(
                             label="レコードID",
                             placeholder="IDを入力...",
+                            elem_id="id-search-input",
                         )
                         id_search_btn = gr.Button(
-                            "ID検索", variant="primary"
+                            "ID検索",
+                            variant="primary",
+                            elem_id="id-search-btn",
                         )
 
                     # 評価値範囲検索（HCPEデータのみ）
@@ -149,22 +442,26 @@ class GradioVisualizationServer:
                     # ページ内レコードナビゲーション（新規）
                     with gr.Group():
                         gr.Markdown(
-                            "### レコードナビゲーション"
+                            "### 🎯 レコードナビゲーション"
                         )
                         with gr.Row():
                             prev_record_btn = gr.Button(
-                                "← 前のレコード", size="sm"
+                                "← 前のレコード",
+                                size="sm",
+                                elem_id="prev-record",
                             )
                             record_indicator = gr.Markdown(
                                 "Record 0 / 0"
                             )
                             next_record_btn = gr.Button(
-                                "次のレコード →", size="sm"
+                                "次のレコード →",
+                                size="sm",
+                                elem_id="next-record",
                             )
 
                     # ページネーション
                     with gr.Group():
-                        gr.Markdown("### ページネーション")
+                        gr.Markdown("### 📄 ページネーション")
                         page_size = gr.Slider(
                             label="1ページあたりの件数",
                             minimum=10,
@@ -173,13 +470,17 @@ class GradioVisualizationServer:
                             step=10,
                         )
                         with gr.Row():
-                            prev_btn = gr.Button("← 前へ")
-                            next_btn = gr.Button("次へ →")
+                            prev_btn = gr.Button(
+                                "← 前へ", elem_id="prev-page"
+                            )
+                            next_btn = gr.Button(
+                                "次へ →", elem_id="next-page"
+                            )
                         page_info = gr.Markdown("ページ 1")
 
                     # データセット情報
                     with gr.Group():
-                        gr.Markdown("### データセット情報")
+                        gr.Markdown("### 📈 データセット情報")
                         gr.JSON(
                             value=self.viz_interface.get_dataset_stats(),
                             label="統計情報",
@@ -187,7 +488,7 @@ class GradioVisualizationServer:
 
                 # 右パネル: 視覚化
                 with gr.Column(scale=2):
-                    gr.Markdown("## 盤面表示")
+                    gr.Markdown("## 🎴 盤面表示")
 
                     # ボード表示（SVG）
                     board_display = gr.HTML(
@@ -195,24 +496,28 @@ class GradioVisualizationServer:
                         label="盤面",
                     )
 
-                    # レコード詳細
-                    with gr.Accordion(
-                        "レコード詳細", open=True
-                    ):
-                        record_details = gr.JSON(
-                            label="全フィールド",
-                        )
+                    # タブ式レコード詳細表示
+                    with gr.Tabs():
+                        with gr.Tab("📋 概要"):
+                            record_details = gr.JSON(
+                                label="レコード詳細",
+                            )
 
-                    # 検索結果テーブル
-                    with gr.Accordion("検索結果", open=False):
-                        # Rendererから動的にヘッダーを取得
-                        table_headers = self.viz_interface.get_table_columns()
+                        with gr.Tab("📊 検索結果"):
+                            # Rendererから動的にヘッダーを取得
+                            table_headers = self.viz_interface.get_table_columns()
 
-                        results_table = gr.Dataframe(
-                            headers=table_headers,
-                            label="結果一覧",
-                            interactive=False,
-                        )
+                            results_table = gr.Dataframe(
+                                headers=table_headers,
+                                label="結果一覧",
+                                interactive=False,
+                            )
+
+                        with gr.Tab("📈 データ分析"):
+                            analytics_chart = gr.HTML(
+                                value="<p style='text-align: center; color: #666;'>検索を実行すると分析チャートが表示されます．</p>",
+                                label="データ分析チャート",
+                            )
 
             # イベントハンドラとState変数
             current_page = gr.State(value=1)
@@ -237,6 +542,7 @@ class GradioVisualizationServer:
                     current_page_records,  # キャッシュ
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
+                    analytics_chart,  # 分析チャート
                 ],
             )
 
@@ -262,6 +568,7 @@ class GradioVisualizationServer:
                     current_page_records,  # キャッシュ
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
+                    analytics_chart,  # 分析チャート
                 ],
             )
 
@@ -292,6 +599,7 @@ class GradioVisualizationServer:
                     current_page_records,  # キャッシュ
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
+                    analytics_chart,  # 分析チャート
                 ],
             )
 
@@ -315,6 +623,7 @@ class GradioVisualizationServer:
                     current_page_records,  # キャッシュ
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
+                    analytics_chart,  # 分析チャート
                 ],
             )
 
@@ -338,6 +647,7 @@ class GradioVisualizationServer:
                     record_details,
                     current_page_records,
                     record_indicator,
+                    analytics_chart,
                 ],
             )
 
@@ -360,6 +670,7 @@ class GradioVisualizationServer:
                     record_details,
                     current_page_records,
                     record_indicator,
+                    analytics_chart,
                 ],
             )
 
@@ -379,6 +690,7 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         int,
         str,
+        str,
     ]:
         """検索を実行し，レコードをキャッシュするラッパー関数．
 
@@ -393,7 +705,7 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator)
+             cached_records, record_index, record_indicator, analytics_html)
         """
         (
             table_data,
@@ -415,6 +727,11 @@ class GradioVisualizationServer:
         else:
             record_indicator = "Record 0 / 0"
 
+        # 分析チャート生成
+        analytics_html = self.viz_interface.generate_analytics(
+            cached_records
+        )
+
         return (
             table_data,
             page_info,
@@ -423,6 +740,7 @@ class GradioVisualizationServer:
             cached_records,  # キャッシュ
             0,  # record_indexをリセット
             record_indicator,  # インジケーター
+            analytics_html,  # 分析チャート
         )
 
     def _paginate_all_data(
@@ -439,6 +757,7 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         int,
         str,
+        str,
     ]:
         """全データをページネーション（評価値フィルタなし）．
 
@@ -453,7 +772,7 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator)
+             cached_records, record_index, record_indicator, analytics_html)
         """
         # 評価値パラメータを明示的にNoneにして全データを取得
         # （引数のmin_eval, max_evalは無視）
@@ -652,6 +971,7 @@ class GradioVisualizationServer:
         Dict[str, Any],
         List[Dict[str, Any]],
         str,
+        str,
     ]:
         """次のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -665,7 +985,7 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator)
+             board_svg, details, cached_records, record_indicator, analytics_html)
         """
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
@@ -696,6 +1016,13 @@ class GradioVisualizationServer:
                 f"ページ {current_page} / {total_pages}"
             )
 
+            # ページ内ナビゲーション時はanalyticsは変わらない
+            analytics_html = (
+                self.viz_interface.generate_analytics(
+                    current_page_records
+                )
+            )
+
             return (
                 current_page,
                 new_index,
@@ -705,6 +1032,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
+                analytics_html,
             )
 
         # ページ境界：次のページへ移動
@@ -728,6 +1056,7 @@ class GradioVisualizationServer:
             cached_records,
             _,  # record_indexは0にリセットされる
             record_indicator,
+            analytics_html,
         ) = paginate_fn(
             min_eval, max_eval, next_page, page_size
         )
@@ -741,6 +1070,7 @@ class GradioVisualizationServer:
             details,
             cached_records,
             record_indicator,
+            analytics_html,
         )
 
     def _navigate_prev_record(
@@ -760,6 +1090,7 @@ class GradioVisualizationServer:
         Dict[str, Any],
         List[Dict[str, Any]],
         str,
+        str,
     ]:
         """前のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -773,7 +1104,7 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator)
+             board_svg, details, cached_records, record_indicator, analytics_html)
         """
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
@@ -804,6 +1135,13 @@ class GradioVisualizationServer:
                 f"ページ {current_page} / {total_pages}"
             )
 
+            # ページ内ナビゲーション時はanalyticsは変わらない
+            analytics_html = (
+                self.viz_interface.generate_analytics(
+                    current_page_records
+                )
+            )
+
             return (
                 current_page,
                 new_index,
@@ -813,6 +1151,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
+                analytics_html,
             )
 
         # ページ境界：前のページへ移動
@@ -836,6 +1175,7 @@ class GradioVisualizationServer:
             cached_records,
             _,  # record_indexは最後に設定される
             _,  # record_indicatorは後で更新
+            analytics_html,
         ) = paginate_fn(
             min_eval, max_eval, prev_page, page_size
         )
@@ -865,6 +1205,7 @@ class GradioVisualizationServer:
             details,
             cached_records,
             record_indicator,
+            analytics_html,
         )
 
 

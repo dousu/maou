@@ -277,6 +277,19 @@ class VisualizationInterface:
             "num_files": len(self.file_paths),
         }
 
+    def generate_analytics(
+        self, records: List[Dict[str, Any]]
+    ) -> str:
+        """レコード群からデータ分析用のチャートHTMLを生成する．
+
+        Args:
+            records: 分析対象のレコードリスト
+
+        Returns:
+            PlotlyチャートのHTML文字列
+        """
+        return self.renderer.generate_analytics(records)
+
     def _render_empty_message(self, message: str) -> str:
         """空メッセージ用のHTML．
 
