@@ -1309,3 +1309,60 @@ While skills activate automatically, you can explicitly request them:
 ```
 
 Run `poetry run maou --help` for detailed CLI options and examples.
+
+## Plugins
+
+The project uses Claude Code plugins to extend functionality with specialized capabilities. Plugins are installed from the official plugin marketplace and automatically integrate with Claude Code sessions.
+
+### Installed Plugins
+
+#### frontend-design
+
+Generates distinctive, production-grade frontend interfaces that avoid generic AI aesthetics.
+
+**Purpose**: Creates bold, memorable frontend code with exceptional attention to aesthetic details and creative choices.
+
+**Automatically activates when**:
+- Building web components, pages, or applications
+- Creating user interfaces
+- Implementing frontend designs
+
+**Key Features**:
+- Bold aesthetic choices (minimalist, maximalist, retro-futuristic, etc.)
+- Distinctive typography and color palettes
+- High-impact animations and visual details
+- Production-ready, functional code
+- Context-aware implementation
+
+**Usage Examples**:
+```
+"Create a dashboard for a music streaming app"
+"Build a landing page for an AI security startup"
+"Design a settings panel with dark mode"
+```
+
+**Design Guidelines**:
+- **Typography**: Distinctive fonts that elevate aesthetics (avoid Arial, Inter, Roboto)
+- **Color & Theme**: Cohesive aesthetic with dominant colors and sharp accents
+- **Motion**: High-impact animations with staggered reveals and scroll-triggered effects
+- **Spatial Composition**: Unexpected layouts, asymmetry, generous negative space
+- **Visual Details**: Gradient meshes, noise textures, geometric patterns, layered transparencies
+
+**Important**: Match implementation complexity to aesthetic vision. Maximalist designs require elaborate code; minimalist designs need precision and restraint.
+
+**Learn More**: [Frontend Aesthetics Cookbook](https://github.com/anthropics/claude-cookbooks/blob/main/coding/prompting_for_frontend_aesthetics.ipynb)
+
+**Authors**: Prithvi Rajasekaran, Alexander Bricken (Anthropic)
+
+### Plugin Management
+
+Plugins are configured in `.claude/settings.json`:
+```json
+{
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
+  }
+}
+```
+
+**Note**: Restart Claude Code after installing new plugins to load them.

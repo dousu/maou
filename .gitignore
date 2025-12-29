@@ -146,5 +146,7 @@ checkpoints/
 **/.claude/settings.local.json
 
 settings.json
+# Allow .claude/settings.json to be committed (plugin configuration)
+!.claude/settings.json
 test_*.html
 stage1_data/
