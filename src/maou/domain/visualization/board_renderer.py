@@ -374,14 +374,14 @@ class SVGBoardRenderer:
     def _draw_coordinates(self) -> str:
         """盤面の座標（1-9, a-i）を描画．
 
-        将棋の標準的な符号表記に従い，列番号は右から左へ（9→1）だが，
+        将棋の標準的な符号表記に従い，列番号は右から左へ（9→1）と表示する．
         配列では col=0 が右端（筋9），col=8 が左端（筋1）となっている．
-        描画時に列を反転させているため，ラベルも左から右へ（1→9）と表示する．
+        描画時に列を反転させているため，ラベルは右から左へ（9→1）と表示する．
         """
         coord_parts = []
 
-        # 列番号（1-9，左から右へ）
-        # 描画時に列を反転させているため，ラベルも反転させる
+        # 列番号（9-1，右から左へ）
+        # 描画時に列を反転させているため，ラベルも将棋の標準に合わせて右から左へ表示
         for visual_col in range(9):
             x = (
                 self.MARGIN
@@ -391,8 +391,8 @@ class SVGBoardRenderer:
             )
             y = self.MARGIN - 5
 
-            # visual_col=0（左端）→ 筋1，visual_col=8（右端）→ 筋9
-            col_number = visual_col + 1
+            # visual_col=0（左端）→ 筋9，visual_col=8（右端）→ 筋1
+            col_number = 9 - visual_col
 
             # 背景を追加して視認性向上
             coord_parts.append(
