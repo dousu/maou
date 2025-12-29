@@ -267,7 +267,8 @@ class SVGBoardRenderer:
                 # マスのハイライト（駒の有無に関係なく描画）
                 if square_idx in highlight_set:
                     x_rect = (
-                        board_x_start + visual_col * self.CELL_SIZE
+                        board_x_start
+                        + visual_col * self.CELL_SIZE
                     )
                     y_rect = self.MARGIN + row * self.CELL_SIZE
                     piece_parts.append(
