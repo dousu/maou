@@ -52,6 +52,7 @@ class SVGBoardRenderer:
     BOARD_WIDTH = 9 * CELL_SIZE  # 盤面幅
     BOARD_HEIGHT = 9 * CELL_SIZE  # 盤面高さ
     HAND_AREA_WIDTH = 150  # 持ち駒エリア幅
+    GAP_BETWEEN_HAND_AND_BOARD = 30  # 持ち駒と盤面の間の隙間
     MARGIN = 20  # マージン
 
     # 駒の日本語表記（PieceId → 文字）
@@ -128,6 +129,7 @@ class SVGBoardRenderer:
             self.MARGIN * 2
             + self.BOARD_WIDTH
             + self.HAND_AREA_WIDTH * 2
+            + self.GAP_BETWEEN_HAND_AND_BOARD * 2
         )
         total_height = self.MARGIN * 2 + self.BOARD_HEIGHT
 
@@ -180,9 +182,16 @@ class SVGBoardRenderer:
         """将棋盤のグリッド線を描画．"""
         grid_parts = []
 
+        # 盤面のX座標開始位置（左側の持ち駒 + ギャップを考慮）
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
         # 盤面背景
         grid_parts.append(
-            f'<rect x="{self.MARGIN + self.HAND_AREA_WIDTH}" '
+            f'<rect x="{board_x_start}" '
             f'y="{self.MARGIN}" '
             f'width="{self.BOARD_WIDTH}" '
             f'height="{self.BOARD_HEIGHT}" '
@@ -193,11 +202,7 @@ class SVGBoardRenderer:
         # ホバーターゲット（各マスに透明な矩形を配置）
         for row in range(9):
             for col in range(9):
-                x = (
-                    self.MARGIN
-                    + self.HAND_AREA_WIDTH
-                    + col * self.CELL_SIZE
-                )
+                x = board_x_start + col * self.CELL_SIZE
                 y = self.MARGIN + row * self.CELL_SIZE
                 grid_parts.append(
                     f'<rect class="board-square" '
@@ -208,11 +213,7 @@ class SVGBoardRenderer:
 
         # 縦線（10本: 0-9列の境界）
         for i in range(10):
-            x = (
-                self.MARGIN
-                + self.HAND_AREA_WIDTH
-                + i * self.CELL_SIZE
-            )
+            x = board_x_start + i * self.CELL_SIZE
             y1 = self.MARGIN
             y2 = self.MARGIN + self.BOARD_HEIGHT
             grid_parts.append(
@@ -223,12 +224,8 @@ class SVGBoardRenderer:
         # 横線（10本: 0-9行の境界）
         for i in range(10):
             y = self.MARGIN + i * self.CELL_SIZE
-            x1 = self.MARGIN + self.HAND_AREA_WIDTH
-            x2 = (
-                self.MARGIN
-                + self.HAND_AREA_WIDTH
-                + self.BOARD_WIDTH
-            )
+            x1 = board_x_start
+            x2 = board_x_start + self.BOARD_WIDTH
             grid_parts.append(
                 f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" '
                 f'stroke="{self.COLOR_GRID}" stroke-width="1"/>'
@@ -252,6 +249,13 @@ class SVGBoardRenderer:
         """
         piece_parts = []
 
+        # 盤面のX座標開始位置
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
         for row in range(9):
             for col in range(9):
                 piece_id = board_id_positions[row][col]
@@ -263,9 +267,7 @@ class SVGBoardRenderer:
                 # マスのハイライト（駒の有無に関係なく描画）
                 if square_idx in highlight_set:
                     x_rect = (
-                        self.MARGIN
-                        + self.HAND_AREA_WIDTH
-                        + visual_col * self.CELL_SIZE
+                        board_x_start + visual_col * self.CELL_SIZE
                     )
                     y_rect = self.MARGIN + row * self.CELL_SIZE
                     piece_parts.append(
@@ -290,8 +292,7 @@ class SVGBoardRenderer:
                 )
 
                 x = (
-                    self.MARGIN
-                    + self.HAND_AREA_WIDTH
+                    board_x_start
                     + visual_col * self.CELL_SIZE
                     + self.CELL_SIZE / 2
                 )
@@ -350,7 +351,9 @@ class SVGBoardRenderer:
                 pieces=pieces_in_hand[7:14],
                 x_base=self.MARGIN
                 + self.HAND_AREA_WIDTH
-                + self.BOARD_WIDTH,
+                + self.GAP_BETWEEN_HAND_AND_BOARD
+                + self.BOARD_WIDTH
+                + self.GAP_BETWEEN_HAND_AND_BOARD,
                 y_base=self.MARGIN,
                 title="後手持ち駒",
                 is_black=False,
@@ -438,12 +441,18 @@ class SVGBoardRenderer:
         """
         coord_parts = []
 
+        # 盤面のX座標開始位置
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
         # 列番号（9-1，右から左へ）
         # 描画時に列を反転させているため，ラベルも将棋の標準に合わせて右から左へ表示
         for visual_col in range(9):
             x = (
-                self.MARGIN
-                + self.HAND_AREA_WIDTH
+                board_x_start
                 + visual_col * self.CELL_SIZE
                 + self.CELL_SIZE / 2
             )
@@ -465,9 +474,10 @@ class SVGBoardRenderer:
                 f'font-weight="600">{col_number}</text>'
             )
 
-        # 行記号（a-i，左側）
+        # 行記号（a-i，盤面の左側）
         for row in range(9):
-            x = self.MARGIN + self.HAND_AREA_WIDTH - 10
+            # 盤面の左端から少し左に配置
+            x = board_x_start - 10
             y = int(
                 self.MARGIN
                 + row * self.CELL_SIZE

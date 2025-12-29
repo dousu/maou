@@ -404,8 +404,9 @@ class GradioVisualizationServer:
                     with gr.Group():
                         gr.Markdown("### ID検索")
                         id_input = gr.Textbox(
-                            label="レコードID",
-                            placeholder="IDを入力...",
+                            label="🔍 レコードID",
+                            placeholder="例: 123456789",
+                            info="検索したいレコードのIDを入力してください",
                             elem_id="id-search-input",
                         )
                         id_search_btn = gr.Button(
@@ -419,12 +420,14 @@ class GradioVisualizationServer:
                         with gr.Group():
                             gr.Markdown("### 評価値範囲検索")
                             min_eval = gr.Number(
-                                label="最小評価値",
+                                label="📉 最小評価値",
+                                info="評価値の下限（例: -1000）",
                                 value=-1000,
                                 precision=0,
                             )
                             max_eval = gr.Number(
-                                label="最大評価値",
+                                label="📈 最大評価値",
+                                info="評価値の上限（例: 1000）",
                                 value=1000,
                                 precision=0,
                             )
@@ -463,7 +466,8 @@ class GradioVisualizationServer:
                     with gr.Group():
                         gr.Markdown("### 📄 ページネーション")
                         page_size = gr.Slider(
-                            label="1ページあたりの件数",
+                            label="📊 1ページあたりの件数",
+                            info="一度に表示するレコード数を設定（10〜100件）",
                             minimum=10,
                             maximum=100,
                             value=20,

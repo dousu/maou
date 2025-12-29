@@ -168,7 +168,8 @@
 .gradio-container textarea::placeholder,
 .gradio-container .gr-input input::placeholder,
 .gradio-container .gr-textbox input::placeholder {
-    color: var(--text-tertiary) !important;
+    color: #718096 !important;
+    font-weight: 400 !important;
 }
 
 /* Number input specific styling */
@@ -206,6 +207,13 @@
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+/* Slider label */
+.gradio-container .gr-slider label {
+    font-size: var(--text-base) !important;
+    font-weight: 600 !important;
+    color: #1a1a1a !important;
+}
+
 /* Slider value display */
 .gradio-container .gr-slider input[type="number"] {
     font-weight: 700 !important;
@@ -216,11 +224,45 @@
 /* ========================================
    Labels
    ======================================== */
-.gradio-container label {
-    font-size: var(--text-sm) !important;
+/* より強力なセレクタで全てのラベルをターゲット */
+.gradio-container label,
+.gradio-container .label,
+.gradio-container span.label,
+.gradio-container .gr-text-input label,
+.gradio-container .gr-number-input label,
+.gradio-container .gr-textbox label,
+.gradio-container [data-testid="textbox"] label,
+.gradio-container [data-testid="number"] label,
+.gradio-container .wrap > label,
+.gradio-container .block > label,
+.gradio-container span[class*="label"],
+.gradio-container div[class*="label"] > span {
+    font-size: var(--text-base) !important;
     font-weight: 600 !important;
-    color: var(--text-primary) !important;
+    color: #1a1a1a !important;
     margin-bottom: var(--space-2) !important;
+}
+
+/* Gradioの特定のSvelteクラスを上書き */
+.gradio-container [class*="svelte-"] label,
+.gradio-container [class*="svelte-"] span {
+    color: #1a1a1a !important;
+}
+
+/* Info text (説明文) */
+.gradio-container .gr-info,
+.gradio-container .info,
+.gradio-container .description,
+.gradio-container .gr-text-input .info,
+.gradio-container .gr-number-input .info,
+.gradio-container [data-testid="textbox"] .info,
+.gradio-container [data-testid="number"] .info,
+.gradio-container p.info {
+    font-size: var(--text-sm) !important;
+    color: #4a5568 !important;
+    margin-top: var(--space-1) !important;
+    font-weight: 400 !important;
+    line-height: 1.5 !important;
 }
 
 /* ========================================
