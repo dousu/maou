@@ -185,7 +185,8 @@ impl DataIndex {
             .collect()
             .map_err(|e| {
                 IndexError::BuildFailed(format!(
-                    "Failed to collect DataFrame: {}",
+                    "Failed to collect DataFrame from {}: {}",
+                    file_path.display(),
                     e
                 ))
             })?;
