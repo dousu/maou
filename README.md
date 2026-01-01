@@ -21,6 +21,78 @@ devcontainerのfeaturesになるべくインストールを任せたいため．
 
 featuresはインストール順序としては最後になるためPython等に依存しているとDockerfileにインストール処理を書けない．
 
+### Rustバックエンドのビルド
+
+**重要**: このプロジェクトはPython拡張モジュールとしてRustコードを使用しています．
+`poetry sync`または`poetry install`を実行した後，Rust拡張モジュールを明示的にビルドする必要があります．
+
+#### 通常の環境（開発マシン・devcontainer）
+
+```bash
+# Rustツールチェーンのインストール（未インストールの場合）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# Rust拡張モジュールのビルド（必須）
+poetry run maturin develop
+
+# ビルド確認
+poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+# 期待される出力: "Maou I/O Rust backend initialized"
+```
+
+#### 非対話的環境（Google Colab・Jupyter Notebook）
+
+Google ColabやJupyter Notebookなどの非対話的環境では，`-y`フラグを使用して自動承認モードでインストールします．
+
+**重要**: Colabでは各セル（`!`コマンド）が独立したシェルセッションで実行されるため，
+環境変数の設定が次のセルに引き継がれません．以下のいずれかの方法で実行してください．
+
+##### 方法1: すべてのコマンドを1つのセルで実行（推奨）
+
+```bash
+# Rustインストール + ビルドを1つのセルで実行
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+  source "$HOME/.cargo/env" && \
+  poetry run maturin develop
+```
+
+##### 方法2: 各コマンドでPATHを明示的に設定
+
+```bash
+# セル1: Rustツールチェーンのインストール
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# セル2: PATHを設定してビルド（source不要）
+!export PATH="$HOME/.cargo/bin:$PATH" && poetry run maturin develop
+
+# セル3: ビルド確認
+!export PATH="$HOME/.cargo/bin:$PATH" && poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+```
+
+##### 方法3: 環境変数を永続的に設定
+
+```python
+# セル1: Rustインストール
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# セル2: PATHをPython経由で設定（以降のセルでも有効）
+import os
+os.environ['PATH'] = f"{os.path.expanduser('~')}/.cargo/bin:{os.environ['PATH']}"
+
+# セル3: ビルド実行
+!poetry run maturin develop
+
+# セル4: ビルド確認
+!poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+```
+
+**注意**: `poetry sync -E cpu -E gcp`などを実行した場合でも，
+上記の`poetry run maturin develop`を実行しないとRust拡張モジュールが利用できず，
+`maou hcpe-convert`などのコマンドが動作しません．
+
+依存関係を更新した後も，必ず`poetry run maturin develop`を実行してください．
+
 ### Pythonアップデート方法
 
 ```bash
@@ -31,6 +103,11 @@ poetry env list
 poetry env remove ${古いpython環境}
 poetry env use python
 bash scripts/dev-init.sh
+
+# 注意: dev-init.shはRust拡張モジュールのビルドも実行します
+# 手動で依存関係をインストールする場合は以下のように実行してください
+# poetry sync -E cpu -E gcp --without dev
+# poetry run maturin develop
 ```
 
 ### poetry cache削除

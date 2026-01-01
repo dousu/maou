@@ -149,6 +149,8 @@ Rust code is located in `rust/maou_io/` and integrated via PyO3 + maturin．
 
 ### Initial Rust Setup
 
+#### Interactive Environment (Development Machine / DevContainer)
+
 ```bash
 # Install Rust toolchain (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -160,6 +162,52 @@ poetry install
 # Verify Rust backend
 poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
 # Expected output: "Maou I/O Rust backend initialized"
+```
+
+#### Non-Interactive Environment (Google Colab / Jupyter Notebook)
+
+For non-interactive environments like Google Colab, use the `-y` flag for automatic acceptance.
+
+**IMPORTANT**: In Colab, each cell (`!` command) runs in a separate shell session,
+so environment variables don't persist across cells. Use one of these approaches:
+
+##### Method 1: Run all commands in one cell (Recommended)
+
+```bash
+# Install Rust + build extension in one cell
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+  source "$HOME/.cargo/env" && \
+  poetry run maturin develop
+```
+
+##### Method 2: Explicitly set PATH in each command
+
+```bash
+# Cell 1: Install Rust toolchain
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Cell 2: Build extension with PATH set
+!export PATH="$HOME/.cargo/bin:$PATH" && poetry run maturin develop
+
+# Cell 3: Verify build
+!export PATH="$HOME/.cargo/bin:$PATH" && poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+```
+
+##### Method 3: Set environment variable via Python (persistent across cells)
+
+```python
+# Cell 1: Install Rust
+!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Cell 2: Set PATH via Python (persists for subsequent cells)
+import os
+os.environ['PATH'] = f"{os.path.expanduser('~')}/.cargo/bin:{os.environ['PATH']}"
+
+# Cell 3: Build extension
+!poetry run maturin develop
+
+# Cell 4: Verify build
+!poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
 ```
 
 ### Development Workflow
