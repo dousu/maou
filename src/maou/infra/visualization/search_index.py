@@ -1,21 +1,22 @@
-"""Rust検索インデックスのPythonラッパー（インフラ層）．
+"""検索インデックスのPython実装（インフラ層）．
 
-Rustで実装された高性能インデックスをPythonから使用するためのラッパークラス．
+ファイルからデータを読み込み，ID・評価値による高速検索を提供する．
 """
 
 import logging
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from maou._rust.maou_index import SearchIndex as RustSearchIndex
+import polars as pl
 
 logger = logging.getLogger(__name__)
 
 
 class SearchIndex:
-    """検索インデックスクラス（Rustバックエンド）．
+    """検索インデックスクラス（Python実装）．
 
-    Rust実装の高性能インデックスをPythonから利用するためのラッパークラス．
+    .featherファイルからデータを読み込み，ID・評価値による検索機能を提供する．
     """
 
     def __init__(
@@ -51,11 +52,10 @@ class SearchIndex:
         self.array_type = array_type
         self.use_mock_data = use_mock_data
 
-        # Rustインデックスを初期化
-        file_paths_str = [str(p) for p in file_paths]
-        self._rust_index = RustSearchIndex(
-            file_paths_str, array_type
-        )
+        # インデックス構造
+        self._id_index: Dict[str, Tuple[int, int]] = {}  # id -> (file_idx, row_idx)
+        self._eval_index: Dict[int, List[Tuple[int, int]]] = defaultdict(list)  # eval -> [(file_idx, row_idx), ...]
+        self._total_records = 0
 
         if use_mock_data:
             logger.warning(
@@ -80,7 +80,19 @@ class SearchIndex:
         logger.info(
             f"Building mock index with {num_records} records"
         )
-        self._rust_index.build_mock(num_records)
+        # モックデータを生成
+        import random
+
+        for i in range(num_records):
+            record_id = f"mock_{i:08d}"
+            eval_value = random.randint(-3000, 3000) if self.array_type == "hcpe" else 0
+            # 仮想的なfile_index=0，row_number=i
+            self._id_index[record_id] = (0, i)
+            if self.array_type == "hcpe":
+                self._eval_index[eval_value].append((0, i))
+
+        self._total_records = num_records
+        logger.info(f"✅ Mock index built: {num_records:,} records")
 
     def search_by_id(
         self, record_id: str
@@ -93,11 +105,7 @@ class SearchIndex:
         Returns:
             (file_index, row_number)のタプル，またはNone
         """
-        result = self._rust_index.search_by_id(record_id)
-        if result is None:
-            return None
-        # Rustから返される(u32, u32)をPythonの(int, int)に変換
-        return (int(result[0]), int(result[1]))
+        return self._id_index.get(record_id)
 
     def search_by_eval_range(
         self,
@@ -131,26 +139,27 @@ class SearchIndex:
                 f"got: {self.array_type}"
             )
 
-        # 非HCPEデータの場合，min_eval=None, max_eval=Noneで全データを取得
-        # （ページネーション用）
+        # 評価値範囲で検索
+        if self.array_type == "hcpe" and (min_eval is not None or max_eval is not None):
+            # HCPEデータで評価値フィルタあり
+            min_v = min_eval if min_eval is not None else -32768
+            max_v = max_eval if max_eval is not None else 32767
 
-        # Rustの型に合わせてi16に変換（必要に応じて）
-        min_eval_i16 = (
-            None if min_eval is None else int(min_eval)
-        )
-        max_eval_i16 = (
-            None if max_eval is None else int(max_eval)
-        )
+            # 該当する評価値のレコードを収集
+            results = []
+            for eval_value in sorted(self._eval_index.keys()):
+                if min_v <= eval_value <= max_v:
+                    results.extend(self._eval_index[eval_value])
 
-        results = self._rust_index.search_by_eval_range(
-            min_eval_i16, max_eval_i16, offset, limit
-        )
-
-        # Rustから返される[(u32, u32), ...]をPythonの[(int, int), ...]に変換
-        return [
-            (int(file_idx), int(row_num))
-            for file_idx, row_num in results
-        ]
+            # offset/limitを適用
+            return results[offset : offset + limit]
+        else:
+            # 非HCPEデータ，またはeval filterなし -> 全データを返す
+            all_records = [
+                (file_idx, row_idx)
+                for file_idx, row_idx in self._id_index.values()
+            ]
+            return all_records[offset : offset + limit]
 
     def count_eval_range(
         self,
@@ -178,17 +187,20 @@ class SearchIndex:
         ):
             return 0
 
-        # Rustの型に合わせてi16に変換
-        min_eval_i16 = (
-            None if min_eval is None else int(min_eval)
-        )
-        max_eval_i16 = (
-            None if max_eval is None else int(max_eval)
-        )
+        # 評価値範囲でカウント
+        if self.array_type == "hcpe" and (min_eval is not None or max_eval is not None):
+            # HCPEデータで評価値フィルタあり
+            min_v = min_eval if min_eval is not None else -32768
+            max_v = max_eval if max_eval is not None else 32767
 
-        return self._rust_index.count_eval_range(
-            min_eval_i16, max_eval_i16
-        )
+            count = 0
+            for eval_value in self._eval_index.keys():
+                if min_v <= eval_value <= max_v:
+                    count += len(self._eval_index[eval_value])
+            return count
+        else:
+            # 全データカウント
+            return self._total_records
 
     def _build_from_files(self) -> None:
         """実ファイルをスキャンして検索インデックスを構築．
@@ -201,9 +213,37 @@ class SearchIndex:
         )
 
         try:
-            self._rust_index.build_from_files()
+            for file_idx, file_path in enumerate(self.file_paths):
+                # pl.read_ipc を使用してファイルを読み込み（LZ4圧縮対応）
+                # LZ4圧縮ファイルはメモリマップ不可のため明示的にFalseを指定
+                df = pl.read_ipc(file_path, memory_map=False)
+
+                # idカラムを取得
+                if "id" not in df.columns:
+                    raise ValueError(f"Missing 'id' column in {file_path}")
+
+                id_column = df["id"]
+
+                # evalカラムを取得（HCPEの場合のみ）
+                eval_column = None
+                if self.array_type == "hcpe":
+                    if "eval" in df.columns:
+                        eval_column = df["eval"]
+
+                # インデックスに追加
+                for row_idx in range(len(df)):
+                    record_id = str(id_column[row_idx])
+                    self._id_index[record_id] = (file_idx, row_idx)
+
+                    # HCPE の場合は評価値インデックスも構築
+                    if eval_column is not None:
+                        eval_value = int(eval_column[row_idx])
+                        self._eval_index[eval_value].append((file_idx, row_idx))
+
+                    self._total_records += 1
+
             logger.info(
-                f"✅ Index built: {self.total_records():,} total records"
+                f"✅ Index built: {self._total_records:,} total records"
             )
         except Exception as e:
             logger.error(f"Failed to build index: {e}")
@@ -215,7 +255,7 @@ class SearchIndex:
         Returns:
             総レコード数
         """
-        return self._rust_index.total_records()
+        return self._total_records
 
     @classmethod
     def build(

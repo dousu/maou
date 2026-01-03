@@ -170,22 +170,20 @@ impl DataIndex {
     /// 成功時はOk(())，エラー時はErr
     pub fn build_from_files(&mut self) -> Result<(), IndexError> {
         for (file_idx, file_path) in self.file_paths.clone().iter().enumerate() {
-            // Featherファイルを読み込み
-            let df = LazyFrame::scan_ipc(
-                file_path,
-                ScanArgsIpc::default(),
-            )
+            // Featherファイルを読み込み（scan_ipcではなくread_ipcを使用してLZ4圧縮に対応）
+            let df = IpcReader::new(std::fs::File::open(file_path).map_err(
+                |e| {
+                    IndexError::BuildFailed(format!(
+                        "Failed to open {}: {}",
+                        file_path.display(),
+                        e
+                    ))
+                },
+            )?)
+            .finish()
             .map_err(|e| {
                 IndexError::BuildFailed(format!(
-                    "Failed to read {}: {}",
-                    file_path.display(),
-                    e
-                ))
-            })?
-            .collect()
-            .map_err(|e| {
-                IndexError::BuildFailed(format!(
-                    "Failed to collect DataFrame from {}: {}",
+                    "Failed to read DataFrame from {}: {}",
                     file_path.display(),
                     e
                 ))

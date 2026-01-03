@@ -24,3 +24,19 @@ updates:
       update:
         patterns:
           - "*"
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      update:
+        patterns:
+          - "*"
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      update:
+        patterns:
+          - "*"
