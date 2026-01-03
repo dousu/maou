@@ -88,7 +88,7 @@ class SearchIndex:
         import random
 
         for i in range(num_records):
-            record_id = f"mock_{i:08d}"
+            record_id = f"mock_id_{i}"
             eval_value = (
                 random.randint(-3000, 3000)
                 if self.array_type == "hcpe"
