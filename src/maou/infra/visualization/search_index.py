@@ -53,8 +53,12 @@ class SearchIndex:
         self.use_mock_data = use_mock_data
 
         # インデックス構造
-        self._id_index: Dict[str, Tuple[int, int]] = {}  # id -> (file_idx, row_idx)
-        self._eval_index: Dict[int, List[Tuple[int, int]]] = defaultdict(list)  # eval -> [(file_idx, row_idx), ...]
+        self._id_index: Dict[
+            str, Tuple[int, int]
+        ] = {}  # id -> (file_idx, row_idx)
+        self._eval_index: Dict[int, List[Tuple[int, int]]] = (
+            defaultdict(list)
+        )  # eval -> [(file_idx, row_idx), ...]
         self._total_records = 0
 
         if use_mock_data:
@@ -85,14 +89,20 @@ class SearchIndex:
 
         for i in range(num_records):
             record_id = f"mock_{i:08d}"
-            eval_value = random.randint(-3000, 3000) if self.array_type == "hcpe" else 0
+            eval_value = (
+                random.randint(-3000, 3000)
+                if self.array_type == "hcpe"
+                else 0
+            )
             # 仮想的なfile_index=0，row_number=i
             self._id_index[record_id] = (0, i)
             if self.array_type == "hcpe":
                 self._eval_index[eval_value].append((0, i))
 
         self._total_records = num_records
-        logger.info(f"✅ Mock index built: {num_records:,} records")
+        logger.info(
+            f"✅ Mock index built: {num_records:,} records"
+        )
 
     def search_by_id(
         self, record_id: str
@@ -140,7 +150,9 @@ class SearchIndex:
             )
 
         # 評価値範囲で検索
-        if self.array_type == "hcpe" and (min_eval is not None or max_eval is not None):
+        if self.array_type == "hcpe" and (
+            min_eval is not None or max_eval is not None
+        ):
             # HCPEデータで評価値フィルタあり
             min_v = min_eval if min_eval is not None else -32768
             max_v = max_eval if max_eval is not None else 32767
@@ -188,7 +200,9 @@ class SearchIndex:
             return 0
 
         # 評価値範囲でカウント
-        if self.array_type == "hcpe" and (min_eval is not None or max_eval is not None):
+        if self.array_type == "hcpe" and (
+            min_eval is not None or max_eval is not None
+        ):
             # HCPEデータで評価値フィルタあり
             min_v = min_eval if min_eval is not None else -32768
             max_v = max_eval if max_eval is not None else 32767
@@ -213,14 +227,18 @@ class SearchIndex:
         )
 
         try:
-            for file_idx, file_path in enumerate(self.file_paths):
+            for file_idx, file_path in enumerate(
+                self.file_paths
+            ):
                 # pl.read_ipc を使用してファイルを読み込み（LZ4圧縮対応）
                 # LZ4圧縮ファイルはメモリマップ不可のため明示的にFalseを指定
                 df = pl.read_ipc(file_path, memory_map=False)
 
                 # idカラムを取得
                 if "id" not in df.columns:
-                    raise ValueError(f"Missing 'id' column in {file_path}")
+                    raise ValueError(
+                        f"Missing 'id' column in {file_path}"
+                    )
 
                 id_column = df["id"]
 
@@ -233,12 +251,17 @@ class SearchIndex:
                 # インデックスに追加
                 for row_idx in range(len(df)):
                     record_id = str(id_column[row_idx])
-                    self._id_index[record_id] = (file_idx, row_idx)
+                    self._id_index[record_id] = (
+                        file_idx,
+                        row_idx,
+                    )
 
                     # HCPE の場合は評価値インデックスも構築
                     if eval_column is not None:
                         eval_value = int(eval_column[row_idx])
-                        self._eval_index[eval_value].append((file_idx, row_idx))
+                        self._eval_index[eval_value].append(
+                            (file_idx, row_idx)
+                        )
 
                     self._total_records += 1
 
