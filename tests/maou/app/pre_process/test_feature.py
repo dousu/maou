@@ -120,7 +120,7 @@ class TestGetBoardIdPositionsDF:
 
         expected = np.zeros((9, 9), dtype=np.uint8)
         offset = len(PieceId) - 1
-        expected[0, 8] = PieceId.FU.value + offset
+        expected[8, 0] = PieceId.FU.value + offset
 
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)
@@ -138,7 +138,7 @@ class TestGetBoardIdPositionsDF:
 
         expected = np.zeros((9, 9), dtype=np.uint8)
         offset = len(PieceId) - 1
-        expected[0, 8] = PieceId.TO.value + offset
+        expected[8, 0] = PieceId.TO.value + offset
 
         assert result.dtype == np.uint8
         np.testing.assert_array_equal(result, expected)

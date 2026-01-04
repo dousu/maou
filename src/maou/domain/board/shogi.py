@@ -141,9 +141,13 @@ class Board:
 
     def to_piece_planes(self, array: np.ndarray) -> None:
         self.board.piece_planes(array)
+        # Transpose to match get_board_id_positions_df coordinate system
+        array[:] = np.transpose(array, (0, 2, 1))
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
         self.board.piece_planes_rotate(array)
+        # Transpose to match get_board_id_positions_df coordinate system
+        array[:] = np.transpose(array, (0, 2, 1))
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
         """手番関係なく常に(先手, 後手)の順にtupleにはいっている
@@ -199,12 +203,16 @@ class Board:
             map_cshogi_to_piece_id,
             otypes=[np.uint8],
         )
-        positions = v_map(
-            np.array(
-                self.board.pieces,
-                dtype=np.uint8,
+        positions = (
+            v_map(
+                np.array(
+                    self.board.pieces,
+                    dtype=np.uint8,
+                )
             )
-        ).reshape((9, 9)).T  # 転置: cshogiは列優先で格納されている
+            .reshape((9, 9))
+            .T
+        )  # 転置: cshogiは列優先で格納されている
         positions_list = positions.tolist()  # Fast conversion
 
         # Use pre-imported polars for performance
@@ -278,6 +286,8 @@ class Board:
         )
         planes.fill(0)
         self.board.piece_planes(planes)
+        # Transpose to match get_board_id_positions_df coordinate system
+        planes = np.transpose(planes, (0, 2, 1))
         planes_list = planes.tolist()  # Fast conversion
 
         # Use pre-imported polars for performance
@@ -318,6 +328,8 @@ class Board:
         )
         planes.fill(0)
         self.board.piece_planes_rotate(planes)
+        # Transpose to match get_board_id_positions_df coordinate system
+        planes = np.transpose(planes, (0, 2, 1))
         planes_list = planes.tolist()  # Fast conversion
 
         # Use pre-imported polars for performance

@@ -315,7 +315,9 @@ class TestDataRetriever:
         hcp_bytes = hcp_df["hcp"][0]
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
-        decoded = data_retriever._decode_hcp_to_board_info(record)
+        decoded = data_retriever._decode_hcp_to_board_info(
+            record
+        )
 
         positions = decoded["boardIdPositions"]
 
@@ -344,7 +346,9 @@ class TestDataRetriever:
         hcp_bytes = hcp_df["hcp"][0]
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
-        decoded = data_retriever._decode_hcp_to_board_info(record)
+        decoded = data_retriever._decode_hcp_to_board_info(
+            record
+        )
 
         positions = decoded["boardIdPositions"]
 
@@ -352,6 +356,6 @@ class TestDataRetriever:
         for col in range(9):
             piece_id = positions[0][col]
             if piece_id != 0:  # 空マスでない場合
-                assert (
-                    piece_id >= 15
-                ), f"White piece at (0, {col}) has ID {piece_id} < 15"
+                assert piece_id >= 15, (
+                    f"White piece at (0, {col}) has ID {piece_id} < 15"
+                )
