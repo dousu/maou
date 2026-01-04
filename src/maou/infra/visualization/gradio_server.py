@@ -4,14 +4,28 @@
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Fix matplotlib backend for Google Colab compatibility
-# Must be done before matplotlib is imported by any other module
+# matplotlib reads MPLBACKEND during import, so we must fix it before importing
+_saved_mplbackend = os.environ.get("MPLBACKEND")
+if _saved_mplbackend and "inline" in _saved_mplbackend:
+    os.environ["MPLBACKEND"] = "Agg"
+
 import matplotlib  # noqa: E402
 
-matplotlib.use("Agg", force=True)  # Non-interactive backend
+matplotlib.use(
+    "Agg", force=True
+)  # Ensure non-interactive backend
+
+# Restore environment to avoid affecting other Colab cells
+# matplotlib is now cached, so other imports will reuse this instance
+if _saved_mplbackend is not None:
+    os.environ["MPLBACKEND"] = _saved_mplbackend
+elif "MPLBACKEND" in os.environ:
+    del os.environ["MPLBACKEND"]
 
 import gradio as gr  # noqa: E402
 
