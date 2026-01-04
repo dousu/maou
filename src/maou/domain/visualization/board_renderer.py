@@ -283,10 +283,10 @@ class SVGBoardRenderer:
 
                 # 駒の描画
                 is_white = (
-                    piece_id >= 16
-                )  # 後手駒はPieceId + 16
+                    piece_id >= 15
+                )  # 後手駒はPieceId + 15
                 actual_piece_id = (
-                    piece_id - 16 if is_white else piece_id
+                    piece_id - 15 if is_white else piece_id
                 )
                 symbol = self.PIECE_SYMBOLS.get(
                     actual_piece_id, "?"

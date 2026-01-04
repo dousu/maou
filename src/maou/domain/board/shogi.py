@@ -204,7 +204,7 @@ class Board:
                 self.board.pieces,
                 dtype=np.uint8,
             )
-        ).reshape((9, 9))
+        ).reshape((9, 9)).T  # 転置: cshogiは列優先で格納されている
         positions_list = positions.tolist()  # Fast conversion
 
         # Use pre-imported polars for performance

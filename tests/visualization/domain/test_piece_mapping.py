@@ -16,8 +16,8 @@ class TestPieceMappingFunctions:
             assert not is_white_piece(piece_id)
 
     def test_is_white_piece_white(self) -> None:
-        """後手の駒（16-30）はTrueを返す．"""
-        for piece_id in range(16, 31):
+        """後手の駒（15-28）はTrueを返す．"""
+        for piece_id in range(15, 29):
             assert is_white_piece(piece_id)
 
     def test_get_actual_piece_id_black(self) -> None:
@@ -27,10 +27,10 @@ class TestPieceMappingFunctions:
         assert get_actual_piece_id(14) == 14
 
     def test_get_actual_piece_id_white(self) -> None:
-        """後手の駒は16を引いた値を返す．"""
-        assert get_actual_piece_id(16) == 0
-        assert get_actual_piece_id(24) == 8  # 後手の王
-        assert get_actual_piece_id(30) == 14
+        """後手の駒は15を引いた値を返す．"""
+        assert get_actual_piece_id(15) == 0
+        assert get_actual_piece_id(23) == 8  # 後手の王
+        assert get_actual_piece_id(28) == 13
 
     def test_square_index_to_coords(self) -> None:
         """マスインデックスを(row, col)座標に変換できる．"""

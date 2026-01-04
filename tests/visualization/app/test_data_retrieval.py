@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from maou.app.visualization.data_retrieval import DataRetriever
-from maou.domain.board.shogi import Board
+from maou.domain.board.shogi import Board, PieceId
 from maou.infra.visualization.search_index import SearchIndex
 
 
@@ -299,3 +299,59 @@ class TestDataRetriever:
         # 新しいフィールドが追加されていることを確認
         assert "boardIdPositions" in decoded_record
         assert "piecesInHand" in decoded_record
+
+    def test_decode_hcp_board_positions_correct(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """HCPデコード後の盤面配置が正しいことを検証．"""
+        # 初期局面のBoardを作成
+        board = Board()
+        board.set_sfen(
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+        )
+
+        # HCPバイナリを取得
+        hcp_df = board.get_hcp_df()
+        hcp_bytes = hcp_df["hcp"][0]
+
+        record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
+        decoded = data_retriever._decode_hcp_to_board_info(record)
+
+        positions = decoded["boardIdPositions"]
+
+        # 先手の玉の位置を確認（row=8, col=4 = 段i, 筋5）
+        # 注: colは0=筋9なので、col=4は筋5（中央）
+        assert positions[8][4] == PieceId.OU  # 先手王
+
+        # 後手の玉の位置を確認（row=0, col=4 = 段a, 筋5）
+        # 後手の駒はPieceId + 15なので、22 = 8 + 14 = OU + 14
+        # ※ map_cshogi_to_piece_idで変換後の値
+        # cshogiのWKING(24) → project ID (24-2=22)
+        white_king_id = 22  # cshogiのWKING(24)がmap後に22になる
+        assert positions[0][4] == white_king_id  # 後手王
+
+    def test_white_piece_detection_with_real_data(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """実際のHCPデータで白駒が正しく判定されることを確認．"""
+        # 持ち駒がある局面（先手が角を持っている）
+        board = Board()
+        board.set_sfen(
+            "lnsgkgsnl/1r7/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b B 1"
+        )
+
+        hcp_df = board.get_hcp_df()
+        hcp_bytes = hcp_df["hcp"][0]
+
+        record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
+        decoded = data_retriever._decode_hcp_to_board_info(record)
+
+        positions = decoded["boardIdPositions"]
+
+        # 後手の駒（row=0の駒）がすべて15以上であることを確認
+        for col in range(9):
+            piece_id = positions[0][col]
+            if piece_id != 0:  # 空マスでない場合
+                assert (
+                    piece_id >= 15
+                ), f"White piece at (0, {col}) has ID {piece_id} < 15"
