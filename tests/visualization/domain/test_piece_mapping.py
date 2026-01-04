@@ -27,10 +27,10 @@ class TestPieceMappingFunctions:
         assert get_actual_piece_id(14) == 14
 
     def test_get_actual_piece_id_white(self) -> None:
-        """後手の駒は15を引いた値を返す．"""
-        assert get_actual_piece_id(15) == 0
-        assert get_actual_piece_id(23) == 8  # 後手の王
-        assert get_actual_piece_id(28) == 13
+        """後手の駒は14を引いた値を返す．"""
+        assert get_actual_piece_id(15) == 1  # 後手のFU
+        assert get_actual_piece_id(22) == 8  # 後手のOU
+        assert get_actual_piece_id(28) == 14  # 後手のRYU
 
     def test_square_index_to_coords(self) -> None:
         """マスインデックスを(row, col)座標に変換できる．"""

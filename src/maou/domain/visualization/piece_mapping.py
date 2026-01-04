@@ -24,13 +24,13 @@ def get_actual_piece_id(piece_id: int) -> int:
     """後手駒の場合，オフセットを除いた実際の駒IDを取得．
 
     Args:
-        piece_id: 駒ID（後手の場合は +15 されている）
+        piece_id: 駒ID（後手の場合は +14 されている）
 
     Returns:
         実際のPieceId値（0-14）
     """
     if is_white_piece(piece_id):
-        return piece_id - 15
+        return piece_id - 14
     return piece_id
 
 
