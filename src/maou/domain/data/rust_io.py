@@ -77,6 +77,7 @@ def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
 
     Rustで実装された高速I/O関数でFeather形式ファイルを読み込み，
     Arrow RecordBatchをPolars DataFrameに変換して返す．
+    Stream形式とFile形式の両方に自動対応．
 
     Args:
         file_path: 入力ファイルパス（.feather拡張子）
@@ -90,9 +91,8 @@ def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
     """
     _check_rust_backend()
 
-    # Rust関数を呼び出し
+    # Rust関数を呼び出し（Stream/File形式自動判定）
     arrow_batch = load_hcpe_feather(str(file_path))
-
     # Arrow → Polars（ゼロコピー）
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
@@ -131,6 +131,8 @@ def load_preprocessing_df(
 ) -> pl.DataFrame:
     """前処理済みDataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
+    Stream形式とFile形式の両方に自動対応．
+
     Args:
         file_path: 入力ファイルパス（.feather拡張子）
 
@@ -143,6 +145,7 @@ def load_preprocessing_df(
     """
     _check_rust_backend()
 
+    # Rust関数を呼び出し（Stream/File形式自動判定）
     arrow_batch = load_preprocessing_feather(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 

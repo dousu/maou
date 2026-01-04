@@ -8,8 +8,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import polars as pl
-
 logger = logging.getLogger(__name__)
 
 
@@ -230,9 +228,23 @@ class SearchIndex:
             for file_idx, file_path in enumerate(
                 self.file_paths
             ):
-                # pl.read_ipc を使用してファイルを読み込み（LZ4圧縮対応）
-                # LZ4圧縮ファイルはメモリマップ不可のため明示的にFalseを指定
-                df = pl.read_ipc(file_path, memory_map=False)
+                # Rustバックエンドで読み込み（Stream/File形式自動判定）
+                from maou.domain.data.rust_io import (
+                    load_hcpe_df,
+                    load_preprocessing_df,
+                    load_stage1_df,
+                    load_stage2_df,
+                )
+
+                loader_map = {
+                    "hcpe": load_hcpe_df,
+                    "preprocessing": load_preprocessing_df,
+                    "stage1": load_stage1_df,
+                    "stage2": load_stage2_df,
+                }
+
+                load_df = loader_map[self.array_type]
+                df = load_df(file_path)
 
                 # idカラムを取得
                 if "id" not in df.columns:

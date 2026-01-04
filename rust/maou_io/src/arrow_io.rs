@@ -1,5 +1,5 @@
 use arrow::array::RecordBatch;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::ipc::CompressionType;
 use std::fs::File;
@@ -37,6 +37,10 @@ pub fn save_feather(record_batch: &RecordBatch, file_path: &str) -> Result<(), M
 
 /// Load Arrow RecordBatch from .feather file．
 ///
+/// Automatically detects and supports both IPC formats:
+/// - File format (starts with "ARROW1")
+/// - Stream format (starts with 0xFFFFFFFF)
+///
 /// Args:
 ///     file_path: Input file path (.feather extension)
 ///
@@ -45,18 +49,55 @@ pub fn save_feather(record_batch: &RecordBatch, file_path: &str) -> Result<(), M
 pub fn load_feather(file_path: &str) -> Result<RecordBatch, MaouIOError> {
     let path = Path::new(file_path);
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
-    let mut reader = FileReader::try_new(reader, None)?;
+    // Peek at the first 4 bytes to detect format
+    use std::io::{Read, Seek, SeekFrom};
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+    reader.seek(SeekFrom::Start(0))?;
 
-    // Read first (and assumed only) batch
-    match reader.next() {
-        Some(Ok(batch)) => Ok(batch),
-        Some(Err(e)) => Err(MaouIOError::ArrowError(e)),
-        None => Err(MaouIOError::IOError(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "Empty file: no record batches found",
-        ))),
+    // Check if it's Stream format (starts with 0xFFFFFFFF = -1)
+    if magic == [0xFF, 0xFF, 0xFF, 0xFF] {
+        // Stream format
+        let mut stream_reader = StreamReader::try_new(reader, None)?;
+
+        // Read all batches and concatenate them
+        let mut batches = Vec::new();
+        while let Some(batch_result) = stream_reader.next() {
+            batches.push(batch_result?);
+        }
+
+        if batches.is_empty() {
+            return Err(MaouIOError::IOError(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Empty file: no record batches found",
+            )));
+        }
+
+        // If there's only one batch, return it directly
+        if batches.len() == 1 {
+            return Ok(batches.into_iter().next().unwrap());
+        }
+
+        // Concatenate multiple batches into one
+        use arrow::compute::concat_batches;
+        let schema = batches[0].schema();
+        concat_batches(&schema, &batches)
+            .map_err(|e| MaouIOError::ArrowError(e))
+    } else {
+        // File format (starts with "ARROW1")
+        let mut file_reader = FileReader::try_new(reader, None)?;
+
+        // Read first batch
+        match file_reader.next() {
+            Some(Ok(batch)) => Ok(batch),
+            Some(Err(e)) => Err(MaouIOError::ArrowError(e)),
+            None => Err(MaouIOError::IOError(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Empty file: no record batches found",
+            ))),
+        }
     }
 }
 
