@@ -15,6 +15,20 @@ from maou.infra.console.common import handle_exception
 logger = logging.getLogger(__name__)
 
 
+def _is_google_colab() -> bool:
+    """Google Colab環境で実行されているか検出する．
+
+    Returns:
+        bool: Google Colab環境の場合True
+    """
+    try:
+        import google.colab  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 @click.command("visualize")
 @click.option(
     "--input-dir",
@@ -137,6 +151,14 @@ def visualize(
     )
     app_logger.info(f"Array type: {array_type}")
     app_logger.info(f"Server address: {server_name}:{port}")
+
+    # Google Colab環境では自動的にshareを有効化
+    if not share and _is_google_colab():
+        share = True
+        app_logger.info(
+            "✅ Auto-enabled --share for Google Colab environment "
+            "(localhost not accessible in Colab)"
+        )
 
     # Gradioサーバー起動（ブロッキング呼び出し）
     try:
