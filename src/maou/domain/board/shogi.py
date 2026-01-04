@@ -146,17 +146,33 @@ class Board:
         # PieceId: KI=5, KA=6, HI=7 (planes[4-6]: KI, KA, HI)
         temp = array.copy()
         # Black pieces reordering
-        array[4] = temp[6]   # GOLD (cshogi) → KI (PieceId)
-        array[5] = temp[5]   # ROOK (cshogi) → KA (PieceId) - cshogi ROOK = 角
-        array[6] = temp[4]   # BISHOP (cshogi) → HI (PieceId) - cshogi BISHOP = 飛
-        array[12] = temp[13] # PROM_ROOK (cshogi) → UMA (PieceId) - cshogi PROM_ROOK = 馬
-        array[13] = temp[12] # PROM_BISHOP (cshogi) → RYU (PieceId) - cshogi PROM_BISHOP = 龍
+        array[4] = temp[6]  # GOLD (cshogi) → KI (PieceId)
+        array[5] = temp[
+            5
+        ]  # ROOK (cshogi) → KA (PieceId) - cshogi ROOK = 角
+        array[6] = temp[
+            4
+        ]  # BISHOP (cshogi) → HI (PieceId) - cshogi BISHOP = 飛
+        array[12] = temp[
+            13
+        ]  # PROM_ROOK (cshogi) → UMA (PieceId) - cshogi PROM_ROOK = 馬
+        array[13] = temp[
+            12
+        ]  # PROM_BISHOP (cshogi) → RYU (PieceId) - cshogi PROM_BISHOP = 龍
         # White pieces reordering (same pattern, offset by 14)
-        array[18] = temp[20] # GOLD (cshogi) → KI (PieceId)
-        array[19] = temp[19] # ROOK (cshogi) → KA (PieceId) - cshogi ROOK = 角
-        array[20] = temp[18] # BISHOP (cshogi) → HI (PieceId) - cshogi BISHOP = 飛
-        array[26] = temp[27] # PROM_ROOK (cshogi) → UMA (PieceId) - cshogi PROM_ROOK = 馬
-        array[27] = temp[26] # PROM_BISHOP (cshogi) → RYU (PieceId) - cshogi PROM_BISHOP = 龍
+        array[18] = temp[20]  # GOLD (cshogi) → KI (PieceId)
+        array[19] = temp[
+            19
+        ]  # ROOK (cshogi) → KA (PieceId) - cshogi ROOK = 角
+        array[20] = temp[
+            18
+        ]  # BISHOP (cshogi) → HI (PieceId) - cshogi BISHOP = 飛
+        array[26] = temp[
+            27
+        ]  # PROM_ROOK (cshogi) → UMA (PieceId) - cshogi PROM_ROOK = 馬
+        array[27] = temp[
+            26
+        ]  # PROM_BISHOP (cshogi) → RYU (PieceId) - cshogi PROM_BISHOP = 龍
         # Transpose to match board_id_positions coordinate system
         array[:] = np.transpose(array, (0, 2, 1))
 
@@ -165,15 +181,15 @@ class Board:
         # Reorder channels (same as to_piece_planes)
         temp = array.copy()
         array[4] = temp[6]
-        array[5] = temp[5]   # cshogi ROOK = 角
-        array[6] = temp[4]   # cshogi BISHOP = 飛
-        array[12] = temp[13] # cshogi PROM_ROOK = 馬
-        array[13] = temp[12] # cshogi PROM_BISHOP = 龍
+        array[5] = temp[5]  # cshogi ROOK = 角
+        array[6] = temp[4]  # cshogi BISHOP = 飛
+        array[12] = temp[13]  # cshogi PROM_ROOK = 馬
+        array[13] = temp[12]  # cshogi PROM_BISHOP = 龍
         array[18] = temp[20]
-        array[19] = temp[19] # cshogi ROOK = 角
-        array[20] = temp[18] # cshogi BISHOP = 飛
-        array[26] = temp[27] # cshogi PROM_ROOK = 馬
-        array[27] = temp[26] # cshogi PROM_BISHOP = 龍
+        array[19] = temp[19]  # cshogi ROOK = 角
+        array[20] = temp[18]  # cshogi BISHOP = 飛
+        array[26] = temp[27]  # cshogi PROM_ROOK = 馬
+        array[27] = temp[26]  # cshogi PROM_BISHOP = 龍
         # Transpose to match board_id_positions coordinate system
         array[:] = np.transpose(array, (0, 2, 1))
 
@@ -229,36 +245,36 @@ class Board:
             mapping = {
                 # Black pieces (1-14)
                 # Note: cshogi uses "BISHOP" for HI (飛) and "ROOK" for KA (角)
-                0: 0,   # EMPTY
-                1: 1,   # BPAWN → FU
-                2: 2,   # BLANCE → KY
-                3: 3,   # BKNIGHT → KE
-                4: 4,   # BSILVER → GI
-                5: 7,   # BBISHOP → HI (cshogi BISHOP = 飛)
-                6: 6,   # BROOK → KA (cshogi ROOK = 角)
-                7: 5,   # BGOLD → KI
-                8: 8,   # BKING → OU
-                9: 9,   # BPROM_PAWN → TO
-                10: 10, # BPROM_LANCE → NKY
-                11: 11, # BPROM_KNIGHT → NKE
-                12: 12, # BPROM_SILVER → NGI
-                13: 14, # BPROM_BISHOP → RYU (cshogi PROM_BISHOP = 龍)
-                14: 13, # BPROM_ROOK → UMA (cshogi PROM_ROOK = 馬)
+                0: 0,  # EMPTY
+                1: 1,  # BPAWN → FU
+                2: 2,  # BLANCE → KY
+                3: 3,  # BKNIGHT → KE
+                4: 4,  # BSILVER → GI
+                5: 7,  # BBISHOP → HI (cshogi BISHOP = 飛)
+                6: 6,  # BROOK → KA (cshogi ROOK = 角)
+                7: 5,  # BGOLD → KI
+                8: 8,  # BKING → OU
+                9: 9,  # BPROM_PAWN → TO
+                10: 10,  # BPROM_LANCE → NKY
+                11: 11,  # BPROM_KNIGHT → NKE
+                12: 12,  # BPROM_SILVER → NGI
+                13: 14,  # BPROM_BISHOP → RYU (cshogi PROM_BISHOP = 龍)
+                14: 13,  # BPROM_ROOK → UMA (cshogi PROM_ROOK = 馬)
                 # White pieces (17-30)
-                17: 15, # WPAWN → FU + 14
-                18: 16, # WLANCE → KY + 14
-                19: 17, # WKNIGHT → KE + 14
-                20: 18, # WSILVER → GI + 14
-                21: 21, # WBISHOP → HI + 14 (cshogi BISHOP = 飛)
-                22: 20, # WROOK → KA + 14 (cshogi ROOK = 角)
-                23: 19, # WGOLD → KI + 14
-                24: 22, # WKING → OU + 14
-                25: 23, # WPROM_PAWN → TO + 14
-                26: 24, # WPROM_LANCE → NKY + 14
-                27: 25, # WPROM_KNIGHT → NKE + 14
-                28: 26, # WPROM_SILVER → NGI + 14
-                29: 28, # WPROM_BISHOP → RYU + 14 (cshogi PROM_BISHOP = 龍)
-                30: 27, # WPROM_ROOK → UMA + 14 (cshogi PROM_ROOK = 馬)
+                17: 15,  # WPAWN → FU + 14
+                18: 16,  # WLANCE → KY + 14
+                19: 17,  # WKNIGHT → KE + 14
+                20: 18,  # WSILVER → GI + 14
+                21: 21,  # WBISHOP → HI + 14 (cshogi BISHOP = 飛)
+                22: 20,  # WROOK → KA + 14 (cshogi ROOK = 角)
+                23: 19,  # WGOLD → KI + 14
+                24: 22,  # WKING → OU + 14
+                25: 23,  # WPROM_PAWN → TO + 14
+                26: 24,  # WPROM_LANCE → NKY + 14
+                27: 25,  # WPROM_KNIGHT → NKE + 14
+                28: 26,  # WPROM_SILVER → NGI + 14
+                29: 28,  # WPROM_BISHOP → RYU + 14 (cshogi PROM_BISHOP = 龍)
+                30: 27,  # WPROM_ROOK → UMA + 14 (cshogi PROM_ROOK = 馬)
             }
             return mapping.get(cshogi_piece_id, 0)
 
@@ -266,12 +282,16 @@ class Board:
             map_cshogi_to_piece_id,
             otypes=[np.uint8],
         )
-        positions = v_map(
-            np.array(
-                self.board.pieces,
-                dtype=np.uint8,
+        positions = (
+            v_map(
+                np.array(
+                    self.board.pieces,
+                    dtype=np.uint8,
+                )
             )
-        ).reshape((9, 9)).T  # row-major + transpose (same as column-major)
+            .reshape((9, 9))
+            .T
+        )  # row-major + transpose (same as column-major)
         positions_list = positions.tolist()  # Fast conversion
 
         # Use pre-imported polars for performance
@@ -348,15 +368,15 @@ class Board:
         # Reorder channels to match PieceId ordering
         temp = planes.copy()
         planes[4] = temp[6]
-        planes[5] = temp[5]   # cshogi ROOK = 角
-        planes[6] = temp[4]   # cshogi BISHOP = 飛
-        planes[12] = temp[13] # cshogi PROM_ROOK = 馬
-        planes[13] = temp[12] # cshogi PROM_BISHOP = 龍
+        planes[5] = temp[5]  # cshogi ROOK = 角
+        planes[6] = temp[4]  # cshogi BISHOP = 飛
+        planes[12] = temp[13]  # cshogi PROM_ROOK = 馬
+        planes[13] = temp[12]  # cshogi PROM_BISHOP = 龍
         planes[18] = temp[20]
-        planes[19] = temp[19] # cshogi ROOK = 角
-        planes[20] = temp[18] # cshogi BISHOP = 飛
-        planes[26] = temp[27] # cshogi PROM_ROOK = 馬
-        planes[27] = temp[26] # cshogi PROM_BISHOP = 龍
+        planes[19] = temp[19]  # cshogi ROOK = 角
+        planes[20] = temp[18]  # cshogi BISHOP = 飛
+        planes[26] = temp[27]  # cshogi PROM_ROOK = 馬
+        planes[27] = temp[26]  # cshogi PROM_BISHOP = 龍
         # Transpose to match board_id_positions coordinate system
         planes = np.transpose(planes, (0, 2, 1))
         planes_list = planes.tolist()  # Fast conversion
@@ -402,15 +422,15 @@ class Board:
         # Reorder channels to match PieceId ordering
         temp = planes.copy()
         planes[4] = temp[6]
-        planes[5] = temp[5]   # cshogi ROOK = 角
-        planes[6] = temp[4]   # cshogi BISHOP = 飛
-        planes[12] = temp[13] # cshogi PROM_ROOK = 馬
-        planes[13] = temp[12] # cshogi PROM_BISHOP = 龍
+        planes[5] = temp[5]  # cshogi ROOK = 角
+        planes[6] = temp[4]  # cshogi BISHOP = 飛
+        planes[12] = temp[13]  # cshogi PROM_ROOK = 馬
+        planes[13] = temp[12]  # cshogi PROM_BISHOP = 龍
         planes[18] = temp[20]
-        planes[19] = temp[19] # cshogi ROOK = 角
-        planes[20] = temp[18] # cshogi BISHOP = 飛
-        planes[26] = temp[27] # cshogi PROM_ROOK = 馬
-        planes[27] = temp[26] # cshogi PROM_BISHOP = 龍
+        planes[19] = temp[19]  # cshogi ROOK = 角
+        planes[20] = temp[18]  # cshogi BISHOP = 飛
+        planes[26] = temp[27]  # cshogi PROM_ROOK = 馬
+        planes[27] = temp[26]  # cshogi PROM_BISHOP = 龍
         # Transpose to match get_board_id_positions_df coordinate system
         planes = np.transpose(planes, (0, 2, 1))
         planes_list = planes.tolist()  # Fast conversion
