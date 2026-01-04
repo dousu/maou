@@ -254,6 +254,7 @@ class DataRetriever:
             Exception: デコード失敗
         """
         import numpy as np
+
         from maou.domain.board.shogi import Board
 
         # HCPバイナリデータを取得
@@ -274,7 +275,9 @@ class DataRetriever:
 
         # 持ち駒を取得
         black_hand, white_hand = board.get_pieces_in_hand()
-        pieces_in_hand = black_hand + white_hand  # 14要素のリスト
+        pieces_in_hand = (
+            black_hand + white_hand
+        )  # 14要素のリスト
 
         # レコードに追加
         record["boardIdPositions"] = board_id_positions

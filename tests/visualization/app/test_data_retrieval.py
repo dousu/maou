@@ -164,8 +164,8 @@ class TestDataRetriever:
         }
 
         # デコード実行
-        decoded_record = data_retriever._decode_hcp_to_board_info(
-            record
+        decoded_record = (
+            data_retriever._decode_hcp_to_board_info(record)
         )
 
         # 検証
@@ -217,8 +217,8 @@ class TestDataRetriever:
         }
 
         # デコード実行
-        decoded_record = data_retriever._decode_hcp_to_board_info(
-            record
+        decoded_record = (
+            data_retriever._decode_hcp_to_board_info(record)
         )
 
         # 持ち駒を確認
@@ -285,8 +285,8 @@ class TestDataRetriever:
         }
 
         # デコード実行
-        decoded_record = data_retriever._decode_hcp_to_board_info(
-            record
+        decoded_record = (
+            data_retriever._decode_hcp_to_board_info(record)
         )
 
         # 元のフィールドが保持されていることを確認
