@@ -227,6 +227,59 @@ class DataRetriever:
             else:
                 record[col] = value.item()
 
+        # HCPEデータの場合，hcpフィールドから盤面情報をデコード
+        if self.array_type == "hcpe" and "hcp" in record:
+            try:
+                record = self._decode_hcp_to_board_info(record)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to decode HCP data: {e}. "
+                    f"Visualization may not work properly."
+                )
+
+        return record
+
+    def _decode_hcp_to_board_info(
+        self, record: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """HCPフィールドから盤面情報をデコードする．
+
+        Args:
+            record: HCPEレコードデータ（hcpフィールドを含む）
+
+        Returns:
+            boardIdPositionsとpiecesInHandを追加したレコード
+
+        Raises:
+            Exception: デコード失敗
+        """
+        import numpy as np
+        from maou.domain.board.shogi import Board
+
+        # HCPバイナリデータを取得
+        hcp_bytes = record.get("hcp")
+        if not hcp_bytes:
+            raise ValueError("hcp field is missing or empty")
+
+        # HCPバイナリをuint8配列に変換（32バイト）
+        hcp_array = np.frombuffer(hcp_bytes, dtype=np.uint8)
+
+        # Boardインスタンスを作成してHCPをデコード
+        board = Board()
+        board.set_hcp(hcp_array)
+
+        # 盤面の駒配置を取得
+        board_df = board.get_board_id_positions_df()
+        board_id_positions = board_df["boardIdPositions"][0]
+
+        # 持ち駒を取得
+        black_hand, white_hand = board.get_pieces_in_hand()
+        pieces_in_hand = black_hand + white_hand  # 14要素のリスト
+
+        # レコードに追加
+        record["boardIdPositions"] = board_id_positions
+        record["piecesInHand"] = pieces_in_hand
+
         return record
 
     def _create_mock_record(

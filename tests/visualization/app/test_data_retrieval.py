@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from maou.app.visualization.data_retrieval import DataRetriever
+from maou.domain.board.shogi import Board
 from maou.infra.visualization.search_index import SearchIndex
 
 
@@ -140,3 +141,161 @@ class TestDataRetriever:
 
         assert isinstance(records, list)
         assert len(records) <= 20
+
+    def test_decode_hcp_to_board_info_success(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """HCPデータから盤面情報を正しくデコードできる．"""
+        # 初期局面のBoardを作成
+        board = Board()
+        board.set_sfen(
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+        )
+
+        # HCPバイナリを取得
+        hcp_df = board.get_hcp_df()
+        hcp_bytes = hcp_df["hcp"][0]
+
+        # テスト用レコード
+        record = {
+            "id": "test_id",
+            "eval": 0,
+            "hcp": hcp_bytes,
+        }
+
+        # デコード実行
+        decoded_record = data_retriever._decode_hcp_to_board_info(
+            record
+        )
+
+        # 検証
+        assert "boardIdPositions" in decoded_record
+        assert "piecesInHand" in decoded_record
+
+        # 盤面が9x9であることを確認
+        board_positions = decoded_record["boardIdPositions"]
+        assert len(board_positions) == 9
+        for row in board_positions:
+            assert len(row) == 9
+
+        # 持ち駒が14要素であることを確認
+        pieces_in_hand = decoded_record["piecesInHand"]
+        assert len(pieces_in_hand) == 14
+
+        # 初期局面では持ち駒はすべて0
+        assert all(count == 0 for count in pieces_in_hand)
+
+        # 盤面に駒が配置されていることを確認（空マスでないマスが存在）
+        non_empty_squares = sum(
+            1
+            for row in board_positions
+            for piece_id in row
+            if piece_id != 0
+        )
+        assert non_empty_squares > 0
+
+    def test_decode_hcp_to_board_info_with_pieces_in_hand(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """持ち駒がある局面のHCPデコードが正しく動作する．"""
+        # 持ち駒がある局面を作成
+        board = Board()
+        # 角落ちの初期局面（先手が角を1枚持っている状態をシミュレート）
+        board.set_sfen(
+            "lnsgkgsnl/1r7/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b B 1"
+        )
+
+        # HCPバイナリを取得
+        hcp_df = board.get_hcp_df()
+        hcp_bytes = hcp_df["hcp"][0]
+
+        # テスト用レコード
+        record = {
+            "id": "test_id_with_hand",
+            "eval": 100,
+            "hcp": hcp_bytes,
+        }
+
+        # デコード実行
+        decoded_record = data_retriever._decode_hcp_to_board_info(
+            record
+        )
+
+        # 持ち駒を確認
+        pieces_in_hand = decoded_record["piecesInHand"]
+        assert len(pieces_in_hand) == 14
+
+        # 先手の角（インデックス5）が1枚あることを確認
+        assert pieces_in_hand[5] == 1
+
+    def test_decode_hcp_to_board_info_missing_hcp(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """hcpフィールドが欠落している場合にエラーが発生する．"""
+        # hcpフィールドがないレコード
+        record = {
+            "id": "test_id_no_hcp",
+            "eval": 0,
+        }
+
+        # エラーが発生することを確認
+        with pytest.raises(
+            ValueError, match="hcp field is missing or empty"
+        ):
+            data_retriever._decode_hcp_to_board_info(record)
+
+    def test_decode_hcp_to_board_info_empty_hcp(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """hcpフィールドが空の場合にエラーが発生する．"""
+        # hcpフィールドが空のレコード
+        record = {
+            "id": "test_id_empty_hcp",
+            "eval": 0,
+            "hcp": b"",
+        }
+
+        # エラーが発生することを確認
+        with pytest.raises(
+            ValueError, match="hcp field is missing or empty"
+        ):
+            data_retriever._decode_hcp_to_board_info(record)
+
+    def test_decode_preserves_original_fields(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """デコード時に元のフィールドが保持される．"""
+        # 初期局面のBoardを作成
+        board = Board()
+        board.set_sfen(
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+        )
+
+        # HCPバイナリを取得
+        hcp_df = board.get_hcp_df()
+        hcp_bytes = hcp_df["hcp"][0]
+
+        # 複数のフィールドを持つレコード
+        record = {
+            "id": "test_id_preserve",
+            "eval": 150,
+            "moves": 50,
+            "hcp": hcp_bytes,
+            "gameResult": 1,
+        }
+
+        # デコード実行
+        decoded_record = data_retriever._decode_hcp_to_board_info(
+            record
+        )
+
+        # 元のフィールドが保持されていることを確認
+        assert decoded_record["id"] == "test_id_preserve"
+        assert decoded_record["eval"] == 150
+        assert decoded_record["moves"] == 50
+        assert decoded_record["gameResult"] == 1
+        assert decoded_record["hcp"] == hcp_bytes
+
+        # 新しいフィールドが追加されていることを確認
+        assert "boardIdPositions" in decoded_record
+        assert "piecesInHand" in decoded_record
