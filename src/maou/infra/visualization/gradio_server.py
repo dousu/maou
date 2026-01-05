@@ -571,6 +571,8 @@ class GradioVisualizationServer:
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
                     analytics_chart,  # 分析チャート
+                    prev_btn,  # ページ前へボタン状態
+                    next_btn,  # ページ次へボタン状態
                 ],
             )
 
@@ -597,6 +599,8 @@ class GradioVisualizationServer:
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
                     analytics_chart,  # 分析チャート
+                    prev_btn,  # ページ前へボタン状態
+                    next_btn,  # ページ次へボタン状態
                 ],
             )
 
@@ -608,8 +612,21 @@ class GradioVisualizationServer:
             )
 
             next_btn.click(
-                fn=lambda page: page + 1,
-                inputs=[current_page],
+                fn=lambda page,
+                min_eval,
+                max_eval,
+                page_size: min(
+                    page + 1,
+                    self._calculate_total_pages(
+                        min_eval, max_eval, page_size
+                    ),
+                ),
+                inputs=[
+                    current_page,
+                    min_eval,
+                    max_eval,
+                    page_size,
+                ],
                 outputs=[current_page],
             ).then(
                 fn=paginate_fn,
@@ -628,6 +645,8 @@ class GradioVisualizationServer:
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
                     analytics_chart,  # 分析チャート
+                    prev_btn,  # ページ前へボタン状態
+                    next_btn,  # ページ次へボタン状態
                 ],
             )
 
@@ -652,6 +671,8 @@ class GradioVisualizationServer:
                     current_record_index,  # インデックス
                     record_indicator,  # インジケーター
                     analytics_chart,  # 分析チャート
+                    prev_btn,  # ページ前へボタン状態
+                    next_btn,  # ページ次へボタン状態
                 ],
             )
 
@@ -676,6 +697,8 @@ class GradioVisualizationServer:
                     current_page_records,
                     record_indicator,
                     analytics_chart,
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
@@ -699,6 +722,8 @@ class GradioVisualizationServer:
                     current_page_records,
                     record_indicator,
                     analytics_chart,
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
@@ -719,6 +744,8 @@ class GradioVisualizationServer:
         int,
         str,
         str,
+        gr.Button,
+        gr.Button,
     ]:
         """検索を実行し，レコードをキャッシュするラッパー関数．
 
@@ -733,7 +760,8 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator, analytics_html)
+             cached_records, record_index, record_indicator, analytics_html,
+             prev_btn_state, next_btn_state)
         """
         (
             table_data,
@@ -760,6 +788,13 @@ class GradioVisualizationServer:
             cached_records
         )
 
+        # ボタン状態を計算
+        prev_interactive, next_interactive = (
+            self._get_button_states(
+                page, min_eval, max_eval, page_size
+            )
+        )
+
         return (
             table_data,
             page_info,
@@ -769,6 +804,12 @@ class GradioVisualizationServer:
             0,  # record_indexをリセット
             record_indicator,  # インジケーター
             analytics_html,  # 分析チャート
+            gr.Button(
+                interactive=prev_interactive
+            ),  # prev_btn状態
+            gr.Button(
+                interactive=next_interactive
+            ),  # next_btn状態
         )
 
     def _paginate_all_data(
@@ -786,6 +827,8 @@ class GradioVisualizationServer:
         int,
         str,
         str,
+        gr.Button,
+        gr.Button,
     ]:
         """全データをページネーション（評価値フィルタなし）．
 
@@ -800,7 +843,8 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator, analytics_html)
+             cached_records, record_index, record_indicator, analytics_html,
+             prev_btn_state, next_btn_state)
         """
         # 評価値パラメータを明示的にNoneにして全データを取得
         # （引数のmin_eval, max_evalは無視）
@@ -982,6 +1026,76 @@ class GradioVisualizationServer:
 
         return (total_records + page_size - 1) // page_size
 
+    def _get_button_states(
+        self,
+        current_page: int,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page_size: int,
+    ) -> Tuple[bool, bool]:
+        """ページネーションボタンの有効/無効状態を計算．
+
+        Args:
+            current_page: 現在のページ番号
+            min_eval: 最小評価値（HCPEのみ）
+            max_eval: 最大評価値（HCPEのみ）
+            page_size: ページサイズ
+
+        Returns:
+            (prev_interactive, next_interactive)のタプル．
+            Trueは有効，Falseは無効を表す．
+        """
+        total_pages = self._calculate_total_pages(
+            min_eval, max_eval, page_size
+        )
+
+        prev_interactive = current_page > 1
+        next_interactive = current_page < total_pages
+
+        return (prev_interactive, next_interactive)
+
+    def _get_record_nav_button_states(
+        self,
+        current_page: int,
+        current_record_index: int,
+        num_records_on_page: int,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page_size: int,
+    ) -> Tuple[bool, bool]:
+        """レコードナビゲーションボタンの有効/無効状態を計算．
+
+        Args:
+            current_page: 現在のページ番号
+            current_record_index: 現在のレコードインデックス
+            num_records_on_page: 現在のページのレコード数
+            min_eval: 最小評価値（HCPEのみ）
+            max_eval: 最大評価値（HCPEのみ）
+            page_size: ページサイズ
+
+        Returns:
+            (prev_interactive, next_interactive)のタプル．
+            Trueは有効，Falseは無効を表す．
+        """
+        total_pages = self._calculate_total_pages(
+            min_eval, max_eval, page_size
+        )
+
+        # 最初のページの最初のレコードなら前へボタンを無効化
+        is_first_record = (
+            current_page == 1 and current_record_index == 0
+        )
+        prev_interactive = not is_first_record
+
+        # 最後のページの最後のレコードなら次へボタンを無効化
+        is_last_record = (
+            current_page == total_pages
+            and current_record_index == num_records_on_page - 1
+        )
+        next_interactive = not is_last_record
+
+        return (prev_interactive, next_interactive)
+
     def _navigate_next_record(
         self,
         current_page: int,
@@ -1000,6 +1114,8 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         str,
         str,
+        gr.Button,
+        gr.Button,
     ]:
         """次のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -1013,7 +1129,8 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator, analytics_html)
+             board_svg, details, cached_records, record_indicator, analytics_html,
+             prev_record_btn_state, next_record_btn_state)
         """
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
@@ -1051,6 +1168,18 @@ class GradioVisualizationServer:
                 )
             )
 
+            # レコードナビゲーションボタン状態を計算
+            prev_interactive, next_interactive = (
+                self._get_record_nav_button_states(
+                    current_page,
+                    new_index,
+                    num_records,
+                    min_eval,
+                    max_eval,
+                    page_size,
+                )
+            )
+
             return (
                 current_page,
                 new_index,
@@ -1061,13 +1190,56 @@ class GradioVisualizationServer:
                 current_page_records,
                 record_indicator,
                 analytics_html,
+                gr.Button(interactive=prev_interactive),
+                gr.Button(interactive=next_interactive),
+            )
+
+        # ページ境界チェック：最後のページの最後のレコードなら停止
+        if current_page >= total_pages:
+            # 最後のページの最後のレコード：何もしない（境界で止める）
+            table_data = [
+                self.viz_interface.renderer.format_table_row(
+                    i + (current_page - 1) * page_size + 1,
+                    record,
+                )
+                for i, record in enumerate(current_page_records)
+            ]
+            page_info_str = (
+                f"ページ {current_page} / {total_pages}"
+            )
+            board_svg, details = (
+                self.viz_interface.navigate_within_page(
+                    current_page_records, current_record_index
+                )
+            )
+            record_indicator = f"Record {current_record_index + 1} / {num_records}"
+            analytics_html = (
+                self.viz_interface.generate_analytics(
+                    current_page_records
+                )
+            )
+
+            # ボタン状態：前へは有効，次へは無効
+            return (
+                current_page,
+                current_record_index,
+                table_data,
+                page_info_str,
+                board_svg,
+                details,
+                current_page_records,
+                record_indicator,
+                analytics_html,
+                gr.Button(
+                    interactive=True
+                ),  # prev_record_btn有効
+                gr.Button(
+                    interactive=False
+                ),  # next_record_btn無効
             )
 
         # ページ境界：次のページへ移動
         next_page = current_page + 1
-        if next_page > total_pages:
-            # 最後のページなら最初のページに循環
-            next_page = 1
 
         # 新しいページのデータを取得
         paginate_fn = (
@@ -1085,8 +1257,24 @@ class GradioVisualizationServer:
             _,  # record_indexは0にリセットされる
             record_indicator,
             analytics_html,
+            _,  # prev_btn state（ページナビゲーション用）
+            _,  # next_btn state（ページナビゲーション用）
         ) = paginate_fn(
             min_eval, max_eval, next_page, page_size
+        )
+
+        # レコードナビゲーションボタン状態を計算
+        # 新しいページの最初のレコードに移動
+        new_num_records = len(cached_records)
+        prev_interactive, next_interactive = (
+            self._get_record_nav_button_states(
+                next_page,
+                0,  # 新しいページの最初のレコード
+                new_num_records,
+                min_eval,
+                max_eval,
+                page_size,
+            )
         )
 
         return (
@@ -1099,6 +1287,8 @@ class GradioVisualizationServer:
             cached_records,
             record_indicator,
             analytics_html,
+            gr.Button(interactive=prev_interactive),
+            gr.Button(interactive=next_interactive),
         )
 
     def _navigate_prev_record(
@@ -1119,6 +1309,8 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         str,
         str,
+        gr.Button,
+        gr.Button,
     ]:
         """前のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -1132,7 +1324,8 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator, analytics_html)
+             board_svg, details, cached_records, record_indicator, analytics_html,
+             prev_record_btn_state, next_record_btn_state)
         """
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
@@ -1170,6 +1363,18 @@ class GradioVisualizationServer:
                 )
             )
 
+            # レコードナビゲーションボタン状態を計算
+            prev_interactive, next_interactive = (
+                self._get_record_nav_button_states(
+                    current_page,
+                    new_index,
+                    num_records,
+                    min_eval,
+                    max_eval,
+                    page_size,
+                )
+            )
+
             return (
                 current_page,
                 new_index,
@@ -1180,13 +1385,56 @@ class GradioVisualizationServer:
                 current_page_records,
                 record_indicator,
                 analytics_html,
+                gr.Button(interactive=prev_interactive),
+                gr.Button(interactive=next_interactive),
+            )
+
+        # ページ境界チェック：最初のページの最初のレコードなら停止
+        if current_page <= 1:
+            # 最初のページの最初のレコード：何もしない（境界で止める）
+            table_data = [
+                self.viz_interface.renderer.format_table_row(
+                    i + (current_page - 1) * page_size + 1,
+                    record,
+                )
+                for i, record in enumerate(current_page_records)
+            ]
+            page_info_str = (
+                f"ページ {current_page} / {total_pages}"
+            )
+            board_svg, details = (
+                self.viz_interface.navigate_within_page(
+                    current_page_records, current_record_index
+                )
+            )
+            record_indicator = f"Record {current_record_index + 1} / {num_records}"
+            analytics_html = (
+                self.viz_interface.generate_analytics(
+                    current_page_records
+                )
+            )
+
+            # ボタン状態：前へは無効，次へは有効
+            return (
+                current_page,
+                current_record_index,
+                table_data,
+                page_info_str,
+                board_svg,
+                details,
+                current_page_records,
+                record_indicator,
+                analytics_html,
+                gr.Button(
+                    interactive=False
+                ),  # prev_record_btn無効
+                gr.Button(
+                    interactive=True
+                ),  # next_record_btn有効
             )
 
         # ページ境界：前のページへ移動
         prev_page = current_page - 1
-        if prev_page < 1:
-            # 最初のページなら最後のページに循環
-            prev_page = total_pages
 
         # 新しいページのデータを取得
         paginate_fn = (
@@ -1204,6 +1452,8 @@ class GradioVisualizationServer:
             _,  # record_indexは最後に設定される
             _,  # record_indicatorは後で更新
             analytics_html,
+            _,  # prev_btn state（ページナビゲーション用）
+            _,  # next_btn state（ページナビゲーション用）
         ) = paginate_fn(
             min_eval, max_eval, prev_page, page_size
         )
@@ -1224,6 +1474,19 @@ class GradioVisualizationServer:
             new_index = 0
             record_indicator = "Record 0 / 0"
 
+        # レコードナビゲーションボタン状態を計算
+        # 新しいページの最後のレコードに移動
+        prev_interactive, next_interactive = (
+            self._get_record_nav_button_states(
+                prev_page,
+                new_index,
+                new_num_records,
+                min_eval,
+                max_eval,
+                page_size,
+            )
+        )
+
         return (
             prev_page,
             new_index,
@@ -1234,6 +1497,8 @@ class GradioVisualizationServer:
             cached_records,
             record_indicator,
             analytics_html,
+            gr.Button(interactive=prev_interactive),
+            gr.Button(interactive=next_interactive),
         )
 
 
