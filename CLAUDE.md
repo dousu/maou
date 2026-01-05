@@ -734,6 +734,84 @@ The project follows Clean Architecture principles with strict dependency rules:
 infra → interface → app → domain
 ```
 
+### cshogi Library Encapsulation
+
+The project uses the `cshogi` C++ library for Shogi game logic, but it is **completely encapsulated within the domain layer** following Clean Architecture.
+
+#### Encapsulation Rules
+
+**Allowed cshogi usage:**
+- ✅ `src/maou/domain/board/shogi.py` - Board wrapper (PRIMARY abstraction point)
+- ✅ `src/maou/domain/parser/csa_parser.py` - CSA parsing (implementation detail)
+- ✅ `src/maou/domain/parser/kif_parser.py` - KIF parsing (implementation detail)
+- ✅ `tests/**` - Direct usage allowed for test simplicity (but Board usage preferred)
+
+**Prohibited cshogi usage:**
+- ❌ `src/maou/app/**` - MUST use `Board` class, not cshogi directly
+- ❌ `src/maou/interface/**` - MUST use domain abstractions
+- ❌ `src/maou/infra/**` - MUST use domain abstractions
+
+#### Piece ID Mapping (CRITICAL)
+
+cshogi and PieceId enum use **DIFFERENT orderings**:
+
+| Piece | cshogi ID | PieceId enum | Conversion |
+|-------|-----------|--------------|------------|
+| 金(GOLD) | 7 | 5 (KI) | Reordered |
+| 角(BISHOP) | 5 | 6 (KA) | Reordered |
+| 飛(ROOK) | 6 | 7 (HI) | Reordered |
+| 白(WHITE) | black+16 | black+14 | Offset difference |
+
+**Conversion methods:**
+- `Board._cshogi_piece_to_piece_id()` - Convert piece IDs
+- `Board._reorder_piece_planes_cshogi_to_pieceid()` - Reorder feature planes
+
+**IMPORTANT:** All piece ID conversions MUST go through these centralized methods. Never implement conversion logic elsewhere.
+
+#### Replacing cshogi with Another Library
+
+If you need to replace cshogi:
+
+1. **Update Board class** (`src/maou/domain/board/shogi.py`):
+   - Replace `self.board = cshogi.Board()` with new library
+   - Update `_cshogi_piece_to_piece_id()` for new library's piece IDs
+   - Update `_reorder_piece_planes_cshogi_to_pieceid()` if needed
+   - Update move utility functions
+
+2. **Update Parsers**:
+   - Replace `cshogi.CSA.Parser` in `csa_parser.py`
+   - Replace `cshogi.KIF.Parser` in `kif_parser.py`
+
+3. **Verify Constants**:
+   - Check `MAX_PIECES_IN_HAND`, `PIECE_TYPES` still match
+   - Update static assertions if values differ
+
+4. **Run Tests**:
+   - `poetry run pytest tests/maou/domain/board/`
+   - Ensure piece ID conversions are correct
+   - Verify no regressions in app/interface/infra layers
+
+#### Anti-Patterns (DO NOT DO THIS)
+
+```python
+# ❌ BAD: Direct cshogi import in app layer
+from cshogi import Board as CshogiBoard
+
+# ✅ GOOD: Use domain Board wrapper
+from maou.domain.board.shogi import Board
+```
+
+```python
+# ❌ BAD: Duplicate piece ID conversion logic
+def my_converter(piece):
+    if piece == 5:
+        return 6  # BISHOP
+    # ...
+
+# ✅ GOOD: Use centralized conversion
+piece_id = Board._cshogi_piece_to_piece_id(cshogi_piece)
+```
+
 ### Data I/O Architecture
 
 #### Centralized Schema Management

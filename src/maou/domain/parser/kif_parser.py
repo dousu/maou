@@ -10,6 +10,14 @@ class KifParser(parser.Parser):
 
     KIF is a human-readable format for Shogi games. Note that this format
     has limited information compared to CSA format (no ratings, scores, etc.).
+
+    **Design Note: cshogi Dependency**
+    This parser is intentionally coupled to cshogi.KIF.Parser as KIF parsing is
+    an implementation detail. The Parser abstract base class provides abstraction
+    at the domain boundary.
+
+    If replacing cshogi with another library, create a new KifParser implementation
+    rather than wrapping the existing one.
     """
 
     def parse(self, content: str) -> None:
