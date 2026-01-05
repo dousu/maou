@@ -148,12 +148,7 @@ class SVGBoardRenderer:
             font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
             font-weight: 700;
             text-anchor: middle;
-            transition: transform 0.2s ease, filter 0.2s ease;
             filter: url(#piece-shadow);
-        }}
-        .piece:hover {{
-            transform: scale(1.15);
-            filter: url(#piece-shadow) brightness(1.1);
         }}
         .black-piece {{
             fill: {self.COLOR_BLACK_PIECE};
