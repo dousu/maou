@@ -421,7 +421,7 @@ class SVGBoardRenderer:
             )
 
             parts.append(
-                f'<text x="{x_base + 10}" '
+                f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
                 f'y="{y_offset + i * 25}" '
                 f'class="piece {color_class}" font-size="20">{text}</text>'
             )
