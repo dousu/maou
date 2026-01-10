@@ -50,6 +50,9 @@ pub struct DataIndex {
     /// ID → レコード位置のハッシュマップ（O(1)検索）
     id_index: HashMap<String, RecordLocation>,
 
+    /// ID → レコード位置のB-tree（O(log n + k) prefix検索）
+    id_sorted_index: BTreeMap<String, RecordLocation>,
+
     /// 評価値 → レコード位置リストのB-tree（O(log n)範囲検索）
     eval_index: BTreeMap<i16, Vec<RecordLocation>>,
 
@@ -71,6 +74,7 @@ impl DataIndex {
     ) -> Self {
         Self {
             id_index: HashMap::new(),
+            id_sorted_index: BTreeMap::new(),
             eval_index: BTreeMap::new(),
             total_records: 0,
             array_type,
@@ -86,7 +90,10 @@ impl DataIndex {
         location: RecordLocation,
     ) {
         // IDインデックスに追加
-        self.id_index.insert(id, location);
+        self.id_index.insert(id.clone(), location);
+
+        // IDソート済みインデックスに追加
+        self.id_sorted_index.insert(id, location);
 
         // 評価値インデックスに追加
         self.eval_index
@@ -103,6 +110,56 @@ impl DataIndex {
         id: &str,
     ) -> Option<RecordLocation> {
         self.id_index.get(id).copied()
+    }
+
+    /// IDプレフィックスで候補を検索（O(log n + k)）．
+    ///
+    /// # Arguments
+    /// * `prefix` - 検索プレフィックス
+    /// * `limit` - 最大取得件数
+    ///
+    /// # Returns
+    /// マッチするIDのベクター（ソート済み）
+    pub fn search_id_prefix(&self, prefix: &str, limit: usize) -> Vec<String> {
+        if prefix.is_empty() {
+            return Vec::new();
+        }
+
+        // プレフィックス範囲の終端を計算
+        // 例: "id_12" → "id_12\0" ～ "id_13"
+        let mut end_bytes = prefix.as_bytes().to_vec();
+        if let Some(last) = end_bytes.last_mut() {
+            *last = last.saturating_add(1);
+        }
+        let end_prefix = String::from_utf8(end_bytes)
+            .unwrap_or_else(|_| format!("{}\u{10ffff}", prefix));
+
+        // BTreeMapのrange queryでO(log n + k)検索
+        self.id_sorted_index
+            .range(prefix.to_string()..end_prefix)
+            .take(limit)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// 全IDリストを取得（ソート済み）．
+    ///
+    /// # Arguments
+    /// * `limit` - 最大取得件数（Noneで全件）
+    ///
+    /// # Returns
+    /// IDのベクター（ソート済み）
+    pub fn get_all_ids(&self, limit: Option<usize>) -> Vec<String> {
+        let ids: Vec<String> = self.id_sorted_index
+            .keys()
+            .cloned()
+            .collect();
+
+        if let Some(max_count) = limit {
+            ids.into_iter().take(max_count).collect()
+        } else {
+            ids
+        }
     }
 
     /// 評価値範囲でレコード位置を検索（O(log n)）．
@@ -334,5 +391,128 @@ mod tests {
             ArrayType::Preprocessing
         );
         assert!(ArrayType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_search_id_prefix_basic() {
+        let mut index = DataIndex::new(
+            ArrayType::HCPE,
+            vec![PathBuf::from("test.feather")],
+        );
+
+        index.add_record(
+            "id_100".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 0,
+            },
+        );
+        index.add_record(
+            "id_101".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 1,
+            },
+        );
+        index.add_record(
+            "id_102".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 2,
+            },
+        );
+        index.add_record(
+            "id_200".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 3,
+            },
+        );
+
+        let results = index.search_id_prefix("id_10", 10);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], "id_100");
+        assert_eq!(results[1], "id_101");
+        assert_eq!(results[2], "id_102");
+    }
+
+    #[test]
+    fn test_search_id_prefix_limit() {
+        let mut index = DataIndex::new(
+            ArrayType::HCPE,
+            vec![PathBuf::from("test.feather")],
+        );
+
+        for i in 0..100 {
+            index.add_record(
+                format!("test_{:03}", i),
+                0,
+                RecordLocation {
+                    file_index: 0,
+                    row_number: i as u32,
+                },
+            );
+        }
+
+        let results = index.search_id_prefix("test_", 20);
+        assert_eq!(results.len(), 20);
+        assert!(results.iter().all(|id| id.starts_with("test_")));
+    }
+
+    #[test]
+    fn test_search_id_prefix_empty() {
+        let index = DataIndex::new(
+            ArrayType::HCPE,
+            vec![PathBuf::from("test.feather")],
+        );
+        let results = index.search_id_prefix("", 10);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_get_all_ids() {
+        let mut index = DataIndex::new(
+            ArrayType::HCPE,
+            vec![PathBuf::from("test.feather")],
+        );
+
+        index.add_record(
+            "id_c".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 0,
+            },
+        );
+        index.add_record(
+            "id_a".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 1,
+            },
+        );
+        index.add_record(
+            "id_b".to_string(),
+            0,
+            RecordLocation {
+                file_index: 0,
+                row_number: 2,
+            },
+        );
+
+        let all_ids = index.get_all_ids(None);
+        assert_eq!(all_ids.len(), 3);
+        // BTreeMapなのでソート済み
+        assert_eq!(all_ids[0], "id_a");
+        assert_eq!(all_ids[1], "id_b");
+        assert_eq!(all_ids[2], "id_c");
+
+        let limited = index.get_all_ids(Some(2));
+        assert_eq!(limited.len(), 2);
     }
 }

@@ -281,9 +281,11 @@ def create_keyboard_shortcuts_script() -> str:
                     break;
                 case '/':
                     e.preventDefault();
-                    const searchInput = document.getElementById('id-search-input')?.querySelector('input');
-                    if (searchInput) {
-                        searchInput.focus();
+                    // Dropdownのinput要素にフォーカス
+                    const searchDropdown = document.getElementById('id-search-input')?.querySelector('input');
+                    if (searchDropdown) {
+                        searchDropdown.focus();
+                        searchDropdown.click();  // ドロップダウンを開く
                     }
                     break;
                 case '?':
@@ -367,6 +369,30 @@ class GradioVisualizationServer:
             f"{self.search_index.total_records()} records indexed"
         )
 
+    def _get_id_suggestions_handler(
+        self, prefix: str
+    ) -> gr.update:
+        """ID入力に応じて候補を動的更新．
+
+        Args:
+            prefix: ユーザーが入力したプレフィックス
+
+        Returns:
+            Dropdownの選択肢更新
+        """
+        if not prefix or len(prefix) < 2:
+            # 2文字未満の場合は初期候補（最初の1000件）を表示
+            initial_ids = self.viz_interface.get_all_ids(
+                limit=1000
+            )
+            return gr.update(choices=initial_ids)
+
+        # プレフィックスに基づく候補を取得
+        suggestions = self.viz_interface.get_id_suggestions(
+            prefix, limit=50
+        )
+        return gr.update(choices=suggestions)
+
     def _supports_eval_search(self) -> bool:
         """評価値範囲検索をサポートするデータ型かどうかを判定．
 
@@ -427,10 +453,27 @@ class GradioVisualizationServer:
                     # ID検索
                     with gr.Group():
                         gr.Markdown("### ID検索")
-                        id_input = gr.Textbox(
+
+                        # 初期化時にID候補リストを取得（最大1000件）
+                        initial_ids = []
+                        try:
+                            initial_ids = (
+                                self.viz_interface.get_all_ids(
+                                    limit=1000
+                                )
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to load initial ID list: {e}"
+                            )
+
+                        id_input = gr.Dropdown(
                             label="🔍 レコードID",
-                            placeholder="例: 123456789",
-                            info="検索したいレコードのIDを入力してください",
+                            choices=initial_ids,
+                            value=None,
+                            allow_custom_value=True,
+                            filterable=True,
+                            info="IDを入力すると候補が絞り込まれます（2文字以上で動的更新）",
                             elem_id="id-search-input",
                         )
                         id_search_btn = gr.Button(
@@ -725,6 +768,13 @@ class GradioVisualizationServer:
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
                 ],
+            )
+
+            # ID入力時の候補動的更新
+            id_input.change(
+                fn=self._get_id_suggestions_handler,
+                inputs=[id_input],
+                outputs=[id_input],
             )
 
         return demo

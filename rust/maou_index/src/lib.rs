@@ -143,6 +143,31 @@ impl SearchIndex {
             .map(|p| p.to_string_lossy().to_string())
             .collect()
     }
+
+    /// IDプレフィックスで候補を検索．
+    ///
+    /// # Arguments
+    /// * `prefix` - 検索プレフィックス
+    /// * `limit` - 最大取得件数（デフォルト: 50）
+    ///
+    /// # Returns
+    /// マッチするIDのリスト（ソート済み）
+    #[pyo3(signature = (prefix, limit=50))]
+    pub fn search_id_prefix(&self, prefix: String, limit: usize) -> Vec<String> {
+        self.index.search_id_prefix(&prefix, limit)
+    }
+
+    /// 全IDリストを取得（ソート済み）．
+    ///
+    /// # Arguments
+    /// * `limit` - 最大取得件数（Noneで全件，デフォルト: None）
+    ///
+    /// # Returns
+    /// IDのリスト（ソート済み）
+    #[pyo3(signature = (limit=None))]
+    pub fn get_all_ids(&self, limit: Option<usize>) -> Vec<String> {
+        self.index.get_all_ids(limit)
+    }
 }
 
 /// Pythonモジュール定義．

@@ -115,6 +115,49 @@ class SearchIndex:
         """
         return self._id_index.get(record_id)
 
+    def search_id_prefix(
+        self, prefix: str, limit: int = 50
+    ) -> List[str]:
+        """IDプレフィックスで候補を検索．
+
+        Args:
+            prefix: 検索プレフィックス（2文字以上推奨）
+            limit: 最大取得件数（デフォルト: 50）
+
+        Returns:
+            マッチするIDのリスト（ソート済み）
+
+        Note:
+            パフォーマンスのため，prefixが2文字未満の場合は空リストを返す．
+        """
+        if not prefix or len(prefix) < 2:
+            return []
+
+        # Python実装（O(n) - 小規模データ向け）
+        matching_ids = [
+            id_str
+            for id_str in self._id_index.keys()
+            if id_str.startswith(prefix)
+        ]
+        matching_ids.sort()
+        return matching_ids[:limit]
+
+    def get_all_ids(
+        self, limit: Optional[int] = None
+    ) -> List[str]:
+        """全IDリストを取得（ソート済み）．
+
+        Args:
+            limit: 最大取得件数（Noneで全件）
+
+        Returns:
+            IDリスト（ソート済み）
+        """
+        all_ids = sorted(self._id_index.keys())
+        if limit is not None:
+            return all_ids[:limit]
+        return all_ids
+
     def search_by_eval_range(
         self,
         min_eval: Optional[int] = None,

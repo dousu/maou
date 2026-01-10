@@ -277,6 +277,44 @@ class VisualizationInterface:
             "num_files": len(self.file_paths),
         }
 
+    def get_id_suggestions(
+        self, prefix: str, limit: int = 50
+    ) -> List[str]:
+        """IDプレフィックスに基づく候補リストを取得．
+
+        Args:
+            prefix: 検索プレフィックス
+            limit: 最大取得件数（デフォルト: 50）
+
+        Returns:
+            候補IDのリスト（ソート済み）
+
+        Example:
+            >>> interface.get_id_suggestions("id_12", limit=10)
+            ["id_120", "id_121", "id_122", ...]
+        """
+        if not prefix or not prefix.strip():
+            return []
+
+        return self.search_index.search_id_prefix(
+            prefix.strip(), limit=limit
+        )
+
+    def get_all_ids(self, limit: int = 1000) -> List[str]:
+        """全IDリストを取得（Dropdown初期化用）．
+
+        Args:
+            limit: 最大取得件数（デフォルト: 1000）
+
+        Returns:
+            IDリスト（ソート済み）
+
+        Note:
+            大規模データセットの場合，ブラウザ負荷を避けるため
+            limitを設定して取得件数を制限する．
+        """
+        return self.search_index.get_all_ids(limit=limit)
+
     def generate_analytics(
         self, records: List[Dict[str, Any]]
     ) -> str:
