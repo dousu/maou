@@ -335,39 +335,53 @@ class GradioVisualizationServer:
             use_mock_data: Trueの場合はモックデータを使用
         """
         self.file_paths = file_paths
-        self.array_type = array_type
+        self.array_type = (
+            array_type  # This can now be changed dynamically
+        )
         self.model_path = model_path
         self.use_mock_data = use_mock_data
         self.renderer = SVGBoardRenderer()
 
+        # Check if data is available
+        self.has_data = len(file_paths) > 0 or use_mock_data
+
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
 
-        # SearchIndexを初期化
-        self.search_index = SearchIndex.build(
-            file_paths=file_paths,
-            array_type=array_type,
-            use_mock_data=use_mock_data,
-            num_mock_records=1000,
-        )
+        if self.has_data:
+            # Build index and interface
+            # SearchIndexを初期化
+            self.search_index = SearchIndex.build(
+                file_paths=file_paths,
+                array_type=array_type,
+                use_mock_data=use_mock_data,
+                num_mock_records=1000,
+            )
 
-        # VisualizationInterfaceを初期化
-        self.viz_interface = VisualizationInterface(
-            search_index=self.search_index,
-            file_paths=file_paths,
-            array_type=array_type,
-        )
+            # VisualizationInterfaceを初期化
+            self.viz_interface = VisualizationInterface(
+                search_index=self.search_index,
+                file_paths=file_paths,
+                array_type=array_type,
+            )
 
-        mode_msg = (
-            "MOCK MODE (fake data)"
-            if use_mock_data
-            else "REAL MODE (actual data)"
-        )
-        logger.info(
-            f"🎯 Visualization server initialized: {mode_msg}, "
-            f"{len(file_paths)} files, type={array_type}, "
-            f"{self.search_index.total_records()} records indexed"
-        )
+            mode_msg = (
+                "MOCK MODE (fake data)"
+                if use_mock_data
+                else "REAL MODE (actual data)"
+            )
+            logger.info(
+                f"🎯 Visualization server initialized: {mode_msg}, "
+                f"{len(file_paths)} files, type={array_type}, "
+                f"{self.search_index.total_records()} records indexed"
+            )
+        else:
+            # Empty state - will be initialized when user loads data
+            self.search_index = None  # type: ignore[assignment]
+            self.viz_interface = None  # type: ignore[assignment]
+            logger.warning(
+                "⚠️  No data loaded - UI will show empty state"
+            )
 
     def _get_id_suggestions_handler(
         self, prefix: str
@@ -380,6 +394,10 @@ class GradioVisualizationServer:
         Returns:
             Dropdownの選択肢更新
         """
+        # Check for empty state
+        if not self.has_data or self.viz_interface is None:
+            return gr.update(choices=[])
+
         if not prefix or len(prefix) < 2:
             # 2文字未満の場合は初期候補（最初の1000件）を表示
             initial_ids = self.viz_interface.get_all_ids(
@@ -401,6 +419,289 @@ class GradioVisualizationServer:
         """
         return self.array_type == "hcpe"
 
+    def _get_initial_status_message(self) -> str:
+        """Generate initial status message based on current state．
+
+        Returns:
+            str: ステータスメッセージ
+        """
+        if self.use_mock_data:
+            return "**Status:** 🟡 Using mock data for testing"
+        elif self.has_data:
+            total = self.search_index.total_records()
+            file_count = len(self.file_paths)
+            return (
+                f"**Status:** 🟢 Loaded {total:,} records "
+                f"from {file_count} file(s)"
+            )
+        else:
+            return "**Status:** ⚪ No data loaded - select a data source to begin"
+
+    def _resolve_directory(self, dir_path: str) -> List[Path]:
+        """Resolve directory to list of .feather files．
+
+        Args:
+            dir_path: Directory path string from UI input
+
+        Returns:
+            List of .feather file paths sorted by name
+
+        Raises:
+            ValueError: If directory not found, empty, or not a directory
+        """
+        if not dir_path or not dir_path.strip():
+            raise ValueError("Directory path is required")
+
+        path = Path(dir_path.strip()).expanduser()
+
+        if not path.exists():
+            raise ValueError(f"Directory not found: {path}")
+
+        if not path.is_dir():
+            raise ValueError(f"Not a directory: {path}")
+
+        feather_files = sorted(path.glob("*.feather"))
+
+        if not feather_files:
+            raise ValueError(
+                f"No .feather files found in {path}"
+            )
+
+        logger.info(
+            f"Found {len(feather_files)} .feather files in {path}"
+        )
+        return feather_files
+
+    def _resolve_file_list(self, files_str: str) -> List[Path]:
+        """Resolve comma-separated file paths．
+
+        Args:
+            files_str: Comma-separated file paths from UI input
+
+        Returns:
+            List of validated .feather file paths
+
+        Raises:
+            ValueError: If files not found or not .feather format
+        """
+        if not files_str or not files_str.strip():
+            raise ValueError("File paths are required")
+
+        # Split by comma and clean up whitespace
+        path_strs = [
+            f.strip() for f in files_str.split(",") if f.strip()
+        ]
+        paths = [Path(p).expanduser() for p in path_strs]
+
+        # Check for missing files
+        missing = [p for p in paths if not p.exists()]
+        if missing:
+            missing_str = ", ".join(str(p) for p in missing)
+            raise ValueError(f"Files not found: {missing_str}")
+
+        # Check for non-.feather files
+        invalid = [p for p in paths if p.suffix != ".feather"]
+        if invalid:
+            invalid_str = ", ".join(str(p) for p in invalid)
+            raise ValueError(
+                f"Not .feather files: {invalid_str}"
+            )
+
+        logger.info(
+            f"Resolved {len(paths)} .feather files from file list"
+        )
+        return paths
+
+    def _load_new_data_source(
+        self,
+        source_mode: str,
+        dir_path: str,
+        files_path: str,
+        array_type: str,
+    ) -> Tuple[str, bool, str]:
+        """Load new data source and rebuild index．
+
+        Args:
+            source_mode: "Directory" or "File List"
+            dir_path: Directory path (used if source_mode == "Directory")
+            files_path: Comma-separated files (used if source_mode == "File List")
+            array_type: Data array type (hcpe, preprocessing, stage1, stage2)
+
+        Returns:
+            Tuple of (status_message, rebuild_btn_enabled, mode_badge)
+        """
+        # Step 1: Validate and resolve paths
+        try:
+            if source_mode == "Directory":
+                file_paths = self._resolve_directory(dir_path)
+            else:  # "File List"
+                file_paths = self._resolve_file_list(files_path)
+        except ValueError as e:
+            logger.error(f"Path resolution failed: {e}")
+            return (
+                f"❌ **Error:** {e}",
+                False,  # Keep rebuild button disabled
+                "⚪ NO DATA",
+            )
+
+        # Step 2: Build new SearchIndex
+        try:
+            logger.info(
+                f"Building search index for {len(file_paths)} files..."
+            )
+            new_index = SearchIndex.build(
+                file_paths=file_paths,
+                array_type=array_type,
+                use_mock_data=False,
+            )
+            logger.info(
+                f"Index built: {new_index.total_records():,} records"
+            )
+        except Exception as e:
+            logger.exception("Index build failed")
+            return (
+                f"❌ **Error:** Index build failed - {e}",
+                False,
+                "⚪ NO DATA",
+            )
+
+        # Step 3: Create new VisualizationInterface
+        try:
+            new_viz_interface = VisualizationInterface(
+                search_index=new_index,
+                file_paths=file_paths,
+                array_type=array_type,
+            )
+        except Exception as e:
+            logger.exception(
+                "VisualizationInterface creation failed"
+            )
+            return (
+                f"❌ **Error:** Failed to create interface - {e}",
+                False,
+                "⚪ NO DATA",
+            )
+
+        # Step 4: Update instance state
+        self.file_paths = file_paths
+        self.array_type = array_type
+        self.search_index = new_index
+        self.viz_interface = new_viz_interface
+        self.has_data = True
+
+        # Step 5: Update eval search support
+        self.supports_eval_search = self._supports_eval_search()
+
+        # Step 6: Return success status
+        total = new_index.total_records()
+        file_count = len(file_paths)
+        success_msg = (
+            f"✓ **Success:** Loaded {total:,} records "
+            f"from {file_count} file(s) (type: {array_type})"
+        )
+
+        logger.info(success_msg)
+        return (
+            success_msg,
+            True,  # Enable rebuild button
+            "🟢 REAL MODE",
+        )
+
+    def _rebuild_index(self) -> str:
+        """Rebuild search index from current file paths．
+
+        Returns:
+            Status message string
+        """
+        if not self.has_data or not self.file_paths:
+            logger.warning(
+                "Rebuild requested but no data source is loaded"
+            )
+            return "❌ **Error:** No data source loaded"
+
+        try:
+            logger.info(
+                f"Rebuilding index for {len(self.file_paths)} files..."
+            )
+
+            # Build new index
+            new_index = SearchIndex.build(
+                file_paths=self.file_paths,
+                array_type=self.array_type,
+                use_mock_data=False,
+            )
+
+            # Update search index
+            self.search_index = new_index
+
+            # Update viz_interface's search_index reference
+            self.viz_interface.search_index = new_index
+
+            total = new_index.total_records()
+            success_msg = f"✓ **Success:** Index rebuilt - {total:,} records"
+
+            logger.info(success_msg)
+            return success_msg
+
+        except Exception as e:
+            logger.exception("Index rebuild failed")
+            return f"❌ **Error:** Rebuild failed - {e}"
+
+    def _get_empty_state_outputs(self) -> Tuple:
+        """Generate output values for empty state (no data loaded)．
+
+        Returns:
+            Tuple matching outputs for pagination methods
+        """
+        empty_table: List[List[Any]] = []  # Empty list for results_table
+
+        page_info = "No data loaded"
+
+        board_display = self._render_empty_board_placeholder()
+
+        record_details = {
+            "message": "No data loaded",
+            "instruction": "Use 'Data Source Management' section to load data",
+        }
+
+        current_page = 1
+        current_page_records = gr.State([])
+        current_record_index = gr.State(0)
+
+        return (
+            empty_table,
+            page_info,
+            board_display,
+            record_details,
+            current_page,
+            current_page_records,
+            current_record_index,
+        )
+
+    def _render_empty_board_placeholder(self) -> str:
+        """Render placeholder SVG when no data is loaded．
+
+        Returns:
+            SVG string with placeholder message
+        """
+        return """
+    <svg width="450" height="450" xmlns="http://www.w3.org/2000/svg">
+        <rect width="450" height="450" fill="#f5f5f5"/>
+        <text x="225" y="200" text-anchor="middle"
+              font-size="20" fill="#666">
+            No Data Loaded
+        </text>
+        <text x="225" y="240" text-anchor="middle"
+              font-size="14" fill="#999">
+            Use Data Source Management section
+        </text>
+        <text x="225" y="265" text-anchor="middle"
+              font-size="14" fill="#999">
+            to load .feather files
+        </text>
+    </svg>
+    """
+
     def create_demo(self) -> gr.Blocks:
         """Gradio UIデモを作成．
 
@@ -417,26 +718,17 @@ class GradioVisualizationServer:
             with gr.Row():
                 gr.Markdown("# ⚡ Maou将棋データ可視化ツール")
 
-            # Mode indicator with badge
-            badge_class = (
-                "warning" if self.use_mock_data else "success"
-            )
-            badge_text = (
-                "MOCK MODE"
-                if self.use_mock_data
-                else "REAL MODE"
-            )
-            badge_icon = "🔴" if self.use_mock_data else "🟢"
+            # Mode indicator with badge (referenceable for updates)
+            if self.use_mock_data:
+                badge_content = "🔴 MOCK MODE"
+            elif self.has_data:
+                badge_content = "🟢 REAL MODE"
+            else:
+                badge_content = "⚪ NO DATA"
 
-            gr.HTML(
-                f"""
-                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
-                    <span class="badge {badge_class}">{badge_icon} {badge_text}</span>
-                    <span style="color: var(--text-secondary); font-size: var(--text-sm);">
-                        データセット: {len(self.file_paths)}ファイル | 型={self.array_type}
-                    </span>
-                </div>
-                """
+            mode_badge = gr.HTML(
+                value=badge_content,
+                elem_id="mode-badge",
             )
 
             # Toast notifications
@@ -448,6 +740,67 @@ class GradioVisualizationServer:
             with gr.Row():
                 # 左パネル: ナビゲーションと検索コントロール
                 with gr.Column(scale=1):
+                    # データソース管理セクション
+                    with gr.Accordion(
+                        "📂 Data Source Management",
+                        open=not self.has_data,  # Expanded when no data
+                    ):
+                        with gr.Row():
+                            source_mode = gr.Radio(
+                                choices=[
+                                    "Directory",
+                                    "File List",
+                                ],
+                                value="Directory",
+                                label="Source Type",
+                                scale=1,
+                            )
+
+                        dir_input = gr.Textbox(
+                            label="Directory Path",
+                            placeholder="/path/to/data (will scan for *.feather files)",
+                            visible=True,
+                            scale=3,
+                        )
+
+                        files_input = gr.Textbox(
+                            label="File Paths (comma-separated)",
+                            placeholder="file1.feather, file2.feather, file3.feather",
+                            visible=False,
+                            lines=3,
+                            scale=3,
+                        )
+
+                        array_type_dropdown = gr.Dropdown(
+                            choices=[
+                                "hcpe",
+                                "preprocessing",
+                                "stage1",
+                                "stage2",
+                            ],
+                            value=self.array_type,
+                            label="Array Type",
+                            interactive=True,
+                        )
+
+                        with gr.Row():
+                            load_btn = gr.Button(
+                                "Load Data Source",
+                                variant="primary",
+                                scale=2,
+                            )
+                            rebuild_btn = gr.Button(
+                                "Rebuild Index",
+                                variant="secondary",
+                                scale=1,
+                                interactive=self.has_data,  # Only enabled when data is loaded
+                            )
+
+                        status_markdown = gr.Markdown(
+                            value=self._get_initial_status_message(),
+                            elem_classes=["status-message"],
+                        )
+
                     # ページ内レコードナビゲーション
                     with gr.Group():
                         gr.Markdown(
@@ -497,16 +850,18 @@ class GradioVisualizationServer:
 
                         # 初期化時にID候補リストを取得（最大1000件）
                         initial_ids = []
-                        try:
-                            initial_ids = (
-                                self.viz_interface.get_all_ids(
+                        if (
+                            self.has_data
+                            and self.viz_interface is not None
+                        ):
+                            try:
+                                initial_ids = self.viz_interface.get_all_ids(
                                     limit=1000
                                 )
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to load initial ID list: {e}"
-                            )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to load initial ID list: {e}"
+                                )
 
                         id_input = gr.Dropdown(
                             label="🔍 レコードID",
@@ -778,6 +1133,109 @@ class GradioVisualizationServer:
                 outputs=[id_input],
             )
 
+            # データソース管理イベントハンドラ
+
+            # Event 1: Toggle between directory and file list inputs
+            source_mode.change(
+                fn=lambda mode: (
+                    gr.update(visible=(mode == "Directory")),
+                    gr.update(visible=(mode == "File List")),
+                ),
+                inputs=[source_mode],
+                outputs=[dir_input, files_input],
+            )
+
+            # Event 2: Load new data source
+            load_result = load_btn.click(
+                fn=self._load_new_data_source,
+                inputs=[
+                    source_mode,
+                    dir_input,
+                    files_input,
+                    array_type_dropdown,
+                ],
+                outputs=[
+                    status_markdown,
+                    rebuild_btn,
+                    mode_badge,
+                ],
+            )
+
+            # Event 3: After successful load, reload first page
+            if self.supports_eval_search:
+                load_result.then(
+                    fn=lambda: (
+                        self._paginate_all_data(
+                            min_eval=-9999,
+                            max_eval=9999,
+                            page=1,
+                            page_size=20,
+                        )
+                        if self.has_data
+                        else self._get_empty_state_outputs()
+                    ),
+                    inputs=[],
+                    outputs=[
+                        results_table,
+                        page_info,
+                        board_display,
+                        record_details,
+                        current_page,
+                        current_page_records,
+                        current_record_index,
+                    ],
+                )
+            else:
+                load_result.then(
+                    fn=lambda: (
+                        self._paginate_all_data(
+                            min_eval=-9999,
+                            max_eval=9999,
+                            page=1,
+                            page_size=20,
+                        )
+                        if self.has_data
+                        else self._get_empty_state_outputs()
+                    ),
+                    inputs=[],
+                    outputs=[
+                        results_table,
+                        page_info,
+                        board_display,
+                        record_details,
+                        current_page,
+                        current_page_records,
+                        current_record_index,
+                    ],
+                )
+
+            # Event 4: Rebuild index
+            rebuild_result = rebuild_btn.click(
+                fn=self._rebuild_index,
+                inputs=[],
+                outputs=[status_markdown],
+            )
+
+            # Event 5: After successful rebuild, reload current page
+            rebuild_result.then(
+                fn=lambda pg, sz: self._paginate_all_data(
+                    min_eval=-9999,
+                    max_eval=9999,
+                    page=pg,
+                    page_size=sz,
+                ),
+                inputs=[current_page, page_size],
+                outputs=[
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
+                    current_page,
+                    current_page_records,
+                    current_record_index,
+                ],
+            )
+
         return demo
 
     def _search_and_cache(
@@ -814,6 +1272,13 @@ class GradioVisualizationServer:
              cached_records, record_index, record_indicator, analytics_html,
              prev_btn_state, next_btn_state)
         """
+        # Check for empty state
+        if not self.has_data or self.viz_interface is None:
+            return self._get_empty_state_outputs() + (
+                gr.Button(interactive=False),
+                gr.Button(interactive=False),
+            )
+
         (
             table_data,
             page_info,

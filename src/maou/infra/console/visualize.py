@@ -138,13 +138,20 @@ def visualize(
         app_logger.info(
             "Using mock data mode - no actual files will be read"
         )
-    else:
+    elif input_dir or input_files:
         file_paths = _resolve_file_paths(input_dir, input_files)
 
         if not file_paths:
             raise click.ClickException(
-                "No input files found. Specify --input-dir or --input-files."
+                "No .feather files found in the specified input directory or files."
             )
+    else:
+        # Allow empty startup - user will load data from UI
+        file_paths = []
+        app_logger.info(
+            "Starting visualization without data source - "
+            "use UI to load data dynamically"
+        )
 
     app_logger.info(
         f"Launching visualization server with {len(file_paths)} files"
