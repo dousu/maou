@@ -446,8 +446,49 @@ class GradioVisualizationServer:
             gr.HTML(create_keyboard_shortcuts_script())
 
             with gr.Row():
-                # 左パネル: 検索コントロール
+                # 左パネル: ナビゲーションと検索コントロール
                 with gr.Column(scale=1):
+                    # ページ内レコードナビゲーション
+                    with gr.Group():
+                        gr.Markdown(
+                            "### 🎯 レコードナビゲーション"
+                        )
+                        with gr.Row():
+                            prev_record_btn = gr.Button(
+                                "← 前のレコード",
+                                size="sm",
+                                elem_id="prev-record",
+                            )
+                            record_indicator = gr.Markdown(
+                                "Record 0 / 0"
+                            )
+                            next_record_btn = gr.Button(
+                                "次のレコード →",
+                                size="sm",
+                                elem_id="next-record",
+                            )
+
+                    # ページネーション
+                    with gr.Group():
+                        gr.Markdown("### 📄 ページネーション")
+                        page_size = gr.Slider(
+                            label="📊 1ページあたりの件数",
+                            info="一度に表示するレコード数を設定（10〜100件）",
+                            minimum=10,
+                            maximum=100,
+                            value=20,
+                            step=10,
+                        )
+                        with gr.Row():
+                            prev_btn = gr.Button(
+                                "← 前へ", elem_id="prev-page"
+                            )
+                            next_btn = gr.Button(
+                                "次へ →", elem_id="next-page"
+                            )
+                        page_info = gr.Markdown("ページ 1")
+
+                    # 検索機能
                     gr.Markdown("## 🔍 検索機能")
 
                     # ID検索
@@ -508,46 +549,6 @@ class GradioVisualizationServer:
                         eval_search_btn = gr.Button(
                             visible=False
                         )
-
-                    # ページ内レコードナビゲーション（新規）
-                    with gr.Group():
-                        gr.Markdown(
-                            "### 🎯 レコードナビゲーション"
-                        )
-                        with gr.Row():
-                            prev_record_btn = gr.Button(
-                                "← 前のレコード",
-                                size="sm",
-                                elem_id="prev-record",
-                            )
-                            record_indicator = gr.Markdown(
-                                "Record 0 / 0"
-                            )
-                            next_record_btn = gr.Button(
-                                "次のレコード →",
-                                size="sm",
-                                elem_id="next-record",
-                            )
-
-                    # ページネーション
-                    with gr.Group():
-                        gr.Markdown("### 📄 ページネーション")
-                        page_size = gr.Slider(
-                            label="📊 1ページあたりの件数",
-                            info="一度に表示するレコード数を設定（10〜100件）",
-                            minimum=10,
-                            maximum=100,
-                            value=20,
-                            step=10,
-                        )
-                        with gr.Row():
-                            prev_btn = gr.Button(
-                                "← 前へ", elem_id="prev-page"
-                            )
-                            next_btn = gr.Button(
-                                "次へ →", elem_id="next-page"
-                            )
-                        page_info = gr.Markdown("ページ 1")
 
                     # データセット情報
                     with gr.Group():
