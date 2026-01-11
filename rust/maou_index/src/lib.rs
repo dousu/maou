@@ -7,8 +7,10 @@ use std::path::PathBuf;
 
 mod error;
 mod index;
+mod path_scanner;
 
 use index::{ArrayType, DataIndex, RecordLocation};
+use path_scanner::PathScanner as RustPathScanner;
 
 /// Python公開用の検索インデックスクラス．
 #[pyclass]
@@ -170,9 +172,106 @@ impl SearchIndex {
     }
 }
 
+/// Python公開用のパススキャナークラス．
+#[pyclass]
+pub struct PathScanner {
+    /// 内部スキャナー
+    scanner: RustPathScanner,
+}
+
+#[pymethods]
+impl PathScanner {
+    /// 新しいPathScannerを作成．
+    ///
+    /// # Arguments
+    /// * `ttl_seconds` - キャッシュのTTL（秒，デフォルト: 60）
+    #[new]
+    #[pyo3(signature = (ttl_seconds=60))]
+    pub fn new(ttl_seconds: u64) -> Self {
+        Self {
+            scanner: RustPathScanner::new(ttl_seconds),
+        }
+    }
+
+    /// キャッシュが古いかチェック．
+    ///
+    /// # Returns
+    /// キャッシュが古い場合はTrue
+    pub fn is_stale(&self) -> bool {
+        self.scanner.is_stale()
+    }
+
+    /// ディレクトリをスキャンしてキャッシュを構築．
+    ///
+    /// # Arguments
+    /// * `base_path` - スキャンするベースディレクトリ
+    /// * `max_depth` - 最大スキャン深度（デフォルト: 5）
+    ///
+    /// # Returns
+    /// スキャンしたディレクトリ数
+    #[pyo3(signature = (base_path, max_depth=5))]
+    pub fn scan_directories(&mut self, base_path: String, max_depth: usize) -> PyResult<usize> {
+        let path = PathBuf::from(base_path);
+        self.scanner
+            .scan_directories(&path, max_depth)
+            .map_err(|e| PyErr::from(e))
+    }
+
+    /// .featherファイルをスキャンしてキャッシュを構築．
+    ///
+    /// # Arguments
+    /// * `base_path` - スキャンするベースディレクトリ
+    /// * `recursive` - 再帰的にスキャンするか（デフォルト: True）
+    ///
+    /// # Returns
+    /// スキャンしたファイル数
+    #[pyo3(signature = (base_path, recursive=true))]
+    pub fn scan_feather_files(&mut self, base_path: String, recursive: bool) -> PyResult<usize> {
+        let path = PathBuf::from(base_path);
+        self.scanner
+            .scan_feather_files(&path, recursive)
+            .map_err(|e| PyErr::from(e))
+    }
+
+    /// ディレクトリパスのプレフィックス検索．
+    ///
+    /// # Arguments
+    /// * `prefix` - 検索するプレフィックス
+    /// * `limit` - 最大取得件数（デフォルト: 50）
+    ///
+    /// # Returns
+    /// マッチするディレクトリパスのリスト（ソート済み）
+    #[pyo3(signature = (prefix, limit=50))]
+    pub fn search_directory_prefix(&self, prefix: String, limit: usize) -> Vec<String> {
+        self.scanner.search_directory_prefix(&prefix, limit)
+    }
+
+    /// ファイルパスのプレフィックス検索．
+    ///
+    /// # Arguments
+    /// * `prefix` - 検索するプレフィックス
+    /// * `limit` - 最大取得件数（デフォルト: 100）
+    ///
+    /// # Returns
+    /// マッチする.featherファイルパスのリスト（ソート済み）
+    #[pyo3(signature = (prefix, limit=100))]
+    pub fn search_file_prefix(&self, prefix: String, limit: usize) -> Vec<String> {
+        self.scanner.search_file_prefix(&prefix, limit)
+    }
+
+    /// 現在のキャッシュ統計を取得．
+    ///
+    /// # Returns
+    /// (ディレクトリ数, ファイル数)のタプル
+    pub fn cache_stats(&self) -> (usize, usize) {
+        self.scanner.cache_stats()
+    }
+}
+
 /// Pythonモジュール定義．
 #[pymodule]
 fn maou_index(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SearchIndex>()?;
+    m.add_class::<PathScanner>()?;
     Ok(())
 }

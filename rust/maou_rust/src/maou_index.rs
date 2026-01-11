@@ -9,5 +9,8 @@ pub fn create_module(py: Python) -> PyResult<Bound<'_, PyModule>> {
     // Add SearchIndex class from maou_index crate
     m.add_class::<::maou_index::SearchIndex>()?;
 
+    // Add PathScanner class from maou_index crate
+    m.add_class::<::maou_index::PathScanner>()?;
+
     Ok(m)
 }

@@ -36,6 +36,9 @@ from maou.domain.visualization.board_renderer import (  # noqa: E402
 from maou.infra.visualization.search_index import (  # noqa: E402
     SearchIndex,
 )
+from maou.interface.path_suggestions import (  # noqa: E402
+    PathSuggestionService,
+)
 from maou.interface.visualization import (  # noqa: E402
     VisualizationInterface,
 )
@@ -348,6 +351,11 @@ class GradioVisualizationServer:
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
 
+        # Initialize path suggestion service
+        self.path_suggester = PathSuggestionService(
+            cache_ttl=60
+        )
+
         if self.has_data:
             # Build index and interface
             # SearchIndexを初期化
@@ -410,6 +418,64 @@ class GradioVisualizationServer:
             prefix, limit=50
         )
         return gr.update(choices=suggestions)
+
+    def _get_directory_suggestions_handler(
+        self, prefix: str
+    ) -> gr.update:
+        """Get directory path suggestions based on user input．
+
+        Args:
+            prefix: User-typed prefix (minimum 2 characters)
+
+        Returns:
+            Dropdown update with suggestions
+        """
+        if not prefix or len(prefix) < 2:
+            return gr.update(choices=[])
+
+        try:
+            suggestions = (
+                self.path_suggester.get_directory_suggestions(
+                    prefix=prefix,
+                    limit=50,
+                )
+            )
+            logger.debug(
+                f"Directory suggestions for '{prefix}': {len(suggestions)} results"
+            )
+            return gr.update(choices=suggestions)
+        except Exception as e:
+            logger.error(f"Directory suggestion failed: {e}")
+            return gr.update(choices=[])
+
+    def _get_file_suggestions_handler(
+        self, prefix: str
+    ) -> gr.update:
+        """Get .feather file path suggestions based on user input．
+
+        Args:
+            prefix: User-typed prefix (minimum 2 characters)
+
+        Returns:
+            Dropdown update with suggestions
+        """
+        if not prefix or len(prefix) < 2:
+            return gr.update(choices=[])
+
+        try:
+            suggestions = (
+                self.path_suggester.get_file_suggestions(
+                    prefix=prefix,
+                    limit=100,  # Higher limit for file mode
+                )
+            )
+            logger.debug(
+                f"File suggestions for '{prefix}': {len(suggestions)} results"
+            )
+            return gr.update(choices=suggestions)
+        except Exception as e:
+            logger.error(f"File suggestion failed: {e}")
+            return gr.update(choices=[])
 
     def _supports_eval_search(self) -> bool:
         """評価値範囲検索をサポートするデータ型かどうかを判定．
@@ -653,7 +719,9 @@ class GradioVisualizationServer:
         Returns:
             Tuple matching outputs for pagination methods
         """
-        empty_table: List[List[Any]] = []  # Empty list for results_table
+        empty_table: List[
+            List[Any]
+        ] = []  # Empty list for results_table
 
         page_info = "No data loaded"
 
@@ -756,18 +824,25 @@ class GradioVisualizationServer:
                                 scale=1,
                             )
 
-                        dir_input = gr.Textbox(
-                            label="Directory Path",
-                            placeholder="/path/to/data (will scan for *.feather files)",
+                        dir_input = gr.Dropdown(
+                            label="📁 Directory Path",
+                            choices=[],  # Initially empty
+                            value=None,
+                            allow_custom_value=True,  # Allow manual path entry
+                            filterable=True,  # Enable incremental search
+                            info="Type to search directories (2+ characters for suggestions)",
                             visible=True,
                             scale=3,
                         )
 
-                        files_input = gr.Textbox(
-                            label="File Paths (comma-separated)",
-                            placeholder="file1.feather, file2.feather, file3.feather",
+                        files_input = gr.Dropdown(
+                            label="📄 File Paths",
+                            choices=[],
+                            value=None,
+                            allow_custom_value=True,
+                            filterable=True,
+                            info="Type to search .feather files (2+ characters)",
                             visible=False,
-                            lines=3,
                             scale=3,
                         )
 
@@ -1131,6 +1206,19 @@ class GradioVisualizationServer:
                 fn=self._get_id_suggestions_handler,
                 inputs=[id_input],
                 outputs=[id_input],
+            )
+
+            # パス候補イベントハンドラ
+            dir_input.change(
+                fn=self._get_directory_suggestions_handler,
+                inputs=[dir_input],
+                outputs=[dir_input],
+            )
+
+            files_input.change(
+                fn=self._get_file_suggestions_handler,
+                inputs=[files_input],
+                outputs=[files_input],
             )
 
             # データソース管理イベントハンドラ
