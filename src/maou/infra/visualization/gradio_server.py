@@ -780,7 +780,7 @@ class GradioVisualizationServer:
         custom_css = _load_custom_css()
 
         with gr.Blocks(
-            title="Maou Shogi Data Visualizer", css=custom_css
+            title="Maou Shogi Data Visualizer"
         ) as demo:
             # Header with mode badge
             with gr.Row():
@@ -2137,6 +2137,9 @@ def launch_server(
 
     demo = server.create_demo()
 
+    # カスタムCSSを読み込み（Gradio 6ではlaunch()に渡す必要がある）
+    custom_css = _load_custom_css()
+
     logger.info(
         f"Launching Gradio server on {server_name}:{port} "
         f"(share={share}, debug={debug})"
@@ -2148,4 +2151,5 @@ def launch_server(
         share=share,
         debug=debug,
         show_error=True,
+        css=custom_css,
     )

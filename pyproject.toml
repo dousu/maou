@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "GPL-3.0-only"}
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "click>=8.1.7",
     "cshogi>=0.9.2",
@@ -80,7 +80,7 @@ aws = [
 ]
 # 可視化ツール用のextra
 visualize = [
-    "gradio>=4.0.0,<5.0.0",
+    "gradio>=6.0.0,<7.0.0",
     "huggingface-hub>=0.19.3,<1.0.0",
 ]
 
