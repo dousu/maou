@@ -407,8 +407,9 @@ class SVGBoardRenderer:
             "black-piece" if is_black else "white-piece"
         )
 
-        for i, (piece_name, count) in enumerate(
-            zip(self.HAND_PIECE_NAMES, pieces)
+        display_index = 0  # 実際に表示する駒のカウンター
+        for piece_name, count in zip(
+            self.HAND_PIECE_NAMES, pieces
         ):
             if count == 0:
                 continue
@@ -422,9 +423,10 @@ class SVGBoardRenderer:
 
             parts.append(
                 f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
-                f'y="{y_offset + i * 25}" '
+                f'y="{y_offset + display_index * 25}" '
                 f'class="piece {color_class}" font-size="20">{text}</text>'
             )
+            display_index += 1
 
         return "\n".join(parts)
 
