@@ -182,17 +182,22 @@
    ======================================== */
 
 /* Universal text color fix for all dropdown descendants */
+/* CRITICAL: This rule must apply to ALL text inside dropdowns */
 .gradio-container .gr-dropdown *,
 .gradio-container [class*="dropdown"] *,
 .gradio-container [class*="Dropdown"] *,
 .gradio-container [data-testid="dropdown"] *,
+.gradio-container [role="combobox"] *,
+.gradio-container [aria-autocomplete="list"] *,
+.gradio-container div[class*="svelte-"] *,
 /* Target the ID search input specifically */
 #id-search-input *,
 #id-search-input label,
 #id-search-input input,
 #id-search-input div,
 #id-search-input span {
-    color: var(--text-primary) !important;  /* 濃い黒 #1a1a1a - 全ての子要素に適用 */
+    color: #1a1a1a !important;  /* Explicit dark color - 濃い黒 #1a1a1a */
+    -webkit-text-fill-color: #1a1a1a !important;
 }
 
 /* Dropdown container */
@@ -217,6 +222,7 @@
 }
 
 /* Dropdown input field - CRITICAL for user input visibility */
+/* Ultra-specific selectors with maximum priority */
 .gradio-container .gr-dropdown input,
 .gradio-container .gr-dropdown input[type="text"],
 .gradio-container .gr-dropdown textarea,
@@ -225,13 +231,23 @@
 .gradio-container [data-testid="dropdown"] textarea,
 .gradio-container [class*="dropdown"] input,
 .gradio-container [class*="Dropdown"] input,
+.gradio-container [class*="svelte-"] input[type="text"],
+.gradio-container div[class*="dropdown"] input,
+.gradio-container div[class*="Dropdown"] input,
+.gradio-container div[data-testid="dropdown"] input,
 /* ID search input specific */
 #id-search-input input,
 #id-search-input input[type="text"],
-#id-search-input textarea {
-    color: var(--text-primary) !important;
+#id-search-input textarea,
+/* Combobox pattern (used by Gradio 6 dropdowns) */
+.gradio-container [role="combobox"],
+.gradio-container input[role="combobox"],
+.gradio-container [aria-autocomplete="list"],
+.gradio-container input[aria-autocomplete="list"] {
+    color: #1a1a1a !important;  /* Explicit dark color instead of variable */
     background: var(--bg-tertiary) !important;
-    font-weight: 500 !important;
+    font-weight: 600 !important;  /* Increased from 500 to 600 */
+    -webkit-text-fill-color: #1a1a1a !important;  /* Override webkit autofill */
 }
 
 /* Dropdown input field - focus state for user typing */
@@ -239,11 +255,15 @@
 .gradio-container .gr-dropdown textarea:focus,
 .gradio-container [data-testid="dropdown"] input:focus,
 .gradio-container [data-testid="dropdown"] textarea:focus,
+.gradio-container [class*="svelte-"] input[type="text"]:focus,
+.gradio-container [role="combobox"]:focus,
+.gradio-container input[role="combobox"]:focus,
 #id-search-input input:focus,
 #id-search-input textarea:focus {
-    color: var(--text-primary) !important;
+    color: #1a1a1a !important;
     background: var(--bg-tertiary) !important;
     border-color: var(--accent-primary) !important;
+    -webkit-text-fill-color: #1a1a1a !important;
 }
 
 /* Dropdown input placeholder */
@@ -262,10 +282,24 @@
 .gradio-container .gr-dropdown [class*="value"],
 .gradio-container [data-testid="dropdown"] .value,
 .gradio-container [data-testid="dropdown"] [class*="value"],
+.gradio-container [role="combobox"] .value,
+.gradio-container [role="combobox"] [class*="value"],
 #id-search-input .value,
 #id-search-input [class*="value"] {
-    color: var(--text-primary) !important;
-    font-weight: 500 !important;
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
+    -webkit-text-fill-color: #1a1a1a !important;
+}
+
+/* CRITICAL: Force text color on ALL dropdown wrapper elements */
+.gradio-container .gr-dropdown,
+.gradio-container [data-testid="dropdown"],
+.gradio-container div[class*="dropdown"],
+.gradio-container div[class*="Dropdown"],
+.gradio-container [role="combobox"],
+.gradio-container [aria-autocomplete="list"] {
+    color: #1a1a1a !important;
+    -webkit-text-fill-color: #1a1a1a !important;
 }
 
 /* Dropdown options list container */
