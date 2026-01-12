@@ -393,7 +393,7 @@ class GradioVisualizationServer:
 
     def _get_id_suggestions_handler(
         self, prefix: str
-    ) -> gr.update:
+    ) -> Any:
         """ID入力に応じて候補を動的更新．
 
         Args:
@@ -421,7 +421,7 @@ class GradioVisualizationServer:
 
     def _get_directory_suggestions_handler(
         self, prefix: str
-    ) -> gr.update:
+    ) -> Any:
         """Get directory path suggestions based on user input．
 
         Args:
@@ -450,7 +450,7 @@ class GradioVisualizationServer:
 
     def _get_file_suggestions_handler(
         self, prefix: str
-    ) -> gr.update:
+    ) -> Any:
         """Get .feather file path suggestions based on user input．
 
         Args:
@@ -776,9 +776,6 @@ class GradioVisualizationServer:
         Returns:
             設定済みのGradio Blocksインスタンス
         """
-        # カスタムCSSを読み込み
-        custom_css = _load_custom_css()
-
         with gr.Blocks(
             title="Maou Shogi Data Visualizer"
         ) as demo:
