@@ -1086,3 +1086,45 @@
         display: none !important;
     }
 }
+
+/* ========================================
+   Custom Component Styling (Gradio 6)
+   ======================================== */
+
+/* Mode Badge - Status indicator for MOCK/REAL/NO DATA */
+#mode-badge,
+#mode-badge *,
+.mode-badge-text {
+    color: var(--text-primary) !important;
+    font-size: var(--text-lg) !important;
+    font-weight: 600 !important;
+    line-height: 1.5 !important;
+}
+
+/* Record Indicator - Shows current record position */
+#record-indicator,
+#record-indicator *,
+#record-indicator p,
+#record-indicator span {
+    color: var(--text-primary) !important;
+    font-size: var(--text-base) !important;
+    font-weight: 600 !important;
+    text-align: center !important;
+    margin: 0 !important;
+}
+
+/* Ensure all Markdown components have proper text color */
+.gradio-container .gr-markdown,
+.gradio-container .gr-markdown *,
+.gradio-container [data-testid="markdown"],
+.gradio-container [data-testid="markdown"] * {
+    color: var(--text-primary) !important;
+}
+
+/* Ensure all HTML components have proper text color */
+.gradio-container .gr-html,
+.gradio-container .gr-html *,
+.gradio-container [data-testid="html"],
+.gradio-container [data-testid="html"] * {
+    color: var(--text-primary) !important;
+}

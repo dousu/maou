@@ -603,7 +603,7 @@ class GradioVisualizationServer:
             return (
                 f"❌ **Error:** {e}",
                 False,  # Keep rebuild button disabled
-                "⚪ NO DATA",
+                '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
         # Step 2: Build new SearchIndex
@@ -624,7 +624,7 @@ class GradioVisualizationServer:
             return (
                 f"❌ **Error:** Index build failed - {e}",
                 False,
-                "⚪ NO DATA",
+                '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
         # Step 3: Create new VisualizationInterface
@@ -641,7 +641,7 @@ class GradioVisualizationServer:
             return (
                 f"❌ **Error:** Failed to create interface - {e}",
                 False,
-                "⚪ NO DATA",
+                '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
         # Step 4: Update instance state
@@ -666,7 +666,7 @@ class GradioVisualizationServer:
         return (
             success_msg,
             True,  # Enable rebuild button
-            "🟢 REAL MODE",
+            '<span class="mode-badge-text">🟢 REAL MODE</span>',
         )
 
     def _rebuild_index(self) -> str:
@@ -781,11 +781,11 @@ class GradioVisualizationServer:
 
             # Mode indicator with badge (referenceable for updates)
             if self.use_mock_data:
-                badge_content = "🔴 MOCK MODE"
+                badge_content = '<span class="mode-badge-text">🔴 MOCK MODE</span>'
             elif self.has_data:
-                badge_content = "🟢 REAL MODE"
+                badge_content = '<span class="mode-badge-text">🟢 REAL MODE</span>'
             else:
-                badge_content = "⚪ NO DATA"
+                badge_content = '<span class="mode-badge-text">⚪ NO DATA</span>'
 
             mode_badge = gr.HTML(
                 value=badge_content,
@@ -881,7 +881,8 @@ class GradioVisualizationServer:
                                 elem_id="prev-record",
                             )
                             record_indicator = gr.Markdown(
-                                "Record 0 / 0"
+                                "Record 0 / 0",
+                                elem_id="record-indicator",
                             )
                             next_record_btn = gr.Button(
                                 "次のレコード →",
