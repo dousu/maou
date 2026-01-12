@@ -181,6 +181,19 @@
    Dropdown / Autocomplete
    ======================================== */
 
+/* Universal text color fix for all dropdown descendants */
+.gradio-container .gr-dropdown *,
+.gradio-container [class*="dropdown"] *,
+.gradio-container [class*="Dropdown"] *,
+/* Target the ID search input specifically */
+#id-search-input *,
+#id-search-input label,
+#id-search-input input,
+#id-search-input div,
+#id-search-input span {
+    color: var(--text-primary) !important;  /* 濃い黒 #1a1a1a - 全ての子要素に適用 */
+}
+
 /* Dropdown container */
 .gradio-container .gr-dropdown {
     background: var(--bg-tertiary) !important;
@@ -205,7 +218,18 @@
 /* Individual dropdown option items - CRITICAL for visibility */
 .gradio-container .gr-dropdown li,
 .gradio-container .gr-dropdown .option,
-.gradio-container .gr-dropdown [role="option"] {
+.gradio-container .gr-dropdown [role="option"],
+.gradio-container select option,
+.gradio-container datalist option,
+/* Gradio 4.x specific selectors */
+.gradio-container .dropdown-content,
+.gradio-container .dropdown-content > *,
+.gradio-container [class*="dropdown"] [class*="option"],
+.gradio-container [class*="dropdown"] li,
+.gradio-container [class*="Dropdown"] [role="option"],
+/* Svelte-specific classes that Gradio might use */
+.gradio-container [class*="svelte-"] [role="option"],
+.gradio-container [class*="svelte-"].option {
     color: var(--text-primary) !important;  /* 濃い黒 #1a1a1a */
     padding: var(--space-2) var(--space-4) !important;
     cursor: pointer;
@@ -215,7 +239,13 @@
 /* Hover state for dropdown options */
 .gradio-container .gr-dropdown li:hover,
 .gradio-container .gr-dropdown .option:hover,
-.gradio-container .gr-dropdown [role="option"]:hover {
+.gradio-container .gr-dropdown [role="option"]:hover,
+.gradio-container .dropdown-content > *:hover,
+.gradio-container [class*="dropdown"] [class*="option"]:hover,
+.gradio-container [class*="dropdown"] li:hover,
+.gradio-container [class*="Dropdown"] [role="option"]:hover,
+.gradio-container [class*="svelte-"] [role="option"]:hover,
+.gradio-container [class*="svelte-"].option:hover {
     background: var(--highlight-primary) !important;  /* 薄い青 */
     color: var(--accent-primary) !important;  /* Vercelブルー #0070f3 */
 }
@@ -223,7 +253,13 @@
 /* Selected/active dropdown option */
 .gradio-container .gr-dropdown li[aria-selected="true"],
 .gradio-container .gr-dropdown .option.selected,
-.gradio-container .gr-dropdown [role="option"][aria-selected="true"] {
+.gradio-container .gr-dropdown [role="option"][aria-selected="true"],
+.gradio-container .dropdown-content > *[aria-selected="true"],
+.gradio-container [class*="dropdown"] [class*="option"][aria-selected="true"],
+.gradio-container [class*="dropdown"] li[aria-selected="true"],
+.gradio-container [class*="Dropdown"] [role="option"][aria-selected="true"],
+.gradio-container [class*="svelte-"] [role="option"][aria-selected="true"],
+.gradio-container [class*="svelte-"].option.selected {
     background: var(--highlight-primary) !important;
     color: var(--accent-primary) !important;
     font-weight: 600 !important;
