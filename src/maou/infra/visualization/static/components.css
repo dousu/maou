@@ -216,10 +216,56 @@
     font-size: var(--text-sm) !important;
 }
 
-/* Dropdown input field */
-.gradio-container .gr-dropdown input {
+/* Dropdown input field - CRITICAL for user input visibility */
+.gradio-container .gr-dropdown input,
+.gradio-container .gr-dropdown input[type="text"],
+.gradio-container .gr-dropdown textarea,
+.gradio-container [data-testid="dropdown"] input,
+.gradio-container [data-testid="dropdown"] input[type="text"],
+.gradio-container [data-testid="dropdown"] textarea,
+.gradio-container [class*="dropdown"] input,
+.gradio-container [class*="Dropdown"] input,
+/* ID search input specific */
+#id-search-input input,
+#id-search-input input[type="text"],
+#id-search-input textarea {
     color: var(--text-primary) !important;
     background: var(--bg-tertiary) !important;
+    font-weight: 500 !important;
+}
+
+/* Dropdown input field - focus state for user typing */
+.gradio-container .gr-dropdown input:focus,
+.gradio-container .gr-dropdown textarea:focus,
+.gradio-container [data-testid="dropdown"] input:focus,
+.gradio-container [data-testid="dropdown"] textarea:focus,
+#id-search-input input:focus,
+#id-search-input textarea:focus {
+    color: var(--text-primary) !important;
+    background: var(--bg-tertiary) !important;
+    border-color: var(--accent-primary) !important;
+}
+
+/* Dropdown input placeholder */
+.gradio-container .gr-dropdown input::placeholder,
+.gradio-container .gr-dropdown textarea::placeholder,
+.gradio-container [data-testid="dropdown"] input::placeholder,
+.gradio-container [data-testid="dropdown"] textarea::placeholder,
+#id-search-input input::placeholder,
+#id-search-input textarea::placeholder {
+    color: var(--text-tertiary) !important;
+    opacity: 0.7 !important;
+}
+
+/* Dropdown selected value display */
+.gradio-container .gr-dropdown .value,
+.gradio-container .gr-dropdown [class*="value"],
+.gradio-container [data-testid="dropdown"] .value,
+.gradio-container [data-testid="dropdown"] [class*="value"],
+#id-search-input .value,
+#id-search-input [class*="value"] {
+    color: var(--text-primary) !important;
+    font-weight: 500 !important;
 }
 
 /* Dropdown options list container */
