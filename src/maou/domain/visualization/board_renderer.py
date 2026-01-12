@@ -402,7 +402,7 @@ class SVGBoardRenderer:
         )
 
         # 各駒種の表示
-        y_offset = y_base + 40
+        y_offset = y_base + 50  # タイトル(30px) + 余白(20px)
         color_class = (
             "black-piece" if is_black else "white-piece"
         )
@@ -423,8 +423,8 @@ class SVGBoardRenderer:
 
             parts.append(
                 f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
-                f'y="{y_offset + display_index * 25}" '
-                f'class="piece {color_class}" font-size="20">{text}</text>'
+                f'y="{y_offset + display_index * 30}" '
+                f'class="piece {color_class}" font-size="18">{text}</text>'
             )
             display_index += 1
 
