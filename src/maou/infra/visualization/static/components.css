@@ -185,6 +185,7 @@
 .gradio-container .gr-dropdown *,
 .gradio-container [class*="dropdown"] *,
 .gradio-container [class*="Dropdown"] *,
+.gradio-container [data-testid="dropdown"] *,
 /* Target the ID search input specifically */
 #id-search-input *,
 #id-search-input label,
@@ -197,6 +198,22 @@
 /* Dropdown container */
 .gradio-container .gr-dropdown {
     background: var(--bg-tertiary) !important;
+}
+
+/* Dropdown label - ensure visibility */
+.gradio-container .gr-dropdown label,
+.gradio-container [data-testid="dropdown"] label {
+    color: var(--text-primary) !important;
+    font-size: var(--text-base) !important;
+    font-weight: 600 !important;
+}
+
+/* Dropdown info text - ensure visibility */
+.gradio-container .gr-dropdown .info,
+.gradio-container [data-testid="dropdown"] .info,
+.gradio-container [data-testid="dropdown"] + .info {
+    color: var(--text-secondary) !important;
+    font-size: var(--text-sm) !important;
 }
 
 /* Dropdown input field */
@@ -271,6 +288,24 @@
     padding: var(--space-4) !important;
     text-align: center;
     font-style: italic;
+}
+
+/* Radio buttons styling */
+.gradio-container .gr-radio,
+.gradio-container [data-testid="radio"],
+.gradio-container fieldset {
+    color: var(--text-primary) !important;
+}
+
+.gradio-container .gr-radio label,
+.gradio-container .gr-radio span,
+.gradio-container [data-testid="radio"] label,
+.gradio-container [data-testid="radio"] span,
+.gradio-container fieldset label,
+.gradio-container fieldset legend {
+    color: var(--text-primary) !important;
+    font-size: var(--text-base) !important;
+    font-weight: 500 !important;
 }
 
 /* Slider styling */
@@ -408,10 +443,19 @@
     font-weight: 500 !important;
     cursor: pointer;
     transition: background var(--transition-fast);
+    color: var(--text-primary) !important;
 }
 
 .gradio-container .gr-accordion-header:hover {
     background: var(--bg-primary) !important;
+}
+
+/* Accordion content area - ensure text visibility */
+.gradio-container .gr-accordion *,
+.gradio-container [data-testid="accordion"] *,
+.gradio-container details *,
+.gradio-container details summary * {
+    color: var(--text-primary) !important;
 }
 
 /* ========================================
