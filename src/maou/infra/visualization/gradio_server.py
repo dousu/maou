@@ -391,9 +391,7 @@ class GradioVisualizationServer:
                 "⚠️  No data loaded - UI will show empty state"
             )
 
-    def _get_id_suggestions_handler(
-        self, prefix: str
-    ) -> Any:
+    def _get_id_suggestions_handler(self, prefix: str) -> Any:
         """ID入力に応じて候補を動的更新．
 
         Args:
@@ -448,9 +446,7 @@ class GradioVisualizationServer:
             logger.error(f"Directory suggestion failed: {e}")
             return gr.update(choices=[])
 
-    def _get_file_suggestions_handler(
-        self, prefix: str
-    ) -> Any:
+    def _get_file_suggestions_handler(self, prefix: str) -> Any:
         """Get .feather file path suggestions based on user input．
 
         Args:
