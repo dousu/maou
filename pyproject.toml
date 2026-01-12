@@ -82,6 +82,7 @@ aws = [
 visualize = [
     "gradio>=6.0.0,<7.0.0",
     "huggingface-hub>=0.19.3,<1.0.0",
+    "matplotlib>=3.5.0",
 ]
 
 [project.scripts]
