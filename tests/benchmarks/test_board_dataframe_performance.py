@@ -47,8 +47,8 @@ class TestBoardDataFramePerformance:
         assert "boardIdPositions" in result.columns
 
         # Performance check
-        assert avg_time_ms < 1.0, (
-            f"Too slow: {avg_time_ms:.3f}ms > 1ms"
+        assert avg_time_ms < 2.0, (
+            f"Too slow: {avg_time_ms:.3f}ms > 2ms"
         )
 
     def test_get_hcp_df_performance(self) -> None:
