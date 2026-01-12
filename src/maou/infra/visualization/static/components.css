@@ -177,6 +177,66 @@
     font-weight: 600 !important;
 }
 
+/* ========================================
+   Dropdown / Autocomplete
+   ======================================== */
+
+/* Dropdown container */
+.gradio-container .gr-dropdown {
+    background: var(--bg-tertiary) !important;
+}
+
+/* Dropdown input field */
+.gradio-container .gr-dropdown input {
+    color: var(--text-primary) !important;
+    background: var(--bg-tertiary) !important;
+}
+
+/* Dropdown options list container */
+.gradio-container .gr-dropdown ul,
+.gradio-container .gr-dropdown .options,
+.gradio-container [data-testid="dropdown-options"] {
+    background: var(--bg-tertiary) !important;
+    border: 1px solid var(--border-medium) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: var(--shadow-md) !important;
+}
+
+/* Individual dropdown option items - CRITICAL for visibility */
+.gradio-container .gr-dropdown li,
+.gradio-container .gr-dropdown .option,
+.gradio-container .gr-dropdown [role="option"] {
+    color: var(--text-primary) !important;  /* 濃い黒 #1a1a1a */
+    padding: var(--space-2) var(--space-4) !important;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+/* Hover state for dropdown options */
+.gradio-container .gr-dropdown li:hover,
+.gradio-container .gr-dropdown .option:hover,
+.gradio-container .gr-dropdown [role="option"]:hover {
+    background: var(--highlight-primary) !important;  /* 薄い青 */
+    color: var(--accent-primary) !important;  /* Vercelブルー #0070f3 */
+}
+
+/* Selected/active dropdown option */
+.gradio-container .gr-dropdown li[aria-selected="true"],
+.gradio-container .gr-dropdown .option.selected,
+.gradio-container .gr-dropdown [role="option"][aria-selected="true"] {
+    background: var(--highlight-primary) !important;
+    color: var(--accent-primary) !important;
+    font-weight: 600 !important;
+}
+
+/* Empty state / No results */
+.gradio-container .gr-dropdown .no-options {
+    color: var(--text-tertiary) !important;
+    padding: var(--space-4) !important;
+    text-align: center;
+    font-style: italic;
+}
+
 /* Slider styling */
 .gradio-container input[type="range"] {
     -webkit-appearance: none;
