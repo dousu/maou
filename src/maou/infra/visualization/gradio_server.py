@@ -5,6 +5,7 @@
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,6 +33,9 @@ import gradio as gr  # noqa: E402
 from maou.domain.visualization.board_renderer import (  # noqa: E402
     BoardPosition,
     SVGBoardRenderer,
+)
+from maou.infra.visualization.indexing_state import (  # noqa: E402
+    IndexingState,
 )
 from maou.infra.visualization.search_index import (  # noqa: E402
     SearchIndex,
@@ -356,22 +360,33 @@ class GradioVisualizationServer:
             cache_ttl=60
         )
 
+        # Initialize threading infrastructure
+        self.indexing_state = IndexingState()
+        self._index_lock = threading.Lock()
+        self._indexing_thread: Optional[threading.Thread] = None
+
         if self.has_data:
-            # Build index and interface
-            # SearchIndexを初期化
-            self.search_index = SearchIndex.build(
-                file_paths=file_paths,
-                array_type=array_type,
-                use_mock_data=use_mock_data,
-                num_mock_records=1000,
+            # Start background indexing instead of blocking
+            logger.info(
+                f"🎯 Starting background indexing: "
+                f"{len(file_paths)} files, type={array_type}"
             )
 
-            # VisualizationInterfaceを初期化
-            self.viz_interface = VisualizationInterface(
-                search_index=self.search_index,
-                file_paths=file_paths,
-                array_type=array_type,
+            # Initialize with None - will be set by background thread
+            self.search_index = None  # type: ignore[assignment]
+            self.viz_interface = None  # type: ignore[assignment]
+
+            # Start background indexing
+            self.indexing_state.set_indexing(
+                total_files=len(file_paths),
+                initial_message="開始中...",
             )
+            self._indexing_thread = threading.Thread(
+                target=self._build_index_background,
+                args=(file_paths, array_type, use_mock_data),
+                daemon=True,
+            )
+            self._indexing_thread.start()
 
             mode_msg = (
                 "MOCK MODE (fake data)"
@@ -379,9 +394,7 @@ class GradioVisualizationServer:
                 else "REAL MODE (actual data)"
             )
             logger.info(
-                f"🎯 Visualization server initialized: {mode_msg}, "
-                f"{len(file_paths)} files, type={array_type}, "
-                f"{self.search_index.total_records()} records indexed"
+                f"⚡ Background indexing started: {mode_msg}"
             )
         else:
             # Empty state - will be initialized when user loads data
@@ -389,6 +402,165 @@ class GradioVisualizationServer:
             self.viz_interface = None  # type: ignore[assignment]
             logger.warning(
                 "⚠️  No data loaded - UI will show empty state"
+            )
+
+    def _build_index_background(
+        self,
+        file_paths: List[Path],
+        array_type: str,
+        use_mock_data: bool,
+    ) -> None:
+        """バックグラウンドでインデックスを構築．
+
+        Args:
+            file_paths: データファイルのパスリスト
+            array_type: データ型
+            use_mock_data: Trueの場合はモックデータを使用
+        """
+        try:
+            logger.info("🔄 Background indexing started")
+
+            # Progress callback to update IndexingState
+            def progress_callback(
+                files_done: int, records: int, message: str
+            ) -> None:
+                # Check for cancellation
+                if self.indexing_state.is_cancelled():
+                    raise InterruptedError(
+                        "Indexing cancelled by user"
+                    )
+
+                self.indexing_state.update_progress(
+                    files_done, records, message
+                )
+
+            # Build search index with progress tracking
+            new_index = SearchIndex.build(
+                file_paths=file_paths,
+                array_type=array_type,
+                use_mock_data=use_mock_data,
+                num_mock_records=1000,
+                progress_callback=progress_callback,
+            )
+
+            # Create visualization interface
+            new_viz_interface = VisualizationInterface(
+                search_index=new_index,
+                file_paths=file_paths,
+                array_type=array_type,
+            )
+
+            # Atomically update state with lock
+            with self._index_lock:
+                if not self.indexing_state.is_cancelled():
+                    self.search_index = new_index
+                    self.viz_interface = new_viz_interface
+                    self.indexing_state.set_ready(
+                        new_index.total_records()
+                    )
+
+                    logger.info(
+                        f"✅ Background indexing completed: "
+                        f"{new_index.total_records():,} records"
+                    )
+                else:
+                    logger.info(
+                        "🚫 Background indexing cancelled"
+                    )
+
+        except InterruptedError as e:
+            logger.info(f"🚫 Indexing interrupted: {e}")
+            self.indexing_state.set_failed(
+                "インデックス作成がキャンセルされました"
+            )
+        except Exception as e:
+            logger.exception("❌ Background indexing failed")
+            self.indexing_state.set_failed(str(e))
+
+    def _check_indexing_status(
+        self,
+    ) -> Tuple[str, gr.Button, gr.Button, str]:
+        """インデックス作成状態をポーリングしてUI更新を返す．
+
+        ローディングスピナーと推定残り時間を含むステータスメッセージ，
+        ボタンの有効/無効状態，モードバッジを返す．
+
+        Returns:
+            (status_message, load_btn, rebuild_btn, mode_badge)のタプル
+        """
+        status = self.indexing_state.get_status()
+
+        if status == "indexing":
+            progress = self.indexing_state.get_progress()
+
+            # 推定残り時間を計算
+            remaining_seconds = (
+                self.indexing_state.estimate_remaining_time()
+            )
+            time_str = ""
+            if remaining_seconds is not None:
+                if remaining_seconds < 60:
+                    time_str = f" - 約{remaining_seconds}秒残り"
+                else:
+                    minutes = remaining_seconds // 60
+                    seconds = remaining_seconds % 60
+                    time_str = f" - 約{minutes}分{seconds}秒残り"
+
+            # Loading spinner HTML (inline CSS animation)
+            spinner_html = """
+<div style="display: inline-block; vertical-align: middle; margin-right: 8px;">
+    <div style="display: inline-block; width: 16px; height: 16px;
+                border: 2px solid #f3f3f3; border-top: 2px solid #ff9800;
+                border-radius: 50%; animation: spin-anim 1s linear infinite;"></div>
+</div>
+<style>
+@keyframes spin-anim {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+"""
+
+            status_msg = (
+                f"{spinner_html}🟡 **Indexing:** {progress['message']} "
+                f"({progress['files']}/{progress['total_files']} files, "
+                f"{progress['records']:,} records){time_str}"
+            )
+
+            return (
+                status_msg,
+                gr.Button(interactive=False),  # Load button
+                gr.Button(interactive=False),  # Rebuild button
+                '<span class="mode-badge-text">🟡 INDEXING</span>',
+            )
+        elif status == "ready":
+            # Thread-safe access to search_index
+            with self._index_lock:
+                if self.search_index is not None:
+                    total = self.search_index.total_records()
+                else:
+                    total = 0
+
+            return (
+                f"🟢 **Ready:** {total:,} records loaded",
+                gr.Button(interactive=True),
+                gr.Button(interactive=True),
+                '<span class="mode-badge-text">🟢 REAL MODE</span>',
+            )
+        elif status == "failed":
+            error = self.indexing_state.get_error()
+            return (
+                f"❌ **Error:** {error}",
+                gr.Button(interactive=True),
+                gr.Button(interactive=False),
+                '<span class="mode-badge-text">⚪ ERROR</span>',
+            )
+        else:  # idle
+            return (
+                "⚪ **No data loaded**",
+                gr.Button(interactive=True),
+                gr.Button(interactive=False),
+                '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
     def _get_id_suggestions_handler(self, prefix: str) -> Any:
@@ -400,22 +572,24 @@ class GradioVisualizationServer:
         Returns:
             Dropdownの選択肢更新
         """
-        # Check for empty state
-        if not self.has_data or self.viz_interface is None:
-            return gr.update(choices=[])
+        # Thread-safe access to viz_interface
+        with self._index_lock:
+            # Check for empty state
+            if not self.has_data or self.viz_interface is None:
+                return gr.update(choices=[])
 
-        if not prefix or len(prefix) < 2:
-            # 2文字未満の場合は初期候補（最初の1000件）を表示
-            initial_ids = self.viz_interface.get_all_ids(
-                limit=1000
+            if not prefix or len(prefix) < 2:
+                # 2文字未満の場合は初期候補（最初の1000件）を表示
+                initial_ids = self.viz_interface.get_all_ids(
+                    limit=1000
+                )
+                return gr.update(choices=initial_ids)
+
+            # プレフィックスに基づく候補を取得
+            suggestions = self.viz_interface.get_id_suggestions(
+                prefix, limit=50
             )
-            return gr.update(choices=initial_ids)
-
-        # プレフィックスに基づく候補を取得
-        suggestions = self.viz_interface.get_id_suggestions(
-            prefix, limit=50
-        )
-        return gr.update(choices=suggestions)
+            return gr.update(choices=suggestions)
 
     def _get_directory_suggestions_handler(
         self, prefix: str
@@ -581,7 +755,7 @@ class GradioVisualizationServer:
         files_path: str,
         array_type: str,
     ) -> Tuple[str, bool, str]:
-        """Load new data source and rebuild index．
+        """Load new data source and rebuild index in background．
 
         Args:
             source_mode: "Directory" or "File List"
@@ -606,67 +780,51 @@ class GradioVisualizationServer:
                 '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
-        # Step 2: Build new SearchIndex
-        try:
+        # Step 2: Cancel any ongoing indexing
+        if self.indexing_state.is_indexing():
             logger.info(
-                f"Building search index for {len(file_paths)} files..."
+                "Cancelling ongoing indexing before loading new data source"
             )
-            new_index = SearchIndex.build(
-                file_paths=file_paths,
-                array_type=array_type,
-                use_mock_data=False,
-            )
-            logger.info(
-                f"Index built: {new_index.total_records():,} records"
-            )
-        except Exception as e:
-            logger.exception("Index build failed")
-            return (
-                f"❌ **Error:** Index build failed - {e}",
-                False,
-                '<span class="mode-badge-text">⚪ NO DATA</span>',
-            )
+            self.indexing_state.cancel()
+            # Wait for thread to finish (with timeout)
+            if (
+                self._indexing_thread is not None
+                and self._indexing_thread.is_alive()
+            ):
+                self._indexing_thread.join(timeout=5.0)
+                if self._indexing_thread.is_alive():
+                    logger.warning(
+                        "Previous indexing thread did not terminate in time"
+                    )
 
-        # Step 3: Create new VisualizationInterface
-        try:
-            new_viz_interface = VisualizationInterface(
-                search_index=new_index,
-                file_paths=file_paths,
-                array_type=array_type,
-            )
-        except Exception as e:
-            logger.exception(
-                "VisualizationInterface creation failed"
-            )
-            return (
-                f"❌ **Error:** Failed to create interface - {e}",
-                False,
-                '<span class="mode-badge-text">⚪ NO DATA</span>',
-            )
-
-        # Step 4: Update instance state
+        # Step 3: Update file paths and array type
         self.file_paths = file_paths
         self.array_type = array_type
-        self.search_index = new_index
-        self.viz_interface = new_viz_interface
         self.has_data = True
-
-        # Step 5: Update eval search support
         self.supports_eval_search = self._supports_eval_search()
 
-        # Step 6: Return success status
-        total = new_index.total_records()
-        file_count = len(file_paths)
-        success_msg = (
-            f"✓ **Success:** Loaded {total:,} records "
-            f"from {file_count} file(s) (type: {array_type})"
+        # Step 4: Start new background indexing
+        logger.info(
+            f"Starting background indexing for {len(file_paths)} files..."
         )
 
-        logger.info(success_msg)
+        self.indexing_state.set_indexing(
+            total_files=len(file_paths),
+            initial_message="開始中...",
+        )
+
+        self._indexing_thread = threading.Thread(
+            target=self._build_index_background,
+            args=(file_paths, array_type, False),
+            daemon=True,
+        )
+        self._indexing_thread.start()
+
+        # Step 5: Return immediate response (indexing continues in background)
         return (
-            success_msg,
-            True,  # Enable rebuild button
-            '<span class="mode-badge-text">🟢 REAL MODE</span>',
+            f"🟡 **Indexing:** Started for {len(file_paths)} file(s)",
+            False,  # Rebuild button disabled during indexing
+            '<span class="mode-badge-text">🟡 INDEXING</span>',
         )
 
     def _rebuild_index(self) -> str:
@@ -868,6 +1026,9 @@ class GradioVisualizationServer:
                             value=self._get_initial_status_message(),
                             elem_classes=["status-message"],
                         )
+
+                        # Status polling timer (polls every 2 seconds)
+                        status_timer = gr.Timer(value=2.0)
 
                     # ページ内レコードナビゲーション
                     with gr.Group():
@@ -1318,6 +1479,17 @@ class GradioVisualizationServer:
                 ],
             )
 
+            # Event 6: Status polling timer
+            status_timer.tick(
+                fn=self._check_indexing_status,
+                outputs=[
+                    status_markdown,
+                    load_btn,
+                    rebuild_btn,
+                    mode_badge,
+                ],
+            )
+
         return demo
 
     def _search_and_cache(
@@ -1354,44 +1526,46 @@ class GradioVisualizationServer:
              cached_records, record_index, record_indicator, analytics_html,
              prev_btn_state, next_btn_state)
         """
-        # Check for empty state
-        if not self.has_data or self.viz_interface is None:
-            return self._get_empty_state_outputs() + (
-                gr.Button(interactive=False),
-                gr.Button(interactive=False),
+        # Thread-safe access to viz_interface
+        with self._index_lock:
+            # Check for empty state
+            if not self.has_data or self.viz_interface is None:
+                return self._get_empty_state_outputs() + (
+                    gr.Button(interactive=False),
+                    gr.Button(interactive=False),
+                )
+
+            (
+                table_data,
+                page_info,
+                board_svg,
+                details,
+                cached_records,
+            ) = self.viz_interface.search_by_eval_range(
+                min_eval=min_eval,
+                max_eval=max_eval,
+                page=page,
+                page_size=page_size,
             )
 
-        (
-            table_data,
-            page_info,
-            board_svg,
-            details,
-            cached_records,
-        ) = self.viz_interface.search_by_eval_range(
-            min_eval=min_eval,
-            max_eval=max_eval,
-            page=page,
-            page_size=page_size,
-        )
+            # レコードインジケーター初期化
+            num_records = len(cached_records)
+            if num_records > 0:
+                record_indicator = f"Record 1 / {num_records}"
+            else:
+                record_indicator = "Record 0 / 0"
 
-        # レコードインジケーター初期化
-        num_records = len(cached_records)
-        if num_records > 0:
-            record_indicator = f"Record 1 / {num_records}"
-        else:
-            record_indicator = "Record 0 / 0"
-
-        # 分析チャート生成
-        analytics_html = self.viz_interface.generate_analytics(
-            cached_records
-        )
-
-        # ボタン状態を計算
-        prev_interactive, next_interactive = (
-            self._get_button_states(
-                page, min_eval, max_eval, page_size
+            # 分析チャート生成
+            analytics_html = self.viz_interface.generate_analytics(
+                cached_records
             )
-        )
+
+            # ボタン状態を計算
+            prev_interactive, next_interactive = (
+                self._get_button_states(
+                    page, min_eval, max_eval, page_size
+                )
+            )
 
         return (
             table_data,

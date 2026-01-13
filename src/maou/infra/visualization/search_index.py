@@ -6,7 +6,7 @@
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +257,20 @@ class SearchIndex:
             # 全データカウント
             return self._total_records
 
-    def _build_from_files(self) -> None:
+    def _build_from_files(
+        self,
+        progress_callback: Optional[
+            Callable[[int, int, str], None]
+        ] = None,
+    ) -> None:
         """実ファイルをスキャンして検索インデックスを構築．
 
         各.featherファイルからid/evalフィールドを読み取り，
         id → (file_index, row_number)のマッピングを構築する．
+
+        Args:
+            progress_callback: 進捗を通知するコールバック関数．
+                (files_done, total_records, message)の引数で呼ばれる．
         """
         logger.info(
             f"Scanning {len(self.file_paths)} .feather files..."
@@ -320,6 +329,15 @@ class SearchIndex:
 
                     self._total_records += 1
 
+                # 進捗をコールバックで通知
+                if progress_callback is not None:
+                    message = f"Scanned {file_idx + 1}/{len(self.file_paths)} files"
+                    progress_callback(
+                        file_idx + 1,
+                        self._total_records,
+                        message,
+                    )
+
             logger.info(
                 f"✅ Index built: {self._total_records:,} total records"
             )
@@ -342,6 +360,9 @@ class SearchIndex:
         array_type: str,
         use_mock_data: bool = False,
         num_mock_records: int = 1000,
+        progress_callback: Optional[
+            Callable[[int, int, str], None]
+        ] = None,
     ) -> "SearchIndex":
         """インデックスを構築して返す（ファクトリーメソッド）．
 
@@ -350,6 +371,8 @@ class SearchIndex:
             array_type: データ型
             use_mock_data: Trueの場合はモックデータを使用
             num_mock_records: モックレコード数（テスト用）
+            progress_callback: 進捗を通知するコールバック関数．
+                (files_done, total_records, message)の引数で呼ばれる．
 
         Returns:
             構築済みSearchIndexインスタンス
@@ -364,7 +387,7 @@ class SearchIndex:
                 f"⚠️  Built mock index: {index.total_records()} fake records"
             )
         else:
-            index._build_from_files()
+            index._build_from_files(progress_callback)
             logger.info(
                 f"✅ Built real index: {index.total_records():,} records"
             )
