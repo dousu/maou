@@ -7,7 +7,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
-from maou.domain.board.shogi import PieceId
+from maou.domain.board.shogi import PieceId, Turn
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,15 @@ class SVGBoardRenderer:
         "飛",
     ]
 
+    # 手番の日本語表記
+    TURN_TEXT = {
+        Turn.BLACK: "先手番",
+        Turn.WHITE: "後手番",
+    }
+
+    # ヘッダー表示設定
+    HEADER_HEIGHT = 50  # ヘッダーエリアの高さ
+
     # 色設定（モダン・ミニマリストパレット）
     COLOR_BOARD_BG = "#f9f6f0"  # 盤面背景（微妙な暖色）
     COLOR_GRID = "#d4c5a9"  # グリッド線（ソフトな茶）
@@ -98,12 +107,16 @@ class SVGBoardRenderer:
         self,
         position: BoardPosition,
         highlight_squares: Optional[List[int]] = None,
+        turn: Optional[Turn] = None,
+        record_id: Optional[str] = None,
     ) -> str:
         """将棋盤をSVGとして描画する．
 
         Args:
             position: 描画する盤面状態
             highlight_squares: ハイライトするマス（0-80のインデックス）
+            turn: 手番（Turn.BLACK または Turn.WHITE）
+            record_id: レコードID
 
         Returns:
             完全なSVG文字列（HTML埋め込み可能）
@@ -112,6 +125,7 @@ class SVGBoardRenderer:
 
         svg_parts = [
             self._svg_header(),
+            self._draw_header(turn, record_id),
             self._draw_grid(),
             self._draw_pieces(
                 position.board_id_positions, highlight_set
@@ -131,7 +145,11 @@ class SVGBoardRenderer:
             + self.HAND_AREA_WIDTH * 2
             + self.GAP_BETWEEN_HAND_AND_BOARD * 2
         )
-        total_height = self.MARGIN * 2 + self.BOARD_HEIGHT
+        total_height = (
+            self.MARGIN * 2
+            + self.BOARD_HEIGHT
+            + self.HEADER_HEIGHT
+        )
 
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
                     width="{total_width}"
@@ -167,11 +185,110 @@ class SVGBoardRenderer:
         .board-square:hover {{
             fill: rgba(0,112,243,0.08);
         }}
+        .header-text {{
+            font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+            font-size: 13px;
+            font-weight: 600;
+            fill: #1a1a1a;
+        }}
+        .turn-black {{
+            fill: {self.COLOR_BLACK_PIECE};
+        }}
+        .turn-white {{
+            fill: {self.COLOR_WHITE_PIECE};
+        }}
     </style>"""
 
     def _svg_footer(self) -> str:
         """SVGフッター（終了タグ）を生成．"""
         return "</svg>"
+
+    def _draw_header(
+        self,
+        turn: Optional[Turn],
+        record_id: Optional[str],
+    ) -> str:
+        """盤面上部のヘッダー（レコードIDと手番）を描画．
+
+        Args:
+            turn: 手番（Turn.BLACK または Turn.WHITE）
+            record_id: レコードID
+
+        Returns:
+            ヘッダーのSVG文字列
+        """
+        if turn is None and record_id is None:
+            return ""  # 表示情報がない場合は空文字列
+
+        header_parts = []
+
+        # 盤面のX座標開始位置
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
+        # ヘッダーのY座標（座標ラベルの上）
+        header_y = self.MARGIN - 30
+
+        # レコードID表示（左側）
+        if record_id:
+            record_id_text = f"ID: {record_id}"
+            # 長いIDは切り詰め
+            if len(record_id_text) > 30:
+                record_id_text = record_id_text[:27] + "..."
+
+            # 背景バッジ
+            text_width = len(record_id_text) * 7 + 20  # 概算幅
+            header_parts.append(
+                f'<rect x="{board_x_start}" y="{header_y - 16}" '
+                f'width="{text_width}" height="22" '
+                f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
+                f'rx="4" opacity="0.95"/>'
+            )
+
+            # テキスト
+            header_parts.append(
+                f'<text x="{board_x_start + 10}" y="{header_y}" '
+                f'class="header-text" font-size="13">{record_id_text}</text>'
+            )
+
+        # 手番表示（右側）
+        if turn is not None:
+            turn_text = self.TURN_TEXT.get(turn, "")
+            if turn_text:
+                # 背景バッジ（右寄せ）
+                badge_width = 80
+                badge_x = (
+                    board_x_start
+                    + self.BOARD_WIDTH
+                    - badge_width
+                )
+
+                header_parts.append(
+                    f'<rect x="{badge_x}" y="{header_y - 16}" '
+                    f'width="{badge_width}" height="22" '
+                    f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
+                    f'rx="4" opacity="0.95"/>'
+                )
+
+                # テキスト（中央揃え）
+                text_x = badge_x + badge_width / 2
+                color_class = (
+                    "turn-black"
+                    if turn == Turn.BLACK
+                    else "turn-white"
+                )
+
+                header_parts.append(
+                    f'<text x="{text_x}" y="{header_y}" '
+                    f'class="header-text {color_class}" '
+                    f'text-anchor="middle" font-size="14" font-weight="700">'
+                    f"{turn_text}</text>"
+                )
+
+        return "\n".join(header_parts)
 
     def _draw_grid(self) -> str:
         """将棋盤のグリッド線を描画．"""
@@ -431,11 +548,12 @@ class SVGBoardRenderer:
         return "\n".join(parts)
 
     def _draw_coordinates(self) -> str:
-        """盤面の座標（1-9, a-i）を描画．
+        """盤面の座標（1-9列，1-9行）を描画．
 
         将棋の標準的な符号表記に従い，列番号は右から左へ（9→1）と表示する．
         配列では col=0 が右端（筋9），col=8 が左端（筋1）となっている．
         描画時に列を反転させているため，ラベルは右から左へ（9→1）と表示する．
+        行番号は盤面の右側に1-9の数字で表示する．
         """
         coord_parts = []
 
@@ -472,10 +590,10 @@ class SVGBoardRenderer:
                 f'font-weight="600">{col_number}</text>'
             )
 
-        # 行記号（a-i，盤面の左側）
+        # 行番号（1-9，盤面の右側）
         for row in range(9):
-            # 盤面の左端から少し左に配置
-            x = board_x_start - 10
+            # 盤面の右端から少し右に配置
+            x = board_x_start + self.BOARD_WIDTH + 10
             y = int(
                 self.MARGIN
                 + row * self.CELL_SIZE
@@ -483,19 +601,19 @@ class SVGBoardRenderer:
                 + 5
             )
 
-            row_letter = chr(ord("a") + row)
+            row_number = row + 1  # 1-9 (not 0-8)
 
             # 洗練された背景バッジ
             coord_parts.append(
-                f'<rect x="{x - 16}" y="{y - 12}" '
-                f'width="18" height="18" '
+                f'<rect x="{x - 10}" y="{y - 12}" '
+                f'width="20" height="18" '
                 f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
                 f'rx="3" opacity="0.95"/>'
             )
             coord_parts.append(
-                f'<text x="{x - 7}" y="{y}" '
+                f'<text x="{x}" y="{y}" '
                 f'class="coord" text-anchor="middle" '
-                f'font-weight="600">{row_letter}</text>'
+                f'font-weight="600">{row_number}</text>'
             )
 
         return "\n".join(coord_parts)

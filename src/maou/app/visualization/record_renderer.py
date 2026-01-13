@@ -8,7 +8,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type
 
-from maou.domain.board.shogi import Board, PieceId
+from maou.domain.board.shogi import Board, PieceId, Turn
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
     SVGBoardRenderer,
@@ -256,7 +256,7 @@ class HCPERecordRenderer(RecordRenderer):
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
-        """盤面SVGを描画する（ハイライトなし）．
+        """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
             record: HCPEレコードデータ
@@ -265,7 +265,19 @@ class HCPERecordRenderer(RecordRenderer):
             SVG文字列
         """
         position = self._create_board_position(record)
-        return self.board_renderer.render(position)
+
+        # 手番を取得（DataRetrieverで抽出済み）
+        turn_value = record.get("turn")
+        turn = (
+            Turn(turn_value) if turn_value is not None else None
+        )
+
+        # レコードIDを取得
+        record_id = str(record.get("id", ""))
+
+        return self.board_renderer.render(
+            position, turn=turn, record_id=record_id
+        )
 
     def extract_display_fields(
         self, record: Dict[str, Any]
@@ -400,7 +412,7 @@ class Stage1RecordRenderer(RecordRenderer):
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
-        """盤面SVGを描画する（到達可能マスをハイライト）．
+        """盤面SVGを描画する（到達可能マスをハイライト，手番とレコードID表示込み）．
 
         Args:
             record: Stage1レコードデータ
@@ -415,8 +427,16 @@ class Stage1RecordRenderer(RecordRenderer):
         )
 
         position = self._create_board_position(record)
+
+        # Stage1データは先手視点に正規化済み
+        turn = Turn.BLACK
+        record_id = str(record.get("id", ""))
+
         return self.board_renderer.render(
-            position, highlight_squares
+            position,
+            highlight_squares,
+            turn=turn,
+            record_id=record_id,
         )
 
     def _extract_reachable_squares(
@@ -542,7 +562,7 @@ class Stage2RecordRenderer(RecordRenderer):
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
-        """盤面SVGを描画する（ハイライトなし）．
+        """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
             record: Stage2レコードデータ
@@ -551,7 +571,14 @@ class Stage2RecordRenderer(RecordRenderer):
             SVG文字列
         """
         position = self._create_board_position(record)
-        return self.board_renderer.render(position)
+
+        # Stage2データは先手視点に正規化済み
+        turn = Turn.BLACK
+        record_id = str(record.get("id", ""))
+
+        return self.board_renderer.render(
+            position, turn=turn, record_id=record_id
+        )
 
     def extract_display_fields(
         self, record: Dict[str, Any]
@@ -674,7 +701,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
-        """盤面SVGを描画する（ハイライトなし）．
+        """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
             record: Preprocessingレコードデータ
@@ -683,7 +710,14 @@ class PreprocessingRecordRenderer(RecordRenderer):
             SVG文字列
         """
         position = self._create_board_position(record)
-        return self.board_renderer.render(position)
+
+        # Preprocessingデータは先手視点に正規化済み
+        turn = Turn.BLACK
+        record_id = str(record.get("id", ""))
+
+        return self.board_renderer.render(
+            position, turn=turn, record_id=record_id
+        )
 
     def extract_display_fields(
         self, record: Dict[str, Any]

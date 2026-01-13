@@ -269,6 +269,9 @@ class DataRetriever:
         board = Board()
         board.set_hcp(hcp_array)
 
+        # 手番を取得（HCPから復元）
+        turn = board.get_turn()
+
         # 盤面の駒配置を取得
         board_df = board.get_board_id_positions_df()
         board_id_positions = board_df["boardIdPositions"][0]
@@ -282,6 +285,9 @@ class DataRetriever:
         # レコードに追加
         record["boardIdPositions"] = board_id_positions
         record["piecesInHand"] = pieces_in_hand
+        record["turn"] = (
+            turn.value
+        )  # Store turn as int (0=BLACK, 1=WHITE)
 
         return record
 
