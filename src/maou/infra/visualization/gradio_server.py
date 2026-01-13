@@ -504,7 +504,9 @@ class GradioVisualizationServer:
                 else:
                     minutes = remaining_seconds // 60
                     seconds = remaining_seconds % 60
-                    time_str = f" - 約{minutes}分{seconds}秒残り"
+                    time_str = (
+                        f" - 約{minutes}分{seconds}秒残り"
+                    )
 
             # Loading spinner HTML (inline CSS animation)
             spinner_html = """
@@ -663,13 +665,16 @@ class GradioVisualizationServer:
         """
         if self.use_mock_data:
             return "**Status:** 🟡 Using mock data for testing"
-        elif self.has_data:
+        elif self.has_data and self.search_index is not None:
             total = self.search_index.total_records()
             file_count = len(self.file_paths)
             return (
                 f"**Status:** 🟢 Loaded {total:,} records "
                 f"from {file_count} file(s)"
             )
+        elif self.has_data:
+            # Indexing in progress
+            return "**Status:** 🟡 Indexing in progress..."
         else:
             return "**Status:** ⚪ No data loaded - select a data source to begin"
 
@@ -833,7 +838,11 @@ class GradioVisualizationServer:
         Returns:
             Status message string
         """
-        if not self.has_data or not self.file_paths:
+        if (
+            not self.has_data
+            or not self.file_paths
+            or self.viz_interface is None
+        ):
             logger.warning(
                 "Rebuild requested but no data source is loaded"
             )
@@ -898,6 +907,26 @@ class GradioVisualizationServer:
             current_page,
             current_page_records,
             current_record_index,
+        )
+
+    def _get_empty_state_navigation(self) -> Tuple:
+        """Generate output values for empty state navigation (no viz_interface)．
+
+        Returns:
+            Tuple matching outputs for navigation methods
+        """
+        return (
+            1,  # current_page
+            0,  # current_record_index
+            [],  # empty table
+            "No data loaded",  # page_info
+            self._render_empty_board_placeholder(),  # board_svg
+            {"message": "No data loaded"},  # record_details
+            [],  # current_page_records
+            "Record 0 / 0",  # record_indicator
+            "",  # analytics_html
+            gr.Button(interactive=False),  # prev button
+            gr.Button(interactive=False),  # next button
         )
 
     def _render_empty_board_placeholder(self) -> str:
@@ -1079,7 +1108,7 @@ class GradioVisualizationServer:
                         gr.Markdown("### ID検索")
 
                         # 初期化時にID候補リストを取得（最大1000件）
-                        initial_ids = []
+                        initial_ids: List[str] = []
                         if (
                             self.has_data
                             and self.viz_interface is not None
@@ -1139,7 +1168,9 @@ class GradioVisualizationServer:
                     with gr.Group():
                         gr.Markdown("### 📈 データセット情報")
                         gr.JSON(
-                            value=self.viz_interface.get_dataset_stats(),
+                            value=self.viz_interface.get_dataset_stats()
+                            if self.viz_interface is not None
+                            else {},
                             label="統計情報",
                         )
 
@@ -1162,7 +1193,12 @@ class GradioVisualizationServer:
 
                         with gr.Tab("📊 検索結果"):
                             # Rendererから動的にヘッダーを取得
-                            table_headers = self.viz_interface.get_table_columns()
+                            table_headers: List[str] = (
+                                self.viz_interface.get_table_columns()
+                                if self.viz_interface
+                                is not None
+                                else []
+                            )
 
                             results_table = gr.Dataframe(
                                 headers=table_headers,
@@ -1206,7 +1242,7 @@ class GradioVisualizationServer:
             )
 
             id_search_btn.click(
-                fn=self.viz_interface.search_by_id,
+                fn=self.viz_interface.search_by_id,  # type: ignore[attr-defined]
                 inputs=[id_input],
                 outputs=[board_display, record_details],
             )
@@ -1556,8 +1592,10 @@ class GradioVisualizationServer:
                 record_indicator = "Record 0 / 0"
 
             # 分析チャート生成
-            analytics_html = self.viz_interface.generate_analytics(
-                cached_records
+            analytics_html = (
+                self.viz_interface.generate_analytics(
+                    cached_records
+                )
             )
 
             # ボタン状態を計算
@@ -1654,8 +1692,13 @@ class GradioVisualizationServer:
 
     def _get_mock_stats(self) -> Dict[str, Any]:
         """インデックス統計情報を返す．"""
+        total_records = (
+            self.search_index.total_records()
+            if self.search_index is not None
+            else 0
+        )
         return {
-            "total_records": self.search_index.total_records(),
+            "total_records": total_records,
             "array_type": self.array_type,
             "num_files": len(self.file_paths),
         }
@@ -1784,6 +1827,9 @@ class GradioVisualizationServer:
         Returns:
             総ページ数
         """
+        if self.search_index is None:
+            return 1
+
         if self.supports_eval_search:
             # HCPEの場合は評価値範囲でカウント
             total_records = self.search_index.count_eval_range(
@@ -1904,6 +1950,9 @@ class GradioVisualizationServer:
              board_svg, details, cached_records, record_indicator, analytics_html,
              prev_record_btn_state, next_record_btn_state)
         """
+        if self.viz_interface is None:
+            return self._get_empty_state_navigation()
+
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
             min_eval, max_eval, page_size
@@ -2099,6 +2148,9 @@ class GradioVisualizationServer:
              board_svg, details, cached_records, record_indicator, analytics_html,
              prev_record_btn_state, next_record_btn_state)
         """
+        if self.viz_interface is None:
+            return self._get_empty_state_navigation()
+
         num_records = len(current_page_records)
         total_pages = self._calculate_total_pages(
             min_eval, max_eval, page_size

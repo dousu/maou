@@ -30,12 +30,16 @@ class IndexingState:
         self._files_processed: int = 0
         self._total_files: int = 0
         self._records_indexed: int = 0
-        self._start_time: Optional[float] = None  # Unix timestamp
+        self._start_time: Optional[float] = (
+            None  # Unix timestamp
+        )
         self._cancelled: bool = False
         self._lock = threading.Lock()
 
     def set_indexing(
-        self, total_files: int, initial_message: str = "開始中..."
+        self,
+        total_files: int,
+        initial_message: str = "開始中...",
     ) -> None:
         """インデックス作成を開始．
 
@@ -64,7 +68,10 @@ class IndexingState:
             message: 進捗メッセージ
         """
         with self._lock:
-            if self._status == "indexing" and not self._cancelled:
+            if (
+                self._status == "indexing"
+                and not self._cancelled
+            ):
                 self._files_processed = files_done
                 self._records_indexed = records
                 self._progress_message = message
@@ -168,7 +175,10 @@ class IndexingState:
         """
         with self._lock:
             # 開始時刻またはtotal_filesが設定されていない場合
-            if self._start_time is None or self._total_files == 0:
+            if (
+                self._start_time is None
+                or self._total_files == 0
+            ):
                 return None
 
             # まだファイル処理が始まっていない場合
@@ -179,7 +189,9 @@ class IndexingState:
             elapsed = time.time() - self._start_time
 
             # 進捗率を計算
-            progress_ratio = self._files_processed / self._total_files
+            progress_ratio = (
+                self._files_processed / self._total_files
+            )
 
             # 進捗が1%未満の場合は推定が不正確なためNoneを返す
             if progress_ratio < 0.01:
