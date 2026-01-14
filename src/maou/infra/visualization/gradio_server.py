@@ -880,7 +880,8 @@ class GradioVisualizationServer:
         """Generate output values for empty state (no data loaded)．
 
         Returns:
-            Tuple matching outputs for pagination methods
+            Tuple matching outputs for pagination methods (8 values).
+            Caller adds 2 button states for total of 10 outputs.
         """
         empty_table: List[
             List[Any]
@@ -895,18 +896,23 @@ class GradioVisualizationServer:
             "instruction": "Use 'Data Source Management' section to load data",
         }
 
-        current_page = 1
-        current_page_records = gr.State([])
-        current_record_index = gr.State(0)
+        cached_records: List[Dict[str, Any]] = []
+        record_index = 0
+        record_indicator = "Record 0 / 0"
+        analytics_html = (
+            "<p style='text-align: center; color: #666;'>"
+            "データがロードされていません．</p>"
+        )
 
         return (
             empty_table,
             page_info,
             board_display,
             record_details,
-            current_page,
-            current_page_records,
-            current_record_index,
+            cached_records,
+            record_index,
+            record_indicator,
+            analytics_html,
         )
 
     def _get_empty_state_navigation(self) -> Tuple:
