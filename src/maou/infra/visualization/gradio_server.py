@@ -1201,7 +1201,9 @@ class GradioVisualizationServer:
                             )
 
                             results_table = gr.Dataframe(
-                                headers=table_headers,
+                                headers=table_headers
+                                if table_headers
+                                else None,
                                 label="結果一覧",
                                 interactive=False,
                             )
@@ -1242,7 +1244,7 @@ class GradioVisualizationServer:
             )
 
             id_search_btn.click(
-                fn=self.viz_interface.search_by_id,  # type: ignore[attr-defined]
+                fn=self._search_by_id,
                 inputs=[id_input],
                 outputs=[board_display, record_details],
             )
@@ -1664,6 +1666,23 @@ class GradioVisualizationServer:
             page=page,
             page_size=page_size,
         )
+
+    def _search_by_id(
+        self, record_id: str
+    ) -> Tuple[str, Dict[str, Any]]:
+        """ID検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
+
+        Args:
+            record_id: 検索するレコードID
+
+        Returns:
+            (board_svg, record_details)のタプル
+        """
+        # Thread-safe access to viz_interface
+        with self._index_lock:
+            if not self.has_data or self.viz_interface is None:
+                return self._search_by_id_mock(record_id)
+            return self.viz_interface.search_by_id(record_id)
 
     def _get_default_board_svg(self) -> str:
         """デフォルトの盤面SVGを生成（平手初期配置）．"""
