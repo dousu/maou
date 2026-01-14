@@ -876,7 +876,18 @@ class GradioVisualizationServer:
             logger.exception("Index rebuild failed")
             return f"❌ **Error:** Rebuild failed - {e}"
 
-    def _get_empty_state_outputs(self) -> Tuple:
+    def _get_empty_state_outputs(
+        self,
+    ) -> Tuple[
+        List[List[Any]],  # table_data
+        str,  # page_info
+        str,  # board_display
+        Dict[str, Any],  # record_details
+        List[Dict[str, Any]],  # cached_records
+        int,  # record_index
+        str,  # record_indicator
+        str,  # analytics_html
+    ]:
         """Generate output values for empty state (no data loaded)．
 
         Returns:
@@ -915,11 +926,25 @@ class GradioVisualizationServer:
             analytics_html,
         )
 
-    def _get_empty_state_navigation(self) -> Tuple:
+    def _get_empty_state_navigation(
+        self,
+    ) -> Tuple[
+        int,  # current_page
+        int,  # current_record_index
+        List[List[Any]],  # table_data
+        str,  # page_info
+        str,  # board_svg
+        Dict[str, Any],  # record_details
+        List[Dict[str, Any]],  # current_page_records
+        str,  # record_indicator
+        str,  # analytics_html
+        gr.Button,  # prev_btn
+        gr.Button,  # next_btn
+    ]:
         """Generate output values for empty state navigation (no viz_interface)．
 
         Returns:
-            Tuple matching outputs for navigation methods
+            Tuple matching outputs for navigation methods (11 values).
         """
         return (
             1,  # current_page
