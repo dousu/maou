@@ -1515,6 +1515,8 @@ class GradioVisualizationServer:
                     analytics_chart,  # 分析チャート
                     prev_btn,  # ページ前へボタン状態
                     next_btn,  # ページ次へボタン状態
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
@@ -1541,6 +1543,8 @@ class GradioVisualizationServer:
                     analytics_chart,  # 分析チャート
                     prev_btn,  # ページ前へボタン状態
                     next_btn,  # ページ次へボタン状態
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
