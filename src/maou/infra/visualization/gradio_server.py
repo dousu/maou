@@ -640,12 +640,12 @@ class GradioVisualizationServer:
             accordion_update = gr.update()
 
         # タイマー状態を決定
-        # gr.update()で既存タイマーのactiveプロパティを更新
-        # gr.Timer(active=False)は新規コンポーネント作成になるため不適切
+        # Gradio公式パターン: gr.Timer(active=True/False)をoutputとして返す
+        # gr.update(active=...)は効果がない（Timer.postprocess()はvalueのみ処理）
         timer_update: Any
         if should_refresh:
-            # インデックス完了時にタイマーを停止
-            timer_update = gr.update(active=False)
+            # インデックス完了時にタイマーを停止（公式パターン）
+            timer_update = gr.Timer(value=2.0, active=False)
         else:
             # それ以外は変更なし
             timer_update = gr.update()
@@ -983,7 +983,9 @@ class GradioVisualizationServer:
             f"🟡 **Indexing:** Started for {len(file_paths)} file(s)",
             False,  # Rebuild button disabled during indexing
             '<span class="mode-badge-text">🟡 INDEXING</span>',
-            gr.update(active=True),  # タイマーを開始
+            gr.Timer(
+                value=2.0, active=True
+            ),  # タイマーを開始（公式パターン）
         )
 
     def _rebuild_index(self) -> str:
