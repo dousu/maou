@@ -1,6 +1,7 @@
 {
 	"name": "Ubuntu",
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
+	"postCreateCommand": "cd scripts/browser && npm install && npx playwright install --with-deps chromium",
 	"features": {
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python

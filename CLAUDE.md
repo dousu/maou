@@ -236,6 +236,7 @@ The project includes specialized Agent Skills that automate common workflows. Sk
 | **type-safety-enforcer** | Enforce type hints and docstring requirements | type safety, mypy, docstrings |
 | **cloud-integration-tests** | Execute GCP/AWS integration tests | cloud testing, S3 tests, GCS tests |
 | **feature-branch-setup** | Automate feature branch creation | create branch, new feature |
+| **gradio-screenshot-capture** | Capture Gradio UI screenshots with Playwright | screenshot, capture UI, visual feedback |
 | **dependency-update-helper** | Manage Poetry dependencies (NEVER use pip) | add package, update dependencies |
 | **rust-build-optimizer** | Build Rust in memory-constrained environments (2-4GB RAM) | build rust, maturin, OOM error |
 | **benchmark-execution** | Performance benchmarks for DataLoader and training | benchmark, performance analysis |

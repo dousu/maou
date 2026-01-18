@@ -1,0 +1,9 @@
+{
+  "name": "maou-browser-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser automation scripts for Maou Gradio UI testing",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
