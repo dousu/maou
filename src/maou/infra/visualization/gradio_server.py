@@ -640,10 +640,12 @@ class GradioVisualizationServer:
             accordion_update = gr.update()
 
         # タイマー状態を決定
+        # gr.update()で既存タイマーのactiveプロパティを更新
+        # gr.Timer(active=False)は新規コンポーネント作成になるため不適切
         timer_update: Any
         if should_refresh:
             # インデックス完了時にタイマーを停止
-            timer_update = gr.Timer(active=False)
+            timer_update = gr.update(active=False)
         else:
             # それ以外は変更なし
             timer_update = gr.update()
@@ -981,7 +983,7 @@ class GradioVisualizationServer:
             f"🟡 **Indexing:** Started for {len(file_paths)} file(s)",
             False,  # Rebuild button disabled during indexing
             '<span class="mode-badge-text">🟡 INDEXING</span>',
-            gr.Timer(active=True),  # タイマーを開始
+            gr.update(active=True),  # タイマーを開始
         )
 
     def _rebuild_index(self) -> str:
@@ -1246,7 +1248,10 @@ class GradioVisualizationServer:
                         )
 
                         # Status polling timer (polls every 2 seconds)
-                        status_timer = gr.Timer(value=2.0)
+                        # 初期状態は非アクティブ，データ読み込み開始時に有効化
+                        status_timer = gr.Timer(
+                            value=2.0, active=False
+                        )
 
                     # ページ内レコードナビゲーション
                     with gr.Group():
