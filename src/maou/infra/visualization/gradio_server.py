@@ -577,6 +577,7 @@ class GradioVisualizationServer:
         str,
         bool,
         Any,
+        Any,
     ]:
         """インデックス作成状態をポーリングし，状態遷移を検出する．
 
@@ -588,9 +589,10 @@ class GradioVisualizationServer:
 
         Returns:
             (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
-             current_status, should_refresh, accordion_update)のタプル．
+             current_status, should_refresh, accordion_update, timer_update)のタプル．
             should_refreshはインデックス完了時にTrueとなる．
             accordion_updateはアコーディオンの展開/閉じ状態を制御する．
+            timer_updateはインデックス完了時にタイマーを停止する．
         """
         current_status = self.indexing_state.get_status()
 
@@ -615,6 +617,7 @@ class GradioVisualizationServer:
                 current_status,
                 False,  # should_refresh
                 gr.update(),  # accordion_update
+                gr.update(),  # timer_update（変更なし）
             )
 
         # 状態変化がある場合，または indexing 中は通常の処理
@@ -636,6 +639,15 @@ class GradioVisualizationServer:
             # それ以外は変更なし
             accordion_update = gr.update()
 
+        # タイマー状態を決定
+        timer_update: Any
+        if should_refresh:
+            # インデックス完了時にタイマーを停止
+            timer_update = gr.Timer(active=False)
+        else:
+            # それ以外は変更なし
+            timer_update = gr.update()
+
         return (
             status_msg,
             load_btn,
@@ -645,6 +657,7 @@ class GradioVisualizationServer:
             current_status,
             should_refresh,
             accordion_update,
+            timer_update,
         )
 
     def _auto_refresh_on_ready(
@@ -896,7 +909,7 @@ class GradioVisualizationServer:
         dir_path: str,
         files_path: str,
         array_type: str,
-    ) -> Tuple[str, bool, str]:
+    ) -> Tuple[str, bool, str, Any]:
         """Load new data source and rebuild index in background．
 
         Args:
@@ -906,7 +919,7 @@ class GradioVisualizationServer:
             array_type: Data array type (hcpe, preprocessing, stage1, stage2)
 
         Returns:
-            Tuple of (status_message, rebuild_btn_enabled, mode_badge)
+            Tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
         """
         # Step 1: Validate and resolve paths
         try:
@@ -920,6 +933,7 @@ class GradioVisualizationServer:
                 f"❌ **Error:** {e}",
                 False,  # Keep rebuild button disabled
                 '<span class="mode-badge-text">⚪ NO DATA</span>',
+                gr.update(),  # タイマー状態は変更なし
             )
 
         # Step 2: Cancel any ongoing indexing
@@ -967,6 +981,7 @@ class GradioVisualizationServer:
             f"🟡 **Indexing:** Started for {len(file_paths)} file(s)",
             False,  # Rebuild button disabled during indexing
             '<span class="mode-badge-text">🟡 INDEXING</span>',
+            gr.Timer(active=True),  # タイマーを開始
         )
 
     def _rebuild_index(self) -> str:
@@ -1157,12 +1172,10 @@ class GradioVisualizationServer:
                 # 左パネル: ナビゲーションと検索コントロール
                 with gr.Column(scale=1):
                     # データソース管理セクション
-                    with (
-                        gr.Accordion(
-                            "📂 Data Source Management",
-                            open=not self.has_data,  # Expanded when no data
-                        ) as data_source_accordion
-                    ):
+                    with gr.Accordion(
+                        "📂 Data Source Management",
+                        open=True,  # Always expanded by default
+                    ) as data_source_accordion:
                         with gr.Row():
                             source_mode = gr.Radio(
                                 choices=[
@@ -1622,6 +1635,7 @@ class GradioVisualizationServer:
                     status_markdown,
                     rebuild_btn,
                     mode_badge,
+                    status_timer,
                 ],
             )
 
@@ -1738,6 +1752,7 @@ class GradioVisualizationServer:
                     previous_indexing_status,  # 現在の状態を保存
                     refresh_trigger,  # 再描画フラグ
                     data_source_accordion,  # アコーディオン展開/閉じ制御
+                    status_timer,  # タイマー動的制御
                 ],
             )
 
