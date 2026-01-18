@@ -625,6 +625,8 @@ class GradioVisualizationServer:
         Any,  # analytics_chart
         Any,  # prev_btn
         Any,  # next_btn
+        Any,  # prev_record_btn
+        Any,  # next_record_btn
     ]:
         """インデックス完了時にデータを自動再読み込みする．
 
@@ -636,7 +638,7 @@ class GradioVisualizationServer:
             page_size: ページサイズ
 
         Returns:
-            10個の出力値のタプル（更新しない場合はgr.update()）
+            12個の出力値のタプル（更新しない場合はgr.update()）
         """
         if not should_refresh:
             # 更新不要な場合はgr.update()を返してスキップ
@@ -651,6 +653,8 @@ class GradioVisualizationServer:
                 gr.update(),  # analytics_chart
                 gr.update(),  # prev_btn
                 gr.update(),  # next_btn
+                gr.update(),  # prev_record_btn
+                gr.update(),  # next_record_btn
             )
 
         # インデックス完了時はデータを読み込み
@@ -1376,6 +1380,8 @@ class GradioVisualizationServer:
                     analytics_chart,  # 分析チャート
                     prev_btn,  # ページ前へボタン状態
                     next_btn,  # ページ次へボタン状態
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
@@ -1404,6 +1410,8 @@ class GradioVisualizationServer:
                     analytics_chart,  # 分析チャート
                     prev_btn,  # ページ前へボタン状態
                     next_btn,  # ページ次へボタン状態
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
                 ],
             )
 
@@ -1673,6 +1681,8 @@ class GradioVisualizationServer:
                     analytics_chart,
                     prev_btn,
                     next_btn,
+                    prev_record_btn,
+                    next_record_btn,
                 ],
             )
 
@@ -1706,6 +1716,8 @@ class GradioVisualizationServer:
                     analytics_chart,
                     prev_btn,
                     next_btn,
+                    prev_record_btn,
+                    next_record_btn,
                 ],
             )
 
@@ -1728,6 +1740,8 @@ class GradioVisualizationServer:
         str,
         gr.Button,
         gr.Button,
+        gr.Button,
+        gr.Button,
     ]:
         """検索を実行し，レコードをキャッシュするラッパー関数．
 
@@ -1743,13 +1757,16 @@ class GradioVisualizationServer:
         Returns:
             (table_data, page_info, board_svg, details,
              cached_records, record_index, record_indicator, analytics_html,
-             prev_btn_state, next_btn_state)
+             prev_btn_state, next_btn_state,
+             prev_record_btn_state, next_record_btn_state)
         """
         # Thread-safe access to viz_interface
         with self._index_lock:
             # Check for empty state
             if not self.has_data or self.viz_interface is None:
                 return self._get_empty_state_outputs() + (
+                    gr.Button(interactive=False),
+                    gr.Button(interactive=False),
                     gr.Button(interactive=False),
                     gr.Button(interactive=False),
                 )
@@ -1781,10 +1798,22 @@ class GradioVisualizationServer:
                 )
             )
 
-            # ボタン状態を計算
-            prev_interactive, next_interactive = (
+            # ページボタン状態を計算
+            prev_page_interactive, next_page_interactive = (
                 self._get_button_states(
                     page, min_eval, max_eval, page_size
+                )
+            )
+
+            # レコードナビゲーションボタン状態を計算
+            prev_record_interactive, next_record_interactive = (
+                self._get_record_nav_button_states(
+                    page,
+                    0,  # 初期はインデックス0
+                    num_records,
+                    min_eval,
+                    max_eval,
+                    page_size,
                 )
             )
 
@@ -1798,11 +1827,17 @@ class GradioVisualizationServer:
             record_indicator,  # インジケーター
             analytics_html,  # 分析チャート
             gr.Button(
-                interactive=prev_interactive
+                interactive=prev_page_interactive
             ),  # prev_btn状態
             gr.Button(
-                interactive=next_interactive
+                interactive=next_page_interactive
             ),  # next_btn状態
+            gr.Button(
+                interactive=prev_record_interactive
+            ),  # prev_record_btn状態
+            gr.Button(
+                interactive=next_record_interactive
+            ),  # next_record_btn状態
         )
 
     def _paginate_all_data(
@@ -1822,6 +1857,8 @@ class GradioVisualizationServer:
         str,
         gr.Button,
         gr.Button,
+        gr.Button,
+        gr.Button,
     ]:
         """全データをページネーション（評価値フィルタなし）．
 
@@ -1837,7 +1874,8 @@ class GradioVisualizationServer:
         Returns:
             (table_data, page_info, board_svg, details,
              cached_records, record_index, record_indicator, analytics_html,
-             prev_btn_state, next_btn_state)
+             prev_btn_state, next_btn_state,
+             prev_record_btn_state, next_record_btn_state)
         """
         # 評価値パラメータを明示的にNoneにして全データを取得
         # （引数のmin_eval, max_evalは無視）
