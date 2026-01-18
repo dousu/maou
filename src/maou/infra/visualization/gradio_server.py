@@ -601,7 +601,10 @@ class GradioVisualizationServer:
         )
 
         # 安定状態（状態変化なし，かつ indexing 以外）では再描画をスキップ
-        if prev_status == current_status and current_status != "indexing":
+        if (
+            prev_status == current_status
+            and current_status != "indexing"
+        ):
             # 状態が変わっていないので，すべて gr.update() で no-op を返す
             return (
                 gr.update(),  # status_msg
@@ -2355,6 +2358,8 @@ class GradioVisualizationServer:
             analytics_html,
             _,  # prev_btn state（ページナビゲーション用）
             _,  # next_btn state（ページナビゲーション用）
+            _,  # prev_record_btn state（レコードナビゲーション用）
+            _,  # next_record_btn state（レコードナビゲーション用）
         ) = paginate_fn(
             min_eval, max_eval, next_page, page_size
         )
@@ -2553,6 +2558,8 @@ class GradioVisualizationServer:
             analytics_html,
             _,  # prev_btn state（ページナビゲーション用）
             _,  # next_btn state（ページナビゲーション用）
+            _,  # prev_record_btn state（レコードナビゲーション用）
+            _,  # next_record_btn state（レコードナビゲーション用）
         ) = paginate_fn(
             min_eval, max_eval, prev_page, page_size
         )
