@@ -156,6 +156,14 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             "Install with `poetry install -E visualize`."
         ),
     ),
+    "screenshot": LazyCommandSpec(
+        "maou.infra.console.screenshot",
+        "screenshot",
+        missing_help=(
+            "Command 'screenshot' requires visualization dependencies. "
+            "Install with `poetry install -E visualize`."
+        ),
+    ),
 }
 
 

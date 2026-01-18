@@ -5,14 +5,14 @@ description: Capture screenshots of Gradio web UI using Playwright headless brow
 
 # Gradio Screenshot Capture
 
-Captures screenshots of Gradio web interfaces using Playwright headless browser. Optimized for Gradio's SPA architecture with proper wait strategies.
+Captures screenshots of Gradio web interfaces using Python Playwright headless browser. Optimized for Gradio's SPA architecture with proper wait strategies.
 
 ## Quick Start
 
 Capture a screenshot of the running Gradio server:
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -22,8 +22,8 @@ node /workspaces/maou/scripts/browser/screenshot.js \
 Ensure Playwright is installed:
 
 ```bash
-cd /workspaces/maou/scripts/browser && npm install
-npx playwright install --with-deps chromium
+poetry install --extras visualize
+poetry run playwright install --with-deps chromium
 ```
 
 ## Instructions
@@ -42,7 +42,7 @@ sleep 10
 #### Basic Screenshot
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -50,7 +50,7 @@ node /workspaces/maou/scripts/browser/screenshot.js \
 #### Base64 Output (for Claude Vision API)
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --base64
 ```
@@ -58,7 +58,7 @@ node /workspaces/maou/scripts/browser/screenshot.js \
 #### Capture Specific Element
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --selector "#search-results" \
   --output /tmp/search-results.png
@@ -67,7 +67,7 @@ node /workspaces/maou/scripts/browser/screenshot.js \
 #### Full Page Screenshot
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --full-page \
   --output /tmp/full-page.png
@@ -83,14 +83,14 @@ Read the file /tmp/gradio-screenshot.png
 
 Claude will analyze the screenshot and provide visual feedback.
 
-## Script Options
+## Command Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--url` | http://localhost:7860 | Target URL |
-| `--output` | /tmp/gradio-screenshot.png | Output file path |
+| `--output`, `-o` | /tmp/gradio-screenshot.png | Output file path |
 | `--base64` | false | Output base64 to stdout |
-| `--selector` | null | CSS selector for element capture |
+| `--selector`, `-s` | null | CSS selector for element capture |
 | `--full-page` | false | Capture full scrollable page |
 | `--wait-for` | .gradio-container | Wait selector before capture |
 | `--timeout` | 30000 | Navigation timeout (ms) |
@@ -130,11 +130,11 @@ poetry run maou visualize --use-mock-data &
 sleep 10
 
 # Capture multiple screenshots
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/main-view.png
 
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/mode-badge.png
@@ -148,9 +148,8 @@ lsof -ti :7860 | xargs kill -9 2>/dev/null || true
 ### Playwright Not Installed
 
 ```bash
-cd /workspaces/maou/scripts/browser
-npm install
-npx playwright install --with-deps chromium
+poetry install --extras visualize
+poetry run playwright install --with-deps chromium
 ```
 
 ### Timeout Errors
@@ -158,7 +157,7 @@ npx playwright install --with-deps chromium
 Increase timeout for slow-loading pages:
 
 ```bash
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --timeout 60000
 ```
@@ -169,7 +168,7 @@ Verify the selector exists in the page:
 
 ```bash
 # Try the default container first
-node /workspaces/maou/scripts/browser/screenshot.js \
+poetry run maou screenshot \
   --url http://localhost:7860 \
   --wait-for "body"
 ```
@@ -192,6 +191,6 @@ lsof -i :7860 || poetry run maou visualize --use-mock-data &
 
 ## References
 
-- [Playwright Documentation](https://playwright.dev/)
+- [Playwright Python Documentation](https://playwright.dev/python/)
 - [Gradio Documentation](https://www.gradio.app/)
-- [Browser Automation Guide](../../docs/browser-automation.md)
+- [Browser Automation Guide](../../../docs/browser-automation.md)

@@ -1,16 +1,13 @@
 {
 	"name": "Ubuntu",
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
-	"postCreateCommand": "cd scripts/browser && npm install && npx playwright install --with-deps chromium",
+	"postCreateCommand": "pip install poetry && poetry install --extras visualize && poetry run playwright install --with-deps chromium",
 	"features": {
 		// Python
 		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {
 			"version": 3.12
 		},
-		// Node.js
-		// https://github.com/devcontainers/features/tree/main/src/node
-		"ghcr.io/devcontainers/features/node:1": {},
 		// GitHub CLI
 		// https://github.com/devcontainers/features/tree/main/src/github-cli
 		"ghcr.io/devcontainers/features/github-cli:1": {}
