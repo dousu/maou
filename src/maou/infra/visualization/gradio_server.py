@@ -565,6 +565,102 @@ class GradioVisualizationServer:
                 '<span class="mode-badge-text">⚪ NO DATA</span>',
             )
 
+    def _check_indexing_status_with_transition(
+        self,
+        prev_status: str,
+    ) -> Tuple[
+        str, gr.Button, gr.Button, gr.Button, str, str, bool
+    ]:
+        """インデックス作成状態をポーリングし，状態遷移を検出する．
+
+        タイマーから呼び出され，前回の状態と比較して
+        "indexing" → "ready" への遷移を検出する．
+
+        Args:
+            prev_status: 前回のポーリング時の状態
+
+        Returns:
+            (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
+             current_status, should_refresh)のタプル．
+            should_refreshはインデックス完了時にTrueとなる．
+        """
+        current_status = self.indexing_state.get_status()
+
+        # "indexing" → "ready" への遷移を検出
+        should_refresh = (
+            prev_status == "indexing"
+            and current_status == "ready"
+        )
+
+        # 既存のステータスチェック処理を呼び出し
+        status_msg, load_btn, rebuild_btn, mode_badge = (
+            self._check_indexing_status()
+        )
+
+        # refresh_btnはrebuild_btnと同じ状態を使用
+        refresh_btn = rebuild_btn
+
+        return (
+            status_msg,
+            load_btn,
+            rebuild_btn,
+            refresh_btn,
+            mode_badge,
+            current_status,
+            should_refresh,
+        )
+
+    def _auto_refresh_on_ready(
+        self,
+        should_refresh: bool,
+        page_size: int,
+    ) -> Tuple[
+        Any,  # results_table
+        Any,  # page_info
+        Any,  # board_display
+        Any,  # record_details
+        Any,  # current_page_records
+        Any,  # current_record_index
+        Any,  # record_indicator
+        Any,  # analytics_chart
+        Any,  # prev_btn
+        Any,  # next_btn
+    ]:
+        """インデックス完了時にデータを自動再読み込みする．
+
+        should_refreshがFalseの場合はgr.update()で更新をスキップ．
+        Trueの場合は_paginate_all_dataを呼び出してデータを表示．
+
+        Args:
+            should_refresh: 再読み込みを行うかどうか
+            page_size: ページサイズ
+
+        Returns:
+            10個の出力値のタプル（更新しない場合はgr.update()）
+        """
+        if not should_refresh:
+            # 更新不要な場合はgr.update()を返してスキップ
+            return (
+                gr.update(),  # results_table
+                gr.update(),  # page_info
+                gr.update(),  # board_display
+                gr.update(),  # record_details
+                gr.update(),  # current_page_records
+                gr.update(),  # current_record_index
+                gr.update(),  # record_indicator
+                gr.update(),  # analytics_chart
+                gr.update(),  # prev_btn
+                gr.update(),  # next_btn
+            )
+
+        # インデックス完了時はデータを読み込み
+        return self._paginate_all_data(
+            min_eval=-9999,
+            max_eval=9999,
+            page=1,
+            page_size=page_size,
+        )
+
     def _get_id_suggestions_handler(self, prefix: str) -> Any:
         """ID入力に応じて候補を動的更新．
 
@@ -1081,6 +1177,12 @@ class GradioVisualizationServer:
                                 scale=1,
                                 interactive=self.has_data,  # Only enabled when data is loaded
                             )
+                            refresh_btn = gr.Button(
+                                "🔄 Refresh",
+                                variant="secondary",
+                                scale=1,
+                                interactive=self.has_data,  # Only enabled when data is loaded
+                            )
 
                         status_markdown = gr.Markdown(
                             value=self._get_initial_status_message(),
@@ -1250,6 +1352,9 @@ class GradioVisualizationServer:
             # ページ内ナビゲーション用のState
             current_page_records = gr.State(value=[])
             current_record_index = gr.State(value=0)
+            # インデックス状態遷移検出用のState
+            previous_indexing_status = gr.State(value="idle")
+            refresh_trigger = gr.State(value=False)
 
             # 初回表示時にページ1をロード（全データ型で実行）
             demo.load(
@@ -1548,14 +1653,59 @@ class GradioVisualizationServer:
                 ],
             )
 
-            # Event 6: Status polling timer
-            status_timer.tick(
-                fn=self._check_indexing_status,
+            # Event 5.5: Manual refresh button
+            refresh_btn.click(
+                fn=lambda sz: self._paginate_all_data(
+                    min_eval=-9999,
+                    max_eval=9999,
+                    page=1,
+                    page_size=sz,
+                ),
+                inputs=[page_size],
+                outputs=[
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
+                    current_page_records,
+                    current_record_index,
+                    record_indicator,
+                    analytics_chart,
+                    prev_btn,
+                    next_btn,
+                ],
+            )
+
+            # Event 6: Status polling timer with auto-refresh on completion
+            status_result = status_timer.tick(
+                fn=self._check_indexing_status_with_transition,
+                inputs=[previous_indexing_status],
                 outputs=[
                     status_markdown,
                     load_btn,
                     rebuild_btn,
+                    refresh_btn,  # リフレッシュボタン状態
                     mode_badge,
+                    previous_indexing_status,  # 現在の状態を保存
+                    refresh_trigger,  # 再描画フラグ
+                ],
+            )
+
+            # Event 7: Auto-refresh when indexing completes
+            status_result.then(
+                fn=self._auto_refresh_on_ready,
+                inputs=[refresh_trigger, page_size],
+                outputs=[
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
+                    current_page_records,
+                    current_record_index,
+                    record_indicator,
+                    analytics_chart,
+                    prev_btn,
+                    next_btn,
                 ],
             )
 
