@@ -569,7 +569,14 @@ class GradioVisualizationServer:
         self,
         prev_status: str,
     ) -> Tuple[
-        str, gr.Button, gr.Button, gr.Button, str, str, bool
+        str,
+        gr.Button,
+        gr.Button,
+        gr.Button,
+        str,
+        str,
+        bool,
+        Any,
     ]:
         """インデックス作成状態をポーリングし，状態遷移を検出する．
 
@@ -581,8 +588,9 @@ class GradioVisualizationServer:
 
         Returns:
             (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
-             current_status, should_refresh)のタプル．
+             current_status, should_refresh, accordion_update)のタプル．
             should_refreshはインデックス完了時にTrueとなる．
+            accordion_updateはアコーディオンの展開/閉じ状態を制御する．
         """
         current_status = self.indexing_state.get_status()
 
@@ -600,6 +608,17 @@ class GradioVisualizationServer:
         # refresh_btnはrebuild_btnと同じ状態を使用
         refresh_btn = rebuild_btn
 
+        # アコーディオン状態を決定
+        if current_status == "indexing":
+            # インデックス作成中はアコーディオンを展開
+            accordion_update = gr.update(open=True)
+        elif should_refresh:
+            # インデックス完了時はアコーディオンを閉じる
+            accordion_update = gr.update(open=False)
+        else:
+            # それ以外は変更なし
+            accordion_update = gr.update()
+
         return (
             status_msg,
             load_btn,
@@ -608,6 +627,7 @@ class GradioVisualizationServer:
             mode_badge,
             current_status,
             should_refresh,
+            accordion_update,
         )
 
     def _auto_refresh_on_ready(
@@ -1120,9 +1140,11 @@ class GradioVisualizationServer:
                 # 左パネル: ナビゲーションと検索コントロール
                 with gr.Column(scale=1):
                     # データソース管理セクション
-                    with gr.Accordion(
-                        "📂 Data Source Management",
-                        open=not self.has_data,  # Expanded when no data
+                    with (
+                        gr.Accordion(
+                            "📂 Data Source Management",
+                            open=not self.has_data,  # Expanded when no data
+                        ) as data_source_accordion
                     ):
                         with gr.Row():
                             source_mode = gr.Radio(
@@ -1698,6 +1720,7 @@ class GradioVisualizationServer:
                     mode_badge,
                     previous_indexing_status,  # 現在の状態を保存
                     refresh_trigger,  # 再描画フラグ
+                    data_source_accordion,  # アコーディオン展開/閉じ制御
                 ],
             )
 
