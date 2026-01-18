@@ -1332,14 +1332,14 @@ class GradioVisualizationServer:
                             gr.Markdown("### 評価値範囲検索")
                             min_eval = gr.Number(
                                 label="📉 最小評価値",
-                                info="評価値の下限（例: -1000）",
-                                value=-1000,
+                                info="評価値の下限（空欄で無制限）",
+                                value=None,
                                 precision=0,
                             )
                             max_eval = gr.Number(
                                 label="📈 最大評価値",
-                                info="評価値の上限（例: 1000）",
-                                value=1000,
+                                info="評価値の上限（空欄で無制限）",
+                                value=None,
                                 precision=0,
                             )
                             eval_search_btn = gr.Button(
