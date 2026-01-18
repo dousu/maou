@@ -569,11 +569,11 @@ class GradioVisualizationServer:
         self,
         prev_status: str,
     ) -> Tuple[
-        str,
-        gr.Button,
-        gr.Button,
-        gr.Button,
-        str,
+        Any,
+        Any,
+        Any,
+        Any,
+        Any,
         str,
         bool,
         Any,
@@ -600,7 +600,21 @@ class GradioVisualizationServer:
             and current_status == "ready"
         )
 
-        # 既存のステータスチェック処理を呼び出し
+        # 安定状態（状態変化なし，かつ indexing 以外）では再描画をスキップ
+        if prev_status == current_status and current_status != "indexing":
+            # 状態が変わっていないので，すべて gr.update() で no-op を返す
+            return (
+                gr.update(),  # status_msg
+                gr.update(),  # load_btn
+                gr.update(),  # rebuild_btn
+                gr.update(),  # refresh_btn
+                gr.update(),  # mode_badge
+                current_status,
+                False,  # should_refresh
+                gr.update(),  # accordion_update
+            )
+
+        # 状態変化がある場合，または indexing 中は通常の処理
         status_msg, load_btn, rebuild_btn, mode_badge = (
             self._check_indexing_status()
         )
