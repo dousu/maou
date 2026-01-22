@@ -1250,9 +1250,10 @@ class GradioVisualizationServer:
                         )
 
                         # Status polling timer (polls every 2 seconds)
-                        # 初期状態は非アクティブ，データ読み込み開始時に有効化
+                        # 起動時にインデックス構築中の場合はアクティブ化
                         status_timer = gr.Timer(
-                            value=2.0, active=False
+                            value=2.0,
+                            active=self.indexing_state.is_indexing(),
                         )
 
                     # ページ内レコードナビゲーション
