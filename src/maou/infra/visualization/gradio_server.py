@@ -543,8 +543,25 @@ class GradioVisualizationServer:
                 else:
                     total = 0
 
+            # Build path info string
+            if len(self.file_paths) == 1:
+                path_info = str(self.file_paths[0])
+            elif len(self.file_paths) > 1:
+                path_info = (
+                    f"{self.file_paths[0].parent}/ "
+                    f"({len(self.file_paths)} files)"
+                )
+            else:
+                path_info = "N/A"
+
+            status_msg = (
+                f"🟢 **Ready:** {total:,} records loaded\n"
+                f"- **Type:** {self.array_type}\n"
+                f"- **Path:** {path_info}"
+            )
+
             return (
-                f"🟢 **Ready:** {total:,} records loaded",
+                status_msg,
                 gr.Button(interactive=True),
                 gr.Button(interactive=True),
                 '<span class="mode-badge-text">🟢 REAL MODE</span>',
@@ -988,49 +1005,73 @@ class GradioVisualizationServer:
             ),  # タイマーを開始（公式パターン）
         )
 
-    def _rebuild_index(self) -> str:
-        """Rebuild search index from current file paths．
+    def _rebuild_index(self) -> Tuple[str, bool, str, Any]:
+        """Rebuild search index from current file paths in background．
 
         Returns:
-            Status message string
+            Tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
         """
-        if (
-            not self.has_data
-            or not self.file_paths
-            or self.viz_interface is None
-        ):
+        if not self.has_data or not self.file_paths:
             logger.warning(
                 "Rebuild requested but no data source is loaded"
             )
-            return "❌ **Error:** No data source loaded"
+            return (
+                "❌ **Error:** No data source loaded",
+                False,
+                '<span class="mode-badge-text">⚪ NO DATA</span>',
+                gr.update(),
+            )
 
-        try:
+        # Cancel any ongoing indexing
+        if self.indexing_state.is_indexing():
             logger.info(
-                f"Rebuilding index for {len(self.file_paths)} files..."
+                "Cancelling ongoing indexing before rebuilding"
+            )
+            self.indexing_state.cancel()
+            if (
+                self._indexing_thread is not None
+                and self._indexing_thread.is_alive()
+            ):
+                self._indexing_thread.join(timeout=5.0)
+
+        # Build path info string for status message
+        if len(self.file_paths) == 1:
+            path_info = str(self.file_paths[0])
+        else:
+            path_info = (
+                f"{self.file_paths[0].parent}/ "
+                f"({len(self.file_paths)} files)"
             )
 
-            # Build new index
-            new_index = SearchIndex.build(
-                file_paths=self.file_paths,
-                array_type=self.array_type,
-                use_mock_data=False,
-            )
+        # Start background indexing
+        logger.info(
+            f"Starting background rebuild for {len(self.file_paths)} files..."
+        )
 
-            # Update search index
-            self.search_index = new_index
+        self.indexing_state.set_indexing(
+            total_files=len(self.file_paths),
+            initial_message="再構築中...",
+        )
 
-            # Update viz_interface's search_index reference
-            self.viz_interface.search_index = new_index
+        self._indexing_thread = threading.Thread(
+            target=self._build_index_background,
+            args=(self.file_paths, self.array_type, False),
+            daemon=True,
+        )
+        self._indexing_thread.start()
 
-            total = new_index.total_records()
-            success_msg = f"✓ **Success:** Index rebuilt - {total:,} records"
+        status_msg = (
+            f"🟡 **Rebuilding Index**\n"
+            f"- **Type:** {self.array_type}\n"
+            f"- **Path:** {path_info}"
+        )
 
-            logger.info(success_msg)
-            return success_msg
-
-        except Exception as e:
-            logger.exception("Index rebuild failed")
-            return f"❌ **Error:** Rebuild failed - {e}"
+        return (
+            status_msg,
+            False,  # Rebuild button disabled during indexing
+            '<span class="mode-badge-text">🟡 INDEXING</span>',
+            gr.Timer(value=2.0, active=True),
+        )
 
     def _get_empty_state_outputs(
         self,
@@ -1699,30 +1740,16 @@ class GradioVisualizationServer:
                     ],
                 )
 
-            # Event 4: Rebuild index
-            rebuild_result = rebuild_btn.click(
+            # Event 4: Rebuild index (background processing)
+            # Auto-refresh is handled by Event 7 (timer completion detection)
+            rebuild_btn.click(
                 fn=self._rebuild_index,
                 inputs=[],
-                outputs=[status_markdown],
-            )
-
-            # Event 5: After successful rebuild, reload current page
-            rebuild_result.then(
-                fn=lambda pg, sz: self._paginate_all_data(
-                    min_eval=-9999,
-                    max_eval=9999,
-                    page=pg,
-                    page_size=sz,
-                ),
-                inputs=[current_page, page_size],
                 outputs=[
-                    results_table,
-                    page_info,
-                    board_display,
-                    record_details,
-                    current_page,
-                    current_page_records,
-                    current_record_index,
+                    status_markdown,
+                    rebuild_btn,
+                    mode_badge,
+                    status_timer,
                 ],
             )
 
