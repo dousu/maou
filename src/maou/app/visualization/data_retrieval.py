@@ -98,8 +98,14 @@ class DataRetriever:
             logger.debug(
                 f"⚠️  MOCK: Returning fake record for {record_id}"
             )
+            # インデックス時の評価値を取得
+            indexed_eval = (
+                self.search_index.get_eval_by_position(
+                    file_index, row_number
+                )
+            )
             return self._create_mock_record(
-                record_id, row_number
+                record_id, row_number, indexed_eval
             )
 
         # Real mode
@@ -153,8 +159,14 @@ class DataRetriever:
             records = []
             for file_index, row_number in locations:
                 record_id = f"mock_id_{row_number}"
+                # インデックス時の評価値を取得
+                indexed_eval = (
+                    self.search_index.get_eval_by_position(
+                        file_index, row_number
+                    )
+                )
                 record = self._create_mock_record(
-                    record_id, row_number
+                    record_id, row_number, indexed_eval
                 )
                 records.append(record)
             return records
@@ -292,13 +304,17 @@ class DataRetriever:
         return record
 
     def _create_mock_record(
-        self, record_id: str, row_number: int
+        self,
+        record_id: str,
+        row_number: int,
+        indexed_eval: Optional[int] = None,
     ) -> Dict[str, Any]:
         """モックレコードデータを生成．
 
         Args:
             record_id: レコードID
             row_number: 行番号
+            indexed_eval: インデックス時の評価値（Noneの場合は計算で生成）
 
         Returns:
             モックレコードデータ
@@ -324,9 +340,16 @@ class DataRetriever:
         mock_hand[0] = row_number % 5  # 先手の歩
         mock_hand[7] = (row_number + 1) % 4  # 後手の歩
 
+        # 評価値はインデックス時の値を使用（整合性のため）
+        eval_value = (
+            indexed_eval
+            if indexed_eval is not None
+            else (row_number % 2000) - 1000
+        )
+
         return {
             "id": record_id,
-            "eval": (row_number % 2000) - 1000,
+            "eval": eval_value,
             "moves": 50 + (row_number % 50),
             "boardIdPositions": mock_board,
             "piecesInHand": mock_hand,

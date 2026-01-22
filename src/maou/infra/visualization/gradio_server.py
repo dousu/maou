@@ -1382,14 +1382,16 @@ class GradioVisualizationServer:
                             min_eval = gr.Number(
                                 label="📉 最小評価値",
                                 info="評価値の下限（空欄で無制限）",
-                                value=None,
+                                value=lambda: None,
                                 precision=0,
+                                placeholder="制限なし",
                             )
                             max_eval = gr.Number(
                                 label="📈 最大評価値",
                                 info="評価値の上限（空欄で無制限）",
-                                value=None,
+                                value=lambda: None,
                                 precision=0,
+                                placeholder="制限なし",
                             )
                             eval_search_btn = gr.Button(
                                 "範囲検索", variant="secondary"

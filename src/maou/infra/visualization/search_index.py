@@ -57,6 +57,8 @@ class SearchIndex:
         self._eval_index: Dict[int, List[Tuple[int, int]]] = (
             defaultdict(list)
         )  # eval -> [(file_idx, row_idx), ...]
+        # モックモード用: 位置から評価値への逆引きマッピング
+        self._position_to_eval: Dict[Tuple[int, int], int] = {}
         self._total_records = 0
 
         if use_mock_data:
@@ -93,9 +95,12 @@ class SearchIndex:
                 else 0
             )
             # 仮想的なfile_index=0，row_number=i
-            self._id_index[record_id] = (0, i)
+            position = (0, i)
+            self._id_index[record_id] = position
             if self.array_type == "hcpe":
-                self._eval_index[eval_value].append((0, i))
+                self._eval_index[eval_value].append(position)
+                # 逆引きマッピングも保存
+                self._position_to_eval[position] = eval_value
 
         self._total_records = num_records
         logger.info(
@@ -114,6 +119,22 @@ class SearchIndex:
             (file_index, row_number)のタプル，またはNone
         """
         return self._id_index.get(record_id)
+
+    def get_eval_by_position(
+        self, file_index: int, row_number: int
+    ) -> Optional[int]:
+        """位置から評価値を取得（モックモード用）．
+
+        Args:
+            file_index: ファイルインデックス
+            row_number: 行番号
+
+        Returns:
+            インデックス時に使用した評価値，またはNone
+        """
+        return self._position_to_eval.get(
+            (file_index, row_number)
+        )
 
     def search_id_prefix(
         self, prefix: str, limit: int = 50
