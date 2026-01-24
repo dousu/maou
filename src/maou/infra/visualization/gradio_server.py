@@ -1083,7 +1083,7 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],  # cached_records
         int,  # record_index
         str,  # record_indicator
-        str,  # analytics_html
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
     ]:
         """Generate output values for empty state (no data loaded)．
 
@@ -1107,10 +1107,7 @@ class GradioVisualizationServer:
         cached_records: List[Dict[str, Any]] = []
         record_index = 0
         record_indicator = "Record 0 / 0"
-        analytics_html = (
-            "<p style='text-align: center; color: #666;'>"
-            "データがロードされていません．</p>"
-        )
+        analytics_figure = None  # gr.Plot accepts None for empty state
 
         return (
             empty_table,
@@ -1120,7 +1117,7 @@ class GradioVisualizationServer:
             cached_records,
             record_index,
             record_indicator,
-            analytics_html,
+            analytics_figure,
         )
 
     def _get_empty_state_navigation(
@@ -1134,7 +1131,7 @@ class GradioVisualizationServer:
         Dict[str, Any],  # record_details
         List[Dict[str, Any]],  # current_page_records
         str,  # record_indicator
-        str,  # analytics_html
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
         gr.Button,  # prev_btn
         gr.Button,  # next_btn
     ]:
@@ -1152,7 +1149,7 @@ class GradioVisualizationServer:
             {"message": "No data loaded"},  # record_details
             [],  # current_page_records
             "Record 0 / 0",  # record_indicator
-            "",  # analytics_html
+            None,  # analytics_figure
             gr.Button(interactive=False),  # prev button
             gr.Button(interactive=False),  # next button
         )
