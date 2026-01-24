@@ -6,7 +6,10 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+
+if TYPE_CHECKING:
+    import plotly.graph_objects as go
 
 from maou.domain.board.shogi import Board, PieceId, Turn
 from maou.domain.visualization.board_renderer import (
@@ -94,14 +97,14 @@ class RecordRenderer(ABC):
     @abstractmethod
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
-        """レコード群からデータ分析用のPlotlyチャートHTMLを生成する．
+    ) -> Optional["go.Figure"]:
+        """レコード群からデータ分析用のPlotly Figureを生成する．
 
         Args:
             records: 分析対象のレコードリスト
 
         Returns:
-            PlotlyチャートのHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         pass
 
