@@ -1830,7 +1830,7 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         int,
         str,
-        str,
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         gr.Button,
@@ -1849,7 +1849,7 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator, analytics_html,
+             cached_records, record_index, record_indicator, analytics_figure,
              prev_btn_state, next_btn_state,
              prev_record_btn_state, next_record_btn_state)
         """
@@ -1947,7 +1947,7 @@ class GradioVisualizationServer:
         List[Dict[str, Any]],
         int,
         str,
-        str,
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         gr.Button,
@@ -1966,7 +1966,7 @@ class GradioVisualizationServer:
 
         Returns:
             (table_data, page_info, board_svg, details,
-             cached_records, record_index, record_indicator, analytics_html,
+             cached_records, record_index, record_indicator, analytics_figure,
              prev_btn_state, next_btn_state,
              prev_record_btn_state, next_record_btn_state)
         """
@@ -2262,7 +2262,7 @@ class GradioVisualizationServer:
         Dict[str, Any],
         List[Dict[str, Any]],
         str,
-        str,
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
     ]:
@@ -2278,7 +2278,7 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator, analytics_html,
+             board_svg, details, cached_records, record_indicator, analytics_figure,
              prev_record_btn_state, next_record_btn_state)
         """
         if self.viz_interface is None:
@@ -2314,7 +2314,7 @@ class GradioVisualizationServer:
             )
 
             # ページ内ナビゲーション時はanalyticsは変わらない
-            analytics_html = (
+            analytics_figure = (
                 self.viz_interface.generate_analytics(
                     current_page_records
                 )
@@ -2341,7 +2341,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_html,
+                analytics_figure,
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
             )
@@ -2365,7 +2365,7 @@ class GradioVisualizationServer:
                 )
             )
             record_indicator = f"Record {current_record_index + 1} / {num_records}"
-            analytics_html = (
+            analytics_figure = (
                 self.viz_interface.generate_analytics(
                     current_page_records
                 )
@@ -2381,7 +2381,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_html,
+                analytics_figure,
                 gr.Button(
                     interactive=True
                 ),  # prev_record_btn有効
@@ -2408,7 +2408,7 @@ class GradioVisualizationServer:
             cached_records,
             _,  # record_indexは0にリセットされる
             record_indicator,
-            analytics_html,
+            analytics_figure,
             _,  # prev_btn state（ページナビゲーション用）
             _,  # next_btn state（ページナビゲーション用）
             _,  # prev_record_btn state（レコードナビゲーション用）
@@ -2440,7 +2440,7 @@ class GradioVisualizationServer:
             details,
             cached_records,
             record_indicator,
-            analytics_html,
+            analytics_figure,
             gr.Button(interactive=prev_interactive),
             gr.Button(interactive=next_interactive),
         )
@@ -2462,7 +2462,7 @@ class GradioVisualizationServer:
         Dict[str, Any],
         List[Dict[str, Any]],
         str,
-        str,
+        Optional[Any],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
     ]:
@@ -2478,7 +2478,7 @@ class GradioVisualizationServer:
 
         Returns:
             (new_page, new_index, table_data, page_info,
-             board_svg, details, cached_records, record_indicator, analytics_html,
+             board_svg, details, cached_records, record_indicator, analytics_figure,
              prev_record_btn_state, next_record_btn_state)
         """
         if self.viz_interface is None:
@@ -2514,7 +2514,7 @@ class GradioVisualizationServer:
             )
 
             # ページ内ナビゲーション時はanalyticsは変わらない
-            analytics_html = (
+            analytics_figure = (
                 self.viz_interface.generate_analytics(
                     current_page_records
                 )
@@ -2541,7 +2541,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_html,
+                analytics_figure,
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
             )
@@ -2565,7 +2565,7 @@ class GradioVisualizationServer:
                 )
             )
             record_indicator = f"Record {current_record_index + 1} / {num_records}"
-            analytics_html = (
+            analytics_figure = (
                 self.viz_interface.generate_analytics(
                     current_page_records
                 )
@@ -2581,7 +2581,7 @@ class GradioVisualizationServer:
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_html,
+                analytics_figure,
                 gr.Button(
                     interactive=False
                 ),  # prev_record_btn無効
@@ -2608,7 +2608,7 @@ class GradioVisualizationServer:
             cached_records,
             _,  # record_indexは最後に設定される
             _,  # record_indicatorは後で更新
-            analytics_html,
+            analytics_figure,
             _,  # prev_btn state（ページナビゲーション用）
             _,  # next_btn state（ページナビゲーション用）
             _,  # prev_record_btn state（レコードナビゲーション用）
@@ -2655,7 +2655,7 @@ class GradioVisualizationServer:
             details,
             cached_records,
             record_indicator,
-            analytics_html,
+            analytics_figure,
             gr.Button(interactive=prev_interactive),
             gr.Button(interactive=next_interactive),
         )
