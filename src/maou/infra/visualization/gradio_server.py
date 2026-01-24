@@ -1884,8 +1884,8 @@ class GradioVisualizationServer:
             else:
                 record_indicator = "Record 0 / 0"
 
-            # 分析チャート生成
-            analytics_html = (
+            # 分析チャート生成（Plotly Figure）
+            analytics_figure = (
                 self.viz_interface.generate_analytics(
                     cached_records
                 )
@@ -1918,7 +1918,7 @@ class GradioVisualizationServer:
             cached_records,  # キャッシュ
             0,  # record_indexをリセット
             record_indicator,  # インジケーター
-            analytics_html,  # 分析チャート
+            analytics_figure,  # 分析チャート（Plotly Figure）
             gr.Button(
                 interactive=prev_page_interactive
             ),  # prev_btn状態
