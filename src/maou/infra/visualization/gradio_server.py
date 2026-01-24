@@ -1449,8 +1449,8 @@ class GradioVisualizationServer:
                             )
 
                         with gr.Tab("📈 データ分析"):
-                            analytics_chart = gr.HTML(
-                                value="<p style='text-align: center; color: #666;'>検索を実行すると分析チャートが表示されます．</p>",
+                            analytics_chart = gr.Plot(
+                                value=None,
                                 label="データ分析チャート",
                             )
 
