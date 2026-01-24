@@ -775,22 +775,22 @@ class PreprocessingRecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
+    ) -> Optional["go.Figure"]:
         """Preprocessingデータから勝率分布チャートを生成する．
 
         Args:
             records: Preprocessingレコードのリスト
 
         Returns:
-            Plotlyチャートを含むHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         try:
             import plotly.graph_objects as go
         except ImportError:
-            return "<p>Plotlyがインストールされていません．</p>"
+            return None
 
         if not records:
-            return "<p>データがありません．</p>"
+            return None
 
         # resultValueを集計
         result_values = [
@@ -804,8 +804,8 @@ class PreprocessingRecordRenderer(RecordRenderer):
             data=[
                 go.Histogram(
                     x=result_values,
-                    marker_color="rgba(0,112,243,0.6)",
-                    nbinsx=30,
+                    marker_color="rgba(156,39,176,0.6)",
+                    nbinsx=20,
                     name="勝率",
                 )
             ]
@@ -822,10 +822,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
             margin=dict(l=40, r=40, t=60, b=40),
         )
 
-        return fig.to_html(
-            include_plotlyjs="cdn",
-            div_id="preprocessing-analytics",
-        )
+        return fig
 
 
 class RecordRendererFactory:
