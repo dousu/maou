@@ -328,23 +328,23 @@ class HCPERecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
+    ) -> Optional["go.Figure"]:
         """HCPEデータから評価値と手数の分布チャートを生成する．
 
         Args:
             records: HCPEレコードのリスト
 
         Returns:
-            Plotlyチャート2つを含むHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         try:
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
         except ImportError:
-            return "<p>Plotlyがインストールされていません．</p>"
+            return None
 
         if not records:
-            return "<p>データがありません．</p>"
+            return None
 
         # データ抽出
         evals = [
@@ -403,9 +403,7 @@ class HCPERecordRenderer(RecordRenderer):
         fig.update_yaxes(title_text="頻度", row=1, col=1)
         fig.update_yaxes(title_text="頻度", row=1, col=2)
 
-        return fig.to_html(
-            include_plotlyjs="cdn", div_id="hcpe-analytics"
-        )
+        return fig
 
 
 class Stage1RecordRenderer(RecordRenderer):
