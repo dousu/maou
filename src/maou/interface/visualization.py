@@ -317,14 +317,14 @@ class VisualizationInterface:
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
-        """レコード群からデータ分析用のチャートHTMLを生成する．
+    ) -> Optional[Any]:
+        """レコード群からデータ分析用のPlotly Figureを生成する．
 
         Args:
             records: 分析対象のレコードリスト
 
         Returns:
-            PlotlyチャートのHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         return self.renderer.generate_analytics(records)
 
