@@ -641,22 +641,22 @@ class Stage2RecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
+    ) -> Optional["go.Figure"]:
         """Stage2データから合法手数の分布チャートを生成する．
 
         Args:
             records: Stage2レコードのリスト
 
         Returns:
-            Plotlyチャートを含むHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         try:
             import plotly.graph_objects as go
         except ImportError:
-            return "<p>Plotlyがインストールされていません．</p>"
+            return None
 
         if not records:
-            return "<p>データがありません．</p>"
+            return None
 
         # 合法手数を集計
         legal_counts = []
@@ -688,9 +688,7 @@ class Stage2RecordRenderer(RecordRenderer):
             margin=dict(l=40, r=40, t=60, b=40),
         )
 
-        return fig.to_html(
-            include_plotlyjs="cdn", div_id="stage2-analytics"
-        )
+        return fig
 
 
 class PreprocessingRecordRenderer(RecordRenderer):
