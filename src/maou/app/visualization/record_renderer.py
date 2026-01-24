@@ -504,22 +504,22 @@ class Stage1RecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
-    ) -> str:
+    ) -> Optional["go.Figure"]:
         """Stage1データから到達可能マス数の分布チャートを生成する．
 
         Args:
             records: Stage1レコードのリスト
 
         Returns:
-            Plotlyチャートを含むHTML文字列
+            Plotly Figureオブジェクト，またはデータがない場合はNone
         """
         try:
             import plotly.graph_objects as go
         except ImportError:
-            return "<p>Plotlyがインストールされていません．</p>"
+            return None
 
         if not records:
-            return "<p>データがありません．</p>"
+            return None
 
         # 到達可能マス数を集計
         reachable_counts = []
@@ -551,9 +551,7 @@ class Stage1RecordRenderer(RecordRenderer):
             margin=dict(l=40, r=40, t=60, b=40),
         )
 
-        return fig.to_html(
-            include_plotlyjs="cdn", div_id="stage1-analytics"
-        )
+        return fig
 
 
 class Stage2RecordRenderer(RecordRenderer):
