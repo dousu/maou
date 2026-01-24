@@ -17,7 +17,7 @@ dependencies = [
     "psutil>=6.0.0",
     "polars>=1.0.0",
     "duckdb (>=1.4.3,<2.0.0)",
-    "plotly[visualize] (>=6.5.0,<7.0.0)",
+    "plotly>=6.5.0,<7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -89,8 +89,34 @@ visualize = [
 [project.scripts]
 maou = "maou.infra.console.app:main"
 
-[tool.poetry]
-packages = [{include = "maou", from = "src"}]
+[tool.uv]
+package = true
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cuda" },
+    { extra = "mpu" },
+    { extra = "tpu" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+  { index = "pytorch-cuda", extra = "mpu" },
+  { index = "pytorch-cuda", extra = "tpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.maturin]
 python-source = "src"
@@ -99,30 +125,33 @@ manifest-path = "rust/maou_rust/Cargo.toml"
 binding = "pyo3"
 features = ["pyo3/extension-module"]
 
-[tool.poetry.group.dev.dependencies]
-pre-commit = "^4.3.0"
-flake8 = "^7.2.0"
-yamllint = "^1.37.1"
-isort = "^6.1.0"
-commitizen = "^4.9.1"
-pytest = "^8.4.2"
-ruff = "^0.14.1"
-types-tqdm = "^4.67.0.20250809"
-mypy = "^1.18.2"
-google-cloud-storage = "^3.4.1"
-google-cloud-bigquery = {version = "^3.38.0", extras = ["pandas"]}
-google-cloud-bigquery-storage = "^2.33.1"
-boto3 = "^1.40.54"
-autopep8 = "^2.3.2"
-yapf = "^0.43.0"
-netron = "^8.6.8"
-maturin = "^1.7.0"
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "flake8>=7.2.0",
+    "yamllint>=1.37.1",
+    "isort>=6.1.0",
+    "commitizen>=4.9.1",
+    "pytest>=8.4.2",
+    "ruff>=0.14.1",
+    "types-tqdm>=4.67.0.20250809",
+    "mypy>=1.18.2",
+    "google-cloud-storage>=3.4.1",
+    "google-cloud-bigquery[pandas]>=3.38.0",
+    "google-cloud-bigquery-storage>=2.33.1",
+    "boto3>=1.40.54",
+    "autopep8>=2.3.2",
+    "yapf>=0.43.0",
+    "netron>=8.6.8",
+    "maturin>=1.7.0",
+    "pytest-cov>=4.0.0",
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
 tag_format = "$version"
 version_scheme = "pep440"
-version_provider = "poetry"
+version_provider = "pep621"
 update_changelog_on_bump = true
 major_version_zero = true
 
@@ -159,8 +188,3 @@ line_length = 64
 [tool.ruff]
 line-length = 64
 indent-width = 4
-
-[[tool.poetry.source]]
-name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu128"
-priority = "explicit"

@@ -51,12 +51,14 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 
 ### Package Management
 
-**ONLY use Poetry. NEVER use pip directly.**
+**ONLY use uv. NEVER use pip directly.**
 
 ```bash
-poetry install                          # Install dependencies
-poetry add package-name                 # Add dependency
-poetry add --group dev package-name     # Add dev dependency
+uv sync                                 # Install dependencies
+uv sync --extra cpu                     # Install with CPU PyTorch
+uv sync --extra cuda                    # Install with CUDA PyTorch
+uv add package-name                     # Add dependency
+uv add --group dev package-name         # Add dev dependency
 ```
 
 ### Code Quality
@@ -65,8 +67,8 @@ See [Code Quality Guide](docs/code-quality.md) for detailed tool configuration.
 
 **Quick Pipeline:**
 ```bash
-poetry run ruff format src/ && poetry run ruff check src/ --fix && \
-  poetry run isort src/ && poetry run mypy src/ && poetry run pytest
+uv run ruff format src/ && uv run ruff check src/ --fix && \
+  uv run isort src/ && uv run mypy src/ && uv run pytest
 ```
 
 ## Testing
@@ -81,10 +83,10 @@ src/maou/{layer}/{module}/file.py
 
 **Test Execution:**
 ```bash
-poetry run pytest                           # All tests
-poetry run pytest --cov=src/maou            # With coverage
-TEST_GCP=true poetry run pytest             # Test GCP features
-TEST_AWS=true poetry run pytest             # Test AWS features
+uv run pytest                           # All tests
+uv run pytest --cov=src/maou            # With coverage
+TEST_GCP=true uv run pytest             # Test GCP features
+TEST_AWS=true uv run pytest             # Test AWS features
 ```
 
 ## Rust Backend Development
@@ -92,7 +94,7 @@ TEST_AWS=true poetry run pytest             # Test AWS features
 The project uses Rust for high-performance I/O operations with Arrow IPC format (Polars + Rust backend). See [Rust Backend Development Guide](docs/rust-backend.md) for comprehensive setup, configuration, and troubleshooting.
 
 ### Quick Start
-- Development: `poetry run maturin develop`
+- Development: `uv run maturin develop`
 - Testing: `cargo test --manifest-path rust/maou_io/Cargo.toml`
 - Memory-constrained: Automatic optimizations reduce peak RAM to 1.0-1.5GB
 
@@ -102,7 +104,7 @@ See [Memory-Constrained Build Configuration](docs/rust-backend.md#memory-constra
 
 ```bash
 bash scripts/dev-init.sh                 # Initialize
-poetry run bash scripts/pre-commit.sh    # Setup hooks
+uv run bash scripts/pre-commit.sh        # Setup hooks
 ```
 
 **Cloud Auth:**
@@ -122,9 +124,9 @@ The project provides main CLI commands following the data pipeline. See [Command
 
 **Examples:**
 ```bash
-poetry run maou hcpe-convert --input-path /path/to/records --input-format csa
-poetry run maou pre-process --input-path /path/to/hcpe --output-dir /path/to/output
-poetry run maou learn-model --input-dir /path/to/data --gpu cuda:0 --epoch 10
+uv run maou hcpe-convert --input-path /path/to/records --input-format csa
+uv run maou pre-process --input-path /path/to/hcpe --output-dir /path/to/output
+uv run maou learn-model --input-dir /path/to/data --gpu cuda:0 --epoch 10
 ```
 
 **Cloud Storage Integration:** See [S3/GCS Operations](docs/commands/) for S3/GCS integration and array bundling.
@@ -167,8 +169,8 @@ See [Performance Guide](docs/performance.md) for:
 
 **Quick Commands:**
 ```bash
-poetry run maou utility benchmark-dataloader --input-dir /path/to/processed --gpu cuda:0
-poetry run maou utility benchmark-training --input-dir /path/to/processed --gpu cuda:0
+uv run maou utility benchmark-dataloader --input-dir /path/to/processed --gpu cuda:0
+uv run maou utility benchmark-training --input-dir /path/to/processed --gpu cuda:0
 ```
 
 ## Debugging and Logging
@@ -180,16 +182,16 @@ export MAOU_LOG_LEVEL=INFO     # Default
 export MAOU_LOG_LEVEL=WARNING  # Minimal
 
 # Or use CLI flag
-poetry run maou --debug-mode hcpe-convert ...
+uv run maou --debug-mode hcpe-convert ...
 ```
 
 ## Error Resolution
 
 ### CI Failure Resolution Order
-1. **Code Formatting**: `poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/`
-2. **Type Errors**: `poetry run mypy src/`
-3. **Linting Issues**: `poetry run flake8 src/`
-4. **Test Failures**: `poetry run pytest --tb=short`
+1. **Code Formatting**: `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/`
+2. **Type Errors**: `uv run mypy src/`
+3. **Linting Issues**: `uv run flake8 src/`
+4. **Test Failures**: `uv run pytest --tb=short`
 
 ## Git Workflow
 
@@ -237,13 +239,13 @@ The project includes specialized Agent Skills that automate common workflows. Sk
 | **cloud-integration-tests** | Execute GCP/AWS integration tests | cloud testing, S3 tests, GCS tests |
 | **feature-branch-setup** | Automate feature branch creation | create branch, new feature |
 | **gradio-screenshot-capture** | Capture Gradio UI screenshots with Playwright | screenshot, capture UI, visual feedback |
-| **dependency-update-helper** | Manage Poetry dependencies (NEVER use pip) | add package, update dependencies |
+| **dependency-update-helper** | Manage uv dependencies (NEVER use pip) | add package, update dependencies |
 | **rust-build-optimizer** | Build Rust in memory-constrained environments (2-4GB RAM) | build rust, maturin, OOM error |
 | **benchmark-execution** | Performance benchmarks for DataLoader and training | benchmark, performance analysis |
 | **japanese-doc-validator** | Validate Japanese punctuation rules (，．) | Japanese text, punctuation rules |
 | **data-pipeline-validator** | Validate data pipeline configuration | data pipeline, array_type, schema |
 
-Run `poetry run maou --help` for detailed CLI options and examples.
+Run `uv run maou --help` for detailed CLI options and examples.
 
 ## Plugins
 
