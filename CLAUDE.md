@@ -100,6 +100,14 @@ The project uses Rust for high-performance I/O operations with Arrow IPC format 
 
 See [Memory-Constrained Build Configuration](docs/rust-backend.md#memory-constrained-build-configuration) for detailed setup.
 
+### Cargo.lock Management
+
+**Cargo.lockはコミット対象です．** このプロジェクトはPython拡張モジュール(最終成果物)のため，ビルドの再現性を確保するためにCargo.lockをバージョン管理しています．
+
+- **依存更新時**: `cargo update`実行後，Cargo.lockの変更もコミットする
+- **特定パッケージの更新**: `cargo update -p package_name`
+- **ロックファイルの再生成**: `cargo generate-lockfile`
+
 ## Environment Setup
 
 ```bash

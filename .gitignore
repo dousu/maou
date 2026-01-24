@@ -8,7 +8,6 @@ __pycache__/
 
 # Rust build artifacts
 target/
-Cargo.lock
 *.pyd
 *.dylib
 
