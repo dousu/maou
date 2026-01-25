@@ -586,20 +586,21 @@ class GradioVisualizationServer:
         self,
         prev_status: str,
     ) -> Tuple[
-        Any,
-        Any,
-        Any,
-        Any,
-        Any,
-        str,
-        bool,
-        Any,
-        Any,
+        Any,  # status_markdown
+        Any,  # load_btn
+        Any,  # rebuild_btn
+        Any,  # refresh_btn
+        Any,  # mode_badge
+        str,  # current_status
+        bool,  # should_refresh
+        Any,  # accordion_update
+        Any,  # timer_update
     ]:
         """インデックス作成状態をポーリングし，状態遷移を検出する．
 
-        タイマーから呼び出され，前回の状態と比較して
-        "indexing" → "ready" への遷移を検出する．
+        タイマーから呼び出され，前回の状態と比較して状態遷移を検出．
+        インデックス作成中で状態変化がない場合は，status_markdownのみを更新し，
+        他のコンポーネントはgr.update()で更新をスキップする（ちらつき防止）．
 
         Args:
             prev_status: 前回のポーリング時の状態
@@ -607,13 +608,11 @@ class GradioVisualizationServer:
         Returns:
             (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
              current_status, should_refresh, accordion_update, timer_update)のタプル．
-            should_refreshはインデックス完了時にTrueとなる．
-            accordion_updateはアコーディオンの展開/閉じ状態を制御する．
-            timer_updateはインデックス完了時にタイマーを停止する．
         """
         current_status = self.indexing_state.get_status()
 
-        # "indexing" → "ready" への遷移を検出
+        # 状態遷移を検出
+        is_state_transition = prev_status != current_status
         should_refresh = (
             prev_status == "indexing"
             and current_status == "ready"
@@ -621,10 +620,9 @@ class GradioVisualizationServer:
 
         # 安定状態（状態変化なし，かつ indexing 以外）では再描画をスキップ
         if (
-            prev_status == current_status
+            not is_state_transition
             and current_status != "indexing"
         ):
-            # 状態が変わっていないので，すべて gr.update() で no-op を返す
             return (
                 gr.update(),  # status_msg
                 gr.update(),  # load_btn
@@ -634,37 +632,82 @@ class GradioVisualizationServer:
                 current_status,
                 False,  # should_refresh
                 gr.update(),  # accordion_update
-                gr.update(),  # timer_update（変更なし）
+                gr.update(),  # timer_update
             )
 
-        # 状態変化がある場合，または indexing 中は通常の処理
+        # indexing 中で状態変化なしの場合: status_markdown のみ更新
+        if (
+            current_status == "indexing"
+            and not is_state_transition
+        ):
+            progress = self.indexing_state.get_progress()
+
+            # 推定残り時間を計算
+            remaining_seconds = (
+                self.indexing_state.estimate_remaining_time()
+            )
+            time_str = ""
+            if remaining_seconds is not None:
+                if remaining_seconds < 60:
+                    time_str = f" - 約{remaining_seconds}秒残り"
+                else:
+                    minutes = remaining_seconds // 60
+                    seconds = remaining_seconds % 60
+                    time_str = (
+                        f" - 約{minutes}分{seconds}秒残り"
+                    )
+
+            # Loading spinner HTML
+            spinner_html = """
+<div style="display: inline-block; vertical-align: middle; margin-right: 8px;">
+    <div style="display: inline-block; width: 16px; height: 16px;
+                border: 2px solid #f3f3f3; border-top: 2px solid #ff9800;
+                border-radius: 50%; animation: spin-anim 1s linear infinite;"></div>
+</div>
+<style>
+@keyframes spin-anim {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+"""
+            status_msg = (
+                f"{spinner_html}🟡 **Indexing:** {progress['message']} "
+                f"({progress['files']}/{progress['total_files']} files, "
+                f"{progress['records']:,} records){time_str}"
+            )
+
+            return (
+                status_msg,
+                gr.update(),  # load_btn - no change
+                gr.update(),  # rebuild_btn - no change
+                gr.update(),  # refresh_btn - no change
+                gr.update(),  # mode_badge - no change
+                current_status,
+                False,  # should_refresh
+                gr.update(),  # accordion_update - no change
+                gr.update(),  # timer_update - no change
+            )
+
+        # 状態遷移がある場合: すべてのコンポーネントを更新
         status_msg, load_btn, rebuild_btn, mode_badge = (
             self._check_indexing_status()
         )
-
-        # refresh_btnはrebuild_btnと同じ状態を使用
         refresh_btn = rebuild_btn
 
         # アコーディオン状態を決定
         if current_status == "indexing":
-            # インデックス作成中はアコーディオンを展開
             accordion_update = gr.update(open=True)
         elif should_refresh:
-            # インデックス完了時はアコーディオンを閉じる
             accordion_update = gr.update(open=False)
         else:
-            # それ以外は変更なし
             accordion_update = gr.update()
 
         # タイマー状態を決定
-        # Gradio公式パターン: gr.Timer(active=True/False)をoutputとして返す
-        # gr.update(active=...)は効果がない（Timer.postprocess()はvalueのみ処理）
         timer_update: Any
         if should_refresh:
-            # インデックス完了時にタイマーを停止（公式パターン）
             timer_update = gr.Timer(value=2.0, active=False)
         else:
-            # それ以外は変更なし
             timer_update = gr.update()
 
         return (
