@@ -739,6 +739,7 @@ class GradioVisualizationServer:
         Any,  # next_btn
         Any,  # prev_record_btn
         Any,  # next_record_btn
+        Any,  # stats_json
     ]:
         """インデックス完了時にデータを自動再読み込みする．
 
@@ -750,7 +751,7 @@ class GradioVisualizationServer:
             page_size: ページサイズ
 
         Returns:
-            12個の出力値のタプル（更新しない場合はgr.update()）
+            13個の出力値のタプル（更新しない場合はgr.update()）
         """
         if not should_refresh:
             # 更新不要な場合はgr.update()を返してスキップ
@@ -767,15 +768,18 @@ class GradioVisualizationServer:
                 gr.update(),  # next_btn
                 gr.update(),  # prev_record_btn
                 gr.update(),  # next_record_btn
+                gr.update(),  # stats_json
             )
 
         # インデックス完了時はデータを読み込み
-        return self._paginate_all_data(
+        paginate_result = self._paginate_all_data(
             min_eval=-9999,
             max_eval=9999,
             page=1,
             page_size=page_size,
         )
+        stats = self._get_current_stats()
+        return (*paginate_result, stats)
 
     def _get_id_suggestions_handler(self, prefix: str) -> Any:
         """ID入力に応じて候補を動的更新．
@@ -1872,6 +1876,7 @@ class GradioVisualizationServer:
                     next_btn,
                     prev_record_btn,
                     next_record_btn,
+                    stats_json,
                 ],
             )
 
