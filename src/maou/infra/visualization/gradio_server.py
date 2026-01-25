@@ -1555,6 +1555,18 @@ class GradioVisualizationServer:
                 ],
             )
 
+            # テーブル行選択イベント
+            results_table.select(
+                fn=self._on_table_row_select,
+                inputs=[current_page_records],
+                outputs=[
+                    board_display,
+                    record_details,
+                    selected_record_id,
+                    current_record_index,
+                ],
+            )
+
             id_search_btn.click(
                 fn=self._search_by_id,
                 inputs=[id_input],
@@ -2046,6 +2058,46 @@ class GradioVisualizationServer:
             page=page,
             page_size=page_size,
         )
+
+    def _on_table_row_select(
+        self,
+        evt: gr.SelectData,
+        current_page_records: List[Dict[str, Any]],
+    ) -> Tuple[str, Dict[str, Any], str, int]:
+        """テーブル行選択時のハンドラ．
+
+        Args:
+            evt: Gradio SelectDataイベント（行インデックスを含む）
+            current_page_records: 現在のページのレコードキャッシュ
+
+        Returns:
+            (board_svg, record_details, selected_id, record_index)
+        """
+        if self.viz_interface is None or not current_page_records:
+            return (
+                self._render_empty_board_placeholder(),
+                {"message": "No record selected"},
+                "",
+                0,
+            )
+
+        # evt.index[0]が行インデックス
+        row_index = evt.index[0] if isinstance(evt.index, tuple) else evt.index
+
+        if row_index < 0 or row_index >= len(current_page_records):
+            return (
+                self._render_empty_board_placeholder(),
+                {"message": "Invalid row index"},
+                "",
+                0,
+            )
+
+        record = current_page_records[row_index]
+        board_svg = self.viz_interface.renderer.render_board(record)
+        details = self.viz_interface.renderer.extract_display_fields(record)
+        record_id = str(record.get("id", ""))
+
+        return board_svg, details, record_id, row_index
 
     def _search_by_id(
         self, record_id: str
