@@ -1408,13 +1408,25 @@ class GradioVisualizationServer:
                         )
 
                     # データセット情報
-                    with gr.Group():
-                        gr.Markdown("### 📈 データセット情報")
-                        gr.JSON(
-                            value=self.viz_interface.get_dataset_stats()
-                            if self.viz_interface is not None
-                            else {},
+                    with gr.Accordion(
+                        "📊 データセット情報", open=True
+                    ):
+                        with gr.Row():
+                            stats_refresh_btn = gr.Button(
+                                "🔄 更新",
+                                size="sm",
+                                scale=0,
+                            )
+                        stats_json = gr.JSON(
+                            value={},
                             label="統計情報",
+                        )
+
+                        # Refresh button click handler
+                        stats_refresh_btn.click(
+                            fn=self._get_current_stats,
+                            inputs=[],
+                            outputs=[stats_json],
                         )
 
                 # 右パネル: 視覚化
@@ -2030,6 +2042,17 @@ class GradioVisualizationServer:
         )
 
         return self.renderer.render(position)
+
+    def _get_current_stats(self) -> Dict[str, Any]:
+        """Get current dataset statistics (thread-safe).
+
+        Returns:
+            Statistics dict, or empty dict if not ready.
+        """
+        with self._index_lock:
+            if self.viz_interface is not None:
+                return self.viz_interface.get_dataset_stats()
+            return {}
 
     def _get_mock_stats(self) -> Dict[str, Any]:
         """インデックス統計情報を返す．"""
