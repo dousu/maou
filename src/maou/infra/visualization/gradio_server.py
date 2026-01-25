@@ -585,16 +585,29 @@ class GradioVisualizationServer:
     def _check_indexing_status_with_transition(
         self,
         prev_status: str,
+        page_size: int,
     ) -> Tuple[
         Any,  # status_markdown
         Any,  # load_btn
         Any,  # rebuild_btn
         Any,  # refresh_btn
         Any,  # mode_badge
-        str,  # current_status
-        bool,  # should_refresh
+        str,  # current_status (for previous_indexing_status State)
         Any,  # accordion_update
         Any,  # timer_update
+        Any,  # results_table
+        Any,  # page_info
+        Any,  # board_display
+        Any,  # record_details
+        Any,  # current_page_records
+        Any,  # current_record_index
+        Any,  # record_indicator
+        Any,  # analytics_chart
+        Any,  # prev_btn
+        Any,  # next_btn
+        Any,  # prev_record_btn
+        Any,  # next_record_btn
+        Any,  # stats_json
     ]:
         """インデックス作成状態をポーリングし，状態遷移を検出する．
 
@@ -602,20 +615,45 @@ class GradioVisualizationServer:
         インデックス作成中で状態変化がない場合は，status_markdownのみを更新し，
         他のコンポーネントはgr.update()で更新をスキップする（ちらつき防止）．
 
+        indexing→ready遷移時はデータコンポーネントも一括更新する（Event 7を統合）．
+
         Args:
             prev_status: 前回のポーリング時の状態
+            page_size: ページサイズ（ready遷移時のデータ読み込みに使用）
 
         Returns:
+            21個の出力値のタプル:
             (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
-             current_status, should_refresh, accordion_update, timer_update)のタプル．
+             current_status, accordion_update, timer_update,
+             results_table, page_info, board_display, record_details,
+             current_page_records, current_record_index, record_indicator,
+             analytics_chart, prev_btn, next_btn, prev_record_btn,
+             next_record_btn, stats_json)
         """
         current_status = self.indexing_state.get_status()
 
         # 状態遷移を検出
         is_state_transition = prev_status != current_status
-        should_refresh = (
+        is_ready_transition = (
             prev_status == "indexing"
             and current_status == "ready"
+        )
+
+        # gr.update()の13個のデータコンポーネント（更新しない場合）
+        no_data_updates: Tuple[Any, ...] = (
+            gr.update(),  # results_table
+            gr.update(),  # page_info
+            gr.update(),  # board_display
+            gr.update(),  # record_details
+            gr.update(),  # current_page_records
+            gr.update(),  # current_record_index
+            gr.update(),  # record_indicator
+            gr.update(),  # analytics_chart
+            gr.update(),  # prev_btn
+            gr.update(),  # next_btn
+            gr.update(),  # prev_record_btn
+            gr.update(),  # next_record_btn
+            gr.update(),  # stats_json
         )
 
         # 安定状態（状態変化なし，かつ indexing 以外）では再描画をスキップ
@@ -630,9 +668,9 @@ class GradioVisualizationServer:
                 gr.update(),  # refresh_btn
                 gr.update(),  # mode_badge
                 current_status,
-                False,  # should_refresh
                 gr.update(),  # accordion_update
                 gr.update(),  # timer_update
+                *no_data_updates,
             )
 
         # indexing 中で状態変化なしの場合: status_markdown のみ更新
@@ -684,12 +722,12 @@ class GradioVisualizationServer:
                 gr.update(),  # refresh_btn - no change
                 gr.update(),  # mode_badge - no change
                 current_status,
-                False,  # should_refresh
                 gr.update(),  # accordion_update - no change
                 gr.update(),  # timer_update - no change
+                *no_data_updates,
             )
 
-        # 状態遷移がある場合: すべてのコンポーネントを更新
+        # 状態遷移がある場合: ステータスコンポーネントを更新
         status_msg, load_btn, rebuild_btn, mode_badge = (
             self._check_indexing_status()
         )
@@ -698,17 +736,33 @@ class GradioVisualizationServer:
         # アコーディオン状態を決定
         if current_status == "indexing":
             accordion_update = gr.update(open=True)
-        elif should_refresh:
+        elif is_ready_transition:
             accordion_update = gr.update(open=False)
         else:
             accordion_update = gr.update()
 
         # タイマー状態を決定
         timer_update: Any
-        if should_refresh:
+        if is_ready_transition:
             timer_update = gr.Timer(value=2.0, active=False)
         else:
             timer_update = gr.update()
+
+        # indexing→ready遷移時はデータを読み込み
+        if is_ready_transition:
+            paginate_result = self._paginate_all_data(
+                min_eval=-9999,
+                max_eval=9999,
+                page=1,
+                page_size=page_size,
+            )
+            stats = self._get_current_stats()
+            data_outputs: Tuple[Any, ...] = (
+                *paginate_result,
+                stats,
+            )
+        else:
+            data_outputs = no_data_updates
 
         return (
             status_msg,
@@ -717,69 +771,10 @@ class GradioVisualizationServer:
             refresh_btn,
             mode_badge,
             current_status,
-            should_refresh,
             accordion_update,
             timer_update,
+            *data_outputs,
         )
-
-    def _auto_refresh_on_ready(
-        self,
-        should_refresh: bool,
-        page_size: int,
-    ) -> Tuple[
-        Any,  # results_table
-        Any,  # page_info
-        Any,  # board_display
-        Any,  # record_details
-        Any,  # current_page_records
-        Any,  # current_record_index
-        Any,  # record_indicator
-        Any,  # analytics_chart
-        Any,  # prev_btn
-        Any,  # next_btn
-        Any,  # prev_record_btn
-        Any,  # next_record_btn
-        Any,  # stats_json
-    ]:
-        """インデックス完了時にデータを自動再読み込みする．
-
-        should_refreshがFalseの場合はgr.update()で更新をスキップ．
-        Trueの場合は_paginate_all_dataを呼び出してデータを表示．
-
-        Args:
-            should_refresh: 再読み込みを行うかどうか
-            page_size: ページサイズ
-
-        Returns:
-            13個の出力値のタプル（更新しない場合はgr.update()）
-        """
-        if not should_refresh:
-            # 更新不要な場合はgr.update()を返してスキップ
-            return (
-                gr.update(),  # results_table
-                gr.update(),  # page_info
-                gr.update(),  # board_display
-                gr.update(),  # record_details
-                gr.update(),  # current_page_records
-                gr.update(),  # current_record_index
-                gr.update(),  # record_indicator
-                gr.update(),  # analytics_chart
-                gr.update(),  # prev_btn
-                gr.update(),  # next_btn
-                gr.update(),  # prev_record_btn
-                gr.update(),  # next_record_btn
-                gr.update(),  # stats_json
-            )
-
-        # インデックス完了時はデータを読み込み
-        paginate_result = self._paginate_all_data(
-            min_eval=-9999,
-            max_eval=9999,
-            page=1,
-            page_size=page_size,
-        )
-        stats = self._get_current_stats()
-        return (*paginate_result, stats)
 
     def _get_id_suggestions_handler(self, prefix: str) -> Any:
         """ID入力に応じて候補を動的更新．
@@ -1523,7 +1518,6 @@ class GradioVisualizationServer:
             current_record_index = gr.State(value=0)
             # インデックス状態遷移検出用のState
             previous_indexing_status = gr.State(value="idle")
-            refresh_trigger = gr.State(value=False)
 
             # 初回表示時にページ1をロード（全データ型で実行）
             demo.load(
@@ -1805,7 +1799,7 @@ class GradioVisualizationServer:
                 )
 
             # Event 4: Rebuild index (background processing)
-            # Auto-refresh is handled by Event 7 (timer completion detection)
+            # Auto-refresh is handled by Event 6 (timer polls status transitions)
             rebuild_btn.click(
                 fn=self._rebuild_index,
                 inputs=[],
@@ -1843,9 +1837,10 @@ class GradioVisualizationServer:
             )
 
             # Event 6: Status polling timer with auto-refresh on completion
-            status_result = status_timer.tick(
+            # (Event 7 merged: data components updated directly on indexing→ready)
+            status_timer.tick(
                 fn=self._check_indexing_status_with_transition,
-                inputs=[previous_indexing_status],
+                inputs=[previous_indexing_status, page_size],
                 outputs=[
                     status_markdown,
                     load_btn,
@@ -1853,17 +1848,9 @@ class GradioVisualizationServer:
                     refresh_btn,  # リフレッシュボタン状態
                     mode_badge,
                     previous_indexing_status,  # 現在の状態を保存
-                    refresh_trigger,  # 再描画フラグ
                     data_source_accordion,  # アコーディオン展開/閉じ制御
                     status_timer,  # タイマー動的制御
-                ],
-            )
-
-            # Event 7: Auto-refresh when indexing completes
-            status_result.then(
-                fn=self._auto_refresh_on_ready,
-                inputs=[refresh_trigger, page_size],
-                outputs=[
+                    # Data components (updated on indexing→ready transition)
                     results_table,
                     page_info,
                     board_display,
