@@ -1381,7 +1381,9 @@ class GradioVisualizationServer:
                             next_btn = gr.Button(
                                 "次へ →", elem_id="next-page"
                             )
-                        page_info = gr.Markdown("ページ 1")
+                        page_info = gr.Markdown(
+                            "ページ 1", elem_id="page-info"
+                        )
 
                     # 検索機能
                     gr.Markdown("## 🔍 検索機能")
@@ -1479,6 +1481,7 @@ class GradioVisualizationServer:
                     board_display = gr.HTML(
                         value=self._get_default_board_svg(),
                         label="盤面",
+                        elem_id="board-display",
                     )
 
                     # タブ式レコード詳細表示

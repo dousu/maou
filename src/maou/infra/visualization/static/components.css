@@ -1251,3 +1251,50 @@
 .gradio-container [data-testid="html"] * {
     color: var(--text-primary) !important;
 }
+
+/* ========================================
+   Disable Gradio Pending State Opacity
+   ======================================== */
+/* Gradio applies .pending class during updates, causing opacity flicker.
+   Override to maintain full opacity for specific components during indexing. */
+
+/* Target components that should not show pending state opacity */
+#record-indicator,
+#record-indicator *,
+#record-indicator.pending,
+#record-indicator.pending *,
+#page-info,
+#page-info *,
+#page-info.pending,
+#page-info.pending *,
+#board-display,
+#board-display *,
+#board-display.pending,
+#board-display.pending * {
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Gradio wraps components in .wrap or .block divs that may have pending class */
+#record-indicator.wrap,
+#record-indicator .wrap,
+#page-info.wrap,
+#page-info .wrap,
+#board-display.wrap,
+#board-display .wrap {
+    opacity: 1 !important;
+}
+
+/* Also target parent containers with pending state */
+.gradio-container .block:has(#record-indicator),
+.gradio-container .block:has(#page-info),
+.gradio-container .block:has(#board-display) {
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* General pending state override for Markdown and HTML components */
+.gradio-container [data-testid="markdown"].pending,
+.gradio-container [data-testid="html"].pending {
+    opacity: 1 !important;
+}
