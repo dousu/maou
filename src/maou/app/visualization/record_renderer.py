@@ -336,7 +336,7 @@ class HCPERecordRenderer(RecordRenderer):
     def generate_analytics(
         self, records: List[Dict[str, Any]]
     ) -> Optional["go.Figure"]:
-        """HCPEデータから評価値と手数の分布チャートを生成する．
+        """HCPEデータから評価値の分布チャートを生成する．
 
         Args:
             records: HCPEレコードのリスト
@@ -346,69 +346,45 @@ class HCPERecordRenderer(RecordRenderer):
         """
         try:
             import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
         except ImportError:
             return None
 
         if not records:
             return None
 
-        # データ抽出
+        # データ抽出（評価値のみ）
         evals = [
             r.get("eval", 0)
             for r in records
             if r.get("eval") is not None
         ]
-        moves = [
-            r.get("moves", 0)
-            for r in records
-            if r.get("moves") is not None
-        ]
 
-        # 2つのサブプロットを作成
-        fig = make_subplots(
-            rows=1,
-            cols=2,
-            subplot_titles=("評価値分布", "手数分布"),
-        )
+        if not evals:
+            return None
 
-        # 評価値ヒストグラム
-        fig.add_trace(
-            go.Histogram(
-                x=evals,
-                marker_color="rgba(0,112,243,0.6)",
-                nbinsx=30,
-                name="評価値",
-            ),
-            row=1,
-            col=1,
-        )
-
-        # 手数ヒストグラム
-        fig.add_trace(
-            go.Histogram(
-                x=moves,
-                marker_color="rgba(0,200,83,0.6)",
-                nbinsx=30,
-                name="手数",
-            ),
-            row=1,
-            col=2,
+        # 評価値ヒストグラム（単一チャート）
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=evals,
+                    marker_color="rgba(0,112,243,0.6)",
+                    nbinsx=30,
+                    name="評価値",
+                )
+            ]
         )
 
         # レイアウト設定
         fig.update_layout(
+            title="評価値分布",
+            xaxis_title="評価値",
+            yaxis_title="頻度",
             template="plotly_white",
             font=dict(family="system-ui", size=12),
             height=400,
             showlegend=False,
             margin=dict(l=40, r=40, t=60, b=40),
         )
-
-        fig.update_xaxes(title_text="評価値", row=1, col=1)
-        fig.update_xaxes(title_text="手数", row=1, col=2)
-        fig.update_yaxes(title_text="頻度", row=1, col=1)
-        fig.update_yaxes(title_text="頻度", row=1, col=2)
 
         return fig
 
