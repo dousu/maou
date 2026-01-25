@@ -1484,6 +1484,14 @@ class GradioVisualizationServer:
                         elem_id="board-display",
                     )
 
+                    # 選択中のレコードID（コピー用）
+                    selected_record_id = gr.Textbox(
+                        value="",
+                        label="選択中のID（部分選択してコピー可能）",
+                        interactive=False,
+                        elem_id="selected-record-id",
+                    )
+
                     # タブ式レコード詳細表示
                     with gr.Tabs():
                         with gr.Tab("📋 概要"):
