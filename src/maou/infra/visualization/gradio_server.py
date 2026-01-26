@@ -1805,6 +1805,7 @@ class GradioVisualizationServer:
                         current_page,
                         current_page_records,
                         current_record_index,
+                        selected_record_id,
                     ],
                 )
             else:
@@ -1828,6 +1829,7 @@ class GradioVisualizationServer:
                         current_page,
                         current_page_records,
                         current_record_index,
+                        selected_record_id,
                     ],
                 )
 
