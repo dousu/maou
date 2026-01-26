@@ -246,13 +246,29 @@ uv tool upgrade serena
 
 ## 実装タスク
 
-1. [ ] `scripts/setup-serena.sh` 作成
-2. [ ] `scripts/start-serena.sh` 作成
-3. [ ] `.devcontainer/devcontainer.json` 更新
-4. [ ] `serena.toml` 作成
-5. [ ] `.claude/settings.local.json` にMCPサーバー追加
-6. [ ] `pyproject.toml` にpylsp設定追加
-7. [ ] `rust/maou_io/rust-analyzer.toml` 作成
-8. [ ] `CLAUDE.md` にツール優先順位追記
+1. [x] `scripts/setup-serena.sh` 作成
+2. [x] `scripts/start-serena.sh` 作成
+3. [x] `.devcontainer/devcontainer.json` 更新
+4. [x] `serena.toml` 作成
+5. [x] `.claude/settings.local.json` にMCPサーバー追加
+6. [x] `pyproject.toml` にpylsp設定追加
+7. [x] `rust/maou_rust/rust-analyzer.toml` 作成
+8. [x] `CLAUDE.md` にツール優先順位追記
 9. [ ] DevContainer再構築・動作確認
 10. [ ] 効果測定（トークン削減率の検証）
+
+## 実装時の変更点
+
+- **Serenaインストール方法**: PyPIではなくGitHubから直接インストール
+  - `uv tool install git+https://github.com/oraios/serena`
+  - MCP設定: `uvx --from git+https://github.com/oraios/serena serena start-mcp-server`
+
+## 次のステップ
+
+DevContainer再構築後，以下で効果を測定:
+
+1. DevContainerを再構築
+2. Claude Codeセッションを開始
+3. 「StorageProtocolの実装をすべて列挙して」と依頼
+4. Serenaツールが使用されることを確認
+5. トークン使用量を記録
