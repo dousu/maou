@@ -1,16 +1,17 @@
 {
 	"name": "Ubuntu",
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
-	"postCreateCommand": "pip install poetry && poetry install --extras visualize && poetry run playwright install --with-deps chromium",
+	"postCreateCommand": "bash scripts/dev-init.sh && bash scripts/setup-serena.sh",
+	"postStartCommand": "bash scripts/start-serena.sh",
 	"features": {
-		// Python
-		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {
-			"version": 3.12
+			"version": "3.12"
 		},
-		// GitHub CLI
-		// https://github.com/devcontainers/features/tree/main/src/github-cli
-		"ghcr.io/devcontainers/features/github-cli:1": {}
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/rust:1": {
+			"version": "latest",
+			"profile": "default"
+		}
 	},
 	"customizations": {
 		"vscode": {
@@ -34,7 +35,8 @@
 			"extensions": [
 				"esbenp.prettier-vscode",
 				"charliermarsh.ruff",
-				"GitHub.copilot"
+				"GitHub.copilot",
+				"rust-lang.rust-analyzer"
 			]
 		}
 	}
