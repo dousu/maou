@@ -35,8 +35,9 @@ Claude Code利用時のトークン消費量を50%以上削減するため，ora
 │  └──────┬─────────────────────────┬─────────────────┘  │
 │         │ LSP Protocol            │ LSP Protocol        │
 │  ┌──────▼──────┐           ┌──────▼──────┐             │
-│  │   pylsp     │           │rust-analyzer│             │
+│  │  pyright    │           │rust-analyzer│             │
 │  │ (Python)    │           │   (Rust)    │             │
+│  │ ※Serena内蔵 │           │             │             │
 │  └──────┬──────┘           └──────┬──────┘             │
 │         │                         │                     │
 │  ┌──────▼─────────────────────────▼─────────────────┐  │
@@ -45,6 +46,8 @@ Claude Code利用時のトークン消費量を50%以上削減するため，ora
 │  └──────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**注記**: SerenaはPython用にpyright-langserverを内蔵しており，外部のpylspは使用しない．
 
 ## 実装詳細
 
@@ -67,10 +70,10 @@ Claude Code利用時のトークン消費量を50%以上削減するため，ora
 
 ```bash
 #!/bin/bash
-# Serenaとpylspのインストール
-uv tool install serena
-uv tool install python-lsp-server[all]
-# rust-analyzerはRust featureで自動インストール
+# Serenaのインストール
+uv tool install git+https://github.com/oraios/serena
+# rust-analyzerはrustup経由でdev-init.shでインストール
+# pyrightはSerenaに内蔵されているため別途インストール不要
 ```
 
 **新規ファイル: `scripts/start-serena.sh`**
@@ -81,76 +84,46 @@ uv tool install python-lsp-server[all]
 # Serena自体はClaude CodeからMCP経由で起動されるため
 # ここでは事前準備のみ
 
-# pylspのパスを環境変数に設定
-export PYLSP_PATH=$(which pylsp)
 export RUST_ANALYZER_PATH=$(which rust-analyzer)
 ```
 
 ### 2. Serena設定
 
-**変更ファイル: `.claude/settings.local.json`**
+**MCP設定: `.mcp.json`**
 
-```jsonc
+```json
 {
-  "permissions": {
-    // 既存の設定を維持
-  },
   "mcpServers": {
     "serena": {
       "command": "uvx",
-      "args": ["serena", "--project-root", "/workspaces/maou"],
+      "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server", "--project", "/workspaces/maou"],
       "env": {
-        "SERENA_LSP_PYTHON": "pylsp",
-        "SERENA_LSP_RUST": "rust-analyzer"
+        "SERENA_LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
 
-**新規ファイル: `serena.toml`**（プロジェクトルート）
+**Serena設定: `.serena/project.yml`**
 
-```toml
-[project]
-name = "maou"
-root = "/workspaces/maou"
+Serenaは`serena.toml`ではなく`.serena/project.yml`を使用する．
 
-[languages.python]
-enabled = true
-lsp_command = "pylsp"
-include = ["src/**/*.py", "tests/**/*.py"]
-exclude = ["**/__pycache__/**", "**/.venv/**"]
+```yaml
+languages:
+- python  # pyright-langserver（Serena内蔵）
+- rust    # rust-analyzer
 
-[languages.rust]
-enabled = true
-lsp_command = "rust-analyzer"
-include = ["rust/**/*.rs"]
-exclude = ["rust/**/target/**"]
-
-[indexing]
-# 起動時に全ファイルをインデックス化
-on_startup = true
-# 変更検知で自動再インデックス
-watch = true
+ignored_paths:
+- "**/target/**"
+- "**/__pycache__/**"
+- "**/.venv/**"
+- "**/node_modules/**"
 ```
 
-### 3. LSP設定
+### 3. rust-analyzer設定
 
-**`pyproject.toml` への追記**
-
-```toml
-[tool.pylsp-mypy]
-enabled = true
-live_mode = false  # パフォーマンス優先
-
-[tool.pylsp]
-plugins.pyflakes.enabled = false  # ruffと重複回避
-plugins.mccabe.enabled = false
-plugins.pycodestyle.enabled = false
-plugins.rope_autoimport.enabled = true  # インポート補完
-```
-
-**新規ファイル: `rust/maou_io/rust-analyzer.toml`**
+**新規ファイル: `rust/maou_rust/rust-analyzer.toml`**
 
 ```toml
 [cargo]
@@ -194,7 +167,7 @@ prefix = "self"
 
 | コンポーネント | メモリ使用量 |
 |---------------|-------------|
-| pylsp | 200-400MB |
+| pyright（Serena内蔵） | 200-400MB |
 | rust-analyzer | 300-500MB |
 | Serena | 100-200MB |
 | **合計** | **最大1.1GB追加** |
@@ -224,17 +197,17 @@ DevContainerのメモリ上限を4GB以上に設定すること．
 
 | 症状 | 原因 | 対処 |
 |------|------|------|
-| Serenaが起動しない | uvxパスが通っていない | `which uvx`確認，`uv tool install serena`再実行 |
-| シンボルが見つからない | インデックス未完了 | 初回起動後30秒待つ，`serena.toml`のincludeパス確認 |
-| pylspエラー | 仮想環境の認識失敗 | `VIRTUAL_ENV`環境変数を設定 |
-| rust-analyzerエラー | Cargo.tomlが見つからない | `serena.toml`のrootパスを確認 |
+| Serenaが起動しない | uvxパスが通っていない | `which uvx`確認，`uv tool install git+https://github.com/oraios/serena`再実行 |
+| シンボルが見つからない | インデックス未完了 | 初回起動後30秒待つ，`.serena/project.yml`の設定確認 |
+| pyrightエラー | Serena内部エラー | Serenaのログ確認，Claude Codeセッション再起動 |
+| rust-analyzerエラー | Cargo.tomlが見つからない | `.serena/project.yml`のlanguagesにrustが含まれているか確認 |
 | メモリ不足 | LSP + Serenaのメモリ使用 | DevContainerのメモリ上限を4GB以上に |
 
 ### メンテナンス
 
 ```bash
 # Serenaアップデート
-uv tool upgrade serena
+uv tool upgrade git+https://github.com/oraios/serena
 
 # インデックス再構築（シンボルが古い場合）
 # Claude Codeセッションを再起動
@@ -242,16 +215,16 @@ uv tool upgrade serena
 
 ### ロールバック
 
-問題が解決しない場合，`.claude/settings.local.json`から`mcpServers`セクションを削除すれば従来動作に戻る．
+問題が解決しない場合，`.mcp.json`から`serena`セクションを削除すれば従来動作に戻る．
 
 ## 実装タスク
 
 1. [x] `scripts/setup-serena.sh` 作成
 2. [x] `scripts/start-serena.sh` 作成
 3. [x] `.devcontainer/devcontainer.json` 更新
-4. [x] `serena.toml` 作成
-5. [x] `.claude/settings.local.json` にMCPサーバー追加
-6. [x] `pyproject.toml` にpylsp設定追加
+4. [x] `.serena/project.yml` 設定（`serena.toml`は不使用）
+5. [x] `.mcp.json` にMCPサーバー追加
+6. [x] ~~`pyproject.toml` にpylsp設定追加~~ → 不要（pyrightはSerena内蔵）
 7. [x] `rust/maou_rust/rust-analyzer.toml` 作成
 8. [x] `CLAUDE.md` にツール優先順位追記
 9. [x] DevContainer再構築・動作確認
@@ -261,17 +234,22 @@ uv tool upgrade serena
 
 ### Python シンボル解析 ✅
 
+**使用LSP**: pyright-langserver 1.1.408（Serena内蔵）
+
 | 機能 | 結果 | 備考 |
 |------|------|------|
 | `find_symbol` | ✅ 動作 | CloudStorageクラスを正しく検出 |
 | `find_referencing_symbols` | ✅ 動作 | GCS/S3実装と使用箇所を全検出 |
 | `get_symbols_overview` | ✅ 動作 | ファイル内シンボル一覧を取得 |
 
-### Rust シンボル解析 ⚠️
+### Rust シンボル解析 ✅
+
+**使用LSP**: rust-analyzer 1.92.0
 
 | 機能 | 結果 | 備考 |
 |------|------|------|
-| `find_symbol` | ⚠️ 要再起動 | 設定は完了，サーバー再起動で有効化 |
+| `find_symbol` | ✅ 動作 | `save_feather`関数を正しく検出 |
+| `get_symbols_overview` | ✅ 動作 | 関数・テストモジュールを全検出 |
 | `search_for_pattern` | ✅ 動作 | テキスト検索として機能 |
 
 ### トークン削減効果
@@ -293,22 +271,15 @@ find_referencing_symbols("CloudStorage")
 
 ### 設定変更点
 
-- `.serena/project.yml`がSerenaの実際の設定ファイル（`serena.toml`は不使用）
-- `languages`リストに`rust`を追加でRust LSP有効化
+- `.serena/project.yml`がSerenaの実際の設定ファイル
+- `languages`リストに`python`と`rust`を指定
 - `ignored_paths`でビルド成果物を除外
+- **pylspは不使用** - Serenaはpyright-langserverを内蔵
 
 ## 実装時の変更点
 
 - **Serenaインストール方法**: PyPIではなくGitHubから直接インストール
   - `uv tool install git+https://github.com/oraios/serena`
   - MCP設定: `uvx --from git+https://github.com/oraios/serena serena start-mcp-server`
-
-## 次のステップ
-
-DevContainer再構築後，以下で効果を測定:
-
-1. DevContainerを再構築
-2. Claude Codeセッションを開始
-3. 「StorageProtocolの実装をすべて列挙して」と依頼
-4. Serenaツールが使用されることを確認
-5. トークン使用量を記録
+- **Python LSP**: pylspではなくpyright（Serena内蔵）を使用
+- **設定ファイル**: `serena.toml`ではなく`.serena/project.yml`を使用
