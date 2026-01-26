@@ -1,0 +1,12 @@
+# rust-analyzer.toml
+# Configuration for rust-analyzer LSP (used by Serena)
+
+[cargo]
+buildScripts.enable = true
+
+[check]
+command = "clippy"
+
+[imports]
+granularity.group = "module"
+prefix = "self"
