@@ -188,14 +188,3 @@ line_length = 64
 [tool.ruff]
 line-length = 64
 indent-width = 4
-
-# Python Language Server configuration for Serena MCP
-[tool.pylsp-mypy]
-enabled = true
-live_mode = false
-
-[tool.pylsp.plugins]
-pyflakes.enabled = false
-mccabe.enabled = false
-pycodestyle.enabled = false
-rope_autoimport.enabled = true
