@@ -607,6 +607,7 @@ class GradioVisualizationServer:
         Any,  # next_btn
         Any,  # prev_record_btn
         Any,  # next_record_btn
+        Any,  # selected_record_id
         Any,  # stats_json
     ]:
         """インデックス作成状態をポーリングし，状態遷移を検出する．
@@ -622,13 +623,13 @@ class GradioVisualizationServer:
             page_size: ページサイズ（ready遷移時のデータ読み込みに使用）
 
         Returns:
-            21個の出力値のタプル:
+            22個の出力値のタプル:
             (status_message, load_btn, rebuild_btn, refresh_btn, mode_badge,
              current_status, accordion_update, timer_update,
              results_table, page_info, board_display, record_details,
              current_page_records, current_record_index, record_indicator,
              analytics_chart, prev_btn, next_btn, prev_record_btn,
-             next_record_btn, stats_json)
+             next_record_btn, selected_record_id, stats_json)
         """
         current_status = self.indexing_state.get_status()
 
@@ -639,7 +640,7 @@ class GradioVisualizationServer:
             and current_status == "ready"
         )
 
-        # gr.update()の13個のデータコンポーネント（更新しない場合）
+        # gr.update()の14個のデータコンポーネント（更新しない場合）
         no_data_updates: Tuple[Any, ...] = (
             gr.update(),  # results_table
             gr.update(),  # page_info
@@ -653,6 +654,7 @@ class GradioVisualizationServer:
             gr.update(),  # next_btn
             gr.update(),  # prev_record_btn
             gr.update(),  # next_record_btn
+            gr.update(),  # selected_record_id
             gr.update(),  # stats_json
         )
 
@@ -1182,11 +1184,12 @@ class GradioVisualizationServer:
         ],  # analytics_figure (Plotly Figure or None)
         gr.Button,  # prev_btn
         gr.Button,  # next_btn
+        str,  # selected_record_id
     ]:
         """Generate output values for empty state navigation (no viz_interface)．
 
         Returns:
-            Tuple matching outputs for navigation methods (11 values).
+            Tuple matching outputs for navigation methods (12 values).
         """
         return (
             1,  # current_page
@@ -1200,6 +1203,7 @@ class GradioVisualizationServer:
             None,  # analytics_figure
             gr.Button(interactive=False),  # prev button
             gr.Button(interactive=False),  # next button
+            "",  # selected_record_id
         )
 
     def _render_empty_board_placeholder(self) -> str:
@@ -1552,6 +1556,7 @@ class GradioVisualizationServer:
                     next_btn,  # ページ次へボタン状態
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1594,6 +1599,7 @@ class GradioVisualizationServer:
                     next_btn,  # ページ次へボタン状態
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1642,6 +1648,7 @@ class GradioVisualizationServer:
                     next_btn,  # ページ次へボタン状態
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1670,6 +1677,7 @@ class GradioVisualizationServer:
                     next_btn,  # ページ次へボタン状態
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1696,6 +1704,7 @@ class GradioVisualizationServer:
                     analytics_chart,
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1721,6 +1730,7 @@ class GradioVisualizationServer:
                     analytics_chart,
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1886,6 +1896,7 @@ class GradioVisualizationServer:
                     next_btn,
                     prev_record_btn,
                     next_record_btn,
+                    selected_record_id,  # 選択中のレコードID
                     stats_json,
                 ],
             )
@@ -1913,6 +1924,7 @@ class GradioVisualizationServer:
         gr.Button,
         gr.Button,
         gr.Button,
+        str,  # selected_record_id
     ]:
         """検索を実行し，レコードをキャッシュするラッパー関数．
 
@@ -1929,7 +1941,7 @@ class GradioVisualizationServer:
             (table_data, page_info, board_svg, details,
              cached_records, record_index, record_indicator, analytics_figure,
              prev_btn_state, next_btn_state,
-             prev_record_btn_state, next_record_btn_state)
+             prev_record_btn_state, next_record_btn_state, selected_record_id)
         """
         # Thread-safe access to viz_interface
         with self._index_lock:
@@ -1940,6 +1952,7 @@ class GradioVisualizationServer:
                     gr.Button(interactive=False),
                     gr.Button(interactive=False),
                     gr.Button(interactive=False),
+                    "",  # selected_record_id
                 )
 
             (
@@ -1988,6 +2001,13 @@ class GradioVisualizationServer:
                 )
             )
 
+            # 最初のレコードのIDを取得
+            first_record_id = (
+                str(cached_records[0].get("id", ""))
+                if cached_records
+                else ""
+            )
+
         return (
             table_data,
             page_info,
@@ -2009,6 +2029,7 @@ class GradioVisualizationServer:
             gr.Button(
                 interactive=next_record_interactive
             ),  # next_record_btn状態
+            first_record_id,  # selected_record_id
         )
 
     def _paginate_all_data(
@@ -2032,6 +2053,7 @@ class GradioVisualizationServer:
         gr.Button,
         gr.Button,
         gr.Button,
+        str,  # selected_record_id
     ]:
         """全データをページネーション（評価値フィルタなし）．
 
@@ -2048,7 +2070,7 @@ class GradioVisualizationServer:
             (table_data, page_info, board_svg, details,
              cached_records, record_index, record_indicator, analytics_figure,
              prev_btn_state, next_btn_state,
-             prev_record_btn_state, next_record_btn_state)
+             prev_record_btn_state, next_record_btn_state, selected_record_id)
         """
         # 評価値パラメータを明示的にNoneにして全データを取得
         # （引数のmin_eval, max_evalは無視）
@@ -2398,6 +2420,7 @@ class GradioVisualizationServer:
         ],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
+        str,  # selected_record_id
     ]:
         """次のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -2412,7 +2435,7 @@ class GradioVisualizationServer:
         Returns:
             (new_page, new_index, table_data, page_info,
              board_svg, details, cached_records, record_indicator, analytics_figure,
-             prev_record_btn_state, next_record_btn_state)
+             prev_record_btn_state, next_record_btn_state, selected_record_id)
         """
         if self.viz_interface is None:
             return self._get_empty_state_navigation()
@@ -2465,6 +2488,11 @@ class GradioVisualizationServer:
                 )
             )
 
+            # 新しいインデックスのレコードIDを取得
+            record_id = str(
+                current_page_records[new_index].get("id", "")
+            )
+
             return (
                 current_page,
                 new_index,
@@ -2477,6 +2505,7 @@ class GradioVisualizationServer:
                 analytics_figure,
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
+                record_id,  # selected_record_id
             )
 
         # ページ境界チェック：最後のページの最後のレコードなら停止
@@ -2504,6 +2533,11 @@ class GradioVisualizationServer:
                 )
             )
 
+            # 現在のレコードIDを取得
+            record_id = str(
+                current_page_records[current_record_index].get("id", "")
+            ) if current_page_records else ""
+
             # ボタン状態：前へは有効，次へは無効
             return (
                 current_page,
@@ -2521,6 +2555,7 @@ class GradioVisualizationServer:
                 gr.Button(
                     interactive=False
                 ),  # next_record_btn無効
+                record_id,  # selected_record_id
             )
 
         # ページ境界：次のページへ移動
@@ -2546,6 +2581,7 @@ class GradioVisualizationServer:
             _,  # next_btn state（ページナビゲーション用）
             _,  # prev_record_btn state（レコードナビゲーション用）
             _,  # next_record_btn state（レコードナビゲーション用）
+            first_record_id,  # selected_record_id
         ) = paginate_fn(
             min_eval, max_eval, next_page, page_size
         )
@@ -2576,6 +2612,7 @@ class GradioVisualizationServer:
             analytics_figure,
             gr.Button(interactive=prev_interactive),
             gr.Button(interactive=next_interactive),
+            first_record_id,  # selected_record_id
         )
 
     def _navigate_prev_record(
@@ -2600,6 +2637,7 @@ class GradioVisualizationServer:
         ],  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
+        str,  # selected_record_id
     ]:
         """前のレコードへナビゲート（ページ境界を跨ぐ）．
 
@@ -2614,7 +2652,7 @@ class GradioVisualizationServer:
         Returns:
             (new_page, new_index, table_data, page_info,
              board_svg, details, cached_records, record_indicator, analytics_figure,
-             prev_record_btn_state, next_record_btn_state)
+             prev_record_btn_state, next_record_btn_state, selected_record_id)
         """
         if self.viz_interface is None:
             return self._get_empty_state_navigation()
@@ -2667,6 +2705,11 @@ class GradioVisualizationServer:
                 )
             )
 
+            # 新しいインデックスのレコードIDを取得
+            record_id = str(
+                current_page_records[new_index].get("id", "")
+            )
+
             return (
                 current_page,
                 new_index,
@@ -2679,6 +2722,7 @@ class GradioVisualizationServer:
                 analytics_figure,
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
+                record_id,  # selected_record_id
             )
 
         # ページ境界チェック：最初のページの最初のレコードなら停止
@@ -2706,6 +2750,11 @@ class GradioVisualizationServer:
                 )
             )
 
+            # 現在のレコードIDを取得
+            record_id = str(
+                current_page_records[current_record_index].get("id", "")
+            ) if current_page_records else ""
+
             # ボタン状態：前へは無効，次へは有効
             return (
                 current_page,
@@ -2723,6 +2772,7 @@ class GradioVisualizationServer:
                 gr.Button(
                     interactive=True
                 ),  # next_record_btn有効
+                record_id,  # selected_record_id
             )
 
         # ページ境界：前のページへ移動
@@ -2748,6 +2798,7 @@ class GradioVisualizationServer:
             _,  # next_btn state（ページナビゲーション用）
             _,  # prev_record_btn state（レコードナビゲーション用）
             _,  # next_record_btn state（レコードナビゲーション用）
+            _,  # selected_record_id（後で再計算）
         ) = paginate_fn(
             min_eval, max_eval, prev_page, page_size
         )
@@ -2764,9 +2815,12 @@ class GradioVisualizationServer:
             record_indicator = (
                 f"Record {new_index + 1} / {new_num_records}"
             )
+            # 最後のレコードのIDを取得
+            record_id = str(cached_records[new_index].get("id", ""))
         else:
             new_index = 0
             record_indicator = "Record 0 / 0"
+            record_id = ""
 
         # レコードナビゲーションボタン状態を計算
         # 新しいページの最後のレコードに移動
@@ -2793,6 +2847,7 @@ class GradioVisualizationServer:
             analytics_figure,
             gr.Button(interactive=prev_interactive),
             gr.Button(interactive=next_interactive),
+            record_id,  # selected_record_id
         )
 
 
