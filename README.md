@@ -21,6 +21,25 @@ devcontainerのfeaturesになるべくインストールを任せたいため．
 
 featuresはインストール順序としては最後になるためPython等に依存しているとDockerfileにインストール処理を書けない．
 
+### Serena MCP Server（Claude Code連携）
+
+Claude Codeでのトークン消費を削減するため，Serena MCPサーバーを使用している．
+DevContainerでは自動設定されるが，ローカル環境では手動セットアップが必要．
+
+```bash
+# Serenaのインストール
+bash scripts/setup-serena.sh
+
+# rust-analyzerのインストール（Rustシンボル解析用）
+rustup component add rust-analyzer
+
+# 環境変数の設定（シェル起動時に実行）
+bash scripts/start-serena.sh
+```
+
+Claude Codeで使用する場合は，`.mcp.json`がプロジェクトルートに存在することを確認する．
+Serenaはpyright（Python）とrust-analyzer（Rust）を使用してシンボルレベルのコード解析を提供する．
+
 ### Rustバックエンドのビルド
 
 **重要**: このプロジェクトはPython拡張モジュールとしてRustコードを使用しています．
