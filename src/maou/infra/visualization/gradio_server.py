@@ -2008,8 +2008,17 @@ class GradioVisualizationServer:
                 else ""
             )
 
+            # テーブルヘッダーを取得
+            table_headers = self.viz_interface.get_table_columns()
+
+            # table_dataの代わりにgr.update()で返す
+            table_update = gr.update(
+                value=table_data,
+                headers=table_headers,
+            )
+
         return (
-            table_data,
+            table_update,
             page_info,
             board_svg,
             details,
