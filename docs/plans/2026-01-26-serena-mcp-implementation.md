@@ -2,11 +2,20 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> **⚠️ Implementation Notes (2026-01-26):**
+> This was the original plan. Actual implementation differed in key areas:
+> - **Python LSP**: Serena uses **pyright** (built-in), not pylsp. Task 6 (pylsp config) was skipped.
+> - **Config file**: Serena uses `.serena/project.yml`, not `serena.toml`. Task 4 was adjusted.
+> - **MCP config**: Uses `.mcp.json` instead of `.claude/settings.local.json` for MCP servers.
+> - **Installation**: `uv tool install git+https://github.com/oraios/serena` (not from PyPI)
+>
+> See `2026-01-26-serena-mcp-token-reduction-design.md` for the updated design with verification results.
+
 **Goal:** Integrate oraias/serena MCP server to reduce Claude Code token consumption by 50%+ through symbol-level code analysis.
 
-**Architecture:** Serena runs as MCP server inside DevContainer, connecting to pylsp (Python) and rust-analyzer (Rust) LSPs. Claude Code uses Serena's symbol-level tools instead of Grep/Read for code exploration.
+**Architecture:** Serena runs as MCP server inside DevContainer, connecting to pyright (Python, built-in) and rust-analyzer (Rust) LSPs. Claude Code uses Serena's symbol-level tools instead of Grep/Read for code exploration.
 
-**Tech Stack:** Serena MCP, pylsp, rust-analyzer, uv tools
+**Tech Stack:** Serena MCP, pyright (Serena built-in), rust-analyzer, uv tools
 
 ---
 
