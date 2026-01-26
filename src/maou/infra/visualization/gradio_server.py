@@ -2011,7 +2011,9 @@ class GradioVisualizationServer:
             )
 
             # テーブルヘッダーを取得
-            table_headers = self.viz_interface.get_table_columns()
+            table_headers = (
+                self.viz_interface.get_table_columns()
+            )
 
             # table_dataの代わりにgr.update()で返す
             table_update = gr.update(
@@ -2106,7 +2108,10 @@ class GradioVisualizationServer:
         Returns:
             (board_svg, record_details, selected_id, record_index)
         """
-        if self.viz_interface is None or not current_page_records:
+        if (
+            self.viz_interface is None
+            or not current_page_records
+        ):
             return (
                 self._render_empty_board_placeholder(),
                 {"message": "No record selected"},
@@ -2115,9 +2120,15 @@ class GradioVisualizationServer:
             )
 
         # evt.index[0]が行インデックス
-        row_index = evt.index[0] if isinstance(evt.index, tuple) else evt.index
+        row_index = (
+            evt.index[0]
+            if isinstance(evt.index, tuple)
+            else evt.index
+        )
 
-        if row_index < 0 or row_index >= len(current_page_records):
+        if row_index < 0 or row_index >= len(
+            current_page_records
+        ):
             return (
                 self._render_empty_board_placeholder(),
                 {"message": "Invalid row index"},
@@ -2126,8 +2137,14 @@ class GradioVisualizationServer:
             )
 
         record = current_page_records[row_index]
-        board_svg = self.viz_interface.renderer.render_board(record)
-        details = self.viz_interface.renderer.extract_display_fields(record)
+        board_svg = self.viz_interface.renderer.render_board(
+            record
+        )
+        details = (
+            self.viz_interface.renderer.extract_display_fields(
+                record
+            )
+        )
         record_id = str(record.get("id", ""))
 
         return board_svg, details, record_id, row_index
@@ -2545,9 +2562,15 @@ class GradioVisualizationServer:
             )
 
             # 現在のレコードIDを取得
-            record_id = str(
-                current_page_records[current_record_index].get("id", "")
-            ) if current_page_records else ""
+            record_id = (
+                str(
+                    current_page_records[
+                        current_record_index
+                    ].get("id", "")
+                )
+                if current_page_records
+                else ""
+            )
 
             # ボタン状態：前へは有効，次へは無効
             return (
@@ -2762,9 +2785,15 @@ class GradioVisualizationServer:
             )
 
             # 現在のレコードIDを取得
-            record_id = str(
-                current_page_records[current_record_index].get("id", "")
-            ) if current_page_records else ""
+            record_id = (
+                str(
+                    current_page_records[
+                        current_record_index
+                    ].get("id", "")
+                )
+                if current_page_records
+                else ""
+            )
 
             # ボタン状態：前へは無効，次へは有効
             return (
@@ -2827,7 +2856,9 @@ class GradioVisualizationServer:
                 f"Record {new_index + 1} / {new_num_records}"
             )
             # 最後のレコードのIDを取得
-            record_id = str(cached_records[new_index].get("id", ""))
+            record_id = str(
+                cached_records[new_index].get("id", "")
+            )
         else:
             new_index = 0
             record_indicator = "Record 0 / 0"

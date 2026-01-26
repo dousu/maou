@@ -21,7 +21,7 @@ def is_gr_update(value: object) -> bool:
 class TestCheckIndexingStatusWithTransition:
     """Tests for _check_indexing_status_with_transition method.
 
-    The method returns a 21-tuple:
+    The method returns a 22-tuple:
     0: status_markdown
     1: load_btn
     2: rebuild_btn
@@ -31,6 +31,7 @@ class TestCheckIndexingStatusWithTransition:
     6: accordion_update
     7: timer_update
     8-20: data components (results_table, page_info, board_display, etc.)
+    21: stats_json
     """
 
     @pytest.fixture
@@ -87,7 +88,7 @@ class TestCheckIndexingStatusWithTransition:
         )
 
         # Result should have 21 elements
-        assert len(result) == 21, (
+        assert len(result) == 22, (
             f"Expected 21 elements, got {len(result)}"
         )
 
@@ -107,7 +108,7 @@ class TestCheckIndexingStatusWithTransition:
         # result[6]: accordion_update
         # result[7]: timer_update
         # result[8-20]: data components
-        for idx in [1, 2, 3, 4, 6, 7] + list(range(8, 21)):
+        for idx in [1, 2, 3, 4, 6, 7] + list(range(8, 22)):
             assert is_gr_update(result[idx]), (
                 f"result[{idx}] should be gr.update(), got {type(result[idx])}: "
                 f"{result[idx]}"
@@ -142,7 +143,7 @@ class TestCheckIndexingStatusWithTransition:
         )
 
         # Result should have 21 elements
-        assert len(result) == 21, (
+        assert len(result) == 22, (
             f"Expected 21 elements, got {len(result)}"
         )
 
@@ -174,7 +175,7 @@ class TestCheckIndexingStatusWithTransition:
         )
 
         # Data components should be gr.update() (not ready transition)
-        for idx in range(8, 21):
+        for idx in range(8, 22):
             assert is_gr_update(result[idx]), (
                 f"result[{idx}] should be gr.update(), got {type(result[idx])}: "
                 f"{result[idx]}"
@@ -203,6 +204,7 @@ class TestCheckIndexingStatusWithTransition:
             gr.Button(interactive=True),  # next_btn
             gr.Button(interactive=False),  # prev_record_btn
             gr.Button(interactive=True),  # next_record_btn
+            "1",  # selected_record_id
         )
         mock_server._paginate_all_data = MagicMock(
             return_value=mock_paginate_result
@@ -222,7 +224,7 @@ class TestCheckIndexingStatusWithTransition:
         )
 
         # Result should have 21 elements
-        assert len(result) == 21, (
+        assert len(result) == 22, (
             f"Expected 21 elements, got {len(result)}"
         )
 
@@ -267,9 +269,9 @@ class TestCheckIndexingStatusWithTransition:
         assert result[9] == "Page 1/1", (
             f"page_info mismatch: {result[9]}"
         )
-        # result[20]: stats_json
-        assert result[20] == {"total_records": 1000}, (
-            f"stats_json mismatch: {result[20]}"
+        # result[21]: stats_json
+        assert result[21] == {"total_records": 1000}, (
+            f"stats_json mismatch: {result[21]}"
         )
 
         # Verify _paginate_all_data was called correctly
@@ -297,12 +299,12 @@ class TestCheckIndexingStatusWithTransition:
         )
 
         # Result should have 21 elements
-        assert len(result) == 21, (
+        assert len(result) == 22, (
             f"Expected 21 elements, got {len(result)}"
         )
 
         # All components except current_status should be gr.update()
-        for idx in range(21):
+        for idx in range(22):
             if idx == 5:  # current_status
                 assert result[idx] == "ready", (
                     f"current_status should be 'ready', got {result[idx]}"
