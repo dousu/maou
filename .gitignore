@@ -151,3 +151,4 @@ test_*.html
 stage1_data/
 
 スクリーンショット*
+.claude/settings.local.json
