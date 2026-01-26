@@ -108,6 +108,40 @@ See [Memory-Constrained Build Configuration](docs/rust-backend.md#memory-constra
 - **特定パッケージの更新**: `cargo update -p package_name`
 - **ロックファイルの再生成**: `cargo generate-lockfile`
 
+## MCP Server: Serena (Token Efficiency)
+
+This project uses Serena MCP server for symbol-level code analysis to reduce token consumption.
+
+### Tool Priority for Code Exploration
+
+**When searching for code, use this priority:**
+
+1. **Serena `find_symbol`** - Find class/function/variable definitions
+2. **Serena `find_referencing_symbols`** - Find where symbols are used
+3. **Serena `get_symbol_definition`** - Get only the definition (not entire file)
+4. **Glob/Grep** - File pattern or text search (when not searching for symbols)
+5. **Read** - Only when full file context is needed
+
+### Tool Priority for Code Editing
+
+1. **Serena `replace_symbol`** - Replace entire function/class
+2. **Serena `insert_after_symbol`** - Insert code after a symbol
+3. **Edit** - Line-level modifications
+
+### Examples
+
+**Finding Protocol Implementations:**
+```
+Bad:  Grep "StorageProtocol" → Read multiple files (high tokens)
+Good: find_referencing_symbols("StorageProtocol") (low tokens)
+```
+
+**Understanding a Function:**
+```
+Bad:  Read entire file to find one function (high tokens)
+Good: get_symbol_definition("process_hcpe") (low tokens)
+```
+
 ## Environment Setup
 
 ```bash
