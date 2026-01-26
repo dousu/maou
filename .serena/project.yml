@@ -23,6 +23,7 @@
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
 - python
+- rust
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
@@ -33,7 +34,11 @@ ignore_all_files_in_gitignore: true
 
 # list of additional paths to ignore in all projects
 # same syntax as gitignore, so you can use * and **
-ignored_paths: []
+ignored_paths:
+- "**/target/**"
+- "**/__pycache__/**"
+- "**/.venv/**"
+- "**/node_modules/**"
 
 # whether the project is in read-only mode
 # If set to true, all editing tools will be disabled and attempts to use them will result in an error
