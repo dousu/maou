@@ -10,6 +10,10 @@ export RUSTFLAGS="-C codegen-units=1 -C incremental=1"
 echo "  CARGO_BUILD_JOBS=1 (sequential builds)"
 echo "  RUSTFLAGS=-C codegen-units=1 -C incremental=1 (reduced parallelism)"
 
+# Install rust-analyzer for Serena LSP integration
+echo "Installing rust-analyzer..."
+rustup component add rust-analyzer
+
 # Install uv if not present
 if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
