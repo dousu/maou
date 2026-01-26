@@ -4,8 +4,8 @@
 
 set -eux
 
-echo "Installing Serena MCP server..."
-uv tool install serena
+echo "Installing Serena MCP server from GitHub..."
+uv tool install git+https://github.com/oraios/serena
 
 echo "Installing Python Language Server..."
 uv tool install python-lsp-server[all]
