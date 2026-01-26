@@ -2,7 +2,7 @@
 # scripts/setup-serena.sh
 # Install Serena MCP server and Python LSP for symbol-level code analysis
 
-set -eu
+set -eux
 
 echo "Installing Serena MCP server..."
 uv tool install serena

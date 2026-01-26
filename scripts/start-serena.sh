@@ -2,7 +2,7 @@
 # scripts/start-serena.sh
 # Prepare environment for Serena MCP server
 
-set -eu
+set -eux
 
 # Export LSP paths for Serena
 export PYLSP_PATH=$(command -v pylsp 2>/dev/null || echo "pylsp")
