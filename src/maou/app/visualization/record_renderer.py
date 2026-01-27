@@ -18,9 +18,18 @@ from typing import (
 if TYPE_CHECKING:
     import plotly.graph_objects as go
 
-from maou.domain.board.shogi import Board, PieceId, Turn
+from maou.domain.board.shogi import (
+    Board,
+    PieceId,
+    Turn,
+    move_drop_hand_piece,
+    move_from,
+    move_is_drop,
+    move_to,
+)
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
+    MoveArrow,
     SVGBoardRenderer,
 )
 from maou.domain.visualization.move_label_converter import (
@@ -288,6 +297,44 @@ class HCPERecordRenderer(RecordRenderer):
         return self.board_renderer.render(
             position, turn=turn, record_id=record_id
         )
+
+    def _create_move_arrow(
+        self, record: Dict[str, Any]
+    ) -> Optional[MoveArrow]:
+        """レコードからMoveArrowを生成する．
+
+        Args:
+            record: HCPEレコードデータ
+
+        Returns:
+            MoveArrowオブジェクト，生成できない場合はNone
+        """
+        best_move = record.get("bestMove16")
+        if best_move is None:
+            return None
+
+        try:
+            to_sq = move_to(best_move)
+
+            if move_is_drop(best_move):
+                # 駒打ち
+                piece_type = move_drop_hand_piece(best_move)
+                return MoveArrow(
+                    from_square=None,
+                    to_square=to_sq,
+                    is_drop=True,
+                    drop_piece_type=piece_type,
+                )
+            else:
+                # 通常移動
+                from_sq = move_from(best_move)
+                return MoveArrow(
+                    from_square=from_sq,
+                    to_square=to_sq,
+                    is_drop=False,
+                )
+        except Exception:
+            return None
 
     def extract_display_fields(
         self, record: Dict[str, Any]
