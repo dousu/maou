@@ -31,7 +31,7 @@ repos:
     name: test
     entry: uv run pytest -v -s
     stages:
-    - "pre-push"
+    - "pre-commit"
     language: system
     pass_filenames: false
     always_run: true
