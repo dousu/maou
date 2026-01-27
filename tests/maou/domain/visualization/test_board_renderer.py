@@ -5,6 +5,7 @@ import pytest
 from maou.domain.board.shogi import PieceId
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
+    MoveArrow,
     SVGBoardRenderer,
 )
 
@@ -165,3 +166,102 @@ class TestSVGBoardRenderer:
         assert "<svg" in svg
         assert "王" in svg
         assert "香" in svg
+
+
+class TestSVGBoardRendererArrow:
+    """SVGBoardRendererの矢印描画テスト．"""
+
+    def test_render_with_move_arrow(self) -> None:
+        """通常の指し手矢印を描画できる．"""
+        renderer = SVGBoardRenderer()
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        hand = [0 for _ in range(14)]
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=hand,
+        )
+
+        # 7七（square_index=76）から6七（square_index=67）への移動
+        arrow = MoveArrow(from_square=76, to_square=67)
+
+        svg = renderer.render(position, move_arrow=arrow)
+
+        # SVGが生成されることを確認
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        # 矢印のマーカー定義が含まれる
+        assert "marker" in svg
+        # 矢印の線が含まれる
+        assert "line" in svg or "path" in svg
+
+    def test_render_with_drop_arrow(self) -> None:
+        """駒打ちの矢印を描画できる．"""
+        renderer = SVGBoardRenderer()
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        hand = [0 for _ in range(14)]
+
+        # 先手の歩を持ち駒に設定
+        hand[0] = 1  # 歩
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=hand,
+        )
+
+        # 歩を5五（square_index=40）に打つ
+        arrow = MoveArrow(
+            from_square=None,
+            to_square=40,
+            is_drop=True,
+            drop_piece_type=0,  # 歩
+        )
+
+        svg = renderer.render(position, move_arrow=arrow)
+
+        # SVGが生成されることを確認
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    def test_render_without_arrow(self) -> None:
+        """矢印なしで後方互換性が維持される．"""
+        renderer = SVGBoardRenderer()
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        hand = [0 for _ in range(14)]
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=hand,
+        )
+
+        # move_arrowを指定しない
+        svg = renderer.render(position)
+
+        # SVGが正常に生成される
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    def test_render_with_arrow_and_highlight(self) -> None:
+        """矢印とハイライトを同時に描画できる．"""
+        renderer = SVGBoardRenderer()
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        hand = [0 for _ in range(14)]
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=hand,
+        )
+
+        arrow = MoveArrow(from_square=76, to_square=67)
+        highlight_squares = [76, 67]
+
+        svg = renderer.render(
+            position,
+            highlight_squares=highlight_squares,
+            move_arrow=arrow,
+        )
+
+        # SVGが生成されることを確認
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "marker" in svg

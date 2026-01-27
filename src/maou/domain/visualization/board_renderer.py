@@ -120,12 +120,17 @@ class SVGBoardRenderer:
         "rgba(0,112,243,0.12)"  # ハイライト（モダンブルー）
     )
 
+    # 矢印の色設定
+    COLOR_ARROW = "rgba(0, 100, 200, 0.6)"  # 半透明の青
+    ARROW_WIDTH = 8  # 矢印の線幅
+
     def render(
         self,
         position: BoardPosition,
         highlight_squares: Optional[List[int]] = None,
         turn: Optional[Turn] = None,
         record_id: Optional[str] = None,
+        move_arrow: Optional[MoveArrow] = None,
     ) -> str:
         """将棋盤をSVGとして描画する．
 
@@ -134,6 +139,7 @@ class SVGBoardRenderer:
             highlight_squares: ハイライトするマス（0-80のインデックス）
             turn: 手番（Turn.BLACK または Turn.WHITE）
             record_id: レコードID
+            move_arrow: 描画する指し手矢印（Noneの場合は矢印なし）
 
         Returns:
             完全なSVG文字列（HTML埋め込み可能）
@@ -141,21 +147,30 @@ class SVGBoardRenderer:
         highlight_set = set(highlight_squares or [])
 
         svg_parts = [
-            self._svg_header(),
+            self._svg_header(move_arrow is not None),
             self._draw_header(turn, record_id),
             self._draw_grid(),
             self._draw_pieces(
                 position.board_id_positions, highlight_set
             ),
             self._draw_pieces_in_hand(position.pieces_in_hand),
+            self._draw_arrow(
+                move_arrow, position.pieces_in_hand
+            ),
             self._draw_coordinates(),
             self._svg_footer(),
         ]
 
         return "\n".join(svg_parts)
 
-    def _svg_header(self) -> str:
-        """SVGヘッダー（開始タグと設定）を生成．"""
+    def _svg_header(
+        self, include_arrow_marker: bool = False
+    ) -> str:
+        """SVGヘッダー（開始タグと設定）を生成．
+
+        Args:
+            include_arrow_marker: 矢印マーカーを含めるかどうか
+        """
         total_width = (
             self.MARGIN * 2
             + self.BOARD_WIDTH
@@ -168,6 +183,15 @@ class SVGBoardRenderer:
             + self.HEADER_HEIGHT
         )
 
+        # 矢印マーカー定義（必要な場合のみ）
+        arrow_marker = ""
+        if include_arrow_marker:
+            arrow_marker = f"""
+        <marker id="arrowhead" markerWidth="10" markerHeight="7"
+                refX="9" refY="3.5" orient="auto" markerUnits="strokeWidth">
+            <polygon points="0 0, 10 3.5, 0 7" fill="{self.COLOR_ARROW}"/>
+        </marker>"""
+
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
                     width="{total_width}"
                     height="{total_height}"
@@ -176,7 +200,7 @@ class SVGBoardRenderer:
     <defs>
         <filter id="piece-shadow" x="-50%" y="-50%" width="200%" height="200%">
             <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.3"/>
-        </filter>
+        </filter>{arrow_marker}
     </defs>
     <style>
         .piece {{
@@ -634,3 +658,109 @@ class SVGBoardRenderer:
             )
 
         return "\n".join(coord_parts)
+
+    def _draw_arrow(
+        self,
+        move_arrow: Optional[MoveArrow],
+        pieces_in_hand: List[int],
+    ) -> str:
+        """指し手を表す矢印を描画する．
+
+        Args:
+            move_arrow: 描画する矢印データ（Noneの場合は空文字列を返す）
+            pieces_in_hand: 持ち駒配列（駒打ちの矢印の始点計算に使用）
+
+        Returns:
+            矢印のSVG文字列
+        """
+        if move_arrow is None:
+            return ""
+
+        # 盤面のX座標開始位置
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
+        # 移動先の座標を計算
+        to_row = move_arrow.to_square // 9
+        to_col = move_arrow.to_square % 9
+        to_visual_col = 8 - to_col  # 将棋は右から左
+
+        to_x = (
+            board_x_start
+            + to_visual_col * self.CELL_SIZE
+            + self.CELL_SIZE / 2
+        )
+        to_y = (
+            self.MARGIN
+            + to_row * self.CELL_SIZE
+            + self.CELL_SIZE / 2
+        )
+
+        # 移動元の座標を計算
+        from_x: float
+        from_y: float
+        if (
+            move_arrow.is_drop
+            and move_arrow.from_square is None
+        ):
+            # 駒打ちの場合: 持ち駒エリアから矢印を引く
+            display_index = self._get_hand_piece_display_index(
+                pieces_in_hand[:7],  # 先手の持ち駒
+                move_arrow.drop_piece_type or 0,
+            )
+            # 持ち駒エリア（左側）の座標
+            from_x = self.MARGIN + self.HAND_AREA_WIDTH / 2
+            # タイトル(30px) + 余白(20px) + 各駒の位置
+            from_y = self.MARGIN + 50 + display_index * 30
+        else:
+            # 通常の移動
+            from_square = move_arrow.from_square or 0
+            from_row = from_square // 9
+            from_col = from_square % 9
+            from_visual_col = 8 - from_col
+
+            from_x = (
+                board_x_start
+                + from_visual_col * self.CELL_SIZE
+                + self.CELL_SIZE / 2
+            )
+            from_y = (
+                self.MARGIN
+                + from_row * self.CELL_SIZE
+                + self.CELL_SIZE / 2
+            )
+
+        # 矢印を描画
+        return (
+            f'<line x1="{from_x}" y1="{from_y}" '
+            f'x2="{to_x}" y2="{to_y}" '
+            f'stroke="{self.COLOR_ARROW}" '
+            f'stroke-width="{self.ARROW_WIDTH}" '
+            f'marker-end="url(#arrowhead)"/>'
+        )
+
+    def _get_hand_piece_display_index(
+        self,
+        hand_pieces: List[int],
+        piece_type: int,
+    ) -> int:
+        """持ち駒エリアにおける駒種の表示位置インデックスを取得する．
+
+        持ち駒は枚数が1以上のものだけ表示されるため，
+        表示位置は駒種のインデックスとは異なる．
+
+        Args:
+            hand_pieces: 7要素の持ち駒配列（歩香桂銀金角飛）
+            piece_type: 駒種インデックス（0=歩, 1=香, ...）
+
+        Returns:
+            表示位置インデックス（0始まり）
+        """
+        display_index = 0
+        for i in range(piece_type):
+            if hand_pieces[i] > 0:
+                display_index += 1
+        return display_index
