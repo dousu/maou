@@ -11,6 +11,23 @@ from maou.domain.board.shogi import PieceId, Turn
 
 
 @dataclass(frozen=True)
+class MoveArrow:
+    """指し手を表す矢印データ．
+
+    Attributes:
+        from_square: 移動元マス（0-80）．駒打ちの場合はNone．
+        to_square: 移動先マス（0-80）．
+        is_drop: 駒打ちかどうか．
+        drop_piece_type: 駒打ちの場合の駒種（0=歩, 1=香, ...）．
+    """
+
+    from_square: Optional[int]
+    to_square: int
+    is_drop: bool = False
+    drop_piece_type: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class BoardPosition:
     """不変な将棋盤の状態表現．
 
