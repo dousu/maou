@@ -130,3 +130,37 @@ class TestHCPERecordRendererArrow:
         arrow = renderer._create_move_arrow(record)
 
         assert arrow is None
+
+
+class TestHCPERecordRendererRenderBoard:
+    """HCPERecordRenderer.render_boardのテスト．"""
+
+    @pytest.fixture
+    def renderer(self) -> HCPERecordRenderer:
+        """テスト用HCPERecordRendererを作成．"""
+        return HCPERecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
+
+    def test_render_board_includes_arrow(
+        self, renderer: HCPERecordRenderer
+    ) -> None:
+        """render_boardが矢印を含むSVGを生成する．"""
+        # 空の盤面データ（9x9）と持ち駒（14要素）
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        hand = [0 for _ in range(14)]
+        record = {
+            "boardIdPositions": board,
+            "piecesInHand": hand,
+            "bestMove16": 8634,
+            "turn": 0,
+            "id": "test-001",
+        }
+
+        svg = renderer.render_board(record)
+
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        # 矢印マーカーが含まれる
+        assert "arrowhead" in svg

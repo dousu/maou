@@ -294,8 +294,14 @@ class HCPERecordRenderer(RecordRenderer):
         # レコードIDを取得
         record_id = str(record.get("id", ""))
 
+        # 矢印を生成
+        move_arrow = self._create_move_arrow(record)
+
         return self.board_renderer.render(
-            position, turn=turn, record_id=record_id
+            position,
+            turn=turn,
+            record_id=record_id,
+            move_arrow=move_arrow,
         )
 
     def _create_move_arrow(
