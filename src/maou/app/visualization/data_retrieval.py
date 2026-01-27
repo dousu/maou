@@ -347,10 +347,22 @@ class DataRetriever:
             else (row_number % 2000) - 1000
         )
 
+        # モック用の指し手を生成（7g7f = 58 | (67 << 7) = 8634）
+        # 様々な指し手を生成
+        mock_moves = [
+            8634,  # 7g7f
+            7609,  # 2g2f
+            16482,  # 8h2b+
+            7610,  # 3g3f
+            8633,  # 6g6f
+        ]
+        best_move = mock_moves[row_number % len(mock_moves)]
+
         return {
             "id": record_id,
             "eval": eval_value,
             "moves": 50 + (row_number % 50),
             "boardIdPositions": mock_board,
             "piecesInHand": mock_hand,
+            "bestMove16": best_move,
         }
