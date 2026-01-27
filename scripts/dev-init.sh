@@ -22,7 +22,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 # Install dependencies with CPU extra (uses lightweight PyTorch from pytorch-cpu index)
-uv sync --extra cpu --group dev
+uv sync --extra cpu --extra visualize --group dev
 
 # Build Rust extension module (required for CLI commands)
 echo "Building Rust extension module..."
