@@ -28,7 +28,6 @@ cpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
     "onnxruntime-tools",
-    "onnxsim",
 ]
 cuda = [
     "torch>=2.6.0,<=2.7.0",
@@ -37,7 +36,6 @@ cuda = [
     "pynvml>=11.4.1",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
 ]
 mpu = [
     "torch>=2.6.0,<=2.7.0",
@@ -45,7 +43,6 @@ mpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
 ]
 tpu = [
     "torch-xla>=2.6.0,<=2.7.0",
@@ -54,7 +51,6 @@ tpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
 ]
 cpu-infer = [
     "onnxruntime",
@@ -160,6 +156,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 addopts = [
     "--import-mode=importlib",
 ]

@@ -258,14 +258,25 @@ class ModelIO:
     ) -> None:
         try:
             import onnx
-            import onnxsim
             from onnxruntime.transformers import float16
         except ImportError as exc:
             raise ModuleNotFoundError(
                 "ONNX export dependencies are missing. "
-                "Install with `poetry install -E cpu` or "
-                "`poetry install -E cpu-infer` to enable model export."
+                "Install with `uv sync --extra cpu` or "
+                "`uv sync --extra cpu-infer` to enable model export."
             ) from exc
+
+        # onnxsim is optional (no Python 3.12 wheels available)
+        try:
+            import onnxsim
+
+            onnxsim_available = True
+        except ImportError:
+            onnxsim_available = False
+            logger.warning(
+                "onnxsim not available. "
+                "ONNX model simplification will be skipped."
+            )
 
         model = ModelFactory.create_shogi_model(
             device, architecture=architecture
@@ -439,10 +450,16 @@ class ModelIO:
         onnx_model = onnx.shape_inference.infer_shapes(
             onnx_model
         )
-        onnx_model_simp, check = onnxsim.simplify(onnx_model)
-        if not check:
-            raise RuntimeError("onnxsim.simplify failed")
-        onnx.save(onnx_model_simp, onnx_model_path)
+        if onnxsim_available:
+            onnx_model_simp, check = onnxsim.simplify(
+                onnx_model
+            )
+            if not check:
+                raise RuntimeError("onnxsim.simplify failed")
+            onnx.save(onnx_model_simp, onnx_model_path)
+        else:
+            # Skip simplification, save with shape inference only
+            onnx.save(onnx_model, onnx_model_path)
 
         # ONNX FP32の検証
         if verify_export:
