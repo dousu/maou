@@ -35,6 +35,31 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST NOT skip pre-commit hooks
 - MUST NOT commit secrets (.env, credentials)
 
+## Code Exploration Policy (MUST)
+
+コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.
+
+### Covered Operations
+- ファイル検索（Glob/Grep）を複数回行う調査
+- 複数ファイルを読んでコードを理解する作業
+- エラー原因の調査
+- 実装方法を決めるための既存コード調査
+
+### MUST NOT: Direct Multi-file Exploration
+以下の操作を直接行うことを禁止:
+- 調査目的での連続的なGrep/Glob実行
+- 複数ファイルを順次Readして回る探索
+- トラブルシューティング時のコード調査
+
+### Exceptions (Direct Access Allowed)
+1. **ユーザーが明示的にファイルパスを指定** - 「src/foo.pyを読んで」
+2. **単一ファイルの特定行を確認** - エラーメッセージの「file:line」参照
+3. **Exploreで特定済みファイルへのアクセス** - 既知の場所への編集
+
+### Decision Criteria
+- 「どこにあるか分からない」→ Explore必須
+- 「このファイルのこの部分」→ 直接アクセス可
+
 ## Development Guidelines (SHOULD)
 
 ### Tool Priority (Serena MCP)
