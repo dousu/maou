@@ -96,6 +96,7 @@ Claude will analyze the screenshot and provide visual feedback.
 | `--timeout` | 30000 | Navigation timeout (ms) |
 | `--width` | 1280 | Viewport width |
 | `--height` | 720 | Viewport height |
+| `--settle-time` | 3000 | Wait time for dynamic content to stabilize (ms) |
 
 ## Gradio UI Selectors
 
@@ -179,6 +180,16 @@ Ensure Gradio server is running:
 
 ```bash
 lsof -i :7860 || poetry run maou visualize --use-mock-data &
+```
+
+### Loading Screen Captured
+
+If the screenshot shows "Loading..." instead of actual UI content, increase settle time:
+
+```bash
+poetry run maou screenshot \
+  --url http://localhost:7860 \
+  --settle-time 5000
 ```
 
 ## When to Use

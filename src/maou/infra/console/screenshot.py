@@ -23,6 +23,7 @@ DEFAULT_WAIT_FOR = ".gradio-container"
 DEFAULT_TIMEOUT = 30000
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
+DEFAULT_SETTLE_TIME = 3000
 
 
 def _capture_screenshot(
@@ -35,6 +36,7 @@ def _capture_screenshot(
     timeout: int,
     width: int,
     height: int,
+    settle_time: int,
 ) -> None:
     """Playwrightを使用してスクリーンショットを取得する．
 
@@ -48,6 +50,7 @@ def _capture_screenshot(
         timeout: タイムアウト（ミリ秒）
         width: ビューポート幅
         height: ビューポート高さ
+        settle_time: 動的コンテンツ安定待機時間（ミリ秒）
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -92,7 +95,7 @@ def _capture_screenshot(
                 )
 
             # 動的コンテンツの安定を待機
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(settle_time)
 
             # スクリーンショット取得
             if selector:
@@ -191,6 +194,12 @@ def _capture_screenshot(
     type=int,
     default=DEFAULT_HEIGHT,
 )
+@click.option(
+    "--settle-time",
+    help=f"Wait time for dynamic content to stabilize in ms (default: {DEFAULT_SETTLE_TIME}).",
+    type=int,
+    default=DEFAULT_SETTLE_TIME,
+)
 @handle_exception
 def screenshot(
     url: str,
@@ -202,6 +211,7 @@ def screenshot(
     timeout: int,
     width: int,
     height: int,
+    settle_time: int,
 ) -> None:
     """Capture Gradio UI screenshot using Playwright.
 
@@ -239,4 +249,5 @@ def screenshot(
         timeout=timeout,
         width=width,
         height=height,
+        settle_time=settle_time,
     )
