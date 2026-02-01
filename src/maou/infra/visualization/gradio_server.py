@@ -2120,9 +2120,10 @@ class GradioVisualizationServer:
             )
 
         # evt.index[0]が行インデックス
+        # Gradio 6.0+ではevt.indexがtuple, list, intのいずれかで返される
         row_index = (
             evt.index[0]
-            if isinstance(evt.index, tuple)
+            if isinstance(evt.index, (tuple, list))
             else evt.index
         )
 
