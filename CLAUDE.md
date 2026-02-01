@@ -93,3 +93,11 @@ uv run maou --help                         # CLI help
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |
 | CLI Commands | [docs/commands/](docs/commands/) |
 | Shogi Visualization | [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) |
+
+### ⚠️ Visualization 実装時の必読ドキュメント
+
+`maou visualize` や将棋盤描画に関する実装を行う前に，
+**必ず** [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) を読むこと．
+
+将棋の座標系は一般的な row-major 配列とは異なり，`square = col * 9 + row` である．
+この規則を理解せずに実装すると，駒の位置や矢印の方向が90度回転するバグが発生する．

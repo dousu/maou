@@ -1,13 +1,19 @@
-"""将棋盤のSVG描画ロジック（ドメイン層）．
+"""将棋盤のSVG描画を担当するモジュール．
 
-このモジュールは，将棋盤の駒配置をSVG形式で視覚的に表現する．
-外部ライブラリに依存しない純粋な描画ロジックを提供する．
+重要: 将棋の座標系は直感に反する部分があります．
+実装前に必ず docs/visualization/shogi-conventions.md を参照してください．
+特に以下の点に注意:
+- マスインデックスは square = col * 9 + row（row-major ではない）
+- 座標変換には piece_mapping.py の関数を使用すること
 """
 
 from dataclasses import dataclass
 from typing import List, Optional
 
 from maou.domain.board.shogi import PieceId, Turn
+from maou.domain.visualization.piece_mapping import (
+    square_index_to_coords,
+)
 
 
 @dataclass(frozen=True)
@@ -122,7 +128,7 @@ class SVGBoardRenderer:
 
     # 矢印の色設定
     COLOR_ARROW = "rgba(0, 100, 200, 0.6)"  # 半透明の青
-    ARROW_WIDTH = 8  # 矢印の線幅
+    ARROW_WIDTH = 4  # 矢印の線幅
 
     def render(
         self,
@@ -187,9 +193,9 @@ class SVGBoardRenderer:
         arrow_marker = ""
         if include_arrow_marker:
             arrow_marker = f"""
-        <marker id="arrowhead" markerWidth="10" markerHeight="7"
-                refX="9" refY="3.5" orient="auto" markerUnits="strokeWidth">
-            <polygon points="0 0, 10 3.5, 0 7" fill="{self.COLOR_ARROW}"/>
+        <marker id="arrowhead" markerWidth="6" markerHeight="4"
+                refX="5" refY="2" orient="auto" markerUnits="strokeWidth">
+            <polygon points="0 0, 6 2, 0 4" fill="{self.COLOR_ARROW}"/>
         </marker>"""
 
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
@@ -676,6 +682,19 @@ class SVGBoardRenderer:
         if move_arrow is None:
             return ""
 
+        # Validate square indices (valid range is 0-80)
+        if (
+            move_arrow.to_square < 0
+            or move_arrow.to_square > 80
+        ):
+            return ""
+        if move_arrow.from_square is not None:
+            if (
+                move_arrow.from_square < 0
+                or move_arrow.from_square > 80
+            ):
+                return ""
+
         # 盤面のX座標開始位置
         board_x_start = (
             self.MARGIN
@@ -684,8 +703,9 @@ class SVGBoardRenderer:
         )
 
         # 移動先の座標を計算
-        to_row = move_arrow.to_square // 9
-        to_col = move_arrow.to_square % 9
+        to_row, to_col = square_index_to_coords(
+            move_arrow.to_square
+        )
         to_visual_col = 8 - to_col  # 将棋は右から左
 
         to_x = (
@@ -718,8 +738,9 @@ class SVGBoardRenderer:
         else:
             # 通常の移動
             from_square = move_arrow.from_square or 0
-            from_row = from_square // 9
-            from_col = from_square % 9
+            from_row, from_col = square_index_to_coords(
+                from_square
+            )
             from_visual_col = 8 - from_col
 
             from_x = (
