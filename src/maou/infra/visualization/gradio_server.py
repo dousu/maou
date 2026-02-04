@@ -1543,8 +1543,9 @@ class GradioVisualizationServer:
             previous_indexing_status = gr.State(value="idle")
 
             # 初回表示時にページ1をロード（全データ型で実行）
+            # バッジとステータスメッセージも更新してサーバー状態と同期する
             demo.load(
-                fn=self._paginate_all_data,
+                fn=self._initial_page_load,
                 inputs=[
                     min_eval,
                     max_eval,
@@ -1565,6 +1566,8 @@ class GradioVisualizationServer:
                     prev_record_btn,  # レコード前へボタン状態
                     next_record_btn,  # レコード次へボタン状態
                     selected_record_id,  # 選択中のレコードID
+                    mode_badge,  # バッジをサーバー状態と同期
+                    status_markdown,  # ステータスメッセージをサーバー状態と同期
                 ],
             )
 
@@ -2101,6 +2104,52 @@ class GradioVisualizationServer:
             page=page,
             page_size=page_size,
         )
+
+    def _initial_page_load(
+        self,
+        min_eval: Optional[int],
+        max_eval: Optional[int],
+        page: int,
+        page_size: int,
+    ) -> Tuple[
+        List[List[Any]],
+        str,
+        str,
+        Dict[str, Any],
+        List[Dict[str, Any]],
+        int,
+        str,
+        Optional[Any],
+        gr.Button,
+        gr.Button,
+        gr.Button,
+        gr.Button,
+        str,
+        str,  # mode_badge
+        str,  # status_message
+    ]:
+        """初回ページロード時にデータとステータスを更新．
+
+        demo.loadイベントで呼び出され，データのページネーションと
+        モードバッジ，ステータスメッセージの更新を行う．
+
+        Returns:
+            _paginate_all_dataの戻り値 + mode_badge HTML + status_message
+        """
+        # データをページネーション
+        paginate_result = self._paginate_all_data(
+            min_eval=min_eval,
+            max_eval=max_eval,
+            page=page,
+            page_size=page_size,
+        )
+
+        # 現在のステータスに基づいてバッジとステータスメッセージを取得
+        status_msg, _, _, mode_badge = (
+            self._check_indexing_status()
+        )
+
+        return (*paginate_result, mode_badge, status_msg)
 
     def _on_table_row_select(
         self,
