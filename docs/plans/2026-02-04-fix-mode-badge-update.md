@@ -261,38 +261,85 @@ git commit -m "fix: return INDEXING badge HTML during indexing state"
 
 ---
 
-## Task 4: Manual Verification
+## Task 4: Manual Verification (User Confirmation Required)
 
-**Step 1: Start server without data**
-
-```bash
-uv run maou visualize --array-type stage1 --port 7860
-```
-
-**Step 2: Open browser and verify initial state**
-
-- Navigate to http://localhost:7860
-- Verify badge shows "NO DATA"
-
-**Step 3: Load data via UI**
-
-1. Select "File List" in Source Type
-2. Enter `/tmp/maou-stage1/stage1_data.feather` in File Paths
-3. Click "Load Data Source"
-
-**Step 4: Verify badge updates**
-
-- Badge should change to "INDEXING" (yellow)
-- After a few seconds, badge should change to "REAL MODE" (green)
-- Board should display stage1 data (single pawn with highlighted reachable square)
-
-**Step 5: Take screenshot for verification**
+**Step 1: Generate stage1 test data (if not exists)**
 
 ```bash
-uv run maou screenshot --url http://localhost:7860 --output /tmp/badge_fix_verification.png --settle-time 5000
+uv run maou utility generate-stage1-data --output-dir /tmp/maou-stage1/
 ```
 
-**Step 6: Stop server**
+**Step 2: Start server without data**
+
+```bash
+uv run maou visualize --array-type stage1 --port 7860 &
+sleep 10
+```
+
+**Step 3: Capture initial state screenshot**
+
+```bash
+uv run maou screenshot --url http://localhost:7860 --output /tmp/badge_fix_1_initial.png --settle-time 3000
+```
+
+**Step 4: Show screenshot to user - verify "NO DATA" badge**
+
+Use Read tool to display `/tmp/badge_fix_1_initial.png` to user.
+
+Expected: Badge shows "NO DATA" (gray)
+
+**⏸️ CHECKPOINT: Wait for user confirmation before proceeding**
+
+**Step 5: Load data via UI using Playwright**
+
+```python
+from playwright.sync_api import sync_playwright
+import time
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page(viewport={"width": 1400, "height": 1000})
+    page.goto("http://127.0.0.1:7860")
+    page.wait_for_selector(".gradio-container")
+    time.sleep(3)
+
+    # Select File List
+    page.locator("span:has-text('File List')").first.click()
+    time.sleep(1)
+
+    # Enter file path
+    file_paths_container = page.locator("text=File Paths").locator("xpath=../..")
+    dropdown_input = file_paths_container.locator("input").first
+    dropdown_input.click()
+    dropdown_input.fill("/tmp/maou-stage1/stage1_data.feather")
+    dropdown_input.press("Enter")
+    time.sleep(1)
+
+    # Click Load Data Source
+    page.get_by_role("button", name="Load Data Source").click()
+    time.sleep(10)  # Wait for indexing
+
+    browser.close()
+```
+
+**Step 6: Capture final state screenshot**
+
+```bash
+uv run maou screenshot --url http://localhost:7860 --output /tmp/badge_fix_2_loaded.png --settle-time 5000 --full-page
+```
+
+**Step 7: Show screenshot to user - verify "REAL MODE" badge**
+
+Use Read tool to display `/tmp/badge_fix_2_loaded.png` to user.
+
+Expected:
+- Badge shows "REAL MODE" (green) - **THIS IS THE FIX**
+- Board displays single pawn with highlighted reachable square
+- Status shows "Loaded 1,105 records from 1 file(s)"
+
+**⏸️ CHECKPOINT: Wait for user confirmation that badge is now correct**
+
+**Step 8: Stop server**
 
 ```bash
 lsof -ti :7860 | xargs kill -9 2>/dev/null || true
