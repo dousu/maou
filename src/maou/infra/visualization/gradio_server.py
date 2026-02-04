@@ -658,6 +658,11 @@ class GradioVisualizationServer:
             gr.update(),  # stats_json
         )
 
+        # 安定状態でもバッジは常に正しい状態を返す
+        _, _, _, stable_mode_badge = (
+            self._check_indexing_status()
+        )
+
         # 安定状態（状態変化なし，かつ indexing 以外）では再描画をスキップ
         if (
             not is_state_transition
@@ -668,7 +673,7 @@ class GradioVisualizationServer:
                 gr.update(),  # load_btn
                 gr.update(),  # rebuild_btn
                 gr.update(),  # refresh_btn
-                gr.update(),  # mode_badge
+                stable_mode_badge,  # バッジは常にHTMLを返す
                 current_status,
                 gr.update(),  # accordion_update
                 gr.update(),  # timer_update
@@ -717,12 +722,15 @@ class GradioVisualizationServer:
                 f"{progress['records']:,} records){time_str}"
             )
 
+            # INDEXING バッジ HTML
+            indexing_badge = '<span class="mode-badge-text">🟡 INDEXING</span>'
+
             return (
                 status_msg,
                 gr.update(),  # load_btn - no change
                 gr.update(),  # rebuild_btn - no change
                 gr.update(),  # refresh_btn - no change
-                gr.update(),  # mode_badge - no change
+                indexing_badge,  # バッジは常にHTMLを返す
                 current_status,
                 gr.update(),  # accordion_update - no change
                 gr.update(),  # timer_update - no change

@@ -104,15 +104,23 @@ class TestCheckIndexingStatusWithTransition:
         # result[1]: load_btn
         # result[2]: rebuild_btn
         # result[3]: refresh_btn
-        # result[4]: mode_badge
+        # result[4]: mode_badge - 常にHTMLを返す（gr.update()ではない）
         # result[6]: accordion_update
         # result[7]: timer_update
         # result[8-20]: data components
-        for idx in [1, 2, 3, 4, 6, 7] + list(range(8, 22)):
+        for idx in [1, 2, 3, 6, 7] + list(range(8, 22)):
             assert is_gr_update(result[idx]), (
                 f"result[{idx}] should be gr.update(), got {type(result[idx])}: "
                 f"{result[idx]}"
             )
+
+        # mode_badge should be actual HTML string (always returns badge HTML)
+        assert isinstance(result[4], str), (
+            f"mode_badge should be str, got {type(result[4])}"
+        )
+        assert "INDEXING" in result[4], (
+            f"mode_badge should contain 'INDEXING', got {result[4]}"
+        )
 
         # current_status should be "indexing"
         assert result[5] == "indexing", (
@@ -286,7 +294,7 @@ class TestCheckIndexingStatusWithTransition:
         self,
         mock_server: Any,
     ) -> None:
-        """When status remains 'ready', all components return gr.update()."""
+        """When status remains 'ready', most components return gr.update()."""
         mock_server.indexing_state.get_status.return_value = (
             "ready"
         )
@@ -298,16 +306,23 @@ class TestCheckIndexingStatusWithTransition:
             )
         )
 
-        # Result should have 21 elements
+        # Result should have 22 elements
         assert len(result) == 22, (
-            f"Expected 21 elements, got {len(result)}"
+            f"Expected 22 elements, got {len(result)}"
         )
 
-        # All components except current_status should be gr.update()
+        # All components except current_status and mode_badge should be gr.update()
         for idx in range(22):
             if idx == 5:  # current_status
                 assert result[idx] == "ready", (
                     f"current_status should be 'ready', got {result[idx]}"
+                )
+            elif idx == 4:  # mode_badge - 常にHTMLを返す
+                assert isinstance(result[idx], str), (
+                    f"mode_badge should be str, got {type(result[idx])}"
+                )
+                assert "REAL MODE" in result[idx], (
+                    f"mode_badge should contain 'REAL MODE', got {result[idx]}"
                 )
             else:
                 assert is_gr_update(result[idx]), (
