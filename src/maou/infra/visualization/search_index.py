@@ -78,33 +78,45 @@ class SearchIndex:
     def build_mock(self, num_records: int) -> None:
         """モックデータでインデックスを構築（テスト用）．
 
+        データ型に応じて異なるインデックスを生成する:
+        - HCPE: eval -3000〜3000のランダム値
+        - Stage1/Stage2: eval不要，全て0に固定（IDインデックスのみ使用）
+        - Preprocessing: resultValueをevalとして扱う（-100〜100にスケール）
+
         Args:
             num_records: 生成するモックレコード数
         """
         logger.info(
-            f"Building mock index with {num_records} records"
+            f"Building mock index with {num_records} records "
+            f"(type={self.array_type})"
         )
         # モックデータを生成
         import random
 
         for i in range(num_records):
             record_id = f"mock_id_{i}"
-            eval_value = (
-                random.randint(-3000, 3000)
-                if self.array_type == "hcpe"
-                else 0
-            )
             # 仮想的なfile_index=0，row_number=i
             position = (0, i)
             self._id_index[record_id] = position
+
+            # データ型に応じたeval値を設定
             if self.array_type == "hcpe":
+                # HCPE: -3000〜3000のランダム値
+                eval_value = random.randint(-3000, 3000)
                 self._eval_index[eval_value].append(position)
-                # 逆引きマッピングも保存
                 self._position_to_eval[position] = eval_value
+            elif self.array_type == "preprocessing":
+                # Preprocessing: resultValueをevalとして扱う（-100〜100）
+                # row_numberに応じて-100〜100の範囲で変化
+                eval_value = (i % 201) - 100  # -100〜100
+                self._eval_index[eval_value].append(position)
+                self._position_to_eval[position] = eval_value
+            # Stage1/Stage2: eval不要（IDインデックスのみ使用）
 
         self._total_records = num_records
         logger.info(
-            f"✅ Mock index built: {num_records:,} records"
+            f"✅ Mock index built: {num_records:,} records "
+            f"(type={self.array_type})"
         )
 
     def search_by_id(
