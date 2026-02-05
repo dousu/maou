@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from maou.app.visualization.data_retrieval import DataRetriever
-from maou.domain.board.shogi import Board, PieceId
+from maou.domain.board.shogi import (
+    DOMAIN_WHITE_MIN,
+    Board,
+    PieceId,
+)
 from maou.infra.visualization.search_index import SearchIndex
 
 
@@ -352,10 +356,12 @@ class TestDataRetriever:
 
         positions = decoded["boardIdPositions"]
 
-        # 後手の駒（row=0の駒）がすべて15以上であることを確認
+        # 後手の駒（row=0の駒）がすべてDOMAIN_WHITE_MIN以上であることを確認
+        # boardIdPositionsはdomain形式（白駒=15-28）を返す
         for col in range(9):
             piece_id = positions[0][col]
             if piece_id != 0:  # 空マスでない場合
-                assert piece_id >= 15, (
-                    f"White piece at (0, {col}) has ID {piece_id} < 15"
+                assert piece_id >= DOMAIN_WHITE_MIN, (
+                    f"White piece at (0, {col}) has ID {piece_id} "
+                    f"< DOMAIN_WHITE_MIN ({DOMAIN_WHITE_MIN})"
                 )

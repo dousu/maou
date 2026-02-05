@@ -5,8 +5,17 @@
 - row: 段（0=1段目，8=9段目）
 
 詳細は docs/visualization/shogi-conventions.md を参照．
+
+Note:
+    piece_mapping.pyはdomain形式の駒IDを扱う．
+    白駒はDOMAIN_WHITE_MIN (15) 以上，オフセットはDOMAIN_WHITE_OFFSET (14)．
 """
 
+from maou.domain.board.shogi import (
+    DOMAIN_WHITE_MAX,
+    DOMAIN_WHITE_MIN,
+    DOMAIN_WHITE_OFFSET,
+)
 from maou.domain.visualization.piece_mapping import (
     coords_to_square_index,
     get_actual_piece_id,
@@ -20,12 +29,14 @@ class TestPieceMappingFunctions:
 
     def test_is_white_piece_black(self) -> None:
         """先手の駒（0-14）はFalseを返す．"""
-        for piece_id in range(15):
+        for piece_id in range(DOMAIN_WHITE_MIN):
             assert not is_white_piece(piece_id)
 
     def test_is_white_piece_white(self) -> None:
         """後手の駒（15-28）はTrueを返す．"""
-        for piece_id in range(15, 29):
+        for piece_id in range(
+            DOMAIN_WHITE_MIN, DOMAIN_WHITE_MAX + 1
+        ):
             assert is_white_piece(piece_id)
 
     def test_get_actual_piece_id_black(self) -> None:
@@ -35,10 +46,17 @@ class TestPieceMappingFunctions:
         assert get_actual_piece_id(14) == 14
 
     def test_get_actual_piece_id_white(self) -> None:
-        """後手の駒は14を引いた値を返す．"""
-        assert get_actual_piece_id(15) == 1  # 後手のFU
-        assert get_actual_piece_id(22) == 8  # 後手のOU
-        assert get_actual_piece_id(28) == 14  # 後手のRYU
+        """後手の駒はDOMAIN_WHITE_OFFSETを引いた値を返す．"""
+        assert (
+            get_actual_piece_id(DOMAIN_WHITE_MIN) == 1
+        )  # 後手のFU
+        assert (
+            get_actual_piece_id(DOMAIN_WHITE_MIN + 7) == 8
+        )  # 後手のOU (15+7=22)
+        assert (
+            get_actual_piece_id(DOMAIN_WHITE_MAX)
+            == DOMAIN_WHITE_OFFSET
+        )  # 後手のRYU (28-14=14)
 
     def test_square_index_to_coords(self) -> None:
         """マスインデックスを(row, col)座標に変換できる．
