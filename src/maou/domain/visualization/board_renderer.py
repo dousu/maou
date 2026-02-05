@@ -10,7 +10,12 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
-from maou.domain.board.shogi import PieceId, Turn
+from maou.domain.board.shogi import (
+    CSHOGI_WHITE_MIN,
+    CSHOGI_WHITE_OFFSET,
+    PieceId,
+    Turn,
+)
 from maou.domain.visualization.piece_mapping import (
     square_index_to_coords,
 )
@@ -442,9 +447,12 @@ class SVGBoardRenderer:
 
                 # 駒の描画
                 # cshogiの駒ID: 先手=1-14, 後手=17-30（先手+16）
-                is_white = piece_id >= 17
+                # 定数は shogi.py の CSHOGI_* を使用
+                is_white = piece_id >= CSHOGI_WHITE_MIN
                 actual_piece_id = (
-                    piece_id - 16 if is_white else piece_id
+                    piece_id - CSHOGI_WHITE_OFFSET
+                    if is_white
+                    else piece_id
                 )
                 symbol = self.PIECE_SYMBOLS.get(
                     actual_piece_id, "?"

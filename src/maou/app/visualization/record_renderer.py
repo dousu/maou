@@ -19,6 +19,10 @@ if TYPE_CHECKING:
     import plotly.graph_objects as go
 
 from maou.domain.board.shogi import (
+    CSHOGI_BLACK_MAX,
+    CSHOGI_BLACK_MIN,
+    CSHOGI_WHITE_MIN,
+    CSHOGI_WHITE_OFFSET,
     Board,
     Turn,
     move_drop_hand_piece,
@@ -220,16 +224,19 @@ class RecordRenderer(ABC):
         }
 
         def get_sfen_char(piece_id: int) -> str:
-            """駒IDからSFEN文字を取得．後手駒は小文字で返す．"""
+            """駒IDからSFEN文字を取得．後手駒は小文字で返す．
+
+            駒ID定数は shogi.py の CSHOGI_* を使用．
+            """
             if piece_id == 0:
                 return ""
-            if 1 <= piece_id <= 14:
+            if CSHOGI_BLACK_MIN <= piece_id <= CSHOGI_BLACK_MAX:
                 # 先手駒（大文字）
                 return black_piece_to_sfen.get(piece_id, "")
-            elif piece_id >= 17:
+            elif piece_id >= CSHOGI_WHITE_MIN:
                 # 後手駒（小文字）: piece_id - 16 の先手マッピングを小文字化
                 black_char = black_piece_to_sfen.get(
-                    piece_id - 16, ""
+                    piece_id - CSHOGI_WHITE_OFFSET, ""
                 )
                 return black_char.lower()
             return ""
