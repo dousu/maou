@@ -165,10 +165,9 @@ def _capture_screenshot(
     required=False,
 )
 @click.option(
-    "--full-page",
-    help="Capture full scrollable page.",
-    is_flag=True,
-    default=False,
+    "--full-page/--no-full-page",
+    help="Capture full scrollable page (default: enabled).",
+    default=True,
 )
 @click.option(
     "--wait-for",

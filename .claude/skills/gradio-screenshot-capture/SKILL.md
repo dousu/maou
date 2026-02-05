@@ -64,13 +64,15 @@ poetry run maou screenshot \
   --output /tmp/search-results.png
 ```
 
-#### Full Page Screenshot
+#### Viewport Only Screenshot
+
+By default, full page screenshots are captured. To capture only the visible viewport:
 
 ```bash
 poetry run maou screenshot \
   --url http://localhost:7860 \
-  --full-page \
-  --output /tmp/full-page.png
+  --no-full-page \
+  --output /tmp/viewport-only.png
 ```
 
 ### 3. View Screenshot
@@ -91,7 +93,8 @@ Claude will analyze the screenshot and provide visual feedback.
 | `--output`, `-o` | /tmp/gradio-screenshot.png | Output file path |
 | `--base64` | false | Output base64 to stdout |
 | `--selector`, `-s` | null | CSS selector for element capture |
-| `--full-page` | false | Capture full scrollable page |
+| `--full-page` | true | Capture full scrollable page |
+| `--no-full-page` | - | Capture viewport only |
 | `--wait-for` | .gradio-container | Wait selector before capture |
 | `--timeout` | 30000 | Navigation timeout (ms) |
 | `--width` | 1280 | Viewport width |
