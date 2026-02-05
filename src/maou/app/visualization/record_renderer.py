@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 from maou.domain.board.shogi import (
     Board,
-    PieceId,
     Turn,
     move_drop_hand_piece,
     move_from,
@@ -201,39 +200,53 @@ class RecordRenderer(ABC):
             駒の所属（先手/後手）判定が必要．
             現状は基本的な変換のみ実装．
         """
-        # PieceId → SFEN文字マッピング
-        piece_to_sfen = {
-            PieceId.EMPTY: "",
-            PieceId.FU: "P",
-            PieceId.KY: "L",
-            PieceId.KE: "N",
-            PieceId.GI: "S",
-            PieceId.KI: "G",
-            PieceId.KA: "B",
-            PieceId.HI: "R",
-            PieceId.OU: "K",
-            PieceId.TO: "+P",
-            PieceId.NKY: "+L",
-            PieceId.NKE: "+N",
-            PieceId.NGI: "+S",
-            PieceId.UMA: "+B",
-            PieceId.RYU: "+R",
+        # 先手駒ID → SFEN文字マッピング
+        # cshogiの駒ID: 先手=1-14, 後手=17-30（先手+16）
+        black_piece_to_sfen = {
+            1: "P",  # 歩
+            2: "L",  # 香
+            3: "N",  # 桂
+            4: "S",  # 銀
+            5: "G",  # 金
+            6: "B",  # 角
+            7: "R",  # 飛
+            8: "K",  # 玉
+            9: "+P",  # と
+            10: "+L",  # 成香
+            11: "+N",  # 成桂
+            12: "+S",  # 成銀
+            13: "+B",  # 馬
+            14: "+R",  # 龍
         }
 
-        # 盤面をSFEN形式に変換（簡易版）
-        # 注: 現在は先手/後手の区別を完全には実装していない
+        def get_sfen_char(piece_id: int) -> str:
+            """駒IDからSFEN文字を取得．後手駒は小文字で返す．"""
+            if piece_id == 0:
+                return ""
+            if 1 <= piece_id <= 14:
+                # 先手駒（大文字）
+                return black_piece_to_sfen.get(piece_id, "")
+            elif piece_id >= 17:
+                # 後手駒（小文字）: piece_id - 16 の先手マッピングを小文字化
+                black_char = black_piece_to_sfen.get(
+                    piece_id - 16, ""
+                )
+                return black_char.lower()
+            return ""
+
+        # 盤面をSFEN形式に変換
         ranks = []
         for row in board_id_positions:
             rank_str = ""
             empty_count = 0
             for piece_id in row:
-                if piece_id == PieceId.EMPTY:
+                if piece_id == 0:
                     empty_count += 1
                 else:
                     if empty_count > 0:
                         rank_str += str(empty_count)
                         empty_count = 0
-                    piece_char = piece_to_sfen.get(piece_id, "")
+                    piece_char = get_sfen_char(piece_id)
                     rank_str += piece_char
 
             if empty_count > 0:
@@ -243,11 +256,13 @@ class RecordRenderer(ABC):
 
         board_sfen = "/".join(ranks)
 
-        # 持ち駒（簡易版: 先手のみ）
+        # 持ち駒（先手: 大文字，後手: 小文字）
         hand_sfen = "-"
+        hand_parts = []
+        piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
+
+        # 先手の持ち駒（pieces_in_hand[0:7]）
         if len(pieces_in_hand) >= 7:
-            hand_parts = []
-            piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
             for i, count in enumerate(pieces_in_hand[:7]):
                 if count > 0:
                     if count > 1:
@@ -256,8 +271,19 @@ class RecordRenderer(ABC):
                         )
                     else:
                         hand_parts.append(piece_chars[i])
-            if hand_parts:
-                hand_sfen = "".join(hand_parts)
+
+        # 後手の持ち駒（pieces_in_hand[7:14]）
+        if len(pieces_in_hand) >= 14:
+            for i, count in enumerate(pieces_in_hand[7:14]):
+                if count > 0:
+                    char = piece_chars[i].lower()
+                    if count > 1:
+                        hand_parts.append(f"{count}{char}")
+                    else:
+                        hand_parts.append(char)
+
+        if hand_parts:
+            hand_sfen = "".join(hand_parts)
 
         # 手番（デフォルト: 先手）
         turn = "b"

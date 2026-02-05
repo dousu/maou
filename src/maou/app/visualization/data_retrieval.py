@@ -534,7 +534,7 @@ class DataRetriever:
 
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
-        # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=14, 竜=15
+        # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +16
 
         # 両玉を配置（必須）
@@ -574,32 +574,32 @@ class DataRetriever:
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 piece = (
-                    14 if (r < 3 and rng.random() < 0.5) else 6
-                )
+                    13 if (r < 3 and rng.random() < 0.5) else 6
+                )  # 馬(13)or角(6)
                 board[r][c] = piece
 
         if rng.random() < 0.7:  # 70%の確率で先手飛車
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 piece = (
-                    15 if (r < 3 and rng.random() < 0.5) else 7
-                )
+                    14 if (r < 3 and rng.random() < 0.5) else 7
+                )  # 竜(14)or飛(7)
                 board[r][c] = piece
 
         if rng.random() < 0.6:  # 60%の確率で後手角
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 piece = (
-                    14 if (r > 5 and rng.random() < 0.5) else 6
-                ) + 16
+                    13 if (r > 5 and rng.random() < 0.5) else 6
+                ) + 16  # 後手馬(29)or角(22)
                 board[r][c] = piece
 
         if rng.random() < 0.6:  # 60%の確率で後手飛車
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 piece = (
-                    15 if (r > 5 and rng.random() < 0.5) else 7
-                ) + 16
+                    14 if (r > 5 and rng.random() < 0.5) else 7
+                ) + 16  # 後手竜(30)or飛(23)
                 board[r][c] = piece
 
         # 歩をいくつか配置
@@ -739,7 +739,7 @@ class DataRetriever:
 
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
-        # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=14, 竜=15
+        # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +16
 
         # 両玉を配置（必須）
@@ -786,14 +786,16 @@ class DataRetriever:
         if rng.random() < 0.5:  # 50%の確率で先手馬/竜
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
-                board[r][c] = rng.choice([14, 15])  # 馬or竜
+                board[r][c] = rng.choice(
+                    [13, 14]
+                )  # 馬(13)or竜(14)
 
         if rng.random() < 0.4:  # 40%の確率で後手馬/竜
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 board[r][c] = (
-                    rng.choice([14, 15]) + 16
-                )  # 後手馬or竜
+                    rng.choice([13, 14]) + 16
+                )  # 後手馬(29)or竜(30)
 
         # 終盤は歩が少ない
         for col in range(9):
