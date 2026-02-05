@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import cshogi
 import numpy as np
@@ -98,6 +99,291 @@ class PieceId(IntEnum):
 # Black pieces: 1-14, White pieces: 17-30 (black + 16)
 CSHOGI_BLACK_KING = 8  # cshogi.BKING
 CSHOGI_WHITE_KING = 24  # cshogi.WKING
+
+# ============================================================================
+# Piece ID System Constants
+# ============================================================================
+#
+# cshogi形式とdomain形式で白駒オフセットが異なる．
+# マジックナンバーを排除するため，以下の定数を使用すること．
+#
+#   cshogi形式:  白駒 = 黒駒 + 16  (1-14 → 17-30)
+#   domain形式:  白駒 = 黒駒 + 14  (0-14 → 15-28)
+#
+
+# cshogi形式の定数
+CSHOGI_WHITE_OFFSET: int = 16
+"""cshogi形式での白駒オフセット．白駒ID = 黒駒ID + 16．"""
+
+CSHOGI_BLACK_MIN: int = 1
+CSHOGI_BLACK_MAX: int = 14
+CSHOGI_WHITE_MIN: int = 17
+CSHOGI_WHITE_MAX: int = 30
+
+# domain形式の定数
+DOMAIN_WHITE_OFFSET: int = 14
+"""domain形式での白駒オフセット．白駒ID = 黒駒ID + 14．"""
+
+DOMAIN_BLACK_MIN: int = 0
+DOMAIN_BLACK_MAX: int = 14
+DOMAIN_WHITE_MIN: int = 15
+DOMAIN_WHITE_MAX: int = 28
+
+
+def is_white_cshogi(cshogi_piece: int) -> bool:
+    """cshogi形式で白駒か判定．
+
+    Args:
+        cshogi_piece: cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
+
+    Returns:
+        True if cshogi_piece >= 17 (白駒)
+
+    Examples:
+        >>> is_white_cshogi(1)   # 黒歩
+        False
+        >>> is_white_cshogi(17)  # 白歩
+        True
+        >>> is_white_cshogi(0)   # 空
+        False
+    """
+    return cshogi_piece >= CSHOGI_WHITE_MIN
+
+
+def cshogi_to_base_piece(cshogi_piece: int) -> int:
+    """cshogi形式から基本駒ID(1-14)を取得．
+
+    白駒の場合はオフセットを減算して基本駒IDを返す．
+
+    Args:
+        cshogi_piece: cshogi駒ID (1-14=黒駒, 17-30=白駒)
+
+    Returns:
+        基本駒ID (1-14)
+
+    Examples:
+        >>> cshogi_to_base_piece(1)   # 黒歩 → 1
+        1
+        >>> cshogi_to_base_piece(17)  # 白歩 → 1
+        1
+        >>> cshogi_to_base_piece(24)  # 白王 → 8
+        8
+    """
+    if is_white_cshogi(cshogi_piece):
+        return cshogi_piece - CSHOGI_WHITE_OFFSET
+    return cshogi_piece
+
+
+def is_white_domain(domain_piece: int) -> bool:
+    """domain形式で白駒か判定．
+
+    Args:
+        domain_piece: domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
+
+    Returns:
+        True if domain_piece >= 15 (白駒)
+
+    Examples:
+        >>> is_white_domain(1)   # 黒歩
+        False
+        >>> is_white_domain(15)  # 白歩
+        True
+        >>> is_white_domain(0)   # 空
+        False
+    """
+    return domain_piece >= DOMAIN_WHITE_MIN
+
+
+def domain_to_base_piece(domain_piece: int) -> int:
+    """domain形式から基本駒ID(0-14)を取得．
+
+    白駒の場合はオフセットを減算して基本駒IDを返す．
+
+    Args:
+        domain_piece: domain駒ID (0-14=黒駒, 15-28=白駒)
+
+    Returns:
+        基本駒ID (0-14)
+
+    Examples:
+        >>> domain_to_base_piece(1)   # 黒歩 → 1
+        1
+        >>> domain_to_base_piece(15)  # 白歩 → 1
+        1
+        >>> domain_to_base_piece(22)  # 白王 → 8
+        8
+    """
+    if is_white_domain(domain_piece):
+        return domain_piece - DOMAIN_WHITE_OFFSET
+    return domain_piece
+
+
+@dataclass(frozen=True, slots=True)
+class ColoredPiece:
+    """手番と駒種類を組み合わせた型安全な駒表現．
+
+    cshogi形式やdomain形式との変換を一元管理し，
+    オフセット計算のバグを防止する．
+
+    Attributes:
+        turn: 駒の所有者（Turn.BLACK または Turn.WHITE）
+        piece_id: 駒の種類（PieceId enum）
+
+    Examples:
+        >>> cp = ColoredPiece.from_cshogi(17)  # 白歩
+        >>> cp.turn
+        <Turn.WHITE: 1>
+        >>> cp.piece_id
+        <PieceId.FU: 1>
+        >>> cp.to_cshogi()
+        17
+    """
+
+    turn: Turn
+    piece_id: PieceId
+
+    # cshogi形式の定数（クラス変数として参照可能）
+    CSHOGI_WHITE_OFFSET: ClassVar[int] = CSHOGI_WHITE_OFFSET
+    CSHOGI_BLACK_MIN: ClassVar[int] = CSHOGI_BLACK_MIN
+    CSHOGI_BLACK_MAX: ClassVar[int] = CSHOGI_BLACK_MAX
+    CSHOGI_WHITE_MIN: ClassVar[int] = CSHOGI_WHITE_MIN
+    CSHOGI_WHITE_MAX: ClassVar[int] = CSHOGI_WHITE_MAX
+
+    # domain形式の定数
+    DOMAIN_WHITE_OFFSET: ClassVar[int] = DOMAIN_WHITE_OFFSET
+    DOMAIN_BLACK_MIN: ClassVar[int] = DOMAIN_BLACK_MIN
+    DOMAIN_BLACK_MAX: ClassVar[int] = DOMAIN_BLACK_MAX
+    DOMAIN_WHITE_MIN: ClassVar[int] = DOMAIN_WHITE_MIN
+    DOMAIN_WHITE_MAX: ClassVar[int] = DOMAIN_WHITE_MAX
+
+    @classmethod
+    def from_cshogi(cls, cshogi_piece: int) -> ColoredPiece:
+        """cshogi形式(0-30)からColoredPieceを生成．
+
+        Args:
+            cshogi_piece: cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
+
+        Returns:
+            ColoredPiece インスタンス
+
+        Raises:
+            ValueError: 無効な駒IDの場合 (15, 16, または範囲外)
+
+        Examples:
+            >>> ColoredPiece.from_cshogi(1)   # 黒歩
+            ColoredPiece(turn=<Turn.BLACK: 0>, piece_id=<PieceId.FU: 1>)
+            >>> ColoredPiece.from_cshogi(17)  # 白歩
+            ColoredPiece(turn=<Turn.WHITE: 1>, piece_id=<PieceId.FU: 1>)
+        """
+        if cshogi_piece == 0:
+            return cls(Turn.BLACK, PieceId.EMPTY)
+
+        if CSHOGI_BLACK_MIN <= cshogi_piece <= CSHOGI_BLACK_MAX:
+            # 黒駒: cshogi 1-14 → PieceId 1-14（同じ）
+            return cls(Turn.BLACK, PieceId(cshogi_piece))
+
+        if CSHOGI_WHITE_MIN <= cshogi_piece <= CSHOGI_WHITE_MAX:
+            # 白駒: cshogi 17-30 → PieceId 1-14
+            base_piece = cshogi_piece - CSHOGI_WHITE_OFFSET
+            return cls(Turn.WHITE, PieceId(base_piece))
+
+        msg = (
+            f"無効なcshogi駒ID: {cshogi_piece}．"
+            f"有効範囲: 0, {CSHOGI_BLACK_MIN}-{CSHOGI_BLACK_MAX}, "
+            f"{CSHOGI_WHITE_MIN}-{CSHOGI_WHITE_MAX}"
+        )
+        raise ValueError(msg)
+
+    @classmethod
+    def from_domain(cls, domain_piece: int) -> ColoredPiece:
+        """domain形式(0-28)からColoredPieceを生成．
+
+        Args:
+            domain_piece: domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
+
+        Returns:
+            ColoredPiece インスタンス
+
+        Raises:
+            ValueError: 無効な駒IDの場合 (範囲外)
+
+        Examples:
+            >>> ColoredPiece.from_domain(1)   # 黒歩
+            ColoredPiece(turn=<Turn.BLACK: 0>, piece_id=<PieceId.FU: 1>)
+            >>> ColoredPiece.from_domain(15)  # 白歩
+            ColoredPiece(turn=<Turn.WHITE: 1>, piece_id=<PieceId.FU: 1>)
+        """
+        if domain_piece == 0:
+            return cls(Turn.BLACK, PieceId.EMPTY)
+
+        if DOMAIN_BLACK_MIN < domain_piece <= DOMAIN_BLACK_MAX:
+            # 黒駒: domain 1-14 → PieceId 1-14
+            return cls(Turn.BLACK, PieceId(domain_piece))
+
+        if DOMAIN_WHITE_MIN <= domain_piece <= DOMAIN_WHITE_MAX:
+            # 白駒: domain 15-28 → PieceId 1-14
+            base_piece = domain_piece - DOMAIN_WHITE_OFFSET
+            return cls(Turn.WHITE, PieceId(base_piece))
+
+        msg = (
+            f"無効なdomain駒ID: {domain_piece}．"
+            f"有効範囲: {DOMAIN_BLACK_MIN}-{DOMAIN_BLACK_MAX}, "
+            f"{DOMAIN_WHITE_MIN}-{DOMAIN_WHITE_MAX}"
+        )
+        raise ValueError(msg)
+
+    def to_cshogi(self) -> int:
+        """cshogi形式(0-30)に変換．
+
+        Returns:
+            cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
+
+        Examples:
+            >>> ColoredPiece(Turn.BLACK, PieceId.FU).to_cshogi()
+            1
+            >>> ColoredPiece(Turn.WHITE, PieceId.FU).to_cshogi()
+            17
+        """
+        if self.piece_id == PieceId.EMPTY:
+            return 0
+        base = int(self.piece_id)
+        if self.turn == Turn.WHITE:
+            return base + CSHOGI_WHITE_OFFSET
+        return base
+
+    def to_domain(self) -> int:
+        """domain形式(0-28)に変換．
+
+        Returns:
+            domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
+
+        Examples:
+            >>> ColoredPiece(Turn.BLACK, PieceId.FU).to_domain()
+            1
+            >>> ColoredPiece(Turn.WHITE, PieceId.FU).to_domain()
+            15
+        """
+        if self.piece_id == PieceId.EMPTY:
+            return 0
+        base = int(self.piece_id)
+        if self.turn == Turn.WHITE:
+            return base + DOMAIN_WHITE_OFFSET
+        return base
+
+    @property
+    def is_black(self) -> bool:
+        """先手の駒か判定．"""
+        return self.turn == Turn.BLACK
+
+    @property
+    def is_white(self) -> bool:
+        """後手の駒か判定．"""
+        return self.turn == Turn.WHITE
+
+    @property
+    def is_empty(self) -> bool:
+        """空のマスか判定．"""
+        return self.piece_id == PieceId.EMPTY
 
 
 def move16(move: int) -> int:

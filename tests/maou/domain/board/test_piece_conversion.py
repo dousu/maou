@@ -1,8 +1,20 @@
 """Tests for cshogi <-> PieceId conversion correctness."""
 
 import numpy as np
+import pytest
 
-from maou.domain.board.shogi import Board, PieceId
+from maou.domain.board.shogi import (
+    CSHOGI_WHITE_OFFSET,
+    DOMAIN_WHITE_OFFSET,
+    Board,
+    ColoredPiece,
+    PieceId,
+    Turn,
+    cshogi_to_base_piece,
+    domain_to_base_piece,
+    is_white_cshogi,
+    is_white_domain,
+)
 
 
 class TestCshogiToPieceIdConversion:
@@ -144,3 +156,244 @@ class TestBoardMethodsUseConversion:
         # Verify planes were reordered (channels 4-6 should be KI, KA, HI)
         # This is a smoke test - detailed verification in integration tests
         assert planes.shape == (104, 9, 9)
+
+
+class TestPieceIdConstants:
+    """Test piece ID system constants."""
+
+    def test_cshogi_white_offset_is_16(self) -> None:
+        """cshogi white offset is 16."""
+        assert CSHOGI_WHITE_OFFSET == 16
+
+    def test_domain_white_offset_is_14(self) -> None:
+        """domain white offset is 14."""
+        assert DOMAIN_WHITE_OFFSET == 14
+
+    def test_colored_piece_class_constants(self) -> None:
+        """ColoredPiece exposes constants as class variables."""
+        assert ColoredPiece.CSHOGI_WHITE_OFFSET == 16
+        assert ColoredPiece.DOMAIN_WHITE_OFFSET == 14
+        assert ColoredPiece.CSHOGI_WHITE_MIN == 17
+        assert ColoredPiece.DOMAIN_WHITE_MIN == 15
+
+
+class TestIsWhiteCshogi:
+    """Test is_white_cshogi function."""
+
+    def test_empty_is_not_white(self) -> None:
+        """Empty square (0) is not white."""
+        assert is_white_cshogi(0) is False
+
+    def test_black_pieces_are_not_white(self) -> None:
+        """Black pieces (1-14) are not white."""
+        for piece_id in range(1, 15):
+            assert is_white_cshogi(piece_id) is False
+
+    def test_white_pieces_are_white(self) -> None:
+        """White pieces (17-30) are white."""
+        for piece_id in range(17, 31):
+            assert is_white_cshogi(piece_id) is True
+
+    def test_invalid_range_15_16_treated_as_not_white(
+        self,
+    ) -> None:
+        """Invalid range (15-16) is treated as not white."""
+        assert is_white_cshogi(15) is False
+        assert is_white_cshogi(16) is False
+
+
+class TestCshogiToBasePiece:
+    """Test cshogi_to_base_piece function."""
+
+    def test_black_pieces_unchanged(self) -> None:
+        """Black pieces (1-14) remain unchanged."""
+        for piece_id in range(1, 15):
+            assert cshogi_to_base_piece(piece_id) == piece_id
+
+    def test_white_pieces_subtract_offset(self) -> None:
+        """White pieces (17-30) have offset subtracted."""
+        assert cshogi_to_base_piece(17) == 1  # 白歩 → 歩
+        assert cshogi_to_base_piece(24) == 8  # 白王 → 王
+        assert cshogi_to_base_piece(30) == 14  # 白龍 → 龍
+
+
+class TestIsWhiteDomain:
+    """Test is_white_domain function."""
+
+    def test_empty_is_not_white(self) -> None:
+        """Empty square (0) is not white."""
+        assert is_white_domain(0) is False
+
+    def test_black_pieces_are_not_white(self) -> None:
+        """Black pieces (1-14) are not white."""
+        for piece_id in range(1, 15):
+            assert is_white_domain(piece_id) is False
+
+    def test_white_pieces_are_white(self) -> None:
+        """White pieces (15-28) are white."""
+        for piece_id in range(15, 29):
+            assert is_white_domain(piece_id) is True
+
+
+class TestDomainToBasePiece:
+    """Test domain_to_base_piece function."""
+
+    def test_black_pieces_unchanged(self) -> None:
+        """Black pieces (0-14) remain unchanged."""
+        for piece_id in range(0, 15):
+            assert domain_to_base_piece(piece_id) == piece_id
+
+    def test_white_pieces_subtract_offset(self) -> None:
+        """White pieces (15-28) have offset subtracted."""
+        assert domain_to_base_piece(15) == 1  # 白歩 → 歩
+        assert domain_to_base_piece(22) == 8  # 白王 → 王
+        assert domain_to_base_piece(28) == 14  # 白龍 → 龍
+
+
+class TestColoredPieceFromCshogi:
+    """Test ColoredPiece.from_cshogi factory method."""
+
+    def test_empty_square(self) -> None:
+        """Empty square (0) creates EMPTY piece."""
+        cp = ColoredPiece.from_cshogi(0)
+        assert cp.piece_id == PieceId.EMPTY
+        assert cp.is_empty is True
+
+    def test_black_pieces(self) -> None:
+        """Black pieces (1-14) create BLACK turn pieces."""
+        cp = ColoredPiece.from_cshogi(1)  # 黒歩
+        assert cp.turn == Turn.BLACK
+        assert cp.piece_id == PieceId.FU
+        assert cp.is_black is True
+        assert cp.is_white is False
+
+        cp = ColoredPiece.from_cshogi(8)  # 黒王
+        assert cp.turn == Turn.BLACK
+        assert cp.piece_id == PieceId.OU
+
+    def test_white_pieces(self) -> None:
+        """White pieces (17-30) create WHITE turn pieces."""
+        cp = ColoredPiece.from_cshogi(17)  # 白歩
+        assert cp.turn == Turn.WHITE
+        assert cp.piece_id == PieceId.FU
+        assert cp.is_black is False
+        assert cp.is_white is True
+
+        cp = ColoredPiece.from_cshogi(24)  # 白王
+        assert cp.turn == Turn.WHITE
+        assert cp.piece_id == PieceId.OU
+
+    def test_invalid_range_raises_error(self) -> None:
+        """Invalid piece IDs (15, 16, >30) raise ValueError."""
+        with pytest.raises(
+            ValueError, match="無効なcshogi駒ID"
+        ):
+            ColoredPiece.from_cshogi(15)
+
+        with pytest.raises(
+            ValueError, match="無効なcshogi駒ID"
+        ):
+            ColoredPiece.from_cshogi(16)
+
+        with pytest.raises(
+            ValueError, match="無効なcshogi駒ID"
+        ):
+            ColoredPiece.from_cshogi(31)
+
+
+class TestColoredPieceFromDomain:
+    """Test ColoredPiece.from_domain factory method."""
+
+    def test_empty_square(self) -> None:
+        """Empty square (0) creates EMPTY piece."""
+        cp = ColoredPiece.from_domain(0)
+        assert cp.piece_id == PieceId.EMPTY
+
+    def test_black_pieces(self) -> None:
+        """Black pieces (1-14) create BLACK turn pieces."""
+        cp = ColoredPiece.from_domain(1)  # 黒歩
+        assert cp.turn == Turn.BLACK
+        assert cp.piece_id == PieceId.FU
+
+    def test_white_pieces(self) -> None:
+        """White pieces (15-28) create WHITE turn pieces."""
+        cp = ColoredPiece.from_domain(15)  # 白歩
+        assert cp.turn == Turn.WHITE
+        assert cp.piece_id == PieceId.FU
+
+        cp = ColoredPiece.from_domain(22)  # 白王
+        assert cp.turn == Turn.WHITE
+        assert cp.piece_id == PieceId.OU
+
+    def test_invalid_range_raises_error(self) -> None:
+        """Invalid piece IDs (>28) raise ValueError."""
+        with pytest.raises(
+            ValueError, match="無効なdomain駒ID"
+        ):
+            ColoredPiece.from_domain(29)
+
+
+class TestColoredPieceToCshogi:
+    """Test ColoredPiece.to_cshogi method."""
+
+    def test_empty_returns_zero(self) -> None:
+        """Empty piece returns 0."""
+        cp = ColoredPiece(Turn.BLACK, PieceId.EMPTY)
+        assert cp.to_cshogi() == 0
+
+    def test_black_pieces(self) -> None:
+        """Black pieces return base piece ID."""
+        cp = ColoredPiece(Turn.BLACK, PieceId.FU)
+        assert cp.to_cshogi() == 1
+
+        cp = ColoredPiece(Turn.BLACK, PieceId.OU)
+        assert cp.to_cshogi() == 8
+
+    def test_white_pieces(self) -> None:
+        """White pieces return base piece ID + 16."""
+        cp = ColoredPiece(Turn.WHITE, PieceId.FU)
+        assert cp.to_cshogi() == 17
+
+        cp = ColoredPiece(Turn.WHITE, PieceId.OU)
+        assert cp.to_cshogi() == 24
+
+
+class TestColoredPieceToDomain:
+    """Test ColoredPiece.to_domain method."""
+
+    def test_empty_returns_zero(self) -> None:
+        """Empty piece returns 0."""
+        cp = ColoredPiece(Turn.BLACK, PieceId.EMPTY)
+        assert cp.to_domain() == 0
+
+    def test_black_pieces(self) -> None:
+        """Black pieces return base piece ID."""
+        cp = ColoredPiece(Turn.BLACK, PieceId.FU)
+        assert cp.to_domain() == 1
+
+        cp = ColoredPiece(Turn.BLACK, PieceId.OU)
+        assert cp.to_domain() == 8
+
+    def test_white_pieces(self) -> None:
+        """White pieces return base piece ID + 14."""
+        cp = ColoredPiece(Turn.WHITE, PieceId.FU)
+        assert cp.to_domain() == 15
+
+        cp = ColoredPiece(Turn.WHITE, PieceId.OU)
+        assert cp.to_domain() == 22
+
+
+class TestColoredPieceRoundTrip:
+    """Test ColoredPiece conversion round-trips."""
+
+    def test_cshogi_roundtrip(self) -> None:
+        """cshogi → ColoredPiece → cshogi preserves value."""
+        for cshogi_id in [0, *range(1, 15), *range(17, 31)]:
+            cp = ColoredPiece.from_cshogi(cshogi_id)
+            assert cp.to_cshogi() == cshogi_id
+
+    def test_domain_roundtrip(self) -> None:
+        """domain → ColoredPiece → domain preserves value."""
+        for domain_id in range(0, 29):
+            cp = ColoredPiece.from_domain(domain_id)
+            assert cp.to_domain() == domain_id
