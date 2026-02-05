@@ -441,11 +441,10 @@ class SVGBoardRenderer:
                     continue
 
                 # 駒の描画
-                is_white = (
-                    piece_id >= 15
-                )  # 後手駒はPieceId + 14
+                # cshogiの駒ID: 先手=1-14, 後手=17-30（先手+16）
+                is_white = piece_id >= 17
                 actual_piece_id = (
-                    piece_id - 14 if is_white else piece_id
+                    piece_id - 16 if is_white else piece_id
                 )
                 symbol = self.PIECE_SYMBOLS.get(
                     actual_piece_id, "?"
