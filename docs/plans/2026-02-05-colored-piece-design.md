@@ -1,5 +1,7 @@
 # ColoredPiece 設計: 繰り返しバグの根本解決
 
+**Status: COMPLETED** (2026-02-05)
+
 ## 背景
 
 過去3カ月のコミット分析から，visualization関連の修正で以下のバグが繰り返し発生していることが判明．
@@ -173,6 +175,46 @@ def cshogi_to_base_piece(cshogi_piece: int) -> int:
 - `src/maou/domain/board/shogi.py` - 型追加
 - `src/maou/domain/visualization/piece_mapping.py` - 定数参照
 - `src/maou/domain/visualization/board_renderer.py` - 定数参照
-- `src/maou/interface/visualization/record_renderer.py` - 定数参照
-- `src/maou/interface/visualization/data_retrieval.py` - 定数参照
+- `src/maou/app/visualization/record_renderer.py` - 定数参照
+- `src/maou/app/visualization/data_retrieval.py` - 定数参照
 - `tests/maou/domain/visualization/test_piece_mapping.py` - テスト修正
+- `tests/maou/app/visualization/test_data_retrieval.py` - テスト修正
+
+## 実装結果
+
+### コミット履歴
+
+1. `38c1cae` - docs: add ColoredPiece design
+2. `e5791be` - feat(board): add ColoredPiece dataclass and piece ID constants (Phase 1)
+3. `592abdf` - refactor(visualization): replace magic numbers with CSHOGI/DOMAIN constants (Phase 2)
+4. `e5152f4` - refactor: replace magic numbers in mock data and tests (Phase 3-4)
+
+### 追加された型・定数
+
+**定数 (shogi.py):**
+- `CSHOGI_WHITE_OFFSET = 16`
+- `CSHOGI_WHITE_MIN = 17`, `CSHOGI_WHITE_MAX = 30`
+- `DOMAIN_WHITE_OFFSET = 14`
+- `DOMAIN_WHITE_MIN = 15`, `DOMAIN_WHITE_MAX = 28`
+
+**関数 (shogi.py):**
+- `is_white_cshogi(cshogi_piece)` - cshogi形式で白駒判定
+- `cshogi_to_base_piece(cshogi_piece)` - cshogi形式から基本駒ID取得
+- `is_white_domain(domain_piece)` - domain形式で白駒判定
+- `domain_to_base_piece(domain_piece)` - domain形式から基本駒ID取得
+
+**クラス (shogi.py):**
+- `ColoredPiece` dataclass - Turn + PieceIdの型安全な駒表現
+  - `from_cshogi()`, `to_cshogi()` - cshogi形式との変換
+  - `from_domain()`, `to_domain()` - domain形式との変換
+  - `is_black`, `is_white`, `is_empty` プロパティ
+
+### テスト追加
+
+`tests/maou/domain/board/test_piece_conversion.py` に30件のテストを追加:
+- `TestPieceIdConstants` - 定数値の検証
+- `TestIsWhiteCshogi`, `TestCshogiToBasePiece` - cshogi形式関数
+- `TestIsWhiteDomain`, `TestDomainToBasePiece` - domain形式関数
+- `TestColoredPieceFromCshogi`, `TestColoredPieceFromDomain` - 変換テスト
+- `TestColoredPieceToCshogi`, `TestColoredPieceToDomain` - 逆変換テスト
+- `TestColoredPieceRoundTrip` - ラウンドトリップ検証
