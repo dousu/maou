@@ -2,7 +2,7 @@
 
 import pytest
 
-from maou.domain.board.shogi import PieceId
+from maou.domain.board.shogi import PieceId, Turn
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
     MoveArrow,
@@ -265,3 +265,59 @@ class TestSVGBoardRendererArrow:
         assert "<svg" in svg
         assert "</svg>" in svg
         assert "marker" in svg
+
+
+class TestDrawPiecesWhitePieces:
+    """_draw_pieces()のdomain形式白駒描画テスト．"""
+
+    @pytest.fixture
+    def renderer(self) -> SVGBoardRenderer:
+        """テスト用SVGBoardRendererを作成．"""
+        return SVGBoardRenderer()
+
+    def test_white_pawn_renders_as_kanji(
+        self, renderer: SVGBoardRenderer
+    ) -> None:
+        """domain形式の白歩(15)が「歩」として描画されることを検証する．"""
+        # 9x9の空盤に白歩(domain PieceId=15)を配置
+        board = [[0] * 9 for _ in range(9)]
+        board[6][4] = 15  # row=6, col=4に白歩を配置
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=[0] * 14,
+        )
+
+        svg = renderer.render(position, turn=Turn.BLACK)
+
+        # 「?」が含まれないことを検証
+        assert "?" not in svg, (
+            "White pawn (domain PieceId=15) rendered as '?' instead of kanji"
+        )
+        # 「歩」が含まれることを検証
+        assert "歩" in svg
+
+    def test_all_white_pieces_render_correctly(
+        self, renderer: SVGBoardRenderer
+    ) -> None:
+        """domain形式の全白駒(15-28)が「?」ではなく漢字で描画されることを検証する．"""
+        # 各白駒を1つずつ配置
+        board = [[0] * 9 for _ in range(9)]
+        white_pieces = list(range(15, 29))  # domain白駒: 15-28
+        for i, piece_id in enumerate(white_pieces):
+            row = i // 9
+            col = i % 9
+            board[row][col] = piece_id
+
+        position = BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=[0] * 14,
+        )
+
+        svg = renderer.render(position, turn=Turn.BLACK)
+
+        assert "?" not in svg, (
+            "Some white pieces rendered as '?' - "
+            "board_renderer may be using cshogi constants "
+            "instead of domain constants"
+        )

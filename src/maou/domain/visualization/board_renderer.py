@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from maou.domain.board.shogi import (
-    CSHOGI_WHITE_MIN,
-    CSHOGI_WHITE_OFFSET,
+    DOMAIN_WHITE_MIN,
+    DOMAIN_WHITE_OFFSET,
     PieceId,
     Turn,
 )
@@ -446,11 +446,11 @@ class SVGBoardRenderer:
                     continue
 
                 # 駒の描画
-                # cshogiの駒ID: 先手=1-14, 後手=17-30（先手+16）
-                # 定数は shogi.py の CSHOGI_* を使用
-                is_white = piece_id >= CSHOGI_WHITE_MIN
+                # domain形式の駒ID: 先手=1-14, 後手=15-28（先手+14）
+                # boardIdPositionsはdomain PieceId形式
+                is_white = piece_id >= DOMAIN_WHITE_MIN
                 actual_piece_id = (
-                    piece_id - CSHOGI_WHITE_OFFSET
+                    piece_id - DOMAIN_WHITE_OFFSET
                     if is_white
                     else piece_id
                 )
