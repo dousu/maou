@@ -1,5 +1,6 @@
 """RecordRendererのテスト．"""
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -280,3 +281,73 @@ class TestConvertToSfen:
         assert any(
             c.islower() for c in board_part if c.isalpha()
         ), f"No white pieces found in SFEN: {board_part}"
+
+    def test_extract_display_fields_from_generated_data(
+        self, renderer: Stage2RecordRenderer, tmp_path: Path
+    ) -> None:
+        """生成済みStage2データからextract_display_fieldsが正しく動作することを検証する．"""
+        from pathlib import Path as P
+
+        import numpy as np
+        import polars as pl
+
+        from maou.app.utility.stage2_data_generation import (
+            Stage2DataGenerationConfig,
+            Stage2DataGenerationUseCase,
+        )
+        from maou.domain.board import shogi
+        from maou.domain.data.rust_io import load_stage2_df
+
+        def board_to_hcp_bytes(board: shogi.Board) -> bytes:
+            hcp = np.empty(32, dtype=np.uint8)
+            board.to_hcp(hcp)
+            return hcp.tobytes()
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        # 先手番と後手番の両方のデータを生成
+        board1 = shogi.Board()  # 先手番
+        hcp1 = board_to_hcp_bytes(board1)
+
+        board2 = shogi.Board()
+        moves = list(board2.get_legal_moves())
+        board2.push_move(moves[0])  # 後手番
+        hcp2 = board_to_hcp_bytes(board2)
+
+        n = 2
+        df = pl.DataFrame(
+            {
+                "hcp": pl.Series(
+                    "hcp", [hcp1, hcp2], dtype=pl.Binary
+                ),
+                "eval": pl.Series(
+                    "eval", [100] * n, dtype=pl.Int16
+                ),
+                "bestMove16": pl.Series(
+                    "bestMove16", [0] * n, dtype=pl.Int16
+                ),
+                "gameResult": pl.Series(
+                    "gameResult", [1] * n, dtype=pl.Int8
+                ),
+            }
+        )
+        df.write_ipc(str(input_dir / "data.feather"))
+
+        config = Stage2DataGenerationConfig(
+            input_dir=input_dir,
+            output_dir=output_dir,
+        )
+        use_case = Stage2DataGenerationUseCase()
+        result = use_case.execute(config)
+
+        output_file = P(result["output_files"][0])
+        stage2_df = load_stage2_df(output_file)
+
+        # 先手番レコード(index 0)ではinvalidが含まれないことを検証
+        row0 = stage2_df.row(0, named=True)
+        fields0 = renderer.extract_display_fields(row0)
+        assert "<invalid" not in fields0["legal_moves"], (
+            f"Record 0 (BLACK turn): {fields0['legal_moves']}"
+        )

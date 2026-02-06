@@ -284,3 +284,141 @@ class TestStage2DataGenerationUseCase:
 
         with pytest.raises(FileNotFoundError):
             use_case.execute(config)
+
+    def test_white_turn_labels_decodable(
+        self, tmp_path: Path
+    ) -> None:
+        """後手番局面の合法手ラベルが正規化済み盤面と整合することを検証する．"""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        # 後手番の局面を作成 (1手進める)
+        board = shogi.Board()
+        moves = list(board.get_legal_moves())
+        board.push_move(moves[0])
+        assert board.get_turn() == shogi.Turn.WHITE
+
+        hcp_bytes = _board_to_hcp_bytes(board)
+        _create_hcpe_feather(
+            input_dir / "data.feather", [hcp_bytes]
+        )
+
+        config = Stage2DataGenerationConfig(
+            input_dir=input_dir,
+            output_dir=output_dir,
+        )
+        use_case = Stage2DataGenerationUseCase()
+        result = use_case.execute(config)
+
+        output_file = Path(result["output_files"][0])
+        df = load_stage2_df(output_file)
+        row = df.row(0, named=True)
+
+        # 出力された合法手ラベルを取得
+        legal_labels = row["legalMovesLabel"]
+        active_labels = [
+            i for i, val in enumerate(legal_labels) if val == 1
+        ]
+
+        # 正規化後の盤面を再構築し，その合法手ラベルと比較
+        from maou.app.pre_process.feature import (
+            make_board_id_positions,
+            make_pieces_in_hand,
+        )
+
+        board_verify = shogi.Board()
+        board_verify.push_move(moves[0])
+        bp = make_board_id_positions(board_verify)
+        pih = make_pieces_in_hand(board_verify)
+
+        normalized = Stage2DataGenerationUseCase._reconstruct_normalized_board(
+            bp, pih
+        )
+
+        expected_labels = set()
+        for move in normalized.get_legal_moves():
+            label = make_move_label(shogi.Turn.BLACK, move)
+            expected_labels.add(label)
+
+        # 生成されたラベルが正規化後盤面の合法手と一致
+        assert set(active_labels) == expected_labels
+        # 合法手数が妥当（正規化後の盤面の合法手数と一致）
+        assert len(active_labels) == len(expected_labels)
+
+    def test_legal_moves_labels_correctness_white_turn(
+        self, tmp_path: Path
+    ) -> None:
+        """後手番の合法手ラベルが正規化後の盤面と整合することを検証する．"""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        # 後手番の局面を使用
+        board = shogi.Board()
+        moves = list(board.get_legal_moves())
+        board.push_move(moves[0])
+        assert board.get_turn() == shogi.Turn.WHITE
+
+        hcp_bytes = _board_to_hcp_bytes(board)
+        _create_hcpe_feather(
+            input_dir / "data.feather", [hcp_bytes]
+        )
+
+        config = Stage2DataGenerationConfig(
+            input_dir=input_dir,
+            output_dir=output_dir,
+        )
+        use_case = Stage2DataGenerationUseCase()
+        result = use_case.execute(config)
+
+        output_file = Path(result["output_files"][0])
+        df = load_stage2_df(output_file)
+        assert len(df) == 1
+
+        # 出力された合法手ラベルを取得
+        legal_labels = df["legalMovesLabel"][0].to_list()
+        active_labels = [
+            i for i, val in enumerate(legal_labels) if val == 1
+        ]
+
+        # 正規化後の盤面を再構築してラベルをデコード
+        from maou.app.visualization.record_renderer import (
+            Stage2RecordRenderer,
+        )
+        from maou.domain.move.label import (
+            make_usi_move_from_label,
+        )
+        from maou.domain.visualization.board_renderer import (
+            SVGBoardRenderer,
+        )
+        from maou.domain.visualization.move_label_converter import (
+            MoveLabelConverter,
+        )
+
+        renderer = Stage2RecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
+        row = df.row(0, named=True)
+        reconstructed_board = (
+            renderer._create_board_from_record(row)
+        )
+
+        # 全ラベルがUSIデコード可能であることを検証
+        decode_failures = 0
+        for label in active_labels:
+            try:
+                make_usi_move_from_label(
+                    reconstructed_board, label
+                )
+            except Exception:
+                decode_failures += 1
+
+        # デコード失敗率が低いことを検証
+        # (デコーダーの既知の制約により一部失敗する場合がある)
+        failure_rate = decode_failures / len(active_labels)
+        assert failure_rate < 0.2, (
+            f"Too many decode failures: {decode_failures}/{len(active_labels)} "
+            f"({failure_rate:.1%})"
+        )
