@@ -245,6 +245,9 @@ class RecordRenderer(ABC):
         # 盤面をSFEN形式に変換
         ranks = []
         for row in board_id_positions:
+            # boardIdPositionsはcol=0が1筋，SFENは9筋→1筋の順
+            # 列を反転して正しいSFEN列順にする
+            row = list(reversed(row))
             rank_str = ""
             empty_count = 0
             for piece_id in row:
