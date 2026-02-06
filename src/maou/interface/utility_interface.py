@@ -428,3 +428,41 @@ def generate_stage1_data(output_dir: Path) -> str:
     result = use_case.execute(config)
 
     return json.dumps(result, indent=2)
+
+
+def generate_stage2_data(
+    *,
+    input_dir: Path,
+    output_dir: Path,
+    output_data_name: str = "stage2",
+    chunk_size: int = 100_000,
+    cache_dir: Optional[Path] = None,
+) -> str:
+    """Generate Stage 2 training data for legal moves prediction.
+
+    Args:
+        input_dir: HCPE featherファイルのディレクトリ
+        output_dir: 出力先ディレクトリ
+        output_data_name: 出力ファイル名ベース
+        chunk_size: チャンクサイズ(局面数)
+        cache_dir: 中間データキャッシュディレクトリ
+
+    Returns:
+        JSON string with generation results
+    """
+    from maou.app.utility.stage2_data_generation import (
+        Stage2DataGenerationConfig,
+        Stage2DataGenerationUseCase,
+    )
+
+    config = Stage2DataGenerationConfig(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        output_data_name=output_data_name,
+        chunk_size=chunk_size,
+        cache_dir=cache_dir,
+    )
+    use_case = Stage2DataGenerationUseCase()
+    result = use_case.execute(config)
+
+    return json.dumps(result, indent=2)

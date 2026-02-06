@@ -1095,6 +1095,140 @@ def generate_stage1_data(output_dir: Path) -> None:
     click.echo("Stage 1 data generation complete!")
 
 
+@click.command("generate-stage2-data")
+@click.option(
+    "--input-path",
+    help="Input directory containing HCPE feather files.",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+@click.option(
+    "--output-dir",
+    help="Directory for output files.",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@click.option(
+    "--output-gcs",
+    type=bool,
+    is_flag=True,
+    help="Output features to Google Cloud Storage.",
+    required=False,
+)
+@click.option(
+    "--output-bucket-name",
+    help="GCS bucket name for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-prefix",
+    help="GCS prefix path for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-data-name",
+    help="Name to identify the data in GCS for output.",
+    type=str,
+    default="stage2",
+    required=False,
+)
+@click.option(
+    "--chunk-size",
+    help="Positions per output chunk (default: 100000).",
+    type=int,
+    default=100_000,
+    required=False,
+)
+@click.option(
+    "--intermediate-cache-dir",
+    help="Directory for intermediate data cache (default: temporary directory).",
+    type=click.Path(path_type=Path),
+    required=False,
+)
+@handle_exception
+def generate_stage2_data(
+    input_path: Path,
+    output_dir: Path,
+    output_gcs: bool,
+    output_bucket_name: Optional[str],
+    output_prefix: Optional[str],
+    output_data_name: str,
+    chunk_size: int,
+    intermediate_cache_dir: Optional[Path],
+) -> None:
+    """Generate Stage 2 training data for legal moves prediction.
+
+    \b
+    Creates training data for the legal moves prediction head from HCPE data:
+
+    \b
+    Phase 1: Collect unique positions (deduplication via board hash)
+    Phase 2: Generate legal move labels for each unique position
+
+    \b
+    Output format: Arrow IPC (.feather) with LZ4 compression
+
+    \b
+    Example:
+        maou utility generate-stage2-data --input-path ./converted_hcpe/ --output-dir ./stage2_data/
+    """
+    import json
+
+    app_logger.info("Generating Stage 2 training data...")
+
+    result_json = utility_interface.generate_stage2_data(
+        input_dir=input_path,
+        output_dir=output_dir,
+        output_data_name=output_data_name,
+        chunk_size=chunk_size,
+        cache_dir=intermediate_cache_dir,
+    )
+    result = json.loads(result_json)
+
+    click.echo(
+        f"✓ Input: {result['total_input_positions']} positions"
+    )
+    click.echo(
+        f"✓ Unique: {result['total_unique_positions']} positions"
+    )
+    click.echo(f"✓ Output: {len(result['output_files'])} files")
+    for f in result["output_files"]:
+        click.echo(f"  - {f}")
+
+    # GCS upload if requested
+    if (
+        output_gcs
+        and output_bucket_name is not None
+        and output_prefix is not None
+    ):
+        if HAS_GCS:
+            try:
+                from maou.infra.gcs.gcs import GCS
+
+                gcs = GCS(bucket_name=output_bucket_name)
+                for file_path_str in result["output_files"]:
+                    file_path = Path(file_path_str)
+                    gcs_path = (
+                        f"{output_prefix}{file_path.name}"
+                    )
+                    gcs.upload(
+                        local_path=file_path,
+                        remote_path=gcs_path,
+                    )
+                    click.echo(f"✓ Uploaded to GCS: {gcs_path}")
+            except Exception as e:
+                app_logger.error(f"GCS upload failed: {e}")
+        else:
+            app_logger.warning(
+                "GCS support not available. Install google-cloud-storage."
+            )
+
+    click.echo()
+    click.echo("Stage 2 data generation complete!")
+
+
 @click.group()
 def utility() -> None:
     """Utility commands for ML development experiments."""
@@ -1104,3 +1238,4 @@ def utility() -> None:
 utility.add_command(benchmark_dataloader)
 utility.add_command(benchmark_training)
 utility.add_command(generate_stage1_data)
+utility.add_command(generate_stage2_data)
