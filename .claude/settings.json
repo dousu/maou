@@ -4,6 +4,7 @@
   },
   "env": {
     "MCP_TIMEOUT": "60000",
-    "MCP_TOOL_TIMEOUT": "120000"
+    "MCP_TOOL_TIMEOUT": "120000",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }

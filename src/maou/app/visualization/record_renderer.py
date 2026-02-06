@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 from maou.domain.board.shogi import (
     CSHOGI_BLACK_MAX,
     CSHOGI_BLACK_MIN,
-    CSHOGI_WHITE_MIN,
-    CSHOGI_WHITE_OFFSET,
+    DOMAIN_WHITE_MIN,
+    DOMAIN_WHITE_OFFSET,
     Board,
     Turn,
     move_drop_hand_piece,
@@ -205,7 +205,7 @@ class RecordRenderer(ABC):
             現状は基本的な変換のみ実装．
         """
         # 先手駒ID → SFEN文字マッピング
-        # cshogiの駒ID: 先手=1-14, 後手=17-30（先手+16）
+        # domain PieceId: 先手=1-14, 後手=15-28（先手+14）
         black_piece_to_sfen = {
             1: "P",  # 歩
             2: "L",  # 香
@@ -226,17 +226,18 @@ class RecordRenderer(ABC):
         def get_sfen_char(piece_id: int) -> str:
             """駒IDからSFEN文字を取得．後手駒は小文字で返す．
 
-            駒ID定数は shogi.py の CSHOGI_* を使用．
+            駒ID定数は shogi.py の DOMAIN_* を使用．
+            boardIdPositionsはdomain PieceId形式(白駒=黒駒+14)．
             """
             if piece_id == 0:
                 return ""
             if CSHOGI_BLACK_MIN <= piece_id <= CSHOGI_BLACK_MAX:
                 # 先手駒（大文字）
                 return black_piece_to_sfen.get(piece_id, "")
-            elif piece_id >= CSHOGI_WHITE_MIN:
-                # 後手駒（小文字）: piece_id - 16 の先手マッピングを小文字化
+            elif piece_id >= DOMAIN_WHITE_MIN:
+                # 後手駒（小文字）: piece_id - 14 の先手マッピングを小文字化
                 black_char = black_piece_to_sfen.get(
-                    piece_id - CSHOGI_WHITE_OFFSET, ""
+                    piece_id - DOMAIN_WHITE_OFFSET, ""
                 )
                 return black_char.lower()
             return ""
