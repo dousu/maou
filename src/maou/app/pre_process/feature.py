@@ -14,6 +14,27 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _swap_piece_ids(board: np.ndarray) -> np.ndarray:
+    """BLACK(1-14)とWHITE(15-28)の駒IDを入れ替える．
+
+    正規化時に手番側の駒が常に1-14，
+    相手側が15-28になるよう入れ替える．
+    EMPTY(0)は変更しない．
+
+    Args:
+        board: 盤面配列(PieceId値)
+
+    Returns:
+        駒IDが入れ替えられた新しい配列
+    """
+    result = board.copy()
+    black_mask = (result >= 1) & (result <= 14)
+    white_mask = (result >= 15) & (result <= 28)
+    result[black_mask] += 14
+    result[white_mask] -= 14
+    return result
+
+
 def make_feature(board: shogi.Board) -> np.ndarray:
     """Create feature representation of board position.
 
@@ -158,7 +179,8 @@ def make_feature_from_board_state(
 
 def make_board_id_positions(board: shogi.Board) -> np.ndarray:
     """盤面の駒配置をPieceIdで表現する.
-    後手番であれば180度回転する
+    後手番であれば180度回転し，駒IDを入れ替える．
+    正規化後は手番側の駒が常に1-14，相手側が15-28となる．
     shapeが(9, 9)のuint8のndarrayで返す
     """
     df = board.get_board_id_positions_df()
@@ -168,7 +190,8 @@ def make_board_id_positions(board: shogi.Board) -> np.ndarray:
     if board.get_turn() == shogi.Turn.BLACK:
         return board_id_positions
     else:
-        return np.rot90(board_id_positions, 2)
+        rotated = np.rot90(board_id_positions, 2)
+        return _swap_piece_ids(rotated)
 
 
 def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
@@ -189,7 +212,8 @@ def make_board_id_positions_df(
     board: shogi.Board,
 ) -> "pl.DataFrame":
     """盤面の駒配置をPolars DataFrameで返す．
-    後手番であれば180度回転する．
+    後手番であれば180度回転し，駒IDを入れ替える．
+    正規化後は手番側の駒が常に1-14，相手側が15-28となる．
 
     Args:
         board: 盤面オブジェクト
@@ -221,7 +245,8 @@ def make_board_id_positions_df(
             df["boardIdPositions"].to_list()[0], dtype=np.uint8
         )
         rotated = np.rot90(positions, 2)
-        positions_list = rotated.tolist()
+        swapped = _swap_piece_ids(rotated)
+        positions_list = swapped.tolist()
 
         from maou.domain.data.schema import (
             get_board_position_polars_schema,
