@@ -1138,12 +1138,16 @@ class GradioVisualizationServer:
         Optional[
             Any
         ],  # analytics_figure (Plotly Figure or None)
+        gr.Button,  # prev_btn
+        gr.Button,  # next_btn
+        gr.Button,  # prev_record_btn
+        gr.Button,  # next_record_btn
+        str,  # selected_record_id
     ]:
         """Generate output values for empty state (no data loaded)．
 
         Returns:
-            Tuple matching outputs for pagination methods (8 values).
-            Caller adds 2 button states for total of 10 outputs.
+            Tuple matching outputs for pagination methods (13 values).
         """
         empty_table: List[
             List[Any]
@@ -1174,6 +1178,11 @@ class GradioVisualizationServer:
             record_index,
             record_indicator,
             analytics_figure,
+            gr.Button(interactive=False),  # prev_btn
+            gr.Button(interactive=False),  # next_btn
+            gr.Button(interactive=False),  # prev_record_btn
+            gr.Button(interactive=False),  # next_record_btn
+            "",  # selected_record_id
         )
 
     def _get_empty_state_navigation(
@@ -1795,54 +1804,39 @@ class GradioVisualizationServer:
             )
 
             # Event 3: After successful load, reload first page
-            if self.supports_eval_search:
-                load_result.then(
-                    fn=lambda: (
-                        self._paginate_all_data(
+            # current_pageもリセットして状態を一貫させる
+            load_result.then(
+                fn=lambda: (
+                    (
+                        1,
+                        *self._paginate_all_data(
                             min_eval=-9999,
                             max_eval=9999,
                             page=1,
                             page_size=20,
-                        )
-                        if self.has_data
-                        else self._get_empty_state_outputs()
-                    ),
-                    inputs=[],
-                    outputs=[
-                        results_table,
-                        page_info,
-                        board_display,
-                        record_details,
-                        current_page,
-                        current_page_records,
-                        current_record_index,
-                        selected_record_id,
-                    ],
-                )
-            else:
-                load_result.then(
-                    fn=lambda: (
-                        self._paginate_all_data(
-                            min_eval=-9999,
-                            max_eval=9999,
-                            page=1,
-                            page_size=20,
-                        )
-                        if self.has_data
-                        else self._get_empty_state_outputs()
-                    ),
-                    inputs=[],
-                    outputs=[
-                        results_table,
-                        page_info,
-                        board_display,
-                        record_details,
-                        current_page,
-                        current_page_records,
-                        current_record_index,
-                        selected_record_id,
-                    ],
-                )
+                        ),
+                    )
+                    if self.has_data
+                    else (1, *self._get_empty_state_outputs())
+                ),
+                inputs=[],
+                outputs=[
+                    current_page,  # ページ番号を1にリセット
+                    results_table,
+                    page_info,
+                    board_display,
+                    record_details,
+                    current_page_records,  # キャッシュ
+                    current_record_index,  # インデックス
+                    record_indicator,  # インジケーター
+                    analytics_chart,  # 分析チャート
+                    prev_btn,  # ページ前へボタン状態
+                    next_btn,  # ページ次へボタン状態
+                    prev_record_btn,  # レコード前へボタン状態
+                    next_record_btn,  # レコード次へボタン状態
+                    selected_record_id,  # 選択中のレコードID
+                ],
+            )
 
             # Event 4: Rebuild index (background processing)
             # Auto-refresh is handled by Event 6 (timer polls status transitions)
@@ -1879,6 +1873,7 @@ class GradioVisualizationServer:
                     next_btn,
                     prev_record_btn,
                     next_record_btn,
+                    selected_record_id,  # 選択中のレコードID
                 ],
             )
 
@@ -1960,13 +1955,7 @@ class GradioVisualizationServer:
         with self._index_lock:
             # Check for empty state
             if not self.has_data or self.viz_interface is None:
-                return self._get_empty_state_outputs() + (
-                    gr.Button(interactive=False),
-                    gr.Button(interactive=False),
-                    gr.Button(interactive=False),
-                    gr.Button(interactive=False),
-                    "",  # selected_record_id
-                )
+                return self._get_empty_state_outputs()
 
             (
                 table_data,
