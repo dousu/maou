@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import polars as pl
 
+from maou.domain.data.rust_io import load_hcpe_df
+
 if TYPE_CHECKING:
     from maou.domain.board import shogi
 
@@ -117,7 +119,7 @@ class Stage2DataGenerationUseCase:
 
         for file_path in feather_files:
             logger.info(f"Processing: {file_path.name}")
-            df = pl.read_ipc(str(file_path))
+            df = load_hcpe_df(file_path)
 
             if "hcp" not in df.columns:
                 logger.warning(

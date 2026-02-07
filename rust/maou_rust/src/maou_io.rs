@@ -41,6 +41,23 @@ fn load_preprocessing_feather(py: Python, file_path: String) -> PyResult<PyObjec
     batch.to_pyarrow(py)
 }
 
+// Generic feather I/O functions (for Stage1/Stage2 data)
+
+#[pyfunction]
+fn save_feather_file(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
+    let batch = RecordBatch::from_pyarrow_bound(batch)?;
+    maou_io_core::arrow_io::save_feather(&batch, &file_path)
+        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    Ok(())
+}
+
+#[pyfunction]
+fn load_feather_file(py: Python, file_path: String) -> PyResult<PyObject> {
+    let batch = maou_io_core::arrow_io::load_feather(&file_path)
+        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    batch.to_pyarrow(py)
+}
+
 // Sparse array compression functions
 
 #[pyfunction]
@@ -75,6 +92,8 @@ pub fn create_module(py: Python) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(load_hcpe_feather, &m)?)?;
     m.add_function(wrap_pyfunction!(save_preprocessing_feather, &m)?)?;
     m.add_function(wrap_pyfunction!(load_preprocessing_feather, &m)?)?;
+    m.add_function(wrap_pyfunction!(save_feather_file, &m)?)?;
+    m.add_function(wrap_pyfunction!(load_feather_file, &m)?)?;
     m.add_function(wrap_pyfunction!(compress_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(expand_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(add_sparse_arrays_rust, &m)?)?;

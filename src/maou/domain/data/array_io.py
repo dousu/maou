@@ -35,8 +35,12 @@ try:
         RUST_BACKEND_AVAILABLE,
         load_hcpe_df,
         load_preprocessing_df,
+        load_stage1_df,
+        load_stage2_df,
         save_hcpe_df,
         save_preprocessing_df,
+        save_stage1_df,
+        save_stage2_df,
     )
 
     __all__ = [
@@ -45,6 +49,10 @@ try:
         "load_hcpe_df",
         "save_preprocessing_df",
         "load_preprocessing_df",
+        "save_stage1_df",
+        "load_stage1_df",
+        "save_stage2_df",
+        "load_stage2_df",
         "RUST_BACKEND_AVAILABLE",
     ]
 except ImportError as e:
