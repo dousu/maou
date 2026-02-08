@@ -296,9 +296,6 @@ class TestIntermediateDataStore:
             batch_df = create_test_dataframe(hash_ids)
             store.add_dataframe_batch(batch_df)
 
-            # Force flush to ensure data is written
-            store._flush_buffer()
-
             size_with_data = store.get_database_size()
             assert (
                 size_with_data >= initial_size

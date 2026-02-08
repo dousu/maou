@@ -3,7 +3,9 @@ from __future__ import annotations
 import abc
 import contextlib
 import logging
+import queue
 import tempfile
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,7 +182,10 @@ class PreProcess:
     def _process_single_array(
         data: np.ndarray,
     ) -> Dict[int, dict]:
-        """Process a chunk of records (optimized: compute feature/mask only for unique boards).
+        """Process a chunk of records (optimized: 1-pass for hash/move/result).
+
+        統合ループでhash + move_label + game_resultを1パスで計算し，
+        set_hcpの呼び出しを4N+U回からN+U回に削減する．
 
         Returns:
             Dictionary mapping board hash to aggregated data
@@ -190,39 +195,37 @@ class PreProcess:
         # 一度だけBoardオブジェクトを作成し，全ての盤面で再利用
         board = shogi.Board()
 
-        # ハッシュ値を計算してソート
+        # 統合ループ: hash + move_label + game_result を1パスで (N回のset_hcp)
         n = len(data)
         hashs = np.empty(n, dtype=np.uint64)
+        move_labels = np.empty(n, dtype=np.int32)
+        wins = np.empty(n, dtype=np.float32)
         for i in range(n):
             board.set_hcp(data["hcp"][i])
             hashs[i] = board.hash()
+            move_labels[i] = (
+                Transform.board_move_label_from_board(
+                    board,
+                    data["bestMove16"][i],  # type: ignore
+                )
+            )
+            wins[i] = Transform.board_game_result_from_board(
+                board,
+                data["gameResult"][i],  # type: ignore
+            )
 
         # ソートしてユニーク盤面を特定
         idx = np.argsort(hashs, kind="mergesort")
         sorted_hash = hashs[idx]
+        sorted_move_labels = move_labels[idx]
+        sorted_wins = wins[idx]
 
-        # ユニーク値とその出現回数を取得
-        uniq_hash, inverse_indices = np.unique(
+        # ユニーク値を取得
+        uniq_hash, _ = np.unique(
             sorted_hash, return_inverse=True
         )
 
-        # 各盤面のデータを事前に計算（ソート順）
-        sorted_move_labels = np.empty(n, dtype=np.int32)
-        sorted_wins = np.empty(n, dtype=np.float32)
-
-        for i in range(n):
-            orig_idx = idx[i]
-            board.set_hcp(data["hcp"][orig_idx])
-            sorted_move_labels[i] = Transform.board_move_label(
-                data["hcp"][orig_idx],
-                data["bestMove16"][orig_idx],  # type: ignore
-            )
-            sorted_wins[i] = Transform.board_game_result(
-                data["hcp"][orig_idx],
-                data["gameResult"][orig_idx],  # type: ignore
-            )
-
-        # ユニーク盤面ごとに集計
+        # ユニーク盤面ごとに集計 (U回のset_hcp)
         result = {}
         start_idx = 0
         for u_idx, hash_val in enumerate(uniq_hash):
@@ -241,14 +244,14 @@ class PreProcess:
             win_sum = np.sum(sorted_wins[start_idx:end_idx])
             count = end_idx - start_idx
 
-            # 最初の出現位置のHCPを使って特徴量とマスクを計算
+            # 最初の出現位置のHCPを使って特徴量を計算 (set_hcp 1回)
             orig_idx = idx[start_idx]
             board.set_hcp(data["hcp"][orig_idx])
-
             (
                 board_id_positions,
                 pieces_in_hand,
-            ) = Transform.board_feature(data["hcp"][orig_idx])
+            ) = Transform.board_feature_from_board(board)
+
             result[int(hash_val)] = {
                 "count": count,
                 "winCount": win_sum,
@@ -615,19 +618,41 @@ class PreProcess:
                             / f"{base_name}.feather",
                         )
             else:
-                # 並列処理（メモリ効率化版）
+                # 並列処理（非同期merge版）
+                # merge専用スレッドでワーカー遊休時間を排除
+                merge_queue: queue.Queue[
+                    Optional[Dict[int, dict]]
+                ] = queue.Queue(maxsize=max_workers)
+                merge_errors: list[Exception] = []
+
+                def _merge_worker(
+                    q: queue.Queue[Optional[Dict[int, dict]]],
+                ) -> None:
+                    while True:
+                        item = q.get()
+                        if item is None:
+                            break
+                        try:
+                            self.merge_intermediate_data(item)
+                        except Exception as e:
+                            merge_errors.append(e)
+                        finally:
+                            q.task_done()
+
+                merge_thread = threading.Thread(
+                    target=_merge_worker,
+                    args=(merge_queue,),
+                    daemon=True,
+                )
+                merge_thread.start()
+
                 with ProcessPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
-                    # メモリ効率化: 逐次サブミット方式
-                    # 全ジョブを一度にサブミットせず、max_workers個ずつ処理
-                    futures = {}
+                    futures: dict = {}
                     data_iterator = iter(
                         self.__datasource.iter_batches()
                     )
-
-                    # バッチ数をカウント（プログレスバー用）
-                    batch_count = 0
 
                     # 初回のmax_workers個をサブミット
                     for _ in range(max_workers):
@@ -638,29 +663,22 @@ class PreProcess:
                                 data,
                             )
                             futures[future] = dataname
-                            batch_count += 1
                         except StopIteration:
                             break
 
-                    # プログレスバー初期化（バッチ数ベース）
                     pbar = tqdm(
                         desc=f"PreProcess (parallel {max_workers} workers)",
                         total=total_batches,
                     )
 
-                    # ジョブが完了するたびに新しいジョブをサブミット
+                    # 完了したfutureの結果をmergeキューに投入し，
+                    # 即座に次のワーカー結果を回収
                     while futures:
-                        # 完了したジョブを取得
-                        done_futures = []
                         for future in as_completed(futures):
-                            dataname = futures[future]
+                            dataname = futures.pop(future)
                             try:
                                 batch_result = future.result()
-                                self.merge_intermediate_data(
-                                    batch_result
-                                )
-                                # 明示的にメモリ解放
-                                del batch_result
+                                merge_queue.put(batch_result)
                             except Exception as exc:
                                 self.logger.error(
                                     f"{dataname} processing failed: {exc}"
@@ -669,7 +687,10 @@ class PreProcess:
                                     f"Dataname {dataname} generated an exception: {exc}"
                                 )
 
-                            done_futures.append(future)
+                            # mergeスレッドのエラーチェック
+                            if merge_errors:
+                                raise merge_errors[0]
+
                             pbar.update(1)
 
                             # 新しいジョブをサブミット
@@ -684,18 +705,20 @@ class PreProcess:
                                 futures[new_future] = (
                                     new_dataname
                                 )
-                                batch_count += 1
                             except StopIteration:
                                 pass
 
-                            # 最初に完了したジョブのみ処理して次へ
+                            # 1件処理したらas_completedを再取得
                             break
 
-                        # 完了したジョブを削除
-                        for future in done_futures:
-                            del futures[future]
-
                     pbar.close()
+
+                # mergeキューの残りを処理して終了
+                merge_queue.put(None)
+                merge_thread.join()
+
+                if merge_errors:
+                    raise merge_errors[0]
 
                 # チェック: ユニーク局面数を取得してリソース要件を確認
                 total_count = (

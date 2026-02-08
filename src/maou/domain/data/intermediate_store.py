@@ -8,7 +8,7 @@ datasets larger than available RAM．
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, Optional
 
 import duckdb
 import polars as pl
@@ -139,13 +139,15 @@ class IntermediateDataStore:
         self.enable_vacuum = (
             enable_vacuum  # Unused but kept for compatibility
         )
-        self._batch_buffer: Dict[int, dict] = {}
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._init_database()
 
     def _init_database(self) -> None:
         """Initialize DuckDB database with Arrow-compatible schema."""
         self._conn = duckdb.connect(str(self.db_path))
+
+        # Register Rust UDFs for sparse array merging
+        self._register_udfs()
 
         # Create table with Arrow-native types
         # Note: DuckDB supports UBIGINT for uint64 natively
@@ -168,172 +170,151 @@ class IntermediateDataStore:
             f"Initialized DuckDB intermediate store at {self.db_path}"
         )
 
-    def add_dataframe_batch(self, df: pl.DataFrame) -> None:
-        """Add or update batch data from Polars DataFrame (zero-copy Arrow).
+    def _register_udfs(self) -> None:
+        """Register Rust-backed UDFs for sparse array merging in DuckDB."""
+        assert self._conn is not None
+
+        def _merge_sparse_indices(
+            ei: list[int],
+            ev: list[int],
+            ni: list[int],
+            nv: list[int],
+        ) -> list[int]:
+            merged_indices, _ = add_sparse_arrays_rust(
+                list(ei), list(ev), list(ni), list(nv)
+            )
+            return list(merged_indices)
+
+        def _merge_sparse_values(
+            ei: list[int],
+            ev: list[int],
+            ni: list[int],
+            nv: list[int],
+        ) -> list[int]:
+            _, merged_values = add_sparse_arrays_rust(
+                list(ei), list(ev), list(ni), list(nv)
+            )
+            return list(merged_values)
+
+        self._conn.create_function(
+            "merge_sparse_indices",
+            _merge_sparse_indices,
+        )
+        self._conn.create_function(
+            "merge_sparse_values",
+            _merge_sparse_values,
+        )
+
+    def bulk_upsert(self, df: pl.DataFrame) -> None:
+        """Bulk upsert batch data from Polars DataFrame using DuckDB SQL.
+
+        Replaces the old row-by-row add_dataframe_batch/flush_buffer pattern
+        with a single INSERT ... ON CONFLICT DO UPDATE statement．
 
         Args:
             df: Polars DataFrame with columns:
                 - hash_id: uint64
                 - count: int32
                 - win_count: float64
-                - move_label_count: list[int32]  # 1496 elements
+                - move_label_count: list[int32]  # 1496 elements (dense)
                 - board_id_positions: list[list[uint8]]  # 9x9 board
                 - pieces_in_hand: list[uint8]  # 14 elements
 
         Expected DataFrame structure (aggregated by hash_id):
             Each row represents one unique board position with aggregated statistics
         """
-        # Add to batch buffer (convert DataFrame rows to dict format)
-        for row in df.iter_rows(named=True):
-            hash_id = row["hash_id"]
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
 
-            if hash_id in self._batch_buffer:
-                # Merge with existing buffer entry
-                self._batch_buffer[hash_id]["count"] += row[
-                    "count"
-                ]
-                self._batch_buffer[hash_id]["win_count"] += row[
-                    "win_count"
-                ]
-                # For lists, we need to add element-wise
-                existing_move = self._batch_buffer[hash_id][
-                    "move_label_count"
-                ]
-                new_move = row["move_label_count"]
-                self._batch_buffer[hash_id][
-                    "move_label_count"
-                ] = [
-                    a + b
-                    for a, b in zip(existing_move, new_move)
-                ]
-            else:
-                # Add new buffer entry
-                self._batch_buffer[hash_id] = {
-                    "count": row["count"],
-                    "win_count": row["win_count"],
-                    "move_label_count": row["move_label_count"],
-                    "board_id_positions": row[
-                        "board_id_positions"
-                    ],
-                    "pieces_in_hand": row["pieces_in_hand"],
-                }
-
-        # Flush buffer if it exceeds batch size
-        if len(self._batch_buffer) >= self.batch_size:
-            self._flush_buffer()
-
-    def _flush_buffer(self) -> None:
-        """Flush batch buffer to DuckDB database."""
-        if not self._batch_buffer or self._conn is None:
+        if df.is_empty():
             return
 
-        flush_count = len(self._batch_buffer)
+        # Compress dense move_label_count to sparse format per row
+        indices_list: list[list[int]] = []
+        values_list: list[list[int]] = []
+        for move_label_count in df[
+            "move_label_count"
+        ].to_list():
+            indices, values = compress_sparse_array_rust(
+                move_label_count
+            )
+            indices_list.append(list(indices))
+            values_list.append(list(values))
+
+        # Build DataFrame with sparse columns for DuckDB
+        batch_df = df.select(
+            [
+                "hash_id",
+                "count",
+                "win_count",
+                "board_id_positions",
+                "pieces_in_hand",
+            ]
+        ).with_columns(
+            [
+                pl.Series(
+                    "move_label_indices",
+                    indices_list,
+                    dtype=pl.List(pl.UInt16),
+                ),
+                pl.Series(
+                    "move_label_values",
+                    values_list,
+                    dtype=pl.List(pl.Int32),
+                ),
+            ]
+        )
 
         try:
-            # Begin transaction
-            self._conn.begin()
+            # Register Polars DataFrame as DuckDB view
+            self._conn.register("batch_df", batch_df.to_arrow())
 
-            for hash_id, data in self._batch_buffer.items():
-                # Check if record exists
-                existing = self._conn.execute(
-                    """
-                    SELECT count, win_count,
-                           move_label_indices, move_label_values
-                    FROM intermediate_data WHERE hash_id = ?
-                    """,
-                    (hash_id,),
-                ).fetchone()
-
-                if existing:
-                    # Update existing record with aggregation
-                    existing_count = existing[0]
-                    existing_win_count = existing[1]
-                    existing_indices = existing[2]
-                    existing_values = existing[3]
-
-                    # Compress new move_label_count to sparse format
-                    new_indices, new_values = (
-                        compress_sparse_array_rust(
-                            data["move_label_count"]
-                        )
-                    )
-
-                    # Add sparse arrays using Rust
-                    merged_indices, merged_values = (
-                        add_sparse_arrays_rust(
-                            list(existing_indices),
-                            list(existing_values),
-                            list(new_indices),
-                            list(new_values),
-                        )
-                    )
-
-                    new_count = existing_count + data["count"]
-                    new_win_count = (
-                        existing_win_count + data["win_count"]
-                    )
-
-                    self._conn.execute(
-                        """
-                        UPDATE intermediate_data
-                        SET count = ?,
-                            win_count = ?,
-                            move_label_indices = ?,
-                            move_label_values = ?
-                        WHERE hash_id = ?
-                        """,
-                        (
-                            new_count,
-                            new_win_count,
-                            merged_indices,
-                            merged_values,
-                            hash_id,
-                        ),
-                    )
-                else:
-                    # Insert new record (data already contains Python lists)
-                    board_positions = data["board_id_positions"]
-                    pieces_in_hand = data["pieces_in_hand"]
-
-                    # Compress sparse move_label_count
-                    indices, values = (
-                        compress_sparse_array_rust(
-                            data["move_label_count"]
-                        )
-                    )
-
-                    self._conn.execute(
-                        """
-                        INSERT INTO intermediate_data
-                        (hash_id, count, win_count,
-                         move_label_indices, move_label_values,
-                         board_id_positions, pieces_in_hand)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            hash_id,
-                            data["count"],
-                            data["win_count"],
-                            indices,
-                            values,
-                            board_positions,
-                            pieces_in_hand,
-                        ),
-                    )
+            # Single SQL UPSERT: insert new records or merge with existing
+            self._conn.execute(
+                """
+                INSERT INTO intermediate_data
+                SELECT hash_id, count, win_count,
+                       move_label_indices, move_label_values,
+                       board_id_positions, pieces_in_hand
+                FROM batch_df
+                ON CONFLICT (hash_id) DO UPDATE SET
+                    count = intermediate_data.count + excluded.count,
+                    win_count = intermediate_data.win_count + excluded.win_count,
+                    move_label_indices = merge_sparse_indices(
+                        intermediate_data.move_label_indices,
+                        intermediate_data.move_label_values,
+                        excluded.move_label_indices,
+                        excluded.move_label_values),
+                    move_label_values = merge_sparse_values(
+                        intermediate_data.move_label_indices,
+                        intermediate_data.move_label_values,
+                        excluded.move_label_indices,
+                        excluded.move_label_values)
+                """
+            )
 
             self._conn.commit()
 
             logger.debug(
-                f"Flushed {flush_count} records to DuckDB database"
+                f"Bulk upserted {len(batch_df)} records to DuckDB"
             )
         except Exception as e:
             if self._conn is not None:
                 self._conn.rollback()
-            logger.error(f"Failed to flush buffer: {e}")
+            logger.error(f"Failed to bulk upsert: {e}")
             raise
         finally:
-            # Clear buffer
-            self._batch_buffer.clear()
+            self._conn.unregister("batch_df")
+
+    def add_dataframe_batch(self, df: pl.DataFrame) -> None:
+        """Add or update batch data from Polars DataFrame.
+
+        Compatibility wrapper that delegates to bulk_upsert()．
+
+        Args:
+            df: Polars DataFrame (see bulk_upsert for column specification)
+        """
+        self.bulk_upsert(df)
 
     def get_total_count(self) -> int:
         """Get total number of unique positions in database.
@@ -343,9 +324,6 @@ class IntermediateDataStore:
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
-
-        # Flush any remaining buffer
-        self._flush_buffer()
 
         result = self._conn.execute(
             "SELECT COUNT(*) FROM intermediate_data"
@@ -423,6 +401,97 @@ class IntermediateDataStore:
 
         return result
 
+    @staticmethod
+    def _expand_and_normalize_move_labels(
+        indices_col: list[list[int]],
+        values_col: list[list[int]],
+        counts: list[int],
+    ) -> list[list[float]]:
+        """sparse展開と正規化をバッチで処理する．
+
+        Args:
+            indices_col: sparse indicesのリスト
+            values_col: sparse valuesのリスト
+            counts: 各レコードのcount値
+
+        Returns:
+            正規化されたmove label確率のリスト(各要素は1496長のfloatリスト)
+        """
+        result = []
+        for indices, values, count in zip(
+            indices_col, values_col, counts
+        ):
+            dense = expand_sparse_array_rust(
+                list(indices), list(values), 1496
+            )
+            normalized = [val / count for val in dense]
+            result.append(normalized)
+        return result
+
+    def _read_chunk_as_polars(
+        self, limit: int, offset: int
+    ) -> pl.DataFrame:
+        """DuckDBからチャンクをPolars DataFrameとして直接読み出す．
+
+        Args:
+            limit: 読み出す行数
+            offset: オフセット
+
+        Returns:
+            DuckDBから直接変換されたPolars DataFrame
+        """
+        assert self._conn is not None
+        return self._conn.execute(
+            """
+            SELECT hash_id, count, win_count,
+                   move_label_indices, move_label_values,
+                   board_id_positions, pieces_in_hand
+            FROM intermediate_data
+            ORDER BY hash_id
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).pl()
+
+    def _finalize_chunk(
+        self, raw_df: pl.DataFrame
+    ) -> pl.DataFrame:
+        """生のDuckDBチャンクを最終形式のDataFrameに変換する．
+
+        sparse展開・正規化・カラムリネームを行う．
+
+        Args:
+            raw_df: DuckDBから読み出した生のDataFrame
+
+        Returns:
+            最終形式のPreprocessing DataFrame
+        """
+        # バッチでsparse展開と正規化
+        move_labels = self._expand_and_normalize_move_labels(
+            raw_df["move_label_indices"].to_list(),
+            raw_df["move_label_values"].to_list(),
+            raw_df["count"].to_list(),
+        )
+
+        # resultValue = win_count / count
+        result_values = raw_df["win_count"] / raw_df["count"]
+
+        return pl.DataFrame(
+            {
+                "id": raw_df["hash_id"],
+                "boardIdPositions": raw_df[
+                    "board_id_positions"
+                ],
+                "piecesInHand": raw_df["pieces_in_hand"],
+                "moveLabel": pl.Series(
+                    move_labels,
+                    dtype=pl.List(pl.Float32),
+                ),
+                "resultValue": result_values.cast(pl.Float32),
+            },
+            schema=get_preprocessing_polars_schema(),
+        )
+
     def finalize_to_dataframe(self) -> pl.DataFrame:
         """Convert all stored data to final preprocessing Polars DataFrame.
 
@@ -448,62 +517,13 @@ class IntermediateDataStore:
         )
 
         if total_count == 0:
-            # Return empty DataFrame with correct schema
             return pl.DataFrame(
                 schema=get_preprocessing_polars_schema()
             )
 
-        # Build Python dict of lists
-        data_lists: Dict[str, List] = {
-            "id": [],
-            "boardIdPositions": [],
-            "piecesInHand": [],
-            "moveLabel": [],
-            "resultValue": [],
-        }
-
-        # Populate lists from DuckDB (no numpy)
-        for row in self._conn.execute(
-            "SELECT * FROM intermediate_data ORDER BY hash_id"
-        ).fetchall():
-            (
-                hash_id,
-                count,
-                win_count,
-                move_label_indices,
-                move_label_values,
-                board_positions,
-                pieces_in_hand,
-            ) = row
-
-            # Expand sparse array using Rust
-            move_label_count_dense = expand_sparse_array_rust(
-                list(move_label_indices),
-                list(move_label_values),
-                1496,
-            )
-
-            # Normalize to move probabilities (pure Python)
-            move_label_normalized = [
-                val / count for val in move_label_count_dense
-            ]
-            result_value = win_count / count
-
-            # Append to lists
-            data_lists["id"].append(hash_id)
-            data_lists["boardIdPositions"].append(
-                board_positions
-            )
-            data_lists["piecesInHand"].append(pieces_in_hand)
-            data_lists["moveLabel"].append(
-                move_label_normalized
-            )
-            data_lists["resultValue"].append(result_value)
-
-        # Convert to Polars DataFrame (NO numpy conversion)
-        df = pl.DataFrame(
-            data_lists, schema=get_preprocessing_polars_schema()
-        )
+        # DuckDB → Polars直接変換 + バッチsparse展開
+        raw_df = self._read_chunk_as_polars(total_count, 0)
+        df = self._finalize_chunk(raw_df)
 
         logger.info(
             f"Finalized {total_count} records to DataFrame"
@@ -537,9 +557,6 @@ class IntermediateDataStore:
         if self._conn is None:
             raise RuntimeError("Database not initialized")
 
-        # Flush any remaining buffer
-        self._flush_buffer()
-
         total_count = self.get_total_count()
 
         logger.info(
@@ -555,94 +572,31 @@ class IntermediateDataStore:
         processed_count = 0
 
         while processed_count < total_count:
-            # Calculate current chunk size
             current_chunk_size = min(
                 chunk_size, total_count - processed_count
             )
 
-            # Build dict of lists for this chunk
-            chunk_data_lists: Dict[str, List] = {
-                "id": [],
-                "boardIdPositions": [],
-                "piecesInHand": [],
-                "moveLabel": [],
-                "resultValue": [],
-            }
-
-            # Read chunk from database (always from offset 0 if deleting)
+            # 削除モードならoffset=0（先頭から読む），
+            # 非削除モードなら処理済み分をスキップ
             read_offset = (
                 0 if delete_after_yield else processed_count
             )
 
-            rows = self._conn.execute(
-                """
-                SELECT hash_id, count, win_count,
-                       move_label_indices, move_label_values,
-                       board_id_positions, pieces_in_hand
-                FROM intermediate_data
-                ORDER BY hash_id
-                LIMIT ? OFFSET ?
-                """,
-                (current_chunk_size, read_offset),
-            ).fetchall()
+            # DuckDB → Polars直接変換
+            raw_df = self._read_chunk_as_polars(
+                current_chunk_size, read_offset
+            )
 
-            hash_ids_to_delete = []
+            # 削除用にhash_idを保持
+            hash_ids_to_delete: list[int] = []
+            if delete_after_yield:
+                hash_ids_to_delete = raw_df["hash_id"].to_list()
 
-            for row in rows:
-                (
-                    hash_id,
-                    count,
-                    win_count,
-                    move_label_indices,
-                    move_label_values,
-                    board_positions,
-                    pieces_in_hand,
-                ) = row
-
-                # Track hash_id for deletion
-                if delete_after_yield:
-                    hash_ids_to_delete.append(hash_id)
-
-                # Expand sparse arrays using Rust
-                move_label_count_dense = (
-                    expand_sparse_array_rust(
-                        list(move_label_indices),
-                        list(move_label_values),
-                        1496,  # MOVE_LABELS_NUM
-                    )
-                )
-
-                # Normalize to move probabilities (pure Python)
-                move_label_normalized = [
-                    val / count
-                    for val in move_label_count_dense
-                ]
-                result_value = win_count / count
-
-                # Append to lists
-                chunk_data_lists["id"].append(hash_id)
-                chunk_data_lists["boardIdPositions"].append(
-                    board_positions
-                )
-                chunk_data_lists["piecesInHand"].append(
-                    pieces_in_hand
-                )
-                chunk_data_lists["moveLabel"].append(
-                    move_label_normalized
-                )
-                chunk_data_lists["resultValue"].append(
-                    result_value
-                )
+            # バッチsparse展開 + 正規化
+            chunk_df = self._finalize_chunk(raw_df)
 
             processed_count += current_chunk_size
 
-            # Convert to Polars DataFrame (NO numpy)
-            chunk_df = pl.DataFrame(
-                chunk_data_lists,
-                schema=get_preprocessing_polars_schema(),
-            )
-
-            # Yield the chunk before deletion to ensure data is safely written
             yield chunk_df
 
             # Delete processed records to free disk space
@@ -697,9 +651,6 @@ class IntermediateDataStore:
 
     def close(self) -> None:
         """Close database connection and cleanup."""
-        # Flush any remaining buffer
-        self._flush_buffer()
-
         if self._conn is not None:
             self._conn.close()
             self._conn = None

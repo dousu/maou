@@ -4,6 +4,7 @@ import numpy as np
 
 from maou.app.pre_process.feature import (
     make_board_id_positions,
+    make_board_id_positions_fast,
     make_pieces_in_hand,
 )
 from maou.domain.board import shogi
@@ -169,6 +170,55 @@ class Transform:
         board.set_hcp(hcp)
         return (
             make_board_id_positions(board),
+            make_pieces_in_hand(board),
+        )
+
+    @staticmethod
+    def board_move_label_from_board(
+        board: shogi.Board, move16: int
+    ) -> int:
+        """構築済みBoardからmove labelを計算（set_hcpスキップ）．
+
+        Args:
+            board: 構築済みBoardインスタンス
+            move16: 16ビット形式の手
+
+        Returns:
+            対応する手ラベル
+        """
+        return make_move_label(board.get_turn(), move16)
+
+    @staticmethod
+    def board_game_result_from_board(
+        board: shogi.Board, game_result: int
+    ) -> float:
+        """構築済みBoardからgame resultを計算（set_hcpスキップ）．
+
+        Args:
+            board: 構築済みBoardインスタンス
+            game_result: ゲーム結果
+
+        Returns:
+            対応する結果値
+        """
+        return make_result_value(board.get_turn(), game_result)
+
+    @staticmethod
+    def board_feature_from_board(
+        board: shogi.Board,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """構築済みBoardからfeatureを計算（set_hcpスキップ）．
+
+        numpy lookup tableによる高速変換を使用する．
+
+        Args:
+            board: 構築済みBoardインスタンス
+
+        Returns:
+            盤面ID (9x9) と持ち駒情報 (14,)
+        """
+        return (
+            make_board_id_positions_fast(board),
             make_pieces_in_hand(board),
         )
 

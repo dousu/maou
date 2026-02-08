@@ -638,6 +638,17 @@ class Board:
         """
         return self.board.pieces_in_hand
 
+    def get_pieces(self) -> list[int]:
+        """盤面の駒配列(81要素)を返す．
+
+        cshogiの内部表現をそのまま返す．
+        値はcshogi駒ID(0-30)で，column-major順に格納される．
+
+        Returns:
+            81要素のリスト(cshogi駒ID)
+        """
+        return self.board.pieces
+
     def to_pretty_board(self) -> str:
         return str(self.board)
 
