@@ -307,7 +307,19 @@ class PreProcess:
                     else data["piecesInHand"],
                 }
             )
-        batch_df = pl.DataFrame(records)
+        batch_df = pl.DataFrame(
+            records,
+            schema={
+                "hash_id": pl.UInt64,
+                "count": pl.Int32,
+                "win_count": pl.Float64,
+                "move_label_count": pl.List(pl.Int32),
+                "board_id_positions": pl.List(
+                    pl.List(pl.UInt8)
+                ),
+                "pieces_in_hand": pl.List(pl.UInt8),
+            },
+        )
         self.intermediate_store.add_dataframe_batch(batch_df)
 
     def aggregate_intermediate_data(self) -> "pl.DataFrame":
