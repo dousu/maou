@@ -1330,6 +1330,7 @@ class GradioVisualizationServer:
                             value=self.array_type,
                             label="Array Type",
                             interactive=True,
+                            elem_id="array-type-dropdown",
                         )
 
                         with gr.Row():
@@ -1535,6 +1536,7 @@ class GradioVisualizationServer:
                                 else None,
                                 label="結果一覧",
                                 interactive=False,
+                                elem_id="search-results-table",
                             )
 
                         with gr.Tab("📈 データ分析"):

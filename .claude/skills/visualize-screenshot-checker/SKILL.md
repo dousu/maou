@@ -436,7 +436,7 @@ uv run maou screenshot \
 uv run maou screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(2)" \
-  --action "click:.dataframe tbody tr:nth-of-type(2)" \
+  --action "click:#search-results-table [data-testid='cell-1-0']" \
   --action "wait:#board-display svg" \
   --output /tmp/check-1001-table-row-click.png
 ```
@@ -455,10 +455,10 @@ uv run maou screenshot \
 #### Check 11.1: データソース変更後のインデクシング表示
 
 ```bash
-# データソースドロップダウンを変更してインデクシング中の状態を撮影
+# Array Type ドロップダウンをクリックしてデータソース変更UIを撮影
 uv run maou screenshot \
   --url http://localhost:7860 \
-  --action "click:#data-source-dropdown" \
+  --action "click:#array-type-dropdown" \
   --settle-time 1000 \
   --output /tmp/check-1101-indexing-start.png
 ```
@@ -472,7 +472,7 @@ uv run maou screenshot \
 ```bash
 uv run maou screenshot \
   --url http://localhost:7860 \
-  --action "click:#data-source-dropdown" \
+  --action "click:#array-type-dropdown" \
   --action "wait-hidden:.loading-spinner" \
   --settle-time 5000 \
   --output /tmp/check-1102-indexing-complete.png
