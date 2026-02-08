@@ -1,6 +1,9 @@
 ---
 name: gradio-screenshot-capture
 description: Capture screenshots of Gradio web UI using Playwright headless browser for visual feedback and verification. Use when testing UI rendering, debugging visual issues, or verifying component appearance.
+user-invocable: true
+disable-model-invocation: true
+argument-hint: [screenshot options]
 ---
 
 # Gradio Screenshot Capture
@@ -100,6 +103,8 @@ Claude will analyze the screenshot and provide visual feedback.
 | `--width` | 1280 | Viewport width |
 | `--height` | 720 | Viewport height |
 | `--settle-time` | 3000 | Wait time for dynamic content to stabilize (ms) |
+| `--action` | (none) | UI action before capture (TYPE:SELECTOR[:VALUE]). Repeatable. |
+| `--action-settle-time` | 500 | Wait time after each action (ms) |
 
 ## Gradio UI Selectors
 
@@ -146,6 +151,42 @@ poetry run maou screenshot \
 # Stop server
 lsof -ti :7860 | xargs kill -9 2>/dev/null || true
 ```
+
+### UI Action Before Capture
+
+Use `--action` to interact with the UI before taking a screenshot:
+
+```bash
+# Fill a search field and click search
+uv run maou screenshot \
+  --url http://localhost:7860 \
+  --action "fill:#id-search-input input:mock_id_0" \
+  --action "click:#id-search-btn" \
+  --action "wait:#board-display svg" \
+  --output /tmp/search-result.png
+
+# Switch to a different tab
+uv run maou screenshot \
+  --url http://localhost:7860 \
+  --action "click:button[role='tab']:nth-of-type(3)" \
+  --output /tmp/analytics-tab.png
+
+# Wait for loading to finish
+uv run maou screenshot \
+  --url http://localhost:7860 \
+  --action "wait-hidden:.loading-spinner" \
+  --output /tmp/loaded.png
+```
+
+**Action Types:**
+
+| Type | Format | Description |
+|------|--------|-------------|
+| `click` | `click:SELECTOR` | Click an element |
+| `fill` | `fill:SELECTOR:VALUE` | Fill an input field |
+| `wait` | `wait:SELECTOR` | Wait for element to be visible |
+| `wait-text` | `wait-text:SELECTOR:TEXT` | Wait for element with specific text |
+| `wait-hidden` | `wait-hidden:SELECTOR` | Wait for element to be hidden |
 
 ## Troubleshooting
 

@@ -7,6 +7,8 @@ Playwright を使用してGradio UIのスクリーンショットを取得する
 import base64
 import logging
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +26,145 @@ DEFAULT_TIMEOUT = 30000
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_SETTLE_TIME = 3000
+DEFAULT_ACTION_SETTLE_TIME = 500
+
+
+class ActionType(Enum):
+    """スクリーンショット撮影前に実行するUIアクションの種別．"""
+
+    CLICK = "click"
+    FILL = "fill"
+    WAIT = "wait"
+    WAIT_TEXT = "wait-text"
+    WAIT_HIDDEN = "wait-hidden"
+
+
+@dataclass(frozen=True)
+class ScreenshotAction:
+    """スクリーンショット撮影前に実行するUIアクション．
+
+    Args:
+        action_type: アクション種別
+        selector: CSSセレクタ
+        value: アクションの値（fill, wait-text で使用）
+    """
+
+    action_type: ActionType
+    selector: str
+    value: Optional[str] = None
+
+
+def _parse_action(action_str: str) -> ScreenshotAction:
+    """CLI文字列をScreenshotActionにパースする．
+
+    フォーマット: ``TYPE:SELECTOR[:VALUE]``
+
+    - 最初の ``:`` でアクション種別とそれ以降を分離
+    - ``fill`` / ``wait-text`` は値が必要 → 右端の ``:`` でselectorとvalueを分離
+    - ``click`` / ``wait`` / ``wait-hidden`` はselectorのみ（CSS疑似セレクタの ``:`` を含められる）
+
+    Args:
+        action_str: ``"click:#btn"`` や ``"fill:#input input:my_value"`` 形式の文字列
+
+    Returns:
+        パース済みの :class:`ScreenshotAction`
+
+    Raises:
+        click.BadParameter: パースに失敗した場合
+    """
+    # 最初の ":" でアクション種別を分離
+    if ":" not in action_str:
+        raise click.BadParameter(
+            f"Invalid action format (missing ':'): {action_str!r}. "
+            f"Expected TYPE:SELECTOR[:VALUE]"
+        )
+
+    type_str, rest = action_str.split(":", 1)
+
+    try:
+        action_type = ActionType(type_str)
+    except ValueError:
+        valid_types = ", ".join(t.value for t in ActionType)
+        raise click.BadParameter(
+            f"Unknown action type: {type_str!r}. "
+            f"Valid types: {valid_types}"
+        )
+
+    if not rest:
+        raise click.BadParameter(
+            f"Missing selector in action: {action_str!r}"
+        )
+
+    # fill / wait-text は値が必要 → 右端の ":" で selector と value を分離
+    if action_type in (ActionType.FILL, ActionType.WAIT_TEXT):
+        if ":" not in rest:
+            raise click.BadParameter(
+                f"Action '{type_str}' requires a value. "
+                f"Expected {type_str}:SELECTOR:VALUE"
+            )
+        selector, value = rest.rsplit(":", 1)
+        if not selector:
+            raise click.BadParameter(
+                f"Missing selector in action: {action_str!r}"
+            )
+        if not value:
+            raise click.BadParameter(
+                f"Missing value in action: {action_str!r}"
+            )
+        return ScreenshotAction(
+            action_type=action_type,
+            selector=selector,
+            value=value,
+        )
+
+    # click / wait / wait-hidden は selector のみ
+    return ScreenshotAction(
+        action_type=action_type, selector=rest
+    )
+
+
+def _execute_action(
+    page: object,
+    action: ScreenshotAction,
+    action_settle_time: int,
+) -> None:
+    """Playwrightページ上でアクションを実行する．
+
+    Args:
+        page: Playwright の Page オブジェクト
+        action: 実行するアクション
+        action_settle_time: アクション後の待機時間（ミリ秒）
+    """
+    from playwright.sync_api import Page
+
+    assert isinstance(page, Page)
+
+    app_logger.info(
+        f"Executing action: {action.action_type.value} "
+        f"on {action.selector!r}"
+        + (
+            f" with value {action.value!r}"
+            if action.value
+            else ""
+        )
+    )
+
+    if action.action_type == ActionType.CLICK:
+        page.click(action.selector)
+    elif action.action_type == ActionType.FILL:
+        assert action.value is not None
+        page.fill(action.selector, action.value)
+    elif action.action_type == ActionType.WAIT:
+        page.wait_for_selector(action.selector, state="visible")
+    elif action.action_type == ActionType.WAIT_TEXT:
+        assert action.value is not None
+        page.locator(action.selector).filter(
+            has_text=action.value
+        ).wait_for(state="visible")
+    elif action.action_type == ActionType.WAIT_HIDDEN:
+        page.wait_for_selector(action.selector, state="hidden")
+
+    page.wait_for_timeout(action_settle_time)
 
 
 def _capture_screenshot(
@@ -37,6 +178,8 @@ def _capture_screenshot(
     width: int,
     height: int,
     settle_time: int,
+    actions: tuple[ScreenshotAction, ...] = (),
+    action_settle_time: int = DEFAULT_ACTION_SETTLE_TIME,
 ) -> None:
     """Playwrightを使用してスクリーンショットを取得する．
 
@@ -51,6 +194,8 @@ def _capture_screenshot(
         width: ビューポート幅
         height: ビューポート高さ
         settle_time: 動的コンテンツ安定待機時間（ミリ秒）
+        actions: 撮影前に実行するUIアクションのタプル
+        action_settle_time: 各アクション後の待機時間（ミリ秒）
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -92,6 +237,12 @@ def _capture_screenshot(
                     wait_for,
                     state="visible",
                     timeout=timeout,
+                )
+
+            # UIアクションの実行
+            for action in actions:
+                _execute_action(
+                    page, action, action_settle_time
                 )
 
             # 動的コンテンツの安定を待機
@@ -199,6 +350,24 @@ def _capture_screenshot(
     type=int,
     default=DEFAULT_SETTLE_TIME,
 )
+@click.option(
+    "--action",
+    "actions",
+    multiple=True,
+    type=str,
+    help=(
+        "UI action to execute before capture. "
+        "Format: TYPE:SELECTOR[:VALUE]. "
+        "Types: click, fill, wait, wait-text, wait-hidden. "
+        "Can be specified multiple times."
+    ),
+)
+@click.option(
+    "--action-settle-time",
+    help=f"Wait time after each action in ms (default: {DEFAULT_ACTION_SETTLE_TIME}).",
+    type=int,
+    default=DEFAULT_ACTION_SETTLE_TIME,
+)
 @handle_exception
 def screenshot(
     url: str,
@@ -211,6 +380,8 @@ def screenshot(
     width: int,
     height: int,
     settle_time: int,
+    actions: tuple[str, ...],
+    action_settle_time: int,
 ) -> None:
     """Capture Gradio UI screenshot using Playwright.
 
@@ -233,10 +404,26 @@ def screenshot(
         #id-search-input     Record ID search input
         #prev-page           Previous page button
         #next-page           Next page button
+
+    Action Examples:
+        # ID search then capture board
+        maou screenshot \\
+          --action "fill:#id-search-input input:mock_id_0" \\
+          --action "click:#id-search-btn" \\
+          --action "wait:#board-display svg" \\
+          --output /tmp/id-search.png
+
+        # Switch to data analysis tab
+        maou screenshot \\
+          --action "click:button[role='tab']:nth-of-type(3)" \\
+          --output /tmp/analytics.png
     """
     # 出力先の決定
     if not base64_output and not output:
         output = Path(DEFAULT_OUTPUT)
+
+    # アクション文字列をパース
+    parsed_actions = tuple(_parse_action(a) for a in actions)
 
     _capture_screenshot(
         url=url,
@@ -249,4 +436,6 @@ def screenshot(
         width=width,
         height=height,
         settle_time=settle_time,
+        actions=parsed_actions,
+        action_settle_time=action_settle_time,
     )
