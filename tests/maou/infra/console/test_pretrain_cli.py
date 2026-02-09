@@ -97,7 +97,7 @@ def test_pretrain_cli(
     result = runner.invoke(
         pretrain,
         [
-            "--input-dir",
+            "--input-path",
             str(tmp_path),
             "--input-cache-mode",
             "memory",

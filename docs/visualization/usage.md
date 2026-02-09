@@ -46,21 +46,21 @@ poetry run maou visualize --help
 ```bash
 # HCPEデータを可視化
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe
 
 # Preprocessingデータを可視化
 poetry run maou visualize \
-  --input-dir ./data/preprocessing \
+  --input-path ./data/preprocessing \
   --array-type preprocessing
 ```
 
 ### 特定ファイルを指定
 
 ```bash
-# カンマ区切りでファイルを指定
+# 複数ファイルを指定
 poetry run maou visualize \
-  --input-files data1.feather,data2.feather,data3.feather \
+  --input-path data1.feather --input-path data2.feather --input-path data3.feather \
   --array-type hcpe
 ```
 
@@ -69,7 +69,7 @@ poetry run maou visualize \
 ```bash
 # ポート8080で起動
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --port 8080
 ```
@@ -86,7 +86,7 @@ VSCodeターミナルで以下を実行：
 
 ```bash
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe
 ```
 
@@ -106,7 +106,7 @@ poetry run maou visualize \
 
 ```bash
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
 ```
@@ -149,7 +149,7 @@ uploaded = files.upload()
 ```python
 # セル3: 可視化サーバー起動
 !maou visualize \
-  --input-dir /content/drive/MyDrive/maou_data/hcpe \
+  --input-path /content/drive/MyDrive/maou_data/hcpe \
   --array-type hcpe \
   --share
 ```
@@ -228,7 +228,7 @@ This share link expires in 72 hours.
 ```bash
 # 1. Preprocessingデータを可視化
 poetry run maou visualize \
-  --input-dir ./data/preprocessing \
+  --input-path ./data/preprocessing \
   --array-type preprocessing
 ```
 
@@ -244,7 +244,7 @@ poetry run maou visualize \
 ```bash
 # epoch10のデータを可視化
 poetry run maou visualize \
-  --input-dir ./output/preprocessing/epoch10 \
+  --input-path ./output/preprocessing/epoch10 \
   --array-type preprocessing
 ```
 
@@ -260,7 +260,7 @@ poetry run maou visualize \
 ```bash
 # デバッグモードで起動
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
 ```
@@ -280,7 +280,7 @@ poetry run maou visualize \
 
 ```bash
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --server-name 0.0.0.0 \
   --port 7860
@@ -293,7 +293,7 @@ poetry run maou visualize \
 ```bash
 # ONNXモデルを指定（現在は未実装）
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --model-path ./models/model_epoch10.onnx
 ```
@@ -327,7 +327,7 @@ OSError: [Errno 48] Address already in use
 
 ```bash
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --port 8080
 ```
@@ -377,7 +377,7 @@ ls -la ./data/hcpe/
 ```bash
 # デバッグモードで起動
 poetry run maou visualize \
-  --input-dir ./data/hcpe \
+  --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
 
@@ -411,14 +411,14 @@ poetry run maou visualize \
    ```bash
    # 一部のファイルのみ指定
    poetry run maou visualize \
-     --input-files data1.feather,data2.feather \
+     --input-path data1.feather --input-path data2.feather \
      --array-type hcpe
    ```
 
 2. **環境変数でログレベルを下げる**:
    ```bash
    export MAOU_LOG_LEVEL=WARNING
-   poetry run maou visualize --input-dir ./data/hcpe --array-type hcpe
+   poetry run maou visualize --input-path ./data/hcpe --array-type hcpe
    ```
 
 ---

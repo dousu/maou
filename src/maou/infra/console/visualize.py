@@ -10,7 +10,10 @@ from typing import List, Optional
 import click
 
 from maou.infra.app_logging import app_logger
-from maou.infra.console.common import handle_exception
+from maou.infra.console.common import (
+    FileSystem,
+    handle_exception,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +34,11 @@ def _is_google_colab() -> bool:
 
 @click.command("visualize")
 @click.option(
-    "--input-dir",
-    help="データファイルを含むディレクトリパス（--use-mock-dataの場合は不要）．",
+    "--input-path",
+    help="入力ファイルまたはディレクトリパス（複数指定可，--use-mock-dataの場合は不要）．",
     type=click.Path(exists=True, path_type=Path),
     required=False,
-)
-@click.option(
-    "--input-files",
-    help="カンマ区切りのデータファイルパスリスト（--use-mock-dataの場合は不要）．",
-    type=str,
-    required=False,
+    multiple=True,
 )
 @click.option(
     "--array-type",
@@ -89,8 +87,7 @@ def _is_google_colab() -> bool:
 )
 @handle_exception
 def visualize(
-    input_dir: Optional[Path],
-    input_files: Optional[str],
+    input_path: tuple[Path, ...],
     array_type: str,
     port: int,
     share: bool,
@@ -106,13 +103,13 @@ def visualize(
         maou visualize --use-mock-data --array-type hcpe
 
         # ディレクトリからHCPEデータを可視化
-        maou visualize --input-dir ./data/hcpe --array-type hcpe
+        maou visualize --input-path ./data/hcpe --array-type hcpe
 
-        # 特定のファイルでpreprocessingデータを可視化
-        maou visualize --input-files data1.feather,data2.feather --array-type preprocessing
+        # 特定のファイルを可視化
+        maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
 
         # 公開リンクを作成
-        maou visualize --input-dir ./data --array-type hcpe --share
+        maou visualize --input-path ./data --array-type hcpe --share
     """
     # デバッグモード設定
     if debug_mode:
@@ -138,12 +135,12 @@ def visualize(
         app_logger.info(
             "Using mock data mode - no actual files will be read"
         )
-    elif input_dir or input_files:
-        file_paths = _resolve_file_paths(input_dir, input_files)
+    elif input_path:
+        file_paths = _resolve_file_paths(input_path)
 
         if not file_paths:
             raise click.ClickException(
-                "No .feather files found in the specified input directory or files."
+                "No .feather files found in the specified input paths."
             )
     else:
         # Allow empty startup - user will load data from UI
@@ -187,14 +184,12 @@ def visualize(
 
 
 def _resolve_file_paths(
-    input_dir: Optional[Path],
-    input_files: Optional[str],
+    input_paths: tuple[Path, ...],
 ) -> List[Path]:
-    """ディレクトリまたはカンマ区切りリストからファイルパスを解決．
+    """入力パス(ファイル・ディレクトリ混在可)からファイルパスを解決．
 
     Args:
-        input_dir: 入力ディレクトリパス
-        input_files: カンマ区切りファイルパス文字列
+        input_paths: 入力パスのタプル(ファイルまたはディレクトリ)
 
     Returns:
         解決されたファイルパスのリスト
@@ -202,33 +197,15 @@ def _resolve_file_paths(
     Raises:
         click.ClickException: 入力が不正な場合
     """
-    if input_files:
-        # カンマ区切りリストから解析
-        paths = [
-            Path(f.strip()) for f in input_files.split(",")
-        ]
-
-        # 存在確認
-        for path in paths:
-            if not path.exists():
-                raise click.ClickException(
-                    f"File not found: {path}"
-                )
-
-        return paths
-
-    elif input_dir:
-        # ディレクトリから.featherファイルを検索
-        feather_files = sorted(input_dir.glob("*.feather"))
-
-        if not feather_files:
-            app_logger.warning(
-                f"No .feather files found in {input_dir}"
-            )
-
-        return feather_files
-
-    else:
-        raise click.ClickException(
-            "Must provide either --input-dir or --input-files"
+    result: List[Path] = []
+    for p in input_paths:
+        result.extend(
+            FileSystem.collect_files(p, ext=".feather")
         )
+
+    if not result:
+        app_logger.warning(
+            "No .feather files found in the specified input paths"
+        )
+
+    return sorted(set(result))

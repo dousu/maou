@@ -770,7 +770,7 @@ uv run maou utility generate-stage2-data --input-path /tmp/test_hcpe/ --output-d
 
 ```bash
 # サーバー起動
-uv run maou visualize --input-files /tmp/test_stage2/stage2.feather --array-type stage2 --server-name 0.0.0.0 --port 7860 &
+uv run maou visualize --input-path /tmp/test_stage2/stage2.feather --array-type stage2 --server-name 0.0.0.0 --port 7860 &
 sleep 10
 
 # スクリーンショット取得

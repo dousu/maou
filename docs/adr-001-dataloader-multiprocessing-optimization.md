@@ -303,7 +303,7 @@ for batch in dataloader:
 ```bash
 # 推奨設定（CPUコア数の2-4倍程度）
 poetry run maou learn-model \
-  --input-dir /path/to/data \
+  --input-path /path/to/data \
   --input-format preprocess \
   --dataloader-workers 4 \
   --pin-memory \

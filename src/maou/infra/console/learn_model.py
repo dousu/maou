@@ -55,8 +55,8 @@ S3DataSource: S3DataSourceType | None = getattr(
 
 @click.command("learn-model")
 @click.option(
-    "--input-dir",
-    help="Input data directory.",
+    "--input-path",
+    help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -416,21 +416,21 @@ S3DataSource: S3DataSourceType | None = getattr(
     show_default=True,
 )
 @click.option(
-    "--stage1-data-dir",
+    "--stage1-data-path",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory containing Stage 1 (reachable squares) training data.",
+    help="File or directory path for Stage 1 (reachable squares) training data.",
     required=False,
 )
 @click.option(
-    "--stage2-data-dir",
+    "--stage2-data-path",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory containing Stage 2 (legal moves) training data.",
+    help="File or directory path for Stage 2 (legal moves) training data.",
     required=False,
 )
 @click.option(
-    "--stage3-data-dir",
+    "--stage3-data-path",
     type=click.Path(exists=True, path_type=Path),
-    help="Directory containing Stage 3 (policy+value) training data.",
+    help="File or directory path for Stage 3 (policy+value) training data.",
     required=False,
 )
 @click.option(
@@ -525,7 +525,7 @@ S3DataSource: S3DataSourceType | None = getattr(
 )
 @common.handle_exception
 def learn_model(
-    input_dir: Optional[Path],
+    input_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
@@ -575,9 +575,9 @@ def learn_model(
     resume_value_head_from: Optional[Path],
     freeze_backbone: bool,
     stage: str,
-    stage1_data_dir: Optional[Path],
-    stage2_data_dir: Optional[Path],
-    stage3_data_dir: Optional[Path],
+    stage1_data_path: Optional[Path],
+    stage2_data_path: Optional[Path],
+    stage3_data_path: Optional[Path],
     stage1_threshold: float,
     stage2_threshold: float,
     stage1_max_epochs: int,
@@ -677,7 +677,7 @@ def learn_model(
         raise ValueError(error_msg)
 
     # Initialize datasource
-    if input_dir is not None:
+    if input_path is not None:
         if (
             input_format != "hcpe"
             and input_format != "preprocess"
@@ -686,7 +686,7 @@ def learn_model(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_dir),
+            file_paths=FileSystem.collect_files(input_path),
             array_type=array_type,
             bit_pack=input_file_packed,
             cache_mode=input_cache_mode.lower(),
@@ -829,8 +829,8 @@ def learn_model(
     # Check if multi-stage training is requested
     is_multi_stage = (
         stage in ("1", "2", "all")
-        or stage1_data_dir is not None
-        or stage2_data_dir is not None
+        or stage1_data_path is not None
+        or stage2_data_path is not None
     )
 
     if is_multi_stage:
@@ -844,11 +844,11 @@ def learn_model(
         stage2_datasource = None
         stage3_datasource = None
 
-        if stage1_data_dir is not None:
+        if stage1_data_path is not None:
             stage1_datasource = (
                 FileDataSource.FileDataSourceSpliter(
                     file_paths=FileSystem.collect_files(
-                        stage1_data_dir
+                        stage1_data_path
                     ),
                     array_type="stage1",
                     bit_pack=False,
@@ -856,11 +856,11 @@ def learn_model(
                 )
             )
 
-        if stage2_data_dir is not None:
+        if stage2_data_path is not None:
             stage2_datasource = (
                 FileDataSource.FileDataSourceSpliter(
                     file_paths=FileSystem.collect_files(
-                        stage2_data_dir
+                        stage2_data_path
                     ),
                     array_type="stage2",
                     bit_pack=False,
@@ -868,11 +868,11 @@ def learn_model(
                 )
             )
 
-        if stage3_data_dir is not None:
+        if stage3_data_path is not None:
             stage3_datasource = (
                 FileDataSource.FileDataSourceSpliter(
                     file_paths=FileSystem.collect_files(
-                        stage3_data_dir
+                        stage3_data_path
                     ),
                     array_type=array_type,
                     bit_pack=input_file_packed,

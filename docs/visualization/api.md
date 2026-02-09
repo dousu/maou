@@ -30,8 +30,7 @@ poetry run maou visualize [OPTIONS]
 
 | オプション | 型 | 必須 | デフォルト | 説明 |
 |-----------|-----|-----|----------|------|
-| `--input-dir` | Path | ❌ | - | データファイルを含むディレクトリパス |
-| `--input-files` | String | ❌ | - | カンマ区切りのファイルパスリスト |
+| `--input-path` | Path | ❌ | - | 入力ファイルまたはディレクトリパス（複数指定可） |
 | `--array-type` | Choice | ✅ | - | データ型（hcpe, preprocessing, stage1, stage2） |
 | `--port` | Int | ❌ | 7860 | Gradioサーバーポート |
 | `--share` | Flag | ❌ | False | Gradio公開リンク作成 |
@@ -43,13 +42,13 @@ poetry run maou visualize [OPTIONS]
 
 ```bash
 # ディレクトリからHCPEデータを可視化
-poetry run maou visualize --input-dir ./data/hcpe --array-type hcpe
+poetry run maou visualize --input-path ./data/hcpe --array-type hcpe
 
 # 特定ファイルでpreprocessingデータを可視化
-poetry run maou visualize --input-files data1.feather,data2.feather --array-type preprocessing
+poetry run maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
 
 # カスタムポートと公開リンク
-poetry run maou visualize --input-dir ./data --array-type hcpe --port 8080 --share
+poetry run maou visualize --input-path ./data --array-type hcpe --port 8080 --share
 ```
 
 ---

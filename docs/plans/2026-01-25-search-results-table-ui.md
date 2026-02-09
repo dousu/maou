@@ -38,7 +38,7 @@
 
 **Step 2: 動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/data`
+Run: `uv run maou visualize --input-path /path/to/data`
 
 Expected: 盤面表示の下に「選択中のID」テキストボックスが表示される
 
@@ -122,7 +122,7 @@ git commit -m "feat(visualization): add ID textbox for copy functionality"
 
 **Step 3: 動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/data`
+Run: `uv run maou visualize --input-path /path/to/data`
 
 Expected: テーブルの行をクリックすると盤面が切り替わり，IDテキストボックスにIDが表示される
 
@@ -229,7 +229,7 @@ git commit -m "feat(visualization): add table row click to display board"
 
 **Step 4: 動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/data`
+Run: `uv run maou visualize --input-path /path/to/data`
 
 Expected: ページ移動，レコードナビゲーション時にもIDテキストボックスが更新される
 
@@ -266,7 +266,7 @@ Gradio Dataframeは`gr.update()`で`headers`を動的に更新できる．`_sear
 
 **Step 2: 動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/data`
+Run: `uv run maou visualize --input-path /path/to/data`
 
 Expected: カラム名が「Index, ID, Eval, Moves」などの意味のある名前で表示される
 
@@ -312,7 +312,7 @@ git commit -m "fix(visualization): update table headers dynamically"
 
 **Step 4: 動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/data`
+Run: `uv run maou visualize --input-path /path/to/data`
 
 Expected: データがない状態でもエラーなく動作する
 
@@ -332,7 +332,7 @@ git commit -m "fix(visualization): handle empty state for ID textbox"
 
 **Step 1: 全機能の動作確認**
 
-Run: `uv run maou visualize --input-dir /path/to/test/data`
+Run: `uv run maou visualize --input-path /path/to/test/data`
 
 確認項目:
 - [ ] テーブル行クリック → 盤面表示が更新される

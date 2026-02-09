@@ -17,7 +17,7 @@
 
 | Flag(s) | Required | Description |
 | --- | --- | --- |
-| `--input-dir PATH` + optional `--input-file-packed` | one of the sources | Streams local `.npy` shards and can unpack bit-packed HCPE tensors. Supplying `--sample-ratio` here logs a warning because every file is already on disk.【F:src/maou/infra/console/utility.py†L520-L821】 |
+| `--input-path PATH` + optional `--input-file-packed` | one of the sources | Streams local `.npy` shards and can unpack bit-packed HCPE tensors. Supplying `--sample-ratio` here logs a warning because every file is already on disk.【F:src/maou/infra/console/utility.py†L520-L821】 |
 | `--input-dataset-id` + `--input-table-name` | pair | Pulls from BigQuery with the same batching, cache sizing, clustering, and partition controls as `learn-model`. Missing GCP extras cause a hard error.【F:src/maou/infra/console/utility.py†L824-L868】 |
 | `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | provider-specific | Downloads tensors via `GCSDataSource`/`S3DataSource` splitters. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional sampling ratios; requires the respective optional extras.【F:src/maou/infra/console/utility.py†L869-L951】 |
 | `--input-format {hcpe,preprocess}` | required | Determines transforms and informs the interface `datasource_type`. Any other value raises `ValueError`.【F:src/maou/infra/console/utility.py†L520-L550】【F:src/maou/interface/utility_interface.py†L213-L216】 |

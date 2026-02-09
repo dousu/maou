@@ -34,6 +34,9 @@ from maou.domain.visualization.board_renderer import (  # noqa: E402
     BoardPosition,
     SVGBoardRenderer,
 )
+from maou.infra.file_system.file_system import (  # noqa: E402
+    FileSystem,
+)
 from maou.infra.visualization.indexing_state import (  # noqa: E402
     IndexingState,
 )
@@ -928,7 +931,9 @@ class GradioVisualizationServer:
         if not path.is_dir():
             raise ValueError(f"Not a directory: {path}")
 
-        feather_files = sorted(path.glob("*.feather"))
+        feather_files = FileSystem.collect_files(
+            path, ext=".feather"
+        )
 
         if not feather_files:
             raise ValueError(
@@ -938,7 +943,7 @@ class GradioVisualizationServer:
         logger.info(
             f"Found {len(feather_files)} .feather files in {path}"
         )
-        return feather_files
+        return sorted(feather_files)
 
     def _resolve_file_list(self, files_str: str) -> List[Path]:
         """Resolve comma-separated file paths．

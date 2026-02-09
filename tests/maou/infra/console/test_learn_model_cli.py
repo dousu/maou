@@ -37,7 +37,7 @@ def test_learn_model_passes_cache_mode(
         result = runner.invoke(
             learn_model.learn_model,
             [
-                "--input-dir",
+                "--input-path",
                 str(input_path),
                 "--input-cache-mode",
                 "memory",
@@ -70,7 +70,7 @@ def test_learn_model_detect_anomaly_flag(
         result = runner.invoke(
             learn_model.learn_model,
             [
-                "--input-dir",
+                "--input-path",
                 str(input_path),
                 "--detect-anomaly",
             ],

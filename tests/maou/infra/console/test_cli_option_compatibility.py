@@ -65,9 +65,9 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "resume-value-head-from",  # コンポーネント別再開（不要）
         "freeze-backbone",  # バックボーン凍結（不要）
         "stage",  # マルチステージ学習（不要）
-        "stage1-data-dir",  # Stage 1データディレクトリ（不要）
-        "stage2-data-dir",  # Stage 2データディレクトリ（不要）
-        "stage3-data-dir",  # Stage 3データディレクトリ（不要）
+        "stage1-data-path",  # Stage 1データパス（不要）
+        "stage2-data-path",  # Stage 2データパス（不要）
+        "stage3-data-path",  # Stage 3データパス（不要）
         "stage1-threshold",  # Stage 1閾値（不要）
         "stage2-threshold",  # Stage 2閾値（不要）
         "stage1-max-epochs",  # Stage 1最大エポック（不要）
@@ -122,7 +122,7 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
     # （出力，ロギング，チェックポイント関連を除く）
     training_params = {
         # 入力関連
-        "input-dir",
+        "input-path",
         "input-file-packed",
         "input-dataset-id",
         "input-table-name",

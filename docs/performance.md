@@ -58,7 +58,7 @@ training_loop = TrainingLoop(
 ### DataLoader Benchmarking
 ```bash
 poetry run maou utility benchmark-dataloader \
-  --input-dir /path/to/processed \
+  --input-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```
@@ -66,7 +66,7 @@ poetry run maou utility benchmark-dataloader \
 ### Training Performance
 ```bash
 poetry run maou utility benchmark-training \
-  --input-dir /path/to/processed \
+  --input-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```

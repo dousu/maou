@@ -96,7 +96,7 @@ class Stage2DataGenerationUseCase:
         )
 
         # Collect feather files
-        feather_files = sorted(input_dir.glob("*.feather"))
+        feather_files = sorted(input_dir.rglob("*.feather"))
         if not feather_files:
             raise FileNotFoundError(
                 f"No .feather files found in {input_dir}"

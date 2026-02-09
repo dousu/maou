@@ -22,8 +22,8 @@ from maou.infra.console.common import (
 
 @click.command("benchmark-dataloader")
 @click.option(
-    "--input-dir",
-    help="Input data directory.",
+    "--input-path",
+    help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -191,7 +191,7 @@ from maou.infra.console.common import (
 )
 @handle_exception
 def benchmark_dataloader(
-    input_dir: Optional[Path],
+    input_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
@@ -250,13 +250,13 @@ def benchmark_dataloader(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_dir is not None:
+    if input_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_dir),
+            file_paths=FileSystem.collect_files(input_path),
             array_type=array_type,
             bit_pack=input_file_packed,
             cache_mode=input_cache_mode,
@@ -419,8 +419,8 @@ def benchmark_dataloader(
 
 @click.command("benchmark-training")
 @click.option(
-    "--input-dir",
-    help="Input data directory.",
+    "--input-path",
+    help="Input file or directory path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -755,7 +755,7 @@ def benchmark_dataloader(
 )
 @handle_exception
 def benchmark_training(
-    input_dir: Optional[Path],
+    input_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
@@ -835,7 +835,7 @@ def benchmark_training(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_dir is not None:
+    if input_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
@@ -848,7 +848,7 @@ def benchmark_training(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_dir),
+            file_paths=FileSystem.collect_files(input_path),
             array_type=array_type,
             bit_pack=input_file_packed,
             cache_mode=input_cache_mode,

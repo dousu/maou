@@ -16,10 +16,10 @@ from maou.interface.pretrain import (
 
 @click.command("pretrain")
 @click.option(
-    "--input-dir",
+    "--input-path",
     type=click.Path(path_type=Path, exists=True),
     required=False,
-    help="Input directory containing training data.",
+    help="Input file or directory path.",
 )
 @click.option(
     "--input-format",
@@ -143,7 +143,7 @@ from maou.interface.pretrain import (
 )
 @handle_exception
 def pretrain(
-    input_dir: Optional[Path],
+    input_path: Optional[Path],
     input_format: str,
     input_file_packed: bool,
     input_cache_mode: str,
@@ -166,10 +166,10 @@ def pretrain(
     app_logger.info(
         "Invoking masked autoencoder pretraining command."
     )
-    if input_dir is None:
+    if input_path is None:
         raise click.BadOptionUsage(
-            option_name="--input-dir",
-            message="--input-dir must be specified for pretraining.",
+            option_name="--input-path",
+            message="--input-path must be specified for pretraining.",
         )
 
     array_type = (
@@ -177,10 +177,10 @@ def pretrain(
         if input_format == "preprocess"
         else "hcpe"
     )
-    file_paths = FileSystem.collect_files(input_dir)
+    file_paths = FileSystem.collect_files(input_path)
     if not file_paths:
         raise click.ClickException(
-            f"No input files found under {input_dir}."
+            f"No input files found under {input_path}."
         )
 
     datasource = FileDataSource.FileDataSourceSpliter(

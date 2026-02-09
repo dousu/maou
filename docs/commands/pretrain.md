@@ -17,7 +17,7 @@
 
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--input-dir PATH` | ✅ | Folder containing `.npz`/`.npy` artifacts from the preprocessing pipeline. The CLI walks recursively and aborts when no files are found.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】 |
+| `--input-path PATH` | ✅ | Folder containing `.npz`/`.npy` artifacts from the preprocessing pipeline. The CLI walks recursively and aborts when no files are found.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】 |
 | `--input-format {preprocess,hcpe}` | default `preprocess` | Selects how `FileDataSourceSpliter` parses the files and informs the interface so HCPE-specific defaults can apply.【F:src/maou/infra/console/pretrain_cli.py†L21-L83】【F:src/maou/interface/pretrain.py†L13-L38】 |
 | `--input-file-packed/--no-input-file-packed` | default `--no-input-file-packed` | Flags whether local shards were bit-packed. Passed directly to `FileDataSource`.【F:src/maou/infra/console/pretrain_cli.py†L22-L66】 |
 | `--input-cache-mode {mmap,memory}` | default `mmap` | Chooses how the on-disk arrays are cached (memory-mapped or copied). Value is lower-cased before reaching the datasource builder.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】 |
@@ -43,7 +43,7 @@
 
 ## Execution flow
 
-1. **Datasource assembly** – After validating `--input-dir`, the CLI enumerates
+1. **Datasource assembly** – After validating `--input-path`, the CLI enumerates
    the files and instantiates `FileDataSource.FileDataSourceSpliter` with the
    selected format, pack mode, and cache mode. Remote datasources are not yet
    supported, so all training data must live locally.【F:src/maou/infra/console/pretrain_cli.py†L16-L83】
@@ -62,7 +62,7 @@
 
 ## Validation and guardrails
 
-- `--input-dir` must exist and contain files; the CLI aborts early if the folder
+- `--input-path` must exist and contain files; the CLI aborts early if the folder
   is empty so GPU resources are never allocated unnecessarily.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】
 - Cache mode strings are lower-cased and validated before building the
   datasource; invalid values raise descriptive errors.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】
@@ -87,7 +87,7 @@
 
 ```bash
 poetry run maou pretrain \
-  --input-dir artifacts/preprocess \
+  --input-path artifacts/preprocess \
   --input-format preprocess \
   --epochs 10 \
   --batch-size 128 \

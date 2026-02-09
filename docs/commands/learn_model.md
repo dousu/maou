@@ -18,7 +18,7 @@
 
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--input-dir PATH` | one of the sources | Recursively collects `.npy` shards through `FileSystem.collect_files`. Works with either `hcpe` or `preprocess` tensors, and can unpack bit-packed data via `--input-file-packed`.【F:src/maou/infra/console/learn_model.py†L1-L120】 |
+| `--input-path PATH` | one of the sources | Recursively collects `.npy` shards through `FileSystem.collect_files`. Works with either `hcpe` or `preprocess` tensors, and can unpack bit-packed data via `--input-file-packed`.【F:src/maou/infra/console/learn_model.py†L1-L120】 |
 | `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Any other string raises a `ValueError`.【F:src/maou/infra/console/learn_model.py†L96-L156】【F:src/maou/interface/learn.py†L101-L120】 |
 | `--input-dataset-id` + `--input-table-name` | pair | Streams from BigQuery when the optional `gcp` extra is installed. Requires `--input-format` to select the array schema and supports batching/cache knobs (below).【F:src/maou/infra/console/learn_model.py†L245-L330】 |
 | `--input-gcs` / `--input-s3` + bucket metadata | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Both providers need `--input-local-cache-dir` and honor optional bundling (`--input-enable-bundling`, `--input-bundle-size-gb`) and worker counts (`--input-max-workers`).【F:src/maou/infra/console/learn_model.py†L330-L399】 |
@@ -122,7 +122,7 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 
 ```bash
 poetry run maou learn-model \
-  --input-dir datasets/hcpe \
+  --input-path datasets/hcpe \
   --input-format hcpe \
   --epoch 20 \
   --batch-size 2048 \

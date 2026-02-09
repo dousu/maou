@@ -165,7 +165,7 @@ loss_fn_value = torch.nn.SmoothL1Loss()
 ```bash
 poetry run maou learn-model \
   --input-format preprocess \
-  --input-dir preprocess/floodgate/2020 \
+  --input-path preprocess/floodgate/2020 \
   --input-file-packed \
   --test-ratio 0.2 \
   --output-gcs \
@@ -188,7 +188,7 @@ poetry run maou learn-model \
 ```bash
 poetry run maou learn-model \
   --input-format preprocess \
-  --input-dir preprocess/floodgate/2020 \
+  --input-path preprocess/floodgate/2020 \
   --input-file-packed \
   --test-ratio 0.2 \
   --output-gcs \

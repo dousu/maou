@@ -19,8 +19,7 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 
 | フラグ | 必須 | 説明 |
 |--------|------|------|
-| `--input-dir PATH` | いずれか1つ | データファイルを含むディレクトリパス．再帰的に`.feather`ファイルを検索する． |
-| `--input-files TEXT` | いずれか1つ | カンマ区切りのデータファイルパスリスト．例：`file1.feather,file2.feather` |
+| `--input-path PATH` | いずれか1つ | 入力ファイルまたはディレクトリパス（複数指定可）．ディレクトリの場合は再帰的に`.feather`ファイルを検索する． |
 | `--use-mock-data` | いずれか1つ | モックデータを使用（UIテスト用）．実際のファイルは読み込まない． |
 
 **注意**: データソースを指定せずに起動した場合，UIからデータを読み込むことができる．
@@ -52,16 +51,16 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 
 ```bash
 # ファイル指定
-maou visualize --input-files ./data/stage1/stage1_data.feather --array-type stage1
+maou visualize --input-path ./data/stage1/stage1_data.feather --array-type stage1
 
 # ディレクトリ指定
-maou visualize --input-dir ./data/stage1/ --array-type stage1
+maou visualize --input-path ./data/stage1/ --array-type stage1
 ```
 
 ### HCPEデータの可視化
 
 ```bash
-maou visualize --input-dir ./data/hcpe/ --array-type hcpe
+maou visualize --input-path ./data/hcpe/ --array-type hcpe
 ```
 
 ### データソースなしで起動（UI操作）
@@ -80,7 +79,7 @@ maou visualize --use-mock-data --array-type hcpe
 ### 公開リンク作成（Google Colab等）
 
 ```bash
-maou visualize --input-files data.feather --array-type stage1 --share
+maou visualize --input-path data.feather --array-type stage1 --share
 ```
 
 ## UI機能

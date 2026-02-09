@@ -67,7 +67,7 @@ Stage 1 data generation complete!
 
 ```bash
 # 可視化サーバーを起動
-maou visualize --input-files ./data/stage1/stage1_data.feather --array-type stage1
+maou visualize --input-path ./data/stage1/stage1_data.feather --array-type stage1
 ```
 
 ブラウザで http://localhost:7860 にアクセスすると：
