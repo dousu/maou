@@ -54,6 +54,7 @@ class TestModeBadgeUpdate:
             server.search_index.total_records.return_value = 100
             server.file_paths = []
             server.array_type = "stage1"
+            server.use_mock_data = False
             server._index_lock = MagicMock()
             server._index_lock.__enter__ = MagicMock(
                 return_value=None
@@ -173,4 +174,41 @@ class TestModeBadgeUpdate:
             or "mode-badge" in mode_badge_result
         ), (
             f"Badge should contain 'NO DATA' or 'mode-badge', got: {mode_badge_result}"
+        )
+
+    def test_badge_shows_mock_mode_when_use_mock_data(
+        self,
+        mock_server: Any,
+    ) -> None:
+        """Badge should show 'MOCK MODE' when use_mock_data is True.
+
+        When the server is initialized with --use-mock-data flag,
+        the badge should always display 'MOCK MODE' regardless of
+        indexing status being 'ready'.
+        """
+        mock_server.use_mock_data = True
+        mock_server.indexing_state.get_status.return_value = (
+            "ready"
+        )
+
+        result = (
+            mock_server._check_indexing_status_with_transition(
+                prev_status="ready",
+                page_size=20,
+            )
+        )
+
+        mode_badge_result = result[4]
+
+        assert isinstance(mode_badge_result, str), (
+            f"Expected HTML string for mode_badge, got {type(mode_badge_result)}: "
+            f"{mode_badge_result}"
+        )
+        assert "MOCK" in mode_badge_result, (
+            f"Badge should contain 'MOCK' when use_mock_data=True, "
+            f"got: {mode_badge_result}"
+        )
+        assert "REAL" not in mode_badge_result, (
+            f"Badge should NOT contain 'REAL' when use_mock_data=True, "
+            f"got: {mode_badge_result}"
         )

@@ -55,6 +55,7 @@ class TestCheckIndexingStatusWithTransition:
             )
             server.file_paths = []
             server.array_type = "hcpe"
+            server.use_mock_data = False
             server._index_lock = MagicMock()
             server._index_lock.__enter__ = MagicMock(
                 return_value=None

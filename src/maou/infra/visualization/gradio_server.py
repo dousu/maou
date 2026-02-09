@@ -560,11 +560,17 @@ class GradioVisualizationServer:
                 f"- **Path:** {path_info}"
             )
 
+            # モックモード時は MOCK MODE バッジを表示
+            if self.use_mock_data:
+                badge = '<span class="mode-badge-text">🔴 MOCK MODE</span>'
+            else:
+                badge = '<span class="mode-badge-text">🟢 REAL MODE</span>'
+
             return (
                 status_msg,
                 gr.Button(interactive=True),
                 gr.Button(interactive=True),
-                '<span class="mode-badge-text">🟢 REAL MODE</span>',
+                badge,
             )
         elif status == "failed":
             error = self.indexing_state.get_error()
