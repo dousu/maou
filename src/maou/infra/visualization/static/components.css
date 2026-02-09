@@ -880,8 +880,8 @@
 
 /* Desktop: 1200px+ (default styles already optimized for desktop) */
 
-/* Tablet: 768px - 1199px */
-@media (max-width: 1199px) {
+/* Tablet: 768px - 1024px */
+@media (max-width: 1024px) {
     .gradio-container {
         max-width: 100%;
         padding: var(--space-6) !important;
@@ -923,8 +923,8 @@
     }
 }
 
-/* Small Tablet / Large Mobile: 600px - 767px */
-@media (max-width: 767px) {
+/* Small Tablet / Large Mobile: below 1024px (stacked layout) */
+@media (max-width: 1024px) {
     .gradio-container {
         padding: var(--space-4) !important;
     }
@@ -940,9 +940,11 @@
         max-width: 100% !important;
     }
 
-    /* Hide sidebar on mobile (too narrow) */
+    /* Show sidebar above board in stacked layout */
     .gradio-container .gr-column:first-child {
-        display: none !important;
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
     }
 
     /* Full width main content */
@@ -1038,7 +1040,7 @@
 }
 
 /* SVG Board Responsive Sizing */
-@media (max-width: 1199px) {
+@media (max-width: 1024px) {
     /* Board already responsive via viewBox, but ensure container doesn't overflow */
     .gradio-container svg {
         max-width: 100%;
