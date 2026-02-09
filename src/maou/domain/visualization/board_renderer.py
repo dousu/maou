@@ -501,29 +501,29 @@ class SVGBoardRenderer:
         """
         hand_parts = []
 
-        # 先手の持ち駒（左側）
-        hand_parts.append(
-            self._draw_single_hand(
-                pieces=pieces_in_hand[:7],
-                x_base=self.MARGIN,
-                y_base=self.MARGIN,
-                title="先手持ち駒",
-                is_black=True,
-            )
-        )
-
-        # 後手の持ち駒（右側）
+        # 後手の持ち駒（左側）
         hand_parts.append(
             self._draw_single_hand(
                 pieces=pieces_in_hand[7:14],
+                x_base=self.MARGIN,
+                y_base=self.MARGIN,
+                title="後手持ち駒",
+                is_black=False,
+            )
+        )
+
+        # 先手の持ち駒（右側）
+        hand_parts.append(
+            self._draw_single_hand(
+                pieces=pieces_in_hand[:7],
                 x_base=self.MARGIN
                 + self.HAND_AREA_WIDTH
                 + self.GAP_BETWEEN_HAND_AND_BOARD
                 + self.BOARD_WIDTH
                 + self.GAP_BETWEEN_HAND_AND_BOARD,
                 y_base=self.MARGIN,
-                title="後手持ち駒",
-                is_black=False,
+                title="先手持ち駒",
+                is_black=True,
             )
         )
 
@@ -738,8 +738,15 @@ class SVGBoardRenderer:
                 pieces_in_hand[:7],  # 先手の持ち駒
                 move_arrow.drop_piece_type or 0,
             )
-            # 持ち駒エリア（左側）の座標
-            from_x = self.MARGIN + self.HAND_AREA_WIDTH / 2
+            # 持ち駒エリア（右側）の座標
+            from_x = (
+                self.MARGIN
+                + self.HAND_AREA_WIDTH
+                + self.GAP_BETWEEN_HAND_AND_BOARD
+                + self.BOARD_WIDTH
+                + self.GAP_BETWEEN_HAND_AND_BOARD
+                + self.HAND_AREA_WIDTH / 2
+            )
             # タイトル(30px) + 余白(20px) + 各駒の位置
             from_y = self.MARGIN + 50 + display_index * 30
         else:
