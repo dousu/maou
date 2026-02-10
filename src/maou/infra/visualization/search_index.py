@@ -3,6 +3,7 @@
 ファイルからデータを読み込み，ID・評価値による高速検索を提供する．
 """
 
+import bisect
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -61,6 +62,11 @@ class SearchIndex:
         self._position_to_eval: Dict[Tuple[int, int], int] = {}
         self._total_records = 0
 
+        # 事前計算済みソート済みデータ (_finalize_index で初期化)
+        self._sorted_eval_keys: List[int] = []
+        self._eval_cumulative_counts: List[int] = []
+        self._sorted_ids: List[str] = []
+
         if use_mock_data:
             logger.warning(
                 "⚠️  MOCK MODE: Using generated mock data instead of reading files"
@@ -114,10 +120,27 @@ class SearchIndex:
             # Stage1/Stage2: eval不要（IDインデックスのみ使用）
 
         self._total_records = num_records
+        self._finalize_index()
         logger.info(
             f"✅ Mock index built: {num_records:,} records "
             f"(type={self.array_type})"
         )
+
+    def _finalize_index(self) -> None:
+        """インデックス構築後のソートと累積カウント計算．
+
+        eval値のソート済みキーリスト・累積カウント，
+        およびIDのソート済みリストを事前計算する．
+        """
+        self._sorted_eval_keys = sorted(self._eval_index.keys())
+
+        cumulative = 0
+        self._eval_cumulative_counts = []
+        for key in self._sorted_eval_keys:
+            cumulative += len(self._eval_index[key])
+            self._eval_cumulative_counts.append(cumulative)
+
+        self._sorted_ids = sorted(self._id_index.keys())
 
     def search_by_id(
         self, record_id: str
@@ -166,14 +189,20 @@ class SearchIndex:
         if not prefix or len(prefix) < 2:
             return []
 
-        # Python実装（O(n) - 小規模データ向け）
-        matching_ids = [
-            id_str
-            for id_str in self._id_index.keys()
-            if id_str.startswith(prefix)
-        ]
-        matching_ids.sort()
-        return matching_ids[:limit]
+        # bisectでプレフィックスの開始位置を特定: O(log N)
+        left = bisect.bisect_left(self._sorted_ids, prefix)
+
+        # プレフィックスに一致するIDを limit 件まで収集
+        results: List[str] = []
+        for i in range(left, len(self._sorted_ids)):
+            if self._sorted_ids[i].startswith(prefix):
+                results.append(self._sorted_ids[i])
+                if len(results) >= limit:
+                    break
+            else:
+                break  # ソート済みなのでプレフィックス不一致で終了
+
+        return results
 
     def get_all_ids(
         self, limit: Optional[int] = None
@@ -231,20 +260,35 @@ class SearchIndex:
             min_v = min_eval if min_eval is not None else -32768
             max_v = max_eval if max_eval is not None else 32767
 
-            # 該当する評価値のレコードを収集
-            results = []
-            for eval_value in sorted(self._eval_index.keys()):
-                if min_v <= eval_value <= max_v:
-                    results.extend(self._eval_index[eval_value])
+            # bisectで範囲内のキーインデックスを特定: O(log K)
+            left = bisect.bisect_left(
+                self._sorted_eval_keys, min_v
+            )
+            right = bisect.bisect_right(
+                self._sorted_eval_keys, max_v
+            )
 
-            # offset/limitを適用
-            return results[offset : offset + limit]
+            # 範囲内のキーに対して結果を収集 (offsetを考慮して必要分のみ)
+            results: List[Tuple[int, int]] = []
+            skipped = 0
+            for i in range(left, right):
+                eval_value = self._sorted_eval_keys[i]
+                records = self._eval_index[eval_value]
+                if skipped + len(records) <= offset:
+                    skipped += len(records)
+                    continue
+                start = max(0, offset - skipped)
+                remaining = limit - len(results)
+                end = min(len(records), start + remaining)
+                results.extend(records[start:end])
+                skipped += len(records)
+                if len(results) >= limit:
+                    break
+
+            return results[:limit]
         else:
             # 非HCPEデータ，またはeval filterなし -> 全データを返す
-            all_records = [
-                (file_idx, row_idx)
-                for file_idx, row_idx in self._id_index.values()
-            ]
+            all_records = list(self._id_index.values())
             return all_records[offset : offset + limit]
 
     def count_eval_range(
@@ -278,14 +322,31 @@ class SearchIndex:
             min_eval is not None or max_eval is not None
         ):
             # HCPEデータで評価値フィルタあり
+            if not self._sorted_eval_keys:
+                return 0
+
             min_v = min_eval if min_eval is not None else -32768
             max_v = max_eval if max_eval is not None else 32767
 
-            count = 0
-            for eval_value in self._eval_index.keys():
-                if min_v <= eval_value <= max_v:
-                    count += len(self._eval_index[eval_value])
-            return count
+            left = bisect.bisect_left(
+                self._sorted_eval_keys, min_v
+            )
+            right = bisect.bisect_right(
+                self._sorted_eval_keys, max_v
+            )
+
+            # 累積カウントから O(1) で計算
+            count_right = (
+                self._eval_cumulative_counts[right - 1]
+                if right > 0
+                else 0
+            )
+            count_left = (
+                self._eval_cumulative_counts[left - 1]
+                if left > 0
+                else 0
+            )
+            return count_right - count_left
         else:
             # 全データカウント
             return self._total_records
@@ -345,22 +406,30 @@ class SearchIndex:
                     if "eval" in df.columns:
                         eval_column = df["eval"]
 
-                # インデックスに追加
-                for row_idx in range(len(df)):
-                    record_id = str(id_column[row_idx])
-                    self._id_index[record_id] = (
-                        file_idx,
-                        row_idx,
-                    )
+                # IDインデックスの一括構築（ベクトル化）
+                import polars as pl
 
-                    # HCPE の場合は評価値インデックスも構築
-                    if eval_column is not None:
-                        eval_value = int(eval_column[row_idx])
-                        self._eval_index[eval_value].append(
-                            (file_idx, row_idx)
+                id_list = id_column.cast(pl.Utf8).to_list()
+                self._id_index.update(
+                    {
+                        record_id: (file_idx, row_idx)
+                        for row_idx, record_id in enumerate(
+                            id_list
                         )
+                    }
+                )
 
-                    self._total_records += 1
+                # evalインデックスの一括構築
+                if eval_column is not None:
+                    eval_list = eval_column.to_list()
+                    for row_idx, eval_value in enumerate(
+                        eval_list
+                    ):
+                        self._eval_index[
+                            int(eval_value)
+                        ].append((file_idx, row_idx))
+
+                self._total_records += len(df)
 
                 # 進捗をコールバックで通知
                 if progress_callback is not None:
@@ -371,6 +440,7 @@ class SearchIndex:
                         message,
                     )
 
+            self._finalize_index()
             logger.info(
                 f"✅ Index built: {self._total_records:,} total records"
             )
