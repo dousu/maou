@@ -4,15 +4,16 @@
 """
 
 import logging
+import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import polars as pl
 
 from maou.domain.board.shogi import CSHOGI_WHITE_OFFSET
 from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
-)
-from maou.infra.file_system.file_data_source import (
-    FileDataSource,
 )
 from maou.infra.visualization.search_index import SearchIndex
 
@@ -45,8 +46,12 @@ class DataRetriever:
         self.file_paths = file_paths
         self.array_type = array_type
 
-        # FileDataSourceは後で必要に応じて初期化
-        self._data_source: Optional[FileDataSource] = None
+        # スレッドセーフなDataFrameキャッシュ
+        self._df_cache: OrderedDict[int, pl.DataFrame] = (
+            OrderedDict()
+        )
+        self._df_cache_lock = threading.Lock()
+        self._df_cache_maxsize = 8
 
         if search_index.use_mock_data:
             logger.warning(
@@ -62,23 +67,51 @@ class DataRetriever:
             f"type={array_type}"
         )
 
-    def _ensure_data_source(self) -> FileDataSource:
-        """データソースを遅延初期化．
+    def _load_df_cached(self, file_index: int) -> pl.DataFrame:
+        """ファイルインデックスからDataFrameをロード(スレッドセーフキャッシュ付き)．
+
+        Args:
+            file_index: ファイルインデックス
 
         Returns:
-            FileDataSourceインスタンス
+            ロード済みDataFrame
         """
-        if self._data_source is None:
-            self._data_source = FileDataSource(
-                file_paths=self.file_paths,
-                array_type=self.array_type,
-                cache_mode="mmap",  # 効率的なランダムアクセス
-            )
-            logger.info(
-                "FileDataSource initialized with mmap cache"
-            )
+        with self._df_cache_lock:
+            if file_index in self._df_cache:
+                # LRU: 最近使用されたものを末尾に移動
+                self._df_cache.move_to_end(file_index)
+                return self._df_cache[file_index]
 
-        return self._data_source
+        # ロック外でI/Oを実行 (ブロッキング時間の最小化)
+        from maou.domain.data.rust_io import (
+            load_hcpe_df,
+            load_preprocessing_df,
+            load_stage1_df,
+            load_stage2_df,
+        )
+
+        loader_map = {
+            "hcpe": load_hcpe_df,
+            "preprocessing": load_preprocessing_df,
+            "stage1": load_stage1_df,
+            "stage2": load_stage2_df,
+        }
+        load_df = loader_map[self.array_type]
+        file_path = self.file_paths[file_index]
+        df = load_df(file_path)
+
+        with self._df_cache_lock:
+            self._df_cache[file_index] = df
+            # サイズ超過時は最古エントリを削除
+            while len(self._df_cache) > self._df_cache_maxsize:
+                self._df_cache.popitem(last=False)
+
+        return df
+
+    def clear_cache(self) -> None:
+        """DataFrameキャッシュをクリア．"""
+        with self._df_cache_lock:
+            self._df_cache.clear()
 
     def get_by_id(
         self, record_id: str
@@ -183,20 +216,59 @@ class DataRetriever:
             f"✅ REAL: Loading {len(locations)} records from files"
         )
 
-        records = []
-        for file_index, row_number in locations:
+        return self._load_records_grouped(locations)
+
+    def _load_records_grouped(
+        self, locations: List[Tuple[int, int]]
+    ) -> List[Dict[str, Any]]:
+        """ロケーションをファイル単位でグルーピングして効率的にロード．
+
+        Args:
+            locations: (file_index, row_number)のリスト
+
+        Returns:
+            レコードデータのリスト（元の順序を保持）
+        """
+        from collections import defaultdict
+
+        # ファイルごとにグルーピング(元の順序を保持するためインデックスも記録)
+        file_groups: Dict[int, List[Tuple[int, int]]] = (
+            defaultdict(list)
+        )
+        for original_idx, (file_index, row_number) in enumerate(
+            locations
+        ):
+            file_groups[file_index].append(
+                (original_idx, row_number)
+            )
+
+        # 結果配列を事前確保
+        results: List[Optional[Dict[str, Any]]] = [None] * len(
+            locations
+        )
+
+        # ファイル単位でバッチロード
+        for file_index, rows in file_groups.items():
             try:
-                record = self._load_record_at_location(
-                    file_index, row_number
-                )
-                records.append(record)
+                df = self._load_df_cached(file_index)
+                for original_idx, row_number in rows:
+                    try:
+                        record = self._extract_record_from_df(
+                            df, row_number
+                        )
+                        results[original_idx] = record
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to extract row {row_number} "
+                            f"from file {file_index}: {e}"
+                        )
             except Exception as e:
                 logger.error(
-                    f"Failed to load record at ({file_index}, {row_number}): {e}"
+                    f"Failed to load file {file_index}: {e}"
                 )
-                continue  # Skip failed records
 
-        return records
+        # Noneを除外して元の順序で返す
+        return [r for r in results if r is not None]
 
     def _load_record_at_location(
         self, file_index: int, row_number: int
@@ -213,35 +285,27 @@ class DataRetriever:
         Raises:
             Exception: ファイル読み込みエラー
         """
-        from maou.domain.data.rust_io import (
-            load_hcpe_df,
-            load_preprocessing_df,
-            load_stage1_df,
-            load_stage2_df,
-        )
+        df = self._load_df_cached(file_index)
+        return self._extract_record_from_df(df, row_number)
 
-        loader_map = {
-            "hcpe": load_hcpe_df,
-            "preprocessing": load_preprocessing_df,
-            "stage1": load_stage1_df,
-            "stage2": load_stage2_df,
-        }
+    def _extract_record_from_df(
+        self, df: pl.DataFrame, row_number: int
+    ) -> Dict[str, Any]:
+        """DataFrameの指定行をレコード辞書に変換．
 
-        load_df = loader_map[self.array_type]
-        file_path = self.file_paths[file_index]
+        Args:
+            df: 対象DataFrame
+            row_number: 行番号
 
-        # DataFrameをロード
-        df = load_df(file_path)
-
-        # 行を抽出して辞書に変換
-        # df[row_number]は1行のDataFrameを返す
+        Returns:
+            レコードデータの辞書
+        """
         row = df[row_number]
-        record = {}
+        record: Dict[str, Any] = {}
         for col in df.columns:
             value = row[col]
             # Polars Seriesの場合，最初の要素を取得
             if hasattr(value, "to_list"):
-                # Seriesから値を取り出す（長さ1のSeriesなので[0]）
                 record[col] = value.to_list()[0]
             else:
                 record[col] = value.item()
