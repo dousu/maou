@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "GPL-3.0-only"}
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "click>=8.1.7",
     "cshogi>=0.9.2",
@@ -103,6 +103,7 @@ torch = [
   { index = "pytorch-cuda", extra = "mpu" },
   { index = "pytorch-cuda", extra = "tpu" },
 ]
+serena-agent = { git = "https://github.com/oraios/serena" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -141,6 +142,7 @@ dev = [
     "netron>=8.6.8",
     "maturin>=1.7.0",
     "pytest-cov>=4.0.0",
+    "serena-agent",
 ]
 
 [tool.commitizen]
