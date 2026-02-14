@@ -7,5 +7,9 @@
     "MCP_TOOL_TIMEOUT": "240000",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "respectGitignore": true,
+  "plansDirectory": "./docs/plans",
+  "teamateMode": "tmux"
 }
