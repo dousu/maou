@@ -8,6 +8,7 @@
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
   },
+  "cleanupPeriodDays": 15,
   "enableAllProjectMcpServers": true,
   "respectGitignore": true,
   "plansDirectory": "./docs/plans",
