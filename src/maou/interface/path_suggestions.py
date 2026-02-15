@@ -143,6 +143,46 @@ class PathSuggestionService:
 
         return suggestions
 
+    def preload_directories(
+        self,
+        base_path: Optional[Path] = None,
+        max_depth: int = 2,
+        limit: int = 100,
+    ) -> List[str]:
+        """初期表示用のディレクトリ候補をプリロード．
+
+        既存の get_directory_suggestions とは異なり，prefix入力なしで
+        base_path以下のディレクトリを直接スキャンして返す．
+
+        Args:
+            base_path: スキャン起点（None = cwd）
+            max_depth: スキャン深度（デフォルト: 2）
+            limit: 最大候補数（デフォルト: 100）
+
+        Returns:
+            ソート済みディレクトリパスのリスト
+        """
+        if base_path is None:
+            base_path = Path.cwd()
+
+        base_str = str(base_path)
+
+        if self.scanner is not None:
+            try:
+                self.scanner.scan_directories(
+                    base_str, max_depth=max_depth
+                )
+                return self.scanner.search_directory_prefix(
+                    base_str, limit
+                )
+            except Exception as e:
+                logger.error(f"Directory preload failed: {e}")
+
+        # Python fallback
+        return self._python_directory_search(
+            base_path, base_str, limit
+        )
+
     def _infer_base_path(self, prefix: str) -> Path:
         """Infer base directory from prefix．
 

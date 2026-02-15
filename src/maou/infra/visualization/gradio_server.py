@@ -1309,13 +1309,18 @@ class GradioVisualizationServer:
                                 scale=1,
                             )
 
+                        initial_dirs = self.path_suggester.preload_directories(
+                            base_path=Path.cwd(),
+                            max_depth=2,
+                            limit=100,
+                        )
                         dir_input = gr.Dropdown(
                             label="📁 Directory Path",
-                            choices=[],  # Initially empty
+                            choices=initial_dirs,
                             value=None,
-                            allow_custom_value=True,  # Allow manual path entry
-                            filterable=True,  # Enable incremental search
-                            info="Type to search directories (2+ characters for suggestions)",
+                            allow_custom_value=True,
+                            filterable=True,
+                            info="Select from list or type to search",
                             visible=True,
                             scale=3,
                         )
@@ -1608,7 +1613,11 @@ class GradioVisualizationServer:
             id_search_btn.click(
                 fn=self._search_by_id,
                 inputs=[id_input],
-                outputs=[board_display, record_details],
+                outputs=[
+                    board_display,
+                    record_details,
+                    selected_record_id,
+                ],
             )
 
             eval_search_btn.click(
@@ -2211,20 +2220,26 @@ class GradioVisualizationServer:
 
     def _search_by_id(
         self, record_id: str
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> Tuple[str, Dict[str, Any], str]:
         """ID検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
 
         Args:
             record_id: 検索するレコードID
 
         Returns:
-            (board_svg, record_details)のタプル
+            (board_svg, record_details, selected_record_id)のタプル
         """
         # Thread-safe access to viz_interface
         with self._index_lock:
             if not self.has_data or self.viz_interface is None:
-                return self._search_by_id_mock(record_id)
-            return self.viz_interface.search_by_id(record_id)
+                board_svg, details = self._search_by_id_mock(
+                    record_id
+                )
+                return board_svg, details, record_id
+            board_svg, details = (
+                self.viz_interface.search_by_id(record_id)
+            )
+            return board_svg, details, record_id
 
     def _get_default_board_svg(self) -> str:
         """デフォルトの盤面SVGを生成（平手初期配置）．"""

@@ -320,6 +320,11 @@ class DataRetriever:
                     f"Visualization may not work properly."
                 )
 
+        # UInt64 IDをJavaScript安全な文字列に変換
+        # （Gradio JSON化時の53bit精度丸めを防止）
+        if "id" in record:
+            record["id"] = str(record["id"])
+
         return record
 
     def _decode_hcp_to_board_info(
