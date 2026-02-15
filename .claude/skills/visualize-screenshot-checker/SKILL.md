@@ -136,6 +136,7 @@ uv run maou screenshot \
 ```bash
 uv run maou screenshot \
   --url http://localhost:7860 \
+  --action "wait:#board-display svg" \
   --selector "#board-display" \
   --output /tmp/check-0202-stage1-board.png
 ```
@@ -153,6 +154,7 @@ uv run maou screenshot \
 ```bash
 uv run maou screenshot \
   --url http://localhost:7860 \
+  --action "wait:#board-display svg" \
   --selector "#board-display" \
   --output /tmp/check-0203-stage2-board.png
 ```
@@ -169,6 +171,7 @@ uv run maou screenshot \
 ```bash
 uv run maou screenshot \
   --url http://localhost:7860 \
+  --action "wait:#board-display svg" \
   --selector "#board-display" \
   --output /tmp/check-0204-preprocessing-board.png
 ```
@@ -192,6 +195,7 @@ HCPE の盤面で将棋のルール・表示規則を重点的に確認する．
 ```bash
 uv run maou screenshot \
   --url http://localhost:7860 \
+  --action "wait:#board-display svg" \
   --selector "#board-display" \
   --output /tmp/check-0301-coordinates.png \
   --width 1920 --height 1080
@@ -559,6 +563,7 @@ uv run maou screenshot \
 
 - サーバーの起動には 8-10 秒程度かかる．`sleep 8` を確保すること
 - Gradio は SPA のため `--settle-time 3000` 以上を推奨
+- **`--selector "#board-display"` を使用する場合，必ず `--action "wait:#board-display svg"` を併用すること**．盤面 SVG は非同期レンダリングされるため，`wait` なしではデータ読み込み前の空盤面がキャプチャされる
 - mock データはランダム生成のため，盤面の駒配置は毎回異なる
 - `--action` オプションでUI操作（ID検索，タブ切り替え，行クリック等）を撮影前に実行可能
 - アクションフォーマット: `TYPE:SELECTOR[:VALUE]`（click, fill, wait, wait-text, wait-hidden）
