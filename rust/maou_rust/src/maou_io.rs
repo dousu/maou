@@ -12,49 +12,64 @@ fn hello() -> PyResult<String> {
 }
 
 #[pyfunction]
-fn save_hcpe_feather(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
+fn save_hcpe_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    maou_io_core::arrow_io::save_feather(&batch, &file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     Ok(())
 }
 
 #[pyfunction]
 fn load_hcpe_feather(py: Python, file_path: String) -> PyResult<PyObject> {
-    let batch = maou_io_core::arrow_io::load_feather(&file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    let batch = py
+        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     batch.to_pyarrow(py)
 }
 
 #[pyfunction]
-fn save_preprocessing_feather(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
+fn save_preprocessing_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    maou_io_core::arrow_io::save_feather(&batch, &file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     Ok(())
 }
 
 #[pyfunction]
 fn load_preprocessing_feather(py: Python, file_path: String) -> PyResult<PyObject> {
-    let batch = maou_io_core::arrow_io::load_feather(&file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    let batch = py
+        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     batch.to_pyarrow(py)
 }
 
 // Generic feather I/O functions (for Stage1/Stage2 data)
 
 #[pyfunction]
-fn save_feather_file(_py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
+fn save_feather_file(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    maou_io_core::arrow_io::save_feather(&batch, &file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     Ok(())
 }
 
 #[pyfunction]
 fn load_feather_file(py: Python, file_path: String) -> PyResult<PyObject> {
-    let batch = maou_io_core::arrow_io::load_feather(&file_path)
-        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    let batch = py
+        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .map_err(|e: MaouIOError| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+        })?;
     batch.to_pyarrow(py)
 }
 
