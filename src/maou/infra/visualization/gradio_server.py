@@ -2545,25 +2545,6 @@ class GradioVisualizationServer:
                 f"Record {new_index + 1} / {num_records}"
             )
 
-            # ページは変わらないので，現在のデータを返す
-            table_data = [
-                self.viz_interface.renderer.format_table_row(
-                    i + (current_page - 1) * page_size + 1,
-                    record,
-                )
-                for i, record in enumerate(current_page_records)
-            ]
-            page_info_str = (
-                f"ページ {current_page} / {total_pages}"
-            )
-
-            # ページ内ナビゲーション時はanalyticsは変わらない
-            analytics_figure = (
-                self.viz_interface.generate_analytics(
-                    current_page_records
-                )
-            )
-
             # レコードナビゲーションボタン状態を計算
             prev_interactive, next_interactive = (
                 self._get_record_nav_button_states(
@@ -2581,16 +2562,19 @@ class GradioVisualizationServer:
                 current_page_records[new_index].get("id", "")
             )
 
+            # ページ内ナビゲーション — テーブル・チャート再計算を排除
+            # NOTE: gr.State (current_page, current_page_records) は既存値を返す
+            # NOTE: UIコンポーネント (table, page_info, analytics) は gr.skip()
             return (
                 current_page,
                 new_index,
-                table_data,
-                page_info_str,
+                gr.skip(),  # results_table — ページ内では変化なし
+                gr.skip(),  # page_info — 変化なし
                 board_svg,
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_figure,
+                gr.skip(),  # analytics_chart — ページ単位統計，変化なし
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
                 record_id,  # selected_record_id
@@ -2599,27 +2583,12 @@ class GradioVisualizationServer:
         # ページ境界チェック：最後のページの最後のレコードなら停止
         if current_page >= total_pages:
             # 最後のページの最後のレコード：何もしない（境界で止める）
-            table_data = [
-                self.viz_interface.renderer.format_table_row(
-                    i + (current_page - 1) * page_size + 1,
-                    record,
-                )
-                for i, record in enumerate(current_page_records)
-            ]
-            page_info_str = (
-                f"ページ {current_page} / {total_pages}"
-            )
             board_svg, details = (
                 self.viz_interface.navigate_within_page(
                     current_page_records, current_record_index
                 )
             )
             record_indicator = f"Record {current_record_index + 1} / {num_records}"
-            analytics_figure = (
-                self.viz_interface.generate_analytics(
-                    current_page_records
-                )
-            )
 
             # 現在のレコードIDを取得
             record_id = (
@@ -2632,17 +2601,18 @@ class GradioVisualizationServer:
                 else ""
             )
 
-            # ボタン状態：前へは有効，次へは無効
+            # 境界条件 — テーブル・チャート再計算を排除
+            # NOTE: gr.State は既存値を返す，UIコンポーネントは gr.skip()
             return (
                 current_page,
                 current_record_index,
-                table_data,
-                page_info_str,
+                gr.skip(),  # results_table
+                gr.skip(),  # page_info
                 board_svg,
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_figure,
+                gr.skip(),  # analytics_chart
                 gr.Button(
                     interactive=True
                 ),  # prev_record_btn有効
@@ -2752,9 +2722,6 @@ class GradioVisualizationServer:
             return self._get_empty_state_navigation()
 
         num_records = len(current_page_records)
-        total_pages = self._calculate_total_pages(
-            min_eval, max_eval, page_size
-        )
 
         # ページ内で前のレコードがある場合
         if current_record_index > 0:
@@ -2766,25 +2733,6 @@ class GradioVisualizationServer:
             )
             record_indicator = (
                 f"Record {new_index + 1} / {num_records}"
-            )
-
-            # ページは変わらないので，現在のデータを返す
-            table_data = [
-                self.viz_interface.renderer.format_table_row(
-                    i + (current_page - 1) * page_size + 1,
-                    record,
-                )
-                for i, record in enumerate(current_page_records)
-            ]
-            page_info_str = (
-                f"ページ {current_page} / {total_pages}"
-            )
-
-            # ページ内ナビゲーション時はanalyticsは変わらない
-            analytics_figure = (
-                self.viz_interface.generate_analytics(
-                    current_page_records
-                )
             )
 
             # レコードナビゲーションボタン状態を計算
@@ -2804,16 +2752,19 @@ class GradioVisualizationServer:
                 current_page_records[new_index].get("id", "")
             )
 
+            # ページ内ナビゲーション — テーブル・チャート再計算を排除
+            # NOTE: gr.State (current_page, current_page_records) は既存値を返す
+            # NOTE: UIコンポーネント (table, page_info, analytics) は gr.skip()
             return (
                 current_page,
                 new_index,
-                table_data,
-                page_info_str,
+                gr.skip(),  # results_table — ページ内では変化なし
+                gr.skip(),  # page_info — 変化なし
                 board_svg,
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_figure,
+                gr.skip(),  # analytics_chart — ページ単位統計，変化なし
                 gr.Button(interactive=prev_interactive),
                 gr.Button(interactive=next_interactive),
                 record_id,  # selected_record_id
@@ -2822,27 +2773,12 @@ class GradioVisualizationServer:
         # ページ境界チェック：最初のページの最初のレコードなら停止
         if current_page <= 1:
             # 最初のページの最初のレコード：何もしない（境界で止める）
-            table_data = [
-                self.viz_interface.renderer.format_table_row(
-                    i + (current_page - 1) * page_size + 1,
-                    record,
-                )
-                for i, record in enumerate(current_page_records)
-            ]
-            page_info_str = (
-                f"ページ {current_page} / {total_pages}"
-            )
             board_svg, details = (
                 self.viz_interface.navigate_within_page(
                     current_page_records, current_record_index
                 )
             )
             record_indicator = f"Record {current_record_index + 1} / {num_records}"
-            analytics_figure = (
-                self.viz_interface.generate_analytics(
-                    current_page_records
-                )
-            )
 
             # 現在のレコードIDを取得
             record_id = (
@@ -2855,17 +2791,18 @@ class GradioVisualizationServer:
                 else ""
             )
 
-            # ボタン状態：前へは無効，次へは有効
+            # 境界条件 — テーブル・チャート再計算を排除
+            # NOTE: gr.State は既存値を返す，UIコンポーネントは gr.skip()
             return (
                 current_page,
                 current_record_index,
-                table_data,
-                page_info_str,
+                gr.skip(),  # results_table
+                gr.skip(),  # page_info
                 board_svg,
                 details,
                 current_page_records,
                 record_indicator,
-                analytics_figure,
+                gr.skip(),  # analytics_chart
                 gr.Button(
                     interactive=False
                 ),  # prev_record_btn無効
