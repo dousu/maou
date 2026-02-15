@@ -51,9 +51,9 @@ def _is_google_colab() -> bool:
 )
 @click.option(
     "--port",
-    help="Gradioサーバーポート（デフォルト: 7860）．",
+    help="Gradioサーバーポート．未指定時は7860-7959の空きポートを自動選択．",
     type=int,
-    default=7860,
+    default=None,
 )
 @click.option(
     "--share",
@@ -89,7 +89,7 @@ def _is_google_colab() -> bool:
 def visualize(
     input_path: tuple[Path, ...],
     array_type: str,
-    port: int,
+    port: Optional[int],
     share: bool,
     server_name: str,
     model_path: Optional[Path],

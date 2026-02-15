@@ -2967,7 +2967,7 @@ class GradioVisualizationServer:
 def launch_server(
     file_paths: List[Path],
     array_type: str,
-    port: int,
+    port: Optional[int],
     share: bool,
     server_name: str,
     model_path: Optional[Path],
@@ -2998,16 +2998,22 @@ def launch_server(
     # カスタムCSSを読み込み（Gradio 6ではlaunch()に渡す必要がある）
     custom_css = _load_custom_css()
 
+    port_desc = (
+        str(port) if port is not None else "auto (7860-7959)"
+    )
     logger.info(
-        f"Launching Gradio server on {server_name}:{port} "
+        f"Launching Gradio server on {server_name}:{port_desc} "
         f"(share={share}, debug={debug})"
     )
 
-    demo.launch(
-        server_name=server_name,
-        server_port=port,
-        share=share,
-        debug=debug,
-        show_error=True,
-        css=custom_css,
-    )
+    launch_kwargs: Dict[str, Any] = {
+        "server_name": server_name,
+        "share": share,
+        "debug": debug,
+        "show_error": True,
+        "css": custom_css,
+    }
+    if port is not None:
+        launch_kwargs["server_port"] = port
+
+    demo.launch(**launch_kwargs)
