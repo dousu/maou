@@ -722,7 +722,15 @@ def learn_model(
         app_logger.error(error_msg)
         raise ValueError(error_msg)
 
+    # Check if multi-stage training is requested (moved before datasource init)
+    is_multi_stage = (
+        stage in ("1", "2", "all")
+        or stage1_data_path is not None
+        or stage2_data_path is not None
+    )
+
     # Initialize datasource
+    datasource = None
     if input_path is not None:
         if (
             input_format != "hcpe"
@@ -865,7 +873,7 @@ def learn_model(
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
-    else:
+    elif not is_multi_stage:
         raise Exception(
             "Please specify an input directory, a BigQuery table, "
             "a GCS bucket, or an S3 bucket."
@@ -888,13 +896,6 @@ def learn_model(
             vit_overrides["dropout"] = vit_dropout
         if vit_overrides:
             architecture_config = vit_overrides
-
-    # Check if multi-stage training is requested
-    is_multi_stage = (
-        stage in ("1", "2", "all")
-        or stage1_data_path is not None
-        or stage2_data_path is not None
-    )
 
     if is_multi_stage:
         # Route to multi-stage training
