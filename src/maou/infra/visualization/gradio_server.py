@@ -1607,6 +1607,9 @@ class GradioVisualizationServer:
                     record_details,
                     selected_record_id,
                     current_record_index,
+                    record_indicator,
+                    prev_record_btn,
+                    next_record_btn,
                 ],
             )
 
@@ -1617,6 +1620,9 @@ class GradioVisualizationServer:
                     board_display,
                     record_details,
                     selected_record_id,
+                    record_indicator,
+                    prev_record_btn,
+                    next_record_btn,
                 ],
             )
 
@@ -2166,7 +2172,9 @@ class GradioVisualizationServer:
         self,
         evt: gr.SelectData,
         current_page_records: List[Dict[str, Any]],
-    ) -> Tuple[str, Dict[str, Any], str, int]:
+    ) -> Tuple[
+        str, Dict[str, Any], str, int, str, gr.Button, gr.Button
+    ]:
         """テーブル行選択時のハンドラ．
 
         Args:
@@ -2174,7 +2182,8 @@ class GradioVisualizationServer:
             current_page_records: 現在のページのレコードキャッシュ
 
         Returns:
-            (board_svg, record_details, selected_id, record_index)
+            (board_svg, record_details, selected_id, record_index,
+             record_indicator, prev_record_btn, next_record_btn)
         """
         if (
             self.viz_interface is None
@@ -2185,6 +2194,9 @@ class GradioVisualizationServer:
                 {"message": "No record selected"},
                 "",
                 0,
+                gr.skip(),
+                gr.skip(),
+                gr.skip(),
             )
 
         # evt.index[0]が行インデックス
@@ -2203,6 +2215,9 @@ class GradioVisualizationServer:
                 {"message": "Invalid row index"},
                 "",
                 0,
+                gr.skip(),
+                gr.skip(),
+                gr.skip(),
             )
 
         record = current_page_records[row_index]
@@ -2215,19 +2230,35 @@ class GradioVisualizationServer:
             )
         )
         record_id = str(record.get("id", ""))
+        num_records = len(current_page_records)
+        record_indicator = (
+            f"Record {row_index + 1} / {num_records}"
+        )
 
-        return board_svg, details, record_id, row_index
+        return (
+            board_svg,
+            details,
+            record_id,
+            row_index,
+            record_indicator,
+            gr.Button(interactive=True),
+            gr.Button(interactive=True),
+        )
 
     def _search_by_id(
         self, record_id: str
-    ) -> Tuple[str, Dict[str, Any], str]:
+    ) -> Tuple[
+        str, Dict[str, Any], str, str, gr.Button, gr.Button
+    ]:
         """ID検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
 
         Args:
             record_id: 検索するレコードID
 
         Returns:
-            (board_svg, record_details, selected_record_id)のタプル
+            (board_svg, record_details, selected_record_id,
+             record_indicator, prev_record_btn, next_record_btn)のタプル．
+            検索失敗時はboard_svg, record_details以外はgr.skip()を返す．
         """
         # Thread-safe access to viz_interface
         with self._index_lock:
@@ -2235,11 +2266,39 @@ class GradioVisualizationServer:
                 board_svg, details = self._search_by_id_mock(
                     record_id
                 )
-                return board_svg, details, record_id
+                return (
+                    board_svg,
+                    details,
+                    record_id,
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                )
+
             board_svg, details = (
                 self.viz_interface.search_by_id(record_id)
             )
-            return board_svg, details, record_id
+
+            # 検索失敗時（"error"キーの存在で判定）は状態を変更しない
+            if "error" in details:
+                return (
+                    board_svg,
+                    details,
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                )
+
+            # 検索成功: ボタン無効化 + インジケータ更新
+            return (
+                board_svg,
+                details,
+                record_id,
+                "ID検索: 1/1",
+                gr.Button(interactive=False),
+                gr.Button(interactive=False),
+            )
 
     def _get_default_board_svg(self) -> str:
         """デフォルトの盤面SVGを生成（平手初期配置）．"""
