@@ -4,7 +4,14 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Literal, MutableMapping, Optional, cast
+from typing import (
+    Any,
+    Dict,
+    Literal,
+    MutableMapping,
+    Optional,
+    cast,
+)
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -25,7 +32,11 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     Network,
 )
-from maou.app.learning.setup import TrainingSetup
+from maou.app.learning.setup import (
+    LossOptimizerFactory,
+    SchedulerFactory,
+    TrainingSetup,
+)
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.cloud_storage import CloudStorage
 
@@ -92,6 +103,7 @@ class Learning:
         resume_policy_head_from: Optional[Path] = None
         resume_value_head_from: Optional[Path] = None
         freeze_backbone: bool = False
+        trainable_layers: Optional[int] = None
         start_epoch: int = 0
         log_dir: Path
         model_dir: Path
@@ -109,8 +121,19 @@ class Learning:
     ):
         self.__cloud_storage = cloud_storage
 
-    def learn(self, config: LearningOption) -> Dict[str, str]:
-        """機械学習を行う."""
+    def learn(
+        self,
+        config: LearningOption,
+        *,
+        architecture_config: dict[str, Any] | None = None,
+    ) -> Dict[str, str]:
+        """機械学習を行う.
+
+        Args:
+            config: 学習設定．
+            architecture_config: アーキテクチャ固有の設定dict．
+                ModelFactoryに渡される．
+        """
         self.logger.info("start learning")
         learning_result: Dict[str, str] = {}
 
@@ -143,6 +166,7 @@ class Learning:
                 lr_scheduler_name=config.lr_scheduler_name,
                 max_epochs=config.epoch,
                 detect_anomaly=config.detect_anomaly,
+                architecture_config=architecture_config,
             )
         )
 
@@ -154,31 +178,67 @@ class Learning:
         self.model_architecture = config.model_architecture
         self.loss_fn_policy = model_components.loss_fn_policy
         self.loss_fn_value = model_components.loss_fn_value
-        self.optimizer = model_components.optimizer
-        self.lr_scheduler: Optional[LRScheduler] = (
-            model_components.lr_scheduler
-        )
         self.policy_loss_ratio = config.policy_loss_ratio
         self.value_loss_ratio = config.value_loss_ratio
         self.log_dir = config.log_dir
         self.epoch = config.epoch
         self.model_dir = config.model_dir
-        self.resume_from = config.resume_from
-        self.resume_backbone_from = config.resume_backbone_from
-        self.resume_policy_head_from = (
-            config.resume_policy_head_from
-        )
-        self.resume_value_head_from = (
-            config.resume_value_head_from
-        )
-        self.freeze_backbone = config.freeze_backbone
         self.start_epoch = config.start_epoch
+        self.freeze_backbone = config.freeze_backbone
+        self.trainable_layers = config.trainable_layers
         self.tensorboard_histogram_frequency = (
             config.tensorboard_histogram_frequency
         )
         self.tensorboard_histogram_modules = (
             config.tensorboard_histogram_modules
         )
+        self.architecture_config = architecture_config
+        self.config = config
+
+        # Load checkpoints before freeze (moved from __train)
+        self._load_checkpoints(config)
+
+        # Apply freeze if requested, then recreate optimizer
+        trainable_layers = self._resolve_trainable_layers()
+        if trainable_layers is not None:
+            self._freeze_backbone(trainable_layers)
+            # Recreate optimizer with only trainable parameters
+            self.optimizer = (
+                LossOptimizerFactory.create_optimizer(
+                    self.model,
+                    config.learning_ratio,
+                    config.momentum,
+                    optimizer_name=config.optimizer_name,
+                    betas=(
+                        config.optimizer_beta1,
+                        config.optimizer_beta2,
+                    ),
+                    eps=config.optimizer_eps,
+                )
+            )
+            self.lr_scheduler: Optional[LRScheduler] = (
+                SchedulerFactory.create_scheduler(
+                    self.optimizer,
+                    lr_scheduler_name=config.lr_scheduler_name,
+                    max_epochs=config.epoch,
+                )
+            )
+        else:
+            self.optimizer = model_components.optimizer
+            self.lr_scheduler = model_components.lr_scheduler
+
+        # Generate model tag (includes -tlN suffix when freezing)
+        self.model_tag = ModelIO.generate_model_tag(
+            self.model,
+            self.model_architecture,
+            trainable_layers=trainable_layers,
+        )
+
+        # Log training configuration summary
+        self._log_training_config(
+            config, architecture_config, self.model_tag
+        )
+
         summary(
             self.model,
             input_size=(
@@ -189,6 +249,7 @@ class Learning:
             dtypes=[torch.int64],
         )
 
+        # Compile after freeze + optimizer setup
         if config.compilation:
             self.logger.info(
                 "Compiling model with torch.compile (dynamic shapes disabled)"
@@ -242,9 +303,7 @@ class Learning:
 
     def __train(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_tag = ModelIO.generate_model_tag(
-            self.model, self.model_architecture
-        )
+        model_tag = self.model_tag
         summary_writer_log_dir = (
             self.log_dir
             / f"{model_tag}_training_log_{timestamp}"
@@ -260,41 +319,10 @@ class Learning:
         EPOCHS = self.epoch
 
         best_vloss = 1_000_000.0
+        last_metrics: Optional[ValidationMetrics] = None
 
-        # resume from checkpoint
-        if self.resume_from is not None:
-            state_dict: MutableMapping[str, torch.Tensor] = (
-                torch.load(
-                    self.resume_from,
-                    weights_only=True,
-                    map_location=self.device,
-                )
-            )
-
-            self._load_resume_state_dict(state_dict)
-
-        # resume from component files
-        if self.resume_backbone_from is not None:
-            backbone_dict = ModelIO.load_backbone(
-                self.resume_backbone_from, self.device
-            )
-            self._load_component_state_dict(backbone_dict)
-
-        if self.resume_policy_head_from is not None:
-            policy_dict = ModelIO.load_policy_head(
-                self.resume_policy_head_from, self.device
-            )
-            self._load_component_state_dict(policy_dict)
-
-        if self.resume_value_head_from is not None:
-            value_dict = ModelIO.load_value_head(
-                self.resume_value_head_from, self.device
-            )
-            self._load_component_state_dict(value_dict)
-
-        # freeze backbone if requested
-        if self.freeze_backbone:
-            self._freeze_backbone()
+        # Checkpoint loading and freeze are handled in learn()
+        # before optimizer creation.
 
         # start epoch設定
         epoch_number = self.start_epoch
@@ -356,6 +384,7 @@ class Learning:
             # Get validation metrics
             avg_vloss = validation_callback.get_average_loss()
             metrics = validation_callback.get_average_metrics()
+            last_metrics = metrics
 
             # Reset callback for next epoch
             validation_callback.reset()
@@ -418,6 +447,15 @@ class Learning:
                 )
 
             epoch_number += 1
+
+        # Record hyperparameters for TensorBoard HParams dashboard
+        if last_metrics is not None:
+            self._log_hparams(
+                writer=writer,
+                model_tag=model_tag,
+                best_vloss=best_vloss,
+                final_metrics=last_metrics,
+            )
 
         writer.close()
 
@@ -509,6 +547,115 @@ class Learning:
             epoch_number + 1,
         )
 
+    def _log_hparams(
+        self,
+        *,
+        writer: SummaryWriter,
+        model_tag: str,
+        best_vloss: float,
+        final_metrics: ValidationMetrics,
+    ) -> None:
+        """Record hyperparameters and final metrics to TensorBoard."""
+        config = self.config
+        hparam_dict: dict[str, bool | int | float | str] = {
+            # Freeze
+            "trainable_layers": config.trainable_layers
+            if config.trainable_layers is not None
+            else -1,
+            "freeze_backbone": config.freeze_backbone,
+            # Model
+            "model_architecture": config.model_architecture,
+            "model_tag": model_tag,
+            # Training
+            "learning_ratio": config.learning_ratio,
+            "optimizer_name": config.optimizer_name,
+            "lr_scheduler_name": config.lr_scheduler_name
+            or "none",
+            "batch_size": config.batch_size,
+            "epoch": config.epoch,
+            # Loss
+            "gce_parameter": config.gce_parameter,
+            "policy_loss_ratio": config.policy_loss_ratio,
+            "value_loss_ratio": config.value_loss_ratio,
+        }
+
+        # ViT固有パラメータ
+        if (
+            self.architecture_config
+            and config.model_architecture == "vit"
+        ):
+            for key in ("embed_dim", "num_layers", "num_heads"):
+                if key in self.architecture_config:
+                    hparam_dict[f"vit_{key}"] = (
+                        self.architecture_config[key]
+                    )
+
+        metric_dict: dict[str, float] = {
+            "hparam/best_vloss": best_vloss,
+            "hparam/policy_top5_accuracy": final_metrics.policy_top5_accuracy,
+            "hparam/policy_cross_entropy": final_metrics.policy_cross_entropy,
+            "hparam/value_brier_score": final_metrics.value_brier_score,
+        }
+
+        writer.add_hparams(
+            hparam_dict,
+            metric_dict,
+            run_name=".",
+        )
+
+    def _log_training_config(
+        self,
+        config: LearningOption,
+        architecture_config: dict[str, Any] | None,
+        model_tag: str,
+    ) -> None:
+        """Log training configuration summary at learning start."""
+        # Model description
+        model_desc = model_tag
+        if (
+            architecture_config
+            and config.model_architecture == "vit"
+        ):
+            vit_parts = []
+            for key in ("embed_dim", "num_layers", "num_heads"):
+                if key in architecture_config:
+                    vit_parts.append(
+                        f"{key}={architecture_config[key]}"
+                    )
+            if vit_parts:
+                model_desc += f" ({', '.join(vit_parts)})"
+
+        # Freeze description
+        resolved = self._resolve_trainable_layers()
+        if resolved is not None:
+            freeze_desc = f"trainable_layers={resolved}"
+        else:
+            freeze_desc = "none"
+
+        # Scheduler description
+        scheduler_desc = config.lr_scheduler_name or "none"
+
+        lines = [
+            "=== Training Configuration ===",
+            f"Model: {model_desc}",
+            f"Freeze: {freeze_desc}",
+            f"Optimizer: {config.optimizer_name} "
+            f"(lr={config.learning_ratio}, "
+            f"beta1={config.optimizer_beta1}, "
+            f"beta2={config.optimizer_beta2})",
+            f"Scheduler: {scheduler_desc}",
+            f"Batch: {config.batch_size}, "
+            f"Epoch: {config.epoch}, "
+            f"Workers: {config.dataloader_workers}",
+            f"Loss: GCE(q={config.gce_parameter}), "
+            f"policy_ratio={config.policy_loss_ratio}, "
+            f"value_ratio={config.value_loss_ratio}",
+            f"Data: {config.datasource_type}, "
+            f"cache={config.input_cache_mode}",
+            "==============================",
+        ]
+        self.logger.info("\n".join(lines))
+
     def _load_resume_state_dict(
         self, state_dict: MutableMapping[str, torch.Tensor]
     ) -> None:
@@ -573,29 +720,89 @@ class Learning:
             )
             raise
 
-    def _freeze_backbone(self) -> None:
-        """Freeze backbone parameters (embedding，backbone，pool，_hand_projection).
+    def _load_checkpoints(self, config: LearningOption) -> None:
+        """Load model state from checkpoint or component files.
 
-        ヘッド(policy_head，value_head)はtrainableのまま保持する．
+        Args:
+            config: Learning configuration with resume paths.
         """
-        frozen_count = 0
-        for name, param in self.model.named_parameters():
-            # torch.compile()の場合は_orig_mod.プレフィックスを除去
-            clean_name = name
-            if name.startswith("_orig_mod."):
-                clean_name = name[len("_orig_mod.") :]
+        if config.resume_from is not None:
+            state_dict: MutableMapping[str, torch.Tensor] = (
+                torch.load(
+                    config.resume_from,
+                    weights_only=True,
+                    map_location=self.device,
+                )
+            )
+            self._load_resume_state_dict(state_dict)
 
-            # Backboneコンポーネントを凍結
-            if (
-                clean_name.startswith("embedding.")
-                or clean_name.startswith("backbone.")
-                or clean_name.startswith("pool.")
-                or clean_name.startswith("_hand_projection.")
-            ):
+        if config.resume_backbone_from is not None:
+            backbone_dict = ModelIO.load_backbone(
+                config.resume_backbone_from, self.device
+            )
+            self._load_component_state_dict(backbone_dict)
+
+        if config.resume_policy_head_from is not None:
+            policy_dict = ModelIO.load_policy_head(
+                config.resume_policy_head_from, self.device
+            )
+            self._load_component_state_dict(policy_dict)
+
+        if config.resume_value_head_from is not None:
+            value_dict = ModelIO.load_value_head(
+                config.resume_value_head_from, self.device
+            )
+            self._load_component_state_dict(value_dict)
+
+    def _resolve_trainable_layers(self) -> Optional[int]:
+        """Resolve effective trainable_layers from config options.
+
+        Returns:
+            int if freezing should be applied, None otherwise.
+        """
+        if (
+            self.trainable_layers is not None
+            and self.freeze_backbone
+        ):
+            self.logger.warning(
+                "Both freeze_backbone and trainable_layers specified. "
+                "Using trainable_layers=%d.",
+                self.trainable_layers,
+            )
+            return self.trainable_layers
+
+        if self.trainable_layers is not None:
+            return self.trainable_layers
+
+        if self.freeze_backbone:
+            return 0
+
+        return None
+
+    def _freeze_backbone(
+        self, trainable_layers: int = 0
+    ) -> None:
+        """Freeze backbone parameters with optional partial unfreezing.
+
+        Args:
+            trainable_layers: Number of trailing backbone groups
+                to keep trainable.
+                0 = freeze all backbone groups (backward-compatible).
+        """
+        frozen_count = self.model.freeze_except_last_n(
+            trainable_layers
+        )
+
+        # Also freeze _hand_projection (Network-level attribute)
+        if hasattr(self.model, "_hand_projection"):
+            for (
+                param
+            ) in self.model._hand_projection.parameters():
                 param.requires_grad = False
                 frozen_count += 1
 
         self.logger.info(
-            f"Frozen {frozen_count} backbone parameters. "
+            f"Frozen {frozen_count} backbone parameters "
+            f"(trainable_layers={trainable_layers}). "
             f"Policy and value heads remain trainable."
         )

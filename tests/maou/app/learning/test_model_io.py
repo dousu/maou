@@ -70,3 +70,41 @@ def test_generate_model_tag_different_architectures() -> None:
     )
     vit_tag = ModelIO.generate_model_tag(vit_model, "vit")
     assert vit_tag.startswith("vit-")
+
+
+def test_generate_model_tag_trainable_layers_none() -> None:
+    """trainable_layers=None produces no suffix (backward compat)."""
+    device = torch.device("cpu")
+    model = ModelFactory.create_shogi_model(
+        device, architecture="resnet"
+    )
+    tag = ModelIO.generate_model_tag(
+        model, "resnet", trainable_layers=None
+    )
+    assert "-tl" not in tag
+    assert tag.startswith("resnet-")
+
+
+def test_generate_model_tag_trainable_layers_zero() -> None:
+    """trainable_layers=0 appends '-tl0'."""
+    device = torch.device("cpu")
+    model = ModelFactory.create_shogi_model(
+        device, architecture="resnet"
+    )
+    tag = ModelIO.generate_model_tag(
+        model, "resnet", trainable_layers=0
+    )
+    assert tag.endswith("-tl0")
+
+
+def test_generate_model_tag_trainable_layers_positive() -> None:
+    """trainable_layers=2 appends '-tl2'."""
+    device = torch.device("cpu")
+    model = ModelFactory.create_shogi_model(
+        device, architecture="vit"
+    )
+    tag = ModelIO.generate_model_tag(
+        model, "vit", trainable_layers=2
+    )
+    assert tag.endswith("-tl2")
+    assert tag.startswith("vit-")

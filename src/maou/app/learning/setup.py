@@ -6,7 +6,7 @@ training_benchmark.py と dl.py の重複コードを統一化．
 import logging
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -228,6 +228,7 @@ class ModelFactory:
         device: torch.device,
         *,
         architecture: BackboneArchitecture = "resnet",
+        architecture_config: dict[str, Any] | None = None,
     ) -> HeadlessNetwork:
         """方策・価値ヘッドを含まないバックボーンを作成."""
 
@@ -240,6 +241,7 @@ class ModelFactory:
             layers=(2, 2, 2, 2),
             strides=(1, 2, 2, 2),
             out_channels=(64, 128, 256, 512),
+            architecture_config=architecture_config,
         )
 
         backbone.to(device)
@@ -258,6 +260,7 @@ class ModelFactory:
         *,
         architecture: BackboneArchitecture = "resnet",
         hand_projection_dim: int | None = None,
+        architecture_config: dict[str, Any] | None = None,
     ) -> Network:
         """将棋特化モデルを作成."""
         from maou.app.learning.network import (
@@ -278,6 +281,7 @@ class ModelFactory:
             layers=(2, 2, 2, 2),
             strides=(1, 2, 2, 2),
             out_channels=(64, 128, 256, 512),
+            architecture_config=architecture_config,
         )
 
         model.to(device)
@@ -570,6 +574,7 @@ class TrainingSetup:
         lr_scheduler_name: Optional[str] = None,
         max_epochs: int = 1,
         detect_anomaly: bool = False,
+        architecture_config: dict[str, Any] | None = None,
     ) -> Tuple[
         DeviceConfig,
         Tuple[DataLoader, DataLoader],
@@ -621,6 +626,7 @@ class TrainingSetup:
         model = ModelFactory.create_shogi_model(
             device_config.device,
             architecture=model_architecture,
+            architecture_config=architecture_config,
         )
 
         # Loss functions and optimizer

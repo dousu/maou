@@ -232,6 +232,14 @@ class ShogiMLPMixer(nn.Module):
             return logits, tokens
         return logits
 
+    def get_freezable_groups(self) -> list[nn.Module]:
+        """Return mixer block groups ordered from lowest to highest.
+
+        Returns:
+            list[nn.Module]: Individual mixer blocks (depth groups, default 16).
+        """
+        return list(self.blocks)
+
 
 def print_model_summary(model: ShogiMLPMixer) -> None:
     """Print a concise summary with parameter count for the given model."""

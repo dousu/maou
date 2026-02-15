@@ -52,17 +52,21 @@ class ModelIO:
 
     @staticmethod
     def generate_model_tag(
-        model: Network, architecture: BackboneArchitecture
+        model: Network,
+        architecture: BackboneArchitecture,
+        *,
+        trainable_layers: Optional[int] = None,
     ) -> str:
         """Generate model tag from architecture and parameter count.
 
         Args:
             model: The neural network model
             architecture: Backbone architecture name
+            trainable_layers: Number of trainable backbone groups.
+                If specified，appends '-tlN' suffix.
 
         Returns:
-            Model tag in format "{architecture}-{parameter_count}"
-            (e.g.，"resnet-1.2m"，"mlp-mixer-45k")
+            Model tag (e.g.，"resnet-1.2m"，"vit-19m-tl2")
         """
         parameter_count = sum(
             parameter.numel()
@@ -71,7 +75,10 @@ class ModelIO:
         parameter_label = ModelIO.format_parameter_count(
             parameter_count
         )
-        return f"{architecture}-{parameter_label}"
+        tag = f"{architecture}-{parameter_label}"
+        if trainable_layers is not None:
+            tag += f"-tl{trainable_layers}"
+        return tag
 
     @staticmethod
     def split_state_dict(

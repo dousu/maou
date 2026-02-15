@@ -303,3 +303,11 @@ class VisionTransformer(nn.Module):
         pooled = self.forward_features(x)
         output = self.head(pooled)
         return output.squeeze(-1)
+
+    def get_freezable_groups(self) -> list[nn.Module]:
+        """Return encoder block groups ordered from lowest to highest.
+
+        Returns:
+            list[nn.Module]: Individual encoder blocks (num_layers groups, default 6).
+        """
+        return list(self.encoder)

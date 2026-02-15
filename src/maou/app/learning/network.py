@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Literal, Tuple, Union
 
@@ -10,6 +11,7 @@ from torch import nn
 
 from maou.domain.board import shogi
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
+from maou.domain.model.protocol import FreezableBackbone
 from maou.domain.model.resnet import (
     BottleneckBlock,
 )
@@ -163,6 +165,68 @@ class HeadlessNetwork(nn.Module):
         """Alias of :meth:`forward_features` for convenience."""
 
         return self.forward_features(x)
+
+    def freeze_except_last_n(self, n: int) -> int:
+        """Freeze backbone except the last n groups, plus always freeze embedding/pool.
+
+        Strategy: freeze ALL backbone parameters first, then selectively
+        unfreeze the last n groups. This ensures non-group parameters
+        (e.g. input_norm, token_projection) are always frozen.
+
+        Args:
+            n: Number of trailing backbone groups to keep trainable.
+                0 = freeze all backbone parameters.
+                Values exceeding total groups are clamped
+                (= only non-group params frozen).
+
+        Returns:
+            int: Total number of frozen parameters.
+
+        Raises:
+            TypeError: If backbone does not implement get_freezable_groups().
+        """
+        logger = logging.getLogger(__name__)
+
+        if not isinstance(self.backbone, FreezableBackbone):
+            msg = (
+                f"Backbone {type(self.backbone).__name__} does not "
+                f"implement get_freezable_groups()."
+            )
+            raise TypeError(msg)
+
+        # 1. Always freeze embedding and pool
+        for module in [self.embedding, self.pool]:
+            for param in module.parameters():
+                param.requires_grad = False
+
+        # 2. Freeze ALL backbone parameters first
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+
+        # 3. Selectively unfreeze last N groups
+        groups = self.backbone.get_freezable_groups()
+        total = len(groups)
+        n_clamped = min(n, total)
+        freeze_count = total - n_clamped
+
+        if n > total:
+            logger.info(
+                "trainable_layers=%d exceeds total groups=%d, "
+                "clamped to %d.",
+                n,
+                total,
+                total,
+            )
+
+        for group in groups[freeze_count:]:
+            for param in group.parameters():
+                param.requires_grad = True
+
+        # Count frozen parameters
+        frozen_params = sum(
+            1 for p in self.parameters() if not p.requires_grad
+        )
+        return frozen_params
 
     def _prepare_inputs(self, x: torch.Tensor) -> torch.Tensor:
         input_type, tensor = self._validate_inputs(x)

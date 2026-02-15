@@ -2,7 +2,7 @@
   "mcpServers": {
     "serena": {
       "command": "uv",
-      "args": ["run", "serena", "start-mcp-server"],
+      "args": ["run", "serena", "start-mcp-server", "--project", "${workspaceFolder}"],
       "cwd": "${workspaceFolder}",
       "env": {
         "SERENA_LOG_LEVEL": "info"

@@ -64,6 +64,12 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "resume-policy-head-from",  # コンポーネント別再開（不要）
         "resume-value-head-from",  # コンポーネント別再開（不要）
         "freeze-backbone",  # バックボーン凍結（不要）
+        "trainable-layers",  # バックボーン凍結制御（不要）
+        "vit-embed-dim",  # ViTアーキテクチャ設定（不要）
+        "vit-num-layers",  # ViTアーキテクチャ設定（不要）
+        "vit-num-heads",  # ViTアーキテクチャ設定（不要）
+        "vit-mlp-ratio",  # ViTアーキテクチャ設定（不要）
+        "vit-dropout",  # ViTアーキテクチャ設定（不要）
         "stage",  # マルチステージ学習（不要）
         "stage1-data-path",  # Stage 1データパス（不要）
         "stage2-data-path",  # Stage 2データパス（不要）

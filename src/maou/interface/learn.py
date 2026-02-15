@@ -170,6 +170,7 @@ def learn(
     resume_policy_head_from: Optional[Path] = None,
     resume_value_head_from: Optional[Path] = None,
     freeze_backbone: bool = False,
+    trainable_layers: Optional[int] = None,
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
@@ -178,6 +179,7 @@ def learn(
     tensorboard_histogram_modules: Optional[
         tuple[str, ...]
     ] = None,
+    architecture_config: Optional[dict[str, Any]] = None,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -210,6 +212,8 @@ def learn(
         resume_policy_head_from: Policy head parameter file to resume from
         resume_value_head_from: Value head parameter file to resume from
         freeze_backbone: Freeze backbone parameters during training
+        trainable_layers: Number of trailing backbone layer groups to keep
+            trainable. None = no freezing, 0 = freeze all backbone layers.
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
@@ -218,6 +222,8 @@ def learn(
             histogram dumps (0 disables histogram logging)
         tensorboard_histogram_modules: Optional glob patterns to filter which
             module names emit histograms
+        architecture_config: Optional architecture-specific configuration dict
+            (e.g. ViT embed_dim, num_layers). Passed to ModelFactory.
 
     Returns:
         JSON string with training results
@@ -437,6 +443,7 @@ def learn(
         resume_policy_head_from=resume_policy_head_from,
         resume_value_head_from=resume_value_head_from,
         freeze_backbone=freeze_backbone,
+        trainable_layers=trainable_layers,
         log_dir=log_dir,
         model_dir=model_dir,
         model_architecture=model_architecture,
@@ -448,9 +455,31 @@ def learn(
 
     learning_result = Learning(
         cloud_storage=cloud_storage
-    ).learn(option)
+    ).learn(option, architecture_config=architecture_config)
 
     return json.dumps(learning_result)
+
+
+def _find_latest_backbone_checkpoint(
+    model_dir: Path,
+) -> Optional[Path]:
+    """Find the latest backbone checkpoint in model_dir.
+
+    Looks for stage2_backbone_*.pt first, then stage1_backbone_*.pt.
+
+    Args:
+        model_dir: Directory containing checkpoint files.
+
+    Returns:
+        Path to latest backbone checkpoint, or None.
+    """
+    for prefix in ("stage2_backbone_", "stage1_backbone_"):
+        candidates = sorted(
+            model_dir.glob(f"{prefix}*.pt"), reverse=True
+        )
+        if candidates:
+            return candidates[0]
+    return None
 
 
 def learn_multi_stage(
@@ -477,6 +506,30 @@ def learn_multi_stage(
     resume_backbone_from: Optional[Path] = None,
     resume_reachable_head_from: Optional[Path] = None,
     resume_legal_moves_head_from: Optional[Path] = None,
+    # Stage 3 parameters
+    compilation: bool = False,
+    detect_anomaly: bool = False,
+    test_ratio: Optional[float] = None,
+    epoch: Optional[int] = None,
+    dataloader_workers: Optional[int] = None,
+    pin_memory: Optional[bool] = None,
+    prefetch_factor: Optional[int] = None,
+    cache_transforms: Optional[bool] = None,
+    gce_parameter: Optional[float] = None,
+    policy_loss_ratio: Optional[float] = None,
+    value_loss_ratio: Optional[float] = None,
+    lr_scheduler: Optional[str] = None,
+    momentum: Optional[float] = None,
+    optimizer_name: Optional[str] = None,
+    optimizer_beta1: Optional[float] = None,
+    optimizer_beta2: Optional[float] = None,
+    optimizer_eps: Optional[float] = None,
+    freeze_backbone: bool = False,
+    trainable_layers: Optional[int] = None,
+    log_dir: Optional[Path] = None,
+    cloud_storage: Optional[CloudStorage] = None,
+    input_cache_mode: Literal["mmap", "memory"] = "mmap",
+    architecture_config: Optional[dict[str, Any]] = None,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -497,6 +550,29 @@ def learn_multi_stage(
         resume_backbone_from: Backbone checkpoint to resume from
         resume_reachable_head_from: Reachable head checkpoint to resume from
         resume_legal_moves_head_from: Legal moves head checkpoint to resume from
+        compilation: Enable PyTorch compilation for Stage 3
+        detect_anomaly: Enable anomaly detection for Stage 3
+        test_ratio: Test set ratio for Stage 3
+        epoch: Number of training epochs for Stage 3
+        dataloader_workers: DataLoader worker count for Stage 3
+        pin_memory: Enable pinned memory for Stage 3
+        prefetch_factor: Prefetch factor for Stage 3
+        cache_transforms: Cache transforms for Stage 3
+        gce_parameter: GCE parameter for Stage 3
+        policy_loss_ratio: Policy loss weight for Stage 3
+        value_loss_ratio: Value loss weight for Stage 3
+        lr_scheduler: LR scheduler for Stage 3
+        momentum: SGD momentum for Stage 3
+        optimizer_name: Optimizer for Stage 3
+        optimizer_beta1: AdamW beta1 for Stage 3
+        optimizer_beta2: AdamW beta2 for Stage 3
+        optimizer_eps: AdamW epsilon for Stage 3
+        freeze_backbone: Freeze backbone in Stage 3
+        trainable_layers: Trainable backbone layers for Stage 3
+        log_dir: Log directory for Stage 3
+        cloud_storage: Cloud storage for Stage 3 model uploads
+        input_cache_mode: Cache strategy for Stage 3 inputs
+        architecture_config: Architecture-specific config dict for backbone
 
     Returns:
         JSON string with training results
@@ -520,9 +596,9 @@ def learn_multi_stage(
         raise ValueError(
             "stage2_datasource is required for stage 2 or all"
         )
-    if stage in ("3", "all") and stage3_datasource is None:
+    if stage == "3" and stage3_datasource is None:
         raise ValueError(
-            "stage3_datasource is required for stage 3 or all"
+            "stage3_datasource is required for stage 3"
         )
 
     # Set model directory default
@@ -536,9 +612,10 @@ def learn_multi_stage(
     logger.info(f"Using device: {device}")
 
     # Create backbone
-    backbone = ModelFactory.create_headless_model(
+    backbone = ModelFactory.create_shogi_backbone(
         device=device,
         architecture=model_architecture,
+        architecture_config=architecture_config,
     )
 
     # Load backbone if resuming
@@ -563,7 +640,6 @@ def learn_multi_stage(
     # Prepare stage configurations
     stage1_config = None
     stage2_config = None
-    stage3_config = None
 
     # Stage 1: Reachable Squares
     if stage in ("1", "all") and stage1_datasource is not None:
@@ -631,20 +707,12 @@ def learn_multi_stage(
             learning_rate=learning_rate,
         )
 
-    # Stage 3: Policy + Value (delegate to existing Learning class)
-    if stage in ("3", "all") and stage3_datasource is not None:
-        logger.info(
-            "Stage 3 would delegate to existing Learning.learn() implementation"
-        )
-        # Note: Actual Stage 3 implementation would be handled separately
-        stage3_config = None  # Placeholder
-
-    # Run all configured stages
+    # Run Stage 1/2 via orchestrator (Stage 3 is handled separately below)
     logger.info(f"Starting multi-stage training: stage={stage}")
     results = orchestrator.run_all_stages(
         stage1_config=stage1_config,
         stage2_config=stage2_config,
-        stage3_config=stage3_config,
+        stage3_config=None,
         save_checkpoints=True,
     )
 
@@ -664,6 +732,65 @@ def learn_multi_stage(
                 "epochs_trained": stage_result.epochs_trained,
                 "threshold_met": stage_result.threshold_met,
             }
+        )
+
+    # Stage 3: Policy + Value (delegate to Learning.learn())
+    if stage in ("3", "all") and stage3_datasource is not None:
+        logger.info("=" * 60)
+        logger.info("STAGE 3: POLICY + VALUE LEARNING")
+        logger.info("=" * 60)
+
+        # Determine backbone checkpoint path
+        stage3_resume_backbone = resume_backbone_from
+        if stage == "all":
+            saved_backbone = _find_latest_backbone_checkpoint(
+                model_dir
+            )
+            if saved_backbone is not None:
+                stage3_resume_backbone = saved_backbone
+                logger.info(
+                    f"Using backbone from Stage 1/2: {saved_backbone}"
+                )
+
+        stage3_result = learn(
+            datasource=stage3_datasource,
+            datasource_type=stage3_datasource.datasource.array_type,
+            gpu=gpu,
+            model_architecture=model_architecture,
+            compilation=compilation,
+            detect_anomaly=detect_anomaly,
+            test_ratio=test_ratio,
+            epoch=epoch,
+            batch_size=batch_size,
+            dataloader_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
+            cache_transforms=cache_transforms,
+            gce_parameter=gce_parameter,
+            policy_loss_ratio=policy_loss_ratio,
+            value_loss_ratio=value_loss_ratio,
+            learning_ratio=learning_rate,
+            lr_scheduler=lr_scheduler,
+            momentum=momentum,
+            optimizer_name=optimizer_name,
+            optimizer_beta1=optimizer_beta1,
+            optimizer_beta2=optimizer_beta2,
+            optimizer_eps=optimizer_eps,
+            resume_backbone_from=stage3_resume_backbone,
+            freeze_backbone=freeze_backbone,
+            trainable_layers=trainable_layers,
+            log_dir=log_dir,
+            model_dir=model_dir,
+            cloud_storage=cloud_storage,
+            input_cache_mode=input_cache_mode,
+            architecture_config=architecture_config,
+        )
+        results_dict["stages_completed"].append("stage3")
+        results_dict["stage3_result"] = stage3_result
+    elif stage == "all" and stage3_datasource is None:
+        logger.warning(
+            "Stage 3 skipped: no --stage3-data-path specified. "
+            "Only Stage 1/2 were executed."
         )
 
     return json.dumps(results_dict)

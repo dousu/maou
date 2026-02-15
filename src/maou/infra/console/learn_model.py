@@ -210,6 +210,36 @@ S3DataSource: S3DataSourceType | None = getattr(
     show_default=True,
 )
 @click.option(
+    "--vit-embed-dim",
+    type=int,
+    default=None,
+    help="ViT: embedding dimension (default: 512).",
+)
+@click.option(
+    "--vit-num-layers",
+    type=int,
+    default=None,
+    help="ViT: number of encoder layers (default: 6).",
+)
+@click.option(
+    "--vit-num-heads",
+    type=int,
+    default=None,
+    help="ViT: number of attention heads (default: 8).",
+)
+@click.option(
+    "--vit-mlp-ratio",
+    type=float,
+    default=None,
+    help="ViT: MLP hidden dimension ratio (default: 4.0).",
+)
+@click.option(
+    "--vit-dropout",
+    type=float,
+    default=None,
+    help="ViT: dropout rate (default: 0.1).",
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
@@ -407,6 +437,16 @@ S3DataSource: S3DataSourceType | None = getattr(
     help="Freeze backbone parameters (embedding, backbone, pool, hand projection).",
 )
 @click.option(
+    "--trainable-layers",
+    type=int,
+    default=None,
+    help=(
+        "Number of trailing backbone layer groups to keep trainable. "
+        "0 = freeze all backbone layers. "
+        "Unset = no freezing (all layers trainable)."
+    ),
+)
+@click.option(
     "--stage",
     type=click.Choice(
         ["1", "2", "3", "all"], case_sensitive=False
@@ -547,6 +587,11 @@ def learn_model(
     input_max_workers: int,
     gpu: Optional[str],
     model_architecture: str,
+    vit_embed_dim: Optional[int],
+    vit_num_layers: Optional[int],
+    vit_num_heads: Optional[int],
+    vit_mlp_ratio: Optional[float],
+    vit_dropout: Optional[float],
     compilation: bool,
     detect_anomaly: bool,
     test_ratio: Optional[float],
@@ -574,6 +619,7 @@ def learn_model(
     resume_policy_head_from: Optional[Path],
     resume_value_head_from: Optional[Path],
     freeze_backbone: bool,
+    trainable_layers: Optional[int],
     stage: str,
     stage1_data_path: Optional[Path],
     stage2_data_path: Optional[Path],
@@ -826,6 +872,23 @@ def learn_model(
         )
     architecture_key = model_architecture.lower()
 
+    # Build architecture_config from ViT-specific options
+    architecture_config: dict[str, Any] | None = None
+    if architecture_key == "vit":
+        vit_overrides: dict[str, Any] = {}
+        if vit_embed_dim is not None:
+            vit_overrides["embed_dim"] = vit_embed_dim
+        if vit_num_layers is not None:
+            vit_overrides["num_layers"] = vit_num_layers
+        if vit_num_heads is not None:
+            vit_overrides["num_heads"] = vit_num_heads
+        if vit_mlp_ratio is not None:
+            vit_overrides["mlp_ratio"] = vit_mlp_ratio
+        if vit_dropout is not None:
+            vit_overrides["dropout"] = vit_dropout
+        if vit_overrides:
+            architecture_config = vit_overrides
+
     # Check if multi-stage training is requested
     is_multi_stage = (
         stage in ("1", "2", "all")
@@ -898,6 +961,29 @@ def learn_model(
                 resume_backbone_from=resume_backbone_from,
                 resume_reachable_head_from=resume_reachable_head_from,
                 resume_legal_moves_head_from=resume_legal_moves_head_from,
+                compilation=compilation,
+                detect_anomaly=detect_anomaly,
+                test_ratio=test_ratio,
+                epoch=epoch,
+                dataloader_workers=dataloader_workers,
+                pin_memory=pin_memory,
+                prefetch_factor=prefetch_factor,
+                cache_transforms=cache_transforms,
+                gce_parameter=gce_parameter,
+                policy_loss_ratio=policy_loss_ratio,
+                value_loss_ratio=value_loss_ratio,
+                lr_scheduler=lr_scheduler,
+                momentum=momentum,
+                optimizer_name=optimizer,
+                optimizer_beta1=optimizer_beta1,
+                optimizer_beta2=optimizer_beta2,
+                optimizer_eps=optimizer_eps,
+                freeze_backbone=freeze_backbone,
+                trainable_layers=trainable_layers,
+                log_dir=log_dir,
+                cloud_storage=cloud_storage,
+                input_cache_mode=input_cache_mode.lower(),
+                architecture_config=architecture_config,
             )
         )
     else:
@@ -936,10 +1022,12 @@ def learn_model(
                 resume_policy_head_from=resume_policy_head_from,
                 resume_value_head_from=resume_value_head_from,
                 freeze_backbone=freeze_backbone,
+                trainable_layers=trainable_layers,
                 log_dir=log_dir,
                 model_dir=model_dir,
                 cloud_storage=cloud_storage,
                 input_cache_mode=input_cache_mode.lower(),
                 detect_anomaly=detect_anomaly,
+                architecture_config=architecture_config,
             )
         )

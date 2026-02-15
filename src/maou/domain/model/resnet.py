@@ -251,3 +251,16 @@ class ResNet(nn.Module):
         x = self.layer4(x)
 
         return x
+
+    def get_freezable_groups(self) -> list[nn.Module]:
+        """Return residual layer groups ordered from lowest to highest.
+
+        Returns:
+            list[nn.Module]: [layer1, layer2, layer3, layer4] (4 groups).
+        """
+        return [
+            self.layer1,
+            self.layer2,
+            self.layer3,
+            self.layer4,
+        ]

@@ -266,6 +266,7 @@ class MultiStageTrainingOrchestrator:
         backbone: HeadlessNetwork,
         device: torch.device,
         model_dir: Path,
+        trainable_layers: Optional[int] = None,
     ):
         """Initialize multi-stage training orchestrator.
 
@@ -273,10 +274,13 @@ class MultiStageTrainingOrchestrator:
             backbone: Shared backbone model
             device: Training device
             model_dir: Directory for saving checkpoints
+            trainable_layers: Number of trailing backbone layer groups
+                to keep trainable in Stage 3. None = no freezing.
         """
         self.backbone = backbone
         self.device = device
         self.model_dir = model_dir
+        self.trainable_layers = trainable_layers
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
     def run_all_stages(
