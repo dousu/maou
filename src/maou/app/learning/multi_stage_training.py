@@ -194,13 +194,15 @@ class SingleStageTrainingLoop:
         ):
             # Move to device
             board_tensor, hand_tensor = inputs
-            board_tensor = board_tensor.to(self.device)
+            board_tensor = board_tensor.to(
+                self.device, non_blocking=True
+            )
             hand_tensor = (
-                hand_tensor.to(self.device)
+                hand_tensor.to(self.device, non_blocking=True)
                 if hand_tensor is not None
                 else None
             )
-            targets = targets.to(self.device)
+            targets = targets.to(self.device, non_blocking=True)
 
             # Zero gradients
             self.config.optimizer.zero_grad()
