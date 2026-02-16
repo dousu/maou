@@ -68,9 +68,13 @@ class TestDataIOService:
         prep_df = create_empty_preprocessing_df(2)
 
         # Create sample move labels (normalized)
-        move_label_1 = np.zeros(MOVE_LABELS_NUM, dtype=np.float16)
+        move_label_1 = np.zeros(
+            MOVE_LABELS_NUM, dtype=np.float16
+        )
         move_label_1[50] = 1.0
-        move_label_2 = np.zeros(MOVE_LABELS_NUM, dtype=np.float16)
+        move_label_2 = np.zeros(
+            MOVE_LABELS_NUM, dtype=np.float16
+        )
         move_label_2[100] = 1.0
 
         prep_df = prep_df.with_columns(

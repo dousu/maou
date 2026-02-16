@@ -12,10 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import polars as pl
 
 from maou.domain.board.shogi import CSHOGI_WHITE_OFFSET
-from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.visualization.search_index import SearchIndex
 
 logger = logging.getLogger(__name__)
