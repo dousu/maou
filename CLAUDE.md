@@ -39,6 +39,12 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST NOT skip pre-commit hooks
 - MUST NOT commit secrets (.env, credentials)
 
+### Documentation
+- MUST update `docs/commands/` when modifying CLI commands or options in `src/maou/infra/console/`
+- MUST create a new `docs/commands/<command-name>.md` when adding a new CLI command
+- MUST remove `docs/commands/<command-name>.md` when removing a CLI command
+- MUST follow the existing documentation format (Overview + CLI options tables)
+
 ## Code Exploration Policy (MUST)
 
 コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.
