@@ -29,6 +29,11 @@ from maou.app.learning.network import (
     BackboneArchitecture,
 )
 from maou.app.learning.setup import DeviceSetup, ModelFactory
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
+    StreamingStage1Dataset,
+    StreamingStage2Dataset,
+)
 from maou.domain.loss.loss_fn import (
     LegalMovesLoss,
     ReachableSquaresLoss,
@@ -201,6 +206,11 @@ def learn(
         tuple[str, ...]
     ] = None,
     architecture_config: Optional[dict[str, Any]] = None,
+    streaming: bool = False,
+    streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    streaming_val_source: Optional[StreamingDataSource] = None,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -245,6 +255,9 @@ def learn(
             module names emit histograms
         architecture_config: Optional architecture-specific configuration dict
             (e.g. ViT embed_dim, num_layers). Passed to ModelFactory.
+        streaming: Use streaming IterableDataset instead of Map-style Dataset
+        streaming_train_source: StreamingDataSource for training data
+        streaming_val_source: StreamingDataSource for validation data
 
     Returns:
         JSON string with training results
@@ -472,6 +485,9 @@ def learn(
         input_cache_mode=normalized_cache_mode,
         tensorboard_histogram_frequency=tensorboard_histogram_frequency,
         tensorboard_histogram_modules=normalized_histogram_modules,
+        streaming=streaming,
+        streaming_train_source=streaming_train_source,
+        streaming_val_source=streaming_val_source,
     )
 
     learning_result = Learning(
@@ -631,6 +647,130 @@ def _run_stage2(
     return results[TrainingStage.LEGAL_MOVES]
 
 
+def _run_stage1_streaming(
+    *,
+    streaming_source: StreamingDataSource,
+    orchestrator: MultiStageTrainingOrchestrator,
+    backbone: "torch.nn.Module",
+    batch_size: int,
+    learning_rate: float,
+    max_epochs: int,
+    threshold: float,
+    device: torch.device,
+) -> StageResult:
+    """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
+
+    Args:
+        streaming_source: ストリーミングデータソース
+        orchestrator: マルチステージオーケストレータ
+        backbone: バックボーンネットワーク
+        batch_size: バッチサイズ
+        learning_rate: 学習率
+        max_epochs: 最大エポック数
+        threshold: 精度閾値
+        device: 計算デバイス
+
+    Returns:
+        Stage 1 の訓練結果
+    """
+    dataset = StreamingStage1Dataset(
+        streaming_source=streaming_source,
+        batch_size=batch_size,
+        shuffle=True,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+    )
+
+    stage_config = StageConfig(
+        stage=TrainingStage.REACHABLE_SQUARES,
+        max_epochs=max_epochs,
+        accuracy_threshold=threshold,
+        dataloader=dataloader,
+        loss_fn=ReachableSquaresLoss(),
+        optimizer=torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        ),
+        learning_rate=learning_rate,
+    )
+
+    results = orchestrator.run_all_stages(
+        stage1_config=stage_config,
+        stage2_config=None,
+        stage3_config=None,
+        save_checkpoints=True,
+    )
+
+    return results[TrainingStage.REACHABLE_SQUARES]
+
+
+def _run_stage2_streaming(
+    *,
+    streaming_source: StreamingDataSource,
+    orchestrator: MultiStageTrainingOrchestrator,
+    backbone: "torch.nn.Module",
+    batch_size: int,
+    learning_rate: float,
+    max_epochs: int,
+    threshold: float,
+    device: torch.device,
+) -> StageResult:
+    """Stage 2 (Legal Moves) をストリーミングモードで実行する．
+
+    Args:
+        streaming_source: ストリーミングデータソース
+        orchestrator: マルチステージオーケストレータ
+        backbone: バックボーンネットワーク
+        batch_size: バッチサイズ
+        learning_rate: 学習率
+        max_epochs: 最大エポック数
+        threshold: 精度閾値
+        device: 計算デバイス
+
+    Returns:
+        Stage 2 の訓練結果
+    """
+    dataset = StreamingStage2Dataset(
+        streaming_source=streaming_source,
+        batch_size=batch_size,
+        shuffle=True,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+    )
+
+    stage_config = StageConfig(
+        stage=TrainingStage.LEGAL_MOVES,
+        max_epochs=max_epochs,
+        accuracy_threshold=threshold,
+        dataloader=dataloader,
+        loss_fn=LegalMovesLoss(),
+        optimizer=torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        ),
+        learning_rate=learning_rate,
+    )
+
+    results = orchestrator.run_all_stages(
+        stage1_config=None,
+        stage2_config=stage_config,
+        stage3_config=None,
+        save_checkpoints=True,
+    )
+
+    return results[TrainingStage.LEGAL_MOVES]
+
+
 def _resolve_datasource_type(
     array_type: Literal[
         "hcpe", "preprocessing", "stage1", "stage2"
@@ -691,6 +831,19 @@ def learn_multi_stage(
     cloud_storage: Optional[CloudStorage] = None,
     input_cache_mode: Literal["file", "memory"] = "file",
     architecture_config: Optional[dict[str, Any]] = None,
+    streaming: bool = False,
+    stage1_streaming_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage2_streaming_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage3_streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage3_streaming_val_source: Optional[
+        StreamingDataSource
+    ] = None,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -734,6 +887,11 @@ def learn_multi_stage(
         cloud_storage: Cloud storage for Stage 3 model uploads
         input_cache_mode: Cache strategy for Stage 3 inputs
         architecture_config: Architecture-specific config dict for backbone
+        streaming: Use streaming IterableDataset for Stage 1/2/3
+        stage1_streaming_source: StreamingDataSource for Stage 1
+        stage2_streaming_source: StreamingDataSource for Stage 2
+        stage3_streaming_train_source: StreamingDataSource for Stage 3 training
+        stage3_streaming_val_source: StreamingDataSource for Stage 3 validation
 
     Returns:
         JSON string with training results
@@ -810,16 +968,28 @@ def learn_multi_stage(
     # DataSource/Dataset/DataLoaderは_run_stage1内のローカル変数．
     # 関数終了時にスコープから外れ，GCの解放対象になる．
     if stage in ("1", "all") and stage1_data_config is not None:
-        stage1_result = _run_stage1(
-            data_config=stage1_data_config,
-            orchestrator=orchestrator,
-            backbone=backbone,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            max_epochs=stage1_max_epochs,
-            threshold=stage1_threshold,
-            device=device,
-        )
+        if streaming and stage1_streaming_source is not None:
+            stage1_result = _run_stage1_streaming(
+                streaming_source=stage1_streaming_source,
+                orchestrator=orchestrator,
+                backbone=backbone,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                max_epochs=stage1_max_epochs,
+                threshold=stage1_threshold,
+                device=device,
+            )
+        else:
+            stage1_result = _run_stage1(
+                data_config=stage1_data_config,
+                orchestrator=orchestrator,
+                backbone=backbone,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                max_epochs=stage1_max_epochs,
+                threshold=stage1_threshold,
+                device=device,
+            )
         results_dict["stages_completed"].append(
             {
                 "stage": stage1_result.stage.value,
@@ -834,16 +1004,28 @@ def learn_multi_stage(
 
     # Stage 2: Legal Moves
     if stage in ("2", "all") and stage2_data_config is not None:
-        stage2_result = _run_stage2(
-            data_config=stage2_data_config,
-            orchestrator=orchestrator,
-            backbone=backbone,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            max_epochs=stage2_max_epochs,
-            threshold=stage2_threshold,
-            device=device,
-        )
+        if streaming and stage2_streaming_source is not None:
+            stage2_result = _run_stage2_streaming(
+                streaming_source=stage2_streaming_source,
+                orchestrator=orchestrator,
+                backbone=backbone,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                max_epochs=stage2_max_epochs,
+                threshold=stage2_threshold,
+                device=device,
+            )
+        else:
+            stage2_result = _run_stage2(
+                data_config=stage2_data_config,
+                orchestrator=orchestrator,
+                backbone=backbone,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                max_epochs=stage2_max_epochs,
+                threshold=stage2_threshold,
+                device=device,
+            )
         results_dict["stages_completed"].append(
             {
                 "stage": stage2_result.stage.value,
@@ -912,6 +1094,9 @@ def learn_multi_stage(
             cloud_storage=cloud_storage,
             input_cache_mode=input_cache_mode,
             architecture_config=architecture_config,
+            streaming=streaming,
+            streaming_train_source=stage3_streaming_train_source,
+            streaming_val_source=stage3_streaming_val_source,
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result

@@ -154,14 +154,19 @@ class TrainingLoop:
             if self.enable_gpu_prefetch:
                 # バッファサイズの決定（0以下の場合は自動計算）
                 if self.gpu_prefetch_buffer_size <= 0:
+                    effective_batch_size = (
+                        dataloader.batch_size
+                        if dataloader.batch_size is not None
+                        else 256
+                    )
                     buffer_size = (
                         calculate_recommended_buffer_size(
-                            dataloader.batch_size
+                            effective_batch_size
                         )
                     )
                     self.logger.info(
                         f"Auto-calculated GPU prefetch buffer size: {buffer_size} "
-                        f"(based on batch_size={dataloader.batch_size})"
+                        f"(based on batch_size={effective_batch_size})"
                     )
                 else:
                     buffer_size = self.gpu_prefetch_buffer_size

@@ -132,6 +132,11 @@ class SingleStageTrainingLoop:
         final_loss = 0.0
 
         for epoch in range(self.config.max_epochs):
+            # Streaming IterableDatasetのエポックシード更新
+            ds = self.config.dataloader.dataset
+            if hasattr(ds, "set_epoch"):
+                ds.set_epoch(epoch)
+
             self.model.train()
             self.head.train()
 

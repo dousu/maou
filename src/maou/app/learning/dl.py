@@ -15,6 +15,7 @@ from typing import (
 
 import torch
 from torch.amp.grad_scaler import GradScaler
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import (
     SummaryWriter,  # type: ignore
 )
@@ -33,9 +34,18 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.setup import (
+    DataLoaderFactory,
+    DeviceConfig,
+    DeviceSetup,
     LossOptimizerFactory,
+    ModelComponents,
+    ModelFactory,
     SchedulerFactory,
     TrainingSetup,
+)
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
+    StreamingKifDataset,
 )
 from maou.app.learning.training_loop import TrainingLoop
 from maou.domain.cloud_storage import CloudStorage
@@ -109,6 +119,13 @@ class Learning:
         model_dir: Path
         lr_scheduler_name: Optional[str] = None
         input_cache_mode: Literal["file", "memory"] = "file"
+        streaming: bool = False
+        streaming_train_source: Optional[
+            StreamingDataSource
+        ] = None
+        streaming_val_source: Optional[StreamingDataSource] = (
+            None
+        )
         tensorboard_histogram_frequency: int = 0
         tensorboard_histogram_modules: (
             tuple[str, ...] | None
@@ -137,38 +154,45 @@ class Learning:
         self.logger.info("start learning")
         learning_result: Dict[str, str] = {}
 
-        # 入力とテスト用のデータソース取得
-        training_datasource, validation_datasource = (
-            config.datasource.train_test_split(
-                test_ratio=config.test_ratio
+        if config.streaming:
+            device_config, dataloaders, model_components = (
+                self._setup_streaming_components(
+                    config, architecture_config
+                )
             )
-        )
+        else:
+            # 入力とテスト用のデータソース取得
+            training_datasource, validation_datasource = (
+                config.datasource.train_test_split(
+                    test_ratio=config.test_ratio
+                )
+            )
 
-        device_config, dataloaders, model_components = (
-            TrainingSetup.setup_training_components(
-                training_datasource=training_datasource,
-                validation_datasource=validation_datasource,
-                datasource_type=config.datasource_type,
-                cache_transforms=config.cache_transforms,
-                gpu=config.gpu,
-                model_architecture=config.model_architecture,
-                batch_size=config.batch_size,
-                dataloader_workers=config.dataloader_workers,
-                pin_memory=config.pin_memory,
-                prefetch_factor=config.prefetch_factor,
-                gce_parameter=config.gce_parameter,
-                learning_ratio=config.learning_ratio,
-                momentum=config.momentum,
-                optimizer_name=config.optimizer_name,
-                optimizer_beta1=config.optimizer_beta1,
-                optimizer_beta2=config.optimizer_beta2,
-                optimizer_eps=config.optimizer_eps,
-                lr_scheduler_name=config.lr_scheduler_name,
-                max_epochs=config.epoch,
-                detect_anomaly=config.detect_anomaly,
-                architecture_config=architecture_config,
+            device_config, dataloaders, model_components = (
+                TrainingSetup.setup_training_components(
+                    training_datasource=training_datasource,
+                    validation_datasource=validation_datasource,
+                    datasource_type=config.datasource_type,
+                    cache_transforms=config.cache_transforms,
+                    gpu=config.gpu,
+                    model_architecture=config.model_architecture,
+                    batch_size=config.batch_size,
+                    dataloader_workers=config.dataloader_workers,
+                    pin_memory=config.pin_memory,
+                    prefetch_factor=config.prefetch_factor,
+                    gce_parameter=config.gce_parameter,
+                    learning_ratio=config.learning_ratio,
+                    momentum=config.momentum,
+                    optimizer_name=config.optimizer_name,
+                    optimizer_beta1=config.optimizer_beta1,
+                    optimizer_beta2=config.optimizer_beta2,
+                    optimizer_eps=config.optimizer_eps,
+                    lr_scheduler_name=config.lr_scheduler_name,
+                    max_epochs=config.epoch,
+                    detect_anomaly=config.detect_anomaly,
+                    architecture_config=architecture_config,
+                )
             )
-        )
 
         self.device = device_config.device
         self.training_loader, self.validation_loader = (
@@ -259,14 +283,142 @@ class Learning:
             )
         self.__train()
 
+        train_ds = self.training_loader.dataset
+        val_ds = self.validation_loader.dataset
+        train_count = (
+            len(train_ds)  # type: ignore[arg-type]
+            if hasattr(train_ds, "__len__")
+            else "streaming"
+        )
+        val_count = (
+            len(val_ds)  # type: ignore[arg-type]
+            if hasattr(val_ds, "__len__")
+            else "streaming"
+        )
         learning_result["Data Samples"] = (
-            f"Training: {len(self.training_loader.dataset)}, "  # type: ignore
-            f"Test: {len(self.validation_loader.dataset)}"  # type: ignore
+            f"Training: {train_count}, Test: {val_count}"
         )
         learning_result["Option"] = str(config)
         learning_result["Result"] = "Finish"
 
         return learning_result
+
+    def _setup_streaming_components(
+        self,
+        config: LearningOption,
+        architecture_config: dict[str, Any] | None,
+    ) -> tuple[
+        DeviceConfig,
+        tuple[DataLoader, DataLoader],
+        ModelComponents,
+    ]:
+        """Streaming用の学習コンポーネントをセットアップする．
+
+        Map-style TrainingSetup.setup_training_components() の代わりに，
+        StreamingKifDataset + create_streaming_dataloaders() を使用する．
+
+        Args:
+            config: 学習設定
+            architecture_config: アーキテクチャ固有の設定dict
+
+        Returns:
+            (DeviceConfig, (train_loader, val_loader), ModelComponents)
+
+        Raises:
+            ValueError: streaming_train_source / streaming_val_source が未設定
+        """
+        if config.streaming_train_source is None:
+            raise ValueError(
+                "streaming_train_source is required "
+                "when streaming=True"
+            )
+        if config.streaming_val_source is None:
+            raise ValueError(
+                "streaming_val_source is required "
+                "when streaming=True"
+            )
+
+        # Torch config
+        if config.detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
+
+        # Device setup
+        device_config = DeviceSetup.setup_device(
+            config.gpu, config.pin_memory
+        )
+
+        # Create streaming datasets
+        train_dataset = StreamingKifDataset(
+            streaming_source=config.streaming_train_source,
+            batch_size=config.batch_size,
+            shuffle=True,
+        )
+        val_dataset = StreamingKifDataset(
+            streaming_source=config.streaming_val_source,
+            batch_size=config.batch_size,
+            shuffle=False,
+        )
+
+        # Create streaming dataloaders
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=device_config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+            )
+        )
+
+        # Model creation
+        model = ModelFactory.create_shogi_model(
+            device_config.device,
+            architecture=config.model_architecture,
+            architecture_config=architecture_config,
+        )
+
+        # Loss functions and optimizer
+        loss_fn_policy, loss_fn_value = (
+            LossOptimizerFactory.create_loss_functions(
+                config.gce_parameter
+            )
+        )
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            config.learning_ratio,
+            config.momentum,
+            optimizer_name=config.optimizer_name,
+            betas=(
+                config.optimizer_beta1,
+                config.optimizer_beta2,
+            ),
+            eps=config.optimizer_eps,
+        )
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=config.lr_scheduler_name,
+            max_epochs=config.epoch,
+        )
+
+        model_components = ModelComponents(
+            model=model,
+            loss_fn_policy=loss_fn_policy,
+            loss_fn_value=loss_fn_value,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+        self.logger.info(
+            "Streaming training components setup completed"
+        )
+
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )
 
     def __train_one_epoch(
         self, epoch_index: int, tb_writer: SummaryWriter
@@ -346,6 +498,15 @@ class Learning:
             self.logger.info(
                 "EPOCH {}:".format(epoch_number + 1)
             )
+
+            # Streaming IterableDatasetのエポックシード更新
+            for loader in (
+                self.training_loader,
+                self.validation_loader,
+            ):
+                ds = loader.dataset
+                if hasattr(ds, "set_epoch"):
+                    ds.set_epoch(epoch_number)
 
             avg_loss = self.__train_one_epoch(
                 epoch_number, writer
