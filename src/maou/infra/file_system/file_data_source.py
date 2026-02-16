@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -18,9 +18,24 @@ import numpy as np
 
 import maou.interface.learn as learn
 import maou.interface.preprocess as preprocess
+from maou.domain.data.schema import (
+    convert_hcpe_df_to_numpy,
+    convert_preprocessing_df_to_numpy,
+    convert_stage1_df_to_numpy,
+    convert_stage2_df_to_numpy,
+)
 
 if TYPE_CHECKING:
     import polars as pl
+
+_DF_TO_NUMPY_CONVERTERS: dict[
+    str, Callable[["pl.DataFrame"], np.ndarray]
+] = {
+    "hcpe": convert_hcpe_df_to_numpy,
+    "preprocessing": convert_preprocessing_df_to_numpy,
+    "stage1": convert_stage1_df_to_numpy,
+    "stage2": convert_stage2_df_to_numpy,
+}
 
 
 class MissingFileDataConfig(Exception):
@@ -30,7 +45,7 @@ class MissingFileDataConfig(Exception):
 class FileDataSource(
     learn.LearningDataSource, preprocess.DataSource
 ):
-    CacheMode = Literal["mmap", "memory"]
+    CacheMode = Literal["file", "memory"]
 
     class FileDataSourceSpliter(
         learn.LearningDataSource.DataSourceSpliter
@@ -44,17 +59,13 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool = False,
-            cache_mode: "FileDataSource.CacheMode" = "mmap",
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
+            cache_mode: "FileDataSource.CacheMode" = "file",
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
                 array_type=array_type,
                 bit_pack=bit_pack,
                 cache_mode=cache_mode,
-                preprocessing_mmap_mode=preprocessing_mmap_mode,
             )
 
         def train_test_split(
@@ -122,10 +133,7 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool,
-            cache_mode: "FileDataSource.CacheMode" = "mmap",
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
+            cache_mode: "FileDataSource.CacheMode" = "file",
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す．
 
@@ -133,21 +141,17 @@ class FileDataSource(
                 file_paths (list[Path]): .featherファイルのリスト
                 array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): データのタイプ
                 bit_pack (bool): 未使用（後方互換性のために保持）
-                cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
-                preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): 未使用（後方互換性のために保持）
+                cache_mode (CacheMode): キャッシュモード ("file" または "memory")
             """
             self.file_paths = file_paths
             self.array_type = array_type
             self.bit_pack = bit_pack
-            self.preprocessing_mmap_mode = (
-                preprocessing_mmap_mode
-            )
             normalized_cache_mode = cast(
                 FileDataSource.CacheMode, cache_mode.lower()
             )
-            if normalized_cache_mode not in {"mmap", "memory"}:
+            if normalized_cache_mode not in {"file", "memory"}:
                 raise ValueError(
-                    "cache_mode must be either 'mmap' or 'memory', "
+                    "cache_mode must be either 'file' or 'memory', "
                     f"got {cache_mode}"
                 )
             self.memmap_arrays: list[
@@ -161,12 +165,12 @@ class FileDataSource(
             )
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
-            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一DataFrame
-            self._concatenated_array: Optional[Any] = (
-                None  # pl.DataFrame when concatenated
+            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一numpy配列
+            self._concatenated_array: Optional[np.ndarray] = (
+                None
             )
 
-            # すべてのファイルパスをmemmapで読み込む
+            # すべてのファイルパスを読み込む
             lengths = []
             for file_path in self.file_paths:
                 try:
@@ -230,45 +234,55 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # cache_mode="memory"の場合、全ファイルを単一DataFrameに結合
+            # Convert DataFrames to numpy structured arrays for fast __getitem__
+            converter = _DF_TO_NUMPY_CONVERTERS.get(
+                self.array_type
+            )
+            if converter is None:
+                raise ValueError(
+                    f"Unknown array_type: {self.array_type}"
+                )
+            for entry in self._file_entries:
+                if entry.cached_array is not None:
+                    entry.cached_array = converter(
+                        entry.cached_array
+                    )
+
+            # cache_mode="memory"の場合、全ファイルを単一numpy配列に結合
             if (
                 self.cache_mode == "memory"
                 and self.total_pages > 1
             ):
-                import polars as pl
+                # メモリ見積もりの警告
+                total_bytes = sum(
+                    entry.cached_array.nbytes
+                    for entry in self._file_entries
+                    if entry.cached_array is not None
+                )
+                estimated_gb = total_bytes / (1024**3)
+                if estimated_gb > 32:
+                    self.logger.warning(
+                        f"cache_mode='memory' with {self.total_rows} rows "
+                        f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
+                        f"Consider using cache_mode='file' instead."
+                    )
 
                 self.logger.info(
-                    f"Concatenating {self.total_pages} DataFrames "
+                    f"Concatenating {self.total_pages} numpy arrays "
                     f"({self.total_rows} records)..."
                 )
 
-                # Collect all DataFrames
-                dataframes = []
+                arrays = [
+                    entry.cached_array
+                    for entry in self._file_entries
+                    if entry.cached_array is not None
+                ]
+                self._concatenated_array = np.concatenate(
+                    arrays
+                )
+                # Release individual arrays to save memory
                 for entry in self._file_entries:
-                    if entry.cached_array is not None:
-                        dataframes.append(entry.cached_array)  # type: ignore
-                    else:
-                        self.logger.warning(
-                            f"File {entry.name} is not cached in memory, skipping"
-                        )
-
-                # Concatenate all DataFrames
-                try:
-                    self._concatenated_array = pl.concat(
-                        dataframes
-                    )  # type: ignore
-                    self.logger.info(
-                        f"Concatenation complete. DataFrame shape: "
-                        f"({len(self._concatenated_array)}, {len(self._concatenated_array.columns)})"
-                    )
-                    # Release individual DataFrames to save memory
-                    for entry in self._file_entries:
-                        entry.cached_array = None
-                except Exception as e:
-                    self.logger.exception(
-                        f"Failed to concatenate DataFrames: {e}"
-                    )
-                    raise
+                    entry.cached_array = None
 
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
@@ -277,79 +291,25 @@ class FileDataSource(
         def get_item(self, idx: int) -> np.ndarray:
             """Get single item as numpy structured array．
 
-            Converts DataFrame row to numpy format for backward compatibility．
-
             Args:
                 idx: Global index across all files
 
             Returns:
                 numpy structured array (single record)
             """
-
-            from maou.domain.data.schema import (
-                convert_hcpe_df_to_numpy,
-                convert_preprocessing_df_to_numpy,
-                convert_stage1_df_to_numpy,
-                convert_stage2_df_to_numpy,
-            )
-
-            # Handle concatenated DataFrame (cache_mode="memory")
             if self._concatenated_array is not None:
-                # Extract single row as DataFrame
-                row_df = self._concatenated_array[idx : idx + 1]
+                return self._concatenated_array[idx]
 
-                # Convert to numpy
-                if self.array_type == "hcpe":
-                    array = convert_hcpe_df_to_numpy(row_df)
-                elif self.array_type == "preprocessing":
-                    array = convert_preprocessing_df_to_numpy(
-                        row_df
-                    )
-                elif self.array_type == "stage1":
-                    array = convert_stage1_df_to_numpy(row_df)
-                elif self.array_type == "stage2":
-                    array = convert_stage2_df_to_numpy(row_df)
-                else:
-                    raise ValueError(
-                        f"Unknown array_type: {self.array_type}"
-                    )
-
-                return array[0]  # Return single record
-
-            # Handle individual files (cache_mode="mmap")
-            # Find which file contains this index
             file_idx = np.searchsorted(
                 self.cum_lengths[1:], idx, side="right"
             )
             local_idx = idx - self.cum_lengths[file_idx]
-
-            # Get DataFrame for this file
             entry = self._file_entries[file_idx]
             if entry.cached_array is None:
                 raise RuntimeError(
-                    f"DataFrame not loaded for file {entry.name}"
+                    f"Array not loaded for file {entry.name}"
                 )
-
-            df = entry.cached_array  # type: pl.DataFrame
-            row_df = df[local_idx : local_idx + 1]
-
-            # Convert to numpy
-            if self.array_type == "hcpe":
-                array = convert_hcpe_df_to_numpy(row_df)
-            elif self.array_type == "preprocessing":
-                array = convert_preprocessing_df_to_numpy(
-                    row_df
-                )
-            elif self.array_type == "stage1":
-                array = convert_stage1_df_to_numpy(row_df)
-            elif self.array_type == "stage2":
-                array = convert_stage2_df_to_numpy(row_df)
-            else:
-                raise ValueError(
-                    f"Unknown array_type: {self.array_type}"
-                )
-
-            return array[0]  # Return single record
+            return entry.cached_array[local_idx]
 
         def get_items(
             self, indices: list[int]
@@ -371,94 +331,43 @@ class FileDataSource(
         ) -> Generator[tuple[str, np.ndarray], None, None]:
             """Iterate over batches as numpy structured arrays．
 
-            Converts DataFrames to numpy format for backward compatibility．
+            Data is already converted to numpy at initialization time．
 
             Yields:
                 Tuple of (filename, numpy array)
             """
-            from maou.domain.data.schema import (
-                convert_hcpe_df_to_numpy,
-                convert_preprocessing_df_to_numpy,
-                convert_stage1_df_to_numpy,
-                convert_stage2_df_to_numpy,
-            )
-
             # If concatenated, yield as single batch
             if self._concatenated_array is not None:
-                # Convert entire DataFrame to numpy
-                if self.array_type == "hcpe":
-                    array = convert_hcpe_df_to_numpy(
-                        self._concatenated_array
-                    )
-                elif self.array_type == "preprocessing":
-                    array = convert_preprocessing_df_to_numpy(
-                        self._concatenated_array
-                    )
-                elif self.array_type == "stage1":
-                    array = convert_stage1_df_to_numpy(
-                        self._concatenated_array
-                    )
-                elif self.array_type == "stage2":
-                    array = convert_stage2_df_to_numpy(
-                        self._concatenated_array
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown array_type: {self.array_type}"
-                    )
-
-                yield ("concatenated", array)
+                yield ("concatenated", self._concatenated_array)
                 return
 
-            # Iterate over individual files
+            # Iterate over individual files (already numpy arrays)
             for entry in self._file_entries:
                 if entry.cached_array is None:
                     continue
-
-                df = entry.cached_array
-                # Convert DataFrame to numpy
-                if self.array_type == "hcpe":
-                    array = convert_hcpe_df_to_numpy(df)
-                elif self.array_type == "preprocessing":
-                    array = convert_preprocessing_df_to_numpy(
-                        df
-                    )
-                elif self.array_type == "stage1":
-                    array = convert_stage1_df_to_numpy(df)
-                elif self.array_type == "stage2":
-                    array = convert_stage2_df_to_numpy(df)
-                else:
-                    raise ValueError(
-                        f"Unknown array_type: {self.array_type}"
-                    )
-
-                yield (entry.name, array)
+                yield (entry.name, entry.cached_array)
 
     def __init__(
         self,
         *,
         file_paths: Optional[list[Path]] = None,
         file_manager: Optional[FileManager] = None,
-        indicies: Optional[list[int]] = None,
+        indicies: Optional[Union[list[int], np.ndarray]] = None,
         array_type: Optional[
             Literal["hcpe", "preprocessing", "stage1", "stage2"]
         ] = None,
         bit_pack: bool = True,
-        cache_mode: CacheMode = "mmap",
-        preprocessing_mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = "c",
+        cache_mode: CacheMode = "file",
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
         Args:
-            file_paths (list[Path]): npyファイルのリスト
+            file_paths (list[Path]): .featherファイルのリスト
             file_manager (Optional[FileManager]): FileManager
-            indicies (Optional[list[int]]): 選択可能なインデックスのリスト
+            indicies (Optional[Union[list[int], np.ndarray]]): 選択可能なインデックス
             array_type (Optional[Literal["hcpe", "preprocessing", "stage1", "stage2"]]): 配列のタイプ
             bit_pack (bool): ビットパッキングを使用するかどうか
-            cache_mode (CacheMode): キャッシュモード ("mmap" または "memory")
-            preprocessing_mmap_mode (Optional[Literal["r", "r+", "w+", "c"]]): preprocessing配列のmmapモード
+            cache_mode (CacheMode): キャッシュモード ("file" または "memory")
         """
         if file_manager is None:
             if (
@@ -470,7 +379,6 @@ class FileDataSource(
                     array_type=array_type,
                     bit_pack=bit_pack,
                     cache_mode=cache_mode,
-                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingFileDataConfig(
@@ -480,11 +388,11 @@ class FileDataSource(
             self.__file_manager = file_manager
 
         if indicies is None:
-            self.indicies = list(
-                range(self.__file_manager.total_rows)
+            self.indicies: np.ndarray = np.arange(
+                self.__file_manager.total_rows, dtype=np.int64
             )
         else:
-            self.indicies = indicies
+            self.indicies = np.asarray(indicies, dtype=np.int64)
 
     def __getitem__(self, idx: int) -> np.ndarray:
         if idx < 0 or idx >= len(self.indicies):
@@ -526,6 +434,8 @@ class FileDataSource(
         """Iterate over batches as Polars DataFrames．
 
         Yields .feather files directly as DataFrames．
+        Note: FileManager converts DataFrames to numpy at initialization
+        (B1.5 method), so this method reloads each file from disk on every call．
 
         Yields:
             tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)

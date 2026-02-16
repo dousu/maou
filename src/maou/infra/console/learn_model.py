@@ -103,9 +103,11 @@ S3DataSource: S3DataSourceType | None = getattr(
 )
 @click.option(
     "--input-cache-mode",
-    type=click.Choice(["mmap", "memory"], case_sensitive=False),
-    help="Cache strategy for local inputs (default: mmap).",
-    default="mmap",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
     show_default=True,
     required=False,
 )
@@ -639,6 +641,17 @@ def learn_model(
     s3_bucket_name: Optional[str],
     s3_base_path: Optional[str],
 ) -> None:
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        input_cache_mode = "file"
+
     # Validate input_format early
     if input_format not in ("hcpe", "preprocess"):
         raise ValueError(
@@ -908,6 +921,14 @@ def learn_model(
         stage2_datasource = None
         stage3_datasource = None
 
+        # Stage1/2 では cache_mode を強制的に "file" にする（OOM防止）
+        stage12_cache_mode = "file"
+        if input_cache_mode.lower() == "memory":
+            app_logger.info(
+                "Stage 1/2: cache_mode='memory' is ignored for memory efficiency. "
+                "Using individual file mode instead."
+            )
+
         if stage1_data_path is not None:
             stage1_datasource = (
                 FileDataSource.FileDataSourceSpliter(
@@ -916,7 +937,7 @@ def learn_model(
                     ),
                     array_type="stage1",
                     bit_pack=False,
-                    cache_mode=input_cache_mode.lower(),
+                    cache_mode=stage12_cache_mode,
                 )
             )
 
@@ -928,7 +949,7 @@ def learn_model(
                     ),
                     array_type="stage2",
                     bit_pack=False,
-                    cache_mode=input_cache_mode.lower(),
+                    cache_mode=stage12_cache_mode,
                 )
             )
 

@@ -108,7 +108,7 @@ class Learning:
         log_dir: Path
         model_dir: Path
         lr_scheduler_name: Optional[str] = None
-        input_cache_mode: Literal["mmap", "memory"] = "mmap"
+        input_cache_mode: Literal["file", "memory"] = "file"
         tensorboard_histogram_frequency: int = 0
         tensorboard_histogram_modules: (
             tuple[str, ...] | None

@@ -40,22 +40,20 @@ class BigQueryDataSource(
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
             sample_ratio: Optional[float] = None,
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
         ) -> None:
-            self.__page_manager = BigQueryDataSource.PageManager(
-                array_type=array_type,
-                dataset_id=dataset_id,
-                table_name=table_name,
-                batch_size=batch_size,
-                max_cached_bytes=max_cached_bytes,
-                clustering_key=clustering_key,
-                partitioning_key_date=partitioning_key_date,
-                use_local_cache=use_local_cache,
-                local_cache_dir=local_cache_dir,
-                sample_ratio=sample_ratio,
-                preprocessing_mmap_mode=preprocessing_mmap_mode,
+            self.__page_manager = (
+                BigQueryDataSource.PageManager(
+                    array_type=array_type,
+                    dataset_id=dataset_id,
+                    table_name=table_name,
+                    batch_size=batch_size,
+                    max_cached_bytes=max_cached_bytes,
+                    clustering_key=clustering_key,
+                    partitioning_key_date=partitioning_key_date,
+                    use_local_cache=use_local_cache,
+                    local_cache_dir=local_cache_dir,
+                    sample_ratio=sample_ratio,
+                )
             )
 
         def train_test_split(
@@ -112,9 +110,6 @@ class BigQueryDataSource(
             use_local_cache: bool = False,
             local_cache_dir: Optional[str] = None,
             sample_ratio: Optional[float] = None,
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = (
@@ -132,9 +127,6 @@ class BigQueryDataSource(
                 else None
             )
             self.array_type = array_type
-            self.preprocessing_mmap_mode = (
-                preprocessing_mmap_mode
-            )
             self.__pruning_info = []
 
             # ローカルキャッシュの設定
@@ -619,12 +611,8 @@ class BigQueryDataSource(
         use_local_cache: bool = False,
         local_cache_dir: Optional[str] = None,
         sample_ratio: Optional[float] = None,
-        preprocessing_mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = "c",
     ) -> None:
         """
-
         Args:
             array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
             dataset_id (Optional[str]): BigQuery データセット名
@@ -656,7 +644,6 @@ class BigQueryDataSource(
                     use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
                     sample_ratio=sample_ratio,
-                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingBigQueryConfig(

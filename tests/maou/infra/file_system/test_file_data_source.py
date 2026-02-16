@@ -202,7 +202,7 @@ def test_file_data_source_memory_cache(tmp_path: Path) -> None:
 
 
 def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
-    """Test FileDataSource with mmap cache mode."""
+    """Test FileDataSource with file cache mode."""
     file_paths, _ = _create_preprocessing_files(
         tmp_path, file_count=1, rows_per_file=4
     )
@@ -210,7 +210,7 @@ def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
     datasource = FileDataSource.FileDataSourceSpliter(
         file_paths=file_paths,
         array_type="preprocessing",
-        cache_mode="mmap",
+        cache_mode="file",
     )
 
     train_ds, _ = datasource.train_test_split(test_ratio=0.0)

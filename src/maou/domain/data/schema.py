@@ -867,6 +867,51 @@ def get_piece_planes_polars_schema() -> dict[
 # ============================================================================
 
 
+def _explode_list_column(
+    series: "pl.Series",
+    n: int,
+    shape: tuple[int, ...],
+    dtype: np.dtype,  # type: ignore[type-arg]
+    nest_depth: int = 1,
+) -> np.ndarray:
+    """Convert a Polars List column to numpy via explode (zero-copy path).
+
+    Falls back to to_list() if null values are present.
+
+    Args:
+        series: Polars Series of List type
+        n: Number of rows
+        shape: Target shape per row (e.g. (14,) or (9, 9))
+        dtype: Target numpy dtype
+        nest_depth: Number of explode() calls (1 for List, 2 for List[List])
+
+    Returns:
+        numpy.ndarray with shape (n, *shape)
+    """
+    if series.null_count() > 0:
+        # Fallback: null rows present, use to_list() with zero-fill
+        zero_fill: list = [0] * shape[-1]
+        if nest_depth == 2:
+            zero_fill = [
+                [0] * shape[-1] for _ in range(shape[0])
+            ]
+        items = series.to_list()
+        items = [
+            item if item is not None else zero_fill
+            for item in items
+        ]
+        return np.array(items, dtype=dtype)
+
+    # Fast path: no nulls, use explode -> to_numpy -> reshape
+    col = series
+    for _ in range(nest_depth):
+        col = col.explode()
+    result = col.to_numpy().reshape(n, *shape)
+    if result.dtype != dtype:
+        result = result.astype(dtype)
+    return result
+
+
 def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     """Convert HCPE Polars DataFrame to numpy structured array．
 
@@ -935,6 +980,9 @@ def convert_preprocessing_df_to_numpy(
 ) -> np.ndarray:
     """Convert preprocessing Polars DataFrame to numpy structured array．
 
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
+
     Args:
         df: Polars DataFrame with preprocessing schema
 
@@ -949,61 +997,45 @@ def convert_preprocessing_df_to_numpy(
             "polars is not installed. Install with: poetry add polars"
         )
 
-    # Get target dtype
+    n = len(df)
     dtype = get_preprocessing_dtype()
-    array = np.empty(len(df), dtype=dtype)
+    array = np.empty(n, dtype=dtype)
 
-    # Convert fields
-    # Handle potential null values in id field
+    # Scalar fields
     id_values = df["id"].to_numpy()
-    # Fill nulls with 0 for uint64
     if id_values.dtype == np.float64:
-        # Polars converts null uint64 to float64 NaN
         id_values = np.nan_to_num(id_values, nan=0.0).astype(
             np.uint64
         )
     array["id"] = id_values
-
-    # Convert nested lists to numpy arrays
-    # boardIdPositions: List[List[List[int]]] -> (N, 9, 9)
-    board_list = df["boardIdPositions"].to_list()
-    # Replace None with zero arrays
-    board_list = [
-        item
-        if item is not None
-        else [[0] * 9 for _ in range(9)]
-        for item in board_list
-    ]
-    array["boardIdPositions"] = np.array(
-        board_list,
-        dtype=np.uint8,
-    )
-
-    # piecesInHand: List[List[int]] -> (N, 14)
-    pieces_list = df["piecesInHand"].to_list()
-    # Replace None with zero arrays
-    pieces_list = [
-        item if item is not None else [0] * 14
-        for item in pieces_list
-    ]
-    array["piecesInHand"] = np.array(
-        pieces_list,
-        dtype=np.uint8,
-    )
-
-    # moveLabel: List[List[float]] -> (N, MOVE_LABELS_NUM)
-    move_list = df["moveLabel"].to_list()
-    # Replace None with zero arrays
-    move_list = [
-        item if item is not None else [0.0] * MOVE_LABELS_NUM
-        for item in move_list
-    ]
-    array["moveLabel"] = np.array(
-        move_list,
-        dtype=np.float32,
-    )
-
     array["resultValue"] = df["resultValue"].to_numpy()
+
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
+    )
+
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
+    )
+
+    # 1D List column: moveLabel List[Float32] -> (N, MOVE_LABELS_NUM)
+    array["moveLabel"] = _explode_list_column(
+        df["moveLabel"],
+        n,
+        (MOVE_LABELS_NUM,),
+        np.dtype(np.float32),
+        nest_depth=1,
+    )
 
     return array
 
@@ -1051,6 +1083,9 @@ def convert_stage1_df_to_numpy(
 ) -> np.ndarray:
     """Convert Stage 1 Polars DataFrame to numpy structured array．
 
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
+
     Args:
         df: Polars DataFrame with Stage 1 schema
 
@@ -1065,12 +1100,11 @@ def convert_stage1_df_to_numpy(
             "polars is not installed. Install with: poetry add polars"
         )
 
-    # Get target dtype
+    n = len(df)
     dtype = get_stage1_dtype()
-    array = np.empty(len(df), dtype=dtype)
+    array = np.empty(n, dtype=dtype)
 
-    # Convert fields
-    # Handle potential null values in id field
+    # Scalar field
     id_values = df["id"].to_numpy()
     if id_values.dtype == np.float64:
         id_values = np.nan_to_num(id_values, nan=0.0).astype(
@@ -1078,42 +1112,31 @@ def convert_stage1_df_to_numpy(
         )
     array["id"] = id_values
 
-    # Convert nested lists to numpy arrays
-    board_list = df["boardIdPositions"].to_list()
-    # Replace None with zero arrays
-    board_list = [
-        item
-        if item is not None
-        else [[0] * 9 for _ in range(9)]
-        for item in board_list
-    ]
-    array["boardIdPositions"] = np.array(
-        board_list,
-        dtype=np.uint8,
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
     )
 
-    pieces_list = df["piecesInHand"].to_list()
-    # Replace None with zero arrays
-    pieces_list = [
-        item if item is not None else [0] * 14
-        for item in pieces_list
-    ]
-    array["piecesInHand"] = np.array(
-        pieces_list,
-        dtype=np.uint8,
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
     )
 
-    reachable_list = df["reachableSquares"].to_list()
-    # Replace None with zero arrays
-    reachable_list = [
-        item
-        if item is not None
-        else [[0] * 9 for _ in range(9)]
-        for item in reachable_list
-    ]
-    array["reachableSquares"] = np.array(
-        reachable_list,
-        dtype=np.uint8,
+    # 2D List column: reachableSquares List[List[UInt8]] -> (N, 9, 9)
+    array["reachableSquares"] = _explode_list_column(
+        df["reachableSquares"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
     )
 
     return array
@@ -1123,6 +1146,9 @@ def convert_stage2_df_to_numpy(
     df: "pl.DataFrame",
 ) -> np.ndarray:
     """Convert Stage 2 Polars DataFrame to numpy structured array．
+
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
 
     Args:
         df: Polars DataFrame with Stage 2 schema
@@ -1138,12 +1164,11 @@ def convert_stage2_df_to_numpy(
             "polars is not installed. Install with: poetry add polars"
         )
 
-    # Get target dtype
+    n = len(df)
     dtype = get_stage2_dtype()
-    array = np.empty(len(df), dtype=dtype)
+    array = np.empty(n, dtype=dtype)
 
-    # Convert fields
-    # Handle potential null values in id field
+    # Scalar field
     id_values = df["id"].to_numpy()
     if id_values.dtype == np.float64:
         id_values = np.nan_to_num(id_values, nan=0.0).astype(
@@ -1151,40 +1176,31 @@ def convert_stage2_df_to_numpy(
         )
     array["id"] = id_values
 
-    # Convert nested lists to numpy arrays
-    board_list = df["boardIdPositions"].to_list()
-    # Replace None with zero arrays
-    board_list = [
-        item
-        if item is not None
-        else [[0] * 9 for _ in range(9)]
-        for item in board_list
-    ]
-    array["boardIdPositions"] = np.array(
-        board_list,
-        dtype=np.uint8,
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
     )
 
-    pieces_list = df["piecesInHand"].to_list()
-    # Replace None with zero arrays
-    pieces_list = [
-        item if item is not None else [0] * 14
-        for item in pieces_list
-    ]
-    array["piecesInHand"] = np.array(
-        pieces_list,
-        dtype=np.uint8,
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
     )
 
-    legal_moves_list = df["legalMovesLabel"].to_list()
-    # Replace None with zero arrays
-    legal_moves_list = [
-        item if item is not None else [0] * MOVE_LABELS_NUM
-        for item in legal_moves_list
-    ]
-    array["legalMovesLabel"] = np.array(
-        legal_moves_list,
-        dtype=np.uint8,
+    # 1D List column: legalMovesLabel List[UInt8] -> (N, MOVE_LABELS_NUM)
+    array["legalMovesLabel"] = _explode_list_column(
+        df["legalMovesLabel"],
+        n,
+        (MOVE_LABELS_NUM,),
+        np.dtype(np.uint8),
+        nest_depth=1,
     )
 
     return array

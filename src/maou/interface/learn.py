@@ -174,7 +174,7 @@ def learn(
     log_dir: Optional[Path] = None,
     model_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
-    input_cache_mode: Literal["mmap", "memory"] = "mmap",
+    input_cache_mode: Literal["file", "memory"] = "file",
     tensorboard_histogram_frequency: int = 0,
     tensorboard_histogram_modules: Optional[
         tuple[str, ...]
@@ -400,9 +400,9 @@ def learn(
     if cache_transforms is None:
         cache_transforms = datasource_type == "hcpe"
     normalized_cache_mode = input_cache_mode.lower()
-    if normalized_cache_mode not in {"mmap", "memory"}:
+    if normalized_cache_mode not in {"file", "memory"}:
         raise ValueError(
-            "input_cache_mode must be either 'mmap' or 'memory', "
+            "input_cache_mode must be either 'file' or 'memory', "
             f"got {input_cache_mode}"
         )
     if tensorboard_histogram_frequency < 0:
@@ -528,7 +528,7 @@ def learn_multi_stage(
     trainable_layers: Optional[int] = None,
     log_dir: Optional[Path] = None,
     cloud_storage: Optional[CloudStorage] = None,
-    input_cache_mode: Literal["mmap", "memory"] = "mmap",
+    input_cache_mode: Literal["file", "memory"] = "file",
     architecture_config: Optional[dict[str, Any]] = None,
 ) -> str:
     """Execute multi-stage training workflow.

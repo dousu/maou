@@ -45,9 +45,6 @@ class ObjectStorageDataSource(
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = True,
             bundle_size_gb: float = 1.0,
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
         ) -> None:
             self.__page_manager = cls_ref.PageManager(
                 bucket_name=bucket_name,
@@ -60,7 +57,6 @@ class ObjectStorageDataSource(
                 array_type=array_type,
                 enable_bundling=enable_bundling,
                 bundle_size_gb=bundle_size_gb,
-                preprocessing_mmap_mode=preprocessing_mmap_mode,
             )
 
         def train_test_split(
@@ -121,9 +117,6 @@ class ObjectStorageDataSource(
             sample_ratio: Optional[float] = None,
             enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
-            preprocessing_mmap_mode: Optional[
-                Literal["r", "r+", "w+", "c"]
-            ] = "c",
         ) -> None:
             self.bucket_name = bucket_name
             self.prefix = prefix
@@ -135,9 +128,6 @@ class ObjectStorageDataSource(
                 max(0.01, min(1.0, sample_ratio))
                 if sample_ratio is not None
                 else None
-            )
-            self.preprocessing_mmap_mode = (
-                preprocessing_mmap_mode
             )
             if local_cache_dir is None:
                 raise ValueError(
@@ -411,7 +401,7 @@ class ObjectStorageDataSource(
         prefix: Optional[str] = None,
         data_name: Optional[str] = None,
         page_manager: Optional[PageManager] = None,
-        indicies: Optional[list[int]] = None,
+        indicies: Optional[Union[list[int], np.ndarray]] = None,
         local_cache_dir: Optional[str] = None,
         max_workers: int = 8,
         max_cached_bytes: int = 100 * 1024 * 1024,
@@ -421,9 +411,6 @@ class ObjectStorageDataSource(
         ] = None,
         enable_bundling: bool = False,
         bundle_size_gb: float = 1.0,
-        preprocessing_mmap_mode: Optional[
-            Literal["r", "r+", "w+", "c"]
-        ] = "c",
     ) -> None:
         """
         Args:
@@ -460,7 +447,6 @@ class ObjectStorageDataSource(
                     array_type=array_type,
                     enable_bundling=enable_bundling,
                     bundle_size_gb=bundle_size_gb,
-                    preprocessing_mmap_mode=preprocessing_mmap_mode,
                 )
             else:
                 raise MissingObjectStorageConfig(
@@ -476,11 +462,11 @@ class ObjectStorageDataSource(
 
         if indicies is None:
             # 初期化を強制してtotal_rowsを取得
-            self.indicies = list(
-                range(self.__page_manager.total_rows)
+            self.indicies: np.ndarray = np.arange(
+                self.__page_manager.total_rows, dtype=np.int64
             )
         else:
-            self.indicies = indicies
+            self.indicies = np.asarray(indicies, dtype=np.int64)
 
     def __getitem__(self, idx: int) -> np.ndarray:
         if idx < 0 or idx >= len(self.indicies):
