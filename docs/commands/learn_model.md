@@ -24,7 +24,7 @@
 | `--input-gcs` / `--input-s3` + bucket metadata | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Both providers need `--input-local-cache-dir` and honor optional bundling (`--input-enable-bundling`, `--input-bundle-size-gb`) and worker counts (`--input-max-workers`).【F:src/maou/infra/console/learn_model.py†L330-L399】 |
 | `--input-max-workers`, `--input-batch-size`, `--input-max-cached-bytes`, `--input-local-cache`, `--input-local-cache-dir`, `--input-clustering-key`, `--input-partitioning-key-date` | optional | Fine-tune remote datasource caching and streaming. Forwarded directly to the datasource constructors and into the interface options.【F:src/maou/infra/console/learn_model.py†L122-L399】【F:src/maou/interface/learn.py†L198-L210】 |
 | `--input-file-packed` | optional | Tells file-based datasources to unpack bit-packed numpy blobs. Ignored for cloud providers.【F:src/maou/infra/console/learn_model.py†L96-L130】 |
-| `--input-cache-mode {mmap,memory}` | default `mmap` | Controls whether local shards are memory-mapped or copied into RAM. The interface revalidates the value before storing it in the options dataclass.【F:src/maou/infra/console/learn_model.py†L136-L175】【F:src/maou/interface/learn.py†L198-L210】 |
+| `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/learn_model.py†L106-L113】【F:src/maou/interface/learn.py†L198-L210】 |
 | `--input-enable-bundling` + `--input-bundle-size-gb` | optional | Bundle remote shards (default 1 GB) before caching to reduce metadata churn. Applies to GCS/S3 datasources.【F:src/maou/infra/console/learn_model.py†L330-L399】 |
 
 **Input exclusivity.** Only one provider (local, BigQuery, GCS, or S3) may be
@@ -46,6 +46,34 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--cache-transforms/--no-cache-transforms` | format-dependent | HCPE datasources cache transforms by default; preprocessed tensors do not. Flags override the heuristic.【F:src/maou/interface/learn.py†L226-L239】 |
 | `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`.【F:src/maou/interface/learn.py†L132-L140】 |
 | `--tensorboard-histogram-frequency INT` + `--tensorboard-histogram-module PATTERN` | default `0` | Controls how often histogram dumps occur and which parameter names qualify.【F:src/maou/interface/learn.py†L233-L244】 |
+| `--no-streaming` | `false` | Disable streaming mode for file input; uses map-style dataset instead. Streaming is the default for multi-file inputs.【F:src/maou/infra/console/learn_model.py†L520-L524】 |
+
+### Model architecture (ViT)
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--vit-embed-dim INT` | `None` (model default: 512) | ViT: embedding dimension. Only applies when `--model-architecture vit`.【F:src/maou/infra/console/learn_model.py†L216-L220】 |
+| `--vit-num-layers INT` | `None` (model default: 6) | ViT: number of encoder layers.【F:src/maou/infra/console/learn_model.py†L221-L225】 |
+| `--vit-num-heads INT` | `None` (model default: 8) | ViT: number of attention heads.【F:src/maou/infra/console/learn_model.py†L226-L230】 |
+| `--vit-mlp-ratio FLOAT` | `None` (model default: 4.0) | ViT: MLP hidden dimension ratio.【F:src/maou/infra/console/learn_model.py†L231-L236】 |
+| `--vit-dropout FLOAT` | `None` (model default: 0.1) | ViT: dropout rate.【F:src/maou/infra/console/learn_model.py†L237-L244】 |
+
+### Multi-stage training
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--stage {1,2,3,all}` | `3` | Training stage: 1=Reachable Squares, 2=Legal Moves, 3=Policy+Value, all=Sequential.【F:src/maou/infra/console/learn_model.py†L453-L460】 |
+| `--stage1-data-path PATH` | optional | File or directory path for Stage 1 (reachable squares) training data.【F:src/maou/infra/console/learn_model.py†L462-L466】 |
+| `--stage2-data-path PATH` | optional | File or directory path for Stage 2 (legal moves) training data.【F:src/maou/infra/console/learn_model.py†L467-L471】 |
+| `--stage3-data-path PATH` | optional | File or directory path for Stage 3 (policy+value) training data.【F:src/maou/infra/console/learn_model.py†L472-L477】 |
+| `--stage1-threshold FLOAT` | `0.99` | Accuracy threshold for Stage 1 (99%). Training advances to the next stage once this threshold is reached.【F:src/maou/infra/console/learn_model.py†L480-L485】 |
+| `--stage2-threshold FLOAT` | `0.95` | Accuracy threshold for Stage 2 (95%).【F:src/maou/infra/console/learn_model.py†L486-L492】 |
+| `--stage1-max-epochs INT` | `10` | Maximum epochs for Stage 1.【F:src/maou/infra/console/learn_model.py†L494-L499】 |
+| `--stage2-max-epochs INT` | `10` | Maximum epochs for Stage 2.【F:src/maou/infra/console/learn_model.py†L500-L506】 |
+| `--freeze-backbone` | `false` | Freeze backbone parameters (embedding, backbone, pool, hand projection).【F:src/maou/infra/console/learn_model.py†L437-L441】 |
+| `--trainable-layers INT` | `None` | Number of trailing backbone layer groups to keep trainable. `0` = freeze all backbone layers. Unset = all layers trainable.【F:src/maou/infra/console/learn_model.py†L443-L451】 |
+| `--resume-reachable-head-from PATH` | optional | Reachable squares head parameter file to resume training (Stage 1).【F:src/maou/infra/console/learn_model.py†L508-L512】 |
+| `--resume-legal-moves-head-from PATH` | optional | Legal moves head parameter file to resume training (Stage 2).【F:src/maou/infra/console/learn_model.py†L514-L518】 |
 
 ### Loss, optimizer, and scheduler controls
 
@@ -65,6 +93,9 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--resume-from PATH` | optional | Must point to an existing checkpoint file before training resumes.【F:src/maou/interface/learn.py†L249-L266】 |
+| `--resume-backbone-from PATH` | optional | Backbone parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L418-L422】 |
+| `--resume-policy-head-from PATH` | optional | Policy head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L423-L428】 |
+| `--resume-value-head-from PATH` | optional | Value head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L429-L434】 |
 | `--start-epoch INT` | default `0` | Lets you offset the epoch counter while still completing `--epoch` total passes. Must be non-negative.【F:src/maou/interface/learn.py†L226-L244】 |
 | `--log-dir PATH` / `--model-dir PATH` | defaults `./logs`, `./models` | Created automatically when missing so TensorBoard and checkpoints always have a target directory.【F:src/maou/interface/learn.py†L249-L266】 |
 | `--output-gcs` + `--gcs-bucket-name` + `--gcs-base-path` | optional | Uploads checkpoints and TensorBoard runs to Google Cloud Storage when the `gcp` extra is installed.【F:src/maou/infra/console/learn_model.py†L416-L520】 |
