@@ -804,6 +804,8 @@ def learn_multi_stage(
     batch_size: int = 256,
     stage1_batch_size: Optional[int] = None,
     stage2_batch_size: Optional[int] = None,
+    stage1_learning_rate: Optional[float] = None,
+    stage2_learning_rate: Optional[float] = None,
     learning_rate: float = 0.001,
     model_dir: Optional[Path] = None,
     resume_backbone_from: Optional[Path] = None,
@@ -863,6 +865,8 @@ def learn_multi_stage(
         batch_size: Training batch size
         stage1_batch_size: Batch size for Stage 1 (default: inherits batch_size)
         stage2_batch_size: Batch size for Stage 2 (default: inherits batch_size)
+        stage1_learning_rate: Stage 1の学習率．未指定時はlearning_rateにフォールバック．
+        stage2_learning_rate: Stage 2の学習率．未指定時はlearning_rateにフォールバック．
         learning_rate: Learning rate
         model_dir: Model output directory
         resume_backbone_from: Backbone checkpoint to resume from
@@ -970,6 +974,10 @@ def learn_multi_stage(
     effective_stage1_batch = stage1_batch_size or batch_size
     effective_stage2_batch = stage2_batch_size or batch_size
 
+    # Resolve stage-specific learning rates (fallback to global learning_rate)
+    effective_stage1_lr = stage1_learning_rate or learning_rate
+    effective_stage2_lr = stage2_learning_rate or learning_rate
+
     logger.info(f"Starting multi-stage training: stage={stage}")
 
     # Stage 1: Reachable Squares
@@ -982,7 +990,7 @@ def learn_multi_stage(
                 orchestrator=orchestrator,
                 backbone=backbone,
                 batch_size=effective_stage1_batch,
-                learning_rate=learning_rate,
+                learning_rate=effective_stage1_lr,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
                 device=device,
@@ -993,7 +1001,7 @@ def learn_multi_stage(
                 orchestrator=orchestrator,
                 backbone=backbone,
                 batch_size=effective_stage1_batch,
-                learning_rate=learning_rate,
+                learning_rate=effective_stage1_lr,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
                 device=device,
@@ -1018,7 +1026,7 @@ def learn_multi_stage(
                 orchestrator=orchestrator,
                 backbone=backbone,
                 batch_size=effective_stage2_batch,
-                learning_rate=learning_rate,
+                learning_rate=effective_stage2_lr,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
                 device=device,
@@ -1029,7 +1037,7 @@ def learn_multi_stage(
                 orchestrator=orchestrator,
                 backbone=backbone,
                 batch_size=effective_stage2_batch,
-                learning_rate=learning_rate,
+                learning_rate=effective_stage2_lr,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
                 device=device,

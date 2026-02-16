@@ -360,9 +360,7 @@ class TestStageSpecificBatchSize:
             mock_device_config
         )
         mock_backbone = MagicMock()
-        mock_model_factory.create_shogi_backbone.return_value = (
-            mock_backbone
-        )
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator_cls.return_value = mock_orchestrator
 
@@ -416,9 +414,7 @@ class TestStageSpecificBatchSize:
             mock_device_config
         )
         mock_backbone = MagicMock()
-        mock_model_factory.create_shogi_backbone.return_value = (
-            mock_backbone
-        )
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator_cls.return_value = mock_orchestrator
 
@@ -472,9 +468,7 @@ class TestStageSpecificBatchSize:
             mock_device_config
         )
         mock_backbone = MagicMock()
-        mock_model_factory.create_shogi_backbone.return_value = (
-            mock_backbone
-        )
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator_cls.return_value = mock_orchestrator
 
@@ -528,9 +522,7 @@ class TestStageSpecificBatchSize:
             mock_device_config
         )
         mock_backbone = MagicMock()
-        mock_model_factory.create_shogi_backbone.return_value = (
-            mock_backbone
-        )
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator_cls.return_value = mock_orchestrator
 
@@ -593,9 +585,7 @@ class TestStageSpecificBatchSize:
         )
         mock_backbone = MagicMock()
         mock_backbone.embedding_dim = 512
-        mock_model_factory.create_shogi_backbone.return_value = (
-            mock_backbone
-        )
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator.run_all_stages.return_value = {}
         mock_orchestrator_cls.return_value = mock_orchestrator
@@ -616,9 +606,7 @@ class TestStageSpecificBatchSize:
             threshold_met=True,
         )
 
-        checkpoint_path = (
-            tmp_path / "stage2_backbone_test.pt"
-        )
+        checkpoint_path = tmp_path / "stage2_backbone_test.pt"
         mock_find_checkpoint.return_value = checkpoint_path
 
         mock_s1_ds = MagicMock()
@@ -660,3 +648,223 @@ class TestStageSpecificBatchSize:
         mock_learn.assert_called_once()
         s3_kwargs = mock_learn.call_args
         assert s3_kwargs.kwargs.get("batch_size") == 256
+
+
+class TestStageSpecificLearningRate:
+    """Stage別学習率のフォールバック解決テスト．"""
+
+    @patch("maou.interface.learn._run_stage1")
+    @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage1_learning_rate_overrides_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_run_stage1: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--stage1-learning-rate指定時はその値がStage 1に渡される．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_config.device.type = "cpu"
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_backbone = MagicMock()
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
+        mock_orchestrator = MagicMock()
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        mock_run_stage1.return_value = StageResult(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            achieved_accuracy=0.99,
+            final_loss=0.01,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+
+        mock_datasource = MagicMock()
+        s1_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="stage1",
+        )
+
+        learn_multi_stage(
+            stage="1",
+            stage1_data_config=s1_config,
+            learning_rate=0.001,
+            stage1_learning_rate=0.0001,
+            model_dir=tmp_path,
+        )
+
+        mock_run_stage1.assert_called_once()
+        call_kwargs = mock_run_stage1.call_args
+        assert call_kwargs.kwargs.get("learning_rate") == 0.0001
+
+    @patch("maou.interface.learn._run_stage1")
+    @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage1_learning_rate_falls_back_to_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_run_stage1: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--stage1-learning-rate未指定時はlearning_rateにフォールバック．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_config.device.type = "cpu"
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_backbone = MagicMock()
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
+        mock_orchestrator = MagicMock()
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        mock_run_stage1.return_value = StageResult(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            achieved_accuracy=0.99,
+            final_loss=0.01,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+
+        mock_datasource = MagicMock()
+        s1_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="stage1",
+        )
+
+        learn_multi_stage(
+            stage="1",
+            stage1_data_config=s1_config,
+            learning_rate=0.001,
+            stage1_learning_rate=None,
+            model_dir=tmp_path,
+        )
+
+        mock_run_stage1.assert_called_once()
+        call_kwargs = mock_run_stage1.call_args
+        assert call_kwargs.kwargs.get("learning_rate") == 0.001
+
+    @patch("maou.interface.learn._run_stage2")
+    @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage2_learning_rate_overrides_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_run_stage2: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--stage2-learning-rate指定時はその値がStage 2に渡される．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_config.device.type = "cpu"
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_backbone = MagicMock()
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
+        mock_orchestrator = MagicMock()
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        mock_run_stage2.return_value = StageResult(
+            stage=TrainingStage.LEGAL_MOVES,
+            achieved_accuracy=0.95,
+            final_loss=0.05,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+
+        mock_datasource = MagicMock()
+        s2_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="stage2",
+        )
+
+        learn_multi_stage(
+            stage="2",
+            stage2_data_config=s2_config,
+            learning_rate=0.001,
+            stage2_learning_rate=0.005,
+            model_dir=tmp_path,
+        )
+
+        mock_run_stage2.assert_called_once()
+        call_kwargs = mock_run_stage2.call_args
+        assert call_kwargs.kwargs.get("learning_rate") == 0.005
+
+    @patch("maou.interface.learn._run_stage2")
+    @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage2_learning_rate_falls_back_to_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_run_stage2: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--stage2-learning-rate未指定時はlearning_rateにフォールバック．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_config.device.type = "cpu"
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_backbone = MagicMock()
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
+        mock_orchestrator = MagicMock()
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        mock_run_stage2.return_value = StageResult(
+            stage=TrainingStage.LEGAL_MOVES,
+            achieved_accuracy=0.95,
+            final_loss=0.05,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+
+        mock_datasource = MagicMock()
+        s2_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="stage2",
+        )
+
+        learn_multi_stage(
+            stage="2",
+            stage2_data_config=s2_config,
+            learning_rate=0.001,
+            stage2_learning_rate=None,
+            model_dir=tmp_path,
+        )
+
+        mock_run_stage2.assert_called_once()
+        call_kwargs = mock_run_stage2.call_args
+        assert call_kwargs.kwargs.get("learning_rate") == 0.001

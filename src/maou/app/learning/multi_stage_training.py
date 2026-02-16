@@ -348,7 +348,8 @@ class MultiStageTrainingOrchestrator:
                     f" (reached "
                     f"{result.achieved_accuracy / stage1_config.accuracy_threshold:.1%}"
                     f" of target)\n"
-                    f"  Hint: try increasing --stage1-max-epochs"
+                    f"  Hint: try increasing --stage1-max-epochs,"
+                    f" adjusting --stage1-learning-rate,"
                     f" or lowering --stage1-threshold"
                     f" or setting --stage1-batch-size 32"
                 )
@@ -393,7 +394,8 @@ class MultiStageTrainingOrchestrator:
                     f" (reached "
                     f"{result.achieved_accuracy / stage2_config.accuracy_threshold:.1%}"
                     f" of target)\n"
-                    f"  Hint: try increasing --stage2-max-epochs"
+                    f"  Hint: try increasing --stage2-max-epochs,"
+                    f" adjusting --stage2-learning-rate,"
                     f" or lowering --stage2-threshold"
                     f" or setting --stage2-batch-size 32"
                 )

@@ -519,6 +519,20 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--stage1-learning-rate",
+    type=float,
+    default=None,
+    help="Learning rate for Stage 1 (default: inherits --learning-ratio).",
+    required=False,
+)
+@click.option(
+    "--stage2-learning-rate",
+    type=float,
+    default=None,
+    help="Learning rate for Stage 2 (default: inherits --learning-ratio).",
+    required=False,
+)
+@click.option(
     "--resume-reachable-head-from",
     type=click.Path(exists=True, path_type=Path),
     help="Reachable squares head parameter file to resume training (Stage 1).",
@@ -653,6 +667,8 @@ def learn_model(
     stage2_max_epochs: int,
     stage1_batch_size: Optional[int],
     stage2_batch_size: Optional[int],
+    stage1_learning_rate: Optional[float],
+    stage2_learning_rate: Optional[float],
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
     no_streaming: bool,
@@ -1102,6 +1118,8 @@ def learn_model(
                 batch_size=batch_size or 256,
                 stage1_batch_size=stage1_batch_size,
                 stage2_batch_size=stage2_batch_size,
+                stage1_learning_rate=stage1_learning_rate,
+                stage2_learning_rate=stage2_learning_rate,
                 learning_rate=learning_ratio or 0.001,
                 model_dir=model_dir,
                 resume_backbone_from=resume_backbone_from,

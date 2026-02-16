@@ -111,6 +111,65 @@ def test_learn_model_passes_stage_batch_sizes(
     assert captured_kwargs["batch_size"] == 256
 
 
+def test_learn_model_passes_stage_learning_rates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """--stage1-learning-rate and --stage2-learning-rate are passed to learn_multi_stage."""
+    runner = CliRunner()
+
+    captured_kwargs: dict[str, Any] = {}
+
+    def fake_learn_multi_stage(**kwargs: Any) -> str:
+        captured_kwargs.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(
+        learn_model.learn,
+        "learn_multi_stage",
+        fake_learn_multi_stage,
+    )
+
+    # FileSystem.collect_files needs to return a list of paths
+    stage1_dir = tmp_path / "stage1"
+    stage1_dir.mkdir()
+    stage1_file = stage1_dir / "data.feather"
+    stage1_file.touch()
+
+    monkeypatch.setattr(
+        learn_model,
+        "FileSystem",
+        type(
+            "FakeFS",
+            (),
+            {
+                "collect_files": staticmethod(
+                    lambda p, ext=None: [stage1_file]
+                )
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        learn_model.learn_model,
+        [
+            "--stage",
+            "1",
+            "--stage1-data-path",
+            str(stage1_dir),
+            "--stage1-learning-rate",
+            "0.0001",
+            "--stage2-learning-rate",
+            "0.005",
+            "--no-streaming",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured_kwargs["stage1_learning_rate"] == 0.0001
+    assert captured_kwargs["stage2_learning_rate"] == 0.005
+
+
 @pytest.mark.skip(reason="Needs update for .feather files")
 def test_learn_model_detect_anomaly_flag(
     monkeypatch: pytest.MonkeyPatch,
