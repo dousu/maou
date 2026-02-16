@@ -350,7 +350,7 @@ class ONNXExportVerifier:
         except ImportError as exc:
             raise ModuleNotFoundError(
                 "ONNX Runtime is required for verification. "
-                "Install with `poetry install -E cpu` or `poetry install -E cpu-infer`"
+                "Install with `uv sync --extra cpu` or `uv sync --extra cpu-infer`"
             ) from exc
 
         from maou.domain.data.schema import (
@@ -471,7 +471,7 @@ class ONNXExportVerifier:
         except ImportError as exc:
             raise ModuleNotFoundError(
                 "ONNX is required for verification. "
-                "Install with `poetry install -E cpu` or `poetry install -E cpu-infer`"
+                "Install with `uv sync --extra cpu` or `uv sync --extra cpu-infer`"
             ) from exc
 
         # Load ONNX model

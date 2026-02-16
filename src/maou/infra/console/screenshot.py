@@ -202,8 +202,8 @@ def _capture_screenshot(
     except ImportError as e:
         error_msg = (
             "Playwright is not installed. "
-            "Install with: poetry install -E visualize && "
-            "poetry run playwright install chromium"
+            "Install with: uv sync --extra visualize && "
+            "uv run playwright install chromium"
         )
         raise click.ClickException(error_msg) from e
 

@@ -1,17 +1,17 @@
 ---
 name: dependency-update-helper
-description: Manage Python dependencies using Poetry exclusively, add new packages, update existing dependencies, remove unused packages, and validate dependency compatibility. Use when adding packages, updating dependencies, resolving conflicts, or managing development dependencies. NEVER use pip directly.
+description: Manage Python dependencies using uv exclusively, add new packages, update existing dependencies, remove unused packages, and validate dependency compatibility. Use when adding packages, updating dependencies, resolving conflicts, or managing development dependencies. NEVER use pip directly.
 ---
 
 # Dependency Update Helper
 
-Manages Python dependencies exclusively through Poetry for the Maou project.
+Manages Python dependencies exclusively through uv for the Maou project.
 
 ## Core Rule
 
-**ONLY use Poetry. NEVER use pip directly.**
+**ONLY use uv. NEVER use pip directly.**
 
-All dependency management must go through Poetry to maintain consistency and avoid conflicts.
+All dependency management must go through uv to maintain consistency and avoid conflicts.
 
 ## Adding Dependencies
 
@@ -19,38 +19,38 @@ All dependency management must go through Poetry to maintain consistency and avo
 
 ```bash
 # Add package to main dependencies
-poetry add package-name
+uv add package-name
 
 # Add specific version
-poetry add "package-name==1.2.3"
+uv add "package-name==1.2.3"
 
 # Add with version constraint
-poetry add "package-name>=1.2.0,<2.0.0"
+uv add "package-name>=1.2.0,<2.0.0"
 
 # Add from git repository
-poetry add git+https://github.com/user/repo.git
+uv add "package-name @ git+https://github.com/user/repo.git"
 ```
 
 ### Add Development Dependency
 
 ```bash
 # Add to dev group
-poetry add --group dev package-name
+uv add --dev package-name
 
 # Common dev dependencies
-poetry add --group dev pytest
-poetry add --group dev mypy
-poetry add --group dev ruff
+uv add --dev pytest
+uv add --dev mypy
+uv add --dev ruff
 ```
 
 ### Add Optional Dependency (Extras)
 
 ```bash
 # Add to specific extra group
-poetry add --optional package-name
+uv add --optional extra-group package-name
 
-# Then add to extras in pyproject.toml:
-# [tool.poetry.extras]
+# Then configure in pyproject.toml:
+# [project.optional-dependencies]
 # cuda = ["torch-cuda", "cupy"]
 ```
 
@@ -59,31 +59,30 @@ poetry add --optional package-name
 ### Update Single Package
 
 ```bash
-# Update specific package to latest version
-poetry update package-name
+# Update specific package to latest compatible version
+uv lock --upgrade-package package-name
+uv sync
 
-# Update to specific version
-poetry add "package-name@^2.0.0"
+# Change version constraint and update
+uv add "package-name>=2.0.0"
 ```
 
 ### Update All Dependencies
 
 ```bash
 # Update all packages to latest compatible versions
-poetry update
-
-# Update lock file without upgrading packages
-poetry lock --no-update
+uv lock --upgrade
+uv sync
 ```
 
-### Update Poetry Lock File
+### Update Lock File
 
 ```bash
 # Regenerate lock file from pyproject.toml
-poetry lock
+uv lock
 
-# Update lock file without installing
-poetry lock --no-update
+# Check if lock file is up to date
+uv lock --check
 ```
 
 ## Removing Dependencies
@@ -92,10 +91,10 @@ poetry lock --no-update
 
 ```bash
 # Remove production dependency
-poetry remove package-name
+uv remove package-name
 
 # Remove dev dependency
-poetry remove --group dev package-name
+uv remove --dev package-name
 ```
 
 ## Installing Dependencies
@@ -103,24 +102,21 @@ poetry remove --group dev package-name
 ### Install All Dependencies
 
 ```bash
-# Install from lock file
-poetry install
-
-# Install without dev dependencies
-poetry install --without dev
+# Sync from lock file
+uv sync
 ```
 
 ### Install with Extras
 
 ```bash
 # Install CPU + GCP extras
-poetry install -E cpu -E gcp
+uv sync --extra cpu --extra gcp
 
 # Install CUDA + AWS extras
-poetry install -E cuda -E aws
+uv sync --extra cuda --extra aws
 
 # Install TPU + GCP extras
-poetry install -E tpu -E gcp
+uv sync --extra tpu --extra gcp
 ```
 
 Available extras:
@@ -130,39 +126,27 @@ Available extras:
 
 ## Dependency Validation
 
-### Check Poetry Configuration
+### Check Configuration
 
 ```bash
-# Verify pyproject.toml is valid
-poetry check
-
-# Show current configuration
-poetry config --list
+# Verify lock file is consistent with pyproject.toml
+uv lock --check
 
 # Show dependency tree
-poetry show --tree
+uv tree
 ```
 
 ### Show Package Information
 
 ```bash
 # Show all installed packages
-poetry show
+uv pip list
 
 # Show specific package details
-poetry show package-name
+uv pip show package-name
 
 # Show outdated packages
-poetry show --outdated
-```
-
-### Verify Lock File
-
-```bash
-# Check if lock file is consistent with pyproject.toml
-poetry lock --check
-
-# Should output: "poetry.lock is consistent with pyproject.toml"
+uv pip list --outdated
 ```
 
 ## Compatibility Testing
@@ -171,20 +155,20 @@ After adding or updating dependencies, run QA pipeline:
 
 ```bash
 # 1. Update dependencies
-poetry add new-package
+uv add new-package
 
 # 2. Update lock file
-poetry lock
+uv lock
 
-# 3. Install
-poetry install
+# 3. Sync environment
+uv sync
 
 # 4. Run QA pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest
 ```
 
 All steps must pass for dependency update to be valid.
@@ -195,43 +179,44 @@ All steps must pass for dependency update to be valid.
 
 ```bash
 # Add package
-poetry add transformers
+uv add transformers
 
 # Verify installation
-poetry show transformers
+uv pip show transformers
 
 # Test import
-poetry run python -c "import transformers; print('✓')"
+uv run python -c "import transformers; print('✓')"
 
 # Run tests
-poetry run pytest
+uv run pytest
 ```
 
 ### Scenario 2: Update Security Vulnerability
 
 ```bash
 # Check for outdated packages
-poetry show --outdated
+uv pip list --outdated
 
 # Update specific package
-poetry update vulnerable-package
+uv lock --upgrade-package vulnerable-package
+uv sync
 
 # Verify version
-poetry show vulnerable-package
+uv pip show vulnerable-package
 
 # Run full test suite
-poetry run pytest
+uv run pytest
 ```
 
 ### Scenario 3: Add Type Stubs
 
 ```bash
 # Add type stubs for third-party library
-poetry add --group dev types-requests
-poetry add --group dev types-PyYAML
+uv add --dev types-requests
+uv add --dev types-PyYAML
 
 # Verify mypy recognizes types
-poetry run mypy src/
+uv run mypy src/
 ```
 
 ### Scenario 4: Remove Unused Dependency
@@ -241,47 +226,22 @@ poetry run mypy src/
 grep -r "import package_name" src/
 
 # If not used, remove
-poetry remove package-name
+uv remove package-name
 
 # Verify still works
-poetry run pytest
+uv run pytest
 ```
 
 ## Environment Management
 
-### Create New Environment
-
-```bash
-# Remove existing environment
-poetry env remove python
-
-# Create new environment with specific Python version
-poetry env use python3.11
-
-# Install dependencies
-poetry install
-```
-
-### Show Environment Information
-
-```bash
-# Show active environment
-poetry env info
-
-# Show environment path
-poetry env info --path
-
-# List all environments
-poetry env list
-```
-
 ### Sync Environment
 
 ```bash
-# Synchronize environment with lock file
-poetry install --sync
+# Synchronize environment with lock file (removes unneeded packages)
+uv sync
 
-# This removes packages not in lock file
+# Verify Python version
+uv run python --version
 ```
 
 ## Dependency Conflict Resolution
@@ -290,31 +250,21 @@ poetry install --sync
 
 ```bash
 # Check dependency tree for conflicts
-poetry show --tree
+uv tree
 
-# Try to resolve
-poetry update
+# Try to resolve by upgrading
+uv lock --upgrade
 
 # If conflicts persist, update pyproject.toml constraints
-# Example: Change "package-name = "^1.0.0"" to "package-name = "^1.5.0""
-```
-
-### Issue: Solver Takes Too Long
-
-```bash
-# Use experimental new installer
-poetry config experimental.new-installer true
-
-# Or update Poetry itself
-poetry self update
+# Example: Change "package-name >= 1.0.0" to "package-name >= 1.5.0"
 ```
 
 ### Issue: Platform-Specific Dependencies
 
 ```bash
-# Add platform marker
-poetry add "package-name; sys_platform == 'linux'"
-poetry add "windows-package; sys_platform == 'win32'"
+# Add platform marker in pyproject.toml
+# "package-name; sys_platform == 'linux'"
+# "windows-package; sys_platform == 'win32'"
 ```
 
 ## Best Practices
@@ -323,25 +273,25 @@ poetry add "windows-package; sys_platform == 'win32'"
 
 ```bash
 # After any pyproject.toml changes
-poetry lock
+uv lock
 ```
 
 ### 2. Commit Lock File
 
 ```bash
-# Always commit poetry.lock
-git add poetry.lock pyproject.toml
+# Always commit uv.lock
+git add uv.lock pyproject.toml
 git commit -m "feat(deps): add new-package"
 ```
 
 ### 3. Use Version Constraints
 
 ```bash
-# Prefer caret (^) for semantic versioning
-poetry add "package-name^1.2.0"  # Allows 1.2.x and 1.y.z where y > 2
+# Prefer >= with upper bound for stability
+uv add "package-name>=1.2.0,<2.0.0"
 
-# Use tilde (~) for stricter control
-poetry add "package-name~1.2.0"  # Only allows 1.2.x
+# Use exact pin for critical dependencies
+uv add "package-name==1.2.3"
 ```
 
 ### 4. Document Extra Requirements
@@ -352,7 +302,7 @@ When adding optional dependencies, document in CLAUDE.md:
 ### New Extra: inference
 
 ```bash
-poetry install -E inference
+uv sync --extra inference
 ```
 
 Includes: onnx, tensorrt, optimization tools
@@ -362,29 +312,13 @@ Includes: onnx, tensorrt, optimization tools
 
 ```bash
 # Test CPU environment
-poetry install -E cpu
-poetry run pytest
+uv sync --extra cpu
+uv run pytest
 
 # Test CUDA environment
-poetry install -E cuda
-poetry run pytest
+uv sync --extra cuda
+uv run pytest
 ```
-
-## CI/CD Integration
-
-### GitHub Actions Caching
-
-The project uses Poetry caching in CI:
-
-```yaml
-- name: Cache Poetry
-  uses: actions/cache@v3
-  with:
-    path: ~/.cache/pypoetry
-    key: poetry-${{ hashFiles('poetry.lock') }}
-```
-
-Local changes should invalidate cache appropriately.
 
 ## Pre-commit Hook Integration
 
@@ -392,10 +326,10 @@ After dependency updates, update pre-commit hooks:
 
 ```bash
 # Update pre-commit dependencies
-poetry run pre-commit autoupdate
+uv run pre-commit autoupdate
 
 # Run on all files
-poetry run pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ## Troubleshooting
@@ -404,39 +338,29 @@ poetry run pre-commit run --all-files
 
 ```bash
 # Verify package is in lock file
-grep "name = \"package-name\"" poetry.lock
+grep "name = \"package-name\"" uv.lock
 
 # Reinstall
-poetry install --sync
+uv sync
 
 # Check environment
-poetry run python -c "import sys; print(sys.path)"
-```
-
-### Issue: Poetry Command Not Found
-
-```bash
-# Install Poetry via pipx (recommended)
-pipx install poetry
-
-# Or via script
-curl -sSL https://install.python-poetry.org | python3 -
+uv run python -c "import sys; print(sys.path)"
 ```
 
 ### Issue: Lock File Out of Date
 
 ```bash
 # Regenerate lock file
-poetry lock --no-update
+uv lock
 
 # Or update all dependencies
-poetry update
+uv lock --upgrade
+uv sync
 ```
 
 ## References
 
-- **CLAUDE.md**: Package management rules (lines 28-45)
-- **AGENTS.md**: Poetry-only policy (lines 33-50)
-- Poetry documentation: https://python-poetry.org/docs/
+- **CLAUDE.md**: Package management rules
+- uv documentation: https://docs.astral.sh/uv/
 - `pyproject.toml`: Dependency configuration
-- `poetry.lock`: Locked dependency versions
+- `uv.lock`: Locked dependency versions

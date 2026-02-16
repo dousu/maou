@@ -31,7 +31,7 @@ pub fn hcpe_schema() -> Schema {
 /// 前処理済みデータスキーマ．ニューラルネットワーク学習用の特徴量を含む．
 /// boardIdPositions: 9x9盤面の駒配置
 /// piecesInHand: 持ち駒情報（14要素）
-/// moveLabel: 指し手ラベル（2187要素）
+/// moveLabel: 指し手ラベル（1496要素）
 /// resultValue: 対局結果値（0.0-1.0）
 pub fn preprocessing_schema() -> Schema {
     Schema::new(vec![
@@ -63,7 +63,7 @@ pub fn preprocessing_schema() -> Schema {
             "moveLabel",
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, false)),
-                2187,
+                1496,
             ),
             false,
         ),

@@ -123,7 +123,7 @@ def visualize(
     except ImportError as e:
         error_msg = (
             "Gradio visualization dependencies not installed. "
-            "Install with: poetry install -E visualize"
+            "Install with: uv sync --extra visualize"
         )
         app_logger.error(error_msg)
         raise click.ClickException(error_msg) from e

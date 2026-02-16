@@ -186,7 +186,7 @@ class TestLegalMovesLoss:
         loss_fn = LegalMovesLoss()
 
         batch_size = 4
-        num_moves = MOVE_LABELS_NUM  # 2187
+        num_moves = MOVE_LABELS_NUM  # 1496
 
         logits = torch.randn(batch_size, num_moves)
         targets = torch.randint(

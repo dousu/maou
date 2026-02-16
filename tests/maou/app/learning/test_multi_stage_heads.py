@@ -222,7 +222,7 @@ class TestLegalMovesHead:
         assert (output < 0).any() or (output > 1).any()
 
     def test_forward_large_output_dimension(self) -> None:
-        """Test forward pass handles large output dimension (2187)."""
+        """Test forward pass handles large output dimension (MOVE_LABELS_NUM)."""
         input_dim = 256
         batch_size = 8
         head = LegalMovesHead(input_dim=input_dim)

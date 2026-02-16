@@ -374,7 +374,7 @@ class Stage2Dataset(Dataset, Sized):
 
     This dataset is used for the second stage of multi-stage training，
     where the model learns which moves are legal in a given position.
-    The target is a 2187-dimensional binary vector indicating legal moves.
+    The target is a MOVE_LABELS_NUM-dimensional binary vector indicating legal moves.
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
@@ -414,7 +414,7 @@ class Stage2Dataset(Dataset, Sized):
                 - features: (board_tensor，pieces_in_hand_tensor)
                     - board_tensor: (9，9) uint8 tensor
                     - pieces_in_hand_tensor: (14，) uint8 tensor
-                - target: (2187，) float32 tensor of binary labels
+                - target: (MOVE_LABELS_NUM，) float32 tensor of binary labels
         """
         data = self.__datasource[idx]
 

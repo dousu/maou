@@ -25,7 +25,7 @@ free -h
 
 ```bash
 # Build with pre-configured memory optimizations
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **Expected:**
@@ -54,7 +54,7 @@ cargo build --manifest-path rust/maou_rust/Cargo.toml
 
 # Step 4: Run maturin with cached dependencies (38.94s, <500MB peak)
 # All Rust crates are already compiled, maturin just links
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **Total time:** ~11 minutes (vs 3-5min standard, but prevents OOM)
@@ -78,7 +78,7 @@ poetry run maturin develop
 2. **Monitor Memory During Build**
    ```bash
    # Terminal 1: Run build with time measurement
-   time poetry run maturin develop 2>&1 | tee build.log
+   time uv run maturin develop 2>&1 | tee build.log
 
    # Terminal 2: Monitor memory usage
    watch -n 1 'free -h && ps aux --sort=-%mem | head -n 5'
@@ -87,7 +87,7 @@ poetry run maturin develop
 3. **Verify Successful Build**
    ```bash
    # Test Rust extension import
-   poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+   uv run python -c "from maou._rust.maou_io import hello; print(hello())"
    # Expected: "Maou I/O Rust backend initialized"
 
    # Check build artifacts
@@ -162,7 +162,7 @@ When standard build fails with OOM:
    **Step 4: Run maturin (Final linking)**
    ```bash
    # All Rust crates are compiled, maturin just links
-   poetry run maturin develop
+   uv run maturin develop
 
    # This step is very fast (~39 seconds)
    # Peak memory is minimal (<500MB)
@@ -172,13 +172,13 @@ When standard build fails with OOM:
 4. **Verify Build Success**
    ```bash
    # Test import
-   poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+   uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 
    # Check installed wheel
    ls -lh target/wheels/
 
    # Verify Python can find extension
-   poetry run python -c "import maou._rust; print(maou._rust.__file__)"
+   uv run python -c "import maou._rust; print(maou._rust.__file__)"
    ```
 
 5. **Extreme Memory Constraints (<2GB RAM)**
@@ -194,7 +194,7 @@ When standard build fails with OOM:
    cargo build --manifest-path rust/maou_io/Cargo.toml
    cargo build --manifest-path rust/maou_index/Cargo.toml
    cargo build --manifest-path rust/maou_rust/Cargo.toml
-   poetry run maturin develop
+   uv run maturin develop
 
    # Warning: Slower builds, no incremental compilation benefits
    ```
@@ -204,7 +204,7 @@ When standard build fails with OOM:
 ### Development Profile (Default)
 
 ```bash
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **Configuration:**
@@ -225,7 +225,7 @@ poetry run maturin develop
 ### Release Profile (Optimized)
 
 ```bash
-poetry run maturin develop --release
+uv run maturin develop --release
 ```
 
 **Configuration:**
@@ -247,7 +247,7 @@ poetry run maturin develop --release
 ### Balanced Profile (Memory-Optimized)
 
 ```bash
-CARGO_PROFILE=mem-opt poetry run maturin develop
+CARGO_PROFILE=mem-opt uv run maturin develop
 ```
 
 **Configuration:**
@@ -288,13 +288,13 @@ Build succeeds when ALL of the following are met:
 bash scripts/dev-init.sh
 
 # 2. Build Rust extension
-poetry run maturin develop
+uv run maturin develop
 
 # 3. Verify build
-poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 
 # 4. Run basic tests
-poetry run pytest tests/ -k rust -v
+uv run pytest tests/ -k rust -v
 ```
 
 **Expected outcome:**
@@ -313,10 +313,10 @@ poetry run pytest tests/ -k rust -v
   export PATH="$HOME/.cargo/bin:$PATH" && \
   export CARGO_BUILD_JOBS=1 && \
   export RUSTFLAGS="-C codegen-units=1 -C incremental=1" && \
-  poetry run maturin develop
+  uv run maturin develop
 
 # Cell 2: Verify import
-!poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+!uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 ```
 
 **Expected outcome:**
@@ -347,7 +347,7 @@ export RUSTFLAGS="-C codegen-units=1"
 cargo build --manifest-path rust/maou_io/Cargo.toml
 cargo build --manifest-path rust/maou_index/Cargo.toml
 cargo build --manifest-path rust/maou_rust/Cargo.toml
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **Expected outcome:**
@@ -361,7 +361,7 @@ poetry run maturin develop
 **Commands:**
 ```bash
 # Use balanced profile for CI
-CARGO_PROFILE=mem-opt poetry run maturin develop --release
+CARGO_PROFILE=mem-opt uv run maturin develop --release
 
 # Verify optimizations
 ls -lh target/wheels/*.whl
@@ -388,8 +388,8 @@ ls -lh target/wheels/*.whl
 
 **Workflow:**
 ```bash
-# 1. Update dependency via Poetry
-poetry add "polars@^1.2.0"
+# 1. Update dependency via uv
+uv add "polars>=1.2.0"
 
 # 2. Check if new dtype features are needed
 grep "dtype-" Cargo.toml
@@ -400,10 +400,10 @@ grep "dtype-" Cargo.toml
 
 # 4. Rebuild with clean cache
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 
 # 5. Verify schema compatibility
-poetry run python -c "from maou.domain.data.schema import get_hcpe_polars_schema; print(get_hcpe_polars_schema())"
+uv run python -c "from maou.domain.data.schema import get_hcpe_polars_schema; print(get_hcpe_polars_schema())"
 ```
 
 **Expected outcome:**
@@ -447,14 +447,14 @@ cargo build --manifest-path rust/maou_io/Cargo.toml
 # polars-core compiles in isolation during maou_index, then cached
 cargo build --manifest-path rust/maou_index/Cargo.toml
 cargo build --manifest-path rust/maou_rust/Cargo.toml
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **B. Disable incremental compilation temporarily:**
 ```bash
 export CARGO_INCREMENTAL=0
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **C. Verify minimal dtype features:**
@@ -475,7 +475,7 @@ package `maou_index` depends on `polars` with feature `dtype-u64` but `polars` d
 **Diagnosis:**
 ```bash
 # Check Polars version compatibility
-poetry show polars | grep "version"
+uv pip show polars | grep "version"
 
 # Check dtype feature definitions
 cargo tree --manifest-path rust/maou_index/Cargo.toml -e features | grep dtype
@@ -490,7 +490,7 @@ cargo tree --manifest-path rust/maou_index/Cargo.toml -e features | grep dtype
 
 # Rebuild
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **B. Verify workspace dependencies:**
@@ -536,19 +536,19 @@ ls -la target/debug/incremental/*/
 **A. Clear incremental cache:**
 ```bash
 rm -rf target/debug/incremental/
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **B. Rebuild from scratch:**
 ```bash
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **C. Disable incremental if persistent:**
 ```bash
 export CARGO_INCREMENTAL=0
-poetry run maturin develop
+uv run maturin develop
 # Warning: Slower builds, but prevents cache corruption
 ```
 
@@ -577,20 +577,20 @@ ls -lt target/debug/lib_rust.so
 **A. Force rebuild:**
 ```bash
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **B. Use cargo directly first:**
 ```bash
 # Force recompilation
 cargo build --manifest-path rust/maou_rust/Cargo.toml
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **C. Clear wheels cache:**
 ```bash
 rm -rf target/wheels/
-poetry run maturin develop
+uv run maturin develop
 ```
 
 ### Issue 5: Linker Errors (lld not found)
@@ -630,7 +630,7 @@ sudo apt-get install -y lld clang
 # Or set environment override
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
 
-poetry run maturin develop
+uv run maturin develop
 ```
 
 ### Issue 6: Split Build Failed on Second Crate
@@ -699,10 +699,10 @@ ModuleNotFoundError: No module named 'maou._rust'
 ls -lh target/debug/lib_rust.so
 
 # Check Python can find the extension
-poetry run python -c "import maou._rust; print(maou._rust.__file__)"
+uv run python -c "import maou._rust; print(maou._rust.__file__)"
 
 # Check what's installed
-poetry run pip list | grep maou
+uv run pip list | grep maou
 ```
 
 **Solutions:**
@@ -710,31 +710,28 @@ poetry run pip list | grep maou
 **A. maturin didn't install the extension:**
 ```bash
 # Force reinstall
-poetry run maturin develop --force
+uv run maturin develop --force
 
 # Verify installation
-poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 ```
 
 **B. Wrong Python environment:**
 ```bash
-# Verify Poetry environment
-poetry env info
-
-# Ensure using Poetry's Python
-poetry run which python
+# Verify uv environment
+uv run which python
 
 # Reinstall in correct environment
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **C. Module name mismatch:**
 ```bash
 # Check actual module structure
-poetry run python -c "import maou._rust; print(dir(maou._rust))"
+uv run python -c "import maou._rust; print(dir(maou._rust))"
 
 # Look for available submodules
-poetry run python -c "import sys; import maou._rust; print(sys.modules['maou._rust'].__path__)"
+uv run python -c "import sys; import maou._rust; print(sys.modules['maou._rust'].__path__)"
 
 # Check if module name changed
 grep "name = " rust/maou_rust/Cargo.toml
@@ -826,45 +823,45 @@ The project includes these optimizations by default:
 
 ```bash
 # 1. Build Rust backend (this skill)
-poetry run maturin develop
+uv run maturin develop
 
 # 2. Run QA pipeline
-poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/ && poetry run mypy src/ && poetry run pytest
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/ && uv run pytest
 ```
 
 ### Workflow 2: Dependency Update + Rebuild
 
 ```bash
 # 1. Update Polars (dependency-update-helper)
-poetry add "polars@^1.2.0"
+uv add "polars>=1.2.0"
 
 # 2. Rebuild Rust (this skill)
 cargo clean
-poetry run maturin develop
+uv run maturin develop
 
 # 3. Verify compatibility
-poetry run pytest tests/ -k rust
+uv run pytest tests/ -k rust
 ```
 
 ### Workflow 3: Release Build + Benchmark
 
 ```bash
 # 1. Build optimized release (this skill)
-poetry run maturin develop --release
+uv run maturin develop --release
 
 # 2. Run benchmarks (benchmark-execution)
-poetry run python -m maou.infra.utility.benchmark_polars_io --num-records 50000
+uv run python -m maou.infra.utility.benchmark_polars_io --num-records 50000
 ```
 
 ### Workflow 4: Cloud Testing Setup
 
 ```bash
 # 1. Build Rust backend (this skill)
-poetry run maturin develop
+uv run maturin develop
 
 # 2. Run cloud integration tests (cloud-integration-tests)
-TEST_GCP=true poetry run pytest tests/integration/ -k gcs
-TEST_AWS=true poetry run pytest tests/integration/ -k s3
+TEST_GCP=true uv run pytest tests/integration/ -k gcs
+TEST_AWS=true uv run pytest tests/integration/ -k s3
 ```
 
 ## Context Reduction

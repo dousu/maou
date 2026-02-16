@@ -15,7 +15,7 @@ Captures screenshots of Gradio web interfaces using Python Playwright headless b
 Capture a screenshot of the running Gradio server:
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -25,8 +25,8 @@ poetry run maou screenshot \
 Ensure Playwright is installed:
 
 ```bash
-poetry install --extras visualize
-poetry run playwright install --with-deps chromium
+uv sync --extra visualize
+uv run playwright install --with-deps chromium
 ```
 
 ## Instructions
@@ -36,7 +36,7 @@ poetry run playwright install --with-deps chromium
 First, ensure the Gradio server is running:
 
 ```bash
-poetry run maou visualize --use-mock-data &
+uv run maou visualize --use-mock-data &
 sleep 10
 ```
 
@@ -45,7 +45,7 @@ sleep 10
 #### Basic Screenshot
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -53,7 +53,7 @@ poetry run maou screenshot \
 #### Base64 Output (for Claude Vision API)
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --base64
 ```
@@ -61,7 +61,7 @@ poetry run maou screenshot \
 #### Capture Specific Element
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --selector "#search-results" \
   --output /tmp/search-results.png
@@ -72,7 +72,7 @@ poetry run maou screenshot \
 By default, full page screenshots are captured. To capture only the visible viewport:
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --no-full-page \
   --output /tmp/viewport-only.png
@@ -135,15 +135,15 @@ Common selectors for the Maou visualization UI:
 
 ```bash
 # Start server
-poetry run maou visualize --use-mock-data &
+uv run maou visualize --use-mock-data &
 sleep 10
 
 # Capture multiple screenshots
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --output /tmp/main-view.png
 
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/mode-badge.png
@@ -193,8 +193,8 @@ uv run maou screenshot \
 ### Playwright Not Installed
 
 ```bash
-poetry install --extras visualize
-poetry run playwright install --with-deps chromium
+uv sync --extra visualize
+uv run playwright install --with-deps chromium
 ```
 
 ### Timeout Errors
@@ -202,7 +202,7 @@ poetry run playwright install --with-deps chromium
 Increase timeout for slow-loading pages:
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --timeout 60000
 ```
@@ -213,7 +213,7 @@ Verify the selector exists in the page:
 
 ```bash
 # Try the default container first
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --wait-for "body"
 ```
@@ -223,7 +223,7 @@ poetry run maou screenshot \
 Ensure Gradio server is running:
 
 ```bash
-lsof -i :7860 || poetry run maou visualize --use-mock-data &
+lsof -i :7860 || uv run maou visualize --use-mock-data &
 ```
 
 ### Loading Screen Captured
@@ -231,7 +231,7 @@ lsof -i :7860 || poetry run maou visualize --use-mock-data &
 If the screenshot shows "Loading..." instead of actual UI content, increase settle time:
 
 ```bash
-poetry run maou screenshot \
+uv run maou screenshot \
   --url http://localhost:7860 \
   --settle-time 5000
 ```

@@ -47,13 +47,13 @@ Execute GCP-specific tests:
 
 ```bash
 # Run all GCP integration tests
-TEST_GCP=true poetry run pytest tests/integrations/gcs/
+TEST_GCP=true uv run pytest tests/integrations/gcs/
 
 # Run with verbose output
-TEST_GCP=true poetry run pytest tests/integrations/gcs/ -v
+TEST_GCP=true uv run pytest tests/integrations/gcs/ -v
 
 # Run specific test
-TEST_GCP=true poetry run pytest tests/integrations/gcs/test_gcs_client.py::test_upload -v
+TEST_GCP=true uv run pytest tests/integrations/gcs/test_gcs_client.py::test_upload -v
 ```
 
 Tests validate:
@@ -71,13 +71,13 @@ Execute AWS-specific tests:
 
 ```bash
 # Run all AWS integration tests
-TEST_AWS=true poetry run pytest tests/integrations/s3/
+TEST_AWS=true uv run pytest tests/integrations/s3/
 
 # Run with verbose output
-TEST_AWS=true poetry run pytest tests/integrations/s3/ -v
+TEST_AWS=true uv run pytest tests/integrations/s3/ -v
 
 # Run specific test
-TEST_AWS=true poetry run pytest tests/integrations/s3/test_s3_client.py::test_upload -v
+TEST_AWS=true uv run pytest tests/integrations/s3/test_s3_client.py::test_upload -v
 ```
 
 Tests validate:
@@ -94,10 +94,10 @@ Test both providers simultaneously:
 
 ```bash
 # Run all cloud integration tests
-TEST_GCP=true TEST_AWS=true poetry run pytest tests/integrations/
+TEST_GCP=true TEST_AWS=true uv run pytest tests/integrations/
 
 # Focus on specific functionality
-TEST_GCP=true TEST_AWS=true poetry run pytest tests/integrations/ -k "upload"
+TEST_GCP=true TEST_AWS=true uv run pytest tests/integrations/ -k "upload"
 ```
 
 ## Cloud Storage Operations
@@ -105,7 +105,7 @@ TEST_GCP=true TEST_AWS=true poetry run pytest tests/integrations/ -k "upload"
 ### S3 Upload with Parallel Processing
 
 ```bash
-poetry run maou hcpe-convert \
+uv run maou hcpe-convert \
   --input-path /path/to/records \
   --input-format csa \
   --output-s3 \
@@ -121,7 +121,7 @@ Benefits:
 ### GCS Upload with Parallel Processing
 
 ```bash
-poetry run maou hcpe-convert \
+uv run maou hcpe-convert \
   --input-path /path/to/records \
   --input-format csa \
   --output-gcs \
@@ -132,7 +132,7 @@ poetry run maou hcpe-convert \
 ### S3 Download with Caching
 
 ```bash
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -147,7 +147,7 @@ Features:
 ### GCS Download with Caching
 
 ```bash
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-gcs \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -160,7 +160,7 @@ Bundle small numpy arrays for optimal I/O:
 
 ```bash
 # S3 with array bundling
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -169,7 +169,7 @@ poetry run maou pre-process \
   --max-workers 16
 
 # GCS with array bundling
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-gcs \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -204,10 +204,10 @@ Before running tests, verify:
 export MAOU_LOG_LEVEL=DEBUG
 
 # Run tests with verbose output
-TEST_GCP=true poetry run pytest tests/integrations/gcs/ -v -s
+TEST_GCP=true uv run pytest tests/integrations/gcs/ -v -s
 
 # Or use CLI flag
-poetry run maou --debug-mode pre-process \
+uv run maou --debug-mode pre-process \
   --input-s3 \
   --input-bucket-name my-bucket
 ```
@@ -273,7 +273,7 @@ Monitor operations:
 
 ```bash
 # Benchmark S3 download performance
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -281,7 +281,7 @@ poetry run maou utility benchmark-training \
   --gpu cuda:0
 
 # Benchmark GCS download performance
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-gcs \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -300,13 +300,13 @@ Metrics to observe:
 
 ```bash
 # Without bundling
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --gpu cuda:0
 
 # With bundling
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-enable-bundling \
   --input-bundle-size-gb 1.0 \

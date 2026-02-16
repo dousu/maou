@@ -78,11 +78,11 @@ Validate that the base state passes all checks:
 
 ```bash
 # Run complete QA pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest
 ```
 
 This ensures you're starting from a clean state.
@@ -115,7 +115,7 @@ git pull origin main
 git checkout -b feature/your-topic-name
 
 # 4. Validate environment
-poetry run pytest
+uv run pytest
 
 # 5. Push to remote
 git push -u origin feature/your-topic-name
@@ -170,16 +170,16 @@ git branch -vv
 
 ### Install Dependencies
 
-Ensure Poetry environment is ready:
+Ensure uv environment is ready:
 
 ```bash
 # Install all dependencies
-poetry install
+uv sync
 
 # For specific environments
-poetry install -E cpu -E gcp      # CPU + GCP
-poetry install -E cuda -E aws     # CUDA + AWS
-poetry install -E tpu -E gcp      # TPU + GCP
+uv sync --extra cpu --extra gcp      # CPU + GCP
+uv sync --extra cuda --extra aws     # CUDA + AWS
+uv sync --extra tpu --extra gcp      # TPU + GCP
 ```
 
 ### Setup Pre-commit Hooks
@@ -187,7 +187,7 @@ poetry install -E tpu -E gcp      # TPU + GCP
 Install pre-commit hooks for automatic validation:
 
 ```bash
-poetry run bash scripts/pre-commit.sh
+uv run bash scripts/pre-commit.sh
 ```
 
 ### Verify Environment
@@ -195,14 +195,11 @@ poetry run bash scripts/pre-commit.sh
 Test that tools are working:
 
 ```bash
-# Check Poetry environment
-poetry env info
-
 # Verify Python version
-poetry run python --version
+uv run python --version
 
 # Test imports
-poetry run python -c "import maou; print('✓ Maou package imports successfully')"
+uv run python -c "import maou; print('✓ Maou package imports successfully')"
 ```
 
 ## Common Scenarios
@@ -213,7 +210,7 @@ poetry run python -c "import maou; print('✓ Maou package imports successfully'
 git checkout main
 git pull origin main
 git checkout -b feature/new-awesome-feature
-poetry run pytest  # Verify base state
+uv run pytest  # Verify base state
 git push -u origin feature/new-awesome-feature
 ```
 
@@ -223,7 +220,7 @@ git push -u origin feature/new-awesome-feature
 git checkout main
 git pull origin main
 git checkout -b fix/training-memory-leak
-poetry run pytest  # Verify base state
+uv run pytest  # Verify base state
 git push -u origin fix/training-memory-leak
 ```
 
@@ -233,7 +230,7 @@ git push -u origin fix/training-memory-leak
 git checkout main
 git pull origin main
 git checkout -b refactor/simplify-data-pipeline
-poetry run pytest  # Verify base state
+uv run pytest  # Verify base state
 git push -u origin refactor/simplify-data-pipeline
 ```
 
@@ -244,7 +241,7 @@ git checkout main
 git pull origin main
 # Branch from specific commit
 git checkout -b feature/backport-fix abc1234
-poetry run pytest
+uv run pytest
 git push -u origin feature/backport-fix
 ```
 

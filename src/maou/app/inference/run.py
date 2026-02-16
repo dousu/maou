@@ -82,7 +82,7 @@ class InferenceRunner:
                 raise RuntimeError(
                     "TensorRT inference requires optional dependency "
                     f"'{missing_dep}'. Install with "
-                    "`poetry install -E tensorrt-infer` before using "
+                    "`uv sync --extra tensorrt-infer` before using "
                     "`--model-type TENSORRT`."
                 ) from exc
             policy_labels, value = TensorRTInference.infer(

@@ -416,7 +416,7 @@ def get_hcpe_polars_schema() -> dict[str, "pl.DataType"]:
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     return {
@@ -448,7 +448,7 @@ def get_preprocessing_polars_schema() -> dict[
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     return {
@@ -487,7 +487,7 @@ def create_empty_hcpe_df(size: int = 0) -> "pl.DataFrame":
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     schema = get_hcpe_polars_schema()
@@ -522,7 +522,7 @@ def get_intermediate_polars_schema() -> dict[
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     return {
@@ -559,7 +559,7 @@ def get_stage1_polars_schema() -> dict[str, "pl.DataType"]:
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     return {
@@ -592,7 +592,7 @@ def get_stage2_polars_schema() -> dict[str, "pl.DataType"]:
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     return {
@@ -630,7 +630,7 @@ def create_empty_intermediate_df(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     schema = get_intermediate_polars_schema()
@@ -671,7 +671,7 @@ def create_empty_preprocessing_df(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     schema = get_preprocessing_polars_schema()
@@ -710,7 +710,7 @@ def create_empty_stage1_df(size: int = 0) -> "pl.DataFrame":
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     schema = get_stage1_polars_schema()
@@ -749,7 +749,7 @@ def create_empty_stage2_df(size: int = 0) -> "pl.DataFrame":
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     schema = get_stage2_polars_schema()
@@ -788,7 +788,7 @@ def get_board_position_polars_schema() -> dict[
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     import polars as pl
@@ -819,7 +819,7 @@ def get_hcp_polars_schema() -> dict[str, "pl.DataType"]:
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     import polars as pl
@@ -850,7 +850,7 @@ def get_piece_planes_polars_schema() -> dict[
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     import polars as pl
@@ -926,7 +926,7 @@ def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     import polars as pl
@@ -994,7 +994,7 @@ def convert_preprocessing_df_to_numpy(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     n = len(df)
@@ -1059,7 +1059,7 @@ def convert_numpy_to_preprocessing_df(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     import polars as pl
@@ -1100,7 +1100,7 @@ def convert_stage1_df_to_numpy(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     n = len(df)
@@ -1164,7 +1164,7 @@ def convert_stage2_df_to_numpy(
     """
     if not POLARS_AVAILABLE:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         )
 
     n = len(df)

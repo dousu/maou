@@ -456,7 +456,7 @@ class FileDataSource(
         except ImportError:
             raise ImportError(
                 "polars is required for DataFrame iteration. "
-                "Install with: poetry add polars"
+                "Install with: uv add polars"
             )
 
         # Iterate over entries (all are .feather files)

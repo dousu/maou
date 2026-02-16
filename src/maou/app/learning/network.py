@@ -557,7 +557,7 @@ class LegalMovesHead(nn.Module):
     """Head for predicting legal moves (multi-label binary classification).
 
     This head is used in Stage 2 training to learn which moves are legal
-    in a given position. Outputs logits for MOVE_LABELS_NUM classes (2187).
+    in a given position. Outputs logits for MOVE_LABELS_NUM classes (1496).
 
     Unlike the policy head (which outputs a probability distribution)，
     this performs multi-label classification where multiple moves can be
@@ -577,7 +577,7 @@ class LegalMovesHead(nn.Module):
         Args:
             input_dim: Dimension of input features from backbone
             num_move_labels: Number of move label classes
-                (default: MOVE_LABELS_NUM = 2187)
+                (default: MOVE_LABELS_NUM = 1496)
             hidden_dim: Optional hidden layer dimension.
                 If None，uses single linear layer.
         """
@@ -600,7 +600,7 @@ class LegalMovesHead(nn.Module):
             features: Backbone features (batch，input_dim)
 
         Returns:
-            Logits for each move label (batch，2187)
+            Logits for each move label (batch，MOVE_LABELS_NUM)
 
         Note: Output is logits for multi-label classification.
         Use BCEWithLogitsLoss for training.

@@ -366,7 +366,7 @@ class TestStage2Dataset:
         size = 10
         array = create_empty_stage2_array(size)
 
-        # Realistic: only 20-40 legal moves out of 2187
+        # Realistic: only 20-40 legal moves out of MOVE_LABELS_NUM
         for i in range(size):
             num_legal = np.random.randint(20, 40)
             legal_indices = np.random.choice(

@@ -506,7 +506,7 @@ class ObjectStorageDataSource(
         except ImportError:
             raise ImportError(
                 "polars is required for DataFrame iteration. "
-                "Install with: poetry add polars"
+                "Install with: uv add polars"
             )
 
         from maou.domain.data.schema import (

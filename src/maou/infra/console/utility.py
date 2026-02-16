@@ -302,7 +302,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -344,7 +344,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -386,7 +386,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -894,7 +894,7 @@ def benchmark_training(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -936,7 +936,7 @@ def benchmark_training(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -978,7 +978,7 @@ def benchmark_training(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)

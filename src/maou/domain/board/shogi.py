@@ -682,7 +682,7 @@ class Board:
         """
         if not _POLARS_AVAILABLE:
             raise ImportError(
-                "polars is not installed. Install with: poetry add polars"
+                "polars is not installed. Install with: uv add polars"
             )
 
         # Map cshogi piece IDs to PieceId enum values using centralized conversion
@@ -728,7 +728,7 @@ class Board:
         """
         if not _POLARS_AVAILABLE:
             raise ImportError(
-                "polars is not installed. Install with: poetry add polars"
+                "polars is not installed. Install with: uv add polars"
             )
 
         # Get HCP data from cshogi board
@@ -760,7 +760,7 @@ class Board:
         """
         if not _POLARS_AVAILABLE:
             raise ImportError(
-                "polars is not installed. Install with: poetry add polars"
+                "polars is not installed. Install with: uv add polars"
             )
 
         # Get piece planes from cshogi board
@@ -804,7 +804,7 @@ class Board:
         """
         if not _POLARS_AVAILABLE:
             raise ImportError(
-                "polars is not installed. Install with: poetry add polars"
+                "polars is not installed. Install with: uv add polars"
             )
 
         # Get rotated piece planes from cshogi board

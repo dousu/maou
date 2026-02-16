@@ -15,11 +15,11 @@ All checks MUST pass:
 
 ```bash
 # Complete QA pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest
 ```
 
 ### 2. Test Coverage Requirements
@@ -31,7 +31,7 @@ poetry run pytest
 
 Run with coverage analysis:
 ```bash
-poetry run pytest --cov=src/maou
+uv run pytest --cov=src/maou
 ```
 
 Verify coverage meets project standards (aim for >80%).
@@ -157,22 +157,22 @@ If CI checks fail, debug in this order:
 
 1. **Code Formatting**
    ```bash
-   poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/
+   uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/
    ```
 
 2. **Type Errors**
    ```bash
-   poetry run mypy src/
+   uv run mypy src/
    ```
 
 3. **Linting Issues**
    ```bash
-   poetry run flake8 src/
+   uv run flake8 src/
    ```
 
 4. **Test Failures**
    ```bash
-   poetry run pytest --tb=short -v
+   uv run pytest --tb=short -v
    ```
 
 ## Branch Workflow

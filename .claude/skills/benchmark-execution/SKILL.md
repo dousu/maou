@@ -14,7 +14,7 @@ Performance analysis and optimization for Maou training workflows.
 Find optimal DataLoader configuration:
 
 ```bash
-poetry run maou utility benchmark-dataloader \
+uv run maou utility benchmark-dataloader \
   --input-dir /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
@@ -40,7 +40,7 @@ poetry run maou utility benchmark-dataloader \
 Analyze end-to-end training performance:
 
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-dir /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
@@ -98,7 +98,7 @@ poetry run maou utility benchmark-training \
 Test on subset of data for quick iteration:
 
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-dir /path/to/processed \
   --sample-ratio 0.1 \
   --gpu cuda:0 \
@@ -118,7 +118,7 @@ Runs on 10% of dataset - sufficient for performance analysis.
 ### S3 Performance Testing
 
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -135,7 +135,7 @@ poetry run maou utility benchmark-training \
 ### GCS Performance Testing
 
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-gcs \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
@@ -149,14 +149,14 @@ Compare bundled vs non-bundled performance:
 
 ```bash
 # Without bundling
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --gpu cuda:0 \
   --batch-size 256
 
 # With bundling
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-enable-bundling \
@@ -188,7 +188,7 @@ The project uses Automatic Mixed Precision (AMP) for CUDA:
 export MAOU_LOG_LEVEL=DEBUG
 
 # Run benchmark
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --gpu cuda:0 \
   --batch-size 256
 
@@ -201,7 +201,7 @@ poetry run maou utility benchmark-training \
 
 1. **Baseline Benchmark**
    ```bash
-   poetry run maou utility benchmark-dataloader --input-dir ./data --gpu cuda:0
+   uv run maou utility benchmark-dataloader --input-dir ./data --gpu cuda:0
    ```
 
 2. **Identify Bottlenecks**
@@ -217,12 +217,12 @@ poetry run maou utility benchmark-training \
 
 4. **Validate Improvements**
    ```bash
-   poetry run maou utility benchmark-training --input-dir ./data --gpu cuda:0
+   uv run maou utility benchmark-training --input-dir ./data --gpu cuda:0
    ```
 
 5. **Production Testing**
    ```bash
-   poetry run maou learn-model --input-dir ./data --gpu cuda:0 --epoch 1
+   uv run maou learn-model --input-dir ./data --gpu cuda:0 --epoch 1
    ```
 
 ## Batch Size Optimization
@@ -233,13 +233,13 @@ Test multiple batch sizes:
 
 ```bash
 # Small batch
-poetry run maou utility benchmark-training --batch-size 64 --gpu cuda:0
+uv run maou utility benchmark-training --batch-size 64 --gpu cuda:0
 
 # Medium batch
-poetry run maou utility benchmark-training --batch-size 256 --gpu cuda:0
+uv run maou utility benchmark-training --batch-size 256 --gpu cuda:0
 
 # Large batch
-poetry run maou utility benchmark-training --batch-size 512 --gpu cuda:0
+uv run maou utility benchmark-training --batch-size 512 --gpu cuda:0
 ```
 
 **Trade-offs**:
@@ -257,13 +257,13 @@ poetry run maou utility benchmark-training --batch-size 512 --gpu cuda:0
 
 ```bash
 # No workers (main process only)
-poetry run maou utility benchmark-dataloader --num-workers 0
+uv run maou utility benchmark-dataloader --num-workers 0
 
 # Few workers
-poetry run maou utility benchmark-dataloader --num-workers 4
+uv run maou utility benchmark-dataloader --num-workers 4
 
 # Many workers
-poetry run maou utility benchmark-dataloader --num-workers 16
+uv run maou utility benchmark-dataloader --num-workers 16
 ```
 
 **Guidelines**:

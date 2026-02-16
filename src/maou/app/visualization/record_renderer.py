@@ -630,7 +630,7 @@ class Stage1RecordRenderer(RecordRenderer):
 class Stage2RecordRenderer(RecordRenderer):
     """Stage2（合法手）の描画戦略．
 
-    legalMovesLabel（2187 binary）をUSI表記で表示する．
+    legalMovesLabel（MOVE_LABELS_NUM binary）をUSI表記で表示する．
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
@@ -665,7 +665,7 @@ class Stage2RecordRenderer(RecordRenderer):
         Returns:
             id, legal_moves_count, legal_moves, array_typeを含む辞書
         """
-        # legalMovesLabel (2187 binary) → USI notation
+        # legalMovesLabel (MOVE_LABELS_NUM binary) → USI notation
         legal_labels = record.get("legalMovesLabel", [])
         legal_indices = [
             i for i, val in enumerate(legal_labels) if val == 1
@@ -767,7 +767,7 @@ class Stage2RecordRenderer(RecordRenderer):
 class PreprocessingRecordRenderer(RecordRenderer):
     """Preprocessing（訓練データ）の描画戦略．
 
-    moveLabel（2187 probabilities）を上位USI手として表示する．
+    moveLabel（MOVE_LABELS_NUM probabilities）を上位USI手として表示する．
     """
 
     def render_board(self, record: Dict[str, Any]) -> str:
@@ -802,7 +802,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
         Returns:
             id, result_value, top_moves, array_typeを含む辞書
         """
-        # moveLabel (2187 probabilities) → Top-K USI moves
+        # moveLabel (MOVE_LABELS_NUM probabilities) → Top-K USI moves
         move_labels = record.get("moveLabel", [])
 
         # Board 再構築

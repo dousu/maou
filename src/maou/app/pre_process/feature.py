@@ -295,7 +295,7 @@ def make_board_id_positions_df(
         import polars as pl
     except ImportError as e:
         raise ImportError(
-            "polars is not installed. Install with: poetry add polars"
+            "polars is not installed. Install with: uv add polars"
         ) from e
 
     # Get positions as DataFrame

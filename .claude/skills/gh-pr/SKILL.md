@@ -15,11 +15,11 @@ Before creating a PR, ensure all requirements are met:
 
 ```bash
 # Run complete QA pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest
 
 # Verify working directory is clean
 git status

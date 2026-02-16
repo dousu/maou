@@ -46,7 +46,7 @@ def create_test_data(
     dtype = np.dtype(
         [
             ("features", np.float32, (119, 9, 9)),
-            ("policy", np.float32, 2187),
+            ("policy", np.float32, 1496),
             ("value", np.float32),
         ]
     )
@@ -60,7 +60,7 @@ def create_test_data(
             data[j]["features"] = np.random.randn(
                 119, 9, 9
             ).astype(np.float32)
-            data[j]["policy"] = np.random.randn(2187).astype(
+            data[j]["policy"] = np.random.randn(1496).astype(
                 np.float32
             )
             data[j]["value"] = np.random.randn().astype(

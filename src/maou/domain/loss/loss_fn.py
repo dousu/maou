@@ -165,7 +165,7 @@ class LegalMovesLoss(torch.nn.Module):
     """Multi-label binary cross-entropy loss for legal moves prediction.
 
     This loss function is designed for Stage 2 training where the model
-    learns which moves are legal in a given position (2187 binary outputs).
+    learns which moves are legal in a given position (MOVE_LABELS_NUM binary outputs).
 
     Unlike policy loss (multi-class classification with softmax)，this is
     multi-label classification where multiple moves can be legal simultaneously.
@@ -196,12 +196,12 @@ class LegalMovesLoss(torch.nn.Module):
         """Compute multi-label binary cross-entropy loss for legal moves.
 
         Args:
-            logits: Predicted logits (batch，2187) - raw scores before sigmoid
-            targets: Target binary labels (batch，2187) with values 0 or 1
+            logits: Predicted logits (batch，MOVE_LABELS_NUM) - raw scores before sigmoid
+            targets: Target binary labels (batch，MOVE_LABELS_NUM) with values 0 or 1
 
         Returns:
             Scalar loss value (if reduction='mean' or 'sum')
-            or per-element loss (batch，2187) if reduction='none'
+            or per-element loss (batch，MOVE_LABELS_NUM) if reduction='none'
         """
         loss_fn = torch.nn.BCEWithLogitsLoss(
             pos_weight=self.pos_weight.to(logits.device),

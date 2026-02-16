@@ -176,7 +176,7 @@ def polars_row_to_stage2_tensors(
     Returns:
         Tuple of (features, target):
             - features: (board_tensor, pieces_in_hand_tensor)
-            - target: legal_moves_tensor (2187-dimensional)
+            - target: legal_moves_tensor (MOVE_LABELS_NUM-dimensional)
     """
     if from_dict:
         data = cast(dict[str, Any], row)

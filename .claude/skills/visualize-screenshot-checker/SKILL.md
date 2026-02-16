@@ -568,7 +568,7 @@ uv run maou screenshot \
 - `--action` オプションでUI操作（ID検索，タブ切り替え，行クリック等）を撮影前に実行可能
 - アクションフォーマット: `TYPE:SELECTOR[:VALUE]`（click, fill, wait, wait-text, wait-hidden）
 - 複数アクションは `--action` を繰り返し指定し，指定順に実行される
-- `poetry run` の代わりに `uv run` を使用すること
+- パッケージ管理には `uv` を使用すること（`poetry` は使用しない）
 
 ## 関連ドキュメント
 

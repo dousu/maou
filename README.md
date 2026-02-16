@@ -10,11 +10,11 @@
 # devcontainerの場合は以下をインストールしておく
 # bash scripts/devcontainer.sh
 bash scripts/dev-init.sh
-# ここで確認できるpythonのパスをVScodeのインタプリタとして設定する
-poetry env info --path
 # pre-commit系の設定
-poetry run bash scripts/pre-commit.sh
+uv run bash scripts/pre-commit.sh
 ```
+
+uvはプロジェクト直下に`.venv`を作成するため，VScodeのインタプリタには`.venv/bin/python`を設定する．
 
 ここでシェルスクリプトを実行するような構成になっているのは，
 devcontainerのfeaturesになるべくインストールを任せたいため．
@@ -117,10 +117,8 @@ os.environ['PATH'] = f"{os.path.expanduser('~')}/.cargo/bin:{os.environ['PATH']}
 ```bash
 # pythonのバージョンが新しくなっていることを確認する
 python --version
-# 今使っている古いpython環境を確認する
-poetry env list
-poetry env remove ${古いpython環境}
-poetry env use python
+# 既存のvenvを削除して再作成する
+rm -rf .venv
 bash scripts/dev-init.sh
 
 # 注意: dev-init.shはRust拡張モジュールのビルドも実行します
@@ -129,13 +127,13 @@ bash scripts/dev-init.sh
 # poetry run maturin develop
 ```
 
-### poetry cache削除
+### uvキャッシュ削除
 
-poetryのcacheがたまってストレージ容量を圧迫している場合は以下のコマンドでpoetryのcacheを消せる．
+uvのキャッシュがたまってストレージ容量を圧迫している場合は以下のコマンドでuvのキャッシュを消せる．
 GitHub Codespacesを使っている場合等，ストレージ容量をなるべく削減したいときに利用する．
 
 ```bash
-poetry cache clear --all .
+uv cache clean
 ```
 
 ### GCPを使う場合

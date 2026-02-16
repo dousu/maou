@@ -112,7 +112,7 @@ Preprocessing format stores training features:
 ```python
 preprocessing_dtype = np.dtype([
     ('features', 'f4', (119, 9, 9)),  # Board features
-    ('policy', 'f4', (2187,)),        # Policy targets
+    ('policy', 'f4', (1496,)),        # Policy targets
     ('value', 'f4'),                  # Value target
 ])
 ```
@@ -312,7 +312,7 @@ grep -rn "bundle-size-gb" src/maou/infra/console/
 ### HCPE Conversion Command
 
 ```bash
-poetry run maou hcpe-convert \
+uv run maou hcpe-convert \
   --input-path /path/to/records \
   --input-format csa \
   --output-dir /path/to/output
@@ -326,7 +326,7 @@ poetry run maou hcpe-convert \
 ### Pre-processing Command
 
 ```bash
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-path /path/to/hcpe \
   --output-dir /path/to/processed
 ```
@@ -339,7 +339,7 @@ poetry run maou pre-process \
 ### Training Command
 
 ```bash
-poetry run maou learn-model \
+uv run maou learn-model \
   --input-dir /path/to/processed \
   --gpu cuda:0
 ```

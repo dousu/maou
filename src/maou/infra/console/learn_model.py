@@ -694,7 +694,7 @@ def learn_model(
         else:
             app_logger.warning(
                 "GCS output requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
     elif (
         output_s3
@@ -714,7 +714,7 @@ def learn_model(
         else:
             app_logger.warning(
                 "S3 output requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
 
     # Check for mixing cloud providers for input
@@ -797,7 +797,7 @@ def learn_model(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -840,7 +840,7 @@ def learn_model(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -883,7 +883,7 @@ def learn_model(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)

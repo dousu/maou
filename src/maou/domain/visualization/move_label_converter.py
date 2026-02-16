@@ -94,7 +94,7 @@ class MoveLabelConverter:
 
         Args:
             board: 現在の局面情報
-            probabilities: 駒移動ラベルの確率分布（2187要素）
+            probabilities: 駒移動ラベルの確率分布（MOVE_LABELS_NUM要素）
             threshold: 含める最小確率（デフォルト: 0.01 = 1%）
             top_k: 返す最大手数（デフォルト: 10）
 
@@ -103,7 +103,7 @@ class MoveLabelConverter:
 
         Example:
             >>> converter = MoveLabelConverter()
-            >>> probs = [0.0] * 2187
+            >>> probs = [0.0] * 1496
             >>> probs[100] = 0.45
             >>> probs[200] = 0.30
             >>> probs[300] = 0.15

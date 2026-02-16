@@ -21,7 +21,7 @@ Enforces strict type safety requirements and documentation standards for the Mao
 Run mypy on entire codebase:
 
 ```bash
-poetry run mypy src/
+uv run mypy src/
 ```
 
 ### Per-Module Type Check
@@ -29,9 +29,9 @@ poetry run mypy src/
 Check specific modules:
 
 ```bash
-poetry run mypy src/maou/domain/
-poetry run mypy src/maou/app/learning/
-poetry run mypy src/maou/infra/console/
+uv run mypy src/maou/domain/
+uv run mypy src/maou/app/learning/
+uv run mypy src/maou/infra/console/
 ```
 
 ### Strict Mode Configuration
@@ -221,11 +221,11 @@ Type checking is part of the QA pipeline:
 
 ```bash
 # Full QA pipeline includes mypy
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/  # Type checking step
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/  # Type checking step
+uv run pytest
 ```
 
 ## Continuous Type Safety
@@ -236,7 +236,7 @@ Type checking runs automatically on commit:
 
 ```bash
 # Install pre-commit hooks
-poetry run bash scripts/pre-commit.sh
+uv run bash scripts/pre-commit.sh
 
 # Hooks will run mypy on staged files
 ```
@@ -249,7 +249,7 @@ Local validation prevents CI failures:
 
 ```bash
 # Run before pushing
-poetry run mypy src/
+uv run mypy src/
 ```
 
 ## Type Stub Files
@@ -258,8 +258,8 @@ For third-party libraries without type stubs:
 
 ```bash
 # Install type stubs
-poetry add --group dev types-requests
-poetry add --group dev types-PyYAML
+uv add --dev types-requests
+uv add --dev types-PyYAML
 ```
 
 Project already has stubs for:
@@ -271,7 +271,7 @@ Project already has stubs for:
 
 Type safety enforcement passes when:
 
-- ✓ `poetry run mypy src/` exits with 0 errors
+- ✓ `uv run mypy src/` exits with 0 errors
 - ✓ All public functions have type hints
 - ✓ All public APIs have docstrings
 - ✓ No `# type: ignore` comments (except for justified cases)

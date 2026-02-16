@@ -125,7 +125,7 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "learn_model",
         missing_help=(
             "Command 'learn-model' requires training dependencies. "
-            "Install with `poetry install -E cpu` (or another training extra)."
+            "Install with `uv sync --extra cpu` (or another training extra)."
         ),
     ),
     "utility": LazyCommandSpec(
@@ -133,7 +133,7 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "utility",
         missing_help=(
             "Command 'utility' requires training dependencies. "
-            "Install with `poetry install -E cpu` (or another training extra)."
+            "Install with `uv sync --extra cpu` (or another training extra)."
         ),
     ),
     "evaluate": LazyCommandSpec(
@@ -141,8 +141,8 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "evaluate_board",
         missing_help=(
             "Command 'evaluate' requires inference dependencies. "
-            "Install with `poetry install -E onnx-gpu-infer` "
-            "or `poetry install -E tensorrt-infer`."
+            "Install with `uv sync --extra onnx-gpu-infer` "
+            "or `uv sync --extra tensorrt-infer`."
         ),
     ),
     "pretrain": LazyCommandSpec(
@@ -153,7 +153,7 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "visualize",
         missing_help=(
             "Command 'visualize' requires visualization dependencies. "
-            "Install with `poetry install -E visualize`."
+            "Install with `uv sync --extra visualize`."
         ),
     ),
     "screenshot": LazyCommandSpec(
@@ -161,7 +161,7 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "screenshot",
         missing_help=(
             "Command 'screenshot' requires visualization dependencies. "
-            "Install with `poetry install -E visualize`."
+            "Install with `uv sync --extra visualize`."
         ),
     ),
 }

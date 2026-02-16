@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import polars as pl
 
 from maou.domain.board.shogi import CSHOGI_WHITE_OFFSET
+from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
 )
@@ -760,7 +761,7 @@ class DataRetriever:
         import random
 
         # 合法手ラベルの総数
-        move_labels_num = 2187
+        move_labels_num = MOVE_LABELS_NUM
 
         # 中盤風盤面と持ち駒を生成
         board = self._create_midgame_board(row_number)
@@ -772,7 +773,7 @@ class DataRetriever:
         # シード固定で再現可能な合法手ラベルを生成
         rng = random.Random(row_number + 99999)
 
-        # 合法手ラベル（2187要素のbinary配列）
+        # 合法手ラベル（MOVE_LABELS_NUM要素のbinary配列）
         legal_moves_label: List[int] = [0] * move_labels_num
 
         # ランダムな位置にnum_legal_moves個の1を立てる
@@ -963,7 +964,7 @@ class DataRetriever:
         import random
 
         # 合法手ラベルの総数
-        move_labels_num = 2187
+        move_labels_num = MOVE_LABELS_NUM
 
         # 終盤風盤面と持ち駒を生成
         board = self._create_endgame_board(row_number)
@@ -972,7 +973,7 @@ class DataRetriever:
         # シード固定で再現可能
         rng = random.Random(row_number + 123456)
 
-        # 確率分布を生成（2187要素，合計1.0）
+        # 確率分布を生成（MOVE_LABELS_NUM要素，合計1.0）
         move_label: List[float] = [0.0] * move_labels_num
 
         pattern = row_number % 3

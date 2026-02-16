@@ -209,7 +209,7 @@ def hcpe_convert(
             app_logger.warning(
                 "BigQuery output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
     # Initialize GCS feature store if requested
     elif (
@@ -237,7 +237,7 @@ def hcpe_convert(
             app_logger.warning(
                 "GCS output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
     # Initialize S3 feature store if requested
     elif (
@@ -265,7 +265,7 @@ def hcpe_convert(
             app_logger.warning(
                 "S3 output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
 
     click.echo(
