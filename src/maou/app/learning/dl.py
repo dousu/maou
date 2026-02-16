@@ -86,7 +86,9 @@ class Learning:
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
-        datasource: LearningDataSource.DataSourceSpliter
+        datasource: Optional[
+            LearningDataSource.DataSourceSpliter
+        ]
         datasource_type: str
         gpu: Optional[str] = None
         model_architecture: BackboneArchitecture = "resnet"
@@ -162,6 +164,10 @@ class Learning:
             )
         else:
             # 入力とテスト用のデータソース取得
+            if config.datasource is None:
+                raise ValueError(
+                    "datasource is required when streaming=False"
+                )
             training_datasource, validation_datasource = (
                 config.datasource.train_test_split(
                     test_ratio=config.test_ratio

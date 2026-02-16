@@ -751,7 +751,14 @@ def learn_model(
     )
 
     # Initialize datasource
+    # When streaming is active for file input, FileDataSourceSpliter is
+    # NOT created here to avoid loading all data into memory eagerly.
+    # Instead, file paths are split directly and StreamingFileSource is
+    # used.  FileDataSourceSpliter is only created as a fallback when
+    # streaming cannot be used (single file, --no-streaming, or
+    # non-file input sources).
     datasource = None
+    file_paths_for_streaming: list[Path] | None = None
     if input_path is not None:
         if (
             input_format != "hcpe"
@@ -760,12 +767,22 @@ def learn_model(
             raise Exception(
                 "Please specify a valid input_format ('hcpe' or 'preprocess')."
             )
-        datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_path),
-            array_type=array_type,
-            bit_pack=input_file_packed,
-            cache_mode=input_cache_mode.lower(),
-        )
+        collected_paths = FileSystem.collect_files(input_path)
+        if no_streaming or len(collected_paths) < 2:
+            # Map-style: load everything into memory
+            datasource = FileDataSource.FileDataSourceSpliter(
+                file_paths=collected_paths,
+                array_type=array_type,
+                bit_pack=input_file_packed,
+                cache_mode=input_cache_mode.lower(),
+            )
+            if len(collected_paths) < 2 and not no_streaming:
+                app_logger.info(
+                    "Single file detected; falling back to map-style dataset."
+                )
+        else:
+            # Streaming: defer data loading, just keep paths
+            file_paths_for_streaming = collected_paths
     elif (
         input_dataset_id is not None
         and input_table_name is not None
@@ -1017,28 +1034,37 @@ def learn_model(
                 ),
                 array_type=_s3_at,
             )
-            if not no_streaming:
-                _s3_spliter = (
-                    FileDataSource.FileDataSourceSpliter(
-                        file_paths=_s3_paths,
-                        array_type=_s3_at,
-                        bit_pack=_s3_bp,
-                        cache_mode=_s3_cache,
-                    )
+            if not no_streaming and len(_s3_paths) >= 2:
+                import random
+
+                from maou.infra.file_system.streaming_file_source import (
+                    StreamingFileSource,
                 )
-                try:
-                    (
-                        s3_streaming_train_source,
-                        s3_streaming_val_source,
-                    ) = _s3_spliter.file_level_split(
-                        test_ratio=test_ratio or 0.1,
-                        seed=42,
-                    )
-                    use_multi_streaming = True
-                except ValueError:
-                    app_logger.info(
-                        "Stage 3: Single file detected; falling back to map-style dataset."
-                    )
+
+                rng = random.Random(42)
+                shuffled = list(_s3_paths)
+                rng.shuffle(shuffled)
+                effective_ratio = test_ratio or 0.1
+                n_val = max(
+                    1, int(len(shuffled) * effective_ratio)
+                )
+                n_train = len(shuffled) - n_val
+                if n_train < 1:
+                    n_train = 1
+                    n_val = len(shuffled) - 1
+                s3_streaming_train_source = StreamingFileSource(
+                    file_paths=shuffled[:n_train],
+                    array_type=_s3_at,
+                )
+                s3_streaming_val_source = StreamingFileSource(
+                    file_paths=shuffled[n_train:],
+                    array_type=_s3_at,
+                )
+                use_multi_streaming = True
+            elif not no_streaming:
+                app_logger.info(
+                    "Stage 3: Single file detected; falling back to map-style dataset."
+                )
 
         if use_multi_streaming:
             app_logger.info(
@@ -1095,28 +1121,42 @@ def learn_model(
         )
     else:
         # Standard single-stage training
-        # Try streaming mode for file input (default unless --no-streaming)
         use_streaming = False
         streaming_train_source = None
         streaming_val_source = None
 
-        if input_path is not None and not no_streaming:
-            assert datasource is not None
-            try:
-                streaming_train_source, streaming_val_source = (
-                    datasource.file_level_split(
-                        test_ratio=test_ratio or 0.1,
-                        seed=42,
-                    )
-                )
-                use_streaming = True
-                app_logger.info(
-                    "Using streaming mode for file input."
-                )
-            except ValueError:
-                app_logger.info(
-                    "Single file detected; falling back to map-style dataset."
-                )
+        if file_paths_for_streaming is not None:
+            # Streaming path: split file paths directly (no data loading)
+            import random
+
+            rng = random.Random(42)
+            shuffled = list(file_paths_for_streaming)
+            rng.shuffle(shuffled)
+            effective_ratio = test_ratio or 0.1
+            n_val = max(1, int(len(shuffled) * effective_ratio))
+            n_train = len(shuffled) - n_val
+            if n_train < 1:
+                n_train = 1
+                n_val = len(shuffled) - 1
+            train_paths = shuffled[:n_train]
+            val_paths = shuffled[n_train:]
+
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
+            )
+
+            streaming_train_source = StreamingFileSource(
+                file_paths=train_paths,
+                array_type=array_type,
+            )
+            streaming_val_source = StreamingFileSource(
+                file_paths=val_paths,
+                array_type=array_type,
+            )
+            use_streaming = True
+            app_logger.info(
+                "Using streaming mode for file input."
+            )
 
         click.echo(
             learn.learn(

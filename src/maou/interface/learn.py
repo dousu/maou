@@ -166,7 +166,7 @@ def dir_init(d: Path) -> None:
 
 
 def learn(
-    datasource: LearningDataSource.DataSourceSpliter,
+    datasource: Optional[LearningDataSource.DataSourceSpliter],
     datasource_type: str,
     *,
     gpu: Optional[str] = None,
