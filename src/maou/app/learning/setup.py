@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 try:
     from torch.optim.lr_scheduler import LRScheduler
@@ -213,6 +213,77 @@ class DataLoaderFactory:
         cls.logger.info(
             f"Validation: {len(validation_loader)} batches"
         )
+
+        return training_loader, validation_loader
+
+    @classmethod
+    def create_streaming_dataloaders(
+        cls,
+        train_dataset: IterableDataset,
+        val_dataset: IterableDataset,
+        dataloader_workers: int,
+        pin_memory: bool,
+        prefetch_factor: int = 2,
+    ) -> Tuple[DataLoader, DataLoader]:
+        """Streaming用DataLoader作成．
+
+        StreamingDatasetがバッチ単位でTensorをyieldするため，
+        DataLoaderは ``batch_size=None`` (自動バッチングOFF)で使用する．
+
+        Args:
+            train_dataset: 学習用IterableDataset
+            val_dataset: 検証用IterableDataset
+            dataloader_workers: workerプロセス数
+            pin_memory: pinned memoryを有効にするか
+            prefetch_factor: 各workerの先読みバッチ数
+
+        Returns:
+            (training_loader, validation_loader) のタプル
+        """
+        worker_init_fn = (
+            default_worker_init_fn
+            if dataloader_workers > 0
+            else None
+        )
+
+        training_loader = DataLoader(
+            train_dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            persistent_workers=dataloader_workers > 0,
+            prefetch_factor=prefetch_factor
+            if dataloader_workers > 0
+            else None,
+            timeout=120 if dataloader_workers > 0 else 0,
+            worker_init_fn=worker_init_fn,
+        )
+
+        validation_loader = DataLoader(
+            val_dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            persistent_workers=dataloader_workers > 0,
+            prefetch_factor=prefetch_factor
+            if dataloader_workers > 0
+            else None,
+            timeout=120 if dataloader_workers > 0 else 0,
+            worker_init_fn=worker_init_fn,
+        )
+
+        if hasattr(train_dataset, "__len__"):
+            cls.logger.info(
+                "Streaming Training: %d batches",
+                len(train_dataset),  # type: ignore[arg-type]
+            )
+        if hasattr(val_dataset, "__len__"):
+            cls.logger.info(
+                "Streaming Validation: %d batches",
+                len(val_dataset),  # type: ignore[arg-type]
+            )
 
         return training_loader, validation_loader
 
