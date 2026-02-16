@@ -1,8 +1,10 @@
 import abc
+import gc
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Callable, Dict, Literal, Optional
 
 import torch
 from torch.utils.data import DataLoader
@@ -19,6 +21,7 @@ from maou.app.learning.dl import (
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
     StageConfig,
+    StageResult,
     TrainingStage,
 )
 from maou.app.learning.network import (
@@ -32,6 +35,24 @@ from maou.domain.loss.loss_fn import (
 )
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
+
+
+@dataclass(frozen=True)
+class StageDataConfig:
+    """Stage別データソース設定．遅延初期化用．
+
+    DataSourceの直接初期化を避け，必要なStage実行直前にのみ
+    DataSourceSpliterを生成するための設定を保持する．
+    ``create_datasource`` にはDataSourceSpliterを生成するファクトリを渡す．
+    """
+
+    create_datasource: (
+        "Callable[[], LearningDataSource.DataSourceSpliter]"
+    )
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ]
+
 
 # Mapping from canonical scheduler keys to CLI display names.
 SUPPORTED_LR_SCHEDULERS: Dict[str, str] = {
@@ -482,18 +503,158 @@ def _find_latest_backbone_checkpoint(
     return None
 
 
+def _run_stage1(
+    *,
+    data_config: StageDataConfig,
+    orchestrator: MultiStageTrainingOrchestrator,
+    backbone: "torch.nn.Module",
+    batch_size: int,
+    learning_rate: float,
+    max_epochs: int,
+    threshold: float,
+    device: torch.device,
+) -> StageResult:
+    """Stage 1 (Reachable Squares) を実行し結果を返す．
+
+    DataSource/Dataset/DataLoaderはすべてこの関数のローカル変数．
+    関数終了時にスコープから外れ，GCの解放対象になる．
+
+    Args:
+        data_config: Stage 1 データソース設定
+        orchestrator: マルチステージオーケストレータ
+        backbone: バックボーンネットワーク
+        batch_size: バッチサイズ
+        learning_rate: 学習率
+        max_epochs: 最大エポック数
+        threshold: 精度閾値
+        device: 計算デバイス
+
+    Returns:
+        Stage 1 の訓練結果
+    """
+    datasource = data_config.create_datasource()
+    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
+
+    dataset = Stage1Dataset(datasource=train_ds)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+    )
+
+    stage_config = StageConfig(
+        stage=TrainingStage.REACHABLE_SQUARES,
+        max_epochs=max_epochs,
+        accuracy_threshold=threshold,
+        dataloader=dataloader,
+        loss_fn=ReachableSquaresLoss(),
+        optimizer=torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        ),
+        learning_rate=learning_rate,
+    )
+
+    results = orchestrator.run_all_stages(
+        stage1_config=stage_config,
+        stage2_config=None,
+        stage3_config=None,
+        save_checkpoints=True,
+    )
+
+    return results[TrainingStage.REACHABLE_SQUARES]
+
+
+def _run_stage2(
+    *,
+    data_config: StageDataConfig,
+    orchestrator: MultiStageTrainingOrchestrator,
+    backbone: "torch.nn.Module",
+    batch_size: int,
+    learning_rate: float,
+    max_epochs: int,
+    threshold: float,
+    device: torch.device,
+) -> StageResult:
+    """Stage 2 (Legal Moves) を実行し結果を返す．
+
+    DataSource/Dataset/DataLoaderはすべてこの関数のローカル変数．
+    関数終了時にスコープから外れ，GCの解放対象になる．
+
+    Args:
+        data_config: Stage 2 データソース設定
+        orchestrator: マルチステージオーケストレータ
+        backbone: バックボーンネットワーク
+        batch_size: バッチサイズ
+        learning_rate: 学習率
+        max_epochs: 最大エポック数
+        threshold: 精度閾値
+        device: 計算デバイス
+
+    Returns:
+        Stage 2 の訓練結果
+    """
+    datasource = data_config.create_datasource()
+    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
+
+    dataset = Stage2Dataset(datasource=train_ds)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+    )
+
+    stage_config = StageConfig(
+        stage=TrainingStage.LEGAL_MOVES,
+        max_epochs=max_epochs,
+        accuracy_threshold=threshold,
+        dataloader=dataloader,
+        loss_fn=LegalMovesLoss(),
+        optimizer=torch.optim.Adam(
+            list(backbone.parameters()),
+            lr=learning_rate,
+        ),
+        learning_rate=learning_rate,
+    )
+
+    results = orchestrator.run_all_stages(
+        stage1_config=None,
+        stage2_config=stage_config,
+        stage3_config=None,
+        save_checkpoints=True,
+    )
+
+    return results[TrainingStage.LEGAL_MOVES]
+
+
+def _resolve_datasource_type(
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
+) -> str:
+    """array_typeからlearn()用のdatasource_typeに変換する．
+
+    Args:
+        array_type: 内部表現のarray_type
+
+    Returns:
+        learn()用のdatasource_type ("hcpe" or "preprocess")
+    """
+    if array_type == "preprocessing":
+        return "preprocess"
+    return array_type
+
+
 def learn_multi_stage(
     stage: str,
     *,
-    stage1_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
-    stage2_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
-    stage3_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
+    stage1_data_config: Optional[StageDataConfig] = None,
+    stage2_data_config: Optional[StageDataConfig] = None,
+    stage3_data_config: Optional[StageDataConfig] = None,
     stage1_threshold: float = 0.99,
     stage2_threshold: float = 0.95,
     stage1_max_epochs: int = 10,
@@ -535,9 +696,9 @@ def learn_multi_stage(
 
     Args:
         stage: Training stage to execute ("1", "2", "3", or "all")
-        stage1_datasource: Data source for Stage 1 (reachable squares)
-        stage2_datasource: Data source for Stage 2 (legal moves)
-        stage3_datasource: Data source for Stage 3 (policy+value)
+        stage1_data_config: Data config for Stage 1 (reachable squares). Lazy init.
+        stage2_data_config: Data config for Stage 2 (legal moves). Lazy init.
+        stage3_data_config: Data config for Stage 3 (policy+value). Lazy init.
         stage1_threshold: Accuracy threshold for Stage 1 (default: 0.99)
         stage2_threshold: Accuracy threshold for Stage 2 (default: 0.95)
         stage1_max_epochs: Maximum epochs for Stage 1 (default: 10)
@@ -587,18 +748,18 @@ def learn_multi_stage(
             f"Invalid stage: {stage}. Must be '1', '2', '3', or 'all'"
         )
 
-    # Validate datasources based on stage
-    if stage in ("1", "all") and stage1_datasource is None:
+    # Validate data configs based on stage
+    if stage in ("1", "all") and stage1_data_config is None:
         raise ValueError(
-            "stage1_datasource is required for stage 1 or all"
+            "stage1_data_config is required for stage 1 or all"
         )
-    if stage in ("2", "all") and stage2_datasource is None:
+    if stage in ("2", "all") and stage2_data_config is None:
         raise ValueError(
-            "stage2_datasource is required for stage 2 or all"
+            "stage2_data_config is required for stage 2 or all"
         )
-    if stage == "3" and stage3_datasource is None:
+    if stage == "3" and stage3_data_config is None:
         raise ValueError(
-            "stage3_datasource is required for stage 3"
+            "stage3_data_config is required for stage 3"
         )
 
     # Set model directory default
@@ -637,105 +798,67 @@ def learn_multi_stage(
         model_dir=model_dir,
     )
 
-    # Prepare stage configurations
-    stage1_config = None
-    stage2_config = None
-
-    # Stage 1: Reachable Squares
-    if stage in ("1", "all") and stage1_datasource is not None:
-        # Create Stage 1 dataset
-        stage1_dataset = Stage1Dataset(
-            datasource=stage1_datasource.datasource
-        )
-
-        # Create DataLoader
-        stage1_dataloader = DataLoader(
-            stage1_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=0,
-            pin_memory=(device.type == "cuda"),
-        )
-
-        # Create loss function and optimizer
-        stage1_loss_fn = ReachableSquaresLoss()
-        stage1_optimizer = torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        )
-
-        stage1_config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=stage1_max_epochs,
-            accuracy_threshold=stage1_threshold,
-            dataloader=stage1_dataloader,
-            loss_fn=stage1_loss_fn,
-            optimizer=stage1_optimizer,
-            learning_rate=learning_rate,
-        )
-
-    # Stage 2: Legal Moves
-    if stage in ("2", "all") and stage2_datasource is not None:
-        # Create Stage 2 dataset
-        stage2_dataset = Stage2Dataset(
-            datasource=stage2_datasource.datasource
-        )
-
-        # Create DataLoader
-        stage2_dataloader = DataLoader(
-            stage2_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=0,
-            pin_memory=(device.type == "cuda"),
-        )
-
-        # Create loss function and optimizer
-        stage2_loss_fn = LegalMovesLoss()
-        stage2_optimizer = torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        )
-
-        stage2_config = StageConfig(
-            stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=stage2_max_epochs,
-            accuracy_threshold=stage2_threshold,
-            dataloader=stage2_dataloader,
-            loss_fn=stage2_loss_fn,
-            optimizer=stage2_optimizer,
-            learning_rate=learning_rate,
-        )
-
-    # Run Stage 1/2 via orchestrator (Stage 3 is handled separately below)
-    logger.info(f"Starting multi-stage training: stage={stage}")
-    results = orchestrator.run_all_stages(
-        stage1_config=stage1_config,
-        stage2_config=stage2_config,
-        stage3_config=None,
-        save_checkpoints=True,
-    )
-
     # Format results as JSON
     results_dict: dict[str, Any] = {
         "stage": stage,
         "stages_completed": [],
     }
 
-    for training_stage, stage_result in results.items():
+    logger.info(f"Starting multi-stage training: stage={stage}")
+
+    # Stage 1: Reachable Squares
+    # DataSource/Dataset/DataLoaderは_run_stage1内のローカル変数．
+    # 関数終了時にスコープから外れ，GCの解放対象になる．
+    if stage in ("1", "all") and stage1_data_config is not None:
+        stage1_result = _run_stage1(
+            data_config=stage1_data_config,
+            orchestrator=orchestrator,
+            backbone=backbone,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            max_epochs=stage1_max_epochs,
+            threshold=stage1_threshold,
+            device=device,
+        )
         results_dict["stages_completed"].append(
             {
-                "stage": training_stage.value,
-                "stage_name": training_stage.name,
-                "achieved_accuracy": stage_result.achieved_accuracy,
-                "final_loss": stage_result.final_loss,
-                "epochs_trained": stage_result.epochs_trained,
-                "threshold_met": stage_result.threshold_met,
+                "stage": stage1_result.stage.value,
+                "stage_name": stage1_result.stage.name,
+                "achieved_accuracy": stage1_result.achieved_accuracy,
+                "final_loss": stage1_result.final_loss,
+                "epochs_trained": stage1_result.epochs_trained,
+                "threshold_met": stage1_result.threshold_met,
             }
         )
+        gc.collect()
+
+    # Stage 2: Legal Moves
+    if stage in ("2", "all") and stage2_data_config is not None:
+        stage2_result = _run_stage2(
+            data_config=stage2_data_config,
+            orchestrator=orchestrator,
+            backbone=backbone,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            max_epochs=stage2_max_epochs,
+            threshold=stage2_threshold,
+            device=device,
+        )
+        results_dict["stages_completed"].append(
+            {
+                "stage": stage2_result.stage.value,
+                "stage_name": stage2_result.stage.name,
+                "achieved_accuracy": stage2_result.achieved_accuracy,
+                "final_loss": stage2_result.final_loss,
+                "epochs_trained": stage2_result.epochs_trained,
+                "threshold_met": stage2_result.threshold_met,
+            }
+        )
+        gc.collect()
 
     # Stage 3: Policy + Value (delegate to Learning.learn())
-    if stage in ("3", "all") and stage3_datasource is not None:
+    # DataSourceはここで遅延初期化する．
+    if stage in ("3", "all") and stage3_data_config is not None:
         logger.info("=" * 60)
         logger.info("STAGE 3: POLICY + VALUE LEARNING")
         logger.info("=" * 60)
@@ -752,9 +875,14 @@ def learn_multi_stage(
                     f"Using backbone from Stage 1/2: {saved_backbone}"
                 )
 
+        stage3_datasource = (
+            stage3_data_config.create_datasource()
+        )
         stage3_result = learn(
             datasource=stage3_datasource,
-            datasource_type=stage3_datasource.datasource.array_type,
+            datasource_type=_resolve_datasource_type(
+                stage3_data_config.array_type
+            ),
             gpu=gpu,
             model_architecture=model_architecture,
             compilation=compilation,
@@ -787,7 +915,7 @@ def learn_multi_stage(
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result
-    elif stage == "all" and stage3_datasource is None:
+    elif stage == "all" and stage3_data_config is None:
         logger.warning(
             "Stage 3 skipped: no --stage3-data-path specified. "
             "Only Stage 1/2 were executed."

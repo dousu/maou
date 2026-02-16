@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from maou.interface.learn import (
+    StageDataConfig,
     _find_latest_backbone_checkpoint,
 )
 
@@ -108,13 +109,16 @@ class TestLearnMultiStageStage3:
         mock_orchestrator_cls.return_value = mock_orchestrator
         mock_learn.return_value = '{"Result": "Finish"}'
 
-        # Create mock datasource
+        # Create mock datasource via StageDataConfig
         mock_datasource = MagicMock()
-        mock_datasource.datasource.array_type = "hcpe"
+        stage3_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="hcpe",
+        )
 
         learn_multi_stage(
             stage="3",
-            stage3_datasource=mock_datasource,
+            stage3_data_config=stage3_config,
             model_dir=tmp_path,
         )
 
@@ -157,11 +161,14 @@ class TestLearnMultiStageStage3:
         mock_learn.return_value = '{"Result": "Finish"}'
 
         mock_datasource = MagicMock()
-        mock_datasource.datasource.array_type = "hcpe"
+        stage3_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="hcpe",
+        )
 
         learn_multi_stage(
             stage="3",
-            stage3_datasource=mock_datasource,
+            stage3_data_config=stage3_config,
             trainable_layers=2,
             model_dir=tmp_path,
         )
@@ -173,22 +180,20 @@ class TestLearnMultiStageStage3:
     @patch(
         "maou.interface.learn._find_latest_backbone_checkpoint"
     )
+    @patch("maou.interface.learn._run_stage2")
+    @patch("maou.interface.learn._run_stage1")
     @patch(
         "maou.interface.learn.MultiStageTrainingOrchestrator"
     )
-    @patch("maou.interface.learn.DataLoader")
-    @patch("maou.interface.learn.Stage2Dataset")
-    @patch("maou.interface.learn.Stage1Dataset")
     @patch("maou.interface.learn.ModelFactory")
     @patch("maou.interface.learn.DeviceSetup")
     def test_stage_all_uses_saved_backbone(
         self,
         mock_device_setup: MagicMock,
         mock_model_factory: MagicMock,
-        mock_stage1_dataset: MagicMock,
-        mock_stage2_dataset: MagicMock,
-        mock_dataloader: MagicMock,
         mock_orchestrator_cls: MagicMock,
+        mock_run_stage1: MagicMock,
+        mock_run_stage2: MagicMock,
         mock_find_checkpoint: MagicMock,
         mock_learn: MagicMock,
         tmp_path: Path,
@@ -202,34 +207,60 @@ class TestLearnMultiStageStage3:
         mock_device_setup.setup_device.return_value = (
             mock_device_config
         )
-        import torch
 
         mock_backbone = MagicMock()
         mock_backbone.embedding_dim = 512
-        # Provide real parameters so torch.optim.Adam doesn't error
-        dummy_param = torch.nn.Parameter(torch.zeros(1))
-        mock_backbone.parameters.return_value = [dummy_param]
         mock_model_factory.create_shogi_backbone.return_value = mock_backbone
         mock_orchestrator = MagicMock()
         mock_orchestrator.run_all_stages.return_value = {}
         mock_orchestrator_cls.return_value = mock_orchestrator
         mock_learn.return_value = '{"Result": "Finish"}'
 
+        # Mock _run_stage1/2 to return StageResult-like objects
+        from maou.app.learning.multi_stage_training import (
+            StageResult,
+            TrainingStage,
+        )
+
+        mock_run_stage1.return_value = StageResult(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            achieved_accuracy=0.99,
+            final_loss=0.01,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+        mock_run_stage2.return_value = StageResult(
+            stage=TrainingStage.LEGAL_MOVES,
+            achieved_accuracy=0.95,
+            final_loss=0.05,
+            epochs_trained=5,
+            threshold_met=True,
+        )
+
         checkpoint_path = tmp_path / "stage2_backbone_test.pt"
         mock_find_checkpoint.return_value = checkpoint_path
 
-        mock_s1 = MagicMock()
-        mock_s1.datasource.array_type = "stage1"
-        mock_s2 = MagicMock()
-        mock_s2.datasource.array_type = "stage2"
-        mock_s3 = MagicMock()
-        mock_s3.datasource.array_type = "hcpe"
+        mock_s1_ds = MagicMock()
+        mock_s2_ds = MagicMock()
+        mock_s3_ds = MagicMock()
+        s1_config = StageDataConfig(
+            create_datasource=lambda: mock_s1_ds,
+            array_type="stage1",
+        )
+        s2_config = StageDataConfig(
+            create_datasource=lambda: mock_s2_ds,
+            array_type="stage2",
+        )
+        s3_config = StageDataConfig(
+            create_datasource=lambda: mock_s3_ds,
+            array_type="hcpe",
+        )
 
         learn_multi_stage(
             stage="all",
-            stage1_datasource=mock_s1,
-            stage2_datasource=mock_s2,
-            stage3_datasource=mock_s3,
+            stage1_data_config=s1_config,
+            stage2_data_config=s2_config,
+            stage3_data_config=s3_config,
             model_dir=tmp_path,
         )
 
@@ -269,12 +300,15 @@ class TestLearnMultiStageStage3:
         mock_learn.return_value = '{"Result": "Finish"}'
 
         mock_datasource = MagicMock()
-        mock_datasource.datasource.array_type = "hcpe"
+        stage3_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="hcpe",
+        )
 
         config = {"embed_dim": 256, "num_layers": 3}
         learn_multi_stage(
             stage="3",
-            stage3_datasource=mock_datasource,
+            stage3_data_config=stage3_config,
             model_dir=tmp_path,
             architecture_config=config,
         )

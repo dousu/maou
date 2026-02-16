@@ -170,51 +170,45 @@ class FileDataSource(
                 None
             )
 
-            # すべてのファイルパスを読み込む
+            # DF→numpy変換関数を先に取得
+            converter = _DF_TO_NUMPY_CONVERTERS.get(
+                self.array_type
+            )
+            if converter is None:
+                raise ValueError(
+                    f"Unknown array_type: {self.array_type}"
+                )
+
+            # ファイル単位で読み込み→変換→DF解放を逐次実行
+            # (ピークメモリ = 累積numpy + 1ファイル分DF + 変換中間配列)
             lengths = []
             for file_path in self.file_paths:
                 try:
-                    # Load .feather files (Arrow IPC format - only supported format)
                     if file_path.suffix != ".feather":
                         raise ValueError(
                             f"Only .feather files are supported. Got: {file_path.suffix}"
                         )
 
                     try:
-                        from maou.domain.data.rust_io import (
-                            load_hcpe_df,
-                            load_preprocessing_df,
-                            load_stage1_df,
-                            load_stage2_df,
-                        )
-
-                        if self.array_type == "hcpe":
-                            df = load_hcpe_df(file_path)
-                        elif self.array_type == "preprocessing":
-                            df = load_preprocessing_df(
-                                file_path
-                            )
-                        elif self.array_type == "stage1":
-                            df = load_stage1_df(file_path)
-                        elif self.array_type == "stage2":
-                            df = load_stage2_df(file_path)
-                        else:
-                            raise ValueError(
-                                f"Unsupported array_type: {self.array_type}"
-                            )
-
+                        # 1. ファイル読み込み (Polars DataFrame)
+                        df = self._load_feather(file_path)
                         array_length = len(df)
-                        # Store DataFrame directly
+
+                        # 2. DF→numpy変換 (この間のみDFとnumpyが共存)
+                        numpy_array = converter(df)
+
+                        # 3. DF参照を即座に切る (GC対象にする)
+                        del df
+
+                        # 4. numpy arrayのみ保持
                         self._file_entries.append(
                             FileDataSource.FileManager._FileEntry(
                                 name=file_path.name,
                                 path=file_path,
-                                dtype=np.dtype(
-                                    "object"
-                                ),  # Placeholder
+                                dtype=numpy_array.dtype,
                                 length=array_length,
                                 memmap=None,
-                                cached_array=df,  # type: ignore # Store DataFrame
+                                cached_array=numpy_array,
                             )
                         )
                         lengths.append(array_length)
@@ -233,20 +227,6 @@ class FileDataSource(
 
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
-
-            # Convert DataFrames to numpy structured arrays for fast __getitem__
-            converter = _DF_TO_NUMPY_CONVERTERS.get(
-                self.array_type
-            )
-            if converter is None:
-                raise ValueError(
-                    f"Unknown array_type: {self.array_type}"
-                )
-            for entry in self._file_entries:
-                if entry.cached_array is not None:
-                    entry.cached_array = converter(
-                        entry.cached_array
-                    )
 
             # cache_mode="memory"の場合、全ファイルを単一numpy配列に結合
             if (
@@ -287,6 +267,37 @@ class FileDataSource(
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
+
+        def _load_feather(
+            self, file_path: Path
+        ) -> "pl.DataFrame":
+            """Arrow IPCファイルを読み込みPolars DataFrameとして返す．
+
+            Args:
+                file_path: .featherファイルのパス
+
+            Returns:
+                Polars DataFrame
+            """
+            from maou.domain.data.rust_io import (
+                load_hcpe_df,
+                load_preprocessing_df,
+                load_stage1_df,
+                load_stage2_df,
+            )
+
+            loaders = {
+                "hcpe": load_hcpe_df,
+                "preprocessing": load_preprocessing_df,
+                "stage1": load_stage1_df,
+                "stage2": load_stage2_df,
+            }
+            loader = loaders.get(self.array_type)
+            if loader is None:
+                raise ValueError(
+                    f"Unsupported array_type: {self.array_type}"
+                )
+            return loader(file_path)
 
         def get_item(self, idx: int) -> np.ndarray:
             """Get single item as numpy structured array．

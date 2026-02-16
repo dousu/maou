@@ -1029,11 +1029,14 @@ def convert_preprocessing_df_to_numpy(
     )
 
     # 1D List column: moveLabel List[Float32] -> (N, MOVE_LABELS_NUM)
+    # Polarsの内部データはFloat32だが，structured arrayのtarget dtypeはfloat16．
+    # float16を指定することで_explode_list_column内のastype変換後の中間配列が
+    # float32の半分のサイズになり，定常メモリを削減する．
     array["moveLabel"] = _explode_list_column(
         df["moveLabel"],
         n,
         (MOVE_LABELS_NUM,),
-        np.dtype(np.float32),
+        np.dtype(np.float16),
         nest_depth=1,
     )
 

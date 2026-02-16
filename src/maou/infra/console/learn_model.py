@@ -5,6 +5,7 @@ import click
 
 import maou.infra.console.common as common
 import maou.interface.learn as learn
+from maou.interface.learn import StageDataConfig
 
 if TYPE_CHECKING:
     from maou.infra.console.common import GCS as GCSType
@@ -916,10 +917,10 @@ def learn_model(
             f"Multi-stage training requested: stage={stage}"
         )
 
-        # Create datasources for each stage
-        stage1_datasource = None
-        stage2_datasource = None
-        stage3_datasource = None
+        # 遅延初期化用のStageDataConfigを生成(この時点ではI/O/メモリ消費なし)
+        stage1_data_config: StageDataConfig | None = None
+        stage2_data_config: StageDataConfig | None = None
+        stage3_data_config: StageDataConfig | None = None
 
         # Stage1/2 では cache_mode を強制的に "file" にする（OOM防止）
         stage12_cache_mode = "file"
@@ -930,47 +931,65 @@ def learn_model(
             )
 
         if stage1_data_path is not None:
-            stage1_datasource = (
-                FileDataSource.FileDataSourceSpliter(
-                    file_paths=FileSystem.collect_files(
-                        stage1_data_path
-                    ),
-                    array_type="stage1",
-                    bit_pack=False,
-                    cache_mode=stage12_cache_mode,
-                )
+            _s1_paths = FileSystem.collect_files(
+                stage1_data_path
+            )
+            stage1_data_config = StageDataConfig(
+                create_datasource=lambda _paths=_s1_paths: (
+                    FileDataSource.FileDataSourceSpliter(
+                        file_paths=_paths,
+                        array_type="stage1",
+                        bit_pack=False,
+                        cache_mode=stage12_cache_mode,
+                    )
+                ),
+                array_type="stage1",
             )
 
         if stage2_data_path is not None:
-            stage2_datasource = (
-                FileDataSource.FileDataSourceSpliter(
-                    file_paths=FileSystem.collect_files(
-                        stage2_data_path
-                    ),
-                    array_type="stage2",
-                    bit_pack=False,
-                    cache_mode=stage12_cache_mode,
-                )
+            _s2_paths = FileSystem.collect_files(
+                stage2_data_path
+            )
+            stage2_data_config = StageDataConfig(
+                create_datasource=lambda _paths=_s2_paths: (
+                    FileDataSource.FileDataSourceSpliter(
+                        file_paths=_paths,
+                        array_type="stage2",
+                        bit_pack=False,
+                        cache_mode=stage12_cache_mode,
+                    )
+                ),
+                array_type="stage2",
             )
 
         if stage3_data_path is not None:
-            stage3_datasource = (
-                FileDataSource.FileDataSourceSpliter(
-                    file_paths=FileSystem.collect_files(
-                        stage3_data_path
-                    ),
-                    array_type=array_type,
-                    bit_pack=input_file_packed,
-                    cache_mode=input_cache_mode.lower(),
-                )
+            _s3_paths = FileSystem.collect_files(
+                stage3_data_path
+            )
+            _s3_cache = input_cache_mode.lower()
+            _s3_at = array_type
+            _s3_bp = input_file_packed
+            stage3_data_config = StageDataConfig(
+                create_datasource=lambda _p=_s3_paths,
+                _a=_s3_at,
+                _b=_s3_bp,
+                _c=_s3_cache: (
+                    FileDataSource.FileDataSourceSpliter(
+                        file_paths=_p,
+                        array_type=_a,
+                        bit_pack=_b,
+                        cache_mode=_c,
+                    )
+                ),
+                array_type=_s3_at,
             )
 
         click.echo(
             learn.learn_multi_stage(
                 stage=stage,
-                stage1_datasource=stage1_datasource,
-                stage2_datasource=stage2_datasource,
-                stage3_datasource=stage3_datasource,
+                stage1_data_config=stage1_data_config,
+                stage2_data_config=stage2_data_config,
+                stage3_data_config=stage3_data_config,
                 stage1_threshold=stage1_threshold,
                 stage2_threshold=stage2_threshold,
                 stage1_max_epochs=stage1_max_epochs,
