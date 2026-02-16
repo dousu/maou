@@ -29,6 +29,10 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST add docstrings to public APIs
 - MUST run pre-commit hooks (NEVER use `--no-verify`)
 
+### Serena MCP
+- MUST NOT call multiple Serena MCP tools in parallel (to prevent OOM in memory-constrained DevContainer)
+- MUST call Serena tools sequentially, one at a time
+
 ### Forbidden Actions
 - MUST NOT use pip directly (use `uv` only)
 - MUST NOT create `__init__.py` unless absolutely necessary
@@ -78,6 +82,10 @@ SHOULD prefer Serena tools for token efficiency:
 - SHOULD follow commit format: `feat|fix|docs|refactor|test|perf: message`
 - SHOULD run QA pipeline before commit:
   `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/`
+
+### Agent Teams
+- SHOULD limit team agents to 2 or fewer in 8GB RAM DevContainer environments
+- SHOULD consider memory impact when adding agents (each agent spawns its own MCP server processes)
 
 ### Testing
 - SHOULD write tests for new features
