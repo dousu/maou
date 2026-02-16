@@ -517,6 +517,12 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--no-streaming",
+    is_flag=True,
+    default=False,
+    help="Disable streaming mode for file input (use map-style dataset instead).",
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -633,6 +639,7 @@ def learn_model(
     stage2_max_epochs: int,
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
+    no_streaming: bool,
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
@@ -930,6 +937,13 @@ def learn_model(
                 "Using individual file mode instead."
             )
 
+        # Streaming source variables for multi-stage
+        use_multi_streaming = False
+        s1_streaming_source = None
+        s2_streaming_source = None
+        s3_streaming_train_source = None
+        s3_streaming_val_source = None
+
         if stage1_data_path is not None:
             _s1_paths = FileSystem.collect_files(
                 stage1_data_path
@@ -945,6 +959,16 @@ def learn_model(
                 ),
                 array_type="stage1",
             )
+            if not no_streaming:
+                from maou.infra.file_system.streaming_file_source import (
+                    StreamingFileSource,
+                )
+
+                s1_streaming_source = StreamingFileSource(
+                    file_paths=_s1_paths,
+                    array_type="stage1",
+                )
+                use_multi_streaming = True
 
         if stage2_data_path is not None:
             _s2_paths = FileSystem.collect_files(
@@ -961,6 +985,16 @@ def learn_model(
                 ),
                 array_type="stage2",
             )
+            if not no_streaming:
+                from maou.infra.file_system.streaming_file_source import (
+                    StreamingFileSource,
+                )
+
+                s2_streaming_source = StreamingFileSource(
+                    file_paths=_s2_paths,
+                    array_type="stage2",
+                )
+                use_multi_streaming = True
 
         if stage3_data_path is not None:
             _s3_paths = FileSystem.collect_files(
@@ -982,6 +1016,33 @@ def learn_model(
                     )
                 ),
                 array_type=_s3_at,
+            )
+            if not no_streaming:
+                _s3_spliter = (
+                    FileDataSource.FileDataSourceSpliter(
+                        file_paths=_s3_paths,
+                        array_type=_s3_at,
+                        bit_pack=_s3_bp,
+                        cache_mode=_s3_cache,
+                    )
+                )
+                try:
+                    (
+                        s3_streaming_train_source,
+                        s3_streaming_val_source,
+                    ) = _s3_spliter.file_level_split(
+                        test_ratio=test_ratio or 0.1,
+                        seed=42,
+                    )
+                    use_multi_streaming = True
+                except ValueError:
+                    app_logger.info(
+                        "Stage 3: Single file detected; falling back to map-style dataset."
+                    )
+
+        if use_multi_streaming:
+            app_logger.info(
+                "Using streaming mode for multi-stage training."
             )
 
         click.echo(
@@ -1025,10 +1086,38 @@ def learn_model(
                 cloud_storage=cloud_storage,
                 input_cache_mode=input_cache_mode.lower(),
                 architecture_config=architecture_config,
+                streaming=use_multi_streaming,
+                stage1_streaming_source=s1_streaming_source,
+                stage2_streaming_source=s2_streaming_source,
+                stage3_streaming_train_source=s3_streaming_train_source,
+                stage3_streaming_val_source=s3_streaming_val_source,
             )
         )
     else:
-        # Standard single-stage training (existing behavior)
+        # Standard single-stage training
+        # Try streaming mode for file input (default unless --no-streaming)
+        use_streaming = False
+        streaming_train_source = None
+        streaming_val_source = None
+
+        if input_path is not None and not no_streaming:
+            assert datasource is not None
+            try:
+                streaming_train_source, streaming_val_source = (
+                    datasource.file_level_split(
+                        test_ratio=test_ratio or 0.1,
+                        seed=42,
+                    )
+                )
+                use_streaming = True
+                app_logger.info(
+                    "Using streaming mode for file input."
+                )
+            except ValueError:
+                app_logger.info(
+                    "Single file detected; falling back to map-style dataset."
+                )
+
         click.echo(
             learn.learn(
                 datasource=datasource,
@@ -1070,5 +1159,8 @@ def learn_model(
                 input_cache_mode=input_cache_mode.lower(),
                 detect_anomaly=detect_anomaly,
                 architecture_config=architecture_config,
+                streaming=use_streaming,
+                streaming_train_source=streaming_train_source,
+                streaming_val_source=streaming_val_source,
             )
         )

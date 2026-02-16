@@ -713,6 +713,12 @@ def benchmark_dataloader(
     show_default=True,
 )
 @click.option(
+    "--no-streaming",
+    is_flag=True,
+    default=False,
+    help="Disable streaming mode for file input (use map-style dataset instead).",
+)
+@click.option(
     "--warmup-batches",
     type=int,
     help="Number of warmup batches to exclude from timing (default: 5).",
@@ -795,6 +801,7 @@ def benchmark_training(
     optimizer_beta1: float,
     optimizer_beta2: float,
     optimizer_eps: float,
+    no_streaming: bool,
     warmup_batches: int,
     max_batches: int,
     enable_profiling: Optional[bool],
