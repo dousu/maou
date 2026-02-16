@@ -70,6 +70,8 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--stage2-threshold FLOAT` | `0.95` | Accuracy threshold for Stage 2 (95%).【F:src/maou/infra/console/learn_model.py†L486-L492】 |
 | `--stage1-max-epochs INT` | `10` | Maximum epochs for Stage 1.【F:src/maou/infra/console/learn_model.py†L494-L499】 |
 | `--stage2-max-epochs INT` | `10` | Maximum epochs for Stage 2.【F:src/maou/infra/console/learn_model.py†L500-L506】 |
+| `--stage1-batch-size INT` | `None` (inherits `--batch-size`) | Batch size for Stage 1. When unset, inherits the global `--batch-size`. For small datasets (~1,000 positions), `32` is recommended.【F:src/maou/infra/console/learn_model.py†L507-L513】 |
+| `--stage2-batch-size INT` | `None` (inherits `--batch-size`) | Batch size for Stage 2. When unset, inherits the global `--batch-size`.【F:src/maou/infra/console/learn_model.py†L514-L520】 |
 | `--freeze-backbone` | `false` | Freeze backbone parameters (embedding, backbone, pool, hand projection).【F:src/maou/infra/console/learn_model.py†L437-L441】 |
 | `--trainable-layers INT` | `None` | Number of trailing backbone layer groups to keep trainable. `0` = freeze all backbone layers. Unset = all layers trainable.【F:src/maou/infra/console/learn_model.py†L443-L451】 |
 | `--resume-reachable-head-from PATH` | optional | Reachable squares head parameter file to resume training (Stage 1).【F:src/maou/infra/console/learn_model.py†L508-L512】 |

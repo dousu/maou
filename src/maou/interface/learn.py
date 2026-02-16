@@ -802,6 +802,8 @@ def learn_multi_stage(
     gpu: Optional[str] = None,
     model_architecture: BackboneArchitecture = "resnet",
     batch_size: int = 256,
+    stage1_batch_size: Optional[int] = None,
+    stage2_batch_size: Optional[int] = None,
     learning_rate: float = 0.001,
     model_dir: Optional[Path] = None,
     resume_backbone_from: Optional[Path] = None,
@@ -859,6 +861,8 @@ def learn_multi_stage(
         gpu: GPU device to use
         model_architecture: Backbone architecture
         batch_size: Training batch size
+        stage1_batch_size: Batch size for Stage 1 (default: inherits batch_size)
+        stage2_batch_size: Batch size for Stage 2 (default: inherits batch_size)
         learning_rate: Learning rate
         model_dir: Model output directory
         resume_backbone_from: Backbone checkpoint to resume from
@@ -962,6 +966,10 @@ def learn_multi_stage(
         "stages_completed": [],
     }
 
+    # Resolve stage-specific batch sizes (fallback to global batch_size)
+    effective_stage1_batch = stage1_batch_size or batch_size
+    effective_stage2_batch = stage2_batch_size or batch_size
+
     logger.info(f"Starting multi-stage training: stage={stage}")
 
     # Stage 1: Reachable Squares
@@ -973,7 +981,7 @@ def learn_multi_stage(
                 streaming_source=stage1_streaming_source,
                 orchestrator=orchestrator,
                 backbone=backbone,
-                batch_size=batch_size,
+                batch_size=effective_stage1_batch,
                 learning_rate=learning_rate,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
@@ -984,7 +992,7 @@ def learn_multi_stage(
                 data_config=stage1_data_config,
                 orchestrator=orchestrator,
                 backbone=backbone,
-                batch_size=batch_size,
+                batch_size=effective_stage1_batch,
                 learning_rate=learning_rate,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
@@ -1009,7 +1017,7 @@ def learn_multi_stage(
                 streaming_source=stage2_streaming_source,
                 orchestrator=orchestrator,
                 backbone=backbone,
-                batch_size=batch_size,
+                batch_size=effective_stage2_batch,
                 learning_rate=learning_rate,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
@@ -1020,7 +1028,7 @@ def learn_multi_stage(
                 data_config=stage2_data_config,
                 orchestrator=orchestrator,
                 backbone=backbone,
-                batch_size=batch_size,
+                batch_size=effective_stage2_batch,
                 learning_rate=learning_rate,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,

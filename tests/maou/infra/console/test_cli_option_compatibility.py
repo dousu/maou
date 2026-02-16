@@ -77,6 +77,8 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "stage1-threshold",  # Stage 1閾値（不要）
         "stage2-threshold",  # Stage 2閾値（不要）
         "stage1-max-epochs",  # Stage 1最大エポック（不要）
+        "stage1-batch-size",  # Stage 1バッチサイズ（不要）
+        "stage2-batch-size",  # Stage 2バッチサイズ（不要）
         "stage2-max-epochs",  # Stage 2最大エポック（不要）
         "resume-reachable-head-from",  # Stage 1ヘッド再開（不要）
         "resume-legal-moves-head-from",  # Stage 2ヘッド再開（不要）

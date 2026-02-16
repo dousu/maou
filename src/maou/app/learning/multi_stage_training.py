@@ -350,6 +350,7 @@ class MultiStageTrainingOrchestrator:
                     f" of target)\n"
                     f"  Hint: try increasing --stage1-max-epochs"
                     f" or lowering --stage1-threshold"
+                    f" or setting --stage1-batch-size 32"
                 )
 
             if save_checkpoints:
@@ -394,6 +395,7 @@ class MultiStageTrainingOrchestrator:
                     f" of target)\n"
                     f"  Hint: try increasing --stage2-max-epochs"
                     f" or lowering --stage2-threshold"
+                    f" or setting --stage2-batch-size 32"
                 )
 
             if save_checkpoints:
