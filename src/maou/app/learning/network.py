@@ -70,6 +70,17 @@ class HeadlessNetwork(nn.Module):
         self.embedding = nn.Embedding(
             board_vocab_size, embedding_dim
         )
+
+        # hand_projection_dim > 0 の場合のみ projection レイヤーを作成
+        self._hand_projection: nn.Linear | None
+        if hand_projection_dim > 0:
+            self._hand_projection = nn.Linear(
+                PIECES_IN_HAND_VECTOR_SIZE,
+                hand_projection_dim,
+            )
+        else:
+            self._hand_projection = None
+
         config: dict[str, Any] = dict(architecture_config or {})
 
         # Total input channels to backbone (board embedding + hand projection)
@@ -139,12 +150,24 @@ class HeadlessNetwork(nn.Module):
 
         return self._embedding_dim
 
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        """Return pooled convolutional features from the shared backbone."""
+    def forward_features(self, x: ModelInputs) -> torch.Tensor:
+        """Return pooled convolutional features from the shared backbone.
 
-        inputs = self._prepare_inputs(x)
+        Args:
+            x: 盤面テンソル，または (盤面, 持ち駒) のシーケンス
+        """
+        board_tensor, hand_tensor = self._separate_inputs(x)
+        embedded_board = self._prepare_inputs(board_tensor)
+
+        if self._hand_projection is not None:
+            combined = self._combine_board_and_hand(
+                embedded_board, hand_tensor
+            )
+        else:
+            combined = embedded_board
+
         if self.architecture == "resnet":
-            features = self.backbone(inputs)
+            features = self.backbone(combined)
             pooled = self.pool(features)
             return torch.flatten(pooled, 1)
 
@@ -157,10 +180,10 @@ class HeadlessNetwork(nn.Module):
         forward_fn: Callable[[torch.Tensor], torch.Tensor] = (
             backbone_forward
         )
-        return forward_fn(inputs)
+        return forward_fn(combined)
 
     def forward(
-        self, x: torch.Tensor
+        self, x: ModelInputs
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Alias of :meth:`forward_features` for convenience."""
 
@@ -227,6 +250,104 @@ class HeadlessNetwork(nn.Module):
             1 for p in self.parameters() if not p.requires_grad
         )
         return frozen_params
+
+    @staticmethod
+    def _separate_inputs(
+        inputs: ModelInputs,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """盤面テンソルと持ち駒テンソルを分離する．
+
+        単一の ``torch.Tensor`` が渡された場合は持ち駒なしとして扱い，
+        ``(board, hand)`` のシーケンスが渡された場合はそれぞれを返す．
+
+        Args:
+            inputs: 盤面テンソル，または (盤面, 持ち駒) のシーケンス
+
+        Returns:
+            (board_tensor, hand_tensor | None) のタプル
+        """
+        if isinstance(inputs, torch.Tensor):
+            return inputs, None
+        if isinstance(inputs, Sequence):
+            if len(inputs) != 2:
+                msg = "Expected inputs to contain board and pieces_in_hand tensors."
+                raise ValueError(msg)
+            board_tensor, pieces_tensor = inputs[0], inputs[1]
+            if not isinstance(board_tensor, torch.Tensor):
+                msg = "Board input must be a torch.Tensor."
+                raise TypeError(msg)
+            if pieces_tensor is None:
+                return board_tensor, None
+            if not isinstance(pieces_tensor, torch.Tensor):
+                msg = "Pieces-in-hand input must be a torch.Tensor."
+                raise TypeError(msg)
+            return board_tensor, pieces_tensor
+        msg = f"Unsupported input structure: {type(inputs)!r}"
+        raise TypeError(msg)
+
+    def _combine_board_and_hand(
+        self,
+        embedded_board: torch.Tensor,
+        hand_tensor: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """盤面 embedding と持ち駒 projection を結合する．
+
+        Args:
+            embedded_board: 盤面の embedding テンソル (batch, channels, H, W)
+            hand_tensor: 持ち駒ベクトル (batch, PIECES_IN_HAND_VECTOR_SIZE) または None
+
+        Returns:
+            結合済みテンソル (batch, channels + hand_projection_dim, H, W)
+        """
+        assert self._hand_projection is not None
+
+        batch_size = embedded_board.shape[0]
+        height, width = (
+            embedded_board.shape[2],
+            embedded_board.shape[3],
+        )
+
+        if hand_tensor is not None:
+            # Project hand features to hand_projection_dim
+            projected = self._hand_projection(
+                hand_tensor.to(
+                    dtype=embedded_board.dtype,
+                    device=embedded_board.device,
+                )
+            )
+
+            # Architecture-specific hand feature integration
+            if self.architecture == "resnet":
+                # ResNet: Expand hand features to all spatial positions
+                hand_features = projected.view(
+                    batch_size,
+                    self._hand_projection_dim,
+                    1,
+                    1,
+                ).expand(-1, -1, height, width)
+            else:
+                # MLP-Mixer/ViT: Place hand features only at position (0, 0)
+                hand_features = torch.zeros(
+                    batch_size,
+                    self._hand_projection_dim,
+                    height,
+                    width,
+                    dtype=embedded_board.dtype,
+                    device=embedded_board.device,
+                )
+                hand_features[:, :, 0, 0] = projected
+        else:
+            # Create zero padding if no hand information provided
+            hand_features = torch.zeros(
+                batch_size,
+                self._hand_projection_dim,
+                height,
+                width,
+                dtype=embedded_board.dtype,
+                device=embedded_board.device,
+            )
+
+        return torch.cat([embedded_board, hand_features], dim=1)
 
     def _prepare_inputs(self, x: torch.Tensor) -> torch.Tensor:
         input_type, tensor = self._validate_inputs(x)
@@ -295,6 +416,7 @@ class HeadlessNetwork(nn.Module):
             for key, value in state_dict.items()
             if key.startswith("backbone.")
             or key.startswith("embedding.")
+            or key.startswith("_hand_projection.")
         }
         return super().load_state_dict(
             backbone_state, strict=strict, assign=assign
@@ -535,9 +657,6 @@ class Network(HeadlessNetwork):
             input_dim=self.embedding_dim,
             hidden_dim=value_hidden_dim,
         )
-        self._hand_projection = nn.Linear(
-            PIECES_IN_HAND_VECTOR_SIZE, hand_projection_dim
-        )
 
     def forward(
         self, x: ModelInputs
@@ -550,97 +669,5 @@ class Network(HeadlessNetwork):
         return policy_logits, value_logit
 
     def forward_features(self, x: ModelInputs) -> torch.Tensor:
-        board_tensor, hand_tensor = self._separate_inputs(x)
-        embedded_board = self._prepare_inputs(board_tensor)
-
-        # Prepare hand features (or zero padding if no hand tensor provided)
-        batch_size = embedded_board.shape[0]
-        height, width = (
-            embedded_board.shape[2],
-            embedded_board.shape[3],
-        )
-
-        if hand_tensor is not None:
-            # Project hand features to hand_projection_dim
-            projected = self._hand_projection(
-                hand_tensor.to(
-                    dtype=embedded_board.dtype,
-                    device=embedded_board.device,
-                )
-            )
-
-            # Architecture-specific hand feature integration
-            if self.architecture == "resnet":
-                # ResNet: Expand hand features to all spatial positions
-                # This allows the convolutional layers to access hand information everywhere
-                hand_features = projected.view(
-                    batch_size, self._hand_projection_dim, 1, 1
-                ).expand(-1, -1, height, width)
-            else:
-                # MLP-Mixer/ViT: Place hand features only at position (0, 0)
-                # Since these architectures convert spatial dimensions to tokens,
-                # we only need one position to contain the hand information
-                hand_features = torch.zeros(
-                    batch_size,
-                    self._hand_projection_dim,
-                    height,
-                    width,
-                    dtype=embedded_board.dtype,
-                    device=embedded_board.device,
-                )
-                hand_features[:, :, 0, 0] = projected
-        else:
-            # Create zero padding if no hand information provided
-            hand_features = torch.zeros(
-                batch_size,
-                self._hand_projection_dim,
-                height,
-                width,
-                dtype=embedded_board.dtype,
-                device=embedded_board.device,
-            )
-
-        # Concatenate board and hand features along channel dimension
-        combined_features = torch.cat(
-            [embedded_board, hand_features], dim=1
-        )
-
-        # Process concatenated features through backbone
-        if self.architecture == "resnet":
-            features = self.backbone(combined_features)
-            pooled = self.pool(features)
-            return torch.flatten(pooled, 1)
-
-        backbone_forward = getattr(
-            self.backbone, "forward_features", None
-        )
-        if backbone_forward is None:
-            msg = "Configured backbone does not implement forward_features."
-            raise RuntimeError(msg)
-        forward_fn: Callable[[torch.Tensor], torch.Tensor] = (
-            backbone_forward
-        )
-        return forward_fn(combined_features)
-
-    @staticmethod
-    def _separate_inputs(
-        inputs: ModelInputs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        if isinstance(inputs, torch.Tensor):
-            return inputs, None
-        if isinstance(inputs, Sequence):
-            if len(inputs) != 2:
-                msg = "Expected inputs to contain board and pieces_in_hand tensors."
-                raise ValueError(msg)
-            board_tensor, pieces_tensor = inputs[0], inputs[1]
-            if not isinstance(board_tensor, torch.Tensor):
-                msg = "Board input must be a torch.Tensor."
-                raise TypeError(msg)
-            if pieces_tensor is None:
-                return board_tensor, None
-            if not isinstance(pieces_tensor, torch.Tensor):
-                msg = "Pieces-in-hand input must be a torch.Tensor."
-                raise TypeError(msg)
-            return board_tensor, pieces_tensor
-        msg = f"Unsupported input structure: {type(inputs)!r}"
-        raise TypeError(msg)
+        """Return pooled features from the shared backbone."""
+        return super().forward_features(x)

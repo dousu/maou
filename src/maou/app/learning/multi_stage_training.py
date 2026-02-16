@@ -193,8 +193,13 @@ class SingleStageTrainingLoop:
             self.config.dataloader
         ):
             # Move to device
-            board_tensor, _ = inputs
+            board_tensor, hand_tensor = inputs
             board_tensor = board_tensor.to(self.device)
+            hand_tensor = (
+                hand_tensor.to(self.device)
+                if hand_tensor is not None
+                else None
+            )
             targets = targets.to(self.device)
 
             # Zero gradients
@@ -207,7 +212,7 @@ class SingleStageTrainingLoop:
             ):
                 # Get features from backbone
                 features = self.model.forward_features(
-                    board_tensor
+                    (board_tensor, hand_tensor)
                 )
 
                 # Get predictions from head
