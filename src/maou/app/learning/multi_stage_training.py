@@ -340,9 +340,16 @@ class MultiStageTrainingOrchestrator:
 
             if not result.threshold_met:
                 raise RuntimeError(
-                    f"Stage 1 failed to meet threshold "
-                    f"({result.achieved_accuracy:.2%} < "
-                    f"{stage1_config.accuracy_threshold:.2%})"
+                    f"Stage 1 failed to meet accuracy threshold "
+                    f"after {result.epochs_trained} epochs.\n"
+                    f"  achieved: {result.achieved_accuracy:.2%}"
+                    f" / required: "
+                    f"{stage1_config.accuracy_threshold:.2%}"
+                    f" (reached "
+                    f"{result.achieved_accuracy / stage1_config.accuracy_threshold:.1%}"
+                    f" of target)\n"
+                    f"  Hint: try increasing --stage1-max-epochs"
+                    f" or lowering --stage1-threshold"
                 )
 
             if save_checkpoints:
@@ -377,9 +384,16 @@ class MultiStageTrainingOrchestrator:
 
             if not result.threshold_met:
                 raise RuntimeError(
-                    f"Stage 2 failed to meet threshold "
-                    f"({result.achieved_accuracy:.2%} < "
-                    f"{stage2_config.accuracy_threshold:.2%})"
+                    f"Stage 2 failed to meet accuracy threshold "
+                    f"after {result.epochs_trained} epochs.\n"
+                    f"  achieved: {result.achieved_accuracy:.2%}"
+                    f" / required: "
+                    f"{stage2_config.accuracy_threshold:.2%}"
+                    f" (reached "
+                    f"{result.achieved_accuracy / stage2_config.accuracy_threshold:.1%}"
+                    f" of target)\n"
+                    f"  Hint: try increasing --stage2-max-epochs"
+                    f" or lowering --stage2-threshold"
                 )
 
             if save_checkpoints:

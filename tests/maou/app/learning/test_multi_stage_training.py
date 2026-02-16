@@ -1,9 +1,13 @@
 """Tests for multi-stage training loop with HeadlessNetwork backbone."""
 
+from pathlib import Path
+
+import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from maou.app.learning.multi_stage_training import (
+    MultiStageTrainingOrchestrator,
     SingleStageTrainingLoop,
     StageConfig,
     TrainingStage,
@@ -384,3 +388,126 @@ class TestSingleStageTrainingLoopWithHandProjection:
         assert result.epochs_trained >= 1
         assert isinstance(result.achieved_accuracy, float)
         assert isinstance(result.final_loss, float)
+
+
+class TestThresholdErrorMessages:
+    """Threshold未達時のエラーメッセージフォーマットを検証するテスト．"""
+
+    def _make_orchestrator(
+        self,
+        tmp_path: Path,
+    ) -> MultiStageTrainingOrchestrator:
+        """テスト用のオーケストレーターを作成する．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        return MultiStageTrainingOrchestrator(
+            backbone=backbone,
+            device=torch.device("cpu"),
+            model_dir=tmp_path / "checkpoints",
+        )
+
+    def _make_stage_config(
+        self,
+        stage: TrainingStage,
+        threshold: float = 0.99,
+    ) -> StageConfig:
+        """テスト用のStageConfigを作成する．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        if stage == TrainingStage.REACHABLE_SQUARES:
+            head = ReachableSquaresHead(
+                input_dim=backbone.embedding_dim
+            )
+            target_dim = 81
+        else:
+            head = LegalMovesHead(
+                input_dim=backbone.embedding_dim
+            )
+            from maou.domain.move.label import MOVE_LABELS_NUM
+
+            target_dim = MOVE_LABELS_NUM
+
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=target_dim
+        )
+        return StageConfig(
+            stage=stage,
+            max_epochs=1,
+            accuracy_threshold=threshold,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            optimizer=torch.optim.Adam(
+                list(backbone.parameters())
+                + list(head.parameters()),
+                lr=1e-3,
+            ),
+        )
+
+    def test_stage1_error_message_format(
+        self, tmp_path: Path
+    ) -> None:
+        """Stage 1 threshold未達時のエラーメッセージに必要な情報が含まれることを検証する．"""
+        orchestrator = self._make_orchestrator(tmp_path)
+        config = self._make_stage_config(
+            TrainingStage.REACHABLE_SQUARES,
+            threshold=0.99,
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Stage 1 failed to meet accuracy threshold",
+        ) as exc_info:
+            orchestrator.run_all_stages(
+                stage1_config=config,
+                save_checkpoints=False,
+            )
+
+        msg = str(exc_info.value)
+        assert "after" in msg and "epochs" in msg
+        assert "achieved:" in msg
+        assert "required:" in msg
+        assert "of target)" in msg
+        assert "--stage1-max-epochs" in msg
+        assert "--stage1-threshold" in msg
+
+    def test_stage2_error_message_format(
+        self, tmp_path: Path
+    ) -> None:
+        """Stage 2 threshold未達時のエラーメッセージに必要な情報が含まれることを検証する．"""
+        orchestrator = self._make_orchestrator(tmp_path)
+        stage1_config = self._make_stage_config(
+            TrainingStage.REACHABLE_SQUARES,
+            threshold=0.0,
+        )
+        stage2_config = self._make_stage_config(
+            TrainingStage.LEGAL_MOVES,
+            threshold=0.99,
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Stage 2 failed to meet accuracy threshold",
+        ) as exc_info:
+            orchestrator.run_all_stages(
+                stage1_config=stage1_config,
+                stage2_config=stage2_config,
+                save_checkpoints=False,
+            )
+
+        msg = str(exc_info.value)
+        assert "after" in msg and "epochs" in msg
+        assert "achieved:" in msg
+        assert "required:" in msg
+        assert "of target)" in msg
+        assert "--stage2-max-epochs" in msg
+        assert "--stage2-threshold" in msg
