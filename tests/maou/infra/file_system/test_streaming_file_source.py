@@ -444,3 +444,59 @@ class TestScanRowCountStreamFormat:
         with open(path, "wb") as f:
             df.write_ipc_stream(f)
         assert _scan_row_count(path) == 10000
+
+
+class TestLazyInitialization:
+    """StreamingFileSource遅延初期化のテスト."""
+
+    def test_init_does_not_scan(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """__init__直後は行数スキャンが実行されていない."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        # _row_counts がNoneであることを確認（スキャン未実行）
+        assert source._row_counts is None
+        assert source._total_rows is None
+
+    def test_total_rows_triggers_scan(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """total_rowsアクセス時にスキャンが実行される."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        # total_rowsアクセスでスキャンがトリガーされる
+        rows = source.total_rows
+        assert rows == 10
+        assert source._row_counts is not None
+        assert source._total_rows == 10
+
+    def test_no_rescan_on_second_access(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """2回目のtotal_rowsアクセスで再スキャンされない."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        _ = source.total_rows
+        row_counts_ref = source._row_counts
+        _ = source.total_rows  # 2回目
+        # 同じオブジェクト参照であること（再スキャンされていない）
+        assert source._row_counts is row_counts_ref

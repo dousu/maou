@@ -70,8 +70,8 @@ class StreamingFileSource:
     ) -> None:
         """ストリーミングデータソースを初期化する．
 
-        初期化時に各ファイルの行数のみをスキャンし，``total_rows`` を計算する．
-        ファイルの内容はイテレーション時まで読み込まない．
+        初期化時にはファイルパスとローダーの設定のみを行い，
+        行数スキャンは ``total_rows`` の初回アクセス時まで遅延する．
 
         Args:
             file_paths: featherファイルパスのリスト
@@ -99,19 +99,14 @@ class StreamingFileSource:
         self._loader = _FEATHER_LOADERS[array_type]
         self._converter = _COLUMNAR_CONVERTERS[array_type]
 
-        # 行数スキャンのみ実行(ファイル内容はメモリに保持しない)
-        self._total_rows = 0
-        self._row_counts: list[int] = []
-        for fp in self._file_paths:
-            row_count = _scan_row_count(fp)
-            self._row_counts.append(row_count)
-            self._total_rows += row_count
+        # 行数スキャンは遅延実行(total_rows初回アクセス時)
+        self._total_rows: int | None = None
+        self._row_counts: list[int] | None = None
 
         logger.info(
-            "StreamingFileSource initialized: "
-            "%d files, %d total rows, array_type=%s",
+            "StreamingFileSource initialized (lazy): "
+            "%d files, array_type=%s",
             len(self._file_paths),
-            self._total_rows,
             array_type,
         )
 
@@ -120,10 +115,43 @@ class StreamingFileSource:
         """ファイルパスのリスト(シャッフル・worker分割用に公開)."""
         return list(self._file_paths)
 
+    def _ensure_row_counts(self) -> None:
+        """行数スキャンを実行する(未実行の場合のみ)．
+
+        初回呼び出し時に全ファイルの行数をスキャンし，
+        ``_total_rows`` と ``_row_counts`` を設定する．
+        2回目以降の呼び出しでは何もしない．
+        """
+        if self._row_counts is not None:
+            return
+
+        self._total_rows = 0
+        self._row_counts = []
+        for fp in self._file_paths:
+            row_count = _scan_row_count(fp)
+            self._row_counts.append(row_count)
+            self._total_rows += row_count
+
+        logger.info(
+            "StreamingFileSource scanned: "
+            "%d files, %d total rows",
+            len(self._file_paths),
+            self._total_rows,
+        )
+
     @property
     def total_rows(self) -> int:
-        """全ファイルの合計行数."""
+        """全ファイルの合計行数(初回アクセス時にスキャン実行)."""
+        self._ensure_row_counts()
+        assert self._total_rows is not None  # noqa: S101
         return self._total_rows
+
+    @property
+    def row_counts(self) -> list[int]:
+        """各ファイルの行数リスト(初回アクセス時にスキャン実行)."""
+        self._ensure_row_counts()
+        assert self._row_counts is not None  # noqa: S101
+        return list(self._row_counts)
 
     def iter_files_columnar(
         self,
