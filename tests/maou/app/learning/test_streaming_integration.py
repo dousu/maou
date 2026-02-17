@@ -122,6 +122,29 @@ class FakeStage1Source:
                 ),
             )
 
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        """Yield columnar batches only for files whose path is in *file_paths*."""
+        rng = np.random.default_rng(456)
+        target_set = set(str(fp) for fp in file_paths)
+        for fp in self._file_paths:
+            n = self._rows_per_file
+            batch = ColumnarBatch(
+                board_positions=rng.integers(
+                    0, 30, size=(n, 9, 9), dtype=np.uint8
+                ),
+                pieces_in_hand=rng.integers(
+                    0, 5, size=(n, 14), dtype=np.uint8
+                ),
+                reachable_squares=rng.integers(
+                    0, 2, size=(n, 9, 9), dtype=np.uint8
+                ),
+            )
+            if str(fp) in target_set:
+                yield batch
+
 
 # ============================================================================
 # LearningOption streaming fields
@@ -583,6 +606,36 @@ class TestInterfaceStreamingStages:
                         dtype=np.uint8,
                     ),
                 )
+
+            def iter_files_columnar_subset(
+                self,
+                file_paths: list[Path],
+            ) -> Generator[ColumnarBatch, None, None]:
+                """Yield columnar batches only for files in *file_paths*."""
+                rng = np.random.default_rng(789)
+                target_set = set(str(fp) for fp in file_paths)
+                for fp in self._file_paths:
+                    if str(fp) in target_set:
+                        yield ColumnarBatch(
+                            board_positions=rng.integers(
+                                0,
+                                30,
+                                size=(8, 9, 9),
+                                dtype=np.uint8,
+                            ),
+                            pieces_in_hand=rng.integers(
+                                0,
+                                5,
+                                size=(8, 14),
+                                dtype=np.uint8,
+                            ),
+                            legal_moves_label=rng.integers(
+                                0,
+                                2,
+                                size=(8, MOVE_LABELS_NUM),
+                                dtype=np.uint8,
+                            ),
+                        )
 
         source = FakeStage2Source()
         device = torch.device("cpu")
