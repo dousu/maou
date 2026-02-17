@@ -36,10 +36,13 @@ from maou.interface.pretrain import (
 )
 @click.option(
     "--input-cache-mode",
-    type=click.Choice(["mmap", "memory"], case_sensitive=False),
-    default="mmap",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
+    required=False,
     show_default=True,
-    help="Cache strategy for local inputs (default: mmap).",
 )
 @click.option(
     "--config-path",
@@ -163,6 +166,17 @@ def pretrain(
     forward_chunk_size: Optional[int],
 ) -> None:
     """CLI entry point for masked autoencoder pretraining."""
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        input_cache_mode = "file"
+
     app_logger.info(
         "Invoking masked autoencoder pretraining command."
     )

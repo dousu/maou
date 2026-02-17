@@ -20,7 +20,7 @@
 | `--input-path PATH` | ✅ | Folder containing `.npz`/`.npy` artifacts from the preprocessing pipeline. The CLI walks recursively and aborts when no files are found.【F:src/maou/infra/console/pretrain_cli.py†L16-L66】 |
 | `--input-format {preprocess,hcpe}` | default `preprocess` | Selects how `FileDataSourceSpliter` parses the files and informs the interface so HCPE-specific defaults can apply.【F:src/maou/infra/console/pretrain_cli.py†L21-L83】【F:src/maou/interface/pretrain.py†L13-L38】 |
 | `--input-file-packed/--no-input-file-packed` | default `--no-input-file-packed` | Flags whether local shards were bit-packed. Passed directly to `FileDataSource`.【F:src/maou/infra/console/pretrain_cli.py†L22-L66】 |
-| `--input-cache-mode {mmap,memory}` | default `mmap` | Chooses how the on-disk arrays are cached (memory-mapped or copied). Value is lower-cased before reaching the datasource builder.【F:src/maou/infra/console/pretrain_cli.py†L31-L70】 |
+| `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/pretrain_cli.py†L37-L44】 |
 | `--config-path FILE` | optional | JSON/TOML file whose fields override CLI hyperparameters (excluding the datasource). Consumed later by `_apply_config_overrides`.【F:src/maou/infra/console/pretrain_cli.py†L34-L83】【F:src/maou/app/learning/masked_autoencoder.py†L259-L325】 |
 | `--output-path FILE` | optional | Destination for the serialized encoder `state_dict`. Defaults to `masked_autoencoder_state.pt` in the current directory.【F:src/maou/infra/console/pretrain_cli.py†L34-L99】【F:src/maou/app/learning/masked_autoencoder.py†L342-L356】 |
 

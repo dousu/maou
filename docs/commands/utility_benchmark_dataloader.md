@@ -21,6 +21,7 @@
 | `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Supports worker counts (`--input-max-workers`), bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional sampling ratios. Requires the corresponding optional extras.【F:src/maou/infra/console/utility.py†L306-L374】 |
 | `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Unsupported strings raise `ValueError`.【F:src/maou/infra/console/utility.py†L217-L247】【F:src/maou/interface/utility_interface.py†L50-L79】 |
 | BigQuery cache knobs (`--input-batch-size`, `--input-max-cached-bytes`, `--input-local-cache`, `--input-local-cache-dir`, `--input-clustering-key`, `--input-partitioning-key-date`) | optional | Forwarded directly to the datasource constructors to mimic production ingestion pressure.【F:src/maou/infra/console/utility.py†L57-L205】 |
+| `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/utility.py†L72-L78】 |
 
 Only **one** remote provider can be enabled at a time; the CLI counts enabled
 flags and aborts when multiple cloud inputs are selected.【F:src/maou/infra/console/utility.py†L230-L247】

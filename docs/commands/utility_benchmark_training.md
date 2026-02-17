@@ -22,6 +22,7 @@
 | `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | provider-specific | Downloads tensors via `GCSDataSource`/`S3DataSource` splitters. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional sampling ratios; requires the respective optional extras.【F:src/maou/infra/console/utility.py†L869-L951】 |
 | `--input-format {hcpe,preprocess}` | required | Determines transforms and informs the interface `datasource_type`. Any other value raises `ValueError`.【F:src/maou/infra/console/utility.py†L520-L550】【F:src/maou/interface/utility_interface.py†L213-L216】 |
 | BigQuery cache knobs (`--input-batch-size`, `--input-max-cached-bytes`, `--input-clustering-key`, `--input-partitioning-key-date`, `--input-local-cache`, `--input-local-cache-dir`) | optional | Forwarded untouched to mimic production ingestion behavior while benchmarking.【F:src/maou/infra/console/utility.py†L824-L848】 |
+| `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/utility.py†L469-L475】 |
 
 Only one datasource may be active at a time; the CLI raises when multiple cloud
 inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】

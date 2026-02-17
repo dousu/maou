@@ -70,9 +70,11 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--input-cache-mode",
-    type=click.Choice(["mmap", "memory"], case_sensitive=False),
-    help="Cache strategy for local inputs (default: mmap).",
-    default="mmap",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
     required=False,
     show_default=True,
 )
@@ -198,7 +200,7 @@ def benchmark_dataloader(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
-    input_cache_mode: FileDataSource.CacheMode,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -218,6 +220,17 @@ def benchmark_dataloader(
     sample_ratio: Optional[float],
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        input_cache_mode = "file"
+
     # Validate input_format early
     if input_format not in ("hcpe", "preprocess"):
         raise ValueError(
@@ -467,9 +480,11 @@ def benchmark_dataloader(
 )
 @click.option(
     "--input-cache-mode",
-    type=click.Choice(["mmap", "memory"], case_sensitive=False),
-    help="Cache strategy for local inputs (default: mmap).",
-    default="mmap",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
     required=False,
     show_default=True,
 )
@@ -768,7 +783,7 @@ def benchmark_training(
     input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
-    input_cache_mode: FileDataSource.CacheMode,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -810,6 +825,17 @@ def benchmark_training(
     enable_resource_monitoring: Optional[bool],
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        input_cache_mode = "file"
+
     # Validate input_format early
     if input_format not in ("hcpe", "preprocess"):
         raise ValueError(

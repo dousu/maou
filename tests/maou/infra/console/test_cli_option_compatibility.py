@@ -6,6 +6,8 @@ benchmark-trainingコマンドでも全て使えることを確認する．
 
 from __future__ import annotations
 
+import types
+
 import click
 import pytest
 
@@ -257,3 +259,130 @@ def test_option_consistency_documentation() -> None:
         print("\nbenchmark-trainingのみ:")
         for opt in benchmark_only:
             print(f"  --{opt}")
+
+
+def _find_option(
+    command: click.Command, option_name: str
+) -> click.Option | None:
+    """Clickコマンドから指定名のオプションを検索する．
+
+    Args:
+        command: 検索対象のClickコマンドオブジェクト
+        option_name: 検索するオプション名（例: "--input-cache-mode"）
+
+    Returns:
+        見つかったオプション，見つからない場合はNone
+    """
+    for param in command.params:
+        if (
+            isinstance(param, click.Option)
+            and option_name in param.opts
+        ):
+            return param
+    return None
+
+
+# ------------------------------------------------------------------
+# --input-cache-mode の一貫性テスト
+# ------------------------------------------------------------------
+
+
+# テスト対象コマンドの遅延取得（pretrain_cli の import を分離）
+def _get_input_cache_mode_commands() -> list[
+    tuple[str, click.Command]
+]:
+    """--input-cache-mode を持つ全コマンドを取得する．"""
+    import maou.infra.console.pretrain_cli as pretrain_cli
+
+    return [
+        ("learn-model", learn_model.learn_model),
+        ("benchmark-dataloader", utility.benchmark_dataloader),
+        ("benchmark-training", utility.benchmark_training),
+        ("pretrain", pretrain_cli.pretrain),
+    ]
+
+
+def _get_input_cache_mode_commands_with_modules() -> list[
+    tuple[str, click.Command, types.ModuleType]
+]:
+    """--input-cache-mode を持つ全コマンドとそのモジュールを取得する．
+
+    デコレータで包まれたコールバックからモジュールを特定できないため，
+    コマンドとモジュールの対応を明示的に定義する．
+    """
+    import maou.infra.console.pretrain_cli as pretrain_cli
+
+    return [
+        ("learn-model", learn_model.learn_model, learn_model),
+        (
+            "benchmark-dataloader",
+            utility.benchmark_dataloader,
+            utility,
+        ),
+        (
+            "benchmark-training",
+            utility.benchmark_training,
+            utility,
+        ),
+        ("pretrain", pretrain_cli.pretrain, pretrain_cli),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _get_input_cache_mode_commands(),
+    ids=[c[0] for c in _get_input_cache_mode_commands()],
+)
+def test_input_cache_mode_choices_consistency(
+    name: str, command: click.Command
+) -> None:
+    """全コマンドの--input-cache-modeがfile, memory, mmapを受け付けることを確認する．"""
+    option = _find_option(command, "--input-cache-mode")
+    assert option is not None, (
+        f"{name} に --input-cache-mode オプションがありません"
+    )
+    assert isinstance(option.type, click.Choice)
+    choices = set(option.type.choices)
+    assert choices == {"file", "memory", "mmap"}, (
+        f"{name} の --input-cache-mode choices が不正です: {choices}"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _get_input_cache_mode_commands(),
+    ids=[c[0] for c in _get_input_cache_mode_commands()],
+)
+def test_input_cache_mode_default_is_file(
+    name: str, command: click.Command
+) -> None:
+    """全コマンドの--input-cache-modeのデフォルト値がfileであることを確認する．"""
+    option = _find_option(command, "--input-cache-mode")
+    assert option is not None
+    assert option.default == "file", (
+        f"{name} の --input-cache-mode default が 'file' ではありません: {option.default!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,command,module",
+    _get_input_cache_mode_commands_with_modules(),
+    ids=[
+        c[0]
+        for c in _get_input_cache_mode_commands_with_modules()
+    ],
+)
+def test_input_cache_mode_has_mmap_deprecation(
+    name: str,
+    command: click.Command,
+    module: types.ModuleType,
+) -> None:
+    """全コマンドにmmap→file変換のdeprecation warningが含まれることを確認する．"""
+    import inspect
+
+    # command.callback はデコレータ(handle_exception)で包まれており，
+    # inspect.getmodule が common.py を返すため，モジュールを明示的に渡す
+    module_source = inspect.getsource(module)
+    assert "'mmap' is deprecated" in module_source, (
+        f"{name} のモジュールに mmap→file の deprecation warning ロジックがありません"
+    )
