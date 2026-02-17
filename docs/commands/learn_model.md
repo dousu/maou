@@ -31,6 +31,39 @@
 active. The CLI counts enabled sources and raises when more than one set of
 flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 
+#### `--input-cache-mode` 使い分けガイド
+
+##### 動作の仕組み
+
+両モードとも**全データをメモリに載せる**点は共通である．`file`は「ディスクから逐次読み込み」ではない．
+
+- **`file`モード(デフォルト)**: 各ファイルのデータを個別の配列としてメモリに保持する．アクセス時に`np.searchsorted()`でO(log F)（F=ファイル数）のファイル境界探索を行い，該当ファイルの配列から直接取得する．【F:src/maou/infra/file_system/file_data_source.py†L573-L611】
+- **`memory`モード**: 初期化時に全ファイルのデータを1つの配列に結合(`np.concatenate`)してメモリに保持する．O(1)の直接インデックスアクセスが可能．結合完了後に個別配列は解放されるため，定常状態のメモリ使用量は`file`と同等になる．【F:src/maou/infra/file_system/file_data_source.py†L446-L480】
+
+**注意**: `memory`モードの初期化時には，個別配列と結合後の配列が同時に存在するため，一時的にデータサイズの最大**2倍**のメモリを消費する．この2倍ピークは一時的であり，結合完了後に個別配列が解放される．
+
+##### 比較表
+
+| 観点 | `file` | `memory` |
+|------|--------|----------|
+| メモリ使用量 | データサイズ分 | 初期化時に最大2倍（定常状態はデータサイズ分） |
+| アクセス速度 | O(log F) `searchsorted`（F=ファイル数） | O(1) 直接アクセス |
+| 実効速度差 | ベースライン | <0.2%改善（実用上無視可能） |
+| OOMリスク | 低 | 高（データ>32GBで警告を出力）【F:src/maou/infra/file_system/file_data_source.py†L457-L464】 |
+| Stage 1/2 | そのまま使用 | `file`に強制変更【F:src/maou/infra/console/learn_model.py†L986-L992】 |
+
+##### 推奨ガイドライン
+
+- **大半のケース → `file`（デフォルト）推奨．** 速度差が<0.2%と実用上無視できるため，OOMリスクの低い`file`が安全な選択である．`memory`モードを選択しても速度改善は<0.2%であるため，メモリに十分な余裕がある場合でも積極的に`memory`を選ぶ理由は薄い．
+- `memory`の使用目安: データサイズが搭載メモリの1/4以下の場合（32GB警告閾値の半分=16GB相当が目安）．
+- ADR-003のベースライン構成（`file`モード）がパフォーマンス検証で最適と確認されている．`__getitems__()`によるバッチ一括取得も検証されたが却下（115%の性能劣化）されており，現状の`file`モードによる個別アクセス(`__getitem__` + PyTorch DataLoaderのC++バッチング)が既に最速の実用構成である．詳細は[ADR-003](../adr-003-training-performance-optimization-attempts.md)を参照．
+
+**注意**: 実際のプロセスメモリにはモデルパラメータ，DataLoaderワーカー，CUDAコンテキスト等も含まれるため，データサイズだけでメモリの余裕を判断できない．
+
+##### `mmap`モードについて
+
+`mmap`は**deprecated**である．CLIで指定した場合は`file`に自動変換される．【F:src/maou/infra/console/learn_model.py†L689-L698】
+
 ### Training hardware and performance knobs
 
 | Flag | Default | Description |
