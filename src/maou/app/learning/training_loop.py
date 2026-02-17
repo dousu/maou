@@ -104,7 +104,6 @@ class TrainingLoop:
             force_cuda_sync
             if force_cuda_sync is not None
             else enable_profiling
-            or self.logger.isEnabledFor(logging.DEBUG)
         )
         self._cuda_sync_enabled = resolved_sync_state
 

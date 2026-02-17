@@ -272,7 +272,12 @@ S3DataSource: S3DataSourceType | None = getattr(
 @click.option(
     "--batch-size",
     type=int,
-    help="Training batch size.",
+    help=(
+        "Training batch size."
+        " Recommended by GPU memory: 512 (8GB), 1024 (16GB),"
+        " 2048 (24GB), 4096 (40-80GB)."
+        " Use --gradient-accumulation-steps to simulate larger batches."
+    ),
     required=False,
 )
 @click.option(
@@ -291,7 +296,7 @@ S3DataSource: S3DataSourceType | None = getattr(
 @click.option(
     "--prefetch-factor",
     type=int,
-    help="Number of batches loaded in advance by each worker (default: 2).",
+    help="Number of batches loaded in advance by each worker (default: 4).",
     required=False,
 )
 @click.option(

@@ -309,9 +309,9 @@ def learn(
     if pin_memory is None:
         pin_memory = False
 
-    # prefetch_factor設定 (ストリーミング時はデフォルト4，それ以外は2)
+    # prefetch_factor設定 (デフォルト4)
     if prefetch_factor is None:
-        prefetch_factor = 4 if streaming else 2
+        prefetch_factor = 4
     elif prefetch_factor <= 0:
         raise ValueError(
             f"prefetch_factor must be positive, got {prefetch_factor}"
