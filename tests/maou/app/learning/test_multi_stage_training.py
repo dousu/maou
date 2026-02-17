@@ -81,11 +81,7 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -124,11 +120,7 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -186,11 +178,7 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -229,11 +217,7 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -249,6 +233,52 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
         assert result.epochs_trained >= 1
         assert isinstance(result.achieved_accuracy, float)
         assert isinstance(result.final_loss, float)
+
+    def test_optimizer_includes_all_parameters(self) -> None:
+        """SingleStageTrainingLoopがbackbone+headの全パラメータでoptimizerを生成する．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        # optimizerのパラメータ数 = backbone + head のパラメータ数
+        optimizer_param_count = sum(
+            1
+            for group in loop.optimizer.param_groups
+            for _ in group["params"]
+        )
+        expected_param_count = len(
+            list(backbone.parameters())
+        ) + len(list(head.parameters()))
+        assert optimizer_param_count == expected_param_count
+
+        # learning_rateが正しく設定されている
+        assert loop.optimizer.param_groups[0]["lr"] == 1e-3
 
 
 class TestSingleStageTrainingLoopWithHandProjection:
@@ -278,11 +308,7 @@ class TestSingleStageTrainingLoopWithHandProjection:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -323,11 +349,7 @@ class TestSingleStageTrainingLoopWithHandProjection:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -368,11 +390,7 @@ class TestSingleStageTrainingLoopWithHandProjection:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
         loop = SingleStageTrainingLoop(
@@ -417,22 +435,9 @@ class TestThresholdErrorMessages:
         threshold: float = 0.99,
     ) -> StageConfig:
         """テスト用のStageConfigを作成する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
         if stage == TrainingStage.REACHABLE_SQUARES:
-            head = ReachableSquaresHead(
-                input_dim=backbone.embedding_dim
-            )
             target_dim = 81
         else:
-            head = LegalMovesHead(
-                input_dim=backbone.embedding_dim
-            )
             from maou.domain.move.label import MOVE_LABELS_NUM
 
             target_dim = MOVE_LABELS_NUM
@@ -446,11 +451,7 @@ class TestThresholdErrorMessages:
             accuracy_threshold=threshold,
             dataloader=dataloader,
             loss_fn=torch.nn.BCEWithLogitsLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=1e-3,
-            ),
+            learning_rate=1e-3,
         )
 
     def test_stage1_error_message_format(

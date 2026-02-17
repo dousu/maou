@@ -395,11 +395,7 @@ class TestSingleStageSetEpoch:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=ReachableSquaresLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=0.001,
-            ),
+            learning_rate=0.001,
         )
 
         loop = SingleStageTrainingLoop(
@@ -459,11 +455,7 @@ class TestSingleStageSetEpoch:
             accuracy_threshold=0.99,
             dataloader=dataloader,
             loss_fn=ReachableSquaresLoss(),
-            optimizer=torch.optim.Adam(
-                list(backbone.parameters())
-                + list(head.parameters()),
-                lr=0.001,
-            ),
+            learning_rate=0.001,
         )
 
         loop = SingleStageTrainingLoop(

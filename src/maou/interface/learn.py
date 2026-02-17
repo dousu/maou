@@ -567,10 +567,6 @@ def _run_stage1(
         accuracy_threshold=threshold,
         dataloader=dataloader,
         loss_fn=ReachableSquaresLoss(),
-        optimizer=torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        ),
         learning_rate=learning_rate,
     )
 
@@ -631,10 +627,6 @@ def _run_stage2(
         accuracy_threshold=threshold,
         dataloader=dataloader,
         loss_fn=LegalMovesLoss(),
-        optimizer=torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        ),
         learning_rate=learning_rate,
     )
 
@@ -693,10 +685,6 @@ def _run_stage1_streaming(
         accuracy_threshold=threshold,
         dataloader=dataloader,
         loss_fn=ReachableSquaresLoss(),
-        optimizer=torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        ),
         learning_rate=learning_rate,
     )
 
@@ -755,10 +743,6 @@ def _run_stage2_streaming(
         accuracy_threshold=threshold,
         dataloader=dataloader,
         loss_fn=LegalMovesLoss(),
-        optimizer=torch.optim.Adam(
-            list(backbone.parameters()),
-            lr=learning_rate,
-        ),
         learning_rate=learning_rate,
     )
 
