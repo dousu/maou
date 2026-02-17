@@ -254,31 +254,51 @@ def test_file_data_source_progress_logging(
         tmp_path, file_count=2, rows_per_file=3
     )
 
-    # maouロガーはpropagate=Falseのため，caplogで捕捉するにはpropagateを有効化する
+    # maouロガーはpropagate=Falseかつlevel=INFOのため，
+    # DEBUGログ捕捉にはpropagateとlevelの両方を一時変更する
     maou_logger = logging.getLogger("maou")
     original_propagate = maou_logger.propagate
+    original_level = maou_logger.level
     maou_logger.propagate = True
+    maou_logger.setLevel(logging.DEBUG)
     try:
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.DEBUG):
             FileDataSource(
                 file_paths=file_paths,
                 array_type="hcpe",
             )
     finally:
         maou_logger.propagate = original_propagate
+        maou_logger.setLevel(original_level)
 
-    messages = caplog.text
+    # INFOレベルのログ検証
+    info_messages = [
+        r.message
+        for r in caplog.records
+        if r.levelno >= logging.INFO
+    ]
+    info_text = "\n".join(info_messages)
 
     # 初期化開始ログ
-    assert "Initializing FileManager with 2 files" in messages
-    # ファイルロードログ (各ファイル)
-    assert "Loading file 1/2" in messages
-    assert "Loading file 2/2" in messages
-    assert "Loaded" in messages
-    # 変換ログ
-    assert "Converted to numpy array" in messages
+    assert "Initializing FileManager with 2 files" in info_text
+    # マイルストーン進捗ログ (n=2, interval=1なので全ファイル表示)
+    assert "Progress: 1/2 files" in info_text
+    assert "Progress: 2/2 files" in info_text
     # サマリーログ
     assert (
         "FileManager initialized: 6 rows from 2 files"
-        in messages
+        in info_text
     )
+
+    # DEBUGレベルのログ検証
+    debug_messages = [
+        r.message
+        for r in caplog.records
+        if r.levelno == logging.DEBUG
+    ]
+    debug_text = "\n".join(debug_messages)
+
+    assert "Loading file 1/2" in debug_text
+    assert "Loading file 2/2" in debug_text
+    assert "Loaded" in debug_text
+    assert "Converted to numpy array" in debug_text

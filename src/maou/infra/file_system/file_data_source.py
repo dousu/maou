@@ -312,6 +312,14 @@ class FileDataSource(
 
             # ファイル単位で読み込み→変換→DF解放を逐次実行
             lengths = []
+            n = len(self.file_paths)
+            if n <= 10:
+                milestone_interval = 1
+            elif n <= 100:
+                milestone_interval = max(1, n // 10)
+            else:
+                milestone_interval = max(25, n // 10)
+            cumulative_rows = 0
             for idx, file_path in enumerate(self.file_paths):
                 try:
                     if file_path.suffix != ".feather":
@@ -324,7 +332,7 @@ class FileDataSource(
                             file_path.stat().st_size
                             / (1024 * 1024)
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             "Loading file %d/%d: %s (%.1f MB)",
                             idx + 1,
                             len(self.file_paths),
@@ -336,7 +344,7 @@ class FileDataSource(
                         df = self._load_feather(file_path)
                         array_length = len(df)
                         t_load = time.perf_counter()
-                        self.logger.info(
+                        self.logger.debug(
                             "Loaded %d rows in %.1fs",
                             array_length,
                             t_load - t0,
@@ -351,7 +359,7 @@ class FileDataSource(
                             )
                             del df
                             t_convert = time.perf_counter()
-                            self.logger.info(
+                            self.logger.debug(
                                 "Converted to columnar batch in %.1fs",
                                 t_convert - t_load,
                             )
@@ -371,7 +379,7 @@ class FileDataSource(
                             numpy_array = numpy_converter(df)
                             del df
                             t_convert = time.perf_counter()
-                            self.logger.info(
+                            self.logger.debug(
                                 "Converted to numpy array in %.1fs",
                                 t_convert - t_load,
                             )
@@ -387,6 +395,22 @@ class FileDataSource(
                                 )
                             )
                         lengths.append(array_length)
+                        cumulative_rows += array_length
+
+                        if (
+                            idx % milestone_interval == 0
+                            or idx == n - 1
+                        ):
+                            self.logger.info(
+                                "Progress: %d/%d files, "
+                                "%d rows loaded, "
+                                "%.1fs elapsed",
+                                idx + 1,
+                                n,
+                                cumulative_rows,
+                                time.perf_counter()
+                                - t_init_start,
+                            )
 
                     except ImportError as e:
                         raise ImportError(
