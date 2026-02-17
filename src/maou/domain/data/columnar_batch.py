@@ -54,6 +54,85 @@ class ColumnarBatch:
         """バッチ内のレコード数を返す."""
         return int(self.board_positions.shape[0])
 
+    @staticmethod
+    def concatenate(
+        batches: list[ColumnarBatch],
+    ) -> ColumnarBatch:
+        """複数のColumnarBatchをフィールドごとに連結する．
+
+        structured arrayの全体concatenateと異なり，各フィールドを独立して
+        concatenateするため，ピークメモリ使用量を抑えられる．
+
+        Args:
+            batches: 連結するColumnarBatchのリスト
+
+        Returns:
+            連結されたColumnarBatch
+
+        Raises:
+            ValueError: batchesが空の場合
+        """
+        if not batches:
+            raise ValueError(
+                "Cannot concatenate empty list of batches"
+            )
+
+        board_positions = np.concatenate(
+            [b.board_positions for b in batches]
+        )
+        pieces_in_hand = np.concatenate(
+            [b.pieces_in_hand for b in batches]
+        )
+
+        move_label: np.ndarray | None = None
+        if batches[0].move_label is not None:
+            move_label = np.concatenate(
+                [
+                    b.move_label
+                    for b in batches
+                    if b.move_label is not None
+                ]
+            )
+
+        result_value: np.ndarray | None = None
+        if batches[0].result_value is not None:
+            result_value = np.concatenate(
+                [
+                    b.result_value
+                    for b in batches
+                    if b.result_value is not None
+                ]
+            )
+
+        reachable_squares: np.ndarray | None = None
+        if batches[0].reachable_squares is not None:
+            reachable_squares = np.concatenate(
+                [
+                    b.reachable_squares
+                    for b in batches
+                    if b.reachable_squares is not None
+                ]
+            )
+
+        legal_moves_label: np.ndarray | None = None
+        if batches[0].legal_moves_label is not None:
+            legal_moves_label = np.concatenate(
+                [
+                    b.legal_moves_label
+                    for b in batches
+                    if b.legal_moves_label is not None
+                ]
+            )
+
+        return ColumnarBatch(
+            board_positions=board_positions,
+            pieces_in_hand=pieces_in_hand,
+            move_label=move_label,
+            result_value=result_value,
+            reachable_squares=reachable_squares,
+            legal_moves_label=legal_moves_label,
+        )
+
     def slice(self, indices: np.ndarray) -> ColumnarBatch:
         """fancy indexingによるバッチスライス．
 

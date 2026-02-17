@@ -368,11 +368,28 @@ class Learning:
         )
 
         # Create streaming dataloaders
+        # ストリーミングモードではworker数をファイル数に制限
+        n_train_files = len(
+            config.streaming_train_source.file_paths
+        )
+        effective_workers = config.dataloader_workers
+        if effective_workers > 0:
+            effective_workers = min(
+                effective_workers, n_train_files
+            )
+            if effective_workers < config.dataloader_workers:
+                self.logger.info(
+                    "Clamped dataloader_workers from %d to %d "
+                    "(limited by training file count)",
+                    config.dataloader_workers,
+                    effective_workers,
+                )
+
         training_loader, validation_loader = (
             DataLoaderFactory.create_streaming_dataloaders(
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
-                dataloader_workers=config.dataloader_workers,
+                dataloader_workers=effective_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
             )

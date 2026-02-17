@@ -15,6 +15,7 @@ from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
     StreamingStage1Dataset,
     StreamingStage2Dataset,
+    _resolve_worker_files,
 )
 from maou.domain.data.columnar_batch import ColumnarBatch
 from maou.domain.move.label import MOVE_LABELS_NUM
@@ -45,24 +46,41 @@ class FakePreprocessingSource:
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
 
+    def _make_batch(
+        self, rng: np.random.Generator
+    ) -> ColumnarBatch:
+        n = self._rows_per_file
+        return ColumnarBatch(
+            board_positions=rng.integers(
+                0, 30, size=(n, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=rng.integers(
+                0, 5, size=(n, 14), dtype=np.uint8
+            ),
+            move_label=rng.random((n, MOVE_LABELS_NUM)).astype(
+                np.float16
+            ),
+            result_value=rng.random(n).astype(np.float16),
+        )
+
     def iter_files_columnar(
         self,
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(123)
         for i in range(self._n_files):
-            n = self._rows_per_file
-            yield ColumnarBatch(
-                board_positions=rng.integers(
-                    0, 30, size=(n, 9, 9), dtype=np.uint8
-                ),
-                pieces_in_hand=rng.integers(
-                    0, 5, size=(n, 14), dtype=np.uint8
-                ),
-                move_label=rng.random(
-                    (n, MOVE_LABELS_NUM)
-                ).astype(np.float16),
-                result_value=rng.random(n).astype(np.float16),
-            )
+            yield self._make_batch(rng)
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        rng = np.random.default_rng(123)
+        all_paths = self._file_paths
+        target_set = set(str(fp) for fp in file_paths)
+        for fp in all_paths:
+            batch = self._make_batch(rng)
+            if str(fp) in target_set:
+                yield batch
 
 
 class FakeStage1Source:
@@ -86,23 +104,40 @@ class FakeStage1Source:
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
 
+    def _make_batch(
+        self, rng: np.random.Generator
+    ) -> ColumnarBatch:
+        n = self._rows_per_file
+        return ColumnarBatch(
+            board_positions=rng.integers(
+                0, 30, size=(n, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=rng.integers(
+                0, 5, size=(n, 14), dtype=np.uint8
+            ),
+            reachable_squares=rng.integers(
+                0, 2, size=(n, 9, 9), dtype=np.uint8
+            ),
+        )
+
     def iter_files_columnar(
         self,
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(456)
         for i in range(self._n_files):
-            n = self._rows_per_file
-            yield ColumnarBatch(
-                board_positions=rng.integers(
-                    0, 30, size=(n, 9, 9), dtype=np.uint8
-                ),
-                pieces_in_hand=rng.integers(
-                    0, 5, size=(n, 14), dtype=np.uint8
-                ),
-                reachable_squares=rng.integers(
-                    0, 2, size=(n, 9, 9), dtype=np.uint8
-                ),
-            )
+            yield self._make_batch(rng)
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        rng = np.random.default_rng(456)
+        all_paths = self._file_paths
+        target_set = set(str(fp) for fp in file_paths)
+        for fp in all_paths:
+            batch = self._make_batch(rng)
+            if str(fp) in target_set:
+                yield batch
 
 
 class FakeStage2Source:
@@ -126,26 +161,43 @@ class FakeStage2Source:
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
 
+    def _make_batch(
+        self, rng: np.random.Generator
+    ) -> ColumnarBatch:
+        n = self._rows_per_file
+        return ColumnarBatch(
+            board_positions=rng.integers(
+                0, 30, size=(n, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=rng.integers(
+                0, 5, size=(n, 14), dtype=np.uint8
+            ),
+            legal_moves_label=rng.integers(
+                0,
+                2,
+                size=(n, MOVE_LABELS_NUM),
+                dtype=np.uint8,
+            ),
+        )
+
     def iter_files_columnar(
         self,
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(789)
         for i in range(self._n_files):
-            n = self._rows_per_file
-            yield ColumnarBatch(
-                board_positions=rng.integers(
-                    0, 30, size=(n, 9, 9), dtype=np.uint8
-                ),
-                pieces_in_hand=rng.integers(
-                    0, 5, size=(n, 14), dtype=np.uint8
-                ),
-                legal_moves_label=rng.integers(
-                    0,
-                    2,
-                    size=(n, MOVE_LABELS_NUM),
-                    dtype=np.uint8,
-                ),
-            )
+            yield self._make_batch(rng)
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        rng = np.random.default_rng(789)
+        all_paths = self._file_paths
+        target_set = set(str(fp) for fp in file_paths)
+        for fp in all_paths:
+            batch = self._make_batch(rng)
+            if str(fp) in target_set:
+                yield batch
 
 
 # ============================================================================
@@ -617,3 +669,211 @@ class TestEmptySource:
             seed=42,
         )
         assert list(dataset) == []
+
+
+# ============================================================================
+# Worker file splitting tests (Phase 1)
+# ============================================================================
+
+
+class TestResolveWorkerFiles:
+    """Test _resolve_worker_files helper function."""
+
+    def test_no_worker_returns_all_files(self) -> None:
+        """Without worker context, all files are returned."""
+        source = FakePreprocessingSource(
+            n_files=4, rows_per_file=10
+        )
+        # No worker context (main process)
+        files = _resolve_worker_files(
+            source, shuffle=False, epoch_seed=0
+        )
+        assert len(files) == 4
+
+    def test_shuffle_changes_file_order(self) -> None:
+        """Shuffle reorders files."""
+        source = FakePreprocessingSource(
+            n_files=10, rows_per_file=5
+        )
+        files_epoch0 = _resolve_worker_files(
+            source, shuffle=True, epoch_seed=0
+        )
+        files_epoch1 = _resolve_worker_files(
+            source, shuffle=True, epoch_seed=1
+        )
+        # Different epoch seeds should produce different orders
+        assert files_epoch0 != files_epoch1
+
+    def test_shuffle_preserves_all_files(self) -> None:
+        """Shuffle preserves the complete set of files."""
+        source = FakePreprocessingSource(
+            n_files=6, rows_per_file=5
+        )
+        original = source.file_paths
+        shuffled = _resolve_worker_files(
+            source, shuffle=True, epoch_seed=42
+        )
+        assert set(str(f) for f in shuffled) == set(
+            str(f) for f in original
+        )
+
+    def test_no_shuffle_preserves_order(self) -> None:
+        """Without shuffle, file order is preserved."""
+        source = FakePreprocessingSource(
+            n_files=4, rows_per_file=5
+        )
+        files = _resolve_worker_files(
+            source, shuffle=False, epoch_seed=0
+        )
+        assert files == source.file_paths
+
+    def test_total_records_across_workers_sum_correctly(
+        self,
+    ) -> None:
+        """Total records from all datasets equal source total (no worker context)."""
+        source = FakePreprocessingSource(
+            n_files=4, rows_per_file=10
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+        total = sum(batch[0][0].shape[0] for batch in dataset)
+        assert total == 40
+
+
+class TestWorkerFileSplitIntegration:
+    """Integration tests for worker file splitting with datasets."""
+
+    def test_kif_single_worker_all_data(self) -> None:
+        """Single-worker mode processes all files."""
+        source = FakePreprocessingSource(
+            n_files=3, rows_per_file=10
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+        total = sum(batch[0][0].shape[0] for batch in dataset)
+        assert total == 30
+
+    def test_stage1_single_worker_all_data(self) -> None:
+        """Stage1 single-worker mode processes all files."""
+        source = FakeStage1Source(n_files=3, rows_per_file=8)
+        dataset = StreamingStage1Dataset(
+            streaming_source=source,
+            batch_size=4,
+            shuffle=False,
+            seed=42,
+        )
+        total = sum(batch[0][0].shape[0] for batch in dataset)
+        assert total == 24
+
+    def test_stage2_single_worker_all_data(self) -> None:
+        """Stage2 single-worker mode processes all files."""
+        source = FakeStage2Source(n_files=3, rows_per_file=6)
+        dataset = StreamingStage2Dataset(
+            streaming_source=source,
+            batch_size=3,
+            shuffle=False,
+            seed=42,
+        )
+        total = sum(batch[0][0].shape[0] for batch in dataset)
+        assert total == 18
+
+
+# ============================================================================
+# Zero-copy optimization tests (Phase 2)
+# ============================================================================
+
+
+class TestZeroCopyOptimization:
+    """Test that .copy() removal doesn't affect correctness."""
+
+    def test_kif_batch_values_correct(self) -> None:
+        """Kif batch tensor values are correct without .copy()."""
+        source = FakePreprocessingSource(
+            n_files=1, rows_per_file=5
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+        batches = list(dataset)
+        features, targets = batches[0]
+        board, pieces = features
+        move_label, result_value, _ = targets
+
+        # Values should be non-trivial (not all zeros)
+        assert board.sum() > 0
+        assert pieces.sum() > 0
+        assert move_label.sum() > 0
+        assert result_value.sum() > 0
+
+    def test_stage1_batch_values_correct(self) -> None:
+        """Stage1 batch tensor values are correct without .copy()."""
+        source = FakeStage1Source(n_files=1, rows_per_file=5)
+        dataset = StreamingStage1Dataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+        batches = list(dataset)
+        features, target = batches[0]
+        board, pieces = features
+
+        assert board.sum() > 0
+        assert pieces.sum() > 0
+        assert target.sum() > 0
+
+    def test_stage2_batch_values_correct(self) -> None:
+        """Stage2 batch tensor values are correct without .copy()."""
+        source = FakeStage2Source(n_files=1, rows_per_file=5)
+        dataset = StreamingStage2Dataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+        batches = list(dataset)
+        features, target = batches[0]
+        board, pieces = features
+
+        assert board.sum() > 0
+        assert pieces.sum() > 0
+        assert target.sum() > 0
+
+    def test_columnar_batch_slice_is_contiguous(
+        self,
+    ) -> None:
+        """ColumnarBatch.slice() returns C-contiguous arrays."""
+        rng = np.random.default_rng(42)
+        batch = ColumnarBatch(
+            board_positions=rng.integers(
+                0, 30, size=(10, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=rng.integers(
+                0, 5, size=(10, 14), dtype=np.uint8
+            ),
+            move_label=rng.random((10, MOVE_LABELS_NUM)).astype(
+                np.float16
+            ),
+            result_value=rng.random(10).astype(np.float16),
+        )
+
+        indices = np.array([3, 1, 7, 5])
+        sliced = batch.slice(indices)
+
+        assert sliced.board_positions.flags["C_CONTIGUOUS"]
+        assert sliced.pieces_in_hand.flags["C_CONTIGUOUS"]
+        assert sliced.move_label is not None
+        assert sliced.move_label.flags["C_CONTIGUOUS"]
+        assert sliced.result_value is not None
+        assert sliced.result_value.flags["C_CONTIGUOUS"]

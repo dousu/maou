@@ -42,7 +42,7 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--batch-size INT` | interface default `1000` | Minibatch size shared by train/test loaders; must be positive.【F:src/maou/interface/learn.py†L142-L156】 |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
-| `--prefetch-factor INT` | interface default `2` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
+| `--prefetch-factor INT` | interface default `2` (streaming: `4`) | Number of batches prefetched per worker; must be positive. Streaming mode defaults to `4` for higher GPU utilization.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--cache-transforms/--no-cache-transforms` | format-dependent | HCPE datasources cache transforms by default; preprocessed tensors do not. Flags override the heuristic.【F:src/maou/interface/learn.py†L226-L239】 |
 | `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`.【F:src/maou/interface/learn.py†L132-L140】 |
 | `--tensorboard-histogram-frequency INT` + `--tensorboard-histogram-module PATTERN` | default `0` | Controls how often histogram dumps occur and which parameter names qualify.【F:src/maou/interface/learn.py†L233-L244】 |

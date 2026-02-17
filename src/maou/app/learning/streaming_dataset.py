@@ -25,6 +25,59 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Worker file resolution helper
+# ============================================================================
+
+
+def _resolve_worker_files(
+    source: StreamingDataSource,
+    shuffle: bool,
+    epoch_seed: int,
+) -> list[Path]:
+    """workerファイル分割 + ファイル順シャッフルを行う共通関数．
+
+    マルチワーカー環境でファイルをラウンドロビン方式で各workerに分配し，
+    エポックごとにファイル順をシャッフルすることでworker間の分布偏りを防ぐ．
+
+    Args:
+        source: ストリーミングデータソース
+        shuffle: ファイル順をシャッフルするか
+        epoch_seed: エポックシード(シャッフル用)
+
+    Returns:
+        このworkerが担当するファイルパスのリスト
+    """
+    file_paths = source.file_paths
+
+    # エポックごとのファイル順シャッフル
+    if shuffle:
+        file_rng = np.random.default_rng(epoch_seed + 1_000_000)
+        file_indices = file_rng.permutation(len(file_paths))
+        file_paths = [file_paths[i] for i in file_indices]
+
+    # worker分割
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is not None:
+        n_workers = worker_info.num_workers
+        worker_id = worker_info.id
+        if len(file_paths) < n_workers:
+            logger.warning(
+                "Number of files (%d) < num_workers (%d). "
+                "Some workers will be idle.",
+                len(file_paths),
+                n_workers,
+            )
+        # ラウンドロビン分配
+        file_paths = [
+            fp
+            for i, fp in enumerate(file_paths)
+            if i % n_workers == worker_id
+        ]
+
+    return file_paths
+
+
+# ============================================================================
 # StreamingDataSource Protocol
 # ============================================================================
 
@@ -52,6 +105,13 @@ class StreamingDataSource(Protocol):
         self,
     ) -> Generator[ColumnarBatch, None, None]:
         """ファイル単位で ``ColumnarBatch`` をyieldする."""
+        ...
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        """指定されたファイルパスのみを読み込み ``ColumnarBatch`` をyieldする."""
         ...
 
 
@@ -117,6 +177,9 @@ class StreamingKifDataset(IterableDataset):
         persistent_workers=True対応のため，worker_info.seedを使用して
         エポックごとに異なるRNGを生成する．
 
+        workerファイル分割により，マルチワーカー環境では各workerが
+        担当ファイルのみを読み込む．
+
         Yields:
             ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor))
         """
@@ -129,9 +192,18 @@ class StreamingKifDataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
+        # workerファイル分割 + ファイル順シャッフル
+        worker_files = _resolve_worker_files(
+            self._source,
+            shuffle=self._shuffle,
+            epoch_seed=epoch_seed,
+        )
+
         for (
             columnar_batch
-        ) in self._source.iter_files_columnar():
+        ) in self._source.iter_files_columnar_subset(
+            worker_files
+        ):
             yield from _yield_kif_batches(
                 columnar_batch,
                 batch_size=self._batch_size,
@@ -194,6 +266,9 @@ class StreamingStage1Dataset(IterableDataset):
     ]:
         """バッチ単位でStage1用Tensorをyield．
 
+        workerファイル分割により，マルチワーカー環境では各workerが
+        担当ファイルのみを読み込む．
+
         Yields:
             ((board_tensor, pieces_tensor), reachable_squares_tensor)
         """
@@ -205,9 +280,18 @@ class StreamingStage1Dataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
+        # workerファイル分割 + ファイル順シャッフル
+        worker_files = _resolve_worker_files(
+            self._source,
+            shuffle=self._shuffle,
+            epoch_seed=epoch_seed,
+        )
+
         for (
             columnar_batch
-        ) in self._source.iter_files_columnar():
+        ) in self._source.iter_files_columnar_subset(
+            worker_files
+        ):
             yield from _yield_stage1_batches(
                 columnar_batch,
                 batch_size=self._batch_size,
@@ -270,6 +354,9 @@ class StreamingStage2Dataset(IterableDataset):
     ]:
         """バッチ単位でStage2用Tensorをyield．
 
+        workerファイル分割により，マルチワーカー環境では各workerが
+        担当ファイルのみを読み込む．
+
         Yields:
             ((board_tensor, pieces_tensor), legal_moves_tensor)
         """
@@ -281,9 +368,18 @@ class StreamingStage2Dataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
+        # workerファイル分割 + ファイル順シャッフル
+        worker_files = _resolve_worker_files(
+            self._source,
+            shuffle=self._shuffle,
+            epoch_seed=epoch_seed,
+        )
+
         for (
             columnar_batch
-        ) in self._source.iter_files_columnar():
+        ) in self._source.iter_files_columnar_subset(
+            worker_files
+        ):
             yield from _yield_stage2_batches(
                 columnar_batch,
                 batch_size=self._batch_size,
@@ -343,21 +439,15 @@ def _yield_kif_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(
-            batch.board_positions.copy()
-        )
-        pieces_tensor = torch.from_numpy(
-            batch.pieces_in_hand.copy()
-        )
+        board_tensor = torch.from_numpy(batch.board_positions)
+        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
 
         assert batch.move_label is not None
         assert batch.result_value is not None
 
-        move_label_tensor = torch.from_numpy(
-            batch.move_label.copy()
-        )
+        move_label_tensor = torch.from_numpy(batch.move_label)
         result_value_tensor = (
-            torch.from_numpy(batch.result_value.copy())
+            torch.from_numpy(batch.result_value)
             .float()
             .unsqueeze(1)
         )  # (N,) → (N, 1)
@@ -414,17 +504,13 @@ def _yield_stage1_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(
-            batch.board_positions.copy()
-        )
-        pieces_tensor = torch.from_numpy(
-            batch.pieces_in_hand.copy()
-        )
+        board_tensor = torch.from_numpy(batch.board_positions)
+        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
 
         assert batch.reachable_squares is not None
         # (N, 9, 9) → (N, 81) and convert to float for BCE
         reachable_tensor = (
-            torch.from_numpy(batch.reachable_squares.copy())
+            torch.from_numpy(batch.reachable_squares)
             .flatten(start_dim=1)
             .float()
         )
@@ -474,16 +560,12 @@ def _yield_stage2_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(
-            batch.board_positions.copy()
-        )
-        pieces_tensor = torch.from_numpy(
-            batch.pieces_in_hand.copy()
-        )
+        board_tensor = torch.from_numpy(batch.board_positions)
+        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
 
         assert batch.legal_moves_label is not None
         legal_moves_tensor = torch.from_numpy(
-            batch.legal_moves_label.copy()
+            batch.legal_moves_label
         ).float()
 
         yield (

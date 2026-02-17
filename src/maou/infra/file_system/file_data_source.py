@@ -18,11 +18,20 @@ import numpy as np
 
 import maou.interface.learn as learn
 import maou.interface.preprocess as preprocess
+from maou.domain.data.columnar_batch import (
+    ColumnarBatch,
+    convert_preprocessing_df_to_columnar,
+    convert_stage1_df_to_columnar,
+    convert_stage2_df_to_columnar,
+)
 from maou.domain.data.schema import (
     convert_hcpe_df_to_numpy,
     convert_preprocessing_df_to_numpy,
     convert_stage1_df_to_numpy,
     convert_stage2_df_to_numpy,
+    get_preprocessing_dtype,
+    get_stage1_dtype,
+    get_stage2_dtype,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +48,20 @@ _DF_TO_NUMPY_CONVERTERS: dict[
     "preprocessing": convert_preprocessing_df_to_numpy,
     "stage1": convert_stage1_df_to_numpy,
     "stage2": convert_stage2_df_to_numpy,
+}
+
+_DF_TO_COLUMNAR_CONVERTERS: dict[
+    str, Callable[["pl.DataFrame"], ColumnarBatch]
+] = {
+    "preprocessing": convert_preprocessing_df_to_columnar,
+    "stage1": convert_stage1_df_to_columnar,
+    "stage2": convert_stage2_df_to_columnar,
+}
+
+_STRUCTURED_DTYPES: dict[str, Callable[[], np.dtype]] = {
+    "preprocessing": get_preprocessing_dtype,
+    "stage1": get_stage1_dtype,
+    "stage2": get_stage2_dtype,
 }
 
 
@@ -201,6 +224,9 @@ class FileDataSource(
             cached_array: Optional[
                 Any
             ]  # Can be DataFrame or ndarray
+            cached_columnar: Optional[ColumnarBatch] = (
+                None  # SOA representation
+            )
 
         def __init__(
             self,
@@ -241,22 +267,43 @@ class FileDataSource(
             )
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
-            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一numpy配列
+            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
             self._concatenated_array: Optional[np.ndarray] = (
                 None
             )
+            self._concatenated_columnar: Optional[
+                ColumnarBatch
+            ] = None
 
-            # DF→numpy変換関数を先に取得
-            converter = _DF_TO_NUMPY_CONVERTERS.get(
+            # SOA化対応: preprocessing/stage1/stage2はColumnarBatchで保持
+            self._use_columnar = (
+                array_type in _DF_TO_COLUMNAR_CONVERTERS
+            )
+            # structured array再構築用のdtype
+            self._structured_dtype: Optional[np.dtype] = None
+            if self._use_columnar:
+                dtype_factory = _STRUCTURED_DTYPES.get(
+                    array_type
+                )
+                if dtype_factory is not None:
+                    self._structured_dtype = dtype_factory()
+
+            # DF→変換関数を先に取得
+            columnar_converter = _DF_TO_COLUMNAR_CONVERTERS.get(
                 self.array_type
             )
-            if converter is None:
+            numpy_converter = _DF_TO_NUMPY_CONVERTERS.get(
+                self.array_type
+            )
+            if (
+                not self._use_columnar
+                and numpy_converter is None
+            ):
                 raise ValueError(
                     f"Unknown array_type: {self.array_type}"
                 )
 
             # ファイル単位で読み込み→変換→DF解放を逐次実行
-            # (ピークメモリ = 累積numpy + 1ファイル分DF + 変換中間配列)
             lengths = []
             for file_path in self.file_paths:
                 try:
@@ -266,27 +313,43 @@ class FileDataSource(
                         )
 
                     try:
-                        # 1. ファイル読み込み (Polars DataFrame)
                         df = self._load_feather(file_path)
                         array_length = len(df)
 
-                        # 2. DF→numpy変換 (この間のみDFとnumpyが共存)
-                        numpy_array = converter(df)
-
-                        # 3. DF参照を即座に切る (GC対象にする)
-                        del df
-
-                        # 4. numpy arrayのみ保持
-                        self._file_entries.append(
-                            FileDataSource.FileManager._FileEntry(
-                                name=file_path.name,
-                                path=file_path,
-                                dtype=numpy_array.dtype,
-                                length=array_length,
-                                memmap=None,
-                                cached_array=numpy_array,
+                        if (
+                            self._use_columnar
+                            and columnar_converter is not None
+                        ):
+                            columnar_batch = columnar_converter(
+                                df
                             )
-                        )
+                            del df
+
+                            self._file_entries.append(
+                                FileDataSource.FileManager._FileEntry(
+                                    name=file_path.name,
+                                    path=file_path,
+                                    dtype=np.dtype("uint8"),
+                                    length=array_length,
+                                    memmap=None,
+                                    cached_array=None,
+                                    cached_columnar=columnar_batch,
+                                )
+                            )
+                        elif numpy_converter is not None:
+                            numpy_array = numpy_converter(df)
+                            del df
+
+                            self._file_entries.append(
+                                FileDataSource.FileManager._FileEntry(
+                                    name=file_path.name,
+                                    path=file_path,
+                                    dtype=numpy_array.dtype,
+                                    length=array_length,
+                                    memmap=None,
+                                    cached_array=numpy_array,
+                                )
+                            )
                         lengths.append(array_length)
 
                     except ImportError as e:
@@ -304,45 +367,102 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # cache_mode="memory"の場合、全ファイルを単一numpy配列に結合
+            # cache_mode="memory"の場合、全ファイルを単一配列に結合
             if (
                 self.cache_mode == "memory"
                 and self.total_pages > 1
             ):
-                # メモリ見積もりの警告
-                total_bytes = sum(
-                    entry.cached_array.nbytes
-                    for entry in self._file_entries
-                    if entry.cached_array is not None
-                )
-                estimated_gb = total_bytes / (1024**3)
-                if estimated_gb > 32:
-                    self.logger.warning(
-                        f"cache_mode='memory' with {self.total_rows} rows "
-                        f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
-                        f"Consider using cache_mode='file' instead."
-                    )
-
-                self.logger.info(
-                    f"Concatenating {self.total_pages} numpy arrays "
-                    f"({self.total_rows} records)..."
-                )
-
-                arrays = [
-                    entry.cached_array
-                    for entry in self._file_entries
-                    if entry.cached_array is not None
-                ]
-                self._concatenated_array = np.concatenate(
-                    arrays
-                )
-                # Release individual arrays to save memory
-                for entry in self._file_entries:
-                    entry.cached_array = None
+                if self._use_columnar:
+                    self._concatenate_columnar()
+                else:
+                    self._concatenate_numpy()
 
             self.logger.info(
                 f"File Data {self.total_rows} rows, {self.total_pages} pages"
             )
+
+        def _concatenate_numpy(self) -> None:
+            """structured arrayを単一配列に結合する(hcpe用)."""
+            total_bytes = sum(
+                entry.cached_array.nbytes
+                for entry in self._file_entries
+                if entry.cached_array is not None
+            )
+            estimated_gb = total_bytes / (1024**3)
+            if estimated_gb > 32:
+                self.logger.warning(
+                    f"cache_mode='memory' with {self.total_rows} rows "
+                    f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
+                    f"Consider using cache_mode='file' instead."
+                )
+
+            self.logger.info(
+                f"Concatenating {self.total_pages} numpy arrays "
+                f"({self.total_rows} records)..."
+            )
+
+            arrays = [
+                entry.cached_array
+                for entry in self._file_entries
+                if entry.cached_array is not None
+            ]
+            self._concatenated_array = np.concatenate(arrays)
+            for entry in self._file_entries:
+                entry.cached_array = None
+
+        def _concatenate_columnar(self) -> None:
+            """ColumnarBatchをフィールドごとに連結する(SOA化)."""
+            batches = [
+                entry.cached_columnar
+                for entry in self._file_entries
+                if entry.cached_columnar is not None
+            ]
+
+            total_bytes = sum(
+                b.board_positions.nbytes
+                + b.pieces_in_hand.nbytes
+                + (
+                    b.move_label.nbytes
+                    if b.move_label is not None
+                    else 0
+                )
+                + (
+                    b.result_value.nbytes
+                    if b.result_value is not None
+                    else 0
+                )
+                + (
+                    b.reachable_squares.nbytes
+                    if b.reachable_squares is not None
+                    else 0
+                )
+                + (
+                    b.legal_moves_label.nbytes
+                    if b.legal_moves_label is not None
+                    else 0
+                )
+                for b in batches
+            )
+            estimated_gb = total_bytes / (1024**3)
+            if estimated_gb > 32:
+                self.logger.warning(
+                    f"cache_mode='memory' with {self.total_rows} rows "
+                    f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
+                    f"Consider using cache_mode='file' instead."
+                )
+
+            self.logger.info(
+                "Concatenating %d columnar batches "
+                "(%d records) field-by-field...",
+                self.total_pages,
+                self.total_rows,
+            )
+
+            self._concatenated_columnar = (
+                ColumnarBatch.concatenate(batches)
+            )
+            for entry in self._file_entries:
+                entry.cached_columnar = None
 
         def _load_feather(
             self, file_path: Path
@@ -384,19 +504,101 @@ class FileDataSource(
             Returns:
                 numpy structured array (single record)
             """
+            # 従来のstructured array path (hcpe)
             if self._concatenated_array is not None:
                 return self._concatenated_array[idx]
+
+            # SOA化 path (preprocessing/stage1/stage2)
+            if self._concatenated_columnar is not None:
+                return self._columnar_to_structured_record(
+                    self._concatenated_columnar, idx
+                )
 
             file_idx = np.searchsorted(
                 self.cum_lengths[1:], idx, side="right"
             )
             local_idx = idx - self.cum_lengths[file_idx]
             entry = self._file_entries[file_idx]
-            if entry.cached_array is None:
-                raise RuntimeError(
-                    f"Array not loaded for file {entry.name}"
+
+            if self._use_columnar:
+                if entry.cached_columnar is None:
+                    raise RuntimeError(
+                        f"Columnar batch not loaded for file {entry.name}"
+                    )
+                return self._columnar_to_structured_record(
+                    entry.cached_columnar, local_idx
                 )
-            return entry.cached_array[local_idx]
+            else:
+                if entry.cached_array is None:
+                    raise RuntimeError(
+                        f"Array not loaded for file {entry.name}"
+                    )
+                return entry.cached_array[local_idx]
+
+        def _columnar_to_structured_record(
+            self, batch: ColumnarBatch, idx: int
+        ) -> np.ndarray:
+            """ColumnarBatchの1レコードをstructured arrayに変換する．
+
+            DataSource ABCの互換性を維持するため，外部I/Fは変更せず
+            内部SOA表現からstructured arrayを再構築する．
+
+            Args:
+                batch: ColumnarBatch
+                idx: レコードインデックス
+
+            Returns:
+                numpy structured array (single record)
+            """
+            assert self._structured_dtype is not None
+            assert self._structured_dtype.names is not None
+            dtype_names = self._structured_dtype.names
+            record = np.empty(1, dtype=self._structured_dtype)
+
+            # id field (preprocessing/stage1/stage2 dtypeに存在)
+            if "id" in dtype_names:
+                record["id"][0] = (
+                    0  # ColumnarBatchにはid情報がない
+                )
+
+            record["boardIdPositions"][0] = (
+                batch.board_positions[idx]
+            )
+            record["piecesInHand"][0] = batch.pieces_in_hand[
+                idx
+            ]
+
+            if (
+                batch.move_label is not None
+                and "moveLabel" in dtype_names
+            ):
+                record["moveLabel"][0] = batch.move_label[idx]
+
+            if (
+                batch.result_value is not None
+                and "resultValue" in dtype_names
+            ):
+                record["resultValue"][0] = batch.result_value[
+                    idx
+                ]
+
+            if (
+                batch.reachable_squares is not None
+                and "reachableSquares" in dtype_names
+            ):
+                record["reachableSquares"][0] = (
+                    batch.reachable_squares[idx]
+                )
+
+            if (
+                batch.legal_moves_label is not None
+                and "legalMovesLabel" in dtype_names
+            ):
+                record["legalMovesLabel"][0] = (
+                    batch.legal_moves_label[idx]
+                )
+
+            return record[0]
 
         def get_items(
             self, indices: list[int]
@@ -419,20 +621,96 @@ class FileDataSource(
             """Iterate over batches as numpy structured arrays．
 
             Data is already converted to numpy at initialization time．
+            SOA化されたデータはstructured arrayに変換して返す．
 
             Yields:
                 Tuple of (filename, numpy array)
             """
-            # If concatenated, yield as single batch
+            # If concatenated (hcpe path), yield as single batch
             if self._concatenated_array is not None:
                 yield ("concatenated", self._concatenated_array)
                 return
 
-            # Iterate over individual files (already numpy arrays)
+            # If SOA concatenated, convert to structured array
+            if self._concatenated_columnar is not None:
+                yield (
+                    "concatenated",
+                    self._columnar_batch_to_structured_array(
+                        self._concatenated_columnar
+                    ),
+                )
+                return
+
+            # Iterate over individual files
             for entry in self._file_entries:
-                if entry.cached_array is None:
-                    continue
-                yield (entry.name, entry.cached_array)
+                if self._use_columnar:
+                    if entry.cached_columnar is None:
+                        continue
+                    yield (
+                        entry.name,
+                        self._columnar_batch_to_structured_array(
+                            entry.cached_columnar
+                        ),
+                    )
+                else:
+                    if entry.cached_array is None:
+                        continue
+                    yield (entry.name, entry.cached_array)
+
+        def _columnar_batch_to_structured_array(
+            self, batch: ColumnarBatch
+        ) -> np.ndarray:
+            """ColumnarBatch全体をstructured arrayに変換する．
+
+            iter_batchesなど，structured array形式が必要な箇所で使用．
+
+            Args:
+                batch: ColumnarBatch
+
+            Returns:
+                numpy structured array
+            """
+            assert self._structured_dtype is not None
+            assert self._structured_dtype.names is not None
+            dtype_names = self._structured_dtype.names
+            n = len(batch)
+            array = np.empty(n, dtype=self._structured_dtype)
+
+            if "id" in dtype_names:
+                array["id"] = np.zeros(n, dtype=np.uint64)
+
+            array["boardIdPositions"] = batch.board_positions
+            array["piecesInHand"] = batch.pieces_in_hand
+
+            if (
+                batch.move_label is not None
+                and "moveLabel" in dtype_names
+            ):
+                array["moveLabel"] = batch.move_label
+
+            if (
+                batch.result_value is not None
+                and "resultValue" in dtype_names
+            ):
+                array["resultValue"] = batch.result_value
+
+            if (
+                batch.reachable_squares is not None
+                and "reachableSquares" in dtype_names
+            ):
+                array["reachableSquares"] = (
+                    batch.reachable_squares
+                )
+
+            if (
+                batch.legal_moves_label is not None
+                and "legalMovesLabel" in dtype_names
+            ):
+                array["legalMovesLabel"] = (
+                    batch.legal_moves_label
+                )
+
+            return array
 
     def __init__(
         self,

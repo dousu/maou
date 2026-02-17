@@ -145,6 +145,26 @@ class StreamingFileSource:
             del df  # DF参照を即座に切る(GC対象にする)
             yield batch
 
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        """指定されたファイルパスのみを読み込み ``ColumnarBatch`` をyieldする．
+
+        workerファイル分割時に，各workerが担当ファイルのみを読み込むために使用する．
+
+        Args:
+            file_paths: 読み込むファイルパスのリスト
+
+        Yields:
+            1ファイル分のデータを含む ``ColumnarBatch``
+        """
+        for fp in file_paths:
+            df = self._loader(fp)
+            batch = self._converter(df)
+            del df  # DF参照を即座に切る(GC対象にする)
+            yield batch
+
 
 def _scan_row_count(file_path: Path) -> int:
     """featherファイルの行数のみを取得する．
