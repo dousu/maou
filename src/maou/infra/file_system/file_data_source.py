@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -246,6 +247,12 @@ class FileDataSource(
                 cache_mode (CacheMode): キャッシュモード ("file" または "memory")
             """
             self.file_paths = file_paths
+            self.logger.info(
+                "Initializing FileManager with %d files, array_type=%s",
+                len(file_paths),
+                array_type,
+            )
+            t_init_start = time.perf_counter()
             self.array_type = array_type
             self.bit_pack = bit_pack
             normalized_cache_mode = cast(
@@ -305,7 +312,7 @@ class FileDataSource(
 
             # ファイル単位で読み込み→変換→DF解放を逐次実行
             lengths = []
-            for file_path in self.file_paths:
+            for idx, file_path in enumerate(self.file_paths):
                 try:
                     if file_path.suffix != ".feather":
                         raise ValueError(
@@ -313,8 +320,27 @@ class FileDataSource(
                         )
 
                     try:
+                        file_size_mb = (
+                            file_path.stat().st_size
+                            / (1024 * 1024)
+                        )
+                        self.logger.info(
+                            "Loading file %d/%d: %s (%.1f MB)",
+                            idx + 1,
+                            len(self.file_paths),
+                            file_path.name,
+                            file_size_mb,
+                        )
+
+                        t0 = time.perf_counter()
                         df = self._load_feather(file_path)
                         array_length = len(df)
+                        t_load = time.perf_counter()
+                        self.logger.info(
+                            "Loaded %d rows in %.1fs",
+                            array_length,
+                            t_load - t0,
+                        )
 
                         if (
                             self._use_columnar
@@ -324,6 +350,11 @@ class FileDataSource(
                                 df
                             )
                             del df
+                            t_convert = time.perf_counter()
+                            self.logger.info(
+                                "Converted to columnar batch in %.1fs",
+                                t_convert - t_load,
+                            )
 
                             self._file_entries.append(
                                 FileDataSource.FileManager._FileEntry(
@@ -339,6 +370,11 @@ class FileDataSource(
                         elif numpy_converter is not None:
                             numpy_array = numpy_converter(df)
                             del df
+                            t_convert = time.perf_counter()
+                            self.logger.info(
+                                "Converted to numpy array in %.1fs",
+                                t_convert - t_load,
+                            )
 
                             self._file_entries.append(
                                 FileDataSource.FileManager._FileEntry(
@@ -378,7 +414,10 @@ class FileDataSource(
                     self._concatenate_numpy()
 
             self.logger.info(
-                f"File Data {self.total_rows} rows, {self.total_pages} pages"
+                "FileManager initialized: %d rows from %d files in %.1fs",
+                self.total_rows,
+                self.total_pages,
+                time.perf_counter() - t_init_start,
             )
 
         def _concatenate_numpy(self) -> None:
@@ -397,16 +436,23 @@ class FileDataSource(
                 )
 
             self.logger.info(
-                f"Concatenating {self.total_pages} numpy arrays "
-                f"({self.total_rows} records)..."
+                "Concatenating %d numpy arrays (%d records)...",
+                self.total_pages,
+                self.total_rows,
             )
 
+            t0 = time.perf_counter()
             arrays = [
                 entry.cached_array
                 for entry in self._file_entries
                 if entry.cached_array is not None
             ]
             self._concatenated_array = np.concatenate(arrays)
+            elapsed = time.perf_counter() - t0
+            self.logger.info(
+                "Concatenation completed in %.1fs",
+                elapsed,
+            )
             for entry in self._file_entries:
                 entry.cached_array = None
 
@@ -458,8 +504,14 @@ class FileDataSource(
                 self.total_rows,
             )
 
+            t0 = time.perf_counter()
             self._concatenated_columnar = (
                 ColumnarBatch.concatenate(batches)
+            )
+            elapsed = time.perf_counter() - t0
+            self.logger.info(
+                "Concatenation completed in %.1fs",
+                elapsed,
             )
             for entry in self._file_entries:
                 entry.cached_columnar = None

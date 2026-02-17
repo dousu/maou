@@ -4,6 +4,7 @@ Updated to use DataFrame-based I/O with Polars.
 Simplified from original numpy-based tests to focus on DataFrame functionality.
 """
 
+import logging
 from pathlib import Path
 
 import polars as pl
@@ -243,3 +244,41 @@ def test_file_data_source_nonexistent_file(
         )
         # Try to access data
         len(datasource)
+
+
+def test_file_data_source_progress_logging(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that FileManager emits progress logs during initialization."""
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=2, rows_per_file=3
+    )
+
+    # maouロガーはpropagate=Falseのため，caplogで捕捉するにはpropagateを有効化する
+    maou_logger = logging.getLogger("maou")
+    original_propagate = maou_logger.propagate
+    maou_logger.propagate = True
+    try:
+        with caplog.at_level(logging.INFO):
+            FileDataSource(
+                file_paths=file_paths,
+                array_type="hcpe",
+            )
+    finally:
+        maou_logger.propagate = original_propagate
+
+    messages = caplog.text
+
+    # 初期化開始ログ
+    assert "Initializing FileManager with 2 files" in messages
+    # ファイルロードログ (各ファイル)
+    assert "Loading file 1/2" in messages
+    assert "Loading file 2/2" in messages
+    assert "Loaded" in messages
+    # 変換ログ
+    assert "Converted to numpy array" in messages
+    # サマリーログ
+    assert (
+        "FileManager initialized: 6 rows from 2 files"
+        in messages
+    )
