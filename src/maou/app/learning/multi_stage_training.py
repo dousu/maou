@@ -12,6 +12,7 @@ accuracy thresholds,with fail-fast error handling if thresholds aren't met.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -194,6 +195,28 @@ class SingleStageTrainingLoop:
         total_correct = 0
         total_samples = 0
 
+        # マイルストーンログの間隔を計算
+        # IterableDataset対応: len()がTypeErrorになる場合がある
+        try:
+            total_batches: int | None = len(
+                self.config.dataloader
+            )
+        except TypeError:
+            total_batches = None
+
+        # 時間ベースフォールバック: 最低30秒間隔でログ出力
+        last_log_time = time.monotonic()
+        _LOG_INTERVAL_SEC = 30.0
+
+        # バッチ数ベースのマイルストーン（既知の場合）
+        if total_batches is not None and total_batches > 0:
+            milestone_interval: int | None = max(
+                1, total_batches // 10
+            )
+        else:
+            milestone_interval = None
+
+        batch_idx = -1
         for batch_idx, (inputs, targets) in enumerate(
             self.config.dataloader
         ):
@@ -250,8 +273,52 @@ class SingleStageTrainingLoop:
 
             total_loss += loss.item()
 
-        avg_loss = total_loss / len(self.config.dataloader)
-        accuracy = total_correct / total_samples
+            # マイルストーンログ出力
+            now = time.monotonic()
+            should_log = False
+
+            if milestone_interval is not None:
+                if (batch_idx + 1) % milestone_interval == 0:
+                    should_log = True
+
+            if (
+                not should_log
+                and (now - last_log_time) >= _LOG_INTERVAL_SEC
+            ):
+                should_log = True
+
+            if should_log:
+                running_loss = total_loss / (batch_idx + 1)
+                running_acc = (
+                    total_correct / total_samples
+                    if total_samples > 0
+                    else 0.0
+                )
+                progress = (
+                    f"{batch_idx + 1}/{total_batches}"
+                    if total_batches is not None
+                    else f"{batch_idx + 1}/?"
+                )
+                self.logger.info(
+                    "Stage %s Epoch %d Batch %s: "
+                    "Loss=%.4f, Accuracy=%.2f%%",
+                    self.config.stage,
+                    epoch_idx + 1,
+                    progress,
+                    running_loss,
+                    running_acc * 100,
+                )
+                last_log_time = now
+
+        # avg_loss計算: IterableDataset対応
+        # batch_idxが-1の場合(空のDataLoader)はゼロ除算を防止
+        num_batches = batch_idx + 1 if batch_idx >= 0 else 1
+        avg_loss = total_loss / num_batches
+        accuracy = (
+            total_correct / total_samples
+            if total_samples > 0
+            else 0.0
+        )
 
         return avg_loss, accuracy
 

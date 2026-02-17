@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import time
 from datetime import date
 
@@ -292,3 +293,95 @@ class TestGenericDataFrameSerialization:
             ValueError, match="Unsupported array_type"
         ):
             load_df_from_bytes(b"dummy", array_type="invalid")  # type: ignore
+
+
+class TestBackwardCompatibility:
+    """Stream形式で保存されたデータの後方互換読み込みテスト．"""
+
+    def test_load_hcpe_from_stream_format(self) -> None:
+        """Stream形式で保存されたHCPEデータを読み込める．"""
+        schema = get_hcpe_polars_schema()
+        data = {
+            "hcp": [b"A" * 32 for _ in range(10)],
+            "eval": [0] * 10,
+            "bestMove16": [0] * 10,
+            "gameResult": [0] * 10,
+            "id": [f"id_{i}" for i in range(10)],
+            "partitioningKey": [
+                date(2025, 12, 25) for _ in range(10)
+            ],
+            "ratings": [[1500, 1500] for _ in range(10)],
+            "endgameStatus": ["Toryo"] * 10,
+            "moves": [100] * 10,
+        }
+        df = pl.DataFrame(data, schema=schema)
+        # Stream形式で保存（旧形式を再現）
+        buffer = io.BytesIO()
+        df.write_ipc_stream(buffer, compression="lz4")
+        stream_bytes = buffer.getvalue()
+        # 新しいload関数で読める
+        loaded = load_hcpe_df_from_bytes(stream_bytes)
+        assert loaded.shape == df.shape
+        assert loaded.columns == df.columns
+
+    def test_load_preprocessing_from_stream_format(
+        self,
+    ) -> None:
+        """Stream形式で保存されたPreprocessingデータを読み込める．"""
+        import numpy as np
+
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        schema = get_preprocessing_polars_schema()
+        data = {
+            "id": list(range(10)),
+            "boardIdPositions": [
+                np.arange(81, dtype=np.uint8)
+                .reshape(9, 9)
+                .tolist()
+                for _ in range(10)
+            ],
+            "piecesInHand": [
+                np.arange(14, dtype=np.uint8).tolist()
+                for _ in range(10)
+            ],
+            "moveLabel": [
+                np.random.rand(MOVE_LABELS_NUM)
+                .astype(np.float32)
+                .tolist()
+                for _ in range(10)
+            ],
+            "resultValue": [0.0] * 10,
+        }
+        df = pl.DataFrame(data, schema=schema)
+        buffer = io.BytesIO()
+        df.write_ipc_stream(buffer, compression="lz4")
+        stream_bytes = buffer.getvalue()
+        loaded = load_preprocessing_df_from_bytes(stream_bytes)
+        assert loaded.shape == df.shape
+
+    def test_file_format_roundtrip(self) -> None:
+        """File形式でのround-tripが正しく動作する．"""
+        schema = get_hcpe_polars_schema()
+        data = {
+            "hcp": [b"A" * 32 for _ in range(10)],
+            "eval": [0] * 10,
+            "bestMove16": [0] * 10,
+            "gameResult": [0] * 10,
+            "id": [f"id_{i}" for i in range(10)],
+            "partitioningKey": [
+                date(2025, 12, 25) for _ in range(10)
+            ],
+            "ratings": [[1500, 1500] for _ in range(10)],
+            "endgameStatus": ["Toryo"] * 10,
+            "moves": [100] * 10,
+        }
+        df = pl.DataFrame(data, schema=schema)
+        saved = save_hcpe_df_to_bytes(df)
+        # File形式であることを確認
+        assert saved[:8] == b"ARROW1\x00\x00", (
+            "Output should be Arrow IPC File format"
+        )
+        loaded = load_hcpe_df_from_bytes(saved)
+        assert loaded.shape == df.shape
+        assert loaded.columns == df.columns

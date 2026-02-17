@@ -22,6 +22,8 @@ from maou.domain.data.schema import (
 from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.file_system.streaming_file_source import (
     StreamingFileSource,
+    _is_arrow_ipc_file_format,
+    _scan_row_count,
 )
 
 # ============================================================================
@@ -386,3 +388,115 @@ class TestIterFilesColumnar:
             np.testing.assert_array_equal(
                 b1.board_positions, b2.board_positions
             )
+
+
+class TestIsArrowIpcFileFormat:
+    """Arrow IPC File/Stream形式判定のテスト."""
+
+    def test_file_format_detection(
+        self, tmp_path: Path
+    ) -> None:
+        """Arrow IPC File形式のファイルがTrueを返す."""
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        path = tmp_path / "file.feather"
+        df.write_ipc(path)
+        assert _is_arrow_ipc_file_format(path) is True
+
+    def test_stream_format_detection(
+        self, tmp_path: Path
+    ) -> None:
+        """Arrow IPC Stream形式のファイルがFalseを返す."""
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        path = tmp_path / "stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _is_arrow_ipc_file_format(path) is False
+
+
+class TestScanRowCountStreamFormat:
+    """_scan_row_countのStream形式フォールバックテスト."""
+
+    def test_file_format_row_count(
+        self, tmp_path: Path
+    ) -> None:
+        """File形式のfeatherファイルで行数を正しく取得できる."""
+        df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        path = tmp_path / "test.feather"
+        df.write_ipc(path)
+        assert _scan_row_count(path) == 3
+
+    def test_stream_format_row_count(
+        self, tmp_path: Path
+    ) -> None:
+        """Stream形式のfeatherファイルで行数を正しく取得できる."""
+        df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        path = tmp_path / "test_stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _scan_row_count(path) == 3
+
+    def test_stream_format_large_data(
+        self, tmp_path: Path
+    ) -> None:
+        """Stream形式の大きめのデータで行数を正しく取得できる."""
+        df = pl.DataFrame({"values": np.random.rand(10000)})
+        path = tmp_path / "large_stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _scan_row_count(path) == 10000
+
+
+class TestLazyInitialization:
+    """StreamingFileSource遅延初期化のテスト."""
+
+    def test_init_does_not_scan(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """__init__直後は行数スキャンが実行されていない."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        # _row_counts がNoneであることを確認（スキャン未実行）
+        assert source._row_counts is None
+        assert source._total_rows is None
+
+    def test_total_rows_triggers_scan(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """total_rowsアクセス時にスキャンが実行される."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        # total_rowsアクセスでスキャンがトリガーされる
+        rows = source.total_rows
+        assert rows == 10
+        assert source._row_counts is not None
+        assert source._total_rows == 10
+
+    def test_no_rescan_on_second_access(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """2回目のtotal_rowsアクセスで再スキャンされない."""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        _ = source.total_rows
+        row_counts_ref = source._row_counts
+        _ = source.total_rows  # 2回目
+        # 同じオブジェクト参照であること（再スキャンされていない）
+        assert source._row_counts is row_counts_ref
