@@ -41,7 +41,8 @@ class StageConfig:
     """Configuration for a single training stage.
 
     This dataclass encapsulates all parameters needed to train one stage,
-    including data,optimization,and stopping criteria.
+    including data,loss function,and stopping criteria.
+    The optimizer is created internally by the training loop using this config.
     """
 
     stage: TrainingStage
@@ -49,8 +50,7 @@ class StageConfig:
     accuracy_threshold: float  # e.g.,0.99 for 99% accuracy
     dataloader: DataLoader
     loss_fn: torch.nn.Module
-    optimizer: torch.optim.Optimizer
-    learning_rate: Optional[float] = None
+    learning_rate: float
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,13 @@ class SingleStageTrainingLoop:
         # Move model and head to device
         self.model.to(device)
         self.head.to(device)
+
+        # Create optimizer with all trainable parameters (backbone + head)
+        self.optimizer = torch.optim.Adam(
+            list(self.model.parameters())
+            + list(self.head.parameters()),
+            lr=self.config.learning_rate,
+        )
 
         # Mixed precision scaler for GPU training
         self.scaler: torch.amp.GradScaler | None
@@ -233,7 +240,7 @@ class SingleStageTrainingLoop:
             targets = targets.to(self.device, non_blocking=True)
 
             # Zero gradients
-            self.config.optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
             # Forward pass with mixed precision
             use_amp = self.device.type == "cuda"
@@ -254,11 +261,11 @@ class SingleStageTrainingLoop:
             # Backward pass
             if self.scaler is not None:
                 self.scaler.scale(loss).backward()
-                self.scaler.step(self.config.optimizer)
+                self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
                 loss.backward()
-                self.config.optimizer.step()
+                self.optimizer.step()
 
             # Compute accuracy (threshold at 0.5 for binary classification)
             with torch.no_grad():
