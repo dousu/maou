@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Callable, Literal
@@ -152,6 +153,7 @@ class StreamingFileSource:
         """指定されたファイルパスのみを読み込み ``ColumnarBatch`` をyieldする．
 
         workerファイル分割時に，各workerが担当ファイルのみを読み込むために使用する．
+        DEBUG レベルでファイル読込・変換のタイミングを出力し，ボトルネック特定に使用する．
 
         Args:
             file_paths: 読み込むファイルパスのリスト
@@ -159,9 +161,28 @@ class StreamingFileSource:
         Yields:
             1ファイル分のデータを含む ``ColumnarBatch``
         """
-        for fp in file_paths:
+        n = len(file_paths)
+        for i, fp in enumerate(file_paths):
+            logger.debug(
+                "Loading file %d/%d: %s", i + 1, n, fp.name
+            )
+            t0 = time.perf_counter()
             df = self._loader(fp)
+            t_load = time.perf_counter() - t0
+            logger.debug(
+                "File loaded: %d rows in %.2fs, converting...",
+                len(df),
+                t_load,
+            )
+            t1 = time.perf_counter()
             batch = self._converter(df)
+            t_conv = time.perf_counter() - t1
+            logger.debug(
+                "Conversion complete: %.2fs (file %d/%d)",
+                t_conv,
+                i + 1,
+                n,
+            )
             del df  # DF参照を即座に切る(GC対象にする)
             yield batch
 
