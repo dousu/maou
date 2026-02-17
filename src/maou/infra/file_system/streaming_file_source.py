@@ -187,11 +187,32 @@ class StreamingFileSource:
             yield batch
 
 
+# Arrow IPC File形式のマジックバイト (先頭8バイト)
+_ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
+
+
+def _is_arrow_ipc_file_format(file_path: Path) -> bool:
+    """ファイルがArrow IPC File形式かどうかを判定する．
+
+    先頭8バイトのマジックバイトで判定する．
+    Stream形式の場合はFalseを返す．
+
+    Args:
+        file_path: 判定するファイルのパス
+
+    Returns:
+        Arrow IPC File形式ならTrue，Stream形式ならFalse
+    """
+    with open(file_path, "rb") as f:
+        header = f.read(8)
+    return header == _ARROW_FILE_MAGIC
+
+
 def _scan_row_count(file_path: Path) -> int:
     """featherファイルの行数のみを取得する．
 
-    Polarsの ``scan_ipc`` + ``collect`` を使用してメタデータから行数を取得する．
-    ファイル全体を読み込まないため高速．
+    Arrow IPC File形式の場合はメタデータから高速に取得する．
+    Stream形式の場合は ``pl.read_ipc_stream`` でDataFrameの行数を取得する．
 
     Args:
         file_path: featherファイルのパス
@@ -199,5 +220,21 @@ def _scan_row_count(file_path: Path) -> int:
     Returns:
         ファイル内の行数
     """
-    lf = pl.scan_ipc(file_path)
-    return lf.select(pl.len()).collect().item()
+    if _is_arrow_ipc_file_format(file_path):
+        # File形式: メタデータのみ読み（高速）
+        lf = pl.scan_ipc(file_path)
+        return lf.select(pl.len()).collect().item()
+    else:
+        # Stream形式: DataFrameの高さを取得
+        # Note: Stream形式ではメタデータのみの読み出しが不可能なため，
+        # 全データを読む必要がある．大規模ファイルではメモリ使用量に注意．
+        logger.warning(
+            "File %s is Arrow IPC Stream format. "
+            "Reading full data for row count "
+            "(consider converting to File format).",
+            file_path,
+        )
+        df = pl.read_ipc_stream(file_path)
+        row_count = df.height
+        del df
+        return row_count

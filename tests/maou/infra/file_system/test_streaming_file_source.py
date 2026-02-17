@@ -22,6 +22,8 @@ from maou.domain.data.schema import (
 from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.file_system.streaming_file_source import (
     StreamingFileSource,
+    _is_arrow_ipc_file_format,
+    _scan_row_count,
 )
 
 # ============================================================================
@@ -386,3 +388,59 @@ class TestIterFilesColumnar:
             np.testing.assert_array_equal(
                 b1.board_positions, b2.board_positions
             )
+
+
+class TestIsArrowIpcFileFormat:
+    """Arrow IPC File/Stream形式判定のテスト."""
+
+    def test_file_format_detection(
+        self, tmp_path: Path
+    ) -> None:
+        """Arrow IPC File形式のファイルがTrueを返す."""
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        path = tmp_path / "file.feather"
+        df.write_ipc(path)
+        assert _is_arrow_ipc_file_format(path) is True
+
+    def test_stream_format_detection(
+        self, tmp_path: Path
+    ) -> None:
+        """Arrow IPC Stream形式のファイルがFalseを返す."""
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        path = tmp_path / "stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _is_arrow_ipc_file_format(path) is False
+
+
+class TestScanRowCountStreamFormat:
+    """_scan_row_countのStream形式フォールバックテスト."""
+
+    def test_file_format_row_count(
+        self, tmp_path: Path
+    ) -> None:
+        """File形式のfeatherファイルで行数を正しく取得できる."""
+        df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        path = tmp_path / "test.feather"
+        df.write_ipc(path)
+        assert _scan_row_count(path) == 3
+
+    def test_stream_format_row_count(
+        self, tmp_path: Path
+    ) -> None:
+        """Stream形式のfeatherファイルで行数を正しく取得できる."""
+        df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        path = tmp_path / "test_stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _scan_row_count(path) == 3
+
+    def test_stream_format_large_data(
+        self, tmp_path: Path
+    ) -> None:
+        """Stream形式の大きめのデータで行数を正しく取得できる."""
+        df = pl.DataFrame({"values": np.random.rand(10000)})
+        path = tmp_path / "large_stream.feather"
+        with open(path, "wb") as f:
+            df.write_ipc_stream(f)
+        assert _scan_row_count(path) == 10000
