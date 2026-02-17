@@ -1050,7 +1050,7 @@ def learn_model(
                 stage3_data_path
             )
             _s3_cache = input_cache_mode.lower()
-            _s3_at = array_type
+            _s3_at = "preprocessing"
             _s3_bp = input_file_packed
             stage3_data_config = StageDataConfig(
                 create_datasource=lambda _p=_s3_paths,

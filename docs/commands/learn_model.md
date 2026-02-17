@@ -19,7 +19,7 @@
 | Flag | Required | Description |
 | --- | --- | --- |
 | `--input-path PATH` | one of the sources | Recursively collects `.npy` shards through `FileSystem.collect_files`. Works with either `hcpe` or `preprocess` tensors, and can unpack bit-packed data via `--input-file-packed`.【F:src/maou/infra/console/learn_model.py†L1-L120】 |
-| `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Any other string raises a `ValueError`.【F:src/maou/infra/console/learn_model.py†L96-L156】【F:src/maou/interface/learn.py†L101-L120】 |
+| `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Any other string raises a `ValueError`.【F:src/maou/infra/console/learn_model.py†L96-L156】【F:src/maou/interface/learn.py†L101-L120】<br><br>**注意**: マルチステージ学習（`--stage all`または`--stage 3`）において、Stage 3は常に前処理済みデータ（`array_type="preprocessing"`）を使用します。このため、`--input-format`オプションはStage 3には影響しません。 |
 | `--input-dataset-id` + `--input-table-name` | pair | Streams from BigQuery when the optional `gcp` extra is installed. Requires `--input-format` to select the array schema and supports batching/cache knobs (below).【F:src/maou/infra/console/learn_model.py†L245-L330】 |
 | `--input-gcs` / `--input-s3` + bucket metadata | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Both providers need `--input-local-cache-dir` and honor optional bundling (`--input-enable-bundling`, `--input-bundle-size-gb`) and worker counts (`--input-max-workers`).【F:src/maou/infra/console/learn_model.py†L330-L399】 |
 | `--input-max-workers`, `--input-batch-size`, `--input-max-cached-bytes`, `--input-local-cache`, `--input-local-cache-dir`, `--input-clustering-key`, `--input-partitioning-key-date` | optional | Fine-tune remote datasource caching and streaming. Forwarded directly to the datasource constructors and into the interface options.【F:src/maou/infra/console/learn_model.py†L122-L399】【F:src/maou/interface/learn.py†L198-L210】 |
@@ -62,10 +62,10 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--stage {1,2,3,all}` | `3` | Training stage: 1=Reachable Squares, 2=Legal Moves, 3=Policy+Value, all=Sequential.【F:src/maou/infra/console/learn_model.py†L453-L460】 |
+| `--stage {1,2,3,all}` | `3` | Training stage: 1=Reachable Squares, 2=Legal Moves, 3=Policy+Value (前処理済みデータのみ使用), all=Sequential.【F:src/maou/infra/console/learn_model.py†L453-L460】 |
 | `--stage1-data-path PATH` | optional | File or directory path for Stage 1 (reachable squares) training data.【F:src/maou/infra/console/learn_model.py†L462-L466】 |
 | `--stage2-data-path PATH` | optional | File or directory path for Stage 2 (legal moves) training data.【F:src/maou/infra/console/learn_model.py†L467-L471】 |
-| `--stage3-data-path PATH` | optional | File or directory path for Stage 3 (policy+value) training data.【F:src/maou/infra/console/learn_model.py†L472-L477】 |
+| `--stage3-data-path PATH` | optional | Stage 3（policy+value）の学習データパスを指定します。**Stage 3は前処理済みデータ（`array_type="preprocessing"`）専用です。** hcpe形式のデータは使用できません。【F:src/maou/infra/console/learn_model.py†L472-L477】 |
 | `--stage1-threshold FLOAT` | `0.99` | Accuracy threshold for Stage 1 (99%). Training advances to the next stage once this threshold is reached.【F:src/maou/infra/console/learn_model.py†L480-L485】 |
 | `--stage2-threshold FLOAT` | `0.95` | Accuracy threshold for Stage 2 (95%).【F:src/maou/infra/console/learn_model.py†L486-L492】 |
 | `--stage1-max-epochs INT` | `10` | Maximum epochs for Stage 1.【F:src/maou/infra/console/learn_model.py†L494-L499】 |
