@@ -2,6 +2,7 @@ import abc
 import gc
 import json
 import logging
+import resource
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Optional
@@ -789,6 +790,50 @@ def _resolve_datasource_type(
     return array_type
 
 
+def _log_memory_usage(context: str) -> None:
+    """現在のメモリ使用量をログ出力する．
+
+    RSS(ピーク値)とGPUメモリ使用量を出力する．
+    外部依存なし(標準ライブラリ ``resource`` + ``torch.cuda``)．
+
+    Args:
+        context: ログのコンテキスト(例: "Stage 1 start")
+    """
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    rss_mb = usage.ru_maxrss / 1024  # Linux: KB → MB
+
+    gpu_info = ""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / (1024**2)
+        reserved = torch.cuda.memory_reserved() / (1024**2)
+        gpu_info = (
+            f", GPU allocated={allocated:.0f}MB"
+            f", GPU reserved={reserved:.0f}MB"
+        )
+
+    logger.info(
+        "[Memory] %s: peak_RSS=%.0fMB%s",
+        context,
+        rss_mb,
+        gpu_info,
+    )
+
+
+def _release_stage_memory(stage_name: str) -> None:
+    """Stage遷移時のメモリ解放を実行する．
+
+    ``gc.collect()`` でPythonオブジェクトを解放し，
+    ``torch.cuda.empty_cache()`` でGPUキャッシュメモリをOSに返却する．
+
+    Args:
+        stage_name: 解放元のステージ名(ログ用)
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("Memory released after %s", stage_name)
+
+
 def learn_multi_stage(
     stage: str,
     *,
@@ -983,6 +1028,7 @@ def learn_multi_stage(
     # Stage 1: Reachable Squares
     # DataSource/Dataset/DataLoaderは_run_stage1内のローカル変数．
     # 関数終了時にスコープから外れ，GCの解放対象になる．
+    _log_memory_usage("Stage 1 start")
     if stage in ("1", "all") and stage1_data_config is not None:
         if streaming and stage1_streaming_source is not None:
             stage1_result = _run_stage1_streaming(
@@ -1016,9 +1062,10 @@ def learn_multi_stage(
                 "threshold_met": stage1_result.threshold_met,
             }
         )
-        gc.collect()
+        _release_stage_memory("Stage 1")
 
     # Stage 2: Legal Moves
+    _log_memory_usage("Stage 2 start")
     if stage in ("2", "all") and stage2_data_config is not None:
         if streaming and stage2_streaming_source is not None:
             stage2_result = _run_stage2_streaming(
@@ -1052,10 +1099,11 @@ def learn_multi_stage(
                 "threshold_met": stage2_result.threshold_met,
             }
         )
-        gc.collect()
+        _release_stage_memory("Stage 2")
 
     # Stage 3: Policy + Value (delegate to Learning.learn())
     # DataSourceはここで遅延初期化する．
+    _log_memory_usage("Stage 3 start")
     if stage in ("3", "all") and stage3_data_config is not None:
         logger.info("=" * 60)
         logger.info("STAGE 3: POLICY + VALUE LEARNING")
