@@ -825,7 +825,7 @@ def learn_multi_stage(
     stage2_data_config: Optional[StageDataConfig] = None,
     stage3_data_config: Optional[StageDataConfig] = None,
     stage1_threshold: float = 0.99,
-    stage2_threshold: float = 0.95,
+    stage2_threshold: float = 0.85,
     stage1_max_epochs: int = 10,
     stage2_max_epochs: int = 10,
     gpu: Optional[str] = None,
@@ -886,7 +886,7 @@ def learn_multi_stage(
         stage2_data_config: Data config for Stage 2 (legal moves). Lazy init.
         stage3_data_config: Data config for Stage 3 (policy+value). Lazy init.
         stage1_threshold: Accuracy threshold for Stage 1 (default: 0.99)
-        stage2_threshold: Accuracy threshold for Stage 2 (default: 0.95)
+        stage2_threshold: F1 threshold for Stage 2 (default: 0.85)
         stage1_max_epochs: Maximum epochs for Stage 1 (default: 10)
         stage2_max_epochs: Maximum epochs for Stage 2 (default: 10)
         gpu: GPU device to use

@@ -100,7 +100,7 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--stage2-data-path PATH` | optional | File or directory path for Stage 2 (legal moves) training data.【F:src/maou/infra/console/learn_model.py†L467-L471】 |
 | `--stage3-data-path PATH` | optional | Stage 3（policy+value）の学習データパスを指定します。**Stage 3は前処理済みデータ（`array_type="preprocessing"`）専用です。** hcpe形式のデータは使用できません。【F:src/maou/infra/console/learn_model.py†L472-L477】 |
 | `--stage1-threshold FLOAT` | `0.99` | Accuracy threshold for Stage 1 (99%). Training advances to the next stage once this threshold is reached.【F:src/maou/infra/console/learn_model.py†L480-L485】 |
-| `--stage2-threshold FLOAT` | `0.95` | Accuracy threshold for Stage 2 (95%).【F:src/maou/infra/console/learn_model.py†L486-L492】 |
+| `--stage2-threshold FLOAT` | `0.85` | F1 threshold for Stage 2 (85%).【F:src/maou/infra/console/learn_model.py†L486-L492】 |
 | `--stage1-max-epochs INT` | `10` | Maximum epochs for Stage 1.【F:src/maou/infra/console/learn_model.py†L494-L499】 |
 | `--stage2-max-epochs INT` | `10` | Maximum epochs for Stage 2.【F:src/maou/infra/console/learn_model.py†L500-L506】 |
 | `--stage1-batch-size INT` | `None` (inherits `--batch-size`) | Batch size for Stage 1. When unset, inherits the global `--batch-size`. For small datasets (~1,000 positions), `32` is recommended.【F:src/maou/infra/console/learn_model.py†L507-L513】 |
