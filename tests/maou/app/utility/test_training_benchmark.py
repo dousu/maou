@@ -16,6 +16,8 @@ class TestBenchmarkResult:
         measured_time: float = 4.75,
         measured_batches: int = 95,
         actual_average_batch_time: float = 0.05,
+        gpu_prefetch_enabled: bool = True,
+        gpu_prefetch_buffer_size: int = 5,
     ) -> BenchmarkResult:
         """テスト用の BenchmarkResult を生成する."""
         return BenchmarkResult(
@@ -27,6 +29,8 @@ class TestBenchmarkResult:
             warmup_batches=warmup_batches,
             measured_time=measured_time,
             measured_batches=measured_batches,
+            gpu_prefetch_enabled=gpu_prefetch_enabled,
+            gpu_prefetch_buffer_size=gpu_prefetch_buffer_size,
             data_loading_time=0.01,
             gpu_transfer_time=0.005,
             forward_pass_time=0.015,
@@ -112,3 +116,33 @@ class TestBenchmarkResult:
         assert result.warmup_time == 0.0
         assert result.warmup_batches == 0
         assert result.total_epoch_time == 10.0
+
+    def test_gpu_prefetch_fields_enabled(self) -> None:
+        """GPU Prefetch有効時のフィールド値."""
+        result = self._make_result(
+            gpu_prefetch_enabled=True,
+            gpu_prefetch_buffer_size=5,
+        )
+        assert result.gpu_prefetch_enabled is True
+        assert result.gpu_prefetch_buffer_size == 5
+
+    def test_gpu_prefetch_fields_disabled(self) -> None:
+        """GPU Prefetch無効時のフィールド値."""
+        result = self._make_result(
+            gpu_prefetch_enabled=False,
+            gpu_prefetch_buffer_size=0,
+        )
+        assert result.gpu_prefetch_enabled is False
+        assert result.gpu_prefetch_buffer_size == 0
+
+    def test_to_dict_includes_gpu_prefetch_fields(self) -> None:
+        """to_dict にGPU Prefetchフィールドが含まれる."""
+        result = self._make_result(
+            gpu_prefetch_enabled=True,
+            gpu_prefetch_buffer_size=8,
+        )
+        d = result.to_dict()
+        assert "gpu_prefetch_enabled" in d
+        assert "gpu_prefetch_buffer_size" in d
+        assert d["gpu_prefetch_enabled"] == 1.0
+        assert d["gpu_prefetch_buffer_size"] == 8.0
