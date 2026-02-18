@@ -1,5 +1,6 @@
 """Tests for multi-stage training loop with HeadlessNetwork backbone."""
 
+import math
 from pathlib import Path
 
 import pytest
@@ -691,3 +692,398 @@ class TestStage2F1Metric:
         assert result.achieved_accuracy > 0.3, (
             f"Stage1 accuracy unexpectedly low: {result.achieved_accuracy:.4f}"
         )
+
+
+class TestLRSqrtScaling:
+    """sqrt LRスケーリングのテスト．"""
+
+    def test_no_scaling_when_batch_sizes_equal(self) -> None:
+        """base_batch_size == actual_batch_sizeの場合，LRは変更されない．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            base_batch_size=256,
+            actual_batch_size=256,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        actual_lr = loop.optimizer.param_groups[0]["lr"]
+        assert actual_lr == pytest.approx(1e-3)
+
+    def test_sqrt_scaling_applied(self) -> None:
+        """actual_batch_size > base_batch_sizeの場合，sqrt scalingが適用される．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            base_batch_size=256,
+            actual_batch_size=4096,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        expected_lr = 1e-3 * math.sqrt(
+            4096 / 256
+        )  # = 1e-3 * 4.0
+        actual_lr = loop.optimizer.param_groups[0]["lr"]
+        assert actual_lr == pytest.approx(expected_lr)
+
+    def test_no_scaling_when_smaller_batch(self) -> None:
+        """actual_batch_size < base_batch_sizeの場合，LRは変更されない．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            base_batch_size=256,
+            actual_batch_size=128,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        actual_lr = loop.optimizer.param_groups[0]["lr"]
+        assert actual_lr == pytest.approx(1e-3)
+
+
+class TestTensorAccumulation:
+    """GPU tensor累積と.item()累積の結果等価性テスト．"""
+
+    def test_loss_accumulation_equivalence(self) -> None:
+        """テンソル累積が.item()累積と同じ結果を返す．"""
+        losses = [
+            torch.tensor(x) for x in [0.5, 0.3, 0.7, 0.2, 0.4]
+        ]
+
+        # .item() pattern
+        total_item = 0.0
+        for loss in losses:
+            total_item += loss.item()
+
+        # tensor pattern
+        total_tensor = torch.tensor(0.0, dtype=torch.float64)
+        for loss in losses:
+            total_tensor += loss.detach()
+
+        assert total_tensor.item() == pytest.approx(total_item)
+
+    def test_accuracy_accumulation_equivalence(self) -> None:
+        """精度メトリクスのテンソル累積が等価．"""
+        corrects = [
+            torch.tensor(x)
+            for x in [10.0, 15.0, 12.0, 8.0, 20.0]
+        ]
+
+        total_item = 0.0
+        for c in corrects:
+            total_item += c.item()
+
+        total_tensor = torch.tensor(0.0, dtype=torch.float64)
+        for c in corrects:
+            total_tensor += c
+
+        assert total_tensor.item() == pytest.approx(total_item)
+
+    def test_f1_accumulation_equivalence(self) -> None:
+        """F1スコアのテンソル累積が等価．"""
+        f1_sums = [
+            torch.tensor(x)
+            for x in [0.8, 0.9, 0.75, 0.85, 0.95]
+        ]
+
+        total_item = 0.0
+        for f1 in f1_sums:
+            total_item += f1.item()
+
+        total_tensor = torch.tensor(0.0, dtype=torch.float64)
+        for f1 in f1_sums:
+            total_tensor += f1
+
+        assert total_tensor.item() == pytest.approx(total_item)
+
+    def test_fp64_precision_for_large_accumulation(
+        self,
+    ) -> None:
+        """FP64 accumulatorがFP32の整数表現限界(2^24)を超えても精度を維持する．"""
+        n = 20_000_000  # 20M — exceeds FP32 exact integer limit (2^24 ≈ 16.7M)
+        value_per_step = 1.0
+
+        # FP64 accumulation
+        acc_fp64 = torch.tensor(0.0, dtype=torch.float64)
+        # Simulate by adding in chunks to avoid slow loop
+        chunk = torch.tensor(
+            value_per_step * 1_000_000, dtype=torch.float64
+        )
+        for _ in range(n // 1_000_000):
+            acc_fp64 += chunk
+
+        assert acc_fp64.item() == pytest.approx(float(n))
+
+        # When accumulating individual 1.0s past 2^24, FP32 rounds
+        # 16777217 → 16777216. We demonstrate this with a targeted check.
+        limit = torch.tensor(
+            2**24, dtype=torch.float32
+        )  # 16777216
+        one = torch.tensor(1.0, dtype=torch.float32)
+        result_fp32 = (
+            limit + one
+        )  # Should be 16777217 but FP32 can't represent it
+        assert float(result_fp32) == float(
+            limit
+        )  # FP32 precision loss!
+
+        # FP64 handles it correctly
+        limit_fp64 = torch.tensor(2**24, dtype=torch.float64)
+        one_fp64 = torch.tensor(1.0, dtype=torch.float64)
+        result_fp64 = limit_fp64 + one_fp64
+        assert float(result_fp64) == 2**24 + 1  # FP64 is exact
+
+
+class TestStage12Compilation:
+    """Stage 1/2のtorch.compile適用テスト．"""
+
+    def test_compilation_separate_backbone_and_head(
+        self,
+    ) -> None:
+        """backboneとheadが個別にコンパイルされエラーにならない．"""
+        from maou.app.learning.compilation import compile_module
+
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+
+        # compile_module should not raise (falls back to eager on CPU if needed)
+        compiled_backbone = compile_module(backbone)
+        compiled_head = compile_module(head)
+
+        assert compiled_backbone is not None
+        assert compiled_head is not None
+        assert isinstance(compiled_backbone, torch.nn.Module)
+        assert isinstance(compiled_head, torch.nn.Module)
+
+    def test_compilation_disabled_by_default(self) -> None:
+        """compilation=Falseの場合，モデルはそのまま使用される．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            compilation=False,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        # Model should be the original HeadlessNetwork, not a compiled wrapper
+        assert isinstance(loop.model, HeadlessNetwork)
+
+
+class TestSchedulerIntegration:
+    """SingleStageTrainingLoopのスケジューラ統合テスト．"""
+
+    def test_scheduler_created_when_configured(self) -> None:
+        """lr_scheduler_nameが設定されている場合，スケジューラが生成される．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=10,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            lr_scheduler_name="warmup_cosine_decay",
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        assert loop.lr_scheduler is not None
+
+    def test_no_scheduler_when_none(self) -> None:
+        """lr_scheduler_nameがNoneの場合，スケジューラは生成されない．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=10,
+            accuracy_threshold=0.99,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            lr_scheduler_name=None,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        assert loop.lr_scheduler is None
+
+    def test_scheduler_step_called_per_epoch(self) -> None:
+        """各epoch終了後にLRが変化する（スケジューラが動作している）．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=3,
+            accuracy_threshold=1.0,  # Unreachable threshold, ensure all epochs run
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+            lr_scheduler_name="warmup_cosine_decay",
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        initial_lr = loop.optimizer.param_groups[0]["lr"]
+
+        # Run training — scheduler should step after each epoch
+        loop.run()
+
+        final_lr = loop.optimizer.param_groups[0]["lr"]
+
+        # After 3 epochs of warmup+cosine decay, LR should have changed
+        # (warmup_epochs = max(1, ceil(3*0.1)) = 1, so epoch 0 is warmup)
+        assert initial_lr != final_lr

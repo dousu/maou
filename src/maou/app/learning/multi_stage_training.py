@@ -12,13 +12,15 @@ accuracy thresholds,with fail-fast error handling if thresholds aren't met.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import torch
+from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
 from maou.app.learning.network import (
@@ -51,6 +53,10 @@ class StageConfig:
     dataloader: DataLoader
     loss_fn: torch.nn.Module
     learning_rate: float
+    lr_scheduler_name: Optional[str] = None
+    base_batch_size: int = 256
+    actual_batch_size: int = 256
+    compilation: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,12 +112,59 @@ class SingleStageTrainingLoop:
         self.model.to(device)
         self.head.to(device)
 
+        # Sqrt scaling for larger batch sizes
+        effective_lr = self.config.learning_rate
+        if (
+            self.config.actual_batch_size
+            > self.config.base_batch_size
+        ):
+            scale = math.sqrt(
+                self.config.actual_batch_size
+                / self.config.base_batch_size
+            )
+            effective_lr = self.config.learning_rate * scale
+            self.logger.info(
+                "LR sqrt scaling: base_lr=%.6f, scale=%.2f, "
+                "effective_lr=%.6f",
+                self.config.learning_rate,
+                scale,
+                effective_lr,
+            )
+
         # Create optimizer with all trainable parameters (backbone + head)
         self.optimizer = torch.optim.Adam(
             list(self.model.parameters())
             + list(self.head.parameters()),
-            lr=self.config.learning_rate,
+            lr=effective_lr,
         )
+
+        # LR scheduler (Stage 3 parity)
+        self.lr_scheduler: Optional[LRScheduler] = None
+        if self.config.lr_scheduler_name is not None:
+            from maou.app.learning.setup import SchedulerFactory
+
+            self.lr_scheduler = SchedulerFactory.create_scheduler(
+                self.optimizer,
+                lr_scheduler_name=self.config.lr_scheduler_name,
+                max_epochs=self.config.max_epochs,
+            )
+
+        # torch.compile (Stage 3 parity)
+        if self.config.compilation:
+            from maou.app.learning.compilation import (
+                compile_module,
+            )
+
+            self.logger.info(
+                "Compiling backbone model with torch.compile"
+            )
+            self.model = cast(
+                HeadlessNetwork, compile_module(self.model)
+            )
+            self.logger.info(
+                "Compiling head model with torch.compile"
+            )
+            self.head = compile_module(self.head)
 
         # Mixed precision scaler for GPU training
         self.scaler: torch.amp.GradScaler | None
@@ -163,6 +216,19 @@ class SingleStageTrainingLoop:
                 f"Loss={epoch_loss:.4f}, {metric_label}={epoch_accuracy:.2%}"
             )
 
+            # Step LR scheduler after each epoch
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+                current_lr = self.optimizer.param_groups[0][
+                    "lr"
+                ]
+                self.logger.info(
+                    "Stage %s Epoch %d: LR = %.6f",
+                    self.config.stage.name,
+                    epoch + 1,
+                    current_lr,
+                )
+
             best_accuracy = max(best_accuracy, epoch_accuracy)
             final_loss = epoch_loss
 
@@ -205,8 +271,12 @@ class SingleStageTrainingLoop:
             Tuple of (average_loss, metric_value) where metric_value is
             F1 score for Stage2 (LEGAL_MOVES) or accuracy for other stages.
         """
-        total_loss = 0.0
-        total_correct: float = 0.0
+        total_loss_tensor = torch.tensor(
+            0.0, device=self.device, dtype=torch.float64
+        )
+        total_correct_tensor = torch.tensor(
+            0.0, device=self.device, dtype=torch.float64
+        )
         total_samples = 0
 
         # マイルストーンログの間隔を計算
@@ -315,7 +385,7 @@ class SingleStageTrainingLoop:
                         torch.ones_like(f1),
                         f1,
                     )
-                    total_correct += f1.sum().item()
+                    total_correct_tensor += f1.sum()
                     total_samples += f1.numel()
                 else:
                     # Stage1/3: element-wise accuracy
@@ -324,10 +394,10 @@ class SingleStageTrainingLoop:
                         .float()
                         .sum()
                     )
-                    total_correct += correct.item()
+                    total_correct_tensor += correct
                     total_samples += targets.numel()
 
-            total_loss += loss.item()
+            total_loss_tensor += loss.detach()
 
             # マイルストーンログ出力
             now = time.monotonic()
@@ -344,9 +414,11 @@ class SingleStageTrainingLoop:
                 should_log = True
 
             if should_log:
-                running_loss = total_loss / (batch_idx + 1)
+                running_loss = total_loss_tensor.item() / (
+                    batch_idx + 1
+                )
                 running_acc = (
-                    total_correct / total_samples
+                    total_correct_tensor.item() / total_samples
                     if total_samples > 0
                     else 0.0
                 )
@@ -376,9 +448,9 @@ class SingleStageTrainingLoop:
         # avg_loss計算: IterableDataset対応
         # batch_idxが-1の場合(空のDataLoader)はゼロ除算を防止
         num_batches = batch_idx + 1 if batch_idx >= 0 else 1
-        avg_loss = total_loss / num_batches
+        avg_loss = total_loss_tensor.item() / num_batches
         accuracy = (
-            total_correct / total_samples
+            total_correct_tensor.item() / total_samples
             if total_samples > 0
             else 0.0
         )
