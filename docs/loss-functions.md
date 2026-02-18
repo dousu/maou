@@ -11,7 +11,7 @@ Maouのマルチステージ学習では，各ステージの学習目標に応�
 |-------|------|---------|---------|-----------|
 | 1 | 到達可能升の学習 | 81次元二値ベクトル | ReachableSquaresLoss (BCE) | Accuracy |
 | 2 | 合法手の学習 | 1496次元二値ベクトル | LegalMovesLoss (ASL / BCE) | F1 Score |
-| 3 | 評価値と指し手の学習 | Policy確率分布 + Value勝率 | KLDivLoss + BCEWithLogitsLoss | Policy Accuracy + Value Loss |
+| 3 | 評価値と指し手の学習 | Policy確率分布 + Value勝率 | KLDivLoss (合法手マスク付き) + BCEWithLogitsLoss | Policy Accuracy + Value Loss |
 
 ---
 
@@ -82,6 +82,17 @@ Focal Lossではγが正例/負例共通であるため，この独立制御が�
 | γ- | `--stage2-gamma-neg` | 2.0 | 1.0-4.0 | 容易な負例の抑制度 |
 | clip | `--stage2-clip` | 0.02 | 0.0-0.05 | 負例のハードクリッピング |
 
+### Validation Split による汎化監視
+
+`--stage2-test-ratio` CLIオプションにより，学習データの一部を検証用に分割できる．
+検証データに対するF1スコアを各エポック終了時に計測し，過学習の早期検知を可能にする．
+
+- `--stage2-test-ratio=0.0` (デフォルト): 検証分割なし(全データを学習に使用)
+- `--stage2-test-ratio=0.1` (推奨): 10%を検証用に確保
+- 閾値判定: 検証分割が有効な場合，`--stage2-threshold` は検証F1で判定される
+
+**注意**: ストリーミングモード(`--streaming`)では検証分割は非対応(警告ログを出力)．
+
 ### パラメータ探索の推奨手順
 
 1. **ベースライン確立**: デフォルト(ASL無効，標準BCE)でF1スコアを測定
@@ -114,6 +125,25 @@ float16の確率分布として保存する．`normalize_policy_targets` で
   損失値の解釈性が向上する
 - **reduction="batchmean"**: バッチ平均で正規化し，バッチサイズに依存しない安定した勾配を得る
 
+#### 合法手マスキング
+
+Policy損失の計算時，`legal_move_mask` を用いて非合法手のlogitsを `-inf` に設定した上で
+`log_softmax` を適用する．これにより確率質量が合法手(平均~20手)のみに分配される．
+
+```python
+masked_logits = outputs_policy.masked_fill(~legal_move_mask.bool(), float("-inf"))
+policy_log_probs = F.log_softmax(masked_logits, dim=1)
+```
+
+**効果**:
+
+- **学習効率の向上**: softmaxの有効次元が1496→~20に縮小され，
+  モデルが非合法手の抑制に勾配を費やす必要がなくなる
+- **ターゲットとの整合性**: `normalize_policy_targets` も同じ `legal_move_mask` で
+  正規化しているため，モデル出力とターゲットの確率空間が一致する
+- **テンソル次元は不変**: 出力テンソルは依然として1496次元であり，
+  推論時のインデックス→指し手への復元に影響しない
+
 ### Value損失: BCEWithLogitsLoss
 
 #### ターゲット形式
@@ -137,7 +167,7 @@ float16の確率分布として保存する．`normalize_policy_targets` で
 
 - Stage 1: `ReachableSquaresLoss(pos_weight=1.0)` = 従来BCE
 - Stage 2: `LegalMovesLoss(gamma_pos=0.0, gamma_neg=0.0, clip=0.0)` = 従来BCE
-- Stage 3: 変更なし
+- Stage 3: Policy損失に合法手マスキングを追加(デフォルトで有効，`legal_move_mask` がない場合は従来動作)
 
 ### Clean Architecture
 
