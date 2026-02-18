@@ -512,3 +512,182 @@ class TestThresholdErrorMessages:
         assert "of target)" in msg
         assert "--stage2-max-epochs" in msg
         assert "--stage2-threshold" in msg
+
+
+class TestStage2F1Metric:
+    """Stage2のF1メトリック計算を検証するテスト．"""
+
+    def test_stage2_f1_metric_computation(self) -> None:
+        """既知のlogits/targetsでF1スコアが正しく計算されることを検証する．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        head = LegalMovesHead(input_dim=backbone.embedding_dim)
+
+        # 手計算可能なtargetsを作成: 最初の10ラベルが合法手
+        num_samples = 4
+        targets = torch.zeros(num_samples, MOVE_LABELS_NUM)
+        targets[:, :10] = 1.0  # 全サンプルで最初の10手が合法
+
+        board_tensor = torch.randint(0, 32, (num_samples, 9, 9))
+        hand_tensor = torch.randn(
+            num_samples, PIECES_IN_HAND_VECTOR_SIZE
+        )
+
+        dataset = TensorDataset(
+            board_tensor, hand_tensor, targets
+        )
+
+        def collate_fn(
+            batch: list[tuple[torch.Tensor, ...]],
+        ) -> tuple[
+            tuple[torch.Tensor, torch.Tensor], torch.Tensor
+        ]:
+            boards = torch.stack([b[0] for b in batch])
+            hands = torch.stack([b[1] for b in batch])
+            tgts = torch.stack([b[2] for b in batch])
+            return (boards, hands), tgts
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=num_samples,
+            collate_fn=collate_fn,
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.LEGAL_MOVES,
+            max_epochs=1,
+            accuracy_threshold=0.0,  # 閾値チェックを無効化
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        result = loop.run()
+
+        # F1スコアは0〜1の範囲
+        assert 0.0 <= result.achieved_accuracy <= 1.0
+        # ランダム重みの初期状態ではF1は低いはず（全部0予測に近い）
+        # 重要: accuracyなら~98%になるが，F1なら低くなることを検証
+        assert result.achieved_accuracy < 0.9, (
+            f"F1 should be low with random weights, got {result.achieved_accuracy:.4f}. "
+            "If this is high, the metric may still be element-wise accuracy."
+        )
+
+    def test_stage2_f1_known_values(self) -> None:
+        """F1の計算ロジックを直接テストする（ネットワーク不使用）．"""
+        # TP=5, FP=2, FN=3 のケース
+        # Precision = 5/(5+2) = 5/7 ≈ 0.714
+        # Recall = 5/(5+3) = 5/8 = 0.625
+        # F1 = 2 * 0.714 * 0.625 / (0.714 + 0.625) ≈ 0.667
+        predictions = torch.tensor(
+            [
+                [
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    False,
+                    False,
+                    False,
+                ]
+            ]
+        )
+        targets = torch.tensor(
+            [
+                [
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    False,
+                    False,
+                    True,
+                    True,
+                    True,
+                ]
+            ]
+        )
+
+        pred_bool = predictions
+        tgt_bool = targets
+        tp = (pred_bool & tgt_bool).float().sum(dim=1)
+        fp = (pred_bool & ~tgt_bool).float().sum(dim=1)
+        fn = (~pred_bool & tgt_bool).float().sum(dim=1)
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1 = (
+            2 * precision * recall / (precision + recall + 1e-8)
+        )
+
+        expected_precision = 5.0 / 7.0
+        expected_recall = 5.0 / 8.0
+        expected_f1 = (
+            2
+            * expected_precision
+            * expected_recall
+            / (expected_precision + expected_recall)
+        )
+
+        assert abs(f1.item() - expected_f1) < 1e-5, (
+            f"F1 mismatch: got {f1.item():.6f}, expected {expected_f1:.6f}"
+        )
+
+    def test_stage1_still_uses_accuracy(self) -> None:
+        """Stage1ではF1ではなくelement-wise accuracyが使われることを検証する．"""
+        backbone = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+
+        # ターゲットを全て0にすることで，ランダムweightsでもaccuracyが高くなる
+        # （element-wise accuracyなら0予測で~50%は正解する）
+        dataloader = _make_dummy_dataloader(
+            board_vocab_size=32, target_dim=81
+        )
+
+        config = StageConfig(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=1,
+            accuracy_threshold=0.0,
+            dataloader=dataloader,
+            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            learning_rate=1e-3,
+        )
+
+        loop = SingleStageTrainingLoop(
+            model=backbone,
+            head=head,
+            device=torch.device("cpu"),
+            config=config,
+        )
+
+        result = loop.run()
+
+        # Stage1はelement-wise accuracy: ターゲットが全0なので高い精度になるはず
+        assert result.achieved_accuracy > 0.3, (
+            f"Stage1 accuracy unexpectedly low: {result.achieved_accuracy:.4f}"
+        )

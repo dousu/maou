@@ -491,8 +491,8 @@ S3DataSource: S3DataSourceType | None = getattr(
 @click.option(
     "--stage2-threshold",
     type=float,
-    default=0.95,
-    help="Accuracy threshold for Stage 2 (default: 0.95 = 95%%).",
+    default=0.85,
+    help="F1 threshold for Stage 2 (default: 0.85 = 85%%).",
     show_default=True,
 )
 @click.option(

@@ -152,9 +152,15 @@ class SingleStageTrainingLoop:
                 epoch
             )
 
+            metric_label = (
+                "F1"
+                if self.config.stage
+                == TrainingStage.LEGAL_MOVES
+                else "Accuracy"
+            )
             self.logger.info(
                 f"Stage {self.config.stage} Epoch {epoch + 1}/{self.config.max_epochs}: "
-                f"Loss={epoch_loss:.4f}, Accuracy={epoch_accuracy:.2%}"
+                f"Loss={epoch_loss:.4f}, {metric_label}={epoch_accuracy:.2%}"
             )
 
             best_accuracy = max(best_accuracy, epoch_accuracy)
@@ -163,7 +169,7 @@ class SingleStageTrainingLoop:
             # Check if threshold met (early stopping)
             if epoch_accuracy >= self.config.accuracy_threshold:
                 self.logger.info(
-                    f"Stage {self.config.stage} threshold achieved! "
+                    f"Stage {self.config.stage} {metric_label} threshold achieved! "
                     f"({epoch_accuracy:.2%} >= {self.config.accuracy_threshold:.2%})"
                 )
                 return StageResult(
@@ -190,16 +196,17 @@ class SingleStageTrainingLoop:
     def _train_epoch(
         self, epoch_idx: int
     ) -> tuple[float, float]:
-        """Train one epoch and return (loss,accuracy).
+        """Train one epoch and return (loss, metric_value).
 
         Args:
             epoch_idx: Current epoch index (0-based)
 
         Returns:
-            Tuple of (average_loss,accuracy)
+            Tuple of (average_loss, metric_value) where metric_value is
+            F1 score for Stage2 (LEGAL_MOVES) or accuracy for other stages.
         """
         total_loss = 0.0
-        total_correct = 0
+        total_correct: float = 0.0
         total_samples = 0
 
         # マイルストーンログの間隔を計算
@@ -267,16 +274,58 @@ class SingleStageTrainingLoop:
                 loss.backward()
                 self.optimizer.step()
 
-            # Compute accuracy (threshold at 0.5 for binary classification)
+            # Compute metric (threshold at 0.5 for binary classification)
             with torch.no_grad():
                 predictions = torch.sigmoid(logits) > 0.5
-                correct = (
-                    (predictions == targets.bool())
-                    .float()
-                    .sum()
-                )
-                total_correct += correct.item()
-                total_samples += targets.numel()
+                if (
+                    self.config.stage
+                    == TrainingStage.LEGAL_MOVES
+                ):
+                    # Stage2: sample-averaged F1 score
+                    pred_bool = predictions
+                    tgt_bool = targets.bool()
+                    tp = (
+                        (pred_bool & tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    fp = (
+                        (pred_bool & ~tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    fn = (
+                        (~pred_bool & tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    precision = tp / (tp + fp + 1e-8)
+                    recall = tp / (tp + fn + 1e-8)
+                    f1 = (
+                        2
+                        * precision
+                        * recall
+                        / (precision + recall + 1e-8)
+                    )
+                    both_empty = (pred_bool.sum(dim=1) == 0) & (
+                        tgt_bool.sum(dim=1) == 0
+                    )
+                    f1 = torch.where(
+                        both_empty,
+                        torch.ones_like(f1),
+                        f1,
+                    )
+                    total_correct += f1.sum().item()
+                    total_samples += f1.numel()
+                else:
+                    # Stage1/3: element-wise accuracy
+                    correct = (
+                        (predictions == targets.bool())
+                        .float()
+                        .sum()
+                    )
+                    total_correct += correct.item()
+                    total_samples += targets.numel()
 
             total_loss += loss.item()
 
@@ -306,13 +355,20 @@ class SingleStageTrainingLoop:
                     if total_batches is not None
                     else f"{batch_idx + 1}/?"
                 )
+                metric_label = (
+                    "F1"
+                    if self.config.stage
+                    == TrainingStage.LEGAL_MOVES
+                    else "Accuracy"
+                )
                 self.logger.info(
                     "Stage %s Epoch %d Batch %s: "
-                    "Loss=%.4f, Accuracy=%.2f%%",
+                    "Loss=%.4f, %s=%.2f%%",
                     self.config.stage,
                     epoch_idx + 1,
                     progress,
                     running_loss,
+                    metric_label,
                     running_acc * 100,
                 )
                 last_log_time = now
