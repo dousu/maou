@@ -77,6 +77,25 @@ def _resolve_worker_files(
     return file_paths
 
 
+def _compute_total_batches(
+    row_counts: list[int],
+    batch_size: int,
+) -> int:
+    """ファイルごとの ceil(rows / batch_size) の合計を返す．
+
+    ストリーミングデータセットはファイル単位でバッチを生成するため，
+    各ファイルの端数バッチを考慮した正確なバッチ数を計算する．
+
+    Args:
+        row_counts: 各ファイルの行数リスト
+        batch_size: バッチサイズ
+
+    Returns:
+        合計バッチ数
+    """
+    return sum(math.ceil(n / batch_size) for n in row_counts)
+
+
 # ============================================================================
 # StreamingDataSource Protocol
 # ============================================================================
@@ -99,6 +118,11 @@ class StreamingDataSource(Protocol):
     @property
     def total_rows(self) -> int:
         """全ファイルの合計行数."""
+        ...
+
+    @property
+    def row_counts(self) -> list[int]:
+        """各ファイルの行数リスト."""
         ...
 
     def iter_files_columnar(
@@ -213,8 +237,9 @@ class StreamingKifDataset(IterableDataset):
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
-        return math.ceil(
-            self._source.total_rows / self._batch_size
+        return _compute_total_batches(
+            self._source.row_counts,
+            self._batch_size,
         )
 
 
@@ -301,8 +326,9 @@ class StreamingStage1Dataset(IterableDataset):
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
-        return math.ceil(
-            self._source.total_rows / self._batch_size
+        return _compute_total_batches(
+            self._source.row_counts,
+            self._batch_size,
         )
 
 
@@ -389,8 +415,9 @@ class StreamingStage2Dataset(IterableDataset):
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
-        return math.ceil(
-            self._source.total_rows / self._batch_size
+        return _compute_total_batches(
+            self._source.row_counts,
+            self._batch_size,
         )
 
 

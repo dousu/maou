@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Generator
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
     StreamingStage1Dataset,
     StreamingStage2Dataset,
+    _compute_total_batches,
     _resolve_worker_files,
 )
 from maou.domain.data.columnar_batch import ColumnarBatch
@@ -45,6 +45,10 @@ class FakePreprocessingSource:
     @property
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
+
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
 
     def _make_batch(
         self, rng: np.random.Generator
@@ -104,6 +108,10 @@ class FakeStage1Source:
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
 
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
+
     def _make_batch(
         self, rng: np.random.Generator
     ) -> ColumnarBatch:
@@ -160,6 +168,10 @@ class FakeStage2Source:
     @property
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
+
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
 
     def _make_batch(
         self, rng: np.random.Generator
@@ -289,7 +301,7 @@ class TestStreamingKifDataset:
         assert total == 14
 
     def test_len(self) -> None:
-        """__len__ returns correct batch count."""
+        """__len__ returns correct batch count (per-file ceil sum)."""
         source = FakePreprocessingSource(
             n_files=2, rows_per_file=10
         )
@@ -299,7 +311,8 @@ class TestStreamingKifDataset:
             shuffle=False,
             seed=42,
         )
-        assert len(dataset) == math.ceil(20 / 4)
+        # Per-file: ceil(10/4) + ceil(10/4) = 3 + 3 = 6
+        assert len(dataset) == 6
 
     def test_shuffle_changes_order(self) -> None:
         """Shuffle produces different record orders."""
@@ -426,7 +439,7 @@ class TestStreamingStage1Dataset:
         assert total == 12
 
     def test_len(self) -> None:
-        """__len__ returns correct batch count."""
+        """__len__ returns correct batch count (per-file ceil sum)."""
         source = FakeStage1Source(n_files=2, rows_per_file=10)
         dataset = StreamingStage1Dataset(
             streaming_source=source,
@@ -434,7 +447,8 @@ class TestStreamingStage1Dataset:
             shuffle=False,
             seed=42,
         )
-        assert len(dataset) == math.ceil(20 / 3)
+        # Per-file: ceil(10/3) + ceil(10/3) = 4 + 4 = 8
+        assert len(dataset) == 8
 
     def test_set_epoch(self) -> None:
         """Different epochs produce different orders."""
@@ -500,7 +514,7 @@ class TestStreamingStage2Dataset:
         assert total == 10
 
     def test_len(self) -> None:
-        """__len__ returns correct batch count."""
+        """__len__ returns correct batch count (per-file ceil sum)."""
         source = FakeStage2Source(n_files=3, rows_per_file=10)
         dataset = StreamingStage2Dataset(
             streaming_source=source,
@@ -508,7 +522,8 @@ class TestStreamingStage2Dataset:
             shuffle=False,
             seed=42,
         )
-        assert len(dataset) == math.ceil(30 / 7)
+        # Per-file: ceil(10/7) * 3 = 2 * 3 = 6
+        assert len(dataset) == 6
 
     def test_set_epoch(self) -> None:
         """Different epochs produce different orders."""
@@ -877,3 +892,49 @@ class TestZeroCopyOptimization:
         assert sliced.move_label.flags["C_CONTIGUOUS"]
         assert sliced.result_value is not None
         assert sliced.result_value.flags["C_CONTIGUOUS"]
+
+
+class TestComputeTotalBatches:
+    """_compute_total_batches ヘルパー関数のテスト."""
+
+    def test_exact_division(self) -> None:
+        """全ファイルがbatch_sizeの倍数の場合."""
+        assert (
+            _compute_total_batches([100, 200], batch_size=100)
+            == 3
+        )
+
+    def test_remainder_per_file(self) -> None:
+        """各ファイルに端数がある場合，ファイルごとにceilされる."""
+        # ceil(150/100) + ceil(150/100) = 2 + 2 = 4
+        assert (
+            _compute_total_batches([150, 150], batch_size=100)
+            == 4
+        )
+
+    def test_single_file(self) -> None:
+        """単一ファイルの場合."""
+        assert (
+            _compute_total_batches([250], batch_size=100) == 3
+        )
+
+    def test_empty(self) -> None:
+        """ファイルなしの場合."""
+        assert _compute_total_batches([], batch_size=100) == 0
+
+    def test_zero_row_file(self) -> None:
+        """0行ファイルを含む場合."""
+        assert (
+            _compute_total_batches([0, 100], batch_size=100)
+            == 1
+        )
+
+    def test_batch_size_larger_than_file(self) -> None:
+        """batch_sizeが各ファイルの行数より大きい場合，各ファイルが1バッチになる."""
+        # ceil(50/1000) + ceil(80/1000) + ceil(30/1000) = 1 + 1 + 1 = 3
+        assert (
+            _compute_total_batches(
+                [50, 80, 30], batch_size=1000
+            )
+            == 3
+        )

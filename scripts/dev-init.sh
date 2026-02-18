@@ -55,10 +55,6 @@ uv generate-shell-completion bash >> ~/.bash_completion
 # Install dependencies with CPU extra (uses lightweight PyTorch from pytorch-cpu index)
 uv sync --extra cpu --extra visualize --group dev
 
-# Build Rust extension module (required for CLI commands)
-echo "Building Rust extension module..."
-uv run maturin develop
-
 # Verify Rust module is built correctly
 uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 
