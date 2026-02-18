@@ -79,6 +79,9 @@ class TrainingLoop:
                 f"(effective batch size multiplied by {gradient_accumulation_steps})"
             )
 
+        # Loss finitude check interval (reduces GPU sync points)
+        self._finitude_check_interval: int = 100
+
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
             self.scaler: Optional[GradScaler] = GradScaler(
@@ -367,33 +370,41 @@ class TrainingLoop:
                 self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio * value_loss
             ) / self.gradient_accumulation_steps
-            loss_is_finite = torch.isfinite(context.loss)
-            policy_loss_is_finite = torch.isfinite(policy_loss)
-            value_loss_is_finite = torch.isfinite(value_loss)
-
             for callback in self.callbacks:
                 callback.on_loss_computation_end(context)
 
         self._maybe_synchronize("post_forward_mixed_precision")
 
-        if not bool(loss_is_finite.item()):
-            for callback in self.callbacks:
-                callback.on_forward_pass_end(context)
+        # Check loss finitude periodically to reduce GPU sync points
+        if (
+            context.batch_idx % self._finitude_check_interval
+            == 0
+        ):
+            loss_is_finite = torch.isfinite(context.loss)
+            if not bool(loss_is_finite.item()):
+                policy_loss_is_finite = torch.isfinite(
+                    policy_loss
+                )
+                value_loss_is_finite = torch.isfinite(
+                    value_loss
+                )
+                for callback in self.callbacks:
+                    callback.on_forward_pass_end(context)
 
-            self.logger.warning(
-                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
-                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
-                context.epoch_idx,
-                context.batch_idx,
-                context.loss.detach(),
-                policy_loss.detach(),
-                bool(policy_loss_is_finite.item()),
-                value_loss.detach(),
-                bool(value_loss_is_finite.item()),
-            )
-            self.optimizer.zero_grad(set_to_none=True)
-            self.scaler.update()
-            return
+                self.logger.warning(
+                    "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                    "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                    context.epoch_idx,
+                    context.batch_idx,
+                    context.loss.detach(),
+                    policy_loss.detach(),
+                    bool(policy_loss_is_finite.item()),
+                    value_loss.detach(),
+                    bool(value_loss_is_finite.item()),
+                )
+                self.optimizer.zero_grad(set_to_none=True)
+                self.scaler.update()
+                return
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -550,27 +561,35 @@ class TrainingLoop:
             self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio * value_loss
         ) / self.gradient_accumulation_steps
-        loss_is_finite = torch.isfinite(context.loss)
-        policy_loss_is_finite = torch.isfinite(policy_loss)
-        value_loss_is_finite = torch.isfinite(value_loss)
-
         for callback in self.callbacks:
             callback.on_loss_computation_end(context)
 
-        if not bool(loss_is_finite.item()):
-            self.logger.warning(
-                "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
-                "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
-                context.epoch_idx,
-                context.batch_idx,
-                context.loss.detach(),
-                policy_loss.detach(),
-                bool(policy_loss_is_finite.item()),
-                value_loss.detach(),
-                bool(value_loss_is_finite.item()),
-            )
-            self.optimizer.zero_grad(set_to_none=True)
-            return
+        # Check loss finitude periodically to reduce GPU sync points
+        if (
+            context.batch_idx % self._finitude_check_interval
+            == 0
+        ):
+            loss_is_finite = torch.isfinite(context.loss)
+            if not bool(loss_is_finite.item()):
+                policy_loss_is_finite = torch.isfinite(
+                    policy_loss
+                )
+                value_loss_is_finite = torch.isfinite(
+                    value_loss
+                )
+                self.logger.warning(
+                    "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+                    "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+                    context.epoch_idx,
+                    context.batch_idx,
+                    context.loss.detach(),
+                    policy_loss.detach(),
+                    bool(policy_loss_is_finite.item()),
+                    value_loss.detach(),
+                    bool(value_loss_is_finite.item()),
+                )
+                self.optimizer.zero_grad(set_to_none=True)
+                return
 
         # 逆伝播
         for callback in self.callbacks:

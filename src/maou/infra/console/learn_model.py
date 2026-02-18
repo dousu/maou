@@ -538,6 +538,31 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
+    "--stage12-lr-scheduler",
+    type=click.Choice(
+        ["auto", "none"]
+        + list(learn.SUPPORTED_LR_SCHEDULERS.values()),
+        case_sensitive=False,
+    ),
+    help=(
+        "Learning rate scheduler for Stage 1/2."
+        " 'auto' enables Warmup+CosineDecay when batch_size > 256."
+        " 'none' disables the scheduler (fixed LR)."
+    ),
+    required=False,
+    default="auto",
+    show_default=True,
+)
+@click.option(
+    "--stage12-compilation/--no-stage12-compilation",
+    default=False,
+    help=(
+        "Enable torch.compile for Stage 1/2 backbone model."
+        " Provides 10-30%% speedup on A100."
+    ),
+    show_default=True,
+)
+@click.option(
     "--resume-reachable-head-from",
     type=click.Path(exists=True, path_type=Path),
     help="Reachable squares head parameter file to resume training (Stage 1).",
@@ -674,6 +699,8 @@ def learn_model(
     stage2_batch_size: Optional[int],
     stage1_learning_rate: Optional[float],
     stage2_learning_rate: Optional[float],
+    stage12_lr_scheduler: Optional[str],
+    stage12_compilation: bool,
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
     no_streaming: bool,
@@ -1120,11 +1147,13 @@ def learn_model(
                 stage2_max_epochs=stage2_max_epochs,
                 gpu=gpu,
                 model_architecture=architecture_key,
-                batch_size=batch_size or 256,
+                batch_size=batch_size or 4096,
                 stage1_batch_size=stage1_batch_size,
                 stage2_batch_size=stage2_batch_size,
                 stage1_learning_rate=stage1_learning_rate,
                 stage2_learning_rate=stage2_learning_rate,
+                stage12_lr_scheduler=stage12_lr_scheduler,
+                stage12_compilation=stage12_compilation,
                 learning_rate=learning_ratio or 0.001,
                 model_dir=model_dir,
                 resume_backbone_from=resume_backbone_from,

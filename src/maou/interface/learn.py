@@ -120,6 +120,33 @@ def normalize_lr_scheduler_name(
     return canonical
 
 
+def _resolve_stage12_scheduler(
+    scheduler_value: Optional[str],
+    actual_batch_size: int,
+    base_batch_size: int = 256,
+) -> Optional[str]:
+    """Stage 1/2 LRスケジューラの'auto'を解決する．
+
+    Args:
+        scheduler_value: CLIから渡されたスケジューラ値('auto', 'none', または具体名)．
+        actual_batch_size: 実際のバッチサイズ．
+        base_batch_size: 基準バッチサイズ(デフォルト256)．
+
+    Returns:
+        正規化されたスケジューラキー，またはNone(スケジューラなし)．
+    """
+    if (
+        scheduler_value is None
+        or scheduler_value.lower() == "none"
+    ):
+        return None
+    if scheduler_value.lower() == "auto":
+        if actual_batch_size > base_batch_size:
+            return "warmup_cosine_decay"
+        return None
+    return normalize_lr_scheduler_name(scheduler_value)
+
+
 class FileSystem(metaclass=abc.ABCMeta):
     """Abstract interface for file system operations.
 
@@ -530,6 +557,8 @@ def _run_stage1(
     max_epochs: int,
     threshold: float,
     device: torch.device,
+    lr_scheduler_name: Optional[str] = None,
+    compilation: bool = False,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) を実行し結果を返す．
 
@@ -568,6 +597,10 @@ def _run_stage1(
         dataloader=dataloader,
         loss_fn=ReachableSquaresLoss(),
         learning_rate=learning_rate,
+        lr_scheduler_name=lr_scheduler_name,
+        base_batch_size=256,
+        actual_batch_size=batch_size,
+        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
@@ -590,6 +623,8 @@ def _run_stage2(
     max_epochs: int,
     threshold: float,
     device: torch.device,
+    lr_scheduler_name: Optional[str] = None,
+    compilation: bool = False,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
 
@@ -628,6 +663,10 @@ def _run_stage2(
         dataloader=dataloader,
         loss_fn=LegalMovesLoss(),
         learning_rate=learning_rate,
+        lr_scheduler_name=lr_scheduler_name,
+        base_batch_size=256,
+        actual_batch_size=batch_size,
+        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
@@ -650,6 +689,8 @@ def _run_stage1_streaming(
     max_epochs: int,
     threshold: float,
     device: torch.device,
+    lr_scheduler_name: Optional[str] = None,
+    compilation: bool = False,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
 
@@ -686,6 +727,10 @@ def _run_stage1_streaming(
         dataloader=dataloader,
         loss_fn=ReachableSquaresLoss(),
         learning_rate=learning_rate,
+        lr_scheduler_name=lr_scheduler_name,
+        base_batch_size=256,
+        actual_batch_size=batch_size,
+        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
@@ -708,6 +753,8 @@ def _run_stage2_streaming(
     max_epochs: int,
     threshold: float,
     device: torch.device,
+    lr_scheduler_name: Optional[str] = None,
+    compilation: bool = False,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
@@ -744,6 +791,10 @@ def _run_stage2_streaming(
         dataloader=dataloader,
         loss_fn=LegalMovesLoss(),
         learning_rate=learning_rate,
+        lr_scheduler_name=lr_scheduler_name,
+        base_batch_size=256,
+        actual_batch_size=batch_size,
+        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
@@ -864,6 +915,8 @@ def learn_multi_stage(
     cloud_storage: Optional[CloudStorage] = None,
     input_cache_mode: Literal["file", "memory"] = "file",
     architecture_config: Optional[dict[str, Any]] = None,
+    stage12_lr_scheduler: Optional[str] = "auto",
+    stage12_compilation: bool = False,
     streaming: bool = False,
     stage1_streaming_source: Optional[
         StreamingDataSource
@@ -924,6 +977,8 @@ def learn_multi_stage(
         cloud_storage: Cloud storage for Stage 3 model uploads
         input_cache_mode: Cache strategy for Stage 3 inputs
         architecture_config: Architecture-specific config dict for backbone
+        stage12_lr_scheduler: Stage 1/2 LRスケジューラ設定．'auto'はbatch_size > 256で自動有効化．
+        stage12_compilation: Stage 1/2でtorch.compileを有効化する．
         streaming: Use streaming IterableDataset for Stage 1/2/3
         stage1_streaming_source: StreamingDataSource for Stage 1
         stage2_streaming_source: StreamingDataSource for Stage 2
@@ -1003,6 +1058,14 @@ def learn_multi_stage(
     effective_stage1_batch = stage1_batch_size or batch_size
     effective_stage2_batch = stage2_batch_size or batch_size
 
+    # Resolve Stage 1/2 LR scheduler ("auto" -> actual scheduler or None)
+    resolved_stage1_scheduler = _resolve_stage12_scheduler(
+        stage12_lr_scheduler, effective_stage1_batch
+    )
+    resolved_stage2_scheduler = _resolve_stage12_scheduler(
+        stage12_lr_scheduler, effective_stage2_batch
+    )
+
     # Resolve stage-specific learning rates (fallback to global learning_rate)
     effective_stage1_lr = stage1_learning_rate or learning_rate
     effective_stage2_lr = stage2_learning_rate or learning_rate
@@ -1024,6 +1087,8 @@ def learn_multi_stage(
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
                 device=device,
+                lr_scheduler_name=resolved_stage1_scheduler,
+                compilation=stage12_compilation,
             )
         else:
             stage1_result = _run_stage1(
@@ -1035,6 +1100,8 @@ def learn_multi_stage(
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
                 device=device,
+                lr_scheduler_name=resolved_stage1_scheduler,
+                compilation=stage12_compilation,
             )
         results_dict["stages_completed"].append(
             {
@@ -1061,6 +1128,8 @@ def learn_multi_stage(
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
                 device=device,
+                lr_scheduler_name=resolved_stage2_scheduler,
+                compilation=stage12_compilation,
             )
         else:
             stage2_result = _run_stage2(
@@ -1072,6 +1141,8 @@ def learn_multi_stage(
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
                 device=device,
+                lr_scheduler_name=resolved_stage2_scheduler,
+                compilation=stage12_compilation,
             )
         results_dict["stages_completed"].append(
             {
