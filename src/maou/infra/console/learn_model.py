@@ -621,6 +621,13 @@ S3DataSource: S3DataSourceType | None = getattr(
     help="Dropout rate for Stage 2 head (requires --stage2-hidden-dim).",
 )
 @click.option(
+    "--stage2-test-ratio",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Validation split ratio for Stage 2 (0.0 = no split, e.g. 0.1 = 10%% validation).",
+)
+@click.option(
     "--resume-reachable-head-from",
     type=click.Path(exists=True, path_type=Path),
     help="Reachable squares head parameter file to resume training (Stage 1).",
@@ -766,6 +773,7 @@ def learn_model(
     stage2_clip: float,
     stage2_hidden_dim: Optional[int],
     stage2_head_dropout: float,
+    stage2_test_ratio: float,
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
     no_streaming: bool,
@@ -1226,6 +1234,7 @@ def learn_model(
                 stage2_clip=stage2_clip,
                 stage2_head_hidden_dim=stage2_hidden_dim,
                 stage2_head_dropout=stage2_head_dropout,
+                stage2_test_ratio=stage2_test_ratio,
                 learning_rate=learning_ratio or 0.001,
                 model_dir=model_dir,
                 resume_backbone_from=resume_backbone_from,

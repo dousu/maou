@@ -116,6 +116,7 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--stage2-clip FLOAT` | `0.0` | ASL負例確率クリッピングマージン．0.0 = 無効，0.02 = 推奨．容易な負例を完全に無視する閾値． |
 | `--stage2-hidden-dim INT` | `None` | Stage 2 headの隠れ層次元．None = 単一線形層．512推奨(hidden層使用時)． |
 | `--stage2-head-dropout FLOAT` | `0.0` | Stage 2 headのDropout率(0.0-1.0)．`--stage2-hidden-dim`指定時のみ有効． |
+| `--stage2-test-ratio FLOAT` | `0.0` | Stage 2検証データ分割比率．0.0で分割なし，0.1で10%を検証用に使用．ストリーミングモードでは未対応． |
 | `--freeze-backbone` | `false` | Freeze backbone parameters (embedding, backbone, pool, hand projection).【F:src/maou/infra/console/learn_model.py†L437-L441】 |
 | `--trainable-layers INT` | `None` | Number of trailing backbone layer groups to keep trainable. `0` = freeze all backbone layers. Unset = all layers trainable.【F:src/maou/infra/console/learn_model.py†L443-L451】 |
 | `--resume-reachable-head-from PATH` | optional | Reachable squares head parameter file to resume training (Stage 1).【F:src/maou/infra/console/learn_model.py†L508-L512】 |

@@ -59,6 +59,7 @@ class StageConfig:
     compilation: bool = False
     head_hidden_dim: int | None = None
     head_dropout: float = 0.0
+    val_dataloader: Optional[DataLoader] = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,13 @@ class SingleStageTrainingLoop:
             f"threshold={self.config.accuracy_threshold:.1%}"
         )
 
+        has_val = self.config.val_dataloader is not None
+        if has_val:
+            self.logger.info(
+                "Validation dataloader provided; "
+                "metrics will be reported on validation set"
+            )
+
         best_accuracy = 0.0
         final_loss = 0.0
 
@@ -207,16 +215,33 @@ class SingleStageTrainingLoop:
                 epoch
             )
 
+            # Use validation metrics if val_dataloader is provided
+            if has_val:
+                val_loss, val_accuracy = self._validate_epoch()
+                report_loss = val_loss
+                report_accuracy = val_accuracy
+            else:
+                report_loss = epoch_loss
+                report_accuracy = epoch_accuracy
+
             metric_label = (
                 "F1"
                 if self.config.stage
                 == TrainingStage.LEGAL_MOVES
                 else "Accuracy"
             )
-            self.logger.info(
-                f"Stage {self.config.stage} Epoch {epoch + 1}/{self.config.max_epochs}: "
-                f"Loss={epoch_loss:.4f}, {metric_label}={epoch_accuracy:.2%}"
-            )
+            if has_val:
+                self.logger.info(
+                    f"Stage {self.config.stage} Epoch {epoch + 1}/{self.config.max_epochs}: "
+                    f"Train Loss={epoch_loss:.4f}, "
+                    f"Val Loss={report_loss:.4f}, "
+                    f"Val {metric_label}={report_accuracy:.2%}"
+                )
+            else:
+                self.logger.info(
+                    f"Stage {self.config.stage} Epoch {epoch + 1}/{self.config.max_epochs}: "
+                    f"Loss={report_loss:.4f}, {metric_label}={report_accuracy:.2%}"
+                )
 
             # Step LR scheduler after each epoch
             if self.lr_scheduler is not None:
@@ -231,18 +256,21 @@ class SingleStageTrainingLoop:
                     current_lr,
                 )
 
-            best_accuracy = max(best_accuracy, epoch_accuracy)
-            final_loss = epoch_loss
+            best_accuracy = max(best_accuracy, report_accuracy)
+            final_loss = report_loss
 
             # Check if threshold met (early stopping)
-            if epoch_accuracy >= self.config.accuracy_threshold:
+            if (
+                report_accuracy
+                >= self.config.accuracy_threshold
+            ):
                 self.logger.info(
                     f"Stage {self.config.stage} {metric_label} threshold achieved! "
-                    f"({epoch_accuracy:.2%} >= {self.config.accuracy_threshold:.2%})"
+                    f"({report_accuracy:.2%} >= {self.config.accuracy_threshold:.2%})"
                 )
                 return StageResult(
                     stage=self.config.stage,
-                    achieved_accuracy=epoch_accuracy,
+                    achieved_accuracy=report_accuracy,
                     final_loss=final_loss,
                     epochs_trained=epoch + 1,
                     threshold_met=True,
@@ -458,6 +486,119 @@ class SingleStageTrainingLoop:
         )
 
         return avg_loss, accuracy
+
+    def _validate_epoch(self) -> tuple[float, float]:
+        """Run validation and return (loss, metric_value).
+
+        Returns:
+            Tuple of (average_loss, metric_value) where metric_value is
+            F1 score for Stage2 (LEGAL_MOVES) or accuracy for other stages.
+        """
+        if self.config.val_dataloader is None:
+            raise RuntimeError(
+                "val_dataloader is required for validation"
+            )
+
+        self.model.eval()
+        self.head.eval()
+
+        total_loss = 0.0
+        total_correct = 0.0
+        total_samples = 0
+        num_batches = 0
+
+        use_amp = self.device.type == "cuda"
+
+        with torch.no_grad():
+            for inputs, targets in self.config.val_dataloader:
+                board_tensor, hand_tensor = inputs
+                board_tensor = board_tensor.to(
+                    self.device, non_blocking=True
+                )
+                hand_tensor = (
+                    hand_tensor.to(
+                        self.device, non_blocking=True
+                    )
+                    if hand_tensor is not None
+                    else None
+                )
+                targets = targets.to(
+                    self.device, non_blocking=True
+                )
+
+                with torch.amp.autocast(
+                    device_type=self.device.type,
+                    enabled=use_amp,
+                ):
+                    features = self.model.forward_features(
+                        (board_tensor, hand_tensor)
+                    )
+                    logits = self.head(features)
+                    loss = self.config.loss_fn(logits, targets)
+
+                total_loss += loss.item()
+                num_batches += 1
+
+                predictions = torch.sigmoid(logits) > 0.5
+                if (
+                    self.config.stage
+                    == TrainingStage.LEGAL_MOVES
+                ):
+                    pred_bool = predictions
+                    tgt_bool = targets.bool()
+                    tp = (
+                        (pred_bool & tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    fp = (
+                        (pred_bool & ~tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    fn = (
+                        (~pred_bool & tgt_bool)
+                        .float()
+                        .sum(dim=1)
+                    )
+                    precision = tp / (tp + fp + 1e-8)
+                    recall = tp / (tp + fn + 1e-8)
+                    f1 = (
+                        2
+                        * precision
+                        * recall
+                        / (precision + recall + 1e-8)
+                    )
+                    both_empty = (pred_bool.sum(dim=1) == 0) & (
+                        tgt_bool.sum(dim=1) == 0
+                    )
+                    f1 = torch.where(
+                        both_empty,
+                        torch.ones_like(f1),
+                        f1,
+                    )
+                    total_correct += f1.sum().item()
+                    total_samples += f1.numel()
+                else:
+                    correct = (
+                        (predictions == targets.bool())
+                        .float()
+                        .sum()
+                        .item()
+                    )
+                    total_correct += correct
+                    total_samples += targets.numel()
+
+        avg_loss = (
+            total_loss / num_batches if num_batches > 0 else 0.0
+        )
+        metric = (
+            total_correct / total_samples
+            if total_samples > 0
+            else 0.0
+        )
+
+        return avg_loss, metric
 
 
 class MultiStageTrainingOrchestrator:

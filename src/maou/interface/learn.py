@@ -637,6 +637,7 @@ def _run_stage2(
     stage2_clip: float = 0.0,
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
+    stage2_test_ratio: float = 0.0,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
 
@@ -660,12 +661,15 @@ def _run_stage2(
         stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
         stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
         stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
+        stage2_test_ratio: 検証データ分割比率(デフォルト: 0.0で分割なし)
 
     Returns:
         Stage 2 の訓練結果
     """
     datasource = data_config.create_datasource()
-    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
+    train_ds, val_ds = datasource.train_test_split(
+        test_ratio=stage2_test_ratio
+    )
 
     dataset = Stage2Dataset(datasource=train_ds)
     dataloader = DataLoader(
@@ -675,6 +679,17 @@ def _run_stage2(
         num_workers=0,
         pin_memory=(device.type == "cuda"),
     )
+
+    val_dataloader: Optional[DataLoader] = None
+    if stage2_test_ratio > 0.0 and val_ds is not None:
+        val_dataset = Stage2Dataset(datasource=val_ds)
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
 
     stage_config = StageConfig(
         stage=TrainingStage.LEGAL_MOVES,
@@ -694,6 +709,7 @@ def _run_stage2(
         compilation=compilation,
         head_hidden_dim=stage2_head_hidden_dim,
         head_dropout=stage2_head_dropout,
+        val_dataloader=val_dataloader,
     )
 
     results = orchestrator.run_all_stages(
@@ -794,6 +810,7 @@ def _run_stage2_streaming(
     stage2_clip: float = 0.0,
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
+    stage2_test_ratio: float = 0.0,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
@@ -814,10 +831,18 @@ def _run_stage2_streaming(
         stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
         stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
         stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
+        stage2_test_ratio: 検証データ分割比率(ストリーミングでは未対応，デフォルト: 0.0)
 
     Returns:
         Stage 2 の訓練結果
     """
+    if stage2_test_ratio > 0.0:
+        logger.warning(
+            "stage2_test_ratio=%.2f is ignored in streaming mode. "
+            "Streaming datasets do not support train/test split.",
+            stage2_test_ratio,
+        )
+
     dataset = StreamingStage2Dataset(
         streaming_source=streaming_source,
         batch_size=batch_size,
@@ -978,6 +1003,7 @@ def learn_multi_stage(
     stage2_clip: float = 0.0,
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
+    stage2_test_ratio: float = 0.0,
     streaming: bool = False,
     stage1_streaming_source: Optional[
         StreamingDataSource
@@ -1047,6 +1073,7 @@ def learn_multi_stage(
         stage2_clip: Stage 2 ASL負例クリッピングマージン(デフォルト: 0.0)
         stage2_head_hidden_dim: Stage 2ヘッドの隠れ層次元(Noneで既定値)
         stage2_head_dropout: Stage 2ヘッドのドロップアウト率(デフォルト: 0.0)
+        stage2_test_ratio: Stage 2検証データ分割比率(デフォルト: 0.0で分割なし)
         streaming: Use streaming IterableDataset for Stage 1/2/3
         stage1_streaming_source: StreamingDataSource for Stage 1
         stage2_streaming_source: StreamingDataSource for Stage 2
@@ -1206,6 +1233,7 @@ def learn_multi_stage(
                 stage2_clip=stage2_clip,
                 stage2_head_hidden_dim=stage2_head_hidden_dim,
                 stage2_head_dropout=stage2_head_dropout,
+                stage2_test_ratio=stage2_test_ratio,
             )
         else:
             stage2_result = _run_stage2(
@@ -1225,6 +1253,7 @@ def learn_multi_stage(
                 stage2_clip=stage2_clip,
                 stage2_head_hidden_dim=stage2_head_hidden_dim,
                 stage2_head_dropout=stage2_head_dropout,
+                stage2_test_ratio=stage2_test_ratio,
             )
         results_dict["stages_completed"].append(
             {
