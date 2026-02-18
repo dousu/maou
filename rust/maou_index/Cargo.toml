@@ -13,3 +13,6 @@ pyo3-polars = { workspace = true }
 polars = { workspace = true }
 thiserror = { workspace = true }
 walkdir = "2.4"
+
+[dev-dependencies]
+tempfile = "3"

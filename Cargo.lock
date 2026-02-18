@@ -1096,6 +1096,7 @@ dependencies = [
  "polars",
  "pyo3",
  "pyo3-polars",
+ "tempfile",
  "thiserror 2.0.18",
  "walkdir",
 ]

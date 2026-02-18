@@ -211,11 +211,6 @@ impl DataIndex {
         self.total_records
     }
 
-    /// データ型を取得．
-    pub fn array_type(&self) -> ArrayType {
-        self.array_type
-    }
-
     /// ファイルパスリストを取得．
     pub fn file_paths(&self) -> &[PathBuf] {
         &self.file_paths

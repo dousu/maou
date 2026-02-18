@@ -99,7 +99,7 @@ fn add_sparse_arrays_rust(
 }
 
 /// Create maou_io submodule
-pub fn create_module(py: Python) -> PyResult<Bound<'_, PyModule>> {
+pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new_bound(py, "maou_io")?;
 
     m.add_function(wrap_pyfunction!(hello, &m)?)?;
