@@ -45,20 +45,20 @@ class TestReachableSquaresLoss:
         """Test default initialization."""
         loss_fn = ReachableSquaresLoss()
 
-        assert loss_fn.pos_weight.item() == 1.0
-        assert loss_fn.reduction == "mean"
+        assert loss_fn._pos_weight.item() == 1.0
+        assert loss_fn._reduction == "mean"
 
     def test_initialization_custom_pos_weight(self) -> None:
         """Test initialization with custom pos_weight."""
         loss_fn = ReachableSquaresLoss(pos_weight=2.0)
 
-        assert loss_fn.pos_weight.item() == 2.0
+        assert loss_fn._pos_weight.item() == 2.0
 
     def test_initialization_custom_reduction(self) -> None:
         """Test initialization with custom reduction mode."""
         loss_fn = ReachableSquaresLoss(reduction="sum")
 
-        assert loss_fn.reduction == "sum"
+        assert loss_fn._reduction == "sum"
 
     def test_forward_shape(self) -> None:
         """Test forward pass returns correct shape."""
@@ -454,6 +454,104 @@ class TestAsymmetricLoss:
         # Easy negatives should have very small loss due to
         # clip + focusing weight suppression
         assert loss.max().item() < 0.01
+
+    def test_extreme_logits_no_nan(self) -> None:
+        """Test that extreme logits do not produce NaN loss."""
+        loss_fn = AsymmetricLoss(
+            gamma_pos=0.0, gamma_neg=2.0, clip=0.02
+        )
+
+        batch_size = 4
+        num_labels = 100
+
+        targets = torch.zeros(batch_size, num_labels)
+        targets[:, :20] = 1.0
+
+        # Extreme logits that would cause NaN with sigmoid→log
+        logits = torch.where(
+            targets == 1,
+            torch.tensor(-100.0),
+            torch.tensor(100.0),
+        )
+
+        loss = loss_fn(logits, targets)
+
+        assert torch.isfinite(loss), (
+            f"Loss should be finite for extreme logits, got {loss.item()}"
+        )
+        assert not torch.isnan(loss), (
+            "Loss should not be NaN for extreme logits"
+        )
+
+    def test_extreme_logits_gradient_nonzero(self) -> None:
+        """Test gradient is non-zero for extreme wrong predictions.
+
+        F.logsigmoid maintains gradient ≈ ±1 for extreme logits,
+        unlike log(sigmoid(x).clamp()) which has zero gradient.
+        """
+        loss_fn = AsymmetricLoss(
+            gamma_pos=0.0, gamma_neg=0.0, clip=0.0
+        )
+
+        # Extreme false negative: target=1 but logits=-50
+        logits = torch.tensor([[-50.0]], requires_grad=True)
+        targets = torch.tensor([[1.0]])
+
+        loss = loss_fn(logits, targets)
+        loss.backward()
+
+        assert logits.grad is not None
+        grad_magnitude = logits.grad.abs().item()
+        # F.logsigmoid gives gradient ≈ -1 for extreme negative logits
+        assert grad_magnitude > 0.5, (
+            f"Gradient should be near 1.0 for extreme false negative, "
+            f"got {grad_magnitude}"
+        )
+
+    def test_extreme_logits_gradient_finite(self) -> None:
+        """Test gradients are finite for extreme logits with ASL params."""
+        loss_fn = AsymmetricLoss(
+            gamma_pos=0.0, gamma_neg=2.0, clip=0.02
+        )
+
+        batch_size = 4
+        num_labels = 100
+
+        logits = torch.randn(batch_size, num_labels) * 50
+        logits.requires_grad_(True)
+        targets = torch.randint(
+            0, 2, (batch_size, num_labels)
+        ).float()
+
+        loss = loss_fn(logits, targets)
+        loss.backward()
+
+        assert logits.grad is not None
+        assert torch.isfinite(logits.grad).all(), (
+            "All gradients should be finite for extreme logits"
+        )
+
+    def test_clip_zero_equals_logsigmoid_neg(self) -> None:
+        """Test clip=0 path uses F.logsigmoid(-x) for negatives."""
+        loss_fn = AsymmetricLoss(
+            gamma_pos=0.0,
+            gamma_neg=0.0,
+            clip=0.0,
+            reduction="none",
+        )
+
+        logits = torch.tensor([[5.0, -5.0, 0.0]])
+        targets = torch.tensor([[0.0, 0.0, 0.0]])
+
+        loss = loss_fn(logits, targets)
+
+        # Compare with BCEWithLogitsLoss (should match exactly)
+        bce = torch.nn.BCEWithLogitsLoss(reduction="none")
+        expected = bce(logits, targets)
+
+        torch.testing.assert_close(
+            loss, expected, atol=1e-5, rtol=1e-5
+        )
 
 
 class TestLegalMovesLoss:

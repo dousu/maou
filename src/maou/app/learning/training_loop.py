@@ -745,9 +745,29 @@ class TrainingLoop:
             )
 
         if context.legal_move_mask is not None:
-            masked_logits = context.outputs_policy.masked_fill(
-                ~context.legal_move_mask.bool(), float("-inf")
-            )
+            mask_bool = context.legal_move_mask.bool()
+            # 全ゼロマスク行の防御: log_softmax([-inf,...]) = NaN を防止
+            has_legal = mask_bool.any(dim=1)
+            if not has_legal.all():
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "Found %d samples with all-zero legal_move_mask; "
+                    "skipping masking for those samples to avoid NaN",
+                    int((~has_legal).sum().item()),
+                )
+                # 全ゼロ行はマスクを適用しない(元のlogitsを保持)
+                safe_mask = mask_bool | ~has_legal.unsqueeze(1)
+                masked_logits = (
+                    context.outputs_policy.masked_fill(
+                        ~safe_mask, float("-inf")
+                    )
+                )
+            else:
+                masked_logits = (
+                    context.outputs_policy.masked_fill(
+                        ~mask_bool, float("-inf")
+                    )
+                )
         else:
             masked_logits = context.outputs_policy
 

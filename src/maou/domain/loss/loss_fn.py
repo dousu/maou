@@ -1,6 +1,7 @@
 import logging
 
 import torch
+import torch.nn.functional as F
 
 
 # Generalized Cross Entropy Loss (GCE) の定義
@@ -140,8 +141,12 @@ class ReachableSquaresLoss(torch.nn.Module):
                 Default: 'mean'
         """
         super(ReachableSquaresLoss, self).__init__()
-        self.pos_weight = torch.tensor([pos_weight])
-        self.reduction = reduction
+        self._pos_weight = torch.tensor([pos_weight])
+        self._reduction = reduction
+        self._loss_fn = torch.nn.BCEWithLogitsLoss(
+            pos_weight=torch.tensor([pos_weight]),
+            reduction=reduction,
+        )
 
     def forward(
         self, logits: torch.Tensor, targets: torch.Tensor
@@ -156,11 +161,10 @@ class ReachableSquaresLoss(torch.nn.Module):
             Scalar loss value (if reduction='mean' or 'sum')
             or per-element loss (batch，81) if reduction='none'
         """
-        loss_fn = torch.nn.BCEWithLogitsLoss(
-            pos_weight=self.pos_weight.to(logits.device),
-            reduction=self.reduction,
+        self._loss_fn.pos_weight = self._pos_weight.to(
+            logits.device
         )
-        return loss_fn(logits, targets)
+        return self._loss_fn(logits, targets)
 
 
 class AsymmetricLoss(torch.nn.Module):
@@ -232,6 +236,8 @@ class AsymmetricLoss(torch.nn.Module):
             reduction='none'の場合は要素ごとの損失 (batch, num_labels)
 
         Note:
+            正例log確率に ``F.logsigmoid`` を使用し，極端なlogitsでも
+            勾配 ≈ ±1 を維持する(``BCEWithLogitsLoss`` 同等の数値安定性)．
             Focusing weight は**クリップ済み確率**から計算される．
             これにより clip で抑制された easy negative は focusing weight も 0 となり，
             完全に損失から除外される(Alibaba-MIIL/ASL 参照実装準拠)．
@@ -240,21 +246,24 @@ class AsymmetricLoss(torch.nn.Module):
         logits = logits.float()
         targets = targets.float()
 
-        # Sigmoid で確率に変換
-        probs = torch.sigmoid(logits)
-        probs_pos = probs
-        probs_neg = 1.0 - probs
+        # 数値安定な log-sigmoid を使用 (log-sum-exp trick)
+        # F.logsigmoid(x) = -softplus(-x) は極端なlogitsでも勾配を維持
+        log_probs_pos = F.logsigmoid(logits)
 
-        # Probability shifting (negative clipping)
+        # 負例log確率: clip有無で計算方法を分岐
         if self.clip > 0:
-            probs_neg = (probs_neg + self.clip).clamp(max=1.0)
-
-        # log を1回だけ計算 (重複計算の排除)
-        log_probs_pos = torch.log(probs_pos.clamp(min=1e-8))
-        log_probs_neg = torch.log(probs_neg.clamp(min=1e-8))
+            # clip > 0: sigmoid(-x) + clip で下限保証 (probs_neg ≥ clip)
+            probs_neg = (
+                torch.sigmoid(-logits) + self.clip
+            ).clamp(max=1.0)
+            log_probs_neg = torch.log(probs_neg)
+        else:
+            # clip = 0: F.logsigmoid(-x) で数値安定に計算
+            log_probs_neg = F.logsigmoid(-logits)
 
         # Positive loss with focusing
         if self.gamma_pos > 0:
+            probs_pos = torch.sigmoid(logits)
             pos_weight = (1 - probs_pos) ** self.gamma_pos
             loss_pos = targets * pos_weight * log_probs_pos
         else:
@@ -262,8 +271,13 @@ class AsymmetricLoss(torch.nn.Module):
 
         # Negative loss with focusing (クリップ済み確率で focusing weight を計算)
         if self.gamma_neg > 0:
-            # probs_neg はクリップ済み → (1 - probs_neg) でクリップ済み正例確率を逆算
-            one_minus_probs_neg = (1.0 - probs_neg).clamp(min=0)
+            if self.clip > 0:
+                # probs_neg はクリップ済み → (1 - probs_neg) で focusing weight
+                one_minus_probs_neg = (1.0 - probs_neg).clamp(
+                    min=0
+                )
+            else:
+                one_minus_probs_neg = torch.sigmoid(logits)
             neg_weight = one_minus_probs_neg**self.gamma_neg
             loss_neg = (
                 (1 - targets) * neg_weight * log_probs_neg
