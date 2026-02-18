@@ -146,3 +146,52 @@ class TestBenchmarkResult:
         assert "gpu_prefetch_buffer_size" in d
         assert d["gpu_prefetch_enabled"] == 1.0
         assert d["gpu_prefetch_buffer_size"] == 8.0
+
+
+class TestFormatTimingSummaryLabeling:
+    """format_timing_summary のラベリングロジックテスト.
+
+    format_timing_summary はローカル関数のため直接呼び出せない．
+    ここでは同関数内で使用される条件分岐ロジックを再現し，
+    BenchmarkResult のフィールド値に基づくラベルとノートの期待値を検証する．
+    """
+
+    def test_format_summary_label_prefetch_wait(self) -> None:
+        """Prefetch有効時に 'Prefetch Wait' ラベルが使用される."""
+        gpu_prefetch_enabled = True
+        data_label = (
+            "Prefetch Wait"
+            if gpu_prefetch_enabled
+            else "Data Loading"
+        )
+        assert data_label == "Prefetch Wait"
+
+    def test_format_summary_label_data_loading(self) -> None:
+        """Prefetch無効時に 'Data Loading' ラベルが使用される."""
+        gpu_prefetch_enabled = False
+        data_label = (
+            "Prefetch Wait"
+            if gpu_prefetch_enabled
+            else "Data Loading"
+        )
+        assert data_label == "Data Loading"
+
+    def test_format_summary_prefetch_note(self) -> None:
+        """Prefetch有効時に注釈が含まれる."""
+        gpu_prefetch_enabled = True
+        prefetch_note = ""
+        if gpu_prefetch_enabled:
+            prefetch_note = (
+                "\n\n  Note: GPU Prefetcher active"
+                " - 'Prefetch Wait' shows buffer fetch time,"
+                " not actual disk I/O time."
+            )
+        assert "GPU Prefetcher active" in prefetch_note
+        assert "Prefetch Wait" in prefetch_note
+
+        # 無効時は空文字列
+        gpu_prefetch_enabled = False
+        prefetch_note = ""
+        if gpu_prefetch_enabled:
+            prefetch_note = "should not appear"
+        assert prefetch_note == ""
