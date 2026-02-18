@@ -1,3 +1,5 @@
+import logging
+
 import torch
 
 
@@ -161,34 +163,192 @@ class ReachableSquaresLoss(torch.nn.Module):
         return loss_fn(logits, targets)
 
 
+class AsymmetricLoss(torch.nn.Module):
+    """Asymmetric Loss for multi-label classification with extreme class imbalance.
+
+    正例と負例に独立したfocusing parameterを使用し，
+    マルチラベル分類における極端なクラス不均衡に対処する．
+
+    将棋の合法手予測(1496ラベル中~20正例)のような
+    extreme multi-label imbalance に特に有効．
+
+    γ+=0, γ-=0, clip=0.0 の場合は標準BCEWithLogitsLossと同等の動作．
+
+    References:
+        Ridnik et al., "Asymmetric Loss For Multi-Label Classification", ICCV 2021
+    """
+
+    def __init__(
+        self,
+        gamma_pos: float = 0.0,
+        gamma_neg: float = 2.0,
+        clip: float = 0.02,
+        reduction: str = "mean",
+    ) -> None:
+        """Initialize AsymmetricLoss.
+
+        Args:
+            gamma_pos: 正例のfocusing parameter．
+                0 = 正例の損失を一切軽視しない(推奨)．
+                デフォルト: 0.0
+            gamma_neg: 負例のfocusing parameter．
+                大きいほど容易な負例の損失を強く抑制．
+                推奨範囲: 1.0-4.0，デフォルト: 2.0
+            clip: 負例確率のクリッピングマージン．
+                確率が clip 未満の負例を完全に無視する．
+                推奨範囲: 0.0-0.05，デフォルト: 0.02
+            reduction: 損失の集約方法 ('mean', 'sum', 'none')．
+                デフォルト: 'mean'
+        """
+        super().__init__()
+        if gamma_pos < 0:
+            raise ValueError(
+                f"gamma_pos must be non-negative, got {gamma_pos}"
+            )
+        if gamma_neg < 0:
+            raise ValueError(
+                f"gamma_neg must be non-negative, got {gamma_neg}"
+            )
+        if clip < 0:
+            raise ValueError(
+                f"clip must be non-negative, got {clip}"
+            )
+        self.gamma_pos = gamma_pos
+        self.gamma_neg = gamma_neg
+        self.clip = clip
+        self.reduction = reduction
+
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute asymmetric loss.
+
+        Args:
+            logits: 予測logits (batch, num_labels) - sigmoid前の生スコア
+            targets: ターゲット二値ラベル (batch, num_labels)，値は0または1
+
+        Returns:
+            reduction='mean'または'sum'の場合はスカラー損失値，
+            reduction='none'の場合は要素ごとの損失 (batch, num_labels)
+
+        Note:
+            Focusing weight は**クリップ済み確率**から計算される．
+            これにより clip で抑制された easy negative は focusing weight も 0 となり，
+            完全に損失から除外される(Alibaba-MIIL/ASL 参照実装準拠)．
+        """
+        # FP32にキャストして数値安定性を確保 (AMP対応)
+        logits = logits.float()
+        targets = targets.float()
+
+        # Sigmoid で確率に変換
+        probs = torch.sigmoid(logits)
+        probs_pos = probs
+        probs_neg = 1.0 - probs
+
+        # Probability shifting (negative clipping)
+        if self.clip > 0:
+            probs_neg = (probs_neg + self.clip).clamp(max=1.0)
+
+        # log を1回だけ計算 (重複計算の排除)
+        log_probs_pos = torch.log(probs_pos.clamp(min=1e-8))
+        log_probs_neg = torch.log(probs_neg.clamp(min=1e-8))
+
+        # Positive loss with focusing
+        if self.gamma_pos > 0:
+            pos_weight = (1 - probs_pos) ** self.gamma_pos
+            loss_pos = targets * pos_weight * log_probs_pos
+        else:
+            loss_pos = targets * log_probs_pos
+
+        # Negative loss with focusing (クリップ済み確率で focusing weight を計算)
+        if self.gamma_neg > 0:
+            # probs_neg はクリップ済み → (1 - probs_neg) でクリップ済み正例確率を逆算
+            one_minus_probs_neg = (1.0 - probs_neg).clamp(min=0)
+            neg_weight = one_minus_probs_neg**self.gamma_neg
+            loss_neg = (
+                (1 - targets) * neg_weight * log_probs_neg
+            )
+        else:
+            loss_neg = (1 - targets) * log_probs_neg
+
+        loss = -(loss_pos + loss_neg)
+
+        # Apply reduction
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 class LegalMovesLoss(torch.nn.Module):
     """Multi-label binary cross-entropy loss for legal moves prediction.
 
     This loss function is designed for Stage 2 training where the model
     learns which moves are legal in a given position (MOVE_LABELS_NUM binary outputs).
 
-    Unlike policy loss (multi-class classification with softmax)，this is
-    multi-label classification where multiple moves can be legal simultaneously.
-    Each move is treated as an independent binary classification problem.
+    クラス不均衡対策としてAsymmetric Loss (ASL)をサポート．
+    1496ラベル中平均~20個が正例(1.3%)という極端な不均衡に対処する．
 
-    Uses BCEWithLogitsLoss for numerical stability and mixed precision compatibility.
+    gamma_neg=0.0 かつ clip=0.0 の場合は標準BCEWithLogitsLossと同等の動作．
     """
 
     def __init__(
-        self, pos_weight: float = 1.0, reduction: str = "mean"
+        self,
+        pos_weight: float = 1.0,
+        reduction: str = "mean",
+        gamma_pos: float = 0.0,
+        gamma_neg: float = 0.0,
+        clip: float = 0.0,
     ) -> None:
         """Initialize LegalMovesLoss.
 
         Args:
             pos_weight: Weight for positive class (legal moves).
                 Values > 1.0 increase recall，< 1.0 increase precision.
-                Default: 1.0 (balanced)
+                Default: 1.0 (balanced).
+                ASL使用時は通常1.0のまま(ASLが不均衡を処理するため)．
             reduction: Reduction method ('mean'，'sum'，or 'none').
                 Default: 'mean'
+            gamma_pos: ASL positive focusing parameter.
+                0.0 = 正例損失を軽視しない (default/recommended).
+            gamma_neg: ASL negative focusing parameter.
+                0.0 = standard BCE (default)，2.0 = recommended for imbalanced.
+            clip: ASL negative probability clipping margin.
+                0.0 = no clipping (default)，0.02 = recommended.
         """
-        super(LegalMovesLoss, self).__init__()
-        self.pos_weight = torch.tensor([pos_weight])
-        self.reduction = reduction
+        super().__init__()
+        self._use_asl = (
+            gamma_neg > 0.0 or gamma_pos > 0.0 or clip > 0.0
+        )
+
+        if self._use_asl and pos_weight != 1.0:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "pos_weight=%.1f is ignored when ASL is active "
+                "(gamma_neg=%.1f, gamma_pos=%.1f, clip=%.3f). "
+                "ASL handles class imbalance internally.",
+                pos_weight,
+                gamma_neg,
+                gamma_pos,
+                clip,
+            )
+
+        if self._use_asl:
+            self._loss_fn: torch.nn.Module = AsymmetricLoss(
+                gamma_pos=gamma_pos,
+                gamma_neg=gamma_neg,
+                clip=clip,
+                reduction=reduction,
+            )
+        else:
+            # ASL無効時は標準BCEを使用 (性能最適化パス)
+            self._pos_weight = torch.tensor([pos_weight])
+            self._reduction = reduction
+            self._loss_fn = torch.nn.BCEWithLogitsLoss(
+                pos_weight=torch.tensor([pos_weight]),
+                reduction=reduction,
+            )
 
     def forward(
         self, logits: torch.Tensor, targets: torch.Tensor
@@ -203,8 +363,11 @@ class LegalMovesLoss(torch.nn.Module):
             Scalar loss value (if reduction='mean' or 'sum')
             or per-element loss (batch，MOVE_LABELS_NUM) if reduction='none'
         """
-        loss_fn = torch.nn.BCEWithLogitsLoss(
-            pos_weight=self.pos_weight.to(logits.device),
-            reduction=self.reduction,
+        if self._use_asl:
+            return self._loss_fn(logits, targets)
+
+        # Standard BCE path: pos_weight のデバイス同期が必要
+        self._loss_fn.pos_weight = self._pos_weight.to(
+            logits.device
         )
-        return loss_fn(logits, targets)
+        return self._loss_fn(logits, targets)

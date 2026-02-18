@@ -559,6 +559,7 @@ def _run_stage1(
     device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
+    stage1_pos_weight: float = 1.0,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) を実行し結果を返す．
 
@@ -574,6 +575,9 @@ def _run_stage1(
         max_epochs: 最大エポック数
         threshold: 精度閾値
         device: 計算デバイス
+        lr_scheduler_name: 学習率スケジューラ名
+        compilation: torch.compileを有効化するか
+        stage1_pos_weight: 正例の重み(デフォルト: 1.0)
 
     Returns:
         Stage 1 の訓練結果
@@ -595,7 +599,9 @@ def _run_stage1(
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
         dataloader=dataloader,
-        loss_fn=ReachableSquaresLoss(),
+        loss_fn=ReachableSquaresLoss(
+            pos_weight=stage1_pos_weight
+        ),
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
@@ -625,6 +631,12 @@ def _run_stage2(
     device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
+    stage2_pos_weight: float = 1.0,
+    stage2_gamma_pos: float = 0.0,
+    stage2_gamma_neg: float = 0.0,
+    stage2_clip: float = 0.0,
+    stage2_head_hidden_dim: int | None = None,
+    stage2_head_dropout: float = 0.0,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
 
@@ -640,6 +652,14 @@ def _run_stage2(
         max_epochs: 最大エポック数
         threshold: 精度閾値
         device: 計算デバイス
+        lr_scheduler_name: 学習率スケジューラ名
+        compilation: torch.compileを有効化するか
+        stage2_pos_weight: 正例の重み(デフォルト: 1.0)
+        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
+        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
+        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
 
     Returns:
         Stage 2 の訓練結果
@@ -661,12 +681,19 @@ def _run_stage2(
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
         dataloader=dataloader,
-        loss_fn=LegalMovesLoss(),
+        loss_fn=LegalMovesLoss(
+            pos_weight=stage2_pos_weight,
+            gamma_pos=stage2_gamma_pos,
+            gamma_neg=stage2_gamma_neg,
+            clip=stage2_clip,
+        ),
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
         actual_batch_size=batch_size,
         compilation=compilation,
+        head_hidden_dim=stage2_head_hidden_dim,
+        head_dropout=stage2_head_dropout,
     )
 
     results = orchestrator.run_all_stages(
@@ -691,6 +718,7 @@ def _run_stage1_streaming(
     device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
+    stage1_pos_weight: float = 1.0,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
 
@@ -703,6 +731,9 @@ def _run_stage1_streaming(
         max_epochs: 最大エポック数
         threshold: 精度閾値
         device: 計算デバイス
+        lr_scheduler_name: 学習率スケジューラ名
+        compilation: torch.compileを有効化するか
+        stage1_pos_weight: 正例の重み(デフォルト: 1.0)
 
     Returns:
         Stage 1 の訓練結果
@@ -725,7 +756,9 @@ def _run_stage1_streaming(
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
         dataloader=dataloader,
-        loss_fn=ReachableSquaresLoss(),
+        loss_fn=ReachableSquaresLoss(
+            pos_weight=stage1_pos_weight
+        ),
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
@@ -755,6 +788,12 @@ def _run_stage2_streaming(
     device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
+    stage2_pos_weight: float = 1.0,
+    stage2_gamma_pos: float = 0.0,
+    stage2_gamma_neg: float = 0.0,
+    stage2_clip: float = 0.0,
+    stage2_head_hidden_dim: int | None = None,
+    stage2_head_dropout: float = 0.0,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
@@ -767,6 +806,14 @@ def _run_stage2_streaming(
         max_epochs: 最大エポック数
         threshold: 精度閾値
         device: 計算デバイス
+        lr_scheduler_name: 学習率スケジューラ名
+        compilation: torch.compileを有効化するか
+        stage2_pos_weight: 正例の重み(デフォルト: 1.0)
+        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
+        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
+        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
 
     Returns:
         Stage 2 の訓練結果
@@ -789,12 +836,19 @@ def _run_stage2_streaming(
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
         dataloader=dataloader,
-        loss_fn=LegalMovesLoss(),
+        loss_fn=LegalMovesLoss(
+            pos_weight=stage2_pos_weight,
+            gamma_pos=stage2_gamma_pos,
+            gamma_neg=stage2_gamma_neg,
+            clip=stage2_clip,
+        ),
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
         actual_batch_size=batch_size,
         compilation=compilation,
+        head_hidden_dim=stage2_head_hidden_dim,
+        head_dropout=stage2_head_dropout,
     )
 
     results = orchestrator.run_all_stages(
@@ -917,6 +971,13 @@ def learn_multi_stage(
     architecture_config: Optional[dict[str, Any]] = None,
     stage12_lr_scheduler: Optional[str] = "auto",
     stage12_compilation: bool = False,
+    stage1_pos_weight: float = 1.0,
+    stage2_pos_weight: float = 1.0,
+    stage2_gamma_pos: float = 0.0,
+    stage2_gamma_neg: float = 0.0,
+    stage2_clip: float = 0.0,
+    stage2_head_hidden_dim: int | None = None,
+    stage2_head_dropout: float = 0.0,
     streaming: bool = False,
     stage1_streaming_source: Optional[
         StreamingDataSource
@@ -979,6 +1040,13 @@ def learn_multi_stage(
         architecture_config: Architecture-specific config dict for backbone
         stage12_lr_scheduler: Stage 1/2 LRスケジューラ設定．'auto'はbatch_size > 256で自動有効化．
         stage12_compilation: Stage 1/2でtorch.compileを有効化する．
+        stage1_pos_weight: Stage 1の正例の重み(デフォルト: 1.0)
+        stage2_pos_weight: Stage 2の正例の重み(デフォルト: 1.0)
+        stage2_gamma_pos: Stage 2 ASL正例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_gamma_neg: Stage 2 ASL負例フォーカシングパラメータ(デフォルト: 0.0)
+        stage2_clip: Stage 2 ASL負例クリッピングマージン(デフォルト: 0.0)
+        stage2_head_hidden_dim: Stage 2ヘッドの隠れ層次元(Noneで既定値)
+        stage2_head_dropout: Stage 2ヘッドのドロップアウト率(デフォルト: 0.0)
         streaming: Use streaming IterableDataset for Stage 1/2/3
         stage1_streaming_source: StreamingDataSource for Stage 1
         stage2_streaming_source: StreamingDataSource for Stage 2
@@ -1089,6 +1157,7 @@ def learn_multi_stage(
                 device=device,
                 lr_scheduler_name=resolved_stage1_scheduler,
                 compilation=stage12_compilation,
+                stage1_pos_weight=stage1_pos_weight,
             )
         else:
             stage1_result = _run_stage1(
@@ -1102,6 +1171,7 @@ def learn_multi_stage(
                 device=device,
                 lr_scheduler_name=resolved_stage1_scheduler,
                 compilation=stage12_compilation,
+                stage1_pos_weight=stage1_pos_weight,
             )
         results_dict["stages_completed"].append(
             {
@@ -1130,6 +1200,12 @@ def learn_multi_stage(
                 device=device,
                 lr_scheduler_name=resolved_stage2_scheduler,
                 compilation=stage12_compilation,
+                stage2_pos_weight=stage2_pos_weight,
+                stage2_gamma_pos=stage2_gamma_pos,
+                stage2_gamma_neg=stage2_gamma_neg,
+                stage2_clip=stage2_clip,
+                stage2_head_hidden_dim=stage2_head_hidden_dim,
+                stage2_head_dropout=stage2_head_dropout,
             )
         else:
             stage2_result = _run_stage2(
@@ -1143,6 +1219,12 @@ def learn_multi_stage(
                 device=device,
                 lr_scheduler_name=resolved_stage2_scheduler,
                 compilation=stage12_compilation,
+                stage2_pos_weight=stage2_pos_weight,
+                stage2_gamma_pos=stage2_gamma_pos,
+                stage2_gamma_neg=stage2_gamma_neg,
+                stage2_clip=stage2_clip,
+                stage2_head_hidden_dim=stage2_head_hidden_dim,
+                stage2_head_dropout=stage2_head_dropout,
             )
         results_dict["stages_completed"].append(
             {

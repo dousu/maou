@@ -109,6 +109,13 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--stage2-learning-rate FLOAT` | `None` (inherits `--learning-ratio`) | Learning rate for Stage 2. When unset, inherits the global `--learning-ratio`.【F:src/maou/infra/console/learn_model.py†L528-L534】 |
 | `--stage12-lr-scheduler {auto,none,Warmup+CosineDecay,CosineAnnealingLR}` | `auto` | Learning rate scheduler for Stage 1/2. `auto` enables Warmup+CosineDecay when batch_size > 256. `none` disables the scheduler (fixed LR). |
 | `--stage12-compilation` / `--no-stage12-compilation` | `False` | Stage 1/2でtorch.compileを有効化．A100で10-30%高速化 |
+| `--stage1-pos-weight FLOAT` | `1.0` | Stage 1損失関数の正例重み．値 > 1.0 でrecall向上，< 1.0 でprecision向上． |
+| `--stage2-pos-weight FLOAT` | `1.0` | Stage 2 BCE損失の正例重み．ASL有効時は通常1.0のまま(ASLが不均衡を処理)． |
+| `--stage2-gamma-pos FLOAT` | `0.0` | ASL正例focusing parameter．0.0 = 正例損失を軽視しない(推奨)． |
+| `--stage2-gamma-neg FLOAT` | `0.0` | ASL負例focusing parameter．0.0 = 標準BCE，2.0 = 不均衡データ推奨．ASL有効化には > 0.0 を指定する． |
+| `--stage2-clip FLOAT` | `0.0` | ASL負例確率クリッピングマージン．0.0 = 無効，0.02 = 推奨．容易な負例を完全に無視する閾値． |
+| `--stage2-hidden-dim INT` | `None` | Stage 2 headの隠れ層次元．None = 単一線形層．512推奨(hidden層使用時)． |
+| `--stage2-head-dropout FLOAT` | `0.0` | Stage 2 headのDropout率(0.0-1.0)．`--stage2-hidden-dim`指定時のみ有効． |
 | `--freeze-backbone` | `false` | Freeze backbone parameters (embedding, backbone, pool, hand projection).【F:src/maou/infra/console/learn_model.py†L437-L441】 |
 | `--trainable-layers INT` | `None` | Number of trailing backbone layer groups to keep trainable. `0` = freeze all backbone layers. Unset = all layers trainable.【F:src/maou/infra/console/learn_model.py†L443-L451】 |
 | `--resume-reachable-head-from PATH` | optional | Reachable squares head parameter file to resume training (Stage 1).【F:src/maou/infra/console/learn_model.py†L508-L512】 |

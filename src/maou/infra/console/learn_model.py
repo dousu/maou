@@ -563,6 +563,64 @@ S3DataSource: S3DataSourceType | None = getattr(
     show_default=True,
 )
 @click.option(
+    "--stage1-pos-weight",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Positive class weight for Stage 1 loss.",
+)
+@click.option(
+    "--stage2-pos-weight",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Positive class weight for Stage 2 BCE loss. Usually 1.0 when ASL is enabled.",
+)
+@click.option(
+    "--stage2-gamma-pos",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL positive focusing parameter for Stage 2."
+        " 0.0 = no down-weighting of positive loss (recommended)."
+    ),
+)
+@click.option(
+    "--stage2-gamma-neg",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL negative focusing parameter for Stage 2."
+        " 0.0 = standard BCE, 2.0 = recommended for imbalanced data."
+    ),
+)
+@click.option(
+    "--stage2-clip",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL negative probability clipping margin for Stage 2."
+        " 0.0 = disabled, 0.02 = recommended."
+    ),
+)
+@click.option(
+    "--stage2-hidden-dim",
+    type=int,
+    default=None,
+    show_default=True,
+    help="Hidden layer dimension for Stage 2 head. None = single linear layer.",
+)
+@click.option(
+    "--stage2-head-dropout",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Dropout rate for Stage 2 head (requires --stage2-hidden-dim).",
+)
+@click.option(
     "--resume-reachable-head-from",
     type=click.Path(exists=True, path_type=Path),
     help="Reachable squares head parameter file to resume training (Stage 1).",
@@ -701,6 +759,13 @@ def learn_model(
     stage2_learning_rate: Optional[float],
     stage12_lr_scheduler: Optional[str],
     stage12_compilation: bool,
+    stage1_pos_weight: float,
+    stage2_pos_weight: float,
+    stage2_gamma_pos: float,
+    stage2_gamma_neg: float,
+    stage2_clip: float,
+    stage2_hidden_dim: Optional[int],
+    stage2_head_dropout: float,
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
     no_streaming: bool,
@@ -1154,6 +1219,13 @@ def learn_model(
                 stage2_learning_rate=stage2_learning_rate,
                 stage12_lr_scheduler=stage12_lr_scheduler,
                 stage12_compilation=stage12_compilation,
+                stage1_pos_weight=stage1_pos_weight,
+                stage2_pos_weight=stage2_pos_weight,
+                stage2_gamma_pos=stage2_gamma_pos,
+                stage2_gamma_neg=stage2_gamma_neg,
+                stage2_clip=stage2_clip,
+                stage2_head_hidden_dim=stage2_hidden_dim,
+                stage2_head_dropout=stage2_head_dropout,
                 learning_rate=learning_ratio or 0.001,
                 model_dir=model_dir,
                 resume_backbone_from=resume_backbone_from,

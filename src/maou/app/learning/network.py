@@ -563,6 +563,8 @@ class LegalMovesHead(nn.Module):
     this performs multi-label classification where multiple moves can be
     legal simultaneously. Each move is treated as an independent binary
     classification problem.
+
+    Supports optional dropout regularization when using a hidden layer.
     """
 
     def __init__(
@@ -571,6 +573,7 @@ class LegalMovesHead(nn.Module):
         input_dim: int,
         num_move_labels: int = MOVE_LABELS_NUM,
         hidden_dim: int | None = None,
+        dropout: float = 0.0,
     ) -> None:
         """Initialize LegalMovesHead.
 
@@ -580,6 +583,9 @@ class LegalMovesHead(nn.Module):
                 (default: MOVE_LABELS_NUM = 1496)
             hidden_dim: Optional hidden layer dimension.
                 If None，uses single linear layer.
+            dropout: Dropout rate for regularization (0.0-1.0).
+                Only effective when hidden_dim is not None.
+                Default: 0.0 (no dropout)
         """
         super().__init__()
         layers: list[nn.Module]
@@ -589,8 +595,12 @@ class LegalMovesHead(nn.Module):
             layers = [
                 nn.Linear(input_dim, hidden_dim),
                 nn.GELU(),
-                nn.Linear(hidden_dim, num_move_labels),
             ]
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+            layers.append(
+                nn.Linear(hidden_dim, num_move_labels)
+            )
         self.head = nn.Sequential(*layers)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:

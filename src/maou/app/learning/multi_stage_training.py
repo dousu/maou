@@ -57,6 +57,8 @@ class StageConfig:
     base_batch_size: int = 256
     actual_batch_size: int = 256
     compilation: bool = False
+    head_hidden_dim: int | None = None
+    head_dropout: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -575,7 +577,9 @@ class MultiStageTrainingOrchestrator:
             self.logger.info("=" * 60)
 
             legal_moves_head = LegalMovesHead(
-                input_dim=self.backbone.embedding_dim
+                input_dim=self.backbone.embedding_dim,
+                hidden_dim=stage2_config.head_hidden_dim,
+                dropout=stage2_config.head_dropout,
             )
             stage2_loop = SingleStageTrainingLoop(
                 model=self.backbone,
