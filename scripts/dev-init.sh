@@ -15,6 +15,7 @@ fi
 CARGO_USER_CONFIG="$HOME/.cargo/config.toml"
 CARGO_USER_CONFIG_MARKER="# managed by dev-init.sh"
 if ! grep -qF "$CARGO_USER_CONFIG_MARKER" "$CARGO_USER_CONFIG" 2>/dev/null; then
+    mkdir -p $(dirname "$CARGO_USER_CONFIG") 
     cat > "$CARGO_USER_CONFIG" << CARGO_CONF
 $CARGO_USER_CONFIG_MARKER
 
@@ -47,8 +48,6 @@ rustup component add rust-analyzer
 # Install uv if not present
 if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    # shellcheck source=/dev/null
-    source "$HOME/.local/bin/env"
 fi
 
 uv generate-shell-completion bash >> ~/.bash_completion

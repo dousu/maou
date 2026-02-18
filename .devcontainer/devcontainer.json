@@ -1,8 +1,7 @@
 {
 	"name": "Ubuntu",
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
-	"postCreateCommand": "bash scripts/dev-init.sh && bash scripts/setup-serena.sh",
-	"postStartCommand": "bash scripts/start-serena.sh",
+	"postCreateCommand": "bash scripts/devcontainer.sh && bash scripts/dev-init.sh",
 	"features": {
 		"ghcr.io/devcontainers/features/python:1": {
 			"version": "3.12"
@@ -20,7 +19,6 @@
 				"python.analysis.typeCheckingMode": "basic",
 				"[python]": {
 					"editor.formatOnSave": true,
-					"editor.defaultFormatter": "charliermarsh.ruff",
 					"editor.codeActionsOnSave": {
 						"source.fixAll.ruff": "explicit",
 						"source.organizeImports.ruff": "explicit"
@@ -33,10 +31,7 @@
     			"python.testing.pytestEnabled": true
 			},
 			"extensions": [
-				"esbenp.prettier-vscode",
-				"charliermarsh.ruff",
-				"GitHub.copilot",
-				"rust-lang.rust-analyzer"
+				"esbenp.prettier-vscode"
 			]
 		}
 	}
