@@ -8,7 +8,7 @@
   - 型: `int`
   - 説明: "Training batch size."
   - 必須: False
-  
+
 **重要**: Stage1用の専用バッチサイズオプションは存在しない。
 
 ### バッチサイズの経路（CLI → Interface → App → Domain）
@@ -17,17 +17,17 @@
    ```python
    batch_size=batch_size or 256,  # デフォルト 256
    ```
-   
+
 2. **Interface層** (`learn.py` 行 792-804):
    - `learn_multi_stage()` の `batch_size` パラメータ (型: int, デフォルト: 256)
-   
+
 3. **Stage1実行関数** (`learn.py` 行 522-583):
    - `_run_stage1()`: map-style dataset用
    - `_run_stage1_streaming()`: streaming dataset用
    - どちらも同一の `batch_size` を使用
-   
+
 4. **DataLoader構成**:
-   
+
    **Map-style** (`learn.py` 行 555-561):
    ```python
    DataLoader(
@@ -38,7 +38,7 @@
        pin_memory=(device.type == "cuda"),  # GPU時はピン留め
    )
    ```
-   
+
    **Streaming** (`learn.py` 行 681-687):
    ```python
    DataLoader(
@@ -62,7 +62,7 @@
 
 ## 2. Stage1 の学習データ量
 
-### データ生成 
+### データ生成
 - **ファイル**: `/workspaces/maou/src/maou/domain/data/stage1_generator.py`
 - **合計パターン**: 約1,105件
 
@@ -71,7 +71,7 @@
   - 通常の駒(8種類): FU, KY, KE, GI, KI, KA, HI, OU
   - 成った駒(6種類): TO, NKY, NKE, NGI, UMA, RYU
   - 各駒の配置: 9×9ボード上の合法的な位置
-  
+
 - **手持ちのパターン**: 7件
   - 7種類の駒 (FU, KY, KE, GI, KI, KA, HI)
   - 成った駒は手持ちできない
@@ -79,7 +79,7 @@
 ### データロード方法
 1. **生成**: `Stage1DataGenerator.generate_all_stage1_data()` (stage1_generator.py 行 228)
    - 結果: Polars DataFrame (~1,105行)
-   
+
 2. **保存**: `save_stage1_df()` で `.feather` ファイル (stage1_data_generation.py 行 56)
 
 3. **学習時**: `FileDataSource.FileDataSourceSpliter` または `StreamingFileSource` で読込
@@ -104,7 +104,7 @@
   correct = (predictions == targets.bool()).float().sum()
   total_correct += correct.item()
   total_samples += targets.numel()
-  
+
   accuracy = total_correct / total_samples
   ```
 
@@ -118,7 +118,7 @@
 for epoch in range(self.config.max_epochs):
     # ... training ...
     epoch_loss, epoch_accuracy = self._train_epoch(epoch)
-    
+
     # Check if threshold met (早期停止)
     if epoch_accuracy >= self.config.accuracy_threshold:  # 行 156
         logger.info(f"Stage {self.config.stage} threshold achieved!")
@@ -133,7 +133,7 @@ for epoch in range(self.config.max_epochs):
 
 ### 閾値達成時の振る舞い
 1. **閾値達成**: 即座にそのステージを終了し、次ステージに進行
-2. **閾値未達成 (max_epochs到達)**: 
+2. **閾値未達成 (max_epochs到達)**:
    - 最高精度を記録
    - RuntimeError を発生させる (multi_stage_training.py 行 342-353)
    ```python
@@ -235,4 +235,3 @@ dataset = StreamingStage1Dataset(
 | dataset.py | 295-369 | Stage1Dataset クラス |
 | streaming_dataset.py | 149-220 | StreamingStage1Dataset クラス |
 | stage1_generator.py | 7, 228-244 | Stage1データ生成 (~1,105件) |
-

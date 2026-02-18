@@ -111,7 +111,7 @@
 for epoch in range(self.config.max_epochs):
     # ...
     epoch_loss, epoch_accuracy = self._train_epoch(epoch)
-    
+
     # 閾値チェック（エポック終了直後）
     if epoch_accuracy >= self.config.accuracy_threshold:
         logger.info(
@@ -243,16 +243,16 @@ for batch_idx, (inputs, targets) in enumerate(self.config.dataloader):
     board_tensor = board_tensor.to(self.device, non_blocking=True)
     hand_tensor = hand_tensor.to(...) if ... else None
     targets = targets.to(self.device, non_blocking=True)
-    
+
     # 勾配クリア
     self.config.optimizer.zero_grad()
-    
+
     # 順伝播
     with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
         features = self.model.forward_features((board_tensor, hand_tensor))
         logits = self.head(features)
         loss = self.config.loss_fn(logits, targets)
-    
+
     # 逆伝播
     if self.scaler is not None:
         self.scaler.scale(loss).backward()
@@ -261,7 +261,7 @@ for batch_idx, (inputs, targets) in enumerate(self.config.dataloader):
     else:
         loss.backward()
         self.config.optimizer.step()
-    
+
     # 精度計算
     with torch.no_grad():
         predictions = torch.sigmoid(logits) > 0.5
@@ -276,9 +276,9 @@ best_accuracy = 0.0
 
 for epoch in range(self.config.max_epochs):
     epoch_loss, epoch_accuracy = self._train_epoch(epoch)
-    
+
     best_accuracy = max(best_accuracy, epoch_accuracy)
-    
+
     # 【早期停止】: 各エポック後に判定
     if epoch_accuracy >= self.config.accuracy_threshold:
         return StageResult(
@@ -346,7 +346,7 @@ class StreamingKifDataset(IterableDataset):
     def __init__(self, streaming_source, batch_size, shuffle):
         self.batch_size = batch_size  # ← Dataset内で保持
         self.shuffle = shuffle
-    
+
     def __iter__(self):
         # ストリーミング = バッチ単位でデータを読込・yield
         for batch in self._fetch_batches():

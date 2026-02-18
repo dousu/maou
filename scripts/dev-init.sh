@@ -15,7 +15,7 @@ fi
 CARGO_USER_CONFIG="$HOME/.cargo/config.toml"
 CARGO_USER_CONFIG_MARKER="# managed by dev-init.sh"
 if ! grep -qF "$CARGO_USER_CONFIG_MARKER" "$CARGO_USER_CONFIG" 2>/dev/null; then
-    mkdir -p $(dirname "$CARGO_USER_CONFIG") 
+    mkdir -p $(dirname "$CARGO_USER_CONFIG")
     cat > "$CARGO_USER_CONFIG" << CARGO_CONF
 $CARGO_USER_CONFIG_MARKER
 

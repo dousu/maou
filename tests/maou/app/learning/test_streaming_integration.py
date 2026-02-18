@@ -63,6 +63,10 @@ class FakePreprocessingSource:
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
 
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
+
     def iter_files_columnar(
         self,
     ) -> Generator[ColumnarBatch, None, None]:
@@ -103,6 +107,10 @@ class FakeStage1Source:
     @property
     def total_rows(self) -> int:
         return self._n_files * self._rows_per_file
+
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
 
     def iter_files_columnar(
         self,
@@ -579,6 +587,10 @@ class TestInterfaceStreamingStages:
             @property
             def total_rows(self) -> int:
                 return 8
+
+            @property
+            def row_counts(self) -> list[int]:
+                return [8]
 
             def iter_files_columnar(
                 self,
