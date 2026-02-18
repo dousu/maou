@@ -655,6 +655,7 @@ class TimingCallback(BaseCallback):
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time: Optional[float] = None
+        self._measurement_start_time: Optional[float] = None
         self._temp_timings: Dict[str, float] = {}
 
     def on_epoch_start(self, epoch_idx: int) -> None:
@@ -768,6 +769,10 @@ class TimingCallback(BaseCallback):
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:
+            if self._measurement_start_time is None:
+                self._measurement_start_time = (
+                    self.batch_start_time
+                )
             self.timing_stats["data_loading"].append(
                 self._temp_timings["data_loading"]
             )
@@ -838,24 +843,58 @@ class TimingCallback(BaseCallback):
     def get_performance_metrics(
         self, total_batches: int
     ) -> Dict[str, float]:
-        """Get performance metrics."""
+        """Get performance metrics.
+
+        ウォームアップ除外の計測区間に基づくメトリクスを返す．
+        ``actual_average_batch_time`` はウォームアップバッチを除外した
+        壁時計時間ベースの平均バッチ時間で，推定エポック時間の算出に使用する．
+        """
+        epoch_end_time = time.perf_counter()
         epoch_total_time = (
-            time.perf_counter() - self.epoch_start_time
+            epoch_end_time - self.epoch_start_time
         )
-        # 実際の平均バッチ時間（全てを含む）
-        actual_avg_batch_time = (
-            epoch_total_time / float(total_batches)
-            if total_batches > 0
-            else 0.0
-        )
+
+        # ウォームアップ除外の計測区間
+        if (
+            self._measurement_start_time is not None
+            and self.measured_batches > 0
+        ):
+            measured_time = (
+                epoch_end_time - self._measurement_start_time
+            )
+            actual_avg_batch_time = measured_time / float(
+                self.measured_batches
+            )
+            warmup_time = (
+                self._measurement_start_time
+                - self.epoch_start_time
+            )
+        else:
+            measured_time = epoch_total_time
+            actual_avg_batch_time = (
+                epoch_total_time / float(total_batches)
+                if total_batches > 0
+                else 0.0
+            )
+            warmup_time = 0.0
+
         return {
             "total_epoch_time": epoch_total_time,
             "total_batches": float(total_batches),
+            "measured_batches": float(self.measured_batches),
             "actual_average_batch_time": actual_avg_batch_time,
-            "samples_per_second": float(self.total_samples)
-            / epoch_total_time,
-            "batches_per_second": float(total_batches)
-            / epoch_total_time,
+            "warmup_time": warmup_time,
+            "measured_time": measured_time,
+            "samples_per_second": (
+                float(self.total_samples) / measured_time
+                if measured_time > 0
+                else 0.0
+            ),
+            "batches_per_second": (
+                float(self.measured_batches) / measured_time
+                if measured_time > 0
+                else 0.0
+            ),
         }
 
     def get_loss_metrics(

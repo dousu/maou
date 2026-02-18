@@ -34,6 +34,12 @@ class BenchmarkResult:
     actual_average_batch_time: float
     total_batches: int
 
+    # ウォームアップ情報
+    warmup_time: float
+    warmup_batches: int
+    measured_time: float
+    measured_batches: int
+
     # 詳細なタイミング分析
     data_loading_time: float
     gpu_transfer_time: float
@@ -60,6 +66,10 @@ class BenchmarkResult:
             "average_batch_time": self.average_batch_time,
             "actual_average_batch_time": self.actual_average_batch_time,
             "total_batches": float(self.total_batches),
+            "warmup_time": self.warmup_time,
+            "warmup_batches": float(self.warmup_batches),
+            "measured_time": self.measured_time,
+            "measured_batches": float(self.measured_batches),
             "data_loading_time": self.data_loading_time,
             "gpu_transfer_time": self.gpu_transfer_time,
             "forward_pass_time": self.forward_pass_time,
@@ -235,6 +245,10 @@ class SingleEpochBenchmark:
             total_batches=int(
                 performance_metrics["total_batches"]
             ),
+            warmup_time=performance_metrics["warmup_time"],
+            warmup_batches=warmup_batches,
+            measured_time=performance_metrics["measured_time"],
+            measured_batches=timing_callback.measured_batches,
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -363,6 +377,10 @@ class SingleEpochBenchmark:
             total_batches=int(
                 performance_metrics["total_batches"]
             ),
+            warmup_time=performance_metrics["warmup_time"],
+            warmup_batches=0,
+            measured_time=performance_metrics["measured_time"],
+            measured_batches=timing_callback.measured_batches,
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -622,6 +640,8 @@ class TrainingBenchmarkUseCase:
             return f"""{label} Performance Summary:
   Processed Batches: {result.total_batches} / {total_batches_in_dataset}
   Total Time (Processed): {result.total_epoch_time:.2f}s
+  Warmup: {result.warmup_batches} batches in {result.warmup_time:.2f}s
+  Measured: {result.measured_batches} batches in {result.measured_time:.2f}s
   Estimated Full Epoch Time: {estimated_full_epoch_time_seconds:.2f}s ({estimated_full_epoch_time_minutes:.2f} minutes)
   Actual Average Time per Batch: {result.actual_average_batch_time:.4f}s
   Processing Time per Batch (excl. data loading): {result.average_batch_time:.4f}s
