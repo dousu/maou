@@ -744,8 +744,15 @@ class TrainingLoop:
                 "Policy outputs are required before computing the loss"
             )
 
+        if context.legal_move_mask is not None:
+            masked_logits = context.outputs_policy.masked_fill(
+                ~context.legal_move_mask.bool(), float("-inf")
+            )
+        else:
+            masked_logits = context.outputs_policy
+
         policy_log_probs = torch.nn.functional.log_softmax(
-            context.outputs_policy,
+            masked_logits,
             dim=1,
         )
         policy_targets = normalize_policy_targets(
