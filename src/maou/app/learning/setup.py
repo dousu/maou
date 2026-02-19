@@ -300,12 +300,20 @@ class ModelFactory:
         *,
         architecture: BackboneArchitecture = "resnet",
         architecture_config: dict[str, Any] | None = None,
+        hand_projection_dim: int | None = None,
     ) -> HeadlessNetwork:
         """方策・価値ヘッドを含まないバックボーンを作成."""
+        from maou.app.learning.network import (
+            DEFAULT_HAND_PROJECTION_DIM,
+        )
+
+        if hand_projection_dim is None:
+            hand_projection_dim = DEFAULT_HAND_PROJECTION_DIM
 
         backbone = HeadlessNetwork(
             board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
             embedding_dim=BOARD_EMBEDDING_DIM,
+            hand_projection_dim=hand_projection_dim,
             board_size=(9, 9),
             architecture=architecture,
             block=BottleneckBlock,

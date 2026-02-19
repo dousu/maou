@@ -7,6 +7,7 @@ import torch
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.setup import (
     DatasetFactory,
+    ModelFactory,
     TrainingSetup,
     WarmupCosineDecayScheduler,
 )
@@ -458,3 +459,66 @@ def test_training_setup_enables_anomaly_detection_when_requested(
     )
 
     assert calls == [(True, True)]
+
+
+def test_create_shogi_backbone_uses_default_hand_projection_dim() -> (
+    None
+):
+    """create_shogi_backbone uses DEFAULT_HAND_PROJECTION_DIM when not specified."""
+    backbone = ModelFactory.create_shogi_backbone(
+        torch.device("cpu")
+    )
+
+    assert backbone._hand_projection_dim == 32
+
+
+def test_create_shogi_backbone_input_channels_include_hand() -> (
+    None
+):
+    """Backbone input_channels equals embedding_dim + hand_projection_dim."""
+    backbone = ModelFactory.create_shogi_backbone(
+        torch.device("cpu")
+    )
+
+    # embedding_dim=32, hand_projection_dim=32 -> backbone_input_channels=64
+    expected_channels = (
+        backbone._embedding_channels
+        + backbone._hand_projection_dim
+    )
+    assert expected_channels == 64
+
+
+def test_create_shogi_backbone_explicit_zero_hand_projection() -> (
+    None
+):
+    """Passing hand_projection_dim=0 disables hand projection."""
+    backbone = ModelFactory.create_shogi_backbone(
+        torch.device("cpu"),
+        hand_projection_dim=0,
+    )
+
+    assert backbone._hand_projection_dim == 0
+    assert backbone._hand_projection is None
+
+
+def test_create_shogi_backbone_shape_matches_full_model() -> (
+    None
+):
+    """Backbone state_dict shapes match the backbone portion of full model."""
+
+    backbone = ModelFactory.create_shogi_backbone(
+        torch.device("cpu")
+    )
+    model = ModelFactory.create_shogi_model(torch.device("cpu"))
+
+    backbone_state = backbone.state_dict()
+    model_state = model.state_dict()
+
+    for key, tensor in backbone_state.items():
+        assert key in model_state, (
+            f"Key {key} missing from full model"
+        )
+        assert tensor.shape == model_state[key].shape, (
+            f"Shape mismatch for {key}: "
+            f"backbone {list(tensor.shape)} vs model {list(model_state[key].shape)}"
+        )
