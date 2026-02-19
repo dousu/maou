@@ -187,7 +187,9 @@ def test_masked_autoencoder_uses_encoder_embedding_dim(
     embedding_dim = 32
 
     def _create_backbone(
-        cls: type[ModelFactory], device: torch.device
+        cls: type[ModelFactory],
+        device: torch.device,
+        **kwargs: object,
     ) -> _DummyBackbone:
         return _DummyBackbone(embedding_dim=embedding_dim).to(
             device
@@ -377,3 +379,16 @@ def test_log_model_summary_logs_stats(
     assert any(
         "fake summary" in message for message in logged_messages
     )
+
+
+def test_mae_encoder_disables_hand_projection() -> None:
+    """MAE encoder is built without hand projection."""
+
+    autoencoder = _MaskedAutoencoder(
+        feature_shape=(9, 9),
+        hidden_dim=128,
+        device=torch.device("cpu"),
+    )
+
+    assert autoencoder.encoder._hand_projection_dim == 0
+    assert autoencoder.encoder._hand_projection is None

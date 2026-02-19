@@ -156,7 +156,8 @@ class _MaskedAutoencoder(nn.Module):
         self._feature_shape = board_shape
         self._flattened_size = int(np.prod(board_shape))
         self.encoder = ModelFactory.create_shogi_backbone(
-            device
+            device,
+            hand_projection_dim=0,  # MAEは持ち駒特徴量を使わない
         )
         encoder_output_dim = getattr(
             self.encoder, "embedding_dim", None
