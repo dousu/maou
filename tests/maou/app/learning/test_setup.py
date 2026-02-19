@@ -501,15 +501,22 @@ def test_create_shogi_backbone_explicit_zero_hand_projection() -> (
     assert backbone._hand_projection is None
 
 
-def test_create_shogi_backbone_shape_matches_full_model() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "architecture", ["resnet", "vit", "mlp-mixer"]
+)
+def test_create_shogi_backbone_shape_matches_full_model(
+    architecture: str,
+) -> None:
     """Backbone state_dict shapes match the backbone portion of full model."""
 
     backbone = ModelFactory.create_shogi_backbone(
-        torch.device("cpu")
+        torch.device("cpu"),
+        architecture=architecture,
     )
-    model = ModelFactory.create_shogi_model(torch.device("cpu"))
+    model = ModelFactory.create_shogi_model(
+        torch.device("cpu"),
+        architecture=architecture,
+    )
 
     backbone_state = backbone.state_dict()
     model_state = model.state_dict()
