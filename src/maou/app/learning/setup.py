@@ -150,6 +150,70 @@ class DatasetFactory:
         return dataset_train, dataset_validation
 
 
+def _estimate_max_workers_by_memory(
+    pin_memory: bool,
+    logger: logging.Logger,
+) -> int:
+    """システムの利用可能メモリからワーカー数の上限を推定する．
+
+    各DataLoaderワーカーはArrowファイルを読み込むため，
+    一定のメモリを消費する．利用可能メモリの一部を
+    DataLoaderワーカーに割り当て，安全なワーカー数を算出する．
+
+    注意: 推定値はArrowファイルサイズに依存するため，
+    実際のメモリ消費とは異なる可能性がある．
+
+    Args:
+        pin_memory: pinned memory が有効か
+        logger: ロガー
+
+    Returns:
+        メモリベースのワーカー数上限(最小1)
+    """
+    try:
+        import psutil
+
+        available_mb = psutil.virtual_memory().available / (
+            1024 * 1024
+        )
+    except ImportError:
+        try:
+            import os
+
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            total_mb = (pages * page_size) / (1024 * 1024)
+            available_mb = total_mb * 0.6
+        except (ValueError, OSError):
+            logger.warning(
+                "Cannot determine available memory; "
+                "skipping memory-based worker limit"
+            )
+            return 64  # 実質的に無制限
+
+    # ワーカーに割当可能なメモリ: 利用可能メモリの50%
+    worker_budget_mb = available_mb * 0.5
+
+    # 1ワーカーあたりの推定メモリ消費(保守的な推定)
+    per_worker_mb = 200.0
+    if pin_memory:
+        per_worker_mb += 50.0
+
+    max_workers = max(1, int(worker_budget_mb / per_worker_mb))
+
+    logger.info(
+        "Memory-based worker limit: %d "
+        "(available=%.0fMB, budget=%.0fMB, per_worker=%.0fMB, "
+        "note: estimate may differ from actual usage)",
+        max_workers,
+        available_mb,
+        worker_budget_mb,
+        per_worker_mb,
+    )
+
+    return max_workers
+
+
 class DataLoaderFactory:
     """DataLoader作成の共通化."""
 
@@ -161,8 +225,10 @@ class DataLoaderFactory:
         n_files: int,
         label: str,
         logger: logging.Logger,
+        *,
+        memory_limit: int | None = None,
     ) -> int:
-        """ワーカー数をファイル数で制限する．
+        """ワーカー数をファイル数およびメモリ制約で制限する．
 
         ストリーミングモードでは各ワーカーが1つ以上のファイルを担当するため，
         ファイル数を超えるワーカーは不要かつ有害(アイドルワーカーの一斉終了が
@@ -173,6 +239,7 @@ class DataLoaderFactory:
             n_files: データセットのファイル数
             label: ログ出力用ラベル(例: "training", "validation")
             logger: ロガー
+            memory_limit: メモリベースのワーカー数上限(Noneで無制限)
 
         Returns:
             制限後のワーカー数
@@ -182,13 +249,17 @@ class DataLoaderFactory:
         if requested_workers <= 0:
             return 0
         effective = min(requested_workers, n_files)
+        if memory_limit is not None and memory_limit > 0:
+            effective = min(effective, memory_limit)
         if effective < requested_workers:
             logger.info(
                 "Clamped %s workers from %d to %d "
-                "(limited by file count)",
+                "(file_count=%d, memory_limit=%s)",
                 label,
                 requested_workers,
                 effective,
+                n_files,
+                memory_limit,
             )
         return effective
 
@@ -301,9 +372,11 @@ class DataLoaderFactory:
         StreamingDatasetがバッチ単位でTensorをyieldするため，
         DataLoaderは ``batch_size=None`` (自動バッチングOFF)で使用する．
 
-        ワーカー数はファイル数で制限される．ファイル数を超えるワーカーは
-        アイドル状態で即座に終了し，GPUプリフェッチャーのデッドロックを
-        引き起こすため．
+        ワーカー数はファイル数およびシステムメモリで制限される．
+        ファイル数を超えるワーカーはアイドル状態で即座に終了し，
+        GPUプリフェッチャーのデッドロックを引き起こすため．
+        また，各ワーカーがArrowファイルを独立に読み込むため，
+        利用可能メモリに基づく上限も適用する．
 
         Args:
             train_dataset: 学習用IterableDataset
@@ -317,17 +390,23 @@ class DataLoaderFactory:
         Returns:
             (training_loader, validation_loader) のタプル
         """
+        memory_limit = _estimate_max_workers_by_memory(
+            pin_memory=pin_memory,
+            logger=cls.logger,
+        )
         train_workers = cls._clamp_workers(
             dataloader_workers,
             n_train_files,
             "training",
             cls.logger,
+            memory_limit=memory_limit,
         )
         val_workers = cls._clamp_workers(
             dataloader_workers,
             n_val_files,
             "validation",
             cls.logger,
+            memory_limit=memory_limit,
         )
 
         train_worker_init_fn = (

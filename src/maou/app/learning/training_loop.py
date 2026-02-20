@@ -167,14 +167,21 @@ class TrainingLoop:
                             else 256
                         )
                     )
+                    num_workers = getattr(
+                        dataloader, "num_workers", 0
+                    )
                     buffer_size = (
                         calculate_recommended_buffer_size(
-                            effective_batch_size
+                            effective_batch_size,
+                            num_workers=num_workers,
                         )
                     )
                     self.logger.info(
-                        f"Auto-calculated GPU prefetch buffer size: {buffer_size} "
-                        f"(based on batch_size={effective_batch_size})"
+                        "Auto-calculated GPU prefetch buffer size: %d "
+                        "(batch_size=%d, num_workers=%d)",
+                        buffer_size,
+                        effective_batch_size,
+                        num_workers,
                     )
                 else:
                     buffer_size = self.gpu_prefetch_buffer_size

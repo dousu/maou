@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from maou.app.learning.setup import (
     ModelFactory,
     TrainingSetup,
     WarmupCosineDecayScheduler,
+    _estimate_max_workers_by_memory,
 )
 from maou.domain.model.mlp_mixer import ShogiMLPMixer
 from maou.domain.move.label import MOVE_LABELS_NUM
@@ -575,17 +577,21 @@ def test_create_streaming_dataloaders_applies_different_worker_counts() -> (
     train_ds = _MinimalIterableDataset()
     val_ds = _MinimalIterableDataset()
 
-    train_loader, val_loader = (
-        DataLoaderFactory.create_streaming_dataloaders(
-            train_dataset=train_ds,
-            val_dataset=val_ds,
-            dataloader_workers=8,
-            pin_memory=False,
-            prefetch_factor=2,
-            n_train_files=8,
-            n_val_files=3,
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=8,
+                pin_memory=False,
+                prefetch_factor=2,
+                n_train_files=8,
+                n_val_files=3,
+            )
         )
-    )
 
     assert train_loader.num_workers == 8
     assert val_loader.num_workers == 3
@@ -692,3 +698,104 @@ def test_create_dataloaders_single_sample_dataset() -> None:
 
     assert train_loader.num_workers == 1
     assert val_loader.num_workers == 1
+
+
+# --- Track 1-2: メモリベースワーカー制限テスト ---
+
+
+class _FakeVirtualMemory:
+    """psutil.virtual_memory() のモック用．"""
+
+    def __init__(self, available_mb: float) -> None:
+        self.available = int(available_mb * 1024 * 1024)
+        self.total = self.available * 2
+        self.percent = 50.0
+
+
+@pytest.mark.parametrize(
+    ("available_mb", "pin_memory", "expected"),
+    [
+        pytest.param(
+            8000.0,
+            False,
+            20,
+            id="8GB_no_pin",
+        ),
+        pytest.param(
+            8000.0,
+            True,
+            16,
+            id="8GB_pin",
+        ),
+        pytest.param(
+            2000.0,
+            False,
+            5,
+            id="2GB_no_pin",
+        ),
+        pytest.param(
+            500.0,
+            False,
+            1,
+            id="500MB_no_pin",
+        ),
+    ],
+)
+def test_estimate_max_workers_by_memory(
+    available_mb: float,
+    pin_memory: bool,
+    expected: int,
+) -> None:
+    """メモリ量モックによるワーカー上限推定の検証．"""
+    logger = logging.getLogger("test_estimate_max_workers")
+    fake_vm = _FakeVirtualMemory(available_mb)
+
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        result = _estimate_max_workers_by_memory(
+            pin_memory=pin_memory,
+            logger=logger,
+        )
+    assert result == expected
+
+
+def test_estimate_max_workers_by_memory_returns_at_least_one() -> (
+    None
+):
+    """利用可能メモリが極端に少ない場合でも最小1を返す．"""
+    logger = logging.getLogger("test_estimate_min")
+    fake_vm = _FakeVirtualMemory(50.0)
+
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        result = _estimate_max_workers_by_memory(
+            pin_memory=False,
+            logger=logger,
+        )
+    assert result >= 1
+
+
+@pytest.mark.parametrize(
+    ("workers", "n_files", "memory_limit", "expected"),
+    [
+        pytest.param(12, 20, 8, 8, id="memory_limit_binding"),
+        pytest.param(12, 5, 8, 5, id="file_limit_binding"),
+        pytest.param(4, 20, 8, 4, id="requested_binding"),
+        pytest.param(12, 20, None, 12, id="no_memory_limit"),
+        pytest.param(12, 20, 0, 12, id="zero_memory_limit"),
+    ],
+)
+def test_clamp_workers_with_memory_limit(
+    workers: int,
+    n_files: int,
+    memory_limit: int | None,
+    expected: int,
+) -> None:
+    """_clamp_workersのmemory_limitパラメータ動作検証．"""
+    logger = logging.getLogger("test_clamp_memory")
+    result = DataLoaderFactory._clamp_workers(
+        requested_workers=workers,
+        n_files=n_files,
+        label="test",
+        logger=logger,
+        memory_limit=memory_limit,
+    )
+    assert result == expected

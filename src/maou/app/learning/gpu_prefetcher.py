@@ -27,31 +27,49 @@ import torch
 from torch.utils.data import DataLoader
 
 
-def calculate_recommended_buffer_size(batch_size: int) -> int:
-    """バッチサイズに基づいて推奨バッファサイズを計算する．
+def calculate_recommended_buffer_size(
+    batch_size: int,
+    num_workers: int = 0,
+) -> int:
+    """バッチサイズとワーカー数に基づいて推奨バッファサイズを計算する．
 
     小〜中バッチではバッファを増やして転送レイテンシを隠蔽し，
     大バッチではバッチあたりのメモリコストが大きく，かつGPU計算時間が
     十分に長いため，少ないバッファで転送を隠蔽できる．
 
+    ワーカー数が多い場合はワーカー+pin_memory+バッファの合計メモリが
+    増大するため，大バッチ時にバッファサイズを抑制する．
+    小バッチはバッファあたりのメモリコストが低いため抑制不要．
+
     Args:
         batch_size: バッチサイズ
+        num_workers: DataLoaderのワーカー数(0で抑制なし)
 
     Returns:
-        推奨バッファサイズ（バッチ数）
+        推奨バッファサイズ（バッチ数，最小2）
     """
     if batch_size <= 128:
-        return 3
+        base = 3
     elif batch_size <= 256:
-        return 5
+        base = 5
     elif batch_size <= 512:
-        return 8
+        base = 8
     elif batch_size <= 1024:
-        return 12
+        base = 12
     elif batch_size <= 2048:
-        return 8
+        base = 8
     else:
-        return 4
+        base = 4
+
+    # ワーカー数による抑制: 大バッチ(≥512)時のみ適用
+    # 小バッチはバッファあたりのメモリコストが低いため抑制不要
+    if batch_size >= 512:
+        if num_workers >= 8:
+            return max(2, base // 2)
+        elif num_workers >= 4:
+            return max(2, base * 2 // 3)
+
+    return base
 
 
 class DataPrefetcher:

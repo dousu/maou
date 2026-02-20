@@ -134,3 +134,52 @@ def test_log_timeout_diagnostics_no_error() -> None:
     # is_first_batch=True/False の両方で例外なく完了すること
     prefetcher._log_timeout_diagnostics(is_first_batch=True)
     prefetcher._log_timeout_diagnostics(is_first_batch=False)
+
+
+# --- Track 1-3: バッファサイズのワーカー数連動テスト ---
+
+
+@pytest.mark.parametrize(
+    ("batch_size", "num_workers", "expected"),
+    [
+        pytest.param(1024, 12, 6, id="1024_12w_halved"),
+        pytest.param(1024, 4, 8, id="1024_4w_two_thirds"),
+        pytest.param(1024, 0, 12, id="1024_0w_no_suppression"),
+        pytest.param(1024, 2, 12, id="1024_2w_no_suppression"),
+        pytest.param(
+            128, 12, 3, id="128_12w_small_batch_no_suppression"
+        ),
+        pytest.param(
+            256, 12, 5, id="256_12w_small_batch_no_suppression"
+        ),
+        pytest.param(512, 8, 4, id="512_8w_halved"),
+        pytest.param(512, 4, 5, id="512_4w_two_thirds"),
+        pytest.param(2048, 8, 4, id="2048_8w_halved"),
+        pytest.param(4096, 8, 2, id="4096_8w_halved_min2"),
+    ],
+)
+def test_buffer_size_with_num_workers(
+    batch_size: int, num_workers: int, expected: int
+) -> None:
+    """ワーカー数によるバッファサイズ抑制の検証．"""
+    result = calculate_recommended_buffer_size(
+        batch_size, num_workers=num_workers
+    )
+    assert result == expected
+
+
+def test_buffer_size_backward_compatible() -> None:
+    """num_workers=0(デフォルト)で既存動作と同一であることを検証する．"""
+    for bs in [64, 128, 256, 512, 1024, 2048, 4096]:
+        assert calculate_recommended_buffer_size(
+            bs, num_workers=0
+        ) == calculate_recommended_buffer_size(bs)
+
+
+def test_buffer_size_minimum_is_two() -> None:
+    """バッファサイズが最小2を下回らないことを検証する．"""
+    # 最小バッファテスト: 大バッチ+多ワーカーでも2以上
+    result = calculate_recommended_buffer_size(
+        4096, num_workers=16
+    )
+    assert result >= 2
