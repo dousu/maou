@@ -596,22 +596,30 @@ class DataLoaderFactory:
             default_worker_init_fn if val_workers > 0 else None
         )
 
-        # ストリーミングモードでは persistent_workers=False にする．
-        # IterableDataset + persistent_workers=True の場合，
-        # ワーカーがエポック間で再利用されるが，大規模ファイルの
-        # メモリ蓄積やワーカー状態の不整合リスクがある．
+        # ストリーミングモードでは forkserver を使用する．
+        # Polars/Rust (jemalloc) が初期化済みのプロセスを fork() すると
+        # 子プロセスが不整合な内部状態をコピーし segfault する可能性がある．
+        # forkserver はクリーンなプロセスからワーカーを起動するため安全．
+        mp_context: str | None = (
+            "forkserver" if train_workers > 0 else None
+        )
+        mp_context_val: str | None = (
+            "forkserver" if val_workers > 0 else None
+        )
+
         training_loader = DataLoader(
             train_dataset,
             batch_size=None,
             shuffle=False,
             num_workers=train_workers,
             pin_memory=pin_memory,
-            persistent_workers=False,
+            persistent_workers=train_workers > 0,
             prefetch_factor=prefetch_factor
             if train_workers > 0
             else None,
             timeout=120 if train_workers > 0 else 0,
             worker_init_fn=train_worker_init_fn,
+            multiprocessing_context=mp_context,
         )
 
         validation_loader = DataLoader(
@@ -620,12 +628,13 @@ class DataLoaderFactory:
             shuffle=False,
             num_workers=val_workers,
             pin_memory=pin_memory,
-            persistent_workers=False,
+            persistent_workers=val_workers > 0,
             prefetch_factor=prefetch_factor
             if val_workers > 0
             else None,
             timeout=120 if val_workers > 0 else 0,
             worker_init_fn=val_worker_init_fn,
+            multiprocessing_context=mp_context_val,
         )
 
         if hasattr(train_dataset, "__len__"):

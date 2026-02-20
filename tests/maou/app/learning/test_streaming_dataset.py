@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 from pathlib import Path
-
-import logging
 from unittest.mock import patch
 
 import numpy as np

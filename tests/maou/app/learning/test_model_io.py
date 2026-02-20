@@ -1,7 +1,5 @@
 """Tests for model I/O utilities."""
 
-from unittest.mock import MagicMock, patch
-
 import torch
 
 from maou.app.learning.model_io import ModelIO
@@ -127,10 +125,11 @@ def test_onnx_fp16_without_onnxsim() -> None:
     )
     model.train(False)
 
+    import numpy as np
+
     from maou.domain.data.schema import (
         create_empty_preprocessing_array,
     )
-    import numpy as np
 
     dummy_data = create_empty_preprocessing_array(1)
     dummy_board = np.asarray(

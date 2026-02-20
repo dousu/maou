@@ -1087,13 +1087,11 @@ def test_log_worker_memory_debug_level() -> None:
     assert "after_first_file" in args[1] % args[2:]
 
 
-# --- Fix C: persistent_workers ストリーミング時無効化テスト ---
+# --- Fix G: multiprocessing_context="forkserver" テスト ---
 
 
-def test_streaming_dataloaders_persistent_workers_disabled() -> (
-    None
-):
-    """ストリーミングDataLoaderでpersistent_workersがFalseであること．"""
+def test_streaming_dataloaders_use_forkserver() -> None:
+    """ストリーミングDataLoaderがforkserverコンテキストを使用すること．"""
 
     class _MinimalIterableDataset2(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
@@ -1118,15 +1116,48 @@ def test_streaming_dataloaders_persistent_workers_disabled() -> (
             )
         )
 
-    # ストリーミングモードではpersistent_workers=Falseであること
-    assert train_loader.persistent_workers is False
-    assert val_loader.persistent_workers is False
+    # ストリーミングモードではforkserverが使われること
+    assert train_loader.multiprocessing_context is not None
+    assert val_loader.multiprocessing_context is not None
+    # persistent_workersはTrue(forkserverで安全)
+    assert train_loader.persistent_workers is True
+    assert val_loader.persistent_workers is True
 
 
-def test_non_streaming_dataloaders_persistent_workers_enabled() -> (
+def test_streaming_dataloaders_no_forkserver_with_zero_workers() -> (
     None
 ):
-    """非ストリーミングDataLoaderではpersistent_workersがTrueであること．"""
+    """ワーカー数0ではforkserverが設定されないこと．"""
+
+    class _MinimalIterableDataset3(IterableDataset):
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
+            return iter([])
+
+    train_ds = _MinimalIterableDataset3()
+    val_ds = _MinimalIterableDataset3()
+
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=0,
+                pin_memory=False,
+                prefetch_factor=2,
+                n_train_files=4,
+                n_val_files=4,
+            )
+        )
+
+    assert train_loader.multiprocessing_context is None
+    assert val_loader.multiprocessing_context is None
+
+
+def test_non_streaming_dataloaders_no_forkserver() -> None:
+    """非ストリーミングDataLoaderにはforkserverが設定されないこと．"""
     train_ds = _make_kifdataset(100)
     val_ds = _make_kifdataset(100)
 
@@ -1140,6 +1171,5 @@ def test_non_streaming_dataloaders_persistent_workers_enabled() -> (
         )
     )
 
-    # 非ストリーミングモードではpersistent_workers=Trueであること
-    assert train_loader.persistent_workers is True
-    assert val_loader.persistent_workers is True
+    # 非ストリーミングモードではforkserverなし
+    assert train_loader.multiprocessing_context is None
