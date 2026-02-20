@@ -203,13 +203,45 @@ class DataLoaderFactory:
         prefetch_factor: int = 2,
         drop_last_train: bool = True,
     ) -> Tuple[DataLoader, DataLoader]:
-        """学習・検証用DataLoaderの作成."""
+        """学習・検証用DataLoaderの作成.
 
-        # Worker initialization function
-        worker_init_fn = (
+        ワーカー数はデータセットサイズで自動的に制限される．
+        データセットのサンプル数がワーカー数より少ない場合，
+        余剰ワーカーがサンプルを受け取れず無駄になるため，
+        ``min(dataloader_workers, len(dataset))`` に制限する．
+        """
+
+        # ワーカー数をデータセットサイズで制限
+        train_workers = min(
+            dataloader_workers, len(dataset_train)
+        )
+        val_workers = min(
+            dataloader_workers, len(dataset_validation)
+        )
+
+        if train_workers < dataloader_workers:
+            cls.logger.info(
+                "Clamped training workers from %d to %d "
+                "(limited by dataset size)",
+                dataloader_workers,
+                train_workers,
+            )
+        if val_workers < dataloader_workers:
+            cls.logger.info(
+                "Clamped validation workers from %d to %d "
+                "(limited by dataset size)",
+                dataloader_workers,
+                val_workers,
+            )
+
+        # Worker initialization function (per-loader)
+        train_worker_init_fn = (
             default_worker_init_fn
-            if dataloader_workers > 0
+            if train_workers > 0
             else None
+        )
+        val_worker_init_fn = (
+            default_worker_init_fn if val_workers > 0 else None
         )
 
         # Training DataLoader
@@ -217,15 +249,15 @@ class DataLoaderFactory:
             dataset_train,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=dataloader_workers,
+            num_workers=train_workers,
             pin_memory=pin_memory,
-            persistent_workers=dataloader_workers > 0,
+            persistent_workers=train_workers > 0,
             prefetch_factor=prefetch_factor
-            if dataloader_workers > 0
+            if train_workers > 0
             else None,
             drop_last=drop_last_train,
-            timeout=120 if dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
+            timeout=120 if train_workers > 0 else 0,
+            worker_init_fn=train_worker_init_fn,
         )
 
         # Validation DataLoader
@@ -233,15 +265,15 @@ class DataLoaderFactory:
             dataset_validation,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=dataloader_workers,
+            num_workers=val_workers,
             pin_memory=pin_memory,
-            persistent_workers=dataloader_workers > 0,
+            persistent_workers=val_workers > 0,
             prefetch_factor=prefetch_factor
-            if dataloader_workers > 0
+            if val_workers > 0
             else None,
             drop_last=False,  # validationでは全データを使用
-            timeout=120 if dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
+            timeout=120 if val_workers > 0 else 0,
+            worker_init_fn=val_worker_init_fn,
         )
 
         cls.logger.info(

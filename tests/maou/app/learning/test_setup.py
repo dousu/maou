@@ -589,3 +589,106 @@ def test_create_streaming_dataloaders_applies_different_worker_counts() -> (
 
     assert train_loader.num_workers == 8
     assert val_loader.num_workers == 3
+
+
+def _make_kifdataset(n_samples: int) -> KifDataset:
+    """テスト用の最小KifDatasetを作成する．"""
+    ds = DummyPreprocessedDataSource(length=n_samples)
+    return KifDataset(datasource=ds)
+
+
+def test_create_dataloaders_clamps_val_workers() -> None:
+    """validation datasetが小さい場合，valワーカー数が制限される．"""
+    train_ds = _make_kifdataset(1000)
+    val_ds = _make_kifdataset(3)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=32,
+            dataloader_workers=12,
+            pin_memory=False,
+        )
+    )
+
+    assert train_loader.num_workers == 12
+    assert val_loader.num_workers == 3
+
+
+def test_create_dataloaders_no_clamping_when_dataset_large() -> (
+    None
+):
+    """データセットサイズ >= workers の場合，ワーカー数は変更されない．"""
+    train_ds = _make_kifdataset(1000)
+    val_ds = _make_kifdataset(1000)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=32,
+            dataloader_workers=4,
+            pin_memory=False,
+        )
+    )
+
+    assert train_loader.num_workers == 4
+    assert val_loader.num_workers == 4
+
+
+def test_create_dataloaders_clamps_both() -> None:
+    """train/val 両方のデータセットが小さい場合，両方制限される．"""
+    train_ds = _make_kifdataset(2)
+    val_ds = _make_kifdataset(3)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=1,
+            dataloader_workers=12,
+            pin_memory=False,
+        )
+    )
+
+    assert train_loader.num_workers == 2
+    assert val_loader.num_workers == 3
+
+
+def test_create_dataloaders_zero_workers() -> None:
+    """workers=0 の場合，clamping後も0のまま．"""
+    train_ds = _make_kifdataset(100)
+    val_ds = _make_kifdataset(100)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=32,
+            dataloader_workers=0,
+            pin_memory=False,
+        )
+    )
+
+    assert train_loader.num_workers == 0
+    assert val_loader.num_workers == 0
+
+
+def test_create_dataloaders_single_sample_dataset() -> None:
+    """データセットサイズ=1 の場合，ワーカー数が1に制限される．"""
+    train_ds = _make_kifdataset(1)
+    val_ds = _make_kifdataset(1)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=1,
+            dataloader_workers=12,
+            pin_memory=False,
+        )
+    )
+
+    assert train_loader.num_workers == 1
+    assert val_loader.num_workers == 1
