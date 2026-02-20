@@ -236,11 +236,13 @@ class StreamingKifDataset(IterableDataset):
                 return
 
             total_batches = 0
+            file_count = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
                 )
             ):
+                file_count += 1
                 if file_idx == 0:
                     _log_worker_memory(
                         worker_id,
@@ -267,7 +269,7 @@ class StreamingKifDataset(IterableDataset):
                 " (%d batches from %d files)",
                 worker_id,
                 total_batches,
-                file_idx + 1 if worker_files else 0,
+                file_count,
             )
         except Exception as exc:
             logger.error(
@@ -368,11 +370,13 @@ class StreamingStage1Dataset(IterableDataset):
                 return
 
             total_batches = 0
+            file_count = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
                 )
             ):
+                file_count += 1
                 if file_idx == 0:
                     _log_worker_memory(
                         worker_id,
@@ -399,7 +403,7 @@ class StreamingStage1Dataset(IterableDataset):
                 " (%d batches from %d files)",
                 worker_id,
                 total_batches,
-                file_idx + 1 if worker_files else 0,
+                file_count,
             )
         except Exception as exc:
             logger.error(
@@ -500,11 +504,13 @@ class StreamingStage2Dataset(IterableDataset):
                 return
 
             total_batches = 0
+            file_count = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
                 )
             ):
+                file_count += 1
                 if file_idx == 0:
                     _log_worker_memory(
                         worker_id,
@@ -531,7 +537,7 @@ class StreamingStage2Dataset(IterableDataset):
                 " (%d batches from %d files)",
                 worker_id,
                 total_batches,
-                file_idx + 1 if worker_files else 0,
+                file_count,
             )
         except Exception as exc:
             logger.error(
