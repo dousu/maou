@@ -2,6 +2,7 @@
 """Tests for maou.app.learning.gpu_prefetcher."""
 
 import queue
+from collections.abc import Iterator
 
 import pytest
 import torch
@@ -41,7 +42,14 @@ class _FixedBatchDataset(IterableDataset):
     def __init__(self, num_batches: int) -> None:
         self.num_batches = num_batches
 
-    def __iter__(self):  # type: ignore[override]
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            torch.Tensor,
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        ]
+    ]:  # type: ignore[override]
         for _ in range(self.num_batches):
             features = torch.zeros(2, 3)
             targets = (

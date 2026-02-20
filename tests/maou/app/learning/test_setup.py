@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -568,7 +569,7 @@ def test_create_streaming_dataloaders_applies_different_worker_counts() -> (
     """Train and val loaders get different num_workers when file counts differ."""
 
     class _MinimalIterableDataset(IterableDataset):
-        def __iter__(self):  # type: ignore[override]
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
             return iter([])
 
     train_ds = _MinimalIterableDataset()
