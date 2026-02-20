@@ -244,6 +244,12 @@ class DataPrefetcher:
 
             # 終了シグナル（None）を受け取ったら終了
             if batch is None:
+                # 残留アイテムのドレイン（複数のNoneセンチネル対策）
+                while True:
+                    try:
+                        self.queue.get_nowait()
+                    except queue.Empty:
+                        break
                 break
 
             # CUDA streamの同期を待つ

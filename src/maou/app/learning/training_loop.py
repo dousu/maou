@@ -40,6 +40,7 @@ class TrainingLoop:
         enable_gpu_prefetch: bool = True,
         gpu_prefetch_buffer_size: int = 0,
         gradient_accumulation_steps: int = 1,
+        logical_batch_size: int | None = None,
     ):
         self.model = model
         self.device = device
@@ -57,6 +58,7 @@ class TrainingLoop:
             enable_gpu_prefetch and device.type == "cuda"
         )
         self.gpu_prefetch_buffer_size = gpu_prefetch_buffer_size
+        self.logical_batch_size = logical_batch_size
 
         if self.enable_gpu_prefetch:
             if gpu_prefetch_buffer_size <= 0:
@@ -157,9 +159,13 @@ class TrainingLoop:
                 # バッファサイズの決定（0以下の場合は自動計算）
                 if self.gpu_prefetch_buffer_size <= 0:
                     effective_batch_size = (
-                        dataloader.batch_size
-                        if dataloader.batch_size is not None
-                        else 256
+                        self.logical_batch_size
+                        if self.logical_batch_size is not None
+                        else (
+                            dataloader.batch_size
+                            if dataloader.batch_size is not None
+                            else 256
+                        )
                     )
                     buffer_size = (
                         calculate_recommended_buffer_size(

@@ -3,9 +3,11 @@ import logging
 import numpy as np
 import pytest
 import torch
+from torch.utils.data import IterableDataset
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.setup import (
+    DataLoaderFactory,
     DatasetFactory,
     ModelFactory,
     TrainingSetup,
@@ -529,3 +531,60 @@ def test_create_shogi_backbone_shape_matches_full_model(
             f"Shape mismatch for {key}: "
             f"backbone {list(tensor.shape)} vs model {list(model_state[key].shape)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# DataLoaderFactory._clamp_workers tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("workers", "n_files", "expected"),
+    [
+        pytest.param(4, 37, 4, id="workers_less_than_files"),
+        pytest.param(12, 4, 4, id="workers_greater_than_files"),
+        pytest.param(4, 4, 4, id="workers_equal_to_files"),
+        pytest.param(12, 1, 1, id="single_file"),
+        pytest.param(0, 10, 0, id="zero_workers"),
+        pytest.param(12, 0, 0, id="zero_files"),
+    ],
+)
+def test_clamp_workers(
+    workers: int, n_files: int, expected: int
+) -> None:
+    logger = logging.getLogger("test_clamp_workers")
+    result = DataLoaderFactory._clamp_workers(
+        requested_workers=workers,
+        n_files=n_files,
+        label="test",
+        logger=logger,
+    )
+    assert result == expected
+
+
+def test_create_streaming_dataloaders_applies_different_worker_counts() -> (
+    None
+):
+    """Train and val loaders get different num_workers when file counts differ."""
+
+    class _MinimalIterableDataset(IterableDataset):
+        def __iter__(self):  # type: ignore[override]
+            return iter([])
+
+    train_ds = _MinimalIterableDataset()
+    val_ds = _MinimalIterableDataset()
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_streaming_dataloaders(
+            train_dataset=train_ds,
+            val_dataset=val_ds,
+            dataloader_workers=8,
+            pin_memory=False,
+            prefetch_factor=2,
+            n_train_files=8,
+            n_val_files=3,
+        )
+    )
+
+    assert train_loader.num_workers == 8
+    assert val_loader.num_workers == 3

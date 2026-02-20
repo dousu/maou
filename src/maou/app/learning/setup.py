@@ -155,6 +155,43 @@ class DataLoaderFactory:
 
     logger: logging.Logger = logging.getLogger(__name__)
 
+    @staticmethod
+    def _clamp_workers(
+        requested_workers: int,
+        n_files: int,
+        label: str,
+        logger: logging.Logger,
+    ) -> int:
+        """ワーカー数をファイル数で制限する．
+
+        ストリーミングモードでは各ワーカーが1つ以上のファイルを担当するため，
+        ファイル数を超えるワーカーは不要かつ有害(アイドルワーカーの一斉終了が
+        GPUプリフェッチャーのデッドロックを引き起こす)．
+
+        Args:
+            requested_workers: 要求されたワーカー数
+            n_files: データセットのファイル数
+            label: ログ出力用ラベル(例: "training", "validation")
+            logger: ロガー
+
+        Returns:
+            制限後のワーカー数
+        """
+        if n_files <= 0:
+            return 0
+        if requested_workers <= 0:
+            return 0
+        effective = min(requested_workers, n_files)
+        if effective < requested_workers:
+            logger.info(
+                "Clamped %s workers from %d to %d "
+                "(limited by file count)",
+                label,
+                requested_workers,
+                effective,
+            )
+        return effective
+
     @classmethod
     def create_dataloaders(
         cls,
@@ -224,54 +261,78 @@ class DataLoaderFactory:
         dataloader_workers: int,
         pin_memory: bool,
         prefetch_factor: int = 2,
+        n_train_files: int = 0,
+        n_val_files: int = 0,
     ) -> Tuple[DataLoader, DataLoader]:
         """Streaming用DataLoader作成．
 
         StreamingDatasetがバッチ単位でTensorをyieldするため，
         DataLoaderは ``batch_size=None`` (自動バッチングOFF)で使用する．
 
+        ワーカー数はファイル数で制限される．ファイル数を超えるワーカーは
+        アイドル状態で即座に終了し，GPUプリフェッチャーのデッドロックを
+        引き起こすため．
+
         Args:
             train_dataset: 学習用IterableDataset
             val_dataset: 検証用IterableDataset
-            dataloader_workers: workerプロセス数
+            dataloader_workers: 要求されたworkerプロセス数
             pin_memory: pinned memoryを有効にするか
             prefetch_factor: 各workerの先読みバッチ数
+            n_train_files: 学習データのファイル数(ワーカー数制限用)
+            n_val_files: 検証データのファイル数(ワーカー数制限用)
 
         Returns:
             (training_loader, validation_loader) のタプル
         """
-        worker_init_fn = (
+        train_workers = cls._clamp_workers(
+            dataloader_workers,
+            n_train_files,
+            "training",
+            cls.logger,
+        )
+        val_workers = cls._clamp_workers(
+            dataloader_workers,
+            n_val_files,
+            "validation",
+            cls.logger,
+        )
+
+        train_worker_init_fn = (
             default_worker_init_fn
-            if dataloader_workers > 0
+            if train_workers > 0
             else None
+        )
+        val_worker_init_fn = (
+            default_worker_init_fn if val_workers > 0 else None
         )
 
         training_loader = DataLoader(
             train_dataset,
             batch_size=None,
             shuffle=False,
-            num_workers=dataloader_workers,
+            num_workers=train_workers,
             pin_memory=pin_memory,
-            persistent_workers=dataloader_workers > 0,
+            persistent_workers=train_workers > 0,
             prefetch_factor=prefetch_factor
-            if dataloader_workers > 0
+            if train_workers > 0
             else None,
-            timeout=120 if dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
+            timeout=120 if train_workers > 0 else 0,
+            worker_init_fn=train_worker_init_fn,
         )
 
         validation_loader = DataLoader(
             val_dataset,
             batch_size=None,
             shuffle=False,
-            num_workers=dataloader_workers,
+            num_workers=val_workers,
             pin_memory=pin_memory,
-            persistent_workers=dataloader_workers > 0,
+            persistent_workers=val_workers > 0,
             prefetch_factor=prefetch_factor
-            if dataloader_workers > 0
+            if val_workers > 0
             else None,
-            timeout=120 if dataloader_workers > 0 else 0,
-            worker_init_fn=worker_init_fn,
+            timeout=120 if val_workers > 0 else 0,
+            worker_init_fn=val_worker_init_fn,
         )
 
         if hasattr(train_dataset, "__len__"):

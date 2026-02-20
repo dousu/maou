@@ -27,3 +27,38 @@ def test_network_separate_inputs_accepts_list() -> None:
 
     assert separated_board is board
     assert separated_pieces is pieces
+
+
+def test_training_loop_stores_logical_batch_size() -> None:
+    """logical_batch_sizeがTrainingLoopに正しく保存されることを確認する．"""
+    model = torch.nn.Linear(10, 2)
+    loop = TrainingLoop(
+        model=model,
+        device=torch.device("cpu"),
+        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
+        loss_fn_policy=torch.nn.CrossEntropyLoss(),
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=1.0,
+        logical_batch_size=4096,
+    )
+
+    assert loop.logical_batch_size == 4096
+
+
+def test_training_loop_logical_batch_size_defaults_to_none() -> (
+    None
+):
+    """logical_batch_size未指定時はNoneとなることを確認する．"""
+    model = torch.nn.Linear(10, 2)
+    loop = TrainingLoop(
+        model=model,
+        device=torch.device("cpu"),
+        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
+        loss_fn_policy=torch.nn.CrossEntropyLoss(),
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=1.0,
+    )
+
+    assert loop.logical_batch_size is None
