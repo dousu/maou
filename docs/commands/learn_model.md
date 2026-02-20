@@ -90,6 +90,7 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--vit-num-heads INT` | `None` (model default: 8) | ViT: number of attention heads.【F:src/maou/infra/console/learn_model.py†L226-L230】 |
 | `--vit-mlp-ratio FLOAT` | `None` (model default: 4.0) | ViT: MLP hidden dimension ratio.【F:src/maou/infra/console/learn_model.py†L231-L236】 |
 | `--vit-dropout FLOAT` | `None` (model default: 0.1) | ViT: dropout rate.【F:src/maou/infra/console/learn_model.py†L237-L244】 |
+| `--gradient-checkpointing` | `False` | Enable gradient checkpointing to reduce activation memory. Recommended for large batch sizes with ViT. |
 
 ### Multi-stage training
 

@@ -243,6 +243,12 @@ S3DataSource: S3DataSourceType | None = getattr(
     help="ViT: dropout rate (default: 0.1).",
 )
 @click.option(
+    "--gradient-checkpointing",
+    is_flag=True,
+    default=False,
+    help="Enable gradient checkpointing to reduce activation memory. Recommended for large batch sizes with ViT.",
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
@@ -724,6 +730,7 @@ def learn_model(
     vit_num_heads: Optional[int],
     vit_mlp_ratio: Optional[float],
     vit_dropout: Optional[float],
+    gradient_checkpointing: bool,
     compilation: bool,
     detect_anomaly: bool,
     test_ratio: Optional[float],
@@ -1069,6 +1076,8 @@ def learn_model(
             vit_overrides["mlp_ratio"] = vit_mlp_ratio
         if vit_dropout is not None:
             vit_overrides["dropout"] = vit_dropout
+        if gradient_checkpointing:
+            vit_overrides["gradient_checkpointing"] = True
         if vit_overrides:
             architecture_config = vit_overrides
 

@@ -16,6 +16,9 @@ from typing import Any, Callable, Optional, cast
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import (
+    checkpoint as torch_checkpoint,
+)
 
 try:
     torch_attention_module: ModuleType | None = (
@@ -57,6 +60,7 @@ class VisionTransformerConfig:
     dropout: float = 0.1
     attention_dropout: float = 0.0
     use_head: bool = True
+    gradient_checkpointing: bool = False
 
     @property
     def num_tokens(self) -> int:
@@ -279,7 +283,15 @@ class VisionTransformer(nn.Module):
         tokens = tokens + self.positional_embedding
         tokens = self.embedding_dropout(tokens)
         for block in self.encoder:
-            tokens = block(tokens)
+            if (
+                self.config.gradient_checkpointing
+                and self.training
+            ):
+                tokens = torch_checkpoint(
+                    block, tokens, use_reentrant=False
+                )
+            else:
+                tokens = block(tokens)
         return tokens
 
     def forward_features(self, x: Tensor) -> Tensor:

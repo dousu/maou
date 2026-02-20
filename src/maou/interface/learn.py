@@ -1153,6 +1153,20 @@ def learn_multi_stage(
     effective_stage1_batch = stage1_batch_size or batch_size
     effective_stage2_batch = stage2_batch_size or batch_size
 
+    # Warn about large Stage 2 batch sizes with ViT
+    if (
+        model_architecture == "vit"
+        and effective_stage2_batch >= 2048
+        and stage in ("2", "all")
+    ):
+        logger.warning(
+            "Stage 2 batch size is %d, which may cause "
+            "CUDA OOM with ViT architecture. Consider using "
+            "--stage2-batch-size to set a smaller value, or "
+            "--gradient-checkpointing to reduce activation memory.",
+            effective_stage2_batch,
+        )
+
     # Resolve Stage 1/2 LR scheduler ("auto" -> actual scheduler or None)
     resolved_stage1_scheduler = _resolve_stage12_scheduler(
         stage12_lr_scheduler, effective_stage1_batch

@@ -62,6 +62,13 @@ class TestViTCLIOptions:
                 f"{name} should default to None"
             )
 
+    def test_gradient_checkpointing_option_registered(
+        self,
+    ) -> None:
+        """--gradient-checkpointingオプションが登録されている."""
+        names = self._get_option_names()
+        assert "gradient_checkpointing" in names
+
     def test_help_text_contains_vit_options(self) -> None:
         """--helpテキストにViTオプションが含まれる."""
         runner = click.testing.CliRunner()
