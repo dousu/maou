@@ -409,7 +409,6 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                self.scaler.update()
                 return
 
         for callback in self.callbacks:
