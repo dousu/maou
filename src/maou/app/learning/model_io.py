@@ -466,7 +466,8 @@ class ModelIO:
             onnx.save(onnx_model_simp, onnx_model_path)
         else:
             # Skip simplification, save with shape inference only
-            onnx.save(onnx_model, onnx_model_path)
+            onnx_model_simp = onnx_model
+            onnx.save(onnx_model_simp, onnx_model_path)
 
         # ONNX FP32の検証
         if verify_export:

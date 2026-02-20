@@ -384,6 +384,7 @@ class Learning:
                 prefetch_factor=config.prefetch_factor,
                 n_train_files=n_train_files,
                 n_val_files=n_val_files,
+                file_paths=config.streaming_train_source.file_paths,
             )
         )
 

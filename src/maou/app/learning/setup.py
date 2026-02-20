@@ -6,6 +6,7 @@ training_benchmark.py と dl.py の重複コードを統一化．
 import logging
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -34,10 +35,39 @@ from maou.domain.model.resnet import BottleneckBlock
 from maou.domain.move.label import MOVE_LABELS_NUM
 
 
+def _log_worker_memory(
+    worker_id: int,
+    label: str,
+    level: int = logging.INFO,
+) -> None:
+    """ワーカープロセスのRSSメモリ使用量をログ出力する．
+
+    Args:
+        worker_id: ワーカーID
+        label: ログラベル(例: "init", "after_first_file")
+        level: ログレベル
+    """
+    _logger = logging.getLogger(__name__)
+    try:
+        import psutil
+
+        rss_mb = psutil.Process().memory_info().rss / (
+            1024 * 1024
+        )
+    except (ImportError, OSError):
+        return
+
+    _logger.log(
+        level,
+        "Worker %d memory [%s]: RSS=%.0fMB",
+        worker_id,
+        label,
+        rss_mb,
+    )
+
+
 def default_worker_init_fn(worker_id: int) -> None:
-    """
-    デフォルトのワーカー初期化関数．
-    """
+    """デフォルトのワーカー初期化関数．"""
     import random
 
     import numpy as np
@@ -47,6 +77,8 @@ def default_worker_init_fn(worker_id: int) -> None:
     np.random.seed(worker_seed)
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
+
+    _log_worker_memory(worker_id, "init")
 
 
 @dataclass
@@ -150,9 +182,77 @@ class DatasetFactory:
         return dataset_train, dataset_validation
 
 
+_DECOMPRESSION_FACTOR: float = 4.0
+"""LZ4の一般的展開倍率(2-4倍)の上限値．"""
+
+_SAFETY_MARGIN: float = 1.5
+"""DataFrame + numpy配列共存の安全マージン．"""
+
+_FALLBACK_PER_WORKER_MB: float = 200.0
+"""ファイルサイズ情報が利用できない場合のデフォルト値．"""
+
+
+def _estimate_per_worker_mb(
+    file_paths: list[Path] | None,
+    logger: logging.Logger,
+) -> float:
+    """データファイルサイズからワーカーあたりのメモリ消費量を推定する．
+
+    圧縮済みファイルの平均サイズに展開倍率と安全マージンを乗じて
+    1ワーカーあたりのメモリ使用量を算出する．
+    ファイルパスが未指定またはすべて存在しない場合はフォールバック値を返す．
+
+    Args:
+        file_paths: データファイルパスのリスト
+        logger: ロガー
+
+    Returns:
+        ワーカーあたりの推定メモリ消費量(MB)
+    """
+    if not file_paths:
+        return _FALLBACK_PER_WORKER_MB
+
+    file_sizes = []
+    for fp in file_paths:
+        try:
+            file_sizes.append(fp.stat().st_size)
+        except OSError:
+            continue
+
+    if not file_sizes:
+        logger.warning(
+            "No accessible data files found; "
+            "using fallback per_worker_mb=%.0f",
+            _FALLBACK_PER_WORKER_MB,
+        )
+        return _FALLBACK_PER_WORKER_MB
+
+    avg_compressed_mb = (
+        sum(file_sizes) / len(file_sizes) / (1024**2)
+    )
+    estimated = (
+        avg_compressed_mb
+        * _DECOMPRESSION_FACTOR
+        * _SAFETY_MARGIN
+    )
+    per_worker_mb = max(estimated, _FALLBACK_PER_WORKER_MB)
+
+    logger.info(
+        "Dynamic per_worker_mb=%.0f "
+        "(avg_file=%.1fMB, files=%d/%d accessible)",
+        per_worker_mb,
+        avg_compressed_mb,
+        len(file_sizes),
+        len(file_paths),
+    )
+
+    return per_worker_mb
+
+
 def _estimate_max_workers_by_memory(
     pin_memory: bool,
     logger: logging.Logger,
+    file_paths: list[Path] | None = None,
 ) -> int:
     """システムの利用可能メモリからワーカー数の上限を推定する．
 
@@ -160,12 +260,14 @@ def _estimate_max_workers_by_memory(
     一定のメモリを消費する．利用可能メモリの一部を
     DataLoaderワーカーに割り当て，安全なワーカー数を算出する．
 
-    注意: 推定値はArrowファイルサイズに依存するため，
-    実際のメモリ消費とは異なる可能性がある．
+    ファイルパスが渡された場合，圧縮ファイルの実サイズから
+    ワーカーあたりのメモリ消費量を動的に推定する．
+    展開倍率(LZ4: 4.0)と安全マージン(1.5)を考慮する．
 
     Args:
         pin_memory: pinned memory が有効か
         logger: ロガー
+        file_paths: データファイルパスのリスト(動的メモリ推定用)
 
     Returns:
         メモリベースのワーカー数上限(最小1)
@@ -194,8 +296,8 @@ def _estimate_max_workers_by_memory(
     # ワーカーに割当可能なメモリ: 利用可能メモリの50%
     worker_budget_mb = available_mb * 0.5
 
-    # 1ワーカーあたりの推定メモリ消費(保守的な推定)
-    per_worker_mb = 200.0
+    # ファイルサイズベースの動的メモリ推定
+    per_worker_mb = _estimate_per_worker_mb(file_paths, logger)
     if pin_memory:
         per_worker_mb += 50.0
 
@@ -212,6 +314,72 @@ def _estimate_max_workers_by_memory(
     )
 
     return max_workers
+
+
+def _check_shm_size(
+    num_workers: int,
+    batch_size: int | None,
+    prefetch_factor: int,
+    logger: logging.Logger,
+) -> None:
+    """Linux環境で /dev/shm の空き容量を確認し不足時に警告する．
+
+    DataLoaderのワーカー間通信は共有メモリ(/dev/shm)を使用する．
+    Docker等で /dev/shm サイズが制限されている場合，ワーカーが
+    クラッシュする原因となる．
+
+    Args:
+        num_workers: DataLoaderのワーカー数
+        batch_size: バッチサイズ(Noneの場合はストリーミングモード)
+        prefetch_factor: プリフェッチファクター
+        logger: ロガー
+    """
+    import sys
+
+    if sys.platform != "linux" or num_workers <= 0:
+        return
+
+    shm_path = Path("/dev/shm")
+    if not shm_path.exists():
+        return
+
+    try:
+        import os
+
+        stat = os.statvfs("/dev/shm")
+        shm_available_mb = (stat.f_bavail * stat.f_frsize) / (
+            1024 * 1024
+        )
+    except OSError:
+        return
+
+    # threshold概算: batch_size × 154KB × num_workers × prefetch_factor
+    # 154KB = Stage 3の1バッチあたりの入力テンソルサイズ概算
+    _BYTES_PER_SAMPLE_KB = 154
+    effective_batch_size = (
+        batch_size if batch_size is not None else 1024
+    )
+    threshold_mb = (
+        effective_batch_size
+        * _BYTES_PER_SAMPLE_KB
+        * num_workers
+        * prefetch_factor
+        / 1024
+    )
+
+    if shm_available_mb < threshold_mb:
+        logger.warning(
+            "/dev/shm available space (%.0fMB) is below "
+            "estimated requirement (%.0fMB) for %d workers "
+            "with prefetch_factor=%d. "
+            "Consider increasing /dev/shm size "
+            "(e.g. docker run --shm-size=8g) or "
+            "reducing --dataloader-workers.",
+            shm_available_mb,
+            threshold_mb,
+            num_workers,
+            prefetch_factor,
+        )
 
 
 class DataLoaderFactory:
@@ -366,6 +534,7 @@ class DataLoaderFactory:
         prefetch_factor: int = 2,
         n_train_files: int = 0,
         n_val_files: int = 0,
+        file_paths: list[Path] | None = None,
     ) -> Tuple[DataLoader, DataLoader]:
         """Streaming用DataLoader作成．
 
@@ -386,6 +555,7 @@ class DataLoaderFactory:
             prefetch_factor: 各workerの先読みバッチ数
             n_train_files: 学習データのファイル数(ワーカー数制限用)
             n_val_files: 検証データのファイル数(ワーカー数制限用)
+            file_paths: データファイルパスのリスト(動的メモリ推定用)
 
         Returns:
             (training_loader, validation_loader) のタプル
@@ -393,6 +563,7 @@ class DataLoaderFactory:
         memory_limit = _estimate_max_workers_by_memory(
             pin_memory=pin_memory,
             logger=cls.logger,
+            file_paths=file_paths,
         )
         train_workers = cls._clamp_workers(
             dataloader_workers,
@@ -407,6 +578,13 @@ class DataLoaderFactory:
             "validation",
             cls.logger,
             memory_limit=memory_limit,
+        )
+
+        _check_shm_size(
+            num_workers=max(train_workers, val_workers),
+            batch_size=None,
+            prefetch_factor=prefetch_factor,
+            logger=cls.logger,
         )
 
         train_worker_init_fn = (

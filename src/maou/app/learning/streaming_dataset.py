@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset
 
+from maou.app.learning.setup import _log_worker_memory
 from maou.domain.data.columnar_batch import ColumnarBatch
 
 logger = logging.getLogger(__name__)
@@ -223,11 +224,20 @@ class StreamingKifDataset(IterableDataset):
             epoch_seed=epoch_seed,
         )
 
-        for (
-            columnar_batch
-        ) in self._source.iter_files_columnar_subset(
-            worker_files
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
+        for file_idx, columnar_batch in enumerate(
+            self._source.iter_files_columnar_subset(
+                worker_files
+            )
         ):
+            if file_idx == 0:
+                _log_worker_memory(
+                    worker_id,
+                    "after_first_file",
+                    level=logging.DEBUG,
+                )
             yield from _yield_kif_batches(
                 columnar_batch,
                 batch_size=self._batch_size,
@@ -312,11 +322,20 @@ class StreamingStage1Dataset(IterableDataset):
             epoch_seed=epoch_seed,
         )
 
-        for (
-            columnar_batch
-        ) in self._source.iter_files_columnar_subset(
-            worker_files
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
+        for file_idx, columnar_batch in enumerate(
+            self._source.iter_files_columnar_subset(
+                worker_files
+            )
         ):
+            if file_idx == 0:
+                _log_worker_memory(
+                    worker_id,
+                    "after_first_file",
+                    level=logging.DEBUG,
+                )
             yield from _yield_stage1_batches(
                 columnar_batch,
                 batch_size=self._batch_size,
@@ -401,11 +420,20 @@ class StreamingStage2Dataset(IterableDataset):
             epoch_seed=epoch_seed,
         )
 
-        for (
-            columnar_batch
-        ) in self._source.iter_files_columnar_subset(
-            worker_files
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
+        for file_idx, columnar_batch in enumerate(
+            self._source.iter_files_columnar_subset(
+                worker_files
+            )
         ):
+            if file_idx == 0:
+                _log_worker_memory(
+                    worker_id,
+                    "after_first_file",
+                    level=logging.DEBUG,
+                )
             yield from _yield_stage2_batches(
                 columnar_batch,
                 batch_size=self._batch_size,

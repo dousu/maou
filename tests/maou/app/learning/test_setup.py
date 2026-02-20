@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -799,3 +800,288 @@ def test_clamp_workers_with_memory_limit(
         memory_limit=memory_limit,
     )
     assert result == expected
+
+
+# --- Fix 1: ファイルサイズベースの動的メモリ推定テスト ---
+
+
+class _FakeStat:
+    """Path.stat() のモック用．"""
+
+    def __init__(self, size_bytes: int) -> None:
+        self.st_size = size_bytes
+
+
+def _make_fake_path(
+    size_mb: float, *, exists: bool = True
+) -> Path:
+    """テスト用の疑似Pathを作成する．"""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    fp = MagicMock(spec=Path)
+    if exists:
+        fp.stat.return_value = _FakeStat(
+            int(size_mb * 1024 * 1024)
+        )
+    else:
+        fp.stat.side_effect = OSError("file not found")
+    return fp
+
+
+def test_estimate_per_worker_mb_100mb_files() -> None:
+    """100MBファイル → per_worker_mb=600(pin_memory=True で650)．"""
+    from maou.app.learning.setup import _estimate_per_worker_mb
+
+    logger = logging.getLogger("test_per_worker")
+    paths = [_make_fake_path(100.0) for _ in range(5)]
+    result = _estimate_per_worker_mb(paths, logger)
+    # 100 * 4.0 * 1.5 = 600.0
+    assert result == pytest.approx(600.0, rel=1e-3)
+
+
+def test_estimate_per_worker_mb_10mb_files() -> None:
+    """10MBファイル → per_worker_mb=200(下限適用)．"""
+    from maou.app.learning.setup import _estimate_per_worker_mb
+
+    logger = logging.getLogger("test_per_worker")
+    paths = [_make_fake_path(10.0) for _ in range(5)]
+    result = _estimate_per_worker_mb(paths, logger)
+    # 10 * 4.0 * 1.5 = 60.0 → max(60, 200) = 200.0
+    assert result == pytest.approx(200.0, rel=1e-3)
+
+
+def test_estimate_per_worker_mb_no_paths() -> None:
+    """ファイルパスなし → フォールバック200MB．"""
+    from maou.app.learning.setup import _estimate_per_worker_mb
+
+    logger = logging.getLogger("test_per_worker")
+    result = _estimate_per_worker_mb(None, logger)
+    assert result == pytest.approx(200.0, rel=1e-3)
+
+
+def test_estimate_per_worker_mb_all_missing() -> None:
+    """全ファイル不存在 → フォールバック200MB．"""
+    from maou.app.learning.setup import _estimate_per_worker_mb
+
+    logger = logging.getLogger("test_per_worker")
+    paths = [
+        _make_fake_path(100.0, exists=False) for _ in range(3)
+    ]
+    result = _estimate_per_worker_mb(paths, logger)
+    assert result == pytest.approx(200.0, rel=1e-3)
+
+
+def test_estimate_per_worker_mb_mixed_existing() -> None:
+    """存在するファイルのみで計算(存在しないファイル混在)．"""
+    from maou.app.learning.setup import _estimate_per_worker_mb
+
+    logger = logging.getLogger("test_per_worker")
+    paths = [
+        _make_fake_path(100.0, exists=True),
+        _make_fake_path(100.0, exists=False),
+        _make_fake_path(100.0, exists=True),
+    ]
+    result = _estimate_per_worker_mb(paths, logger)
+    # avg = 100MB, 100 * 4.0 * 1.5 = 600.0
+    assert result == pytest.approx(600.0, rel=1e-3)
+
+
+def test_estimate_max_workers_with_file_paths() -> None:
+    """ファイルサイズ100MB + pin_memory → per_worker_mb=650．"""
+    logger = logging.getLogger("test_max_workers_file")
+    fake_vm = _FakeVirtualMemory(50000.0)  # 50GB available
+    paths = [_make_fake_path(100.0) for _ in range(10)]
+
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        result = _estimate_max_workers_by_memory(
+            pin_memory=True,
+            logger=logger,
+            file_paths=paths,
+        )
+    # budget = 50000 * 0.5 = 25000, per_worker = 600 + 50 = 650
+    # max_workers = 25000 / 650 = 38.46 → 38
+    assert result == 38
+
+
+def test_estimate_max_workers_fallback_no_file_paths() -> None:
+    """ファイルパスなし + pin_memory → per_worker_mb=250(フォールバック)．"""
+    logger = logging.getLogger("test_max_workers_fallback")
+    fake_vm = _FakeVirtualMemory(8000.0)
+
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        result = _estimate_max_workers_by_memory(
+            pin_memory=True,
+            logger=logger,
+            file_paths=None,
+        )
+    # budget = 8000 * 0.5 = 4000, per_worker = 200 + 50 = 250
+    # max_workers = 4000 / 250 = 16
+    assert result == 16
+
+
+# --- Fix 3: /dev/shm サイズチェックテスト ---
+
+
+class _FakeStatvfs:
+    """os.statvfs のモック用．"""
+
+    def __init__(self, available_mb: float) -> None:
+        self.f_frsize = 4096
+        self.f_bavail = int(
+            available_mb * 1024 * 1024 / self.f_frsize
+        )
+
+
+def test_check_shm_size_warns_when_insufficient() -> None:
+    """shm空き不足時にWARNINGが出力されること．"""
+    from maou.app.learning.setup import _check_shm_size
+
+    logger = logging.getLogger("test_shm")
+    # 100MB available, but threshold will be much higher
+    fake_statvfs = _FakeStatvfs(100.0)
+
+    with (
+        patch("sys.platform", "linux"),
+        patch("os.statvfs", return_value=fake_statvfs),
+        patch.object(Path, "exists", return_value=True),
+        patch.object(logger, "warning") as mock_warn,
+    ):
+        _check_shm_size(
+            num_workers=8,
+            batch_size=None,
+            prefetch_factor=2,
+            logger=logger,
+        )
+
+    mock_warn.assert_called_once()
+    assert "/dev/shm" in mock_warn.call_args[0][0]
+
+
+def test_check_shm_size_no_warn_when_sufficient() -> None:
+    """shm空き十分な場合はWARNINGが出力されないこと．"""
+    from maou.app.learning.setup import _check_shm_size
+
+    logger = logging.getLogger("test_shm")
+    # 16GB available - should be more than enough
+    fake_statvfs = _FakeStatvfs(16000.0)
+
+    with (
+        patch("sys.platform", "linux"),
+        patch("os.statvfs", return_value=fake_statvfs),
+        patch.object(Path, "exists", return_value=True),
+        patch.object(logger, "warning") as mock_warn,
+    ):
+        _check_shm_size(
+            num_workers=8,
+            batch_size=None,
+            prefetch_factor=2,
+            logger=logger,
+        )
+
+    mock_warn.assert_not_called()
+
+
+def test_check_shm_size_skipped_on_non_linux() -> None:
+    """Linux以外ではチェックがスキップされること．"""
+    from maou.app.learning.setup import _check_shm_size
+
+    logger = logging.getLogger("test_shm")
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch.object(logger, "warning") as mock_warn,
+    ):
+        _check_shm_size(
+            num_workers=8,
+            batch_size=None,
+            prefetch_factor=2,
+            logger=logger,
+        )
+
+    mock_warn.assert_not_called()
+
+
+def test_check_shm_size_skipped_with_zero_workers() -> None:
+    """ワーカー数0ではチェックがスキップされること．"""
+    from maou.app.learning.setup import _check_shm_size
+
+    logger = logging.getLogger("test_shm")
+
+    with patch.object(logger, "warning") as mock_warn:
+        _check_shm_size(
+            num_workers=0,
+            batch_size=None,
+            prefetch_factor=2,
+            logger=logger,
+        )
+
+    mock_warn.assert_not_called()
+
+
+# --- Fix 4: ワーカーメモリ使用量ログテスト ---
+
+
+class _FakeMemoryInfo:
+    """psutil.Process().memory_info() のモック用．"""
+
+    def __init__(self, rss_mb: float) -> None:
+        self.rss = int(rss_mb * 1024 * 1024)
+
+
+def test_log_worker_memory_info_level() -> None:
+    """_log_worker_memory がINFOレベルで正しい形式のログを出力すること．"""
+    from maou.app.learning.setup import _log_worker_memory
+
+    fake_mem = _FakeMemoryInfo(512.0)
+    mock_process = patch(
+        "psutil.Process",
+        return_value=type(
+            "FakeProcess",
+            (),
+            {"memory_info": lambda self: fake_mem},
+        )(),
+    )
+
+    with mock_process:
+        with patch(
+            "maou.app.learning.setup.logging"
+        ) as mock_logging:
+            mock_logger = mock_logging.getLogger.return_value
+            _log_worker_memory(0, "init")
+
+    mock_logger.log.assert_called_once()
+    args = mock_logger.log.call_args[0]
+    assert args[0] == logging.INFO
+    assert "Worker 0" in args[1] % args[2:]
+    assert "init" in args[1] % args[2:]
+
+
+def test_log_worker_memory_debug_level() -> None:
+    """_log_worker_memory がDEBUGレベルで正しい形式のログを出力すること．"""
+    from maou.app.learning.setup import _log_worker_memory
+
+    fake_mem = _FakeMemoryInfo(1024.0)
+    mock_process = patch(
+        "psutil.Process",
+        return_value=type(
+            "FakeProcess",
+            (),
+            {"memory_info": lambda self: fake_mem},
+        )(),
+    )
+
+    with mock_process:
+        with patch(
+            "maou.app.learning.setup.logging"
+        ) as mock_logging:
+            mock_logger = mock_logging.getLogger.return_value
+            _log_worker_memory(
+                3, "after_first_file", level=logging.DEBUG
+            )
+
+    mock_logger.log.assert_called_once()
+    args = mock_logger.log.call_args[0]
+    assert args[0] == logging.DEBUG
+    assert "Worker 3" in args[1] % args[2:]
+    assert "after_first_file" in args[1] % args[2:]
