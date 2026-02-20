@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -234,6 +235,7 @@ class StreamingKifDataset(IterableDataset):
                 )
                 return
 
+            total_batches = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
@@ -245,16 +247,35 @@ class StreamingKifDataset(IterableDataset):
                         "after_first_file",
                         level=logging.DEBUG,
                     )
-                yield from _yield_kif_batches(
+                for batch in _yield_kif_batches(
                     columnar_batch,
                     batch_size=self._batch_size,
                     shuffle=self._shuffle,
                     rng=rng,
-                )
-        except Exception:
-            logger.error(
-                "Worker %d crashed during iteration",
+                ):
+                    total_batches += 1
+                    if total_batches == 1:
+                        logger.debug(
+                            "Worker %d: first batch produced"
+                            " (pid=%d)",
+                            worker_id,
+                            os.getpid(),
+                        )
+                    yield batch
+            logger.debug(
+                "Worker %d: iteration complete"
+                " (%d batches from %d files)",
                 worker_id,
+                total_batches,
+                file_idx + 1 if worker_files else 0,
+            )
+        except Exception as exc:
+            logger.error(
+                "Worker %d crashed during iteration"
+                " (pid=%d): %s",
+                worker_id,
+                os.getpid(),
+                exc,
                 exc_info=True,
             )
             raise
@@ -346,6 +367,7 @@ class StreamingStage1Dataset(IterableDataset):
                 )
                 return
 
+            total_batches = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
@@ -357,16 +379,35 @@ class StreamingStage1Dataset(IterableDataset):
                         "after_first_file",
                         level=logging.DEBUG,
                     )
-                yield from _yield_stage1_batches(
+                for batch in _yield_stage1_batches(
                     columnar_batch,
                     batch_size=self._batch_size,
                     shuffle=self._shuffle,
                     rng=rng,
-                )
-        except Exception:
-            logger.error(
-                "Worker %d crashed during iteration",
+                ):
+                    total_batches += 1
+                    if total_batches == 1:
+                        logger.debug(
+                            "Worker %d: first batch produced"
+                            " (pid=%d)",
+                            worker_id,
+                            os.getpid(),
+                        )
+                    yield batch
+            logger.debug(
+                "Worker %d: iteration complete"
+                " (%d batches from %d files)",
                 worker_id,
+                total_batches,
+                file_idx + 1 if worker_files else 0,
+            )
+        except Exception as exc:
+            logger.error(
+                "Worker %d crashed during iteration"
+                " (pid=%d): %s",
+                worker_id,
+                os.getpid(),
+                exc,
                 exc_info=True,
             )
             raise
@@ -458,6 +499,7 @@ class StreamingStage2Dataset(IterableDataset):
                 )
                 return
 
+            total_batches = 0
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
@@ -469,16 +511,35 @@ class StreamingStage2Dataset(IterableDataset):
                         "after_first_file",
                         level=logging.DEBUG,
                     )
-                yield from _yield_stage2_batches(
+                for batch in _yield_stage2_batches(
                     columnar_batch,
                     batch_size=self._batch_size,
                     shuffle=self._shuffle,
                     rng=rng,
-                )
-        except Exception:
-            logger.error(
-                "Worker %d crashed during iteration",
+                ):
+                    total_batches += 1
+                    if total_batches == 1:
+                        logger.debug(
+                            "Worker %d: first batch produced"
+                            " (pid=%d)",
+                            worker_id,
+                            os.getpid(),
+                        )
+                    yield batch
+            logger.debug(
+                "Worker %d: iteration complete"
+                " (%d batches from %d files)",
                 worker_id,
+                total_batches,
+                file_idx + 1 if worker_files else 0,
+            )
+        except Exception as exc:
+            logger.error(
+                "Worker %d crashed during iteration"
+                " (pid=%d): %s",
+                worker_id,
+                os.getpid(),
+                exc,
                 exc_info=True,
             )
             raise

@@ -5,6 +5,7 @@ training_benchmark.py と dl.py の重複コードを統一化．
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,8 @@ from maou.app.learning.network import (
 from maou.app.pre_process.transform import Transform
 from maou.domain.model.resnet import BottleneckBlock
 from maou.domain.move.label import MOVE_LABELS_NUM
+
+logger = logging.getLogger(__name__)
 
 
 def _log_worker_memory(
@@ -67,7 +70,11 @@ def _log_worker_memory(
 
 
 def default_worker_init_fn(worker_id: int) -> None:
-    """デフォルトのワーカー初期化関数．"""
+    """デフォルトのワーカー初期化関数．
+
+    spawn コンテキストで新規プロセスとして起動されるため，
+    シード設定とライフサイクルログを行う．
+    """
     import random
 
     import numpy as np
@@ -78,6 +85,12 @@ def default_worker_init_fn(worker_id: int) -> None:
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
+    logger.info(
+        "Worker %d initialized (pid=%d, seed=%d)",
+        worker_id,
+        os.getpid(),
+        worker_seed,
+    )
     _log_worker_memory(worker_id, "init")
 
 
@@ -547,6 +560,10 @@ class DataLoaderFactory:
         また，各ワーカーがArrowファイルを独立に読み込むため，
         利用可能メモリに基づく上限も適用する．
 
+        ストリーミングワーカーは Rust FFI (Polars/Arrow) を呼び出すため，
+        multiprocessing_context="spawn" を使用する．fork/forkserver では
+        jemalloc の内部状態が子プロセスに継承され segfault する．
+
         Args:
             train_dataset: 学習用IterableDataset
             val_dataset: 検証用IterableDataset
@@ -596,15 +613,16 @@ class DataLoaderFactory:
             default_worker_init_fn if val_workers > 0 else None
         )
 
-        # ストリーミングモードでは forkserver を使用する．
-        # Polars/Rust (jemalloc) が初期化済みのプロセスを fork() すると
-        # 子プロセスが不整合な内部状態をコピーし segfault する可能性がある．
-        # forkserver はクリーンなプロセスからワーカーを起動するため安全．
+        # ストリーミングモードでは spawn を使用する．
+        # Polars/Rust (jemalloc) が初期化済みプロセスを fork() すると，
+        # 子プロセスが不整合なアロケータ状態を継承し segfault する．
+        # forkserver も fork() でデーモンを生成するため同様に危険．
+        # spawn は os.exec() で完全に新しいプロセスを生成するため安全．
         mp_context: str | None = (
-            "forkserver" if train_workers > 0 else None
+            "spawn" if train_workers > 0 else None
         )
         mp_context_val: str | None = (
-            "forkserver" if val_workers > 0 else None
+            "spawn" if val_workers > 0 else None
         )
 
         training_loader = DataLoader(

@@ -1087,11 +1087,11 @@ def test_log_worker_memory_debug_level() -> None:
     assert "after_first_file" in args[1] % args[2:]
 
 
-# --- Fix G: multiprocessing_context="forkserver" テスト ---
+# --- Fix G: multiprocessing_context="spawn" テスト ---
 
 
-def test_streaming_dataloaders_use_forkserver() -> None:
-    """ストリーミングDataLoaderがforkserverコンテキストを使用すること．"""
+def test_streaming_dataloaders_use_spawn() -> None:
+    """ストリーミングDataLoaderがspawnコンテキストを使用すること．"""
 
     class _MinimalIterableDataset2(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
@@ -1116,18 +1116,30 @@ def test_streaming_dataloaders_use_forkserver() -> None:
             )
         )
 
-    # ストリーミングモードではforkserverが使われること
+    # ストリーミングモードではspawnが使われること
     assert train_loader.multiprocessing_context is not None
+    assert (
+        "spawn"
+        in type(
+            train_loader.multiprocessing_context
+        ).__name__.lower()
+    )
     assert val_loader.multiprocessing_context is not None
-    # persistent_workersはTrue(forkserverで安全)
+    assert (
+        "spawn"
+        in type(
+            val_loader.multiprocessing_context
+        ).__name__.lower()
+    )
+    # persistent_workersはTrue(spawnで安全)
     assert train_loader.persistent_workers is True
     assert val_loader.persistent_workers is True
 
 
-def test_streaming_dataloaders_no_forkserver_with_zero_workers() -> (
+def test_streaming_dataloaders_no_mp_context_with_zero_workers() -> (
     None
 ):
-    """ワーカー数0ではforkserverが設定されないこと．"""
+    """ワーカー数0ではmultiprocessing_contextが設定されないこと．"""
 
     class _MinimalIterableDataset3(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
@@ -1156,8 +1168,8 @@ def test_streaming_dataloaders_no_forkserver_with_zero_workers() -> (
     assert val_loader.multiprocessing_context is None
 
 
-def test_non_streaming_dataloaders_no_forkserver() -> None:
-    """非ストリーミングDataLoaderにはforkserverが設定されないこと．"""
+def test_non_streaming_dataloaders_no_mp_context() -> None:
+    """非ストリーミングDataLoaderにはmultiprocessing_contextが設定されないこと．"""
     train_ds = _make_kifdataset(100)
     val_ds = _make_kifdataset(100)
 
@@ -1171,5 +1183,5 @@ def test_non_streaming_dataloaders_no_forkserver() -> None:
         )
     )
 
-    # 非ストリーミングモードではforkserverなし
+    # 非ストリーミングモードではmultiprocessing_contextなし
     assert train_loader.multiprocessing_context is None
