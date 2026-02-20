@@ -30,8 +30,9 @@ from torch.utils.data import DataLoader
 def calculate_recommended_buffer_size(batch_size: int) -> int:
     """バッチサイズに基づいて推奨バッファサイズを計算する．
 
-    大きなバッチサイズではより多くのバッファが必要．
-    小さなバッチサイズでは少ないバッファで十分．
+    小〜中バッチではバッファを増やして転送レイテンシを隠蔽し，
+    大バッチではバッチあたりのメモリコストが大きく，かつGPU計算時間が
+    十分に長いため，少ないバッファで転送を隠蔽できる．
 
     Args:
         batch_size: バッチサイズ
@@ -47,8 +48,10 @@ def calculate_recommended_buffer_size(batch_size: int) -> int:
         return 8
     elif batch_size <= 1024:
         return 12
+    elif batch_size <= 2048:
+        return 8
     else:
-        return 16
+        return 4
 
 
 class DataPrefetcher:

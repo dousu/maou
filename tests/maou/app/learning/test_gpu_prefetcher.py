@@ -21,7 +21,8 @@ from maou.app.learning.gpu_prefetcher import (
         (256, 5),
         (512, 8),
         (1024, 12),
-        (2048, 16),
+        (2048, 8),
+        (4096, 4),
     ],
 )
 def test_calculate_recommended_buffer_size_ranges(
