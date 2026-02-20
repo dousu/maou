@@ -596,13 +596,17 @@ class DataLoaderFactory:
             default_worker_init_fn if val_workers > 0 else None
         )
 
+        # ストリーミングモードでは persistent_workers=False にする．
+        # IterableDataset + persistent_workers=True の場合，
+        # ワーカーがエポック間で再利用されるが，大規模ファイルの
+        # メモリ蓄積やワーカー状態の不整合リスクがある．
         training_loader = DataLoader(
             train_dataset,
             batch_size=None,
             shuffle=False,
             num_workers=train_workers,
             pin_memory=pin_memory,
-            persistent_workers=train_workers > 0,
+            persistent_workers=False,
             prefetch_factor=prefetch_factor
             if train_workers > 0
             else None,
@@ -616,7 +620,7 @@ class DataLoaderFactory:
             shuffle=False,
             num_workers=val_workers,
             pin_memory=pin_memory,
-            persistent_workers=val_workers > 0,
+            persistent_workers=False,
             prefetch_factor=prefetch_factor
             if val_workers > 0
             else None,

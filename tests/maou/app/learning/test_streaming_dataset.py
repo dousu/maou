@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Generator
 from pathlib import Path
 
+import logging
+from unittest.mock import patch
+
 import numpy as np
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
@@ -938,3 +942,137 @@ class TestComputeTotalBatches:
             )
             == 3
         )
+
+
+# ============================================================================
+# Fix A: __iter__ 例外ハンドリングテスト
+# ============================================================================
+
+
+class ErrorSource:
+    """イテレーション中にエラーを発生させるテスト用ソース．"""
+
+    def __init__(self, *, n_files: int = 2) -> None:
+        self._file_paths = [
+            Path(f"/fake/err_{i}.feather")
+            for i in range(n_files)
+        ]
+
+    @property
+    def file_paths(self) -> list[Path]:
+        return list(self._file_paths)
+
+    @property
+    def total_rows(self) -> int:
+        return 100
+
+    @property
+    def row_counts(self) -> list[int]:
+        return [50, 50]
+
+    def iter_files_columnar(
+        self,
+    ) -> Generator[ColumnarBatch, None, None]:
+        raise RuntimeError("Simulated file read error")
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        raise RuntimeError("Simulated file read error")
+
+
+_STREAMING_LOGGER = "maou.app.learning.streaming_dataset"
+
+
+def test_streaming_kif_dataset_exception_logged_and_reraised() -> (
+    None
+):
+    """StreamingKifDataset.__iter__ で例外がログ出力されて再raiseされること．"""
+    source = ErrorSource()
+    dataset = StreamingKifDataset(
+        streaming_source=source,  # type: ignore[arg-type]
+        batch_size=32,
+        shuffle=False,
+    )
+
+    target_logger = logging.getLogger(_STREAMING_LOGGER)
+    with patch.object(target_logger, "error") as mock_error:
+        with pytest.raises(
+            RuntimeError, match="Simulated file read error"
+        ):
+            list(dataset)
+
+    mock_error.assert_called_once()
+    assert (
+        "crashed during iteration" in mock_error.call_args[0][0]
+    )
+
+
+def test_streaming_stage1_dataset_exception_logged_and_reraised() -> (
+    None
+):
+    """StreamingStage1Dataset.__iter__ で例外がログ出力されて再raiseされること．"""
+    source = ErrorSource()
+    dataset = StreamingStage1Dataset(
+        streaming_source=source,  # type: ignore[arg-type]
+        batch_size=32,
+        shuffle=False,
+    )
+
+    target_logger = logging.getLogger(_STREAMING_LOGGER)
+    with patch.object(target_logger, "error") as mock_error:
+        with pytest.raises(
+            RuntimeError, match="Simulated file read error"
+        ):
+            list(dataset)
+
+    mock_error.assert_called_once()
+    assert (
+        "crashed during iteration" in mock_error.call_args[0][0]
+    )
+
+
+def test_streaming_stage2_dataset_exception_logged_and_reraised() -> (
+    None
+):
+    """StreamingStage2Dataset.__iter__ で例外がログ出力されて再raiseされること．"""
+    source = ErrorSource()
+    dataset = StreamingStage2Dataset(
+        streaming_source=source,  # type: ignore[arg-type]
+        batch_size=32,
+        shuffle=False,
+    )
+
+    target_logger = logging.getLogger(_STREAMING_LOGGER)
+    with patch.object(target_logger, "error") as mock_error:
+        with pytest.raises(
+            RuntimeError, match="Simulated file read error"
+        ):
+            list(dataset)
+
+    mock_error.assert_called_once()
+    assert (
+        "crashed during iteration" in mock_error.call_args[0][0]
+    )
+
+
+def test_streaming_kif_dataset_normal_operation_with_exception_handling() -> (
+    None
+):
+    """例外ハンドリング追加後も正常動作が維持されること．"""
+    source = FakePreprocessingSource(
+        n_files=2, rows_per_file=10
+    )
+    dataset = StreamingKifDataset(
+        streaming_source=source,  # type: ignore[arg-type]
+        batch_size=5,
+        shuffle=False,
+    )
+
+    batches = list(dataset)
+    # 2 files × 10 rows / 5 batch_size = 4 batches
+    assert len(batches) == 4
+    for (board, pieces), (move, value, mask) in batches:
+        assert board.shape[0] == 5
+        assert pieces.shape[0] == 5

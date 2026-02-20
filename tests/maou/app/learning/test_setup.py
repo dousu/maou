@@ -1085,3 +1085,61 @@ def test_log_worker_memory_debug_level() -> None:
     assert args[0] == logging.DEBUG
     assert "Worker 3" in args[1] % args[2:]
     assert "after_first_file" in args[1] % args[2:]
+
+
+# --- Fix C: persistent_workers ストリーミング時無効化テスト ---
+
+
+def test_streaming_dataloaders_persistent_workers_disabled() -> (
+    None
+):
+    """ストリーミングDataLoaderでpersistent_workersがFalseであること．"""
+
+    class _MinimalIterableDataset2(IterableDataset):
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
+            return iter([])
+
+    train_ds = _MinimalIterableDataset2()
+    val_ds = _MinimalIterableDataset2()
+
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=4,
+                pin_memory=False,
+                prefetch_factor=2,
+                n_train_files=4,
+                n_val_files=4,
+            )
+        )
+
+    # ストリーミングモードではpersistent_workers=Falseであること
+    assert train_loader.persistent_workers is False
+    assert val_loader.persistent_workers is False
+
+
+def test_non_streaming_dataloaders_persistent_workers_enabled() -> (
+    None
+):
+    """非ストリーミングDataLoaderではpersistent_workersがTrueであること．"""
+    train_ds = _make_kifdataset(100)
+    val_ds = _make_kifdataset(100)
+
+    train_loader, val_loader = (
+        DataLoaderFactory.create_dataloaders(
+            dataset_train=train_ds,
+            dataset_validation=val_ds,
+            batch_size=32,
+            dataloader_workers=2,
+            pin_memory=False,
+        )
+    )
+
+    # 非ストリーミングモードではpersistent_workers=Trueであること
+    assert train_loader.persistent_workers is True
+    assert val_loader.persistent_workers is True

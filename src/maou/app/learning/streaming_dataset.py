@@ -210,6 +210,9 @@ class StreamingKifDataset(IterableDataset):
         """
         # persistent_workers対応: worker_info.seedはエポックごとに変わる
         worker_info = torch.utils.data.get_worker_info()
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
         if worker_info is not None:
             epoch_seed = worker_info.seed
         else:
@@ -217,33 +220,44 @@ class StreamingKifDataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
-        # workerファイル分割 + ファイル順シャッフル
-        worker_files = _resolve_worker_files(
-            self._source,
-            shuffle=self._shuffle,
-            epoch_seed=epoch_seed,
-        )
-
-        worker_id = (
-            worker_info.id if worker_info is not None else 0
-        )
-        for file_idx, columnar_batch in enumerate(
-            self._source.iter_files_columnar_subset(
-                worker_files
-            )
-        ):
-            if file_idx == 0:
-                _log_worker_memory(
-                    worker_id,
-                    "after_first_file",
-                    level=logging.DEBUG,
-                )
-            yield from _yield_kif_batches(
-                columnar_batch,
-                batch_size=self._batch_size,
+        try:
+            # workerファイル分割 + ファイル順シャッフル
+            worker_files = _resolve_worker_files(
+                self._source,
                 shuffle=self._shuffle,
-                rng=rng,
+                epoch_seed=epoch_seed,
             )
+
+            if not worker_files:
+                logger.debug(
+                    "Worker %d: no files assigned", worker_id
+                )
+                return
+
+            for file_idx, columnar_batch in enumerate(
+                self._source.iter_files_columnar_subset(
+                    worker_files
+                )
+            ):
+                if file_idx == 0:
+                    _log_worker_memory(
+                        worker_id,
+                        "after_first_file",
+                        level=logging.DEBUG,
+                    )
+                yield from _yield_kif_batches(
+                    columnar_batch,
+                    batch_size=self._batch_size,
+                    shuffle=self._shuffle,
+                    rng=rng,
+                )
+        except Exception:
+            logger.error(
+                "Worker %d crashed during iteration",
+                worker_id,
+                exc_info=True,
+            )
+            raise
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
@@ -308,6 +322,9 @@ class StreamingStage1Dataset(IterableDataset):
             ((board_tensor, pieces_tensor), reachable_squares_tensor)
         """
         worker_info = torch.utils.data.get_worker_info()
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
         if worker_info is not None:
             epoch_seed = worker_info.seed
         else:
@@ -315,33 +332,44 @@ class StreamingStage1Dataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
-        # workerファイル分割 + ファイル順シャッフル
-        worker_files = _resolve_worker_files(
-            self._source,
-            shuffle=self._shuffle,
-            epoch_seed=epoch_seed,
-        )
-
-        worker_id = (
-            worker_info.id if worker_info is not None else 0
-        )
-        for file_idx, columnar_batch in enumerate(
-            self._source.iter_files_columnar_subset(
-                worker_files
-            )
-        ):
-            if file_idx == 0:
-                _log_worker_memory(
-                    worker_id,
-                    "after_first_file",
-                    level=logging.DEBUG,
-                )
-            yield from _yield_stage1_batches(
-                columnar_batch,
-                batch_size=self._batch_size,
+        try:
+            # workerファイル分割 + ファイル順シャッフル
+            worker_files = _resolve_worker_files(
+                self._source,
                 shuffle=self._shuffle,
-                rng=rng,
+                epoch_seed=epoch_seed,
             )
+
+            if not worker_files:
+                logger.debug(
+                    "Worker %d: no files assigned", worker_id
+                )
+                return
+
+            for file_idx, columnar_batch in enumerate(
+                self._source.iter_files_columnar_subset(
+                    worker_files
+                )
+            ):
+                if file_idx == 0:
+                    _log_worker_memory(
+                        worker_id,
+                        "after_first_file",
+                        level=logging.DEBUG,
+                    )
+                yield from _yield_stage1_batches(
+                    columnar_batch,
+                    batch_size=self._batch_size,
+                    shuffle=self._shuffle,
+                    rng=rng,
+                )
+        except Exception:
+            logger.error(
+                "Worker %d crashed during iteration",
+                worker_id,
+                exc_info=True,
+            )
+            raise
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
@@ -406,6 +434,9 @@ class StreamingStage2Dataset(IterableDataset):
             ((board_tensor, pieces_tensor), legal_moves_tensor)
         """
         worker_info = torch.utils.data.get_worker_info()
+        worker_id = (
+            worker_info.id if worker_info is not None else 0
+        )
         if worker_info is not None:
             epoch_seed = worker_info.seed
         else:
@@ -413,33 +444,44 @@ class StreamingStage2Dataset(IterableDataset):
 
         rng = np.random.default_rng(epoch_seed)
 
-        # workerファイル分割 + ファイル順シャッフル
-        worker_files = _resolve_worker_files(
-            self._source,
-            shuffle=self._shuffle,
-            epoch_seed=epoch_seed,
-        )
-
-        worker_id = (
-            worker_info.id if worker_info is not None else 0
-        )
-        for file_idx, columnar_batch in enumerate(
-            self._source.iter_files_columnar_subset(
-                worker_files
-            )
-        ):
-            if file_idx == 0:
-                _log_worker_memory(
-                    worker_id,
-                    "after_first_file",
-                    level=logging.DEBUG,
-                )
-            yield from _yield_stage2_batches(
-                columnar_batch,
-                batch_size=self._batch_size,
+        try:
+            # workerファイル分割 + ファイル順シャッフル
+            worker_files = _resolve_worker_files(
+                self._source,
                 shuffle=self._shuffle,
-                rng=rng,
+                epoch_seed=epoch_seed,
             )
+
+            if not worker_files:
+                logger.debug(
+                    "Worker %d: no files assigned", worker_id
+                )
+                return
+
+            for file_idx, columnar_batch in enumerate(
+                self._source.iter_files_columnar_subset(
+                    worker_files
+                )
+            ):
+                if file_idx == 0:
+                    _log_worker_memory(
+                        worker_id,
+                        "after_first_file",
+                        level=logging.DEBUG,
+                    )
+                yield from _yield_stage2_batches(
+                    columnar_batch,
+                    batch_size=self._batch_size,
+                    shuffle=self._shuffle,
+                    rng=rng,
+                )
+        except Exception:
+            logger.error(
+                "Worker %d crashed during iteration",
+                worker_id,
+                exc_info=True,
+            )
+            raise
 
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
