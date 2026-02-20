@@ -1283,6 +1283,19 @@ def learn_multi_stage(
 
     # Stage 3: Policy + Value (delegate to Learning.learn())
     # DataSourceはここで遅延初期化する．
+    #
+    # Stage 1/2で使用したオーケストレータとバックボーンを明示的に解放する．
+    # Stage 3は learn() 内で新しいモデルを作成しチェックポイントから
+    # backboneをロードするため，これらのオブジェクトは不要．
+    # 解放しないとGPU/CPUメモリが残留し，Stage 3のDataLoaderワーカーが
+    # メモリ枯渇でタイムアウトする原因となる．
+    if stage == "all":
+        del orchestrator
+        del backbone
+        if hasattr(torch, "_dynamo"):
+            torch._dynamo.reset()
+        _release_stage_memory("pre-Stage 3 cleanup")
+
     _log_memory_usage("Stage 3 start")
     if stage in ("3", "all") and stage3_data_config is not None:
         logger.info("=" * 60)

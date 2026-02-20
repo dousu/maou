@@ -107,3 +107,30 @@ def test_prefetcher_queue_empty_after_iteration() -> None:
     assert prefetcher.queue.empty()
     with pytest.raises(queue.Empty):
         prefetcher.queue.get_nowait()
+
+
+def test_prefetcher_timeout_constants() -> None:
+    """タイムアウト定数が期待値と整合することを検証する．"""
+    assert DataPrefetcher.DEFAULT_TIMEOUT == 120.0
+    assert DataPrefetcher.FIRST_BATCH_TIMEOUT == 300.0
+    assert (
+        DataPrefetcher.FIRST_BATCH_TIMEOUT
+        > DataPrefetcher.DEFAULT_TIMEOUT
+    )
+
+
+def test_log_timeout_diagnostics_no_error() -> None:
+    """_log_timeout_diagnosticsがシステム状態によらず例外を投げないことを検証する．"""
+    dataset = _FixedBatchDataset(1)
+    loader = DataLoader(dataset, batch_size=None, num_workers=0)
+    prefetcher = DataPrefetcher(
+        loader, device="cpu", buffer_size=2
+    )
+
+    # diagnosticsが検査するqueue/threadを初期化
+    prefetcher.queue = queue.Queue(maxsize=2)
+    prefetcher.thread = None  # type: ignore[assignment]
+
+    # is_first_batch=True/False の両方で例外なく完了すること
+    prefetcher._log_timeout_diagnostics(is_first_batch=True)
+    prefetcher._log_timeout_diagnostics(is_first_batch=False)

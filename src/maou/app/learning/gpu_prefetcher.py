@@ -21,7 +21,7 @@ GPU prefetchラッパーを提供する．
 import logging
 import queue
 import threading
-from typing import Any, Iterator, Optional, Union
+from typing import Any, ClassVar, Iterator, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader
@@ -67,6 +67,12 @@ class DataPrefetcher:
         buffer_size: バッファに保持するバッチ数
         pin_memory_override: DataLoaderのpin_memory設定を上書き
     """
+
+    #: 通常バッチのタイムアウト(秒)
+    DEFAULT_TIMEOUT: ClassVar[float] = 120.0
+    #: 初回バッチのタイムアウト(秒):
+    #: ワーカー初期化+ファイル読込+torch.compileウォームアップを考慮
+    FIRST_BATCH_TIMEOUT: ClassVar[float] = 300.0
 
     def __init__(
         self,
@@ -204,12 +210,15 @@ class DataPrefetcher:
         """イテレータを返す．
 
         バックグラウンドスレッドを開始し，prefetchを実行する．
+        初回バッチにはワーカー初期化やファイル読込を考慮した
+        長めのタイムアウトを適用する．
 
         Yields:
             GPUに転送済みのバッチデータ
 
         Raises:
             Exception: ローダースレッドで例外が発生した場合
+            TimeoutError: バッチ取得がタイムアウトした場合
         """
         # 前回のスレッドが残っている場合は停止
         if self.thread is not None and self.thread.is_alive():
@@ -228,21 +237,33 @@ class DataPrefetcher:
         )
         self.thread.start()
 
+        is_first_batch = True
+
         # キューからバッチを取得して返す
         while True:
             # ローダースレッドで例外が発生していないか確認
             if self.exception is not None:
                 raise self.exception
 
+            # 初回バッチには長めのタイムアウトを適用
+            timeout = (
+                self.FIRST_BATCH_TIMEOUT
+                if is_first_batch
+                else self.DEFAULT_TIMEOUT
+            )
+
             # キューからバッチを取得（タイムアウト付き）
             try:
-                batch = self.queue.get(timeout=120)
+                batch = self.queue.get(timeout=timeout)
             except queue.Empty:
-                # タイムアウト時は例外をチェック
+                # タイムアウト時は診断情報を出力
+                self._log_timeout_diagnostics(is_first_batch)
                 if self.exception is not None:
                     raise self.exception
                 raise TimeoutError(
-                    "Timeout waiting for batch from DataPrefetcher"
+                    f"Timeout ({timeout:.0f}s) waiting for "
+                    f"{'first ' if is_first_batch else ''}"
+                    f"batch from DataPrefetcher"
                 )
 
             # 終了シグナル（None）を受け取ったら終了
@@ -259,7 +280,82 @@ class DataPrefetcher:
             if self.stream is not None:
                 self.stream.synchronize()
 
+            is_first_batch = False
             yield batch
+
+    def _log_timeout_diagnostics(
+        self, is_first_batch: bool
+    ) -> None:
+        """タイムアウト発生時の診断情報をログ出力する．
+
+        メモリ使用量，ワーカー状態，GPUメモリ等を出力し，
+        タイムアウトの原因特定を支援する．
+
+        Args:
+            is_first_batch: 初回バッチでのタイムアウトかどうか
+        """
+        diag_lines = [
+            "=== DataPrefetcher Timeout Diagnostics ===",
+            f"First batch: {is_first_batch}",
+            f"Buffer size: {self.buffer_size}",
+            f"Queue size: {self.queue.qsize()}/{self.buffer_size}",
+            f"Loader thread alive: "
+            f"{self.thread.is_alive() if self.thread else 'N/A'}",
+            f"Stop event set: {self.stop_event.is_set()}",
+            f"Exception in loader: {self.exception}",
+        ]
+
+        # システムメモリ情報
+        try:
+            import psutil
+
+            vm = psutil.virtual_memory()
+            diag_lines.append(
+                f"System memory: "
+                f"total={vm.total // (1024**2)}MB, "
+                f"available={vm.available // (1024**2)}MB, "
+                f"percent={vm.percent}%"
+            )
+        except ImportError:
+            try:
+                import resource
+
+                usage = resource.getrusage(resource.RUSAGE_SELF)
+                rss_mb = usage.ru_maxrss / 1024
+                diag_lines.append(f"Peak RSS: {rss_mb:.0f}MB")
+            except Exception:
+                pass
+
+        # GPUメモリ情報
+        if torch.cuda.is_available():
+            try:
+                allocated = torch.cuda.memory_allocated() / (
+                    1024**2
+                )
+                reserved = torch.cuda.memory_reserved() / (
+                    1024**2
+                )
+                diag_lines.append(
+                    f"GPU memory: "
+                    f"allocated={allocated:.0f}MB, "
+                    f"reserved={reserved:.0f}MB"
+                )
+            except Exception:
+                pass
+
+        # DataLoader情報
+        if hasattr(self.loader, "num_workers"):
+            diag_lines.append(
+                f"DataLoader workers: {self.loader.num_workers}"
+            )
+        if hasattr(self.loader, "pin_memory"):
+            diag_lines.append(
+                f"DataLoader pin_memory: "
+                f"{self.loader.pin_memory}"
+            )
+
+        for line in diag_lines:
+            self.logger.error(line)
 
     def __len__(self) -> int:
         """DataLoaderの長さを返す．
