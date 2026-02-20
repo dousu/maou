@@ -325,3 +325,21 @@ poetry run maou learn-model \
 - [PyTorch Multiprocessing Best Practices](https://pytorch.org/docs/stable/notes/multiprocessing.html)
 - [CUDA Context Management](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__CONTEXT.html)
 - [Python Multiprocessing Start Methods](https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods)
+
+## 更新: forkserver → spawn (2026-02-20)
+
+### 問題
+
+forkserver は fork() でデーモンプロセスを生成する．
+メインプロセスで Polars/Rust (jemalloc) が初期化済みの場合，
+デーモンもその状態を継承するため，ワーカーが Rust FFI 呼び出しで
+segfault する．
+
+### 決定
+
+ストリーミング DataLoader の multiprocessing_context を
+`"forkserver"` から `"spawn"` に変更．
+
+- spawn は os.exec() で完全に新しいプロセスを生成
+- 各ワーカーがモジュールを再インポートし Polars/Rust をクリーンに初期化
+- persistent_workers=True でワーカー再生成コストを償却
