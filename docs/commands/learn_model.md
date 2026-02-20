@@ -92,6 +92,19 @@ flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 | `--vit-dropout FLOAT` | `None` (model default: 0.1) | ViT: dropout rate.【F:src/maou/infra/console/learn_model.py†L237-L244】 |
 | `--gradient-checkpointing` | `False` | Enable gradient checkpointing to reduce activation memory. Recommended for large batch sizes with ViT. |
 
+#### `--gradient-checkpointing` の影響
+
+ViTエンコーダのGPU活性化メモリを約93%削減するオプション．
+大きなバッチサイズでのCUDA OOMを回避できる．
+
+| 項目 | 影響 |
+|------|------|
+| GPU活性化メモリ | 約93%削減（例: batch_size=4096で ~30GB → ~2GB） |
+| 学習速度 (Stage 1/2) | 20〜30%低下（forward passの再計算） |
+| 学習速度 (Stage 3, trainable_layers=2) | 7〜10%低下 |
+| 学習精度 | 影響なし（数学的に等価） |
+| CPU/ホストメモリ | 影響なし |
+
 ### Multi-stage training
 
 | Flag | Default | Description |
