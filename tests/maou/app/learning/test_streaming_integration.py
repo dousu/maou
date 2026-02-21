@@ -486,16 +486,6 @@ class TestSingleStageSetEpoch:
 class TestTrainingLoopBatchSizeNone:
     """TrainingLoop handles batch_size=None for streaming DataLoaders."""
 
-    def test_gpu_prefetch_buffer_fallback(self) -> None:
-        """GPU prefetch buffer calculation uses fallback for batch_size=None."""
-        from maou.app.learning.gpu_prefetcher import (
-            calculate_recommended_buffer_size,
-        )
-
-        # The fallback default is 256 when batch_size is None
-        result = calculate_recommended_buffer_size(256)
-        assert result > 0
-
     def test_streaming_dataloader_batch_size_is_none(
         self,
     ) -> None:

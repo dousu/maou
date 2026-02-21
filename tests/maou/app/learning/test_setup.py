@@ -1225,7 +1225,7 @@ def test_streaming_dataloaders_timeout_zero() -> None:
         )
 
     # ストリーミングDataLoaderのtimeoutは0
-    # (DataPrefetcherのFIRST_BATCH_TIMEOUT/DEFAULT_TIMEOUTに一元化)
+    # (ストリーミングモードではタイムアウト管理をアプリケーション側で行う)
     assert train_loader.timeout == 0
     assert val_loader.timeout == 0
 
@@ -1323,11 +1323,11 @@ def test_streaming_dataloaders_cap_total_spawn_workers(
     assert val_loader.num_workers == expected_val
 
 
-def test_streaming_dataloaders_pin_memory_disabled() -> None:
-    """ストリーミングDataLoaderのpin_memoryが無効であることを検証する．
+def test_streaming_dataloaders_pin_memory_passthrough() -> None:
+    """ストリーミングDataLoaderのpin_memoryが引数通りに設定されることを検証する．
 
-    spawn + persistent_workers環境でのpin_memory_threadによる
-    デッドロックを防止するため，pin_memoryはFalseに固定される．
+    DataPrefetcher除去後はpin_memory_threadがspawnコンテキストで
+    安全に動作するため，pin_memoryをそのまま渡す．
     """
 
     class _PinMemoryTestDataset(IterableDataset):
@@ -1353,6 +1353,6 @@ def test_streaming_dataloaders_pin_memory_disabled() -> None:
             )
         )
 
-    # pin_memory=True で呼んでも，ストリーミングモードでは False に固定される
-    assert train_loader.pin_memory is False
-    assert val_loader.pin_memory is False
+    # pin_memory=True がそのまま渡される
+    assert train_loader.pin_memory is True
+    assert val_loader.pin_memory is True

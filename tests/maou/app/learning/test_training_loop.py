@@ -34,41 +34,6 @@ def test_network_separate_inputs_accepts_list() -> None:
     assert separated_pieces is pieces
 
 
-def test_training_loop_stores_logical_batch_size() -> None:
-    """logical_batch_sizeがTrainingLoopに正しく保存されることを確認する．"""
-    model = torch.nn.Linear(10, 2)
-    loop = TrainingLoop(
-        model=model,
-        device=torch.device("cpu"),
-        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
-        loss_fn_policy=torch.nn.CrossEntropyLoss(),
-        loss_fn_value=torch.nn.MSELoss(),
-        policy_loss_ratio=1.0,
-        value_loss_ratio=1.0,
-        logical_batch_size=4096,
-    )
-
-    assert loop.logical_batch_size == 4096
-
-
-def test_training_loop_logical_batch_size_defaults_to_none() -> (
-    None
-):
-    """logical_batch_size未指定時はNoneとなることを確認する．"""
-    model = torch.nn.Linear(10, 2)
-    loop = TrainingLoop(
-        model=model,
-        device=torch.device("cpu"),
-        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
-        loss_fn_policy=torch.nn.CrossEntropyLoss(),
-        loss_fn_value=torch.nn.MSELoss(),
-        policy_loss_ratio=1.0,
-        value_loss_ratio=1.0,
-    )
-
-    assert loop.logical_batch_size is None
-
-
 def test_nan_loss_does_not_call_scaler_update() -> None:
     """NaN損失検出時にscaler.update()が呼ばれないことを確認する．"""
     model = torch.nn.Linear(10, 2)
@@ -122,3 +87,162 @@ def test_nan_loss_does_not_call_scaler_update() -> None:
 
     # scaler.update()はNaN検出時に呼ばれてはいけない
     mock_scaler.update.assert_not_called()
+
+
+class _SimpleBatchDataset(torch.utils.data.IterableDataset):
+    """Yields simple batches for testing iteration methods."""
+
+    def __init__(self, num_batches: int) -> None:
+        self.num_batches = num_batches
+
+    def __iter__(self):  # type: ignore[override]
+        for i in range(self.num_batches):
+            features = torch.full((2, 3), float(i))
+            targets = (
+                torch.full((2,), float(i)),
+                torch.full((2,), float(i)),
+                None,
+            )
+            yield features, targets
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+
+def _make_loop() -> TrainingLoop:
+    """Create a minimal TrainingLoop for testing."""
+    model = torch.nn.Linear(3, 2)
+    return TrainingLoop(
+        model=model,
+        device=torch.device("cpu"),
+        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
+        loss_fn_policy=torch.nn.CrossEntropyLoss(),
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=1.0,
+    )
+
+
+class TestIterateDirect:
+    """Tests for _iterate_direct (CPU path)."""
+
+    def test_yields_all_batches(self) -> None:
+        """All batches are yielded in correct order."""
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(5)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        results = list(
+            loop._iterate_direct(dataloader, epoch_idx=0)
+        )
+
+        assert len(results) == 5
+        for i, (batch_idx, ctx) in enumerate(results):
+            assert batch_idx == i
+            assert ctx.epoch_idx == 0
+            assert ctx.batch_size == 2
+
+    def test_empty_dataloader(self) -> None:
+        """Empty dataloader yields nothing."""
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(0)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        results = list(
+            loop._iterate_direct(dataloader, epoch_idx=0)
+        )
+        assert len(results) == 0
+
+    def test_single_batch(self) -> None:
+        """Single batch is yielded correctly."""
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(1)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        results = list(
+            loop._iterate_direct(dataloader, epoch_idx=3)
+        )
+
+        assert len(results) == 1
+        batch_idx, ctx = results[0]
+        assert batch_idx == 0
+        assert ctx.epoch_idx == 3
+
+
+class TestIterateWithTransfer:
+    """Tests for _iterate_with_transfer dispatch."""
+
+    def test_cpu_device_uses_direct(self) -> None:
+        """CPU device dispatches to _iterate_direct."""
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(3)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        results = list(
+            loop._iterate_with_transfer(dataloader, epoch_idx=0)
+        )
+
+        assert len(results) == 3
+        for i, (batch_idx, ctx) in enumerate(results):
+            assert batch_idx == i
+
+    def test_transfers_data_for_cpu(self) -> None:
+        """_transfer_to_device is called for each batch on CPU."""
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(2)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+        transfer_count = 0
+        original_transfer = loop._transfer_to_device
+
+        def counting_transfer(ctx: TrainingContext) -> None:
+            nonlocal transfer_count
+            transfer_count += 1
+            original_transfer(ctx)
+
+        with patch.object(
+            loop, "_transfer_to_device", counting_transfer
+        ):
+            list(
+                loop._iterate_with_transfer(
+                    dataloader, epoch_idx=0
+                )
+            )
+
+        assert transfer_count == 2
+
+
+class TestUnpackBatch:
+    """Tests for _unpack_batch."""
+
+    def test_unpacks_correctly(self) -> None:
+        """Raw batch data is unpacked into TrainingContext."""
+        loop = _make_loop()
+        features = torch.zeros(4, 3)
+        targets = (
+            torch.zeros(4),
+            torch.ones(4),
+            None,
+        )
+        raw_data = (features, targets)
+
+        ctx = loop._unpack_batch(
+            raw_data, batch_idx=5, epoch_idx=2
+        )
+
+        assert ctx.batch_idx == 5
+        assert ctx.epoch_idx == 2
+        assert ctx.batch_size == 4
+        assert ctx.inputs is features
+        assert ctx.labels_policy is targets[0]
+        assert ctx.labels_value is targets[1]
+        assert ctx.legal_move_mask is None

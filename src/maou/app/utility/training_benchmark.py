@@ -13,9 +13,6 @@ from maou.app.learning.callbacks import (
 )
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
-from maou.app.learning.gpu_prefetcher import (
-    calculate_recommended_buffer_size,
-)
 from maou.app.learning.network import (
     BackboneArchitecture,
     Network,
@@ -40,10 +37,6 @@ class BenchmarkResult:
     warmup_batches: int
     measured_time: float
     measured_batches: int
-
-    # GPU Prefetch情報
-    gpu_prefetch_enabled: bool
-    gpu_prefetch_buffer_size: int
 
     # 詳細なタイミング分析
     data_loading_time: float
@@ -75,12 +68,6 @@ class BenchmarkResult:
             "warmup_batches": float(self.warmup_batches),
             "measured_time": self.measured_time,
             "measured_batches": float(self.measured_batches),
-            "gpu_prefetch_enabled": float(
-                self.gpu_prefetch_enabled
-            ),
-            "gpu_prefetch_buffer_size": float(
-                self.gpu_prefetch_buffer_size
-            ),
             "data_loading_time": self.data_loading_time,
             "gpu_transfer_time": self.gpu_transfer_time,
             "forward_pass_time": self.forward_pass_time,
@@ -120,8 +107,6 @@ class SingleEpochBenchmark:
         policy_loss_ratio: float,
         value_loss_ratio: float,
         enable_resource_monitoring: bool = False,
-        enable_gpu_prefetch: bool = True,
-        gpu_prefetch_buffer_size: int = 0,
     ):
         self.model = model
         self.device = device
@@ -133,8 +118,6 @@ class SingleEpochBenchmark:
         self.enable_resource_monitoring = (
             enable_resource_monitoring
         )
-        self.enable_gpu_prefetch = enable_gpu_prefetch
-        self.gpu_prefetch_buffer_size = gpu_prefetch_buffer_size
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -196,8 +179,6 @@ class SingleEpochBenchmark:
             value_loss_ratio=self.value_loss_ratio,
             callbacks=callbacks,
             logger=self.logger,
-            enable_gpu_prefetch=self.enable_gpu_prefetch,
-            gpu_prefetch_buffer_size=self.gpu_prefetch_buffer_size,
         )
 
         # Run training epoch with timing
@@ -244,30 +225,6 @@ class SingleEpochBenchmark:
             f"Samples per second: {performance_metrics['samples_per_second']:.1f}"
         )
 
-        # GPU Prefetchの実効バッファサイズを決定
-        effective_gpu_prefetch = (
-            self.enable_gpu_prefetch
-            and self.device.type == "cuda"
-        )
-        if effective_gpu_prefetch:
-            if self.gpu_prefetch_buffer_size <= 0:
-                effective_batch_size = (
-                    dataloader.batch_size
-                    if dataloader.batch_size is not None
-                    else 256
-                )
-                effective_buffer_size = (
-                    calculate_recommended_buffer_size(
-                        effective_batch_size
-                    )
-                )
-            else:
-                effective_buffer_size = (
-                    self.gpu_prefetch_buffer_size
-                )
-        else:
-            effective_buffer_size = 0
-
         return BenchmarkResult(
             total_epoch_time=performance_metrics[
                 "total_epoch_time"
@@ -285,8 +242,6 @@ class SingleEpochBenchmark:
             warmup_batches=warmup_batches,
             measured_time=performance_metrics["measured_time"],
             measured_batches=timing_callback.measured_batches,
-            gpu_prefetch_enabled=effective_gpu_prefetch,
-            gpu_prefetch_buffer_size=effective_buffer_size,
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -358,8 +313,6 @@ class SingleEpochBenchmark:
             value_loss_ratio=self.value_loss_ratio,
             callbacks=callbacks,
             logger=self.logger,
-            enable_gpu_prefetch=self.enable_gpu_prefetch,
-            gpu_prefetch_buffer_size=self.gpu_prefetch_buffer_size,
         )
 
         # Run validation epoch with timing
@@ -404,30 +357,6 @@ class SingleEpochBenchmark:
             f"Samples per second: {performance_metrics['samples_per_second']:.1f}"
         )
 
-        # GPU Prefetchの実効バッファサイズを決定
-        effective_gpu_prefetch = (
-            self.enable_gpu_prefetch
-            and self.device.type == "cuda"
-        )
-        if effective_gpu_prefetch:
-            if self.gpu_prefetch_buffer_size <= 0:
-                effective_batch_size = (
-                    dataloader.batch_size
-                    if dataloader.batch_size is not None
-                    else 256
-                )
-                effective_buffer_size = (
-                    calculate_recommended_buffer_size(
-                        effective_batch_size
-                    )
-                )
-            else:
-                effective_buffer_size = (
-                    self.gpu_prefetch_buffer_size
-                )
-        else:
-            effective_buffer_size = 0
-
         return BenchmarkResult(
             total_epoch_time=performance_metrics[
                 "total_epoch_time"
@@ -445,8 +374,6 @@ class SingleEpochBenchmark:
             warmup_batches=0,
             measured_time=performance_metrics["measured_time"],
             measured_batches=timing_callback.measured_batches,
-            gpu_prefetch_enabled=effective_gpu_prefetch,
-            gpu_prefetch_buffer_size=effective_buffer_size,
             data_loading_time=timing_stats["data_loading_time"],
             gpu_transfer_time=timing_stats["gpu_transfer_time"],
             forward_pass_time=timing_stats["forward_pass_time"],
@@ -676,26 +603,6 @@ class TrainingBenchmarkUseCase:
                 / result.actual_average_batch_time
                 * 100
             )
-            # GPU Prefetch情報
-            if result.gpu_prefetch_enabled:
-                gpu_prefetch_info = f"  GPU Prefetch: enabled (buffer={result.gpu_prefetch_buffer_size})"
-            else:
-                gpu_prefetch_info = "  GPU Prefetch: disabled"
-
-            data_label = (
-                "Prefetch Wait"
-                if result.gpu_prefetch_enabled
-                else "Data Loading"
-            )
-
-            prefetch_note = ""
-            if result.gpu_prefetch_enabled:
-                prefetch_note = (
-                    "\n\n  Note: GPU Prefetcher active"
-                    " - 'Prefetch Wait' shows buffer fetch time,"
-                    " not actual disk I/O time."
-                )
-
             # Format resource usage summary if available
             resource_summary = ""
             if result.resource_usage is not None:
@@ -723,7 +630,6 @@ class TrainingBenchmarkUseCase:
   Total Time (Processed): {result.total_epoch_time:.2f}s
   Warmup: {result.warmup_batches} batches in {result.warmup_time:.2f}s
   Measured: {result.measured_batches} batches in {result.measured_time:.2f}s
-{gpu_prefetch_info}
   Estimated Full Epoch Time: {estimated_full_epoch_time_seconds:.2f}s ({estimated_full_epoch_time_minutes:.2f} minutes)
   Actual Average Time per Batch: {result.actual_average_batch_time:.4f}s
   Processing Time per Batch (excl. data loading): {result.average_batch_time:.4f}s
@@ -731,7 +637,7 @@ class TrainingBenchmarkUseCase:
   Batches per Second: {result.batches_per_second:.2f}
 
   Detailed Timing Breakdown (per batch, warmup excluded):
-  - {data_label}: {result.data_loading_time:.4f}s ({data_pct:.1f}%)
+  - Data Loading: {result.data_loading_time:.4f}s ({data_pct:.1f}%)
   - GPU Transfer: {result.gpu_transfer_time:.4f}s ({gpu_pct:.1f}%)
   - Forward Pass: {result.forward_pass_time:.4f}s ({forward_pct:.1f}%)
   - Loss Computation: {result.loss_computation_time:.4f}s ({loss_pct:.1f}%)
@@ -740,7 +646,7 @@ class TrainingBenchmarkUseCase:
 
   Loss Information:
   - Final Loss: {result.final_loss:.6f}
-  - Average Loss: {result.average_loss:.6f}{resource_summary}{prefetch_note}"""
+  - Average Loss: {result.average_loss:.6f}{resource_summary}"""
 
         training_summary = format_timing_summary(
             training_result,

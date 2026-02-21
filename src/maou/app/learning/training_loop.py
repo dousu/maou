@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import List, Optional, cast
 
 import torch
@@ -12,10 +12,6 @@ from maou.app.learning.callbacks import (
     ModelInputs,
     TrainingCallback,
     TrainingContext,
-)
-from maou.app.learning.gpu_prefetcher import (
-    DataPrefetcher,
-    calculate_recommended_buffer_size,
 )
 from maou.app.learning.policy_targets import (
     normalize_policy_targets,
@@ -37,10 +33,7 @@ class TrainingLoop:
         value_loss_ratio: float,
         callbacks: Optional[List[TrainingCallback]] = None,
         logger: Optional[logging.Logger] = None,
-        enable_gpu_prefetch: bool = True,
-        gpu_prefetch_buffer_size: int = 0,
         gradient_accumulation_steps: int = 1,
-        logical_batch_size: int | None = None,
     ):
         self.model = model
         self.device = device
@@ -52,24 +45,6 @@ class TrainingLoop:
         self.callbacks = callbacks or []
         self.logger = logger or logging.getLogger(__name__)
         self._cuda_sync_enabled = False
-
-        # GPU prefetch設定
-        self.enable_gpu_prefetch = (
-            enable_gpu_prefetch and device.type == "cuda"
-        )
-        self.gpu_prefetch_buffer_size = gpu_prefetch_buffer_size
-        self.logical_batch_size = logical_batch_size
-
-        if self.enable_gpu_prefetch:
-            if gpu_prefetch_buffer_size <= 0:
-                self.logger.info(
-                    "GPU prefetching enabled with auto-calculated buffer size "
-                    "(determined per batch size)"
-                )
-            else:
-                self.logger.info(
-                    f"GPU prefetching enabled with buffer_size={gpu_prefetch_buffer_size}"
-                )
 
         # Gradient accumulation設定
         self.gradient_accumulation_steps = max(
@@ -154,96 +129,31 @@ class TrainingLoop:
             profiler.start()
 
         try:
-            # GPU prefetchを有効化している場合はDataPrefetcherでラップ
-            if self.enable_gpu_prefetch:
-                # バッファサイズの決定（0以下の場合は自動計算）
-                if self.gpu_prefetch_buffer_size <= 0:
-                    effective_batch_size = (
-                        self.logical_batch_size
-                        if self.logical_batch_size is not None
-                        else (
-                            dataloader.batch_size
-                            if dataloader.batch_size is not None
-                            else 256
-                        )
-                    )
-                    num_workers = getattr(
-                        dataloader, "num_workers", 0
-                    )
-                    buffer_size = (
-                        calculate_recommended_buffer_size(
-                            effective_batch_size,
-                            num_workers=num_workers,
-                        )
-                    )
-                    self.logger.info(
-                        "Auto-calculated GPU prefetch buffer size: %d "
-                        "(batch_size=%d, num_workers=%d)",
-                        buffer_size,
-                        effective_batch_size,
-                        num_workers,
-                    )
-                else:
-                    buffer_size = self.gpu_prefetch_buffer_size
-
-                prefetcher = DataPrefetcher(
-                    dataloader,
-                    device=self.device,
-                    buffer_size=buffer_size,
-                    pin_memory_override=None,
-                )
-                data_iterator = prefetcher
-            else:
-                data_iterator = dataloader
-
+            transfer_iter = self._iterate_with_transfer(
+                dataloader, epoch_idx
+            )
             dataloader_iter = (
                 tqdm(
-                    enumerate(data_iterator),
+                    transfer_iter,
                     desc="Training"
                     if train_mode
                     else "Validation",
                     total=len(dataloader),
                 )
                 if progress_bar
-                else enumerate(data_iterator)
+                else transfer_iter
             )
 
-            for batch_idx, data in dataloader_iter:
+            for batch_idx, context in dataloader_iter:
                 if (
                     max_batches is not None
                     and batch_idx >= max_batches
                 ):
                     break
 
-                # データの展開
-                (
-                    inputs,
-                    (
-                        labels_policy,
-                        labels_value,
-                        legal_move_mask,
-                    ),
-                ) = data
-                batch_size = self._resolve_batch_size(inputs)
-
-                # コンテキストの作成
-                context = TrainingContext(
-                    batch_idx=batch_idx,
-                    epoch_idx=epoch_idx,
-                    inputs=inputs,
-                    labels_policy=labels_policy,
-                    labels_value=labels_value,
-                    legal_move_mask=legal_move_mask,
-                    batch_size=batch_size,
-                )
-
                 # バッチ開始のコールバック
                 for callback in self.callbacks:
                     callback.on_batch_start(context)
-
-                # GPU転送（prefetch使用時は既にGPU上にあるためスキップ）
-                if not self.enable_gpu_prefetch:
-                    self._transfer_to_device(context)
 
                 if train_mode:
                     # 学習モード：勾配計算あり
@@ -261,13 +171,6 @@ class TrainingLoop:
                     profiler.step()
 
         finally:
-            # GPU prefetcherのクリーンアップ
-            if (
-                self.enable_gpu_prefetch
-                and "prefetcher" in locals()
-            ):
-                prefetcher.shutdown()
-
             if (
                 self.device.type == "cuda"
                 and previous_sync_state
@@ -325,6 +228,115 @@ class TrainingLoop:
 
         for callback in self.callbacks:
             callback.on_data_transfer_end(context)
+
+    def _iterate_with_transfer(
+        self,
+        dataloader: DataLoader,
+        epoch_idx: int,
+    ) -> Iterator[tuple[int, TrainingContext]]:
+        """Iterate dataloader with device transfer.
+
+        CUDAデバイスではストリームオーバーラップによりH2D転送と
+        計算を並行して実行する．CPUでは同期的に転送する．
+        """
+        if self.device.type == "cuda":
+            yield from self._iterate_cuda_overlap(
+                dataloader, epoch_idx
+            )
+        else:
+            yield from self._iterate_direct(
+                dataloader, epoch_idx
+            )
+
+    def _iterate_cuda_overlap(
+        self,
+        dataloader: DataLoader,
+        epoch_idx: int,
+    ) -> Iterator[tuple[int, TrainingContext]]:
+        """Iterate with CUDA stream overlap for async H2D transfer.
+
+        別のCUDAストリームでH2D転送を行い，デフォルトストリームでの
+        計算とオーバーラップさせることでスループットを向上させる．
+        """
+        stream = torch.cuda.Stream()
+        data_iter = iter(dataloader)
+
+        # 最初のバッチは同期転送
+        try:
+            first_raw = next(data_iter)
+        except StopIteration:
+            return
+
+        current_ctx = self._unpack_batch(
+            first_raw, batch_idx=0, epoch_idx=epoch_idx
+        )
+        self._transfer_to_device(current_ctx)
+
+        batch_idx = 0
+        for next_raw in data_iter:
+            next_ctx = self._unpack_batch(
+                next_raw,
+                batch_idx=batch_idx + 1,
+                epoch_idx=epoch_idx,
+            )
+            with torch.cuda.stream(stream):
+                # NOTE: _transfer_to_device内のコールバック(on_data_transfer_start/end)は
+                # 転送ストリーム上で実行される．将来のコールバックでCUDA操作を行うと
+                # 誤ったストリームにスケジュールされるため注意．
+                self._transfer_to_device(next_ctx)
+
+            # デフォルトストリームで現在のバッチを学習（H2D転送とオーバーラップ）
+            yield batch_idx, current_ctx
+
+            # 次バッチの転送完了を待機
+            stream.synchronize()
+            current_ctx = next_ctx
+            batch_idx += 1
+
+        # 最後のバッチを返す
+        yield batch_idx, current_ctx
+
+    def _iterate_direct(
+        self,
+        dataloader: DataLoader,
+        epoch_idx: int,
+    ) -> Iterator[tuple[int, TrainingContext]]:
+        """Direct iteration with synchronous transfer (CPU path)."""
+        for batch_idx, raw_batch in enumerate(dataloader):
+            ctx = self._unpack_batch(
+                raw_batch,
+                batch_idx=batch_idx,
+                epoch_idx=epoch_idx,
+            )
+            self._transfer_to_device(ctx)
+            yield batch_idx, ctx
+
+    def _unpack_batch(
+        self,
+        data: tuple[
+            ModelInputs,
+            tuple[
+                torch.Tensor, torch.Tensor, torch.Tensor | None
+            ],
+        ],
+        batch_idx: int,
+        epoch_idx: int,
+    ) -> TrainingContext:
+        """Unpack raw dataloader output into a TrainingContext."""
+        (
+            inputs,
+            (labels_policy, labels_value, legal_move_mask),
+        ) = data
+        batch_size = self._resolve_batch_size(inputs)
+        return TrainingContext(
+            batch_idx=batch_idx,
+            epoch_idx=epoch_idx,
+            inputs=inputs,
+            labels_policy=labels_policy,
+            labels_value=labels_value,
+            legal_move_mask=legal_move_mask,
+            batch_size=batch_size,
+        )
 
     def _train_batch(self, context: TrainingContext) -> None:
         """Train a single batch with gradient computation."""
