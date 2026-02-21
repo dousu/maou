@@ -111,6 +111,10 @@ perf-engineer が Rust ソースコード(`rust/maou_rust/src/maou_io.rs`)を確
 
 10 ファイル結合でバッチ/ファイルロード比率を Stage 3 と同等にしたが改善なし．I/O パターンは無関係．
 
+### BCEWithLogitsLoss backward が主因
+
+perf-engineer の分析により否定．勾配テンソルの形状が Stage 2・Stage 3 とも [1024, 1496] で同一のため，backward の Linear GEMM コストと backbone backward コストは同一．さらに Stage 3 は masked_fill + log_softmax + normalize_policy_targets が追加されており，**Stage 3 の方がむしろ計算量が多い．** BCEWithLogitsLoss の `σ(x)-y` と KLDivLoss+log_softmax の backward はどちらも element-wise 操作で GPU 上では trivial であり，6-7x の差は理論的にあり得ない．
+
 ## コンピュート側の差異分析
 
 workers=0 テストとバッチサイズ確認により，**速度差の原因は 100% コンピュート側**にある．以下が Stage 2 と Stage 3 の計算パスの差異:
