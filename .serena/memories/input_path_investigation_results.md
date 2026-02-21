@@ -49,7 +49,7 @@
           else FileSystem.collect_files(input_path)
       )
   ```
-- **意味**: 
+- **意味**:
   - マルチステージ時に `--stage3-data-path` が指定されていない場合
   - `--input-path` を **Stage 3データとしてのみ** 使用
   - つまり、マルチステージ時の `--input-path` は Stage 3 専用データパスとして機能
@@ -68,7 +68,7 @@
 | `--stage3-data-path` がない + `--input-path` 指定 | `--input-path` （fallback） | L1190-1244 |
 | `--input-path` のみ指定 + 非マルチステージ | `--input-path` （非マルチステージ） | L1313-1396 |
 
-**結論**: 
+**結論**:
 - `--stage3-data-path` が優先度が高い（明示的）
 - `--input-path` は fallback として Stage 3 に使用
 - 異なる用途ではなく、**`--stage3-data-path` の後方互換性オプション**
