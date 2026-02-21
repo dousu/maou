@@ -44,31 +44,19 @@ def _make_dummy_dataloader(
 
     dataset = TensorDataset(board_tensor, hand_tensor, targets)
 
-    if stage == TrainingStage.LEGAL_MOVES:
-
-        def collate_fn(
-            batch: list[tuple[torch.Tensor, ...]],
-        ) -> tuple[
-            tuple[torch.Tensor, torch.Tensor],
-            tuple[torch.Tensor, torch.Tensor, None],
-        ]:
-            boards = torch.stack([b[0] for b in batch])
-            hands = torch.stack([b[1] for b in batch])
-            tgts = torch.stack([b[2] for b in batch])
+    def collate_fn(
+        batch: list[tuple[torch.Tensor, ...]],
+    ) -> tuple[
+        tuple[torch.Tensor, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor, None] | torch.Tensor,
+    ]:
+        boards = torch.stack([b[0] for b in batch])
+        hands = torch.stack([b[1] for b in batch])
+        tgts = torch.stack([b[2] for b in batch])
+        if stage == TrainingStage.LEGAL_MOVES:
             dummy_value = torch.zeros(tgts.shape[0], 1)
             return (boards, hands), (tgts, dummy_value, None)
-
-    else:
-
-        def collate_fn(
-            batch: list[tuple[torch.Tensor, ...]],
-        ) -> tuple[
-            tuple[torch.Tensor, torch.Tensor], torch.Tensor
-        ]:
-            boards = torch.stack([b[0] for b in batch])
-            hands = torch.stack([b[1] for b in batch])
-            tgts = torch.stack([b[2] for b in batch])
-            return (boards, hands), tgts
+        return (boards, hands), tgts
 
     return DataLoader(
         dataset,
