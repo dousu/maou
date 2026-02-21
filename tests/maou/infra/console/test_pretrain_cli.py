@@ -128,7 +128,8 @@ def test_pretrain_cli(
         key.startswith("decoder") for key in state_dict
     )
     backbone = ModelFactory.create_shogi_backbone(
-        torch.device("cpu")
+        torch.device("cpu"),
+        hand_projection_dim=0,
     )
     backbone.load_state_dict(state_dict)
     assert "saved state_dict" in result.output.lower()

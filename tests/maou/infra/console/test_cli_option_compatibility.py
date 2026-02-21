@@ -72,6 +72,7 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "vit-num-heads",  # ViTアーキテクチャ設定（不要）
         "vit-mlp-ratio",  # ViTアーキテクチャ設定（不要）
         "vit-dropout",  # ViTアーキテクチャ設定（不要）
+        "gradient-checkpointing",  # ViTメモリ最適化（不要）
         "stage",  # マルチステージ学習（不要）
         "stage1-data-path",  # Stage 1データパス（不要）
         "stage2-data-path",  # Stage 2データパス（不要）
