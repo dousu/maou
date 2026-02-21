@@ -558,6 +558,41 @@ class StreamingStage2Dataset(IterableDataset):
         )
 
 
+class Stage2StreamingAdapter(IterableDataset):
+    """StreamingStage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
+
+    StreamingStage2Dataset は ``((board, hand), legal_moves)`` を yield するが，
+    TrainingLoop._unpack_batch() は
+    ``((board, hand), (labels_policy, labels_value, legal_move_mask))``
+    を期待する．このアダプタがダミーの value ラベルと None マスクを挿入する．
+    """
+
+    def __init__(self, dataset: StreamingStage2Dataset) -> None:
+        self._dataset = dataset
+
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            tuple[torch.Tensor, torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]
+    ]:
+        for inputs, targets in self._dataset:
+            dummy_value = torch.zeros(
+                targets.shape[0], 1, dtype=torch.float32
+            )
+            yield (inputs, (targets, dummy_value, None))
+
+    def __len__(self) -> int:
+        """tqdm 用のバッチ数推定を委譲する."""
+        return len(self._dataset)
+
+    def set_epoch(self, epoch: int) -> None:
+        """エポックごとのシャッフルシードを委譲する."""
+        self._dataset.set_epoch(epoch)
+
+
 # ============================================================================
 # Batch yield helpers
 # ============================================================================

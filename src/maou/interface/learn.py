@@ -35,6 +35,7 @@ from maou.app.learning.setup import (
     ModelFactory,
 )
 from maou.app.learning.streaming_dataset import (
+    Stage2StreamingAdapter,
     StreamingDataSource,
     StreamingStage1Dataset,
     StreamingStage2Dataset,
@@ -842,11 +843,12 @@ def _run_stage2_streaming(
             stage2_test_ratio,
         )
 
-    dataset = StreamingStage2Dataset(
+    raw_dataset = StreamingStage2Dataset(
         streaming_source=streaming_source,
         batch_size=batch_size,
         shuffle=True,
     )
+    dataset = Stage2StreamingAdapter(raw_dataset)
 
     # Stage 2 streaming ではバリデーション分割を行わないため，
     # train のみの DataLoader を DataLoaderFactory 経由で作成する．

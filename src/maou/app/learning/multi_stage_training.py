@@ -76,6 +76,46 @@ class StageResult:
     threshold_met: bool
 
 
+class Stage2ModelAdapter(torch.nn.Module):
+    """Stage 2 用のモデルアダプタ．
+
+    HeadlessNetwork と LegalMovesHead をラップし，
+    TrainingLoop が期待する ``(policy, value)`` の2タプルを返す．
+    ``value`` 出力はダミーゼロテンソルで，value loss は ``value_loss_ratio=0.0`` で無視される．
+
+    Args:
+        backbone: 共有バックボーンネットワーク
+        head: Stage 2 用の LegalMovesHead
+    """
+
+    def __init__(
+        self,
+        backbone: HeadlessNetwork,
+        head: torch.nn.Module,
+    ) -> None:
+        super().__init__()
+        self.backbone = backbone
+        self.head = head
+
+    def forward(
+        self, inputs: tuple[torch.Tensor, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """フォワードパスを実行し，(policy, dummy_value) を返す．
+
+        Args:
+            inputs: (board, hand) のタプル
+
+        Returns:
+            (logits, dummy_value) のタプル
+        """
+        features = self.backbone.forward_features(inputs)
+        logits = self.head(features)
+        dummy_value = torch.zeros(
+            logits.shape[0], 1, device=logits.device
+        )
+        return logits, dummy_value
+
+
 class SingleStageTrainingLoop:
     """Training loop for a single stage with threshold checking.
 
@@ -606,6 +646,192 @@ class SingleStageTrainingLoop:
         return avg_loss, metric
 
 
+def run_stage2_with_training_loop(
+    *,
+    backbone: HeadlessNetwork,
+    config: StageConfig,
+    device: torch.device,
+    logger: logging.Logger | None = None,
+) -> tuple[StageResult, LegalMovesHead]:
+    """TrainingLoop を使用して Stage 2 (Legal Moves) を学習する．
+
+    CUDA stream overlap，tqdm 進捗表示，コールバックアーキテクチャを活用し，
+    SingleStageTrainingLoop より高スループットな学習を実現する．
+
+    Args:
+        backbone: 共有バックボーンネットワーク
+        config: Stage 2 の学習設定
+        device: 学習デバイス (CPU or CUDA)
+        logger: ロガー
+
+    Returns:
+        (StageResult, LegalMovesHead) のタプル．
+        ヘッドはチェックポイント保存に使用される．
+    """
+    from maou.app.learning.callbacks import (
+        LRSchedulerStepCallback,
+        Stage2F1Callback,
+    )
+    from maou.app.learning.setup import SchedulerFactory
+    from maou.app.learning.training_loop import (
+        Stage2TrainingLoop,
+    )
+
+    _logger = logger or logging.getLogger(__name__)
+
+    # Head 作成
+    legal_moves_head = LegalMovesHead(
+        input_dim=backbone.embedding_dim,
+        hidden_dim=config.head_hidden_dim,
+        dropout=config.head_dropout,
+    )
+
+    # Model adapter (TrainingLoop 互換)
+    model = Stage2ModelAdapter(backbone, legal_moves_head)
+    model.to(device)
+
+    # torch.compile (オプション)
+    if config.compilation:
+        from maou.app.learning.compilation import (
+            compile_module,
+        )
+
+        _logger.info(
+            "Compiling Stage 2 model with torch.compile"
+        )
+        model = cast(Stage2ModelAdapter, compile_module(model))
+
+    # Sqrt scaling for larger batch sizes
+    effective_lr = config.learning_rate
+    if config.actual_batch_size > config.base_batch_size:
+        scale = math.sqrt(
+            config.actual_batch_size / config.base_batch_size
+        )
+        effective_lr = config.learning_rate * scale
+        _logger.info(
+            "LR sqrt scaling: base_lr=%.6f, scale=%.2f, "
+            "effective_lr=%.6f",
+            config.learning_rate,
+            scale,
+            effective_lr,
+        )
+
+    # Optimizer
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=effective_lr
+    )
+
+    # Callbacks
+    f1_callback = Stage2F1Callback()
+    callbacks: list = [f1_callback]
+
+    # LR Scheduler (optional)
+    if config.lr_scheduler_name is not None:
+        steps_per_epoch = len(config.dataloader)
+        scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=config.lr_scheduler_name,
+            max_epochs=config.max_epochs,
+            steps_per_epoch=steps_per_epoch,
+        )
+        if scheduler is not None:
+            callbacks.append(LRSchedulerStepCallback(scheduler))
+
+    # TrainingLoop 作成
+    training_loop = Stage2TrainingLoop(
+        model=model,
+        device=device,
+        optimizer=optimizer,
+        loss_fn_policy=config.loss_fn,
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=0.0,
+        callbacks=callbacks,
+        logger=_logger,
+    )
+
+    # Epoch loop
+    _logger.info(
+        "Starting Stage 2 (TrainingLoop): max_epochs=%d, "
+        "threshold=%.1f%%",
+        config.max_epochs,
+        config.accuracy_threshold * 100,
+    )
+
+    best_f1 = 0.0
+    final_loss = 0.0
+
+    for epoch in range(config.max_epochs):
+        # IterableDataset のエポックシード更新
+        ds = config.dataloader.dataset
+        if hasattr(ds, "set_epoch"):
+            ds.set_epoch(epoch)
+
+        f1_callback.reset()
+
+        training_loop.run_epoch(
+            dataloader=config.dataloader,
+            epoch_idx=epoch,
+            progress_bar=True,
+            train_mode=True,
+        )
+
+        epoch_f1 = f1_callback.get_epoch_f1()
+        epoch_loss = f1_callback.get_average_loss()
+        final_loss = epoch_loss
+
+        _logger.info(
+            "Stage 2 Epoch %d/%d: Loss=%.4f, F1=%.2f%%",
+            epoch + 1,
+            config.max_epochs,
+            epoch_loss,
+            epoch_f1 * 100,
+        )
+
+        if optimizer.param_groups:
+            current_lr = optimizer.param_groups[0]["lr"]
+            _logger.info(
+                "Stage 2 Epoch %d: LR = %.6f",
+                epoch + 1,
+                current_lr,
+            )
+
+        best_f1 = max(best_f1, epoch_f1)
+
+        # Threshold check (early stopping)
+        if epoch_f1 >= config.accuracy_threshold:
+            _logger.info(
+                "Stage 2 F1 threshold achieved! "
+                "(%.2f%% >= %.2f%%)",
+                epoch_f1 * 100,
+                config.accuracy_threshold * 100,
+            )
+            return (
+                StageResult(
+                    stage=config.stage,
+                    achieved_accuracy=epoch_f1,
+                    final_loss=final_loss,
+                    epochs_trained=epoch + 1,
+                    threshold_met=True,
+                ),
+                legal_moves_head,
+            )
+
+    # Max epochs reached
+    threshold_met = best_f1 >= config.accuracy_threshold
+
+    return (
+        StageResult(
+            stage=config.stage,
+            achieved_accuracy=best_f1,
+            final_loss=final_loss,
+            epochs_trained=config.max_epochs,
+            threshold_met=threshold_met,
+        ),
+        legal_moves_head,
+    )
+
+
 class MultiStageTrainingOrchestrator:
     """Orchestrator for multi-stage training with automatic progression.
 
@@ -722,18 +948,14 @@ class MultiStageTrainingOrchestrator:
             self.logger.info("STAGE 2: LEGAL MOVES LEARNING")
             self.logger.info("=" * 60)
 
-            legal_moves_head = LegalMovesHead(
-                input_dim=self.backbone.embedding_dim,
-                hidden_dim=stage2_config.head_hidden_dim,
-                dropout=stage2_config.head_dropout,
+            result, legal_moves_head = (
+                run_stage2_with_training_loop(
+                    backbone=self.backbone,
+                    config=stage2_config,
+                    device=self.device,
+                    logger=self.logger,
+                )
             )
-            stage2_loop = SingleStageTrainingLoop(
-                model=self.backbone,
-                head=legal_moves_head,
-                device=self.device,
-                config=stage2_config,
-            )
-            result = stage2_loop.run()
             results[TrainingStage.LEGAL_MOVES] = result
 
             if not result.threshold_met:

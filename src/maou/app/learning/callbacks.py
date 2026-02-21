@@ -1015,3 +1015,78 @@ class LRSchedulerStepCallback(BaseCallback):
     ) -> None:
         """Optimizer step完了後に学習率スケジューラをステップする．"""
         self._scheduler.step()
+
+
+class Stage2F1Callback(BaseCallback):
+    """Stage 2 (Legal Moves) 用のF1スコア計算コールバック．
+
+    ``on_batch_end`` でサンプル平均F1スコアを蓄積し，
+    エポック終了後に ``get_epoch_f1()`` で取得する．
+
+    F1計算ロジックは ``SingleStageTrainingLoop._train_epoch()``
+    のStage 2パス(multi-label binary classification)と同一．
+    """
+
+    def __init__(self) -> None:
+        self._total_f1: float = 0.0
+        self._total_samples: int = 0
+        self._total_loss: float = 0.0
+        self._num_batches: int = 0
+
+    def on_batch_end(self, context: TrainingContext) -> None:
+        """バッチごとにF1スコアとlossを蓄積する."""
+        if context.loss is not None:
+            self._total_loss += context.loss.item()
+            self._num_batches += 1
+
+        if context.outputs_policy is None:
+            return
+
+        with torch.no_grad():
+            predictions = (
+                torch.sigmoid(context.outputs_policy) > 0.5
+            )
+            targets = context.labels_policy.bool()
+
+            tp = (predictions & targets).float().sum(dim=1)
+            fp = (predictions & ~targets).float().sum(dim=1)
+            fn = (~predictions & targets).float().sum(dim=1)
+
+            precision = tp / (tp + fp + 1e-8)
+            recall = tp / (tp + fn + 1e-8)
+            f1 = (
+                2
+                * precision
+                * recall
+                / (precision + recall + 1e-8)
+            )
+
+            # 予測・正解ともに空の場合はF1=1.0とする
+            both_empty = (predictions.sum(dim=1) == 0) & (
+                targets.sum(dim=1) == 0
+            )
+            f1 = torch.where(
+                both_empty, torch.ones_like(f1), f1
+            )
+
+            self._total_f1 += f1.sum().item()
+            self._total_samples += f1.numel()
+
+    def get_epoch_f1(self) -> float:
+        """エポックのサンプル平均F1スコアを返す."""
+        if self._total_samples == 0:
+            return 0.0
+        return self._total_f1 / self._total_samples
+
+    def get_average_loss(self) -> float:
+        """エポックの平均lossを返す."""
+        if self._num_batches == 0:
+            return 0.0
+        return self._total_loss / self._num_batches
+
+    def reset(self) -> None:
+        """エポック間でカウンタをリセットする."""
+        self._total_f1 = 0.0
+        self._total_samples = 0
+        self._total_loss = 0.0
+        self._num_batches = 0

@@ -29,10 +29,12 @@ def _make_dummy_dataloader(
     board_size: tuple[int, int] = (9, 9),
     target_dim: int = 81,
     hand_dim: int = PIECES_IN_HAND_VECTOR_SIZE,
+    stage: TrainingStage = TrainingStage.REACHABLE_SQUARES,
 ) -> DataLoader:
     """ダミーの (board_tensor, hand_tensor), target データローダーを作成する．
 
-    Stage 1/2 のデータセットは ((board_tensor, hand_tensor), target) を返す．
+    Stage 1 は ((board_tensor, hand_tensor), target) を返す．
+    Stage 2 は TrainingLoop 互換形式 ((board_tensor, hand_tensor), (target, dummy_value, None)) を返す．
     """
     board_tensor = torch.randint(
         0, board_vocab_size, (num_samples, *board_size)
@@ -42,13 +44,31 @@ def _make_dummy_dataloader(
 
     dataset = TensorDataset(board_tensor, hand_tensor, targets)
 
-    def collate_fn(
-        batch: list[tuple[torch.Tensor, ...]],
-    ) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        boards = torch.stack([b[0] for b in batch])
-        hands = torch.stack([b[1] for b in batch])
-        tgts = torch.stack([b[2] for b in batch])
-        return (boards, hands), tgts
+    if stage == TrainingStage.LEGAL_MOVES:
+
+        def collate_fn(
+            batch: list[tuple[torch.Tensor, ...]],
+        ) -> tuple[
+            tuple[torch.Tensor, torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]:
+            boards = torch.stack([b[0] for b in batch])
+            hands = torch.stack([b[1] for b in batch])
+            tgts = torch.stack([b[2] for b in batch])
+            dummy_value = torch.zeros(tgts.shape[0], 1)
+            return (boards, hands), (tgts, dummy_value, None)
+
+    else:
+
+        def collate_fn(
+            batch: list[tuple[torch.Tensor, ...]],
+        ) -> tuple[
+            tuple[torch.Tensor, torch.Tensor], torch.Tensor
+        ]:
+            boards = torch.stack([b[0] for b in batch])
+            hands = torch.stack([b[1] for b in batch])
+            tgts = torch.stack([b[2] for b in batch])
+            return (boards, hands), tgts
 
     return DataLoader(
         dataset,
@@ -444,7 +464,9 @@ class TestThresholdErrorMessages:
             target_dim = MOVE_LABELS_NUM
 
         dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=target_dim
+            board_vocab_size=32,
+            target_dim=target_dim,
+            stage=stage,
         )
         return StageConfig(
             stage=stage,

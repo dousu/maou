@@ -811,3 +811,25 @@ class TrainingLoop:
         return self.loss_fn_policy(
             policy_log_probs, policy_targets
         )
+
+
+class Stage2TrainingLoop(TrainingLoop):
+    """Stage 2 (Legal Moves) 用の TrainingLoop サブクラス．
+
+    Stage 3 の ``_compute_policy_loss`` は ``log_softmax`` +
+    ``normalize_policy_targets`` で方策分布を正規化するが，
+    Stage 2 の ``LegalMovesLoss`` は生logitsに対するBCEWithLogitsLoss
+    であるため，これらの前処理をバイパスする．
+    """
+
+    def _compute_policy_loss(
+        self, context: TrainingContext
+    ) -> torch.Tensor:
+        """生logitsを直接 loss_fn_policy に渡す."""
+        if context.outputs_policy is None:
+            raise RuntimeError(
+                "Policy outputs are required before computing the loss"
+            )
+        return self.loss_fn_policy(
+            context.outputs_policy, context.labels_policy
+        )
