@@ -1285,8 +1285,15 @@ def learn_multi_stage(
                     f"Using backbone from Stage 1/2: {saved_backbone}"
                 )
 
+        # streaming mode では FileManager による全データロードをスキップする．
+        # create_datasource() は FileDataSourceSpliter を生成し，
+        # FileManager が全ファイルをメモリにロードする(Stage 3: ~123GB)．
+        # streaming mode では StreamingKifDataset が遅延読み込みするため不要．
+        # 不要なロードを行うと spawn ワーカー起動時に OOM kill される．
         stage3_datasource = (
-            stage3_data_config.create_datasource()
+            None
+            if streaming
+            else stage3_data_config.create_datasource()
         )
         stage3_result = learn(
             datasource=stage3_datasource,
