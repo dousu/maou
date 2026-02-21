@@ -140,23 +140,7 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
         # 入力関連
         "stage3-data-path",
         "input-file-packed",
-        "input-dataset-id",
-        "input-table-name",
-        "input-batch-size",
-        "input-max-cached-bytes",
         "input-cache-mode",
-        "input-clustering-key",
-        "input-partitioning-key-date",
-        "input-local-cache",
-        "input-local-cache-dir",
-        "input-enable-bundling",
-        "input-bundle-size-gb",
-        "input-gcs",
-        "input-s3",
-        "input-bucket-name",
-        "input-prefix",
-        "input-data-name",
-        "input-max-workers",
         # GPU/デバイス
         "gpu",
         # モデル

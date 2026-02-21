@@ -11,47 +11,25 @@ if TYPE_CHECKING:
     from maou.infra.console.common import GCS as GCSType
     from maou.infra.console.common import S3 as S3Type
     from maou.infra.console.common import (
-        BigQueryDataSource as BigQueryDataSourceType,
-    )
-    from maou.infra.console.common import (
         FileDataSource as FileDataSourceType,
     )
     from maou.infra.console.common import (
         FileSystem as FileSystemType,
     )
-    from maou.infra.console.common import (
-        GCSDataSource as GCSDataSourceType,
-    )
-    from maou.infra.console.common import (
-        S3DataSource as S3DataSourceType,
-    )
 else:
-    BigQueryDataSourceType = Any
     FileDataSourceType = Any
     FileSystemType = Any
     GCSType = Any
-    GCSDataSourceType = Any
     S3Type = Any
-    S3DataSourceType = Any
 
 
 app_logger = common.app_logger
 FileDataSource = common.FileDataSource
 FileSystem = common.FileSystem
-HAS_BIGQUERY = common.HAS_BIGQUERY
 HAS_GCS = common.HAS_GCS
 HAS_AWS = common.HAS_AWS
-BigQueryDataSource: BigQueryDataSourceType | None = getattr(
-    common, "BigQueryDataSource", None
-)
 GCS: GCSType | None = getattr(common, "GCS", None)
-GCSDataSource: GCSDataSourceType | None = getattr(
-    common, "GCSDataSource", None
-)
 S3: S3Type | None = getattr(common, "S3", None)
-S3DataSource: S3DataSourceType | None = getattr(
-    common, "S3DataSource", None
-)
 
 
 @click.command("learn-model")
@@ -64,32 +42,6 @@ S3DataSource: S3DataSourceType | None = getattr(
     required=False,
 )
 @click.option(
-    "--input-dataset-id",
-    help="BigQuery dataset ID for input.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-table-name",
-    help="BigQuery table name for input.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-batch-size",
-    help="Batch size for reading from BigQuery.",
-    type=int,
-    default=10000,
-    required=False,
-)
-@click.option(
-    "--input-max-cached-bytes",
-    help="Max cache size in bytes for input (default: 500MB).",
-    type=int,
-    default=500 * 1024 * 1024,
-    required=False,
-)
-@click.option(
     "--input-cache-mode",
     type=click.Choice(
         ["file", "memory", "mmap"], case_sensitive=False
@@ -98,86 +50,6 @@ S3DataSource: S3DataSourceType | None = getattr(
     default="file",
     show_default=True,
     required=False,
-)
-@click.option(
-    "--input-clustering-key",
-    help="BigQuery clustering key.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-partitioning-key-date",
-    help="BigQuery date partitioning key.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-local-cache",
-    type=bool,
-    is_flag=True,
-    help="Enable local caching of cloud data.",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-local-cache-dir",
-    type=str,
-    help="Directory path for storing the local cache of cloud data.",
-    required=False,
-)
-@click.option(
-    "--input-enable-bundling",
-    type=bool,
-    is_flag=True,
-    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-bundle-size-gb",
-    type=float,
-    help="Target bundle size in GB for array bundling (default: 1.0).",
-    default=1.0,
-    required=False,
-)
-@click.option(
-    "--input-gcs",
-    type=bool,
-    is_flag=True,
-    help="Use GCS as input data source.",
-    required=False,
-)
-@click.option(
-    "--input-s3",
-    type=bool,
-    is_flag=True,
-    help="Use S3 as input data source.",
-    required=False,
-)
-@click.option(
-    "--input-bucket-name",
-    help="S3/GCS bucket name for input.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-prefix",
-    help="S3/GCS prefix path for input.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-data-name",
-    help="Name to identify the data in S3/GCS for input.",
-    type=str,
-    required=False,
-)
-@click.option(
-    "--input-max-workers",
-    help="Number of parallel download threads for S3/GCS input (default: 8).",
-    type=int,
-    required=False,
-    default=8,
 )
 @click.option(
     "--gpu",
@@ -691,23 +563,7 @@ S3DataSource: S3DataSourceType | None = getattr(
 @common.handle_exception
 def learn_model(
     input_file_packed: bool,
-    input_dataset_id: Optional[str],
-    input_table_name: Optional[str],
-    input_batch_size: int,
-    input_max_cached_bytes: int,
     input_cache_mode: str,
-    input_clustering_key: Optional[str],
-    input_partitioning_key_date: Optional[str],
-    input_local_cache: bool,
-    input_local_cache_dir: Optional[str],
-    input_enable_bundling: bool,
-    input_bundle_size_gb: float,
-    input_gcs: Optional[bool],
-    input_s3: Optional[bool],
-    input_bucket_name: Optional[str],
-    input_prefix: Optional[str],
-    input_data_name: Optional[str],
-    input_max_workers: int,
     gpu: Optional[str],
     model_architecture: str,
     vit_embed_dim: Optional[int],
@@ -789,8 +645,6 @@ def learn_model(
         )
         input_cache_mode = "file"
 
-    array_type = "preprocessing"
-
     # Check for mixing cloud providers for output
     if output_gcs and output_s3:
         error_msg = (
@@ -843,175 +697,6 @@ def learn_model(
                 "Install with 'uv sync --extra aws'"
             )
 
-    # Check for mixing cloud providers for input
-    cloud_input_count = sum(
-        [
-            bool(
-                input_dataset_id is not None
-                or input_table_name is not None
-            ),
-            bool(input_gcs),
-            bool(input_s3),
-        ]
-    )
-    if cloud_input_count > 1:
-        error_msg = (
-            "Cannot use multiple cloud providers for input simultaneously. "
-            "Please choose only one: BigQuery, GCS, or S3."
-        )
-        app_logger.error(error_msg)
-        raise ValueError(error_msg)
-
-    # Check if multi-stage training is requested (moved before datasource init)
-    is_multi_stage = (
-        stage in ("1", "2", "3", "all")
-        or stage1_data_path is not None
-        or stage2_data_path is not None
-        or stage3_data_path is not None
-    )
-
-    # Initialize datasource
-    # When streaming is active for file input, FileDataSourceSpliter is
-    # NOT created here to avoid loading all data into memory eagerly.
-    # Instead, file paths are split directly and StreamingFileSource is
-    # used.  FileDataSourceSpliter is only created as a fallback when
-    # streaming cannot be used (single file, --no-streaming, or
-    # non-file input sources).
-    datasource = None
-    file_paths_for_streaming: list[Path] | None = None
-    if (
-        input_dataset_id is not None
-        and input_table_name is not None
-    ):
-        if HAS_BIGQUERY and BigQueryDataSource is not None:
-            try:
-                # BigQueryDataSourceSpliterを使用
-                if hasattr(
-                    BigQueryDataSource,
-                    "BigQueryDataSourceSpliter",
-                ):
-                    datasource = BigQueryDataSource.BigQueryDataSourceSpliter(
-                        array_type=array_type,
-                        dataset_id=input_dataset_id,
-                        table_name=input_table_name,
-                        batch_size=input_batch_size,
-                        max_cached_bytes=input_max_cached_bytes,
-                        clustering_key=input_clustering_key,
-                        partitioning_key_date=input_partitioning_key_date,
-                        use_local_cache=input_local_cache,
-                        local_cache_dir=input_local_cache_dir,
-                        sample_ratio=None,
-                    )
-                else:
-                    app_logger.error(
-                        "BigQueryDataSourceSpliter not available"
-                    )
-                    raise AttributeError(
-                        "BigQueryDataSourceSpliter not available"
-                    )
-            except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize BigQueryDataSourceSpliter: {e}"
-                )
-                raise
-        else:
-            error_msg = (
-                "BigQuery input requested but required packages are not installed. "
-                "Install with 'uv sync --extra gcp'"
-            )
-            app_logger.error(error_msg)
-            raise ImportError(error_msg)
-    elif (
-        input_gcs
-        and input_bucket_name is not None
-        and input_prefix is not None
-        and input_data_name is not None
-        and input_local_cache_dir is not None
-    ):
-        if HAS_GCS and GCSDataSource is not None:
-            try:
-                # GCSDataSourceSpliterを使用
-                if hasattr(GCSDataSource, "DataSourceSpliter"):
-                    datasource = GCSDataSource.DataSourceSpliter(
-                        cls_ref=GCSDataSource,
-                        bucket_name=input_bucket_name,
-                        prefix=input_prefix,
-                        data_name=input_data_name,
-                        array_type=array_type,
-                        local_cache_dir=input_local_cache_dir,
-                        max_workers=input_max_workers,
-                        max_cached_bytes=input_max_cached_bytes,
-                        sample_ratio=None,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
-                    )
-                else:
-                    app_logger.error(
-                        "DataSourceSpliter not available"
-                    )
-                    raise AttributeError(
-                        "DataSourceSpliter not available"
-                    )
-            except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize DataSourceSpliter: {e}"
-                )
-                raise
-        else:
-            error_msg = (
-                "GCS input requested but required packages are not installed. "
-                "Install with 'uv sync --extra gcp'"
-            )
-            app_logger.error(error_msg)
-            raise ImportError(error_msg)
-    elif (
-        input_s3
-        and input_bucket_name is not None
-        and input_prefix is not None
-        and input_data_name is not None
-        and input_local_cache_dir is not None
-    ):
-        if HAS_AWS and S3DataSource is not None:
-            try:
-                # S3DataSourceSpliterを使用
-                if hasattr(S3DataSource, "DataSourceSpliter"):
-                    datasource = S3DataSource.DataSourceSpliter(
-                        cls_ref=S3DataSource,
-                        bucket_name=input_bucket_name,
-                        prefix=input_prefix,
-                        data_name=input_data_name,
-                        array_type=array_type,
-                        local_cache_dir=input_local_cache_dir,
-                        max_workers=input_max_workers,
-                        max_cached_bytes=input_max_cached_bytes,
-                        sample_ratio=None,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
-                    )
-                else:
-                    app_logger.error(
-                        "DataSourceSpliter not available"
-                    )
-                    raise AttributeError(
-                        "DataSourceSpliter not available"
-                    )
-            except Exception as e:
-                app_logger.error(
-                    f"Failed to initialize S3DataSourceSpliter: {e}"
-                )
-                raise
-        else:
-            error_msg = (
-                "S3 input requested but required packages are not installed. "
-                "Install with 'uv sync --extra aws'"
-            )
-            app_logger.error(error_msg)
-            raise ImportError(error_msg)
-    elif not is_multi_stage:
-        raise Exception(
-            "Please specify an input directory, a BigQuery table, "
-            "a GCS bucket, or an S3 bucket."
-        )
     architecture_key = model_architecture.lower()
 
     # Build architecture_config from ViT-specific options
@@ -1033,216 +718,107 @@ def learn_model(
         if vit_overrides:
             architecture_config = vit_overrides
 
-    if is_multi_stage:
-        # Route to multi-stage training
+    # Route to multi-stage training
+    app_logger.info(
+        f"Multi-stage training requested: stage={stage}"
+    )
+
+    # 遅延初期化用のStageDataConfigを生成(この時点ではI/O/メモリ消費なし)
+    stage1_data_config: StageDataConfig | None = None
+    stage2_data_config: StageDataConfig | None = None
+    stage3_data_config: StageDataConfig | None = None
+
+    # Stage1/2 では cache_mode を強制的に "file" にする（OOM防止）
+    stage12_cache_mode = "file"
+    if input_cache_mode.lower() == "memory":
         app_logger.info(
-            f"Multi-stage training requested: stage={stage}"
+            "Stage 1/2: cache_mode='memory' is ignored for memory efficiency. "
+            "Using individual file mode instead."
         )
 
-        # 遅延初期化用のStageDataConfigを生成(この時点ではI/O/メモリ消費なし)
-        stage1_data_config: StageDataConfig | None = None
-        stage2_data_config: StageDataConfig | None = None
-        stage3_data_config: StageDataConfig | None = None
+    # Streaming source variables for multi-stage
+    use_multi_streaming = False
+    s1_streaming_source = None
+    s2_streaming_source = None
+    s3_streaming_train_source = None
+    s3_streaming_val_source = None
 
-        # Stage1/2 では cache_mode を強制的に "file" にする（OOM防止）
-        stage12_cache_mode = "file"
-        if input_cache_mode.lower() == "memory":
-            app_logger.info(
-                "Stage 1/2: cache_mode='memory' is ignored for memory efficiency. "
-                "Using individual file mode instead."
+    if stage1_data_path is not None:
+        _s1_paths = FileSystem.collect_files(stage1_data_path)
+        stage1_data_config = StageDataConfig(
+            create_datasource=lambda _paths=_s1_paths: (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=_paths,
+                    array_type="stage1",
+                    bit_pack=False,
+                    cache_mode=stage12_cache_mode,
+                )
+            ),
+            array_type="stage1",
+        )
+        if not no_streaming:
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
             )
 
-        # Streaming source variables for multi-stage
-        use_multi_streaming = False
-        s1_streaming_source = None
-        s2_streaming_source = None
-        s3_streaming_train_source = None
-        s3_streaming_val_source = None
-
-        if stage1_data_path is not None:
-            _s1_paths = FileSystem.collect_files(
-                stage1_data_path
-            )
-            stage1_data_config = StageDataConfig(
-                create_datasource=lambda _paths=_s1_paths: (
-                    FileDataSource.FileDataSourceSpliter(
-                        file_paths=_paths,
-                        array_type="stage1",
-                        bit_pack=False,
-                        cache_mode=stage12_cache_mode,
-                    )
-                ),
+            s1_streaming_source = StreamingFileSource(
+                file_paths=_s1_paths,
                 array_type="stage1",
             )
-            if not no_streaming:
-                from maou.infra.file_system.streaming_file_source import (
-                    StreamingFileSource,
-                )
+            use_multi_streaming = True
 
-                s1_streaming_source = StreamingFileSource(
-                    file_paths=_s1_paths,
-                    array_type="stage1",
+    if stage2_data_path is not None:
+        _s2_paths = FileSystem.collect_files(stage2_data_path)
+        stage2_data_config = StageDataConfig(
+            create_datasource=lambda _paths=_s2_paths: (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=_paths,
+                    array_type="stage2",
+                    bit_pack=False,
+                    cache_mode=stage12_cache_mode,
                 )
-                use_multi_streaming = True
-
-        if stage2_data_path is not None:
-            _s2_paths = FileSystem.collect_files(
-                stage2_data_path
+            ),
+            array_type="stage2",
+        )
+        if not no_streaming:
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
             )
-            stage2_data_config = StageDataConfig(
-                create_datasource=lambda _paths=_s2_paths: (
-                    FileDataSource.FileDataSourceSpliter(
-                        file_paths=_paths,
-                        array_type="stage2",
-                        bit_pack=False,
-                        cache_mode=stage12_cache_mode,
-                    )
-                ),
+
+            s2_streaming_source = StreamingFileSource(
+                file_paths=_s2_paths,
                 array_type="stage2",
             )
-            if not no_streaming:
-                from maou.infra.file_system.streaming_file_source import (
-                    StreamingFileSource,
-                )
+            use_multi_streaming = True
 
-                s2_streaming_source = StreamingFileSource(
-                    file_paths=_s2_paths,
-                    array_type="stage2",
+    if stage3_data_path is not None:
+        _s3_paths = FileSystem.collect_files(stage3_data_path)
+        _s3_cache = input_cache_mode.lower()
+        _s3_at = "preprocessing"
+        _s3_bp = input_file_packed
+        stage3_data_config = StageDataConfig(
+            create_datasource=lambda _p=_s3_paths,
+            _a=_s3_at,
+            _b=_s3_bp,
+            _c=_s3_cache: (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=_p,
+                    array_type=_a,
+                    bit_pack=_b,
+                    cache_mode=_c,
                 )
-                use_multi_streaming = True
-
-        if stage3_data_path is not None:
-            _s3_paths = FileSystem.collect_files(
-                stage3_data_path
-            )
-            _s3_cache = input_cache_mode.lower()
-            _s3_at = "preprocessing"
-            _s3_bp = input_file_packed
-            stage3_data_config = StageDataConfig(
-                create_datasource=lambda _p=_s3_paths,
-                _a=_s3_at,
-                _b=_s3_bp,
-                _c=_s3_cache: (
-                    FileDataSource.FileDataSourceSpliter(
-                        file_paths=_p,
-                        array_type=_a,
-                        bit_pack=_b,
-                        cache_mode=_c,
-                    )
-                ),
-                array_type=_s3_at,
-            )
-            if not no_streaming and len(_s3_paths) >= 2:
-                import random
-
-                from maou.infra.file_system.streaming_file_source import (
-                    StreamingFileSource,
-                )
-
-                rng = random.Random(42)
-                shuffled = list(_s3_paths)
-                rng.shuffle(shuffled)
-                effective_ratio = test_ratio or 0.1
-                n_val = max(
-                    1, int(len(shuffled) * effective_ratio)
-                )
-                n_train = len(shuffled) - n_val
-                if n_train < 1:
-                    n_train = 1
-                    n_val = len(shuffled) - 1
-                s3_streaming_train_source = StreamingFileSource(
-                    file_paths=shuffled[:n_train],
-                    array_type=_s3_at,
-                )
-                s3_streaming_val_source = StreamingFileSource(
-                    file_paths=shuffled[n_train:],
-                    array_type=_s3_at,
-                )
-                use_multi_streaming = True
-            elif not no_streaming:
-                app_logger.info(
-                    "Stage 3: Single file detected; falling back to map-style dataset."
-                )
-
-        if use_multi_streaming:
-            app_logger.info(
-                "Using streaming mode for multi-stage training."
-            )
-
-        click.echo(
-            learn.learn_multi_stage(
-                stage=stage,
-                stage1_data_config=stage1_data_config,
-                stage2_data_config=stage2_data_config,
-                stage3_data_config=stage3_data_config,
-                stage1_threshold=stage1_threshold,
-                stage2_threshold=stage2_threshold,
-                stage1_max_epochs=stage1_max_epochs,
-                stage2_max_epochs=stage2_max_epochs,
-                gpu=gpu,
-                model_architecture=architecture_key,
-                batch_size=batch_size or 4096,
-                stage1_batch_size=stage1_batch_size,
-                stage2_batch_size=stage2_batch_size,
-                stage1_learning_rate=stage1_learning_rate,
-                stage2_learning_rate=stage2_learning_rate,
-                stage12_lr_scheduler=stage12_lr_scheduler,
-                stage12_compilation=stage12_compilation,
-                stage1_pos_weight=stage1_pos_weight,
-                stage2_pos_weight=stage2_pos_weight,
-                stage2_gamma_pos=stage2_gamma_pos,
-                stage2_gamma_neg=stage2_gamma_neg,
-                stage2_clip=stage2_clip,
-                stage2_head_hidden_dim=stage2_hidden_dim,
-                stage2_head_dropout=stage2_head_dropout,
-                stage2_test_ratio=stage2_test_ratio,
-                learning_rate=learning_ratio or 0.001,
-                model_dir=model_dir,
-                resume_backbone_from=resume_backbone_from,
-                resume_reachable_head_from=resume_reachable_head_from,
-                resume_legal_moves_head_from=resume_legal_moves_head_from,
-                compilation=compilation,
-                detect_anomaly=detect_anomaly,
-                test_ratio=test_ratio,
-                epoch=epoch,
-                dataloader_workers=dataloader_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
-                cache_transforms=cache_transforms,
-                gce_parameter=gce_parameter,
-                policy_loss_ratio=policy_loss_ratio,
-                value_loss_ratio=value_loss_ratio,
-                lr_scheduler=lr_scheduler,
-                momentum=momentum,
-                optimizer_name=optimizer,
-                optimizer_beta1=optimizer_beta1,
-                optimizer_beta2=optimizer_beta2,
-                optimizer_eps=optimizer_eps,
-                freeze_backbone=freeze_backbone,
-                trainable_layers=trainable_layers,
-                log_dir=log_dir,
-                cloud_storage=cloud_storage,
-                input_cache_mode=input_cache_mode.lower(),
-                architecture_config=architecture_config,
-                streaming=use_multi_streaming,
-                stage1_streaming_source=s1_streaming_source,
-                stage2_streaming_source=s2_streaming_source,
-                stage3_streaming_train_source=s3_streaming_train_source,
-                stage3_streaming_val_source=s3_streaming_val_source,
-            )
+            ),
+            array_type=_s3_at,
         )
-    else:
-        # Standard single-stage training
-        use_streaming = False
-        streaming_train_source = None
-        streaming_val_source = None
-
-        if file_paths_for_streaming is not None:
-            # Streaming path: split file paths directly (no data loading)
+        if not no_streaming and len(_s3_paths) >= 2:
             import random
 
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
+            )
+
             rng = random.Random(42)
-            shuffled = list(file_paths_for_streaming)
+            shuffled = list(_s3_paths)
             rng.shuffle(shuffled)
             effective_ratio = test_ratio or 0.1
             n_val = max(1, int(len(shuffled) * effective_ratio))
@@ -1250,68 +826,84 @@ def learn_model(
             if n_train < 1:
                 n_train = 1
                 n_val = len(shuffled) - 1
-            train_paths = shuffled[:n_train]
-            val_paths = shuffled[n_train:]
-
-            from maou.infra.file_system.streaming_file_source import (
-                StreamingFileSource,
+            s3_streaming_train_source = StreamingFileSource(
+                file_paths=shuffled[:n_train],
+                array_type=_s3_at,
             )
-
-            streaming_train_source = StreamingFileSource(
-                file_paths=train_paths,
-                array_type=array_type,
+            s3_streaming_val_source = StreamingFileSource(
+                file_paths=shuffled[n_train:],
+                array_type=_s3_at,
             )
-            streaming_val_source = StreamingFileSource(
-                file_paths=val_paths,
-                array_type=array_type,
-            )
-            use_streaming = True
+            use_multi_streaming = True
+        elif not no_streaming:
             app_logger.info(
-                "Using streaming mode for file input."
+                "Stage 3: Single file detected; falling back to map-style dataset."
             )
 
-        click.echo(
-            learn.learn(
-                datasource=datasource,
-                gpu=gpu,
-                model_architecture=architecture_key,
-                compilation=compilation,
-                test_ratio=test_ratio,
-                epoch=epoch,
-                batch_size=batch_size,
-                dataloader_workers=dataloader_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
-                tensorboard_histogram_frequency=tensorboard_histogram_frequency,
-                tensorboard_histogram_modules=(
-                    tensorboard_histogram_modules or None
-                ),
-                cache_transforms=cache_transforms,
-                gce_parameter=gce_parameter,
-                policy_loss_ratio=policy_loss_ratio,
-                value_loss_ratio=value_loss_ratio,
-                learning_ratio=learning_ratio,
-                lr_scheduler=lr_scheduler,
-                momentum=momentum,
-                optimizer_name=optimizer,
-                optimizer_beta1=optimizer_beta1,
-                optimizer_beta2=optimizer_beta2,
-                optimizer_eps=optimizer_eps,
-                resume_from=resume_from,
-                start_epoch=start_epoch,
-                resume_backbone_from=resume_backbone_from,
-                resume_policy_head_from=resume_policy_head_from,
-                resume_value_head_from=resume_value_head_from,
-                freeze_backbone=freeze_backbone,
-                trainable_layers=trainable_layers,
-                log_dir=log_dir,
-                model_dir=model_dir,
-                cloud_storage=cloud_storage,
-                input_cache_mode=input_cache_mode.lower(),
-                detect_anomaly=detect_anomaly,
-                architecture_config=architecture_config,
-                streaming=use_streaming,
-                streaming_train_source=streaming_train_source,
-                streaming_val_source=streaming_val_source,
-            )
+    if use_multi_streaming:
+        app_logger.info(
+            "Using streaming mode for multi-stage training."
         )
+
+    click.echo(
+        learn.learn_multi_stage(
+            stage=stage,
+            stage1_data_config=stage1_data_config,
+            stage2_data_config=stage2_data_config,
+            stage3_data_config=stage3_data_config,
+            stage1_threshold=stage1_threshold,
+            stage2_threshold=stage2_threshold,
+            stage1_max_epochs=stage1_max_epochs,
+            stage2_max_epochs=stage2_max_epochs,
+            gpu=gpu,
+            model_architecture=architecture_key,
+            batch_size=batch_size or 4096,
+            stage1_batch_size=stage1_batch_size,
+            stage2_batch_size=stage2_batch_size,
+            stage1_learning_rate=stage1_learning_rate,
+            stage2_learning_rate=stage2_learning_rate,
+            stage12_lr_scheduler=stage12_lr_scheduler,
+            stage12_compilation=stage12_compilation,
+            stage1_pos_weight=stage1_pos_weight,
+            stage2_pos_weight=stage2_pos_weight,
+            stage2_gamma_pos=stage2_gamma_pos,
+            stage2_gamma_neg=stage2_gamma_neg,
+            stage2_clip=stage2_clip,
+            stage2_head_hidden_dim=stage2_hidden_dim,
+            stage2_head_dropout=stage2_head_dropout,
+            stage2_test_ratio=stage2_test_ratio,
+            learning_rate=learning_ratio or 0.001,
+            model_dir=model_dir,
+            resume_backbone_from=resume_backbone_from,
+            resume_reachable_head_from=resume_reachable_head_from,
+            resume_legal_moves_head_from=resume_legal_moves_head_from,
+            compilation=compilation,
+            detect_anomaly=detect_anomaly,
+            test_ratio=test_ratio,
+            epoch=epoch,
+            dataloader_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
+            cache_transforms=cache_transforms,
+            gce_parameter=gce_parameter,
+            policy_loss_ratio=policy_loss_ratio,
+            value_loss_ratio=value_loss_ratio,
+            lr_scheduler=lr_scheduler,
+            momentum=momentum,
+            optimizer_name=optimizer,
+            optimizer_beta1=optimizer_beta1,
+            optimizer_beta2=optimizer_beta2,
+            optimizer_eps=optimizer_eps,
+            freeze_backbone=freeze_backbone,
+            trainable_layers=trainable_layers,
+            log_dir=log_dir,
+            cloud_storage=cloud_storage,
+            input_cache_mode=input_cache_mode.lower(),
+            architecture_config=architecture_config,
+            streaming=use_multi_streaming,
+            stage1_streaming_source=s1_streaming_source,
+            stage2_streaming_source=s2_streaming_source,
+            stage3_streaming_train_source=s3_streaming_train_source,
+            stage3_streaming_val_source=s3_streaming_val_source,
+        )
+    )
