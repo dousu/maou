@@ -192,6 +192,13 @@ _SAFETY_MARGIN: float = 1.5
 _FALLBACK_PER_WORKER_MB: float = 200.0
 """ファイルサイズ情報が利用できない場合のデフォルト値．"""
 
+_MAX_SPAWN_WORKERS_TOTAL: int = 8
+"""spawnコンテキストでのtraining + validation合計ワーカー数の上限．
+
+各ワーカーが独立にPython + Polars + Rustを初期化するため，
+過多なワーカーはメモリ圧迫と起動遅延を招く．
+"""
+
 
 def _estimate_per_worker_mb(
     file_paths: list[Path] | None,
@@ -432,6 +439,71 @@ class DataLoaderFactory:
             )
         return effective
 
+    @staticmethod
+    def _cap_total_workers(
+        train_workers: int,
+        val_workers: int,
+        max_total: int,
+        logger: logging.Logger,
+    ) -> tuple[int, int]:
+        """training + validation の合計ワーカー数をキャップする．
+
+        training を優先的に維持し，validation から先に削減する．
+        validation が元々0でない場合は最低1ワーカーを保証する．
+
+        アルゴリズム:
+            - 両方0の場合: spawn不要のためそのまま返す
+            - val_workers > 0 の場合:
+                1. val_workers = max(1, min(val_workers, max_total - train_workers))
+                2. train_workers = min(train_workers, max_total - val_workers)
+            - val_workers == 0 の場合:
+                1. train_workers = min(train_workers, max_total)
+
+        Args:
+            train_workers: training用ワーカー数
+            val_workers: validation用ワーカー数
+            max_total: 合計ワーカー数の上限
+            logger: ロガー
+
+        Returns:
+            (調整後train_workers, 調整後val_workers) のタプル
+        """
+        # 両方0: メインプロセスI/Oのためspawn不要
+        if train_workers == 0 and val_workers == 0:
+            return train_workers, val_workers
+
+        total = train_workers + val_workers
+        if total <= max_total:
+            return train_workers, val_workers
+
+        original_train = train_workers
+        original_val = val_workers
+
+        if val_workers > 0:
+            # Step 1: validation を先に削減（最低1を保証）
+            val_workers = max(
+                1, min(val_workers, max_total - train_workers)
+            )
+            # Step 2: training を残りの枠に収める
+            train_workers = min(
+                train_workers, max_total - val_workers
+            )
+        else:
+            # validation データなし: training のみキャップ
+            train_workers = min(train_workers, max_total)
+
+        logger.info(
+            "Capped total spawn workers from %d "
+            "(train=%d, val=%d) to %d (train=%d, val=%d)",
+            original_train + original_val,
+            original_train,
+            original_val,
+            train_workers + val_workers,
+            train_workers,
+            val_workers,
+        )
+        return train_workers, val_workers
+
     @classmethod
     def create_dataloaders(
         cls,
@@ -585,26 +657,13 @@ class DataLoaderFactory:
             memory_limit=memory_limit,
         )
 
-        # spawn コンテキストでのワーカー数警告
-        # 各ワーカーが独立にPython+Polars+Rustを初期化するため，
-        # 過多なワーカーはメモリ圧迫と起動遅延を招く
-        _SPAWN_WORKERS_WARNING_THRESHOLD = 8
-        if train_workers > _SPAWN_WORKERS_WARNING_THRESHOLD:
-            cls.logger.warning(
-                "Streaming mode uses spawn context: %d training "
-                "workers may cause slow startup. Consider "
-                "--dataloader-workers %d or lower.",
-                train_workers,
-                _SPAWN_WORKERS_WARNING_THRESHOLD,
-            )
-        if val_workers > _SPAWN_WORKERS_WARNING_THRESHOLD:
-            cls.logger.warning(
-                "Streaming mode uses spawn context: %d validation "
-                "workers may cause slow startup. Consider "
-                "--dataloader-workers %d or lower.",
-                val_workers,
-                _SPAWN_WORKERS_WARNING_THRESHOLD,
-            )
+        # spawn コンテキストでの合計ワーカー数キャップ
+        train_workers, val_workers = cls._cap_total_workers(
+            train_workers,
+            val_workers,
+            _MAX_SPAWN_WORKERS_TOTAL,
+            cls.logger,
+        )
 
         _check_shm_size(
             num_workers=max(train_workers, val_workers),

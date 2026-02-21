@@ -602,8 +602,8 @@ def test_create_streaming_dataloaders_applies_different_worker_counts() -> (
             )
         )
 
-    assert train_loader.num_workers == 8
-    assert val_loader.num_workers == 3
+    assert train_loader.num_workers == 7
+    assert val_loader.num_workers == 1
 
 
 def _make_kifdataset(n_samples: int) -> KifDataset:
@@ -1234,32 +1234,66 @@ def test_streaming_dataloaders_timeout_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("requested", "n_files", "expect_warning"),
+    ("train", "val", "expected"),
     [
-        pytest.param(16, 100, True, id="above_threshold"),
-        pytest.param(4, 100, False, id="below_threshold"),
-        pytest.param(8, 100, False, id="exact_threshold"),
+        pytest.param(3, 3, (3, 3), id="under_cap"),
+        pytest.param(6, 6, (6, 2), id="over_cap_val_reduced"),
+        pytest.param(10, 2, (7, 1), id="train_alone_exceeds"),
+        pytest.param(8, 4, (7, 1), id="val_min_guarantee"),
+        pytest.param(1, 1, (1, 1), id="minimal"),
+        pytest.param(8, 0, (8, 0), id="val_zero_no_data"),
+        pytest.param(0, 0, (0, 0), id="both_zero"),
+        pytest.param(0, 4, (0, 4), id="train_zero_val_exists"),
         pytest.param(
-            12, 5, False, id="file_count_limits_first"
+            12, 0, (8, 0), id="val_zero_train_exceeds"
         ),
     ],
 )
-def test_streaming_dataloaders_warn_spawn_workers(
+def test_cap_total_workers(
+    train: int,
+    val: int,
+    expected: tuple[int, int],
+) -> None:
+    """合計ワーカー数キャップのロジックを検証する．"""
+    result = DataLoaderFactory._cap_total_workers(
+        train,
+        val,
+        8,
+        logging.getLogger("test"),
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "requested",
+        "n_train",
+        "n_val",
+        "expected_train",
+        "expected_val",
+    ),
+    [
+        pytest.param(6, 100, 100, 6, 2, id="cap_applied"),
+        pytest.param(3, 100, 100, 3, 3, id="under_cap"),
+    ],
+)
+def test_streaming_dataloaders_cap_total_spawn_workers(
     requested: int,
-    n_files: int,
-    expect_warning: bool,
+    n_train: int,
+    n_val: int,
+    expected_train: int,
+    expected_val: int,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """spawn ワーカー数が閾値超過時に警告が出力されることを検証する．"""
+    """create_streaming_dataloaders で合計ワーカー数キャップが適用されることを検証する．"""
 
-    class _WorkerTestDataset(IterableDataset):
+    class _CapTestDataset(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
             return iter([])
 
-    train_ds = _WorkerTestDataset()
-    val_ds = _WorkerTestDataset()
+    train_ds = _CapTestDataset()
+    val_ds = _CapTestDataset()
 
-    # caplog で maou ロガーを捕捉するために propagate を一時有効化
     maou_logger = logging.getLogger("maou")
     original_propagate = maou_logger.propagate
     maou_logger.propagate = True
@@ -1269,7 +1303,7 @@ def test_streaming_dataloaders_warn_spawn_workers(
                 "maou.app.learning.setup._estimate_max_workers_by_memory",
                 return_value=64,
             ),
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.INFO),
         ):
             train_loader, val_loader = (
                 DataLoaderFactory.create_streaming_dataloaders(
@@ -1278,27 +1312,12 @@ def test_streaming_dataloaders_warn_spawn_workers(
                     dataloader_workers=requested,
                     pin_memory=False,
                     prefetch_factor=2,
-                    n_train_files=n_files,
-                    n_val_files=n_files,
+                    n_train_files=n_train,
+                    n_val_files=n_val,
                 )
             )
     finally:
         maou_logger.propagate = original_propagate
 
-    # ワーカー数は制限されない(そのまま維持)
-    effective = min(requested, n_files)
-    assert train_loader.num_workers == effective
-    assert val_loader.num_workers == effective
-
-    # 警告の有無を検証
-    warning_messages = [
-        r.message
-        for r in caplog.records
-        if r.levelno == logging.WARNING
-        and "spawn context" in r.message
-    ]
-    if expect_warning:
-        assert len(warning_messages) >= 1
-        assert "--dataloader-workers" in warning_messages[0]
-    else:
-        assert len(warning_messages) == 0
+    assert train_loader.num_workers == expected_train
+    assert val_loader.num_workers == expected_val
