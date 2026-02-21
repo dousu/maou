@@ -195,28 +195,19 @@ class DataPrefetcher:
     def _loader_thread(self) -> None:
         """バックグラウンドスレッドでDataLoaderからバッチを読み込む．
 
-        DataLoaderからバッチを読み込み，GPUに転送してキューに追加する．
-        CUDA streamを使用して非同期転送を行う．
+        DataLoaderからバッチを読み込み，CPUバッチとしてキューに追加する．
+        GPU転送はメインスレッドの__iter__で行う（spawn環境での
+        CUDAデッドロック防止のため）．
         """
+        batch_count = 0
         try:
             for batch in self.loader:
                 if self.stop_event.is_set():
                     break
 
-                # CUDA streamを使用して非同期転送
-                if self.stream is not None:
-                    with torch.cuda.stream(self.stream):
-                        gpu_batch = self._transfer_to_device(
-                            batch, non_blocking=True
-                        )
-                else:
-                    # CPU deviceの場合は通常の転送
-                    gpu_batch = self._transfer_to_device(
-                        batch, non_blocking=False
-                    )
-
-                # キューに追加（キューが満杯の場合は待機）
-                self.queue.put(gpu_batch)
+                # CPUバッチをそのままキューに追加
+                self.queue.put(batch)
+                batch_count += 1
 
         except Exception as e:
             self.logger.error(f"Error in loader thread: {e}")
@@ -302,9 +293,18 @@ class DataPrefetcher:
                     raise self.exception
                 break
 
-            # CUDA streamの同期を待つ
+            # メインスレッドでGPU転送を実行
+            # （spawn環境でのCUDAデッドロック防止）
             if self.stream is not None:
+                with torch.cuda.stream(self.stream):
+                    batch = self._transfer_to_device(
+                        batch, non_blocking=True
+                    )
                 self.stream.synchronize()
+            else:
+                batch = self._transfer_to_device(
+                    batch, non_blocking=False
+                )
 
             is_first_batch = False
             yield batch

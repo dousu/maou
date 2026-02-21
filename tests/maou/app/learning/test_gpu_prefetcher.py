@@ -320,3 +320,42 @@ def test_prefetcher_no_pin_memory_override_when_none() -> None:
     assert loader.pin_memory is False
 
     prefetcher.shutdown()
+
+
+def test_prefetcher_gpu_transfer_in_main_thread() -> None:
+    """_transfer_to_device はメインスレッドで呼ばれなければならない．
+
+    バックグラウンドスレッド(_loader_thread)から CUDA 操作を行うと，
+    spawn ワーカー環境でデッドロックが発生する．
+    GPU 転送はメインスレッドで行い，_loader_thread は CPU バッチの
+    キューイングのみを行うべきである．
+    """
+    dataset = _FixedBatchDataset(2)
+    loader = DataLoader(dataset, batch_size=None, num_workers=0)
+    prefetcher = DataPrefetcher(
+        loader, device="cpu", buffer_size=2
+    )
+
+    original_transfer = prefetcher._transfer_to_device
+    transfer_threads: list[threading.Thread] = []
+
+    def tracking_transfer(
+        batch: Any, non_blocking: bool = True
+    ) -> Any:
+        transfer_threads.append(threading.current_thread())
+        return original_transfer(batch, non_blocking)
+
+    with patch.object(
+        prefetcher, "_transfer_to_device", tracking_transfer
+    ):
+        list(prefetcher)
+
+    # 修正後: 全ての転送がメインスレッドで行われること
+    main_thread = threading.main_thread()
+    for t in transfer_threads:
+        assert t == main_thread, (
+            f"_transfer_to_device called from {t.name}, "
+            f"expected main thread"
+        )
+
+    prefetcher.shutdown()
