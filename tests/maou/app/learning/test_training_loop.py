@@ -96,7 +96,14 @@ class _SimpleBatchDataset(torch.utils.data.IterableDataset):
     def __init__(self, num_batches: int) -> None:
         self.num_batches = num_batches
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, None]]]:  # type: ignore[override]
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            torch.Tensor,
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]
+    ]:  # type: ignore[override]
         for i in range(self.num_batches):
             features = torch.full((2, 3), float(i))
             targets = (
