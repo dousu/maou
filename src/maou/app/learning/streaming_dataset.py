@@ -25,6 +25,14 @@ from maou.domain.data.columnar_batch import ColumnarBatch
 
 logger = logging.getLogger(__name__)
 
+_FILES_PER_CONCAT: int = 10
+"""ファイル結合のグループサイズ．
+
+Stage 2 の小ファイル(~100K行)をこの個数まとめて
+``ColumnarBatch.concatenate()`` で結合し，ファイルロード
+間隔を広げてI/Oストールを軽減する．
+"""
+
 
 # ============================================================================
 # Worker file resolution helper
@@ -475,6 +483,10 @@ class StreamingStage2Dataset(IterableDataset):
         workerファイル分割により，マルチワーカー環境では各workerが
         担当ファイルのみを読み込む．
 
+        小ファイル(~100K行)を ``_FILES_PER_CONCAT`` 個まとめて
+        ``ColumnarBatch.concatenate()`` で結合し，ファイルロード
+        間隔を広げてI/Oストールを軽減する．
+
         Yields:
             ((board_tensor, pieces_tensor), legal_moves_tensor)
         """
@@ -505,6 +517,8 @@ class StreamingStage2Dataset(IterableDataset):
 
             total_batches = 0
             file_count = 0
+            buffer: list[ColumnarBatch] = []
+
             for file_idx, columnar_batch in enumerate(
                 self._source.iter_files_columnar_subset(
                     worker_files
@@ -517,8 +531,33 @@ class StreamingStage2Dataset(IterableDataset):
                         "after_first_file",
                         level=logging.DEBUG,
                     )
+                buffer.append(columnar_batch)
+
+                if len(buffer) >= _FILES_PER_CONCAT:
+                    merged = ColumnarBatch.concatenate(buffer)
+                    buffer.clear()
+                    for batch in _yield_stage2_batches(
+                        merged,
+                        batch_size=self._batch_size,
+                        shuffle=self._shuffle,
+                        rng=rng,
+                    ):
+                        total_batches += 1
+                        if total_batches == 1:
+                            logger.debug(
+                                "Worker %d: first batch produced"
+                                " (pid=%d)",
+                                worker_id,
+                                os.getpid(),
+                            )
+                        yield batch
+
+            # 残りのバッファを処理
+            if buffer:
+                merged = ColumnarBatch.concatenate(buffer)
+                buffer.clear()
                 for batch in _yield_stage2_batches(
-                    columnar_batch,
+                    merged,
                     batch_size=self._batch_size,
                     shuffle=self._shuffle,
                     rng=rng,
@@ -532,12 +571,15 @@ class StreamingStage2Dataset(IterableDataset):
                             os.getpid(),
                         )
                     yield batch
+
             logger.debug(
                 "Worker %d: iteration complete"
-                " (%d batches from %d files)",
+                " (%d batches from %d files,"
+                " concat group size=%d)",
                 worker_id,
                 total_batches,
                 file_count,
+                _FILES_PER_CONCAT,
             )
         except Exception as exc:
             logger.error(
