@@ -191,13 +191,21 @@ class StreamingFileSource:
         """
         n = len(file_paths)
         for i, fp in enumerate(file_paths):
-            logger.debug(
-                "Loading file %d/%d: %s", i + 1, n, fp.name
+            log_level = (
+                logging.INFO if i == 0 else logging.DEBUG
+            )
+            logger.log(
+                log_level,
+                "Loading file %d/%d: %s",
+                i + 1,
+                n,
+                fp.name,
             )
             t0 = time.perf_counter()
             df = self._loader(fp)
             t_load = time.perf_counter() - t0
-            logger.debug(
+            logger.log(
+                log_level,
                 "File loaded: %d rows in %.2fs, converting...",
                 len(df),
                 t_load,

@@ -115,7 +115,7 @@ def test_prefetcher_queue_empty_after_iteration() -> None:
 def test_prefetcher_timeout_constants() -> None:
     """タイムアウト定数が期待値と整合することを検証する．"""
     assert DataPrefetcher.DEFAULT_TIMEOUT == 120.0
-    assert DataPrefetcher.FIRST_BATCH_TIMEOUT == 300.0
+    assert DataPrefetcher.FIRST_BATCH_TIMEOUT == 180.0
     assert (
         DataPrefetcher.FIRST_BATCH_TIMEOUT
         > DataPrefetcher.DEFAULT_TIMEOUT

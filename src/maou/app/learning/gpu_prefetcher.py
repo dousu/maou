@@ -89,8 +89,9 @@ class DataPrefetcher:
     #: 通常バッチのタイムアウト(秒)
     DEFAULT_TIMEOUT: ClassVar[float] = 120.0
     #: 初回バッチのタイムアウト(秒):
-    #: ワーカー初期化+ファイル読込+torch.compileウォームアップを考慮
-    FIRST_BATCH_TIMEOUT: ClassVar[float] = 300.0
+    #: spawnワーカーの初期化+ファイル読込を考慮．
+    #: ワーカーキャップ(合計8)により初期化時間が短縮されたため300sから180sに変更．
+    FIRST_BATCH_TIMEOUT: ClassVar[float] = 180.0
 
     def __init__(
         self,
@@ -281,7 +282,11 @@ class DataPrefetcher:
                 raise TimeoutError(
                     f"Timeout ({timeout:.0f}s) waiting for "
                     f"{'first ' if is_first_batch else ''}"
-                    f"batch from DataPrefetcher"
+                    f"batch from DataPrefetcher. "
+                    f"This may indicate slow data loading "
+                    f"in spawn workers rather than a deadlock. "
+                    f"Try --dataloader-workers 0 to test "
+                    f"without spawn."
                 )
 
             # 終了シグナル（None）を受け取ったら終了

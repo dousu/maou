@@ -75,8 +75,11 @@ def default_worker_init_fn(worker_id: int) -> None:
     シード設定とライフサイクルログを行う．
     """
     import random
+    import time
 
     import numpy as np
+
+    start = time.monotonic()
 
     # 再現性のためのシード設定（ワーカーごとに異なるシードを使用）
     worker_seed = torch.initial_seed() % 2**32
@@ -84,11 +87,13 @@ def default_worker_init_fn(worker_id: int) -> None:
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
+    elapsed = time.monotonic() - start
     logger.info(
-        "Worker %d initialized (pid=%d, seed=%d)",
+        "Worker %d initialized (pid=%d, seed=%d, init_time=%.1fs)",
         worker_id,
         os.getpid(),
         worker_seed,
+        elapsed,
     )
     _log_worker_memory(worker_id, "init")
 
