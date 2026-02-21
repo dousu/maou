@@ -585,6 +585,27 @@ class DataLoaderFactory:
             memory_limit=memory_limit,
         )
 
+        # spawn コンテキストでのワーカー上限を適用
+        # 各ワーカーが独立にPython+Polars+Rustを初期化するため，
+        # 過多なワーカーはメモリ圧迫と起動遅延を招く
+        _MAX_SPAWN_WORKERS = 8
+        if train_workers > _MAX_SPAWN_WORKERS:
+            cls.logger.info(
+                "Clamped training streaming workers from %d to %d "
+                "(spawn context limit)",
+                train_workers,
+                _MAX_SPAWN_WORKERS,
+            )
+            train_workers = _MAX_SPAWN_WORKERS
+        if val_workers > _MAX_SPAWN_WORKERS:
+            cls.logger.info(
+                "Clamped validation streaming workers from %d to %d "
+                "(spawn context limit)",
+                val_workers,
+                _MAX_SPAWN_WORKERS,
+            )
+            val_workers = _MAX_SPAWN_WORKERS
+
         _check_shm_size(
             num_workers=max(train_workers, val_workers),
             batch_size=None,
@@ -623,7 +644,7 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if train_workers > 0
             else None,
-            timeout=120 if train_workers > 0 else 0,
+            timeout=0,
             worker_init_fn=train_worker_init_fn,
             multiprocessing_context=mp_context,
         )
@@ -638,7 +659,7 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if val_workers > 0
             else None,
-            timeout=120 if val_workers > 0 else 0,
+            timeout=0,
             worker_init_fn=val_worker_init_fn,
             multiprocessing_context=mp_context_val,
         )

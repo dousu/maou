@@ -1193,3 +1193,84 @@ def test_non_streaming_dataloaders_no_mp_context() -> None:
 
     # 非ストリーミングモードではmultiprocessing_contextなし
     assert train_loader.multiprocessing_context is None
+
+
+# --- Fix 2: ストリーミングDataLoaderのタイムアウト検証 ---
+
+
+def test_streaming_dataloaders_timeout_zero() -> None:
+    """ストリーミングDataLoaderの timeout が 0 であることを検証する．"""
+
+    class _TimeoutTestDataset(IterableDataset):
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
+            return iter([])
+
+    train_ds = _TimeoutTestDataset()
+    val_ds = _TimeoutTestDataset()
+
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=4,
+                pin_memory=False,
+                prefetch_factor=2,
+                n_train_files=4,
+                n_val_files=4,
+            )
+        )
+
+    # ストリーミングDataLoaderのtimeoutは0
+    # (DataPrefetcherのFIRST_BATCH_TIMEOUT/DEFAULT_TIMEOUTに一元化)
+    assert train_loader.timeout == 0
+    assert val_loader.timeout == 0
+
+
+# --- Fix 3: ストリーミングワーカー数上限テスト ---
+
+
+@pytest.mark.parametrize(
+    ("requested", "n_files", "expected"),
+    [
+        pytest.param(16, 100, 8, id="spawn_limit"),
+        pytest.param(4, 100, 4, id="below_limit"),
+        pytest.param(12, 5, 5, id="file_count_first"),
+        pytest.param(8, 100, 8, id="exact_limit"),
+    ],
+)
+def test_streaming_dataloaders_clamp_spawn_workers(
+    requested: int,
+    n_files: int,
+    expected: int,
+) -> None:
+    """spawn ワーカー数が _MAX_SPAWN_WORKERS で制限されることを検証する．"""
+
+    class _WorkerTestDataset(IterableDataset):
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
+            return iter([])
+
+    train_ds = _WorkerTestDataset()
+    val_ds = _WorkerTestDataset()
+
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=requested,
+                pin_memory=False,
+                prefetch_factor=2,
+                n_train_files=n_files,
+                n_val_files=n_files,
+            )
+        )
+
+    assert train_loader.num_workers == expected
+    assert val_loader.num_workers == expected

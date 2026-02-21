@@ -292,6 +292,9 @@ class DataPrefetcher:
                         self.queue.get_nowait()
                     except queue.Empty:
                         break
+                # ローダースレッドで例外が発生していた場合は伝播
+                if self.exception is not None:
+                    raise self.exception
                 break
 
             # CUDA streamの同期を待つ
