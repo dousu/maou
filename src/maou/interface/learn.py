@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Optional
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 from maou.app.learning.dataset import (
     Stage1Dataset,
@@ -29,7 +29,11 @@ from maou.app.learning.network import (
     BACKBONE_ARCHITECTURES,
     BackboneArchitecture,
 )
-from maou.app.learning.setup import DeviceSetup, ModelFactory
+from maou.app.learning.setup import (
+    DataLoaderFactory,
+    DeviceSetup,
+    ModelFactory,
+)
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
     StreamingStage1Dataset,
@@ -800,6 +804,9 @@ def _run_stage2_streaming(
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
     stage2_test_ratio: float = 0.0,
+    dataloader_workers: int = 0,
+    pin_memory: bool = False,
+    prefetch_factor: int = 2,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
@@ -821,6 +828,9 @@ def _run_stage2_streaming(
         stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
         stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
         stage2_test_ratio: 検証データ分割比率(ストリーミングでは未対応，デフォルト: 0.0)
+        dataloader_workers: DataLoaderワーカー数(デフォルト: 0)
+        pin_memory: pinned memoryを有効にするか(デフォルト: False)
+        prefetch_factor: 各workerの先読みバッチ数(デフォルト: 2)
 
     Returns:
         Stage 2 の訓練結果
@@ -837,12 +847,26 @@ def _run_stage2_streaming(
         batch_size=batch_size,
         shuffle=True,
     )
-    dataloader = DataLoader(
-        dataset,
-        batch_size=None,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=(device.type == "cuda"),
+
+    # Stage 2 streaming ではバリデーション分割を行わないため，
+    # train のみの DataLoader を DataLoaderFactory 経由で作成する．
+    # n_val_files=0 により val 側は num_workers=0 となる．
+    _EmptyDataset = type(
+        "_EmptyDataset",
+        (IterableDataset,),
+        {"__iter__": lambda self: iter([])},
+    )
+    dataloader, _ = (
+        DataLoaderFactory.create_streaming_dataloaders(
+            train_dataset=dataset,
+            val_dataset=_EmptyDataset(),
+            dataloader_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
+            n_train_files=len(streaming_source.file_paths),
+            n_val_files=0,
+            file_paths=streaming_source.file_paths,
+        )
     )
 
     stage_config = StageConfig(
@@ -1219,6 +1243,9 @@ def learn_multi_stage(
                 stage2_head_hidden_dim=stage2_head_hidden_dim,
                 stage2_head_dropout=stage2_head_dropout,
                 stage2_test_ratio=stage2_test_ratio,
+                dataloader_workers=dataloader_workers or 0,
+                pin_memory=pin_memory or False,
+                prefetch_factor=prefetch_factor or 2,
             )
         else:
             stage2_result = _run_stage2(
