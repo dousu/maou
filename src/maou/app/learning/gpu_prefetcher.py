@@ -193,37 +193,53 @@ class DataPrefetcher:
             return batch
 
     def _loader_thread(self) -> None:
-        """バックグラウンドスレッドでDataLoaderからバッチを読み込む．
-
-        DataLoaderからバッチを読み込み，GPUに転送してキューに追加する．
-        CUDA streamを使用して非同期転送を行う．
-        """
+        """バックグラウンドでDataLoaderからバッチを読み出しGPUへ転送する．"""
+        self.logger.info(
+            "loader_thread: started, iterating DataLoader"
+        )
+        batch_idx = 0
         try:
             for batch in self.loader:
+                if batch_idx == 0:
+                    self.logger.info(
+                        "loader_thread: first batch received "
+                        "from DataLoader"
+                    )
                 if self.stop_event.is_set():
                     break
 
-                # CUDA streamを使用して非同期転送
                 if self.stream is not None:
                     with torch.cuda.stream(self.stream):
                         gpu_batch = self._transfer_to_device(
                             batch, non_blocking=True
                         )
+                    if batch_idx == 0:
+                        self.logger.info(
+                            "loader_thread: first batch GPU "
+                            "transfer complete"
+                        )
                 else:
-                    # CPU deviceの場合は通常の転送
                     gpu_batch = self._transfer_to_device(
                         batch, non_blocking=False
                     )
 
-                # キューに追加（キューが満杯の場合は待機）
                 self.queue.put(gpu_batch)
+                if batch_idx == 0:
+                    self.logger.info(
+                        "loader_thread: first batch queued "
+                        "successfully"
+                    )
+                batch_idx += 1
 
         except Exception as e:
             self.logger.error(f"Error in loader thread: {e}")
             self.exception = e
         finally:
-            # 終了シグナルをキューに追加
             self.queue.put(None)
+            self.logger.info(
+                "loader_thread: finished (%d batches processed)",
+                batch_idx,
+            )
 
     def __iter__(self) -> Iterator[Any]:
         """イテレータを返す．
