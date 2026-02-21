@@ -995,3 +995,23 @@ class ResourceMonitoringCallback(BaseCallback):
                 else None
             ),
         )
+
+
+class LRSchedulerStepCallback(BaseCallback):
+    """Per-step LR scheduler callback.
+
+    optimizer.step()の直後にscheduler.step()を呼び出し，
+    バッチ単位で学習率を更新する．
+    """
+
+    def __init__(
+        self,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+    ) -> None:
+        self._scheduler = scheduler
+
+    def on_optimizer_step_end(
+        self, context: TrainingContext
+    ) -> None:
+        """Optimizer step完了後に学習率スケジューラをステップする．"""
+        self._scheduler.step()

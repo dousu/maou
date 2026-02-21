@@ -181,23 +181,30 @@ def test_training_setup_creates_warmup_cosine_decay_scheduler() -> (
     scheduler = model_components.lr_scheduler
     assert isinstance(scheduler, WarmupCosineDecayScheduler)
 
+    # Per-step scheduler: steps_per_epoch=4, total_steps=80, warmup_steps=8
     optimizer = model_components.optimizer
     base_lr = scheduler.base_lrs[0]
     initial_lr = optimizer.param_groups[0]["lr"]
 
-    assert initial_lr == pytest.approx(base_lr * 0.5)
+    # Step 0: warmup_progress = 1/8 = 0.125
+    assert initial_lr == pytest.approx(base_lr * (1 / 8))
+    assert initial_lr < base_lr  # Still in warmup
 
-    optimizer.step()
-    scheduler.step()
+    # Advance through warmup (7 more steps to complete 8 warmup steps)
+    for _ in range(7):
+        optimizer.step()
+        scheduler.step()
     warmup_completed_lr = scheduler.get_last_lr()[0]
 
-    optimizer.step()
-    scheduler.step()
-    optimizer.step()
-    scheduler.step()
+    # Step 7 (last warmup): warmup_progress = 8/8 = 1.0
+    assert warmup_completed_lr == pytest.approx(base_lr)
+
+    # Advance into decay phase
+    for _ in range(10):
+        optimizer.step()
+        scheduler.step()
     decay_lr = scheduler.get_last_lr()[0]
 
-    assert warmup_completed_lr == pytest.approx(base_lr)
     assert decay_lr < base_lr
 
 
@@ -229,7 +236,8 @@ def test_training_setup_creates_cosine_annealing_scheduler() -> (
     assert isinstance(
         scheduler, torch.optim.lr_scheduler.CosineAnnealingLR
     )
-    assert scheduler.T_max == 5
+    # Per-step: T_max = max_epochs * steps_per_epoch = 5 * 4 = 20
+    assert scheduler.T_max == 20
 
 
 def test_kifdataset_caches_transform_results_when_enabled(

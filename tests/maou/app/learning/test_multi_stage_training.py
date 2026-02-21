@@ -1044,8 +1044,8 @@ class TestSchedulerIntegration:
 
         assert loop.lr_scheduler is None
 
-    def test_scheduler_step_called_per_epoch(self) -> None:
-        """各epoch終了後にLRが変化する（スケジューラが動作している）．"""
+    def test_scheduler_step_called_per_batch(self) -> None:
+        """各バッチ後にLRが変化する（スケジューラが動作している）．"""
         backbone = HeadlessNetwork(
             board_vocab_size=32,
             embedding_dim=64,
@@ -1079,11 +1079,10 @@ class TestSchedulerIntegration:
 
         initial_lr = loop.optimizer.param_groups[0]["lr"]
 
-        # Run training — scheduler should step after each epoch
+        # Run training — scheduler should step after each batch
         loop.run()
 
         final_lr = loop.optimizer.param_groups[0]["lr"]
 
-        # After 3 epochs of warmup+cosine decay, LR should have changed
-        # (warmup_epochs = max(1, ceil(3*0.1)) = 1, so epoch 0 is warmup)
+        # After 3 epochs of per-step warmup+cosine decay, LR should have changed
         assert initial_lr != final_lr

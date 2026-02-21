@@ -23,6 +23,7 @@ from torchinfo import summary
 
 from maou.app.learning.callbacks import (
     LoggingCallback,
+    LRSchedulerStepCallback,
     ValidationCallback,
     ValidationMetrics,
 )
@@ -251,6 +252,7 @@ class Learning:
                     self.optimizer,
                     lr_scheduler_name=config.lr_scheduler_name,
                     max_epochs=config.epoch,
+                    steps_per_epoch=len(self.training_loader),
                 )
             )
         else:
@@ -416,6 +418,7 @@ class Learning:
             optimizer,
             lr_scheduler_name=config.lr_scheduler_name,
             max_epochs=config.epoch,
+            steps_per_epoch=len(training_loader),
         )
 
         model_components = ModelComponents(
@@ -446,6 +449,15 @@ class Learning:
             logger=self.logger,
         )
 
+        # Build callback list
+        callbacks: list[
+            LoggingCallback | LRSchedulerStepCallback
+        ] = [logging_callback]
+        if self.lr_scheduler is not None:
+            callbacks.append(
+                LRSchedulerStepCallback(self.lr_scheduler)
+            )
+
         # Create training loop
         training_loop = TrainingLoop(
             model=self.model,
@@ -455,7 +467,7 @@ class Learning:
             loss_fn_value=self.loss_fn_value,
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
-            callbacks=[logging_callback],
+            callbacks=callbacks,
             logger=self.logger,
             logical_batch_size=self.config.batch_size,
         )
@@ -496,15 +508,20 @@ class Learning:
         # start epoch設定
         epoch_number = self.start_epoch
 
-        # 学習率スケジューラをstart_epoch分だけ進める
+        # 学習率スケジューラをstart_epochのステップ分だけ進める
         if (
             self.lr_scheduler is not None
             and self.start_epoch > 0
         ):
-            self.logger.info(
-                f"Advancing LR scheduler to epoch {self.start_epoch}"
+            steps_to_advance = self.start_epoch * len(
+                self.training_loader
             )
-            for _ in range(self.start_epoch):
+            self.logger.info(
+                "Advancing LR scheduler by %d steps (epoch %d)",
+                steps_to_advance,
+                self.start_epoch,
+            )
+            for _ in range(steps_to_advance):
                 self.lr_scheduler.step()
             current_lr = self.optimizer.param_groups[0]["lr"]
             self.logger.info(
@@ -594,8 +611,7 @@ class Learning:
                 learning_rate=current_lr,
             )
 
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+            # LR scheduler is stepped per-batch via LRSchedulerStepCallback
 
             writer.flush()
 

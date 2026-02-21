@@ -866,38 +866,41 @@ class LossOptimizerFactory:
 
 
 class WarmupCosineDecayScheduler(LRScheduler):
-    """Linear warmup followed by cosine decay scheduler."""
+    """Linear warmup followed by cosine decay scheduler.
+
+    Per-step(バッチ単位)でステップし，エポック境界でのLRジャンプを防ぐ．
+    """
 
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
         *,
-        warmup_epochs: int,
-        max_epochs: int,
+        warmup_steps: int,
+        total_steps: int,
         min_lr: float = 0.0,
     ) -> None:
-        if max_epochs <= 0:
+        if total_steps <= 0:
             raise ValueError(
-                "max_epochs must be positive for LR scheduling."
+                "total_steps must be positive for LR scheduling."
             )
-        if warmup_epochs < 0:
+        if warmup_steps < 0:
             raise ValueError(
-                "warmup_epochs must be non-negative for LR scheduling."
+                "warmup_steps must be non-negative for LR scheduling."
             )
 
-        warmup_epochs = min(warmup_epochs, max_epochs)
+        warmup_steps = min(warmup_steps, total_steps)
 
-        self.warmup_epochs = warmup_epochs
-        self.max_epochs = max_epochs
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
         self.min_lr = min_lr
 
         super().__init__(optimizer)
 
         # Ensure the optimizer starts with the warmup-adjusted learning rate
         # before the first training iteration runs. Without this adjustment the
-        # first epoch would use the unscaled base learning rate and the warmup
-        # schedule would be shifted by one epoch. By explicitly setting
-        # ``last_epoch`` to the initial epoch and synchronising the parameter
+        # first step would use the unscaled base learning rate and the warmup
+        # schedule would be shifted by one step. By explicitly setting
+        # ``last_epoch`` to the initial step and synchronising the parameter
         # groups, we align the scheduler's state with the intended warm start.
         self.last_epoch = 0
         initial_lrs = self.get_lr()
@@ -908,28 +911,22 @@ class WarmupCosineDecayScheduler(LRScheduler):
         self._last_lr = initial_lrs
 
     def get_lr(self) -> List[float]:
-        """Return the learning rate for the current epoch."""
+        """Return the learning rate for the current step."""
 
-        epoch_index = self.last_epoch
+        step = self.last_epoch  # PyTorch convention
 
-        if (
-            self.warmup_epochs > 0
-            and epoch_index < self.warmup_epochs
-        ):
-            warmup_progress = (
-                epoch_index + 1
-            ) / self.warmup_epochs
+        if self.warmup_steps > 0 and step < self.warmup_steps:
+            warmup_progress = (step + 1) / self.warmup_steps
             return [
                 base_lr * warmup_progress
                 for base_lr in self.base_lrs
             ]
 
-        decay_epochs = max(
-            self.max_epochs - self.warmup_epochs, 1
+        decay_steps = max(
+            self.total_steps - self.warmup_steps, 1
         )
         decay_progress = min(
-            max(epoch_index - self.warmup_epochs, 0)
-            / decay_epochs,
+            max(step - self.warmup_steps, 0) / decay_steps,
             1.0,
         )
         cosine_scale = 0.5 * (
@@ -955,8 +952,16 @@ class SchedulerFactory:
         *,
         lr_scheduler_name: Optional[str] = None,
         max_epochs: int = 1,
+        steps_per_epoch: int = 1,
     ) -> Optional[LRScheduler]:
-        """Create a scheduler for the given optimizer."""
+        """Create a per-step scheduler for the given optimizer.
+
+        Args:
+            optimizer: 対象のオプティマイザ
+            lr_scheduler_name: スケジューラ名
+            max_epochs: 最大エポック数
+            steps_per_epoch: 1エポックあたりのバッチ数
+        """
 
         if lr_scheduler_name is None:
             return None
@@ -970,31 +975,35 @@ class SchedulerFactory:
                 "max_epochs must be positive for LR scheduling."
             )
 
+        total_steps = max_epochs * steps_per_epoch
+
         if normalized_name == "warmup_cosine_decay":
-            warmup_epochs = max(
-                1,
+            warmup_steps = max(
+                steps_per_epoch,
                 math.ceil(
-                    max_epochs * cls.DEFAULT_WARMUP_RATIO
+                    total_steps * cls.DEFAULT_WARMUP_RATIO
                 ),
             )
-            warmup_epochs = min(warmup_epochs, max_epochs)
+            warmup_steps = min(warmup_steps, total_steps)
             cls.logger.info(
-                "Using Warmup+CosineDecay scheduler (warmup_epochs=%d)",
-                warmup_epochs,
+                "Using Warmup+CosineDecay scheduler "
+                "(warmup_steps=%d, total_steps=%d)",
+                warmup_steps,
+                total_steps,
             )
             return WarmupCosineDecayScheduler(
                 optimizer,
-                warmup_epochs=warmup_epochs,
-                max_epochs=max_epochs,
+                warmup_steps=warmup_steps,
+                total_steps=total_steps,
             )
 
         if normalized_name == "cosine_annealing_lr":
             cls.logger.info(
                 "Using CosineAnnealingLR scheduler (T_max=%d)",
-                max_epochs,
+                total_steps,
             )
             return CosineAnnealingLR(
-                optimizer, T_max=max_epochs
+                optimizer, T_max=total_steps
             )
 
         supported = ", ".join(
@@ -1108,6 +1117,7 @@ class TrainingSetup:
             optimizer,
             lr_scheduler_name=lr_scheduler_name,
             max_epochs=max_epochs,
+            steps_per_epoch=len(training_loader),
         )
 
         model_components = ModelComponents(

@@ -141,15 +141,17 @@ class SingleStageTrainingLoop:
             lr=effective_lr,
         )
 
-        # LR scheduler (Stage 3 parity)
+        # LR scheduler (per-step stepping)
         self.lr_scheduler: Optional[LRScheduler] = None
         if self.config.lr_scheduler_name is not None:
             from maou.app.learning.setup import SchedulerFactory
 
+            steps_per_epoch = len(self.config.dataloader)
             self.lr_scheduler = SchedulerFactory.create_scheduler(
                 self.optimizer,
                 lr_scheduler_name=self.config.lr_scheduler_name,
                 max_epochs=self.config.max_epochs,
+                steps_per_epoch=steps_per_epoch,
             )
 
         # torch.compile (Stage 3 parity)
@@ -243,9 +245,8 @@ class SingleStageTrainingLoop:
                     f"Loss={report_loss:.4f}, {metric_label}={report_accuracy:.2%}"
                 )
 
-            # Step LR scheduler after each epoch
+            # Log current LR (scheduler is stepped per-batch in _train_epoch)
             if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
                 current_lr = self.optimizer.param_groups[0][
                     "lr"
                 ]
@@ -373,6 +374,10 @@ class SingleStageTrainingLoop:
             else:
                 loss.backward()
                 self.optimizer.step()
+
+            # Per-step LR scheduling
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
 
             # Compute metric (threshold at 0.5 for binary classification)
             with torch.no_grad():
