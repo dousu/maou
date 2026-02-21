@@ -585,26 +585,26 @@ class DataLoaderFactory:
             memory_limit=memory_limit,
         )
 
-        # spawn コンテキストでのワーカー上限を適用
+        # spawn コンテキストでのワーカー数警告
         # 各ワーカーが独立にPython+Polars+Rustを初期化するため，
         # 過多なワーカーはメモリ圧迫と起動遅延を招く
-        _MAX_SPAWN_WORKERS = 8
-        if train_workers > _MAX_SPAWN_WORKERS:
-            cls.logger.info(
-                "Clamped training streaming workers from %d to %d "
-                "(spawn context limit)",
+        _SPAWN_WORKERS_WARNING_THRESHOLD = 8
+        if train_workers > _SPAWN_WORKERS_WARNING_THRESHOLD:
+            cls.logger.warning(
+                "Streaming mode uses spawn context: %d training "
+                "workers may cause slow startup. Consider "
+                "--dataloader-workers %d or lower.",
                 train_workers,
-                _MAX_SPAWN_WORKERS,
+                _SPAWN_WORKERS_WARNING_THRESHOLD,
             )
-            train_workers = _MAX_SPAWN_WORKERS
-        if val_workers > _MAX_SPAWN_WORKERS:
-            cls.logger.info(
-                "Clamped validation streaming workers from %d to %d "
-                "(spawn context limit)",
+        if val_workers > _SPAWN_WORKERS_WARNING_THRESHOLD:
+            cls.logger.warning(
+                "Streaming mode uses spawn context: %d validation "
+                "workers may cause slow startup. Consider "
+                "--dataloader-workers %d or lower.",
                 val_workers,
-                _MAX_SPAWN_WORKERS,
+                _SPAWN_WORKERS_WARNING_THRESHOLD,
             )
-            val_workers = _MAX_SPAWN_WORKERS
 
         _check_shm_size(
             num_workers=max(train_workers, val_workers),

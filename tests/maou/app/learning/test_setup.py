@@ -1230,24 +1230,27 @@ def test_streaming_dataloaders_timeout_zero() -> None:
     assert val_loader.timeout == 0
 
 
-# --- Fix 3: ストリーミングワーカー数上限テスト ---
+# --- Fix 3: ストリーミングワーカー数警告テスト ---
 
 
 @pytest.mark.parametrize(
-    ("requested", "n_files", "expected"),
+    ("requested", "n_files", "expect_warning"),
     [
-        pytest.param(16, 100, 8, id="spawn_limit"),
-        pytest.param(4, 100, 4, id="below_limit"),
-        pytest.param(12, 5, 5, id="file_count_first"),
-        pytest.param(8, 100, 8, id="exact_limit"),
+        pytest.param(16, 100, True, id="above_threshold"),
+        pytest.param(4, 100, False, id="below_threshold"),
+        pytest.param(8, 100, False, id="exact_threshold"),
+        pytest.param(
+            12, 5, False, id="file_count_limits_first"
+        ),
     ],
 )
-def test_streaming_dataloaders_clamp_spawn_workers(
+def test_streaming_dataloaders_warn_spawn_workers(
     requested: int,
     n_files: int,
-    expected: int,
+    expect_warning: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """spawn ワーカー数が _MAX_SPAWN_WORKERS で制限されることを検証する．"""
+    """spawn ワーカー数が閾値超過時に警告が出力されることを検証する．"""
 
     class _WorkerTestDataset(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
@@ -1256,21 +1259,46 @@ def test_streaming_dataloaders_clamp_spawn_workers(
     train_ds = _WorkerTestDataset()
     val_ds = _WorkerTestDataset()
 
-    with patch(
-        "maou.app.learning.setup._estimate_max_workers_by_memory",
-        return_value=64,
-    ):
-        train_loader, val_loader = (
-            DataLoaderFactory.create_streaming_dataloaders(
-                train_dataset=train_ds,
-                val_dataset=val_ds,
-                dataloader_workers=requested,
-                pin_memory=False,
-                prefetch_factor=2,
-                n_train_files=n_files,
-                n_val_files=n_files,
+    # caplog で maou ロガーを捕捉するために propagate を一時有効化
+    maou_logger = logging.getLogger("maou")
+    original_propagate = maou_logger.propagate
+    maou_logger.propagate = True
+    try:
+        with (
+            patch(
+                "maou.app.learning.setup._estimate_max_workers_by_memory",
+                return_value=64,
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            train_loader, val_loader = (
+                DataLoaderFactory.create_streaming_dataloaders(
+                    train_dataset=train_ds,
+                    val_dataset=val_ds,
+                    dataloader_workers=requested,
+                    pin_memory=False,
+                    prefetch_factor=2,
+                    n_train_files=n_files,
+                    n_val_files=n_files,
+                )
             )
-        )
+    finally:
+        maou_logger.propagate = original_propagate
 
-    assert train_loader.num_workers == expected
-    assert val_loader.num_workers == expected
+    # ワーカー数は制限されない(そのまま維持)
+    effective = min(requested, n_files)
+    assert train_loader.num_workers == effective
+    assert val_loader.num_workers == effective
+
+    # 警告の有無を検証
+    warning_messages = [
+        r.message
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+        and "spawn context" in r.message
+    ]
+    if expect_warning:
+        assert len(warning_messages) >= 1
+        assert "--dataloader-workers" in warning_messages[0]
+    else:
+        assert len(warning_messages) == 0
