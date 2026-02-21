@@ -16,10 +16,9 @@
 
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--input-path PATH` | one of the sources | Reads local `.npy` tensors via `FileDataSource.FileDataSourceSpliter` with optional bit-packed decoding (`--input-file-packed`). `--sample-ratio` is ignored because the files already reside on disk.【F:src/maou/infra/console/utility.py†L217-L274】 |
+| `--stage3-data-path PATH` | one of the sources | Reads local `.npy` tensors for Stage 3 (policy+value) benchmarking via `FileDataSource.FileDataSourceSpliter` with optional bit-packed decoding (`--input-file-packed`). `--sample-ratio` is ignored because the files already reside on disk.【F:src/maou/infra/console/utility.py†L217-L274】 |
 | `--input-dataset-id` + `--input-table-name` | pair | Streams directly from BigQuery with the same batching, caching, clustering, and partition knobs as `learn-model`. Enabling `--sample-ratio` logs that `TABLESAMPLE` is active before constructing the datasource.【F:src/maou/infra/console/utility.py†L260-L325】 |
 | `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Supports worker counts (`--input-max-workers`), bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional sampling ratios. Requires the corresponding optional extras.【F:src/maou/infra/console/utility.py†L306-L374】 |
-| `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Unsupported strings raise `ValueError`.【F:src/maou/infra/console/utility.py†L217-L247】【F:src/maou/interface/utility_interface.py†L50-L79】 |
 | BigQuery cache knobs (`--input-batch-size`, `--input-max-cached-bytes`, `--input-local-cache`, `--input-local-cache-dir`, `--input-clustering-key`, `--input-partitioning-key-date`) | optional | Forwarded directly to the datasource constructors to mimic production ingestion pressure.【F:src/maou/infra/console/utility.py†L57-L205】 |
 | `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/utility.py†L72-L78】 |
 
@@ -79,8 +78,7 @@ flags and aborts when multiple cloud inputs are selected.【F:src/maou/infra/con
 
 ```bash
 poetry run maou utility benchmark-dataloader \
-  --input-path datasets/hcpe \
-  --input-format hcpe \
+  --stage3-data-path datasets/preprocessed \
   --batch-size 512 \
   --num-batches 200 \
   --gpu cuda:0

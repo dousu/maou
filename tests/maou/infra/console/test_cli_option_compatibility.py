@@ -137,11 +137,10 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
     # （出力，ロギング，チェックポイント関連を除く）
     training_params = {
         # 入力関連
-        "input-path",
+        "stage3-data-path",
         "input-file-packed",
         "input-dataset-id",
         "input-table-name",
-        "input-format",
         "input-batch-size",
         "input-max-cached-bytes",
         "input-cache-mode",

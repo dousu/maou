@@ -31,7 +31,6 @@ from maou.app.learning.network import (
     HeadlessNetwork,
     Network,
 )
-from maou.app.pre_process.transform import Transform
 from maou.domain.model.resnet import BottleneckBlock
 from maou.domain.move.label import MOVE_LABELS_NUM
 
@@ -160,22 +159,11 @@ class DatasetFactory:
         cls,
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        datasource_type: str,
         cache_transforms: bool = False,
     ) -> Tuple[KifDataset, KifDataset]:
         """学習・検証用データセットの作成."""
 
-        # Validate datasource type
-        if datasource_type not in ("hcpe", "preprocess"):
-            raise ValueError(
-                f"Data source type `{datasource_type}` is invalid."
-            )
-
-        # Create transform based on datasource type
-        if datasource_type == "hcpe":
-            transform = Transform()
-        else:
-            transform = None
+        transform = None
 
         # Create base datasets
         cache_enabled = (
@@ -1025,7 +1013,6 @@ class TrainingSetup:
         cls,
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        datasource_type: str,
         cache_transforms: Optional[bool] = None,
         gpu: Optional[str] = None,
         model_architecture: BackboneArchitecture = "resnet",
@@ -1068,13 +1055,12 @@ class TrainingSetup:
         cache_transforms_enabled = (
             cache_transforms
             if cache_transforms is not None
-            else datasource_type == "hcpe"
+            else False
         )
         dataset_train, dataset_validation = (
             DatasetFactory.create_datasets(
                 training_datasource,
                 validation_datasource,
-                datasource_type,
                 cache_transforms=cache_transforms_enabled,
             )
         )

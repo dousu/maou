@@ -18,16 +18,14 @@
 
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--input-path PATH` | one of the sources | Recursively collects `.npy` shards through `FileSystem.collect_files`. Works with either `hcpe` or `preprocess` tensors, and can unpack bit-packed data via `--input-file-packed`.【F:src/maou/infra/console/learn_model.py†L1-L120】 |
-| `--input-format {hcpe,preprocess}` | default `hcpe` | Drives both CLI validation and the interface `datasource_type`. Any other string raises a `ValueError`.【F:src/maou/infra/console/learn_model.py†L96-L156】【F:src/maou/interface/learn.py†L101-L120】<br><br>**注意**: マルチステージ学習（`--stage all`または`--stage 3`）において、Stage 3は常に前処理済みデータ（`array_type="preprocessing"`）を使用します。このため、`--input-format`オプションはStage 3には影響しません。 |
-| `--input-dataset-id` + `--input-table-name` | pair | Streams from BigQuery when the optional `gcp` extra is installed. Requires `--input-format` to select the array schema and supports batching/cache knobs (below).【F:src/maou/infra/console/learn_model.py†L245-L330】 |
+| `--input-dataset-id` + `--input-table-name` | pair | Streams from BigQuery when the optional `gcp` extra is installed. Supports batching/cache knobs (below).【F:src/maou/infra/console/learn_model.py†L245-L330】 |
 | `--input-gcs` / `--input-s3` + bucket metadata | pair | Downloads shards via `GCSDataSource` or `S3DataSource` splitters. Both providers need `--input-local-cache-dir` and honor optional bundling (`--input-enable-bundling`, `--input-bundle-size-gb`) and worker counts (`--input-max-workers`).【F:src/maou/infra/console/learn_model.py†L330-L399】 |
 | `--input-max-workers`, `--input-batch-size`, `--input-max-cached-bytes`, `--input-local-cache`, `--input-local-cache-dir`, `--input-clustering-key`, `--input-partitioning-key-date` | optional | Fine-tune remote datasource caching and streaming. Forwarded directly to the datasource constructors and into the interface options.【F:src/maou/infra/console/learn_model.py†L122-L399】【F:src/maou/interface/learn.py†L198-L210】 |
 | `--input-file-packed` | optional | Tells file-based datasources to unpack bit-packed numpy blobs. Ignored for cloud providers.【F:src/maou/infra/console/learn_model.py†L96-L130】 |
 | `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/learn_model.py†L106-L113】【F:src/maou/interface/learn.py†L198-L210】 |
 | `--input-enable-bundling` + `--input-bundle-size-gb` | optional | Bundle remote shards (default 1 GB) before caching to reduce metadata churn. Applies to GCS/S3 datasources.【F:src/maou/infra/console/learn_model.py†L330-L399】 |
 
-**Input exclusivity.** Only one provider (local, BigQuery, GCS, or S3) may be
+**Input exclusivity.** Only one provider (BigQuery, GCS, or S3) may be
 active. The CLI counts enabled sources and raises when more than one set of
 flags is present.【F:src/maou/infra/console/learn_model.py†L568-L639】
 
@@ -168,7 +166,7 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 ## Execution flow
 
 1. **Datasource selection** – The CLI enforces provider exclusivity, instantiates
-   the requested datasource (File/BigQuery/GCS/S3), and passes it to the
+   the requested datasource (BigQuery/GCS/S3 or stage-specific file paths), and passes it to the
    interface along with cache/bundling hints.【F:src/maou/infra/console/learn_model.py†L122-L399】【F:src/maou/infra/console/learn_model.py†L568-L639】
 2. **Option normalization** – `learn.learn` validates ratios, batch sizes,
    worker counts, optimizer parameters, cache settings, and scheduler names
@@ -214,8 +212,7 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 
 ```bash
 poetry run maou learn-model \
-  --input-path datasets/hcpe \
-  --input-format hcpe \
+  --stage3-data-path datasets/preprocessed \
   --epoch 20 \
   --batch-size 2048 \
   --gpu cuda:0 \

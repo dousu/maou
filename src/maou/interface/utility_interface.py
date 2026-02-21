@@ -24,7 +24,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 def benchmark_dataloader(
     datasource: LearningDataSource.DataSourceSpliter,
-    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     batch_size: Optional[int] = None,
@@ -36,7 +35,6 @@ def benchmark_dataloader(
 
     Args:
         datasource: Training data source splitter
-        datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         batch_size: Batch size for benchmarking
         pin_memory: Enable pinned memory for GPU transfers
@@ -46,11 +44,6 @@ def benchmark_dataloader(
     Returns:
         JSON string with benchmark results and recommendations
     """
-    # Validate datasource type
-    if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(
-            f"Data source type `{datasource_type}` is invalid."
-        )
 
     # Set device
     if gpu is not None and gpu != "cpu":
@@ -106,7 +99,6 @@ def benchmark_dataloader(
     # Create benchmark configuration
     config = BenchmarkConfig(
         datasource=training_datasource,
-        datasource_type=datasource_type,
         batch_size=batch_size,
         device=device,
         pin_memory=pin_memory,
@@ -153,7 +145,6 @@ def benchmark_dataloader(
 
 def benchmark_training(
     datasource: LearningDataSource.DataSourceSpliter,
-    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     compilation: bool = False,
@@ -195,7 +186,6 @@ def benchmark_training(
 
     Args:
         datasource: Training data source splitter
-        datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         compilation: Whether to compile the model
         detect_anomaly: Enable torch.autograd anomaly detection
@@ -226,11 +216,6 @@ def benchmark_training(
     Returns:
         JSON string with benchmark results and recommendations
     """
-
-    if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(
-            f"Data source type `{datasource_type}` is invalid."
-        )
 
     if test_ratio is None:
         test_ratio = 0.2
@@ -265,7 +250,7 @@ def benchmark_training(
         )
 
     if cache_transforms is None:
-        cache_transforms_enabled = datasource_type == "hcpe"
+        cache_transforms_enabled = False
     else:
         cache_transforms_enabled = cache_transforms
 
@@ -384,7 +369,6 @@ def benchmark_training(
 
     config = TrainingBenchmarkConfig(
         datasource=datasource,
-        datasource_type=datasource_type,
         gpu=gpu,
         compilation=compilation,
         test_ratio=test_ratio,

@@ -22,8 +22,8 @@ from maou.infra.console.common import (
 
 @click.command("benchmark-dataloader")
 @click.option(
-    "--input-path",
-    help="Input file or directory path.",
+    "--stage3-data-path",
+    help="Stage 3 (policy+value) training data path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -45,13 +45,6 @@ from maou.infra.console.common import (
     "--input-table-name",
     help="BigQuery table name for input.",
     type=str,
-    required=False,
-)
-@click.option(
-    "--input-format",
-    help="Input format: 'hcpe' or 'preprocess'.",
-    type=str,
-    default="hcpe",
     required=False,
 )
 @click.option(
@@ -193,11 +186,10 @@ from maou.infra.console.common import (
 )
 @handle_exception
 def benchmark_dataloader(
-    input_path: Optional[Path],
+    stage3_data_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
-    input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_cache_mode: str,
@@ -231,17 +223,7 @@ def benchmark_dataloader(
         )
         input_cache_mode = "file"
 
-    # Validate input_format early
-    if input_format not in ("hcpe", "preprocess"):
-        raise ValueError(
-            "Please specify a valid input_format ('hcpe' or 'preprocess')."
-        )
-    # Convert input_format to array_type for data sources
-    array_type = (
-        "preprocessing"
-        if input_format == "preprocess"
-        else "hcpe"
-    )
+    array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -263,13 +245,15 @@ def benchmark_dataloader(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_path is not None:
+    if stage3_data_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_path),
+            file_paths=FileSystem.collect_files(
+                stage3_data_path
+            ),
             array_type=array_type,
             bit_pack=input_file_packed,
             cache_mode=input_cache_mode,
@@ -412,7 +396,6 @@ def benchmark_dataloader(
     # Run benchmark
     result_json = utility_interface.benchmark_dataloader(
         datasource=datasource,
-        datasource_type=input_format,
         gpu=gpu,
         batch_size=batch_size,
         pin_memory=pin_memory,
@@ -432,8 +415,8 @@ def benchmark_dataloader(
 
 @click.command("benchmark-training")
 @click.option(
-    "--input-path",
-    help="Input file or directory path.",
+    "--stage3-data-path",
+    help="Stage 3 (policy+value) training data path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -455,13 +438,6 @@ def benchmark_dataloader(
     "--input-table-name",
     help="BigQuery table name for input.",
     type=str,
-    required=False,
-)
-@click.option(
-    "--input-format",
-    help="Input format: 'hcpe' or 'preprocess'.",
-    type=str,
-    default="hcpe",
     required=False,
 )
 @click.option(
@@ -841,11 +817,10 @@ def benchmark_dataloader(
 )
 @handle_exception
 def benchmark_training(
-    input_path: Optional[Path],
+    stage3_data_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
-    input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_cache_mode: str,
@@ -909,17 +884,7 @@ def benchmark_training(
         )
         input_cache_mode = "file"
 
-    # Validate input_format early
-    if input_format not in ("hcpe", "preprocess"):
-        raise ValueError(
-            "Please specify a valid input_format ('hcpe' or 'preprocess')."
-        )
-    # Convert input_format to array_type for data sources
-    array_type = (
-        "preprocessing"
-        if input_format == "preprocess"
-        else "hcpe"
-    )
+    array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -941,20 +906,15 @@ def benchmark_training(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_path is not None:
+    if stage3_data_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
-        if (
-            input_format != "hcpe"
-            and input_format != "preprocess"
-        ):
-            raise Exception(
-                "Please specify a valid input_format ('hcpe' or 'preprocess')."
-            )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_path),
+            file_paths=FileSystem.collect_files(
+                stage3_data_path
+            ),
             array_type=array_type,
             bit_pack=input_file_packed,
             cache_mode=input_cache_mode,
@@ -1097,7 +1057,6 @@ def benchmark_training(
     # Run benchmark
     result_json = utility_interface.benchmark_training(
         datasource=datasource,
-        datasource_type=input_format,
         gpu=gpu,
         compilation=compilation,
         detect_anomaly=detect_anomaly,

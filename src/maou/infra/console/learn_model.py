@@ -56,12 +56,6 @@ S3DataSource: S3DataSourceType | None = getattr(
 
 @click.command("learn-model")
 @click.option(
-    "--input-path",
-    help="Input file or directory path.",
-    type=click.Path(exists=True, path_type=Path),
-    required=False,
-)
-@click.option(
     "--input-file-packed",
     type=bool,
     is_flag=True,
@@ -79,13 +73,6 @@ S3DataSource: S3DataSourceType | None = getattr(
     "--input-table-name",
     help="BigQuery table name for input.",
     type=str,
-    required=False,
-)
-@click.option(
-    "--input-format",
-    help="Input format: 'hcpe' or 'preprocess'.",
-    type=str,
-    default="hcpe",
     required=False,
 )
 @click.option(
@@ -703,11 +690,9 @@ S3DataSource: S3DataSourceType | None = getattr(
 )
 @common.handle_exception
 def learn_model(
-    input_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
-    input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_cache_mode: str,
@@ -804,17 +789,7 @@ def learn_model(
         )
         input_cache_mode = "file"
 
-    # Validate input_format early
-    if input_format not in ("hcpe", "preprocess"):
-        raise ValueError(
-            "Please specify a valid input_format ('hcpe' or 'preprocess')."
-        )
-    # Convert input_format to array_type for data sources
-    array_type = (
-        "preprocessing"
-        if input_format == "preprocess"
-        else "hcpe"
-    )
+    array_type = "preprocessing"
 
     # Check for mixing cloud providers for output
     if output_gcs and output_s3:
@@ -889,9 +864,10 @@ def learn_model(
 
     # Check if multi-stage training is requested (moved before datasource init)
     is_multi_stage = (
-        stage in ("1", "2", "all")
+        stage in ("1", "2", "3", "all")
         or stage1_data_path is not None
         or stage2_data_path is not None
+        or stage3_data_path is not None
     )
 
     # Initialize datasource
@@ -903,31 +879,7 @@ def learn_model(
     # non-file input sources).
     datasource = None
     file_paths_for_streaming: list[Path] | None = None
-    if input_path is not None:
-        if (
-            input_format != "hcpe"
-            and input_format != "preprocess"
-        ):
-            raise Exception(
-                "Please specify a valid input_format ('hcpe' or 'preprocess')."
-            )
-        collected_paths = FileSystem.collect_files(input_path)
-        if no_streaming or len(collected_paths) < 2:
-            # Map-style: load everything into memory
-            datasource = FileDataSource.FileDataSourceSpliter(
-                file_paths=collected_paths,
-                array_type=array_type,
-                bit_pack=input_file_packed,
-                cache_mode=input_cache_mode.lower(),
-            )
-            if len(collected_paths) < 2 and not no_streaming:
-                app_logger.info(
-                    "Single file detected; falling back to map-style dataset."
-                )
-        else:
-            # Streaming: defer data loading, just keep paths
-            file_paths_for_streaming = collected_paths
-    elif (
+    if (
         input_dataset_id is not None
         and input_table_name is not None
     ):
@@ -1321,7 +1273,6 @@ def learn_model(
         click.echo(
             learn.learn(
                 datasource=datasource,
-                datasource_type=input_format,
                 gpu=gpu,
                 model_architecture=architecture_key,
                 compilation=compilation,

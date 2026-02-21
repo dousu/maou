@@ -24,8 +24,6 @@ from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import TrainingSetup
 from maou.app.learning.training_loop import TrainingLoop
 
-HCPE_DATA_SOURCE = "hcpe"
-
 
 @dataclass(frozen=True)
 class BenchmarkResult:
@@ -476,7 +474,6 @@ class TrainingBenchmarkConfig:
     """Configuration for training benchmark."""
 
     datasource: LearningDataSource.DataSourceSpliter
-    datasource_type: str
     gpu: Optional[str] = None
     compilation: bool = False
     detect_anomaly: bool = False
@@ -525,19 +522,15 @@ class TrainingBenchmarkUseCase:
         )
 
         # Setup all training components using shared setup module
-        datasource_type_normalized = (
-            config.datasource_type.lower()
-        )
         cache_transforms_enabled = (
             config.cache_transforms
             if config.cache_transforms is not None
-            else datasource_type_normalized == HCPE_DATA_SOURCE
+            else False
         )
         device_config, dataloaders, model_components = (
             TrainingSetup.setup_training_components(
                 training_datasource=training_datasource,
                 validation_datasource=validation_datasource,
-                datasource_type=config.datasource_type,
                 cache_transforms=cache_transforms_enabled,
                 gpu=config.gpu,
                 model_architecture=config.model_architecture,

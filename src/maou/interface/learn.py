@@ -55,9 +55,7 @@ class StageDataConfig:
     create_datasource: (
         "Callable[[], LearningDataSource.DataSourceSpliter]"
     )
-    array_type: Literal[
-        "hcpe", "preprocessing", "stage1", "stage2"
-    ]
+    array_type: Literal["preprocessing", "stage1", "stage2"]
 
 
 # Mapping from canonical scheduler keys to CLI display names.
@@ -195,7 +193,6 @@ def dir_init(d: Path) -> None:
 
 def learn(
     datasource: Optional[LearningDataSource.DataSourceSpliter],
-    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     model_architecture: BackboneArchitecture = "resnet",
@@ -244,7 +241,6 @@ def learn(
 
     Args:
         datasource: Training data source
-        datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for training
         model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         compilation: Whether to compile the model
@@ -290,12 +286,6 @@ def learn(
     Returns:
         JSON string with training results
     """
-    # データソースのtype確認 (hcpeかpreprocessのみ)
-    if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(
-            f"Data source type `{datasource_type}` is invalid."
-        )
-
     if model_architecture not in BACKBONE_ARCHITECTURES:
         valid_options = ", ".join(BACKBONE_ARCHITECTURES)
         raise ValueError(
@@ -460,7 +450,7 @@ def learn(
     logger.info(f"Input: {datasource}, Output: {model_dir}")
 
     if cache_transforms is None:
-        cache_transforms = datasource_type == "hcpe"
+        cache_transforms = False
     normalized_cache_mode = input_cache_mode.lower()
     if normalized_cache_mode not in {"file", "memory"}:
         raise ValueError(
@@ -479,7 +469,6 @@ def learn(
 
     option = Learning.LearningOption(
         datasource=datasource,
-        datasource_type=datasource_type,
         gpu=gpu,
         compilation=compilation,
         test_ratio=test_ratio,
@@ -884,24 +873,6 @@ def _run_stage2_streaming(
     )
 
     return results[TrainingStage.LEGAL_MOVES]
-
-
-def _resolve_datasource_type(
-    array_type: Literal[
-        "hcpe", "preprocessing", "stage1", "stage2"
-    ],
-) -> str:
-    """array_typeからlearn()用のdatasource_typeに変換する．
-
-    Args:
-        array_type: 内部表現のarray_type
-
-    Returns:
-        learn()用のdatasource_type ("hcpe" or "preprocess")
-    """
-    if array_type == "preprocessing":
-        return "preprocess"
-    return array_type
 
 
 def _log_memory_usage(context: str) -> None:
@@ -1319,9 +1290,6 @@ def learn_multi_stage(
         )
         stage3_result = learn(
             datasource=stage3_datasource,
-            datasource_type=_resolve_datasource_type(
-                stage3_data_config.array_type
-            ),
             gpu=gpu,
             model_architecture=model_architecture,
             compilation=compilation,

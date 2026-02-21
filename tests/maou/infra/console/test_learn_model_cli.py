@@ -46,7 +46,6 @@ def test_learn_model_passes_cache_mode(
 
     assert result.exit_code == 0, result.output
     assert captured_kwargs["input_cache_mode"] == "memory"
-    assert captured_kwargs["datasource_type"] == "hcpe"
 
 
 def test_learn_model_passes_stage_batch_sizes(
@@ -199,3 +198,57 @@ def test_learn_model_detect_anomaly_flag(
 
     assert result.exit_code == 0, result.output
     assert captured_kwargs["detect_anomaly"] is True
+
+
+def test_stage3_with_stage3_data_path_routes_to_multi_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """--stage 3 --stage3-data-pathがlearn_multi_stage()を呼ぶことを確認する．"""
+    runner = CliRunner()
+
+    captured_kwargs: dict[str, Any] = {}
+
+    def fake_learn_multi_stage(**kwargs: Any) -> str:
+        captured_kwargs.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(
+        learn_model.learn,
+        "learn_multi_stage",
+        fake_learn_multi_stage,
+    )
+
+    stage3_dir = tmp_path / "stage3"
+    stage3_dir.mkdir()
+    stage3_file = stage3_dir / "data.feather"
+    stage3_file.touch()
+
+    monkeypatch.setattr(
+        learn_model,
+        "FileSystem",
+        type(
+            "FakeFS",
+            (),
+            {
+                "collect_files": staticmethod(
+                    lambda p, ext=None: [stage3_file]
+                )
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        learn_model.learn_model,
+        [
+            "--stage",
+            "3",
+            "--stage3-data-path",
+            str(stage3_dir),
+            "--no-streaming",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "stage3_data_config" in captured_kwargs
+    assert captured_kwargs["stage3_data_config"] is not None

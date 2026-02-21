@@ -90,7 +90,6 @@ class Learning:
         datasource: Optional[
             LearningDataSource.DataSourceSpliter
         ]
-        datasource_type: str
         gpu: Optional[str] = None
         model_architecture: BackboneArchitecture = "resnet"
         compilation: bool
@@ -179,7 +178,6 @@ class Learning:
                 TrainingSetup.setup_training_components(
                     training_datasource=training_datasource,
                     validation_datasource=validation_datasource,
-                    datasource_type=config.datasource_type,
                     cache_transforms=config.cache_transforms,
                     gpu=config.gpu,
                     model_architecture=config.model_architecture,
@@ -845,7 +843,7 @@ class Learning:
             f"Loss: GCE(q={config.gce_parameter}), "
             f"policy_ratio={config.policy_loss_ratio}, "
             f"value_ratio={config.value_loss_ratio}",
-            f"Data: {config.datasource_type}, "
+            f"Data: preprocessing, "
             f"cache={config.input_cache_mode}",
             "==============================",
         ]

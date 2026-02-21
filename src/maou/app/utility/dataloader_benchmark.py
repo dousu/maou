@@ -10,7 +10,6 @@ import torch
 from torch.utils.data import DataLoader
 
 from maou.app.learning.dataset import DataSource, KifDataset
-from maou.app.pre_process.transform import Transform
 
 
 @dataclass(frozen=True)
@@ -30,7 +29,6 @@ class BenchmarkConfig:
     """Configuration for DataLoader benchmarking."""
 
     datasource: DataSource
-    datasource_type: str
     batch_size: int
     device: torch.device
     pin_memory: bool
@@ -92,15 +90,7 @@ class DataLoaderBenchmark:
         )
 
         # Create dataset
-        dataset: KifDataset
-        if self.config.datasource_type == "hcpe":
-            transform = Transform()
-        elif self.config.datasource_type == "preprocess":
-            transform = None
-        else:
-            raise ValueError(
-                f"Data source type `{self.config.datasource_type}` is invalid."
-            )
+        transform = None
 
         dataset = KifDataset(
             datasource=self.config.datasource,
