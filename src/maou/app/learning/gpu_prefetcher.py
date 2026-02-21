@@ -423,7 +423,7 @@ def create_prefetched_loader(
     loader: DataLoader,
     device: Union[str, torch.device],
     buffer_size: int = 3,
-    pin_memory_override: bool = True,
+    pin_memory_override: Optional[bool] = None,
 ) -> DataPrefetcher:
     """DataPrefetcherを作成するヘルパー関数．
 
@@ -431,7 +431,7 @@ def create_prefetched_loader(
         loader: ラップするDataLoader
         device: データを転送するGPU device
         buffer_size: バッファに保持するバッチ数（デフォルト: 3）
-        pin_memory_override: pin_memoryを強制的に有効化するかどうか
+        pin_memory_override: pin_memoryの上書き設定(Noneで上書きなし)
 
     Returns:
         DataPrefetcherインスタンス

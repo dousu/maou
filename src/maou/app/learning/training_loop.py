@@ -190,7 +190,7 @@ class TrainingLoop:
                     dataloader,
                     device=self.device,
                     buffer_size=buffer_size,
-                    pin_memory_override=True,
+                    pin_memory_override=None,
                 )
                 data_iterator = prefetcher
             else:

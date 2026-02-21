@@ -5,7 +5,7 @@ import queue
 import threading
 from collections.abc import Callable, Iterator
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -302,3 +302,21 @@ def test_prefetcher_propagates_exception_after_partial_iteration() -> (
             RuntimeError, match="I/O error after 2 batches"
         ):
             next(it)
+
+
+def test_prefetcher_no_pin_memory_override_when_none() -> None:
+    """pin_memory_override=Noneの場合，DataLoaderのpin_memoryが上書きされないことを検証する．"""
+    loader = MagicMock(spec=DataLoader)
+    loader.pin_memory = False
+    loader.dataset = MagicMock()
+    loader.__iter__ = MagicMock(return_value=iter([]))
+
+    prefetcher = DataPrefetcher(
+        loader,
+        device="cpu",
+        buffer_size=2,
+        pin_memory_override=None,
+    )
+    assert loader.pin_memory is False
+
+    prefetcher.shutdown()
