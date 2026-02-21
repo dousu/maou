@@ -1020,23 +1020,35 @@ class LRSchedulerStepCallback(BaseCallback):
 class Stage2F1Callback(BaseCallback):
     """Stage 2 (Legal Moves) 用のF1スコア計算コールバック．
 
-    ``on_batch_end`` でサンプル平均F1スコアを蓄積し，
+    ``on_batch_end`` でサンプル平均F1スコアをGPUテンソル上に蓄積し，
     エポック終了後に ``get_epoch_f1()`` で取得する．
+
+    GPU同期(`.item()`)はエポック終了時のみ行い，
+    バッチごとのGPUパイプラインストールを回避する．
 
     F1計算ロジックは ``SingleStageTrainingLoop._train_epoch()``
     のStage 2パス(multi-label binary classification)と同一．
     """
 
     def __init__(self) -> None:
-        self._total_f1: float = 0.0
+        self._total_f1: torch.Tensor = torch.tensor(0.0)
         self._total_samples: int = 0
-        self._total_loss: float = 0.0
+        self._total_loss: torch.Tensor = torch.tensor(0.0)
         self._num_batches: int = 0
+        self._device_initialized: bool = False
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if not self._device_initialized:
+            self._total_f1 = self._total_f1.to(device)
+            self._total_loss = self._total_loss.to(device)
+            self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
-        """バッチごとにF1スコアとlossを蓄積する."""
+        """バッチごとにF1スコアとlossをGPUテンソル上に蓄積する."""
         if context.loss is not None:
-            self._total_loss += context.loss.item()
+            self._ensure_device(context.loss.device)
+            self._total_loss += context.loss.detach()
             self._num_batches += 1
 
         if context.outputs_policy is None:
@@ -1069,24 +1081,28 @@ class Stage2F1Callback(BaseCallback):
                 both_empty, torch.ones_like(f1), f1
             )
 
-            self._total_f1 += f1.sum().item()
+            self._total_f1 += f1.sum()
             self._total_samples += f1.numel()
 
     def get_epoch_f1(self) -> float:
         """エポックのサンプル平均F1スコアを返す."""
         if self._total_samples == 0:
             return 0.0
-        return self._total_f1 / self._total_samples
+        return (self._total_f1 / self._total_samples).item()
 
     def get_average_loss(self) -> float:
         """エポックの平均lossを返す."""
         if self._num_batches == 0:
             return 0.0
-        return self._total_loss / self._num_batches
+        return (self._total_loss / self._num_batches).item()
 
     def reset(self) -> None:
         """エポック間でカウンタをリセットする."""
-        self._total_f1 = 0.0
+        if self._device_initialized:
+            self._total_f1.zero_()
+            self._total_loss.zero_()
+        else:
+            self._total_f1 = torch.tensor(0.0)
+            self._total_loss = torch.tensor(0.0)
         self._total_samples = 0
-        self._total_loss = 0.0
         self._num_batches = 0
