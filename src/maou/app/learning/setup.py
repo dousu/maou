@@ -642,6 +642,12 @@ class DataLoaderFactory:
         Returns:
             (training_loader, validation_loader) のタプル
         """
+        # ストリーミングモードでは DataPrefetcher が GPU 転送を管理するため，
+        # DataLoader 側の pin_memory は False にする．
+        # pin_memory=True は pin_memory_thread を起動し，
+        # spawn + persistent_workers 環境でデッドロックを引き起こす．
+        _STREAMING_PIN_MEMORY = False
+
         memory_limit = _estimate_max_workers_by_memory(
             pin_memory=pin_memory,
             logger=cls.logger,
@@ -703,7 +709,7 @@ class DataLoaderFactory:
             batch_size=None,
             shuffle=False,
             num_workers=train_workers,
-            pin_memory=pin_memory,
+            pin_memory=_STREAMING_PIN_MEMORY,
             persistent_workers=train_workers > 0,
             prefetch_factor=prefetch_factor
             if train_workers > 0
@@ -718,7 +724,7 @@ class DataLoaderFactory:
             batch_size=None,
             shuffle=False,
             num_workers=val_workers,
-            pin_memory=pin_memory,
+            pin_memory=_STREAMING_PIN_MEMORY,
             persistent_workers=val_workers > 0,
             prefetch_factor=prefetch_factor
             if val_workers > 0

@@ -1321,3 +1321,38 @@ def test_streaming_dataloaders_cap_total_spawn_workers(
 
     assert train_loader.num_workers == expected_train
     assert val_loader.num_workers == expected_val
+
+
+def test_streaming_dataloaders_pin_memory_disabled() -> None:
+    """ストリーミングDataLoaderのpin_memoryが無効であることを検証する．
+
+    spawn + persistent_workers環境でのpin_memory_threadによる
+    デッドロックを防止するため，pin_memoryはFalseに固定される．
+    """
+
+    class _PinMemoryTestDataset(IterableDataset):
+        def __iter__(self) -> Iterator[None]:  # type: ignore[override]
+            return iter([])
+
+    train_ds = _PinMemoryTestDataset()
+    val_ds = _PinMemoryTestDataset()
+
+    with patch(
+        "maou.app.learning.setup._estimate_max_workers_by_memory",
+        return_value=64,
+    ):
+        train_loader, val_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+                dataloader_workers=2,
+                pin_memory=True,
+                prefetch_factor=2,
+                n_train_files=10,
+                n_val_files=10,
+            )
+        )
+
+    # pin_memory=True で呼んでも，ストリーミングモードでは False に固定される
+    assert train_loader.pin_memory is False
+    assert val_loader.pin_memory is False
