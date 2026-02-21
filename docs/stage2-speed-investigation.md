@@ -125,20 +125,20 @@ workers=0 テストとバッチサイズ確認により，**速度差の原因�
 
 Forward pass は**ほぼ同一**．Stage 3 は ValueHead が追加されているが，1 次元出力なので計算量は無視できる．
 
-### Loss 計算(最大の差異)
+### Loss 計算
+
+**訂正**: Stage 3 は `GCELoss` ではなく `KLDivLoss` を使用している．`LossOptimizerFactory.create_loss_functions()` (`setup.py:761-785`)で `gce_parameter` は無視されている．
 
 | 項目 | Stage 2 | Stage 3 |
 |------|---------|---------|
-| Policy Loss | `BCEWithLogitsLoss(logits[1024, 1496], targets[1024, 1496])` | `GCELoss(logits[1024, 1496], targets[1024])` |
-| 損失計算方式 | **multi-label**: 各 1496 要素が独立した binary classification | **single-label**: softmax → one-hot → cross-entropy |
-| 勾配の要素数 | **1,532,416** 個(1024 × 1496，全要素に独立した勾配) | softmax の Jacobian は sparse で効率的 |
+| Policy Loss | `BCEWithLogitsLoss(logits[1024, 1496], targets[1024, 1496])` | `KLDivLoss(log_softmax(masked_logits), normalized_targets)` |
+| 計算ステップ | 1 fused kernel | masked_fill + log_softmax + normalize_policy_targets + KLDivLoss (5+ kernels) |
+| 勾配形状 | [1024, 1496] | [1024, 1496] |
+| 勾配計算 | `σ(x) - y` (element-wise) | `-targets/N` (element-wise) + log_softmax backward |
 | Value Loss | `MSELoss(dummy, dummy)` — 実質ゼロコスト | `MSELoss(value, target)` — 1024 要素 |
 | Legal Move Mask | なし | あり(masked_fill + 全ゼロ行検出) |
 
-**BCEWithLogitsLoss の backward pass が重い可能性**:
-- 1,532,416 個の要素それぞれに sigmoid + log の勾配が伝播
-- `reduction='mean'` により全要素の平均 → backward で勾配が全要素に均等分配
-- GCELoss は softmax ベースで勾配計算が効率的(PyTorch の内部最適化)
+**perf-engineer 分析**: 勾配テンソルの形状が同一([1024, 1496])のため，backward の Linear GEMM コストと backbone backward コストは同一．Stage 3 の方がむしろ計算量が多い(masked_fill + log_softmax + normalize が追加)．**BCEWithLogitsLoss backward が 6-7x 遅いことは理論的にあり得ない．**
 
 ### Stage2F1Callback の計算
 
@@ -149,37 +149,50 @@ Forward pass は**ほぼ同一**．Stage 3 は ValueHead が追加されてい�
 - `both_empty` 判定 + `torch.where`: 3 カーネル
 - **合計 ~15 CUDA カーネル/バッチ**
 
-Stage 3 の `LoggingCallback` にはこの計算がない．
+Stage 3 の `LoggingCallback` にはこの計算がない．ただし perf-engineer 分析では合計 ~0.2ms/batch で，333ms の差を説明できない．
 
 ## 残る仮説・次の調査候補
 
-### 最重要: BCEWithLogitsLoss backward の計算量
+### 理論分析の限界
 
-1496 次元 multi-label の `BCEWithLogitsLoss` backward が Stage 3 の `GCELoss` backward より 6-7 倍遅いことは理論的にあり得るか？ 以下の確認が必要:
+perf-engineer の分析により，**理論的に特定可能な差異(Loss 関数，F1 Callback，Forward Pass)はいずれも 6-7x の速度差を説明できない**ことが判明．Stage 3 の方がむしろ計算量が多い．
 
-**確認方法**:
+原因特定には**経験的切り分け(アブレーションテスト)**が必要．
+
+### 最重要: 経験的切り分けテスト (perf-engineer 推奨)
+
+以下の 3 テストのうち，**テスト B が最も情報量が多い**:
+
+#### テスト B: Training step 全体をスキップ(最推奨)
+
+データイテレーションのみ計測し，compute vs data を完全に切り分ける:
+
 ```python
-# 単体ベンチマーク: BCEWithLogitsLoss vs GCELoss の forward+backward 時間
-import torch, time
-
-logits = torch.randn(1024, 1496, device='cuda', requires_grad=True)
-targets_bce = torch.randint(0, 2, (1024, 1496), device='cuda').float()
-targets_gce = torch.randint(0, 1496, (1024,), device='cuda')
-
-# Stage 2: BCEWithLogitsLoss
-loss_fn_bce = torch.nn.BCEWithLogitsLoss()
-torch.cuda.synchronize()
-start = time.perf_counter()
-for _ in range(100):
-    loss = loss_fn_bce(logits, targets_bce)
-    loss.backward()
-    logits.grad = None
-torch.cuda.synchronize()
-bce_time = time.perf_counter() - start
-
-# Stage 3: GCELoss (softmax + one_hot + custom)
-# ... 同様のベンチマーク
+# run_epoch の training ループを一時的に変更:
+for batch_idx, context in self._iterate_with_transfer(dataloader):
+    pass  # 何もしない — データイテレーションのみ計測
 ```
+
+- → 20 it/s になれば training step (forward+loss+backward) がボトルネック
+- → 3 it/s のままならデータイテレーション自体がボトルネック(workers=0 テストと矛盾するため，さらに深い調査が必要)
+
+#### テスト A: Loss を dummy に置換
+
+```python
+# Stage2TrainingLoop._compute_policy_loss を一時的に変更:
+def _compute_policy_loss(self, context):
+    return context.outputs_policy.mean()  # Dummy loss
+```
+
+- → 20 it/s になれば Loss がボトルネック(理論と矛盾するが事実を優先)
+- → 3 it/s のままなら Loss は無関係
+
+#### テスト C: Stage2F1Callback を無効化
+
+Stage 2 のコールバックリストから `Stage2F1Callback` を除外して実行:
+
+- → 速度が変われば callback がボトルネック
+- → 速度が変わらなければ callback は無関係
 
 ### 高優先度
 
@@ -187,17 +200,10 @@ bce_time = time.perf_counter() - start
    ```bash
    nvidia-smi dmon -s u -d 1
    ```
-   - GPU Util < 30%: GPU がアイドル状態(データ供給以外の原因)
-   - GPU Util > 80%: GPU 計算が飽和(BCEWithLogitsLoss の backward が重い)
+   - GPU Util < 30%: GPU がアイドル状態
+   - GPU Util > 80%: GPU 計算が飽和
 
 2. **`nsys profile` での GPU タイムライン分析** — カーネル実行，backward pass の内訳を可視化
-
-3. **Stage2F1Callback の計算コスト** — 毎バッチ ~15 CUDA カーネルの実行時間を計測．`on_batch_end` 内の計算を N バッチごとに間引くことで効果を確認
-
-### 中優先度
-
-4. **`torch.compile` の効果** — Stage 2 で `torch.compile()` を有効にし，BCEWithLogitsLoss + F1 計算のカーネル融合による高速化を確認
-5. **mixed precision の確認** — `autocast` 下での BCEWithLogitsLoss の精度と速度のバランス
 
 ## perf-engineer による調査アプローチの振り返り
 
@@ -208,7 +214,7 @@ bce_time = time.perf_counter() - start
 > 3. workers=0 でも速度が同じ → DataLoader は完全に無関係
 > 4. バッチサイズは同一 → 設定の問題ではない
 >
-> **次の調査は loss 関数の backward pass と F1 Callback の計算コストに焦点を当てるべきである．**
+> **理論的に特定可能な差異はいずれも 6-7x を説明できない．次の調査はアブレーションテスト(経験的切り分け)で原因を絞り込むべきである．**
 
 ## 適用済みコミット一覧
 
@@ -233,6 +239,7 @@ Stage 2 速度改善に関連する `update-model` ブランチ上のコミッ�
 - `src/maou/app/learning/multi_stage_training.py` — Stage2ModelAdapter, run_stage2_with_training_loop()
 - `src/maou/interface/learn.py` — _run_stage2_streaming(), learn_multi_stage()
 - `src/maou/domain/data/columnar_batch.py` — ColumnarBatch.concatenate()
-- `src/maou/domain/loss/loss_fn.py` — LegalMovesLoss(BCEWithLogitsLoss), GCELoss
+- `src/maou/domain/loss/loss_fn.py` — LegalMovesLoss(BCEWithLogitsLoss), GCELoss(未使用)
+- `src/maou/app/learning/setup.py` — LossOptimizerFactory(Stage 3 は KLDivLoss を使用)
 - `src/maou/app/learning/network.py` — LegalMovesHead, PolicyHead, HeadlessNetwork
 - `rust/maou_rust/src/maou_io.rs` — load_feather_file(), load_preprocessing_feather()
