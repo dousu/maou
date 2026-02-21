@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import Sequence
 from typing import List, Optional, cast
 
@@ -156,21 +155,7 @@ class TrainingLoop:
 
         try:
             # GPU prefetchを有効化している場合はDataPrefetcherでラップ
-            effective_gpu_prefetch = self.enable_gpu_prefetch
-            if (
-                effective_gpu_prefetch
-                and os.environ.get(
-                    "MAOU_DISABLE_GPU_PREFETCH", ""
-                )
-                == "1"
-            ):
-                self.logger.warning(
-                    "GPU prefetch disabled via "
-                    "MAOU_DISABLE_GPU_PREFETCH env var"
-                )
-                effective_gpu_prefetch = False
-
-            if effective_gpu_prefetch:
+            if self.enable_gpu_prefetch:
                 # バッファサイズの決定（0以下の場合は自動計算）
                 if self.gpu_prefetch_buffer_size <= 0:
                     effective_batch_size = (
@@ -257,7 +242,7 @@ class TrainingLoop:
                     callback.on_batch_start(context)
 
                 # GPU転送（prefetch使用時は既にGPU上にあるためスキップ）
-                if not effective_gpu_prefetch:
+                if not self.enable_gpu_prefetch:
                     self._transfer_to_device(context)
 
                 if train_mode:
@@ -278,7 +263,7 @@ class TrainingLoop:
         finally:
             # GPU prefetcherのクリーンアップ
             if (
-                effective_gpu_prefetch
+                self.enable_gpu_prefetch
                 and "prefetcher" in locals()
             ):
                 prefetcher.shutdown()
