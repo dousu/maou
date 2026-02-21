@@ -129,6 +129,7 @@ uv run maou --help                         # CLI help
 | Code Quality | [docs/code-quality.md](docs/code-quality.md) |
 | Rust Backend | [docs/rust-backend.md](docs/rust-backend.md) |
 | Performance | [docs/performance.md](docs/performance.md) |
+| LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |
 | CLI Commands | [docs/commands/](docs/commands/) |
 | Shogi Visualization | [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) |
