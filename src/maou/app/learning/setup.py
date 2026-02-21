@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def _log_worker_memory(
     worker_id: int,
     label: str,
-    level: int = logging.INFO,
+    level: int = logging.DEBUG,
 ) -> None:
     """ワーカープロセスのRSSメモリ使用量をログ出力する．
 
@@ -88,7 +88,7 @@ def default_worker_init_fn(worker_id: int) -> None:
     torch.manual_seed(worker_seed)
 
     elapsed = time.monotonic() - start
-    logger.info(
+    logger.debug(
         "Worker %d initialized (pid=%d, seed=%d, init_time=%.1fs)",
         worker_id,
         os.getpid(),

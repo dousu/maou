@@ -191,9 +191,7 @@ class StreamingFileSource:
         """
         n = len(file_paths)
         for i, fp in enumerate(file_paths):
-            log_level = (
-                logging.INFO if i == 0 else logging.DEBUG
-            )
+            log_level = logging.DEBUG
             logger.log(
                 log_level,
                 "Loading file %d/%d: %s",

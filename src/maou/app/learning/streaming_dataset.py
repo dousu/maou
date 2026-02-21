@@ -257,7 +257,7 @@ class StreamingKifDataset(IterableDataset):
                 ):
                     total_batches += 1
                     if total_batches == 1:
-                        logger.info(
+                        logger.debug(
                             "Worker %d: first batch produced"
                             " (pid=%d)",
                             worker_id,
@@ -391,7 +391,7 @@ class StreamingStage1Dataset(IterableDataset):
                 ):
                     total_batches += 1
                     if total_batches == 1:
-                        logger.info(
+                        logger.debug(
                             "Worker %d: first batch produced"
                             " (pid=%d)",
                             worker_id,
@@ -525,7 +525,7 @@ class StreamingStage2Dataset(IterableDataset):
                 ):
                     total_batches += 1
                     if total_batches == 1:
-                        logger.info(
+                        logger.debug(
                             "Worker %d: first batch produced"
                             " (pid=%d)",
                             worker_id,
