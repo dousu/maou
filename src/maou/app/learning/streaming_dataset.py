@@ -603,13 +603,21 @@ def _yield_kif_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(batch.board_positions)
-        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
+        # .clone() でPyTorch-nativeストレージに変換し，
+        # spawn コンテキストでの share_memory_() を安全にする．
+        board_tensor = torch.from_numpy(
+            batch.board_positions
+        ).clone()
+        pieces_tensor = torch.from_numpy(
+            batch.pieces_in_hand
+        ).clone()
 
         assert batch.move_label is not None
         assert batch.result_value is not None
 
-        move_label_tensor = torch.from_numpy(batch.move_label)
+        move_label_tensor = torch.from_numpy(
+            batch.move_label
+        ).clone()
         result_value_tensor = (
             torch.from_numpy(batch.result_value)
             .float()
@@ -668,8 +676,12 @@ def _yield_stage1_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(batch.board_positions)
-        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
+        board_tensor = torch.from_numpy(
+            batch.board_positions
+        ).clone()
+        pieces_tensor = torch.from_numpy(
+            batch.pieces_in_hand
+        ).clone()
 
         assert batch.reachable_squares is not None
         # (N, 9, 9) → (N, 81) and convert to float for BCE
@@ -724,8 +736,12 @@ def _yield_stage2_batches(
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
 
-        board_tensor = torch.from_numpy(batch.board_positions)
-        pieces_tensor = torch.from_numpy(batch.pieces_in_hand)
+        board_tensor = torch.from_numpy(
+            batch.board_positions
+        ).clone()
+        pieces_tensor = torch.from_numpy(
+            batch.pieces_in_hand
+        ).clone()
 
         assert batch.legal_moves_label is not None
         legal_moves_tensor = torch.from_numpy(

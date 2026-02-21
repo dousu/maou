@@ -1198,8 +1198,12 @@ def test_non_streaming_dataloaders_no_mp_context() -> None:
 # --- Fix 2: ストリーミングDataLoaderのタイムアウト検証 ---
 
 
-def test_streaming_dataloaders_timeout_zero() -> None:
-    """ストリーミングDataLoaderの timeout が 0 であることを検証する．"""
+def test_streaming_dataloaders_timeout_finite() -> None:
+    """ストリーミングDataLoaderに有限タイムアウトが設定されることを検証する．
+
+    spawn + persistent_workers でのデッドロックを検出するため，
+    ワーカー使用時は300秒のタイムアウトを設定する．
+    """
 
     class _TimeoutTestDataset(IterableDataset):
         def __iter__(self) -> Iterator[None]:  # type: ignore[override]
@@ -1224,10 +1228,9 @@ def test_streaming_dataloaders_timeout_zero() -> None:
             )
         )
 
-    # ストリーミングDataLoaderのtimeoutは0
-    # (ストリーミングモードではタイムアウト管理をアプリケーション側で行う)
-    assert train_loader.timeout == 0
-    assert val_loader.timeout == 0
+    # ストリーミングDataLoaderにはデッドロック検出用の有限タイムアウトを設定
+    assert train_loader.timeout == 300
+    assert val_loader.timeout == 300
 
 
 # --- Fix 3: ストリーミングワーカー数警告テスト ---

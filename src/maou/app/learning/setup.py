@@ -701,6 +701,10 @@ class DataLoaderFactory:
             "spawn" if val_workers > 0 else None
         )
 
+        # spawn + persistent_workers でのデッドロックを検出するため
+        # 有限タイムアウトを設定する(spawn起動+大ファイル読込を考慮)．
+        _STREAMING_TIMEOUT = 300 if train_workers > 0 else 0
+
         training_loader = DataLoader(
             train_dataset,
             batch_size=None,
@@ -711,10 +715,12 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if train_workers > 0
             else None,
-            timeout=0,
+            timeout=_STREAMING_TIMEOUT,
             worker_init_fn=train_worker_init_fn,
             multiprocessing_context=mp_context,
         )
+
+        _STREAMING_TIMEOUT_VAL = 300 if val_workers > 0 else 0
 
         validation_loader = DataLoader(
             val_dataset,
@@ -726,7 +732,7 @@ class DataLoaderFactory:
             prefetch_factor=prefetch_factor
             if val_workers > 0
             else None,
-            timeout=0,
+            timeout=_STREAMING_TIMEOUT_VAL,
             worker_init_fn=val_worker_init_fn,
             multiprocessing_context=mp_context_val,
         )
