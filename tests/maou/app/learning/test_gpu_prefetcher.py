@@ -3,7 +3,8 @@
 
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -194,7 +195,7 @@ def _make_error_loader_thread(
     error: Exception,
     batches: list | None = None,
     delay_error_until: "threading.Event | None" = None,
-):
+) -> Callable[[Any], None]:
     """_loader_thread の差し替え用関数を生成する．
 
     キューにバッチを投入した後，例外を設定して None センチネルを投入する．
@@ -206,7 +207,7 @@ def _make_error_loader_thread(
             例外発生を遅延させる(部分成功テスト用)
     """
 
-    def _fake_loader_thread(self) -> None:
+    def _fake_loader_thread(self: Any) -> None:
         try:
             for batch in batches or []:
                 self.queue.put(batch)
