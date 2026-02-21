@@ -467,7 +467,6 @@ class Learning:
             value_loss_ratio=self.value_loss_ratio,
             callbacks=callbacks,
             logger=self.logger,
-            logical_batch_size=self.config.batch_size,
         )
 
         # Run training epoch
@@ -564,7 +563,6 @@ class Learning:
                 value_loss_ratio=self.value_loss_ratio,
                 callbacks=[validation_callback],
                 logger=self.logger,
-                logical_batch_size=self.config.batch_size,
             )
 
             # Run validation epoch

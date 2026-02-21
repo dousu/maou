@@ -412,8 +412,8 @@ class DataLoaderFactory:
         """ワーカー数をファイル数およびメモリ制約で制限する．
 
         ストリーミングモードでは各ワーカーが1つ以上のファイルを担当するため，
-        ファイル数を超えるワーカーは不要かつ有害(アイドルワーカーの一斉終了が
-        GPUプリフェッチャーのデッドロックを引き起こす)．
+        ファイル数を超えるワーカーは不要かつ有害(アイドルワーカーがリソースを
+        消費する)．
 
         Args:
             requested_workers: 要求されたワーカー数
@@ -620,8 +620,7 @@ class DataLoaderFactory:
         DataLoaderは ``batch_size=None`` (自動バッチングOFF)で使用する．
 
         ワーカー数はファイル数およびシステムメモリで制限される．
-        ファイル数を超えるワーカーはアイドル状態で即座に終了し，
-        GPUプリフェッチャーのデッドロックを引き起こすため．
+        ファイル数を超えるワーカーはアイドル状態で即座に終了するため．
         また，各ワーカーがArrowファイルを独立に読み込むため，
         利用可能メモリに基づく上限も適用する．
 
@@ -642,11 +641,9 @@ class DataLoaderFactory:
         Returns:
             (training_loader, validation_loader) のタプル
         """
-        # ストリーミングモードでは DataPrefetcher が GPU 転送を管理するため，
-        # DataLoader 側の pin_memory は False にする．
-        # pin_memory=True は pin_memory_thread を起動し，
-        # spawn + persistent_workers 環境でデッドロックを引き起こす．
-        _STREAMING_PIN_MEMORY = False
+        # pin_memory はストリーミングモードでもそのまま使用する．
+        # DataPrefetcher 除去後は pin_memory_thread が spawn コンテキストで
+        # 安全に動作する(PyTorch issue #130610 参照)．
 
         memory_limit = _estimate_max_workers_by_memory(
             pin_memory=pin_memory,
@@ -709,7 +706,7 @@ class DataLoaderFactory:
             batch_size=None,
             shuffle=False,
             num_workers=train_workers,
-            pin_memory=_STREAMING_PIN_MEMORY,
+            pin_memory=pin_memory,
             persistent_workers=train_workers > 0,
             prefetch_factor=prefetch_factor
             if train_workers > 0
@@ -724,7 +721,7 @@ class DataLoaderFactory:
             batch_size=None,
             shuffle=False,
             num_workers=val_workers,
-            pin_memory=_STREAMING_PIN_MEMORY,
+            pin_memory=pin_memory,
             persistent_workers=val_workers > 0,
             prefetch_factor=prefetch_factor
             if val_workers > 0
