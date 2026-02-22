@@ -198,7 +198,7 @@ def test_single_epoch_benchmark_accepts_training_loop_class() -> (
     from unittest.mock import MagicMock
 
     from maou.app.learning.training_loop import (
-        Stage2TrainingLoop,
+        RawLogitsTrainingLoop,
         TrainingLoop,
     )
     from maou.app.utility.training_benchmark import (
@@ -223,7 +223,7 @@ def test_single_epoch_benchmark_accepts_training_loop_class() -> (
     )
     assert benchmark.training_loop_class is TrainingLoop
 
-    # Should accept Stage2TrainingLoop
+    # Should accept RawLogitsTrainingLoop
     benchmark_s2 = SingleEpochBenchmark(
         model=model,
         device=device,
@@ -232,10 +232,11 @@ def test_single_epoch_benchmark_accepts_training_loop_class() -> (
         loss_fn_value=loss_value,
         policy_loss_ratio=1.0,
         value_loss_ratio=0.0,
-        training_loop_class=Stage2TrainingLoop,
+        training_loop_class=RawLogitsTrainingLoop,
     )
     assert (
-        benchmark_s2.training_loop_class is Stage2TrainingLoop
+        benchmark_s2.training_loop_class
+        is RawLogitsTrainingLoop
     )
 
 

@@ -1072,7 +1072,7 @@ class TrainingBenchmarkUseCase:
 
         # Stage 別コンポーネントセットアップ
         from maou.app.learning.training_loop import (
-            Stage2TrainingLoop,
+            RawLogitsTrainingLoop,
         )
 
         training_loop_class: type[TrainingLoop] = TrainingLoop
@@ -1081,7 +1081,7 @@ class TrainingBenchmarkUseCase:
             device_config, dataloaders, model_components = (
                 self._setup_stage1_components(config)
             )
-            training_loop_class = Stage2TrainingLoop
+            training_loop_class = RawLogitsTrainingLoop
             data_load_method = "map-style"
         elif config.stage == 2:
             if (
@@ -1100,7 +1100,7 @@ class TrainingBenchmarkUseCase:
                     self._setup_stage2_components(config)
                 )
                 data_load_method = "map-style"
-            training_loop_class = Stage2TrainingLoop
+            training_loop_class = RawLogitsTrainingLoop
         else:
             # Stage 3: 既存のロジック
             if (

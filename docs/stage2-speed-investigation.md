@@ -57,7 +57,7 @@ Stage 2 を `SingleStageTrainingLoop` から `TrainingLoop`(Stage 3 と同一)�
 
 主な追加コンポーネント:
 - `Stage2ModelAdapter` — HeadlessNetwork + LegalMovesHead を `(policy, value)` 出力に変換
-- `Stage2TrainingLoop` — `_compute_policy_loss` をオーバーライドし BCEWithLogitsLoss を直接使用
+- `RawLogitsTrainingLoop` — `_compute_policy_loss` をオーバーライドし BCEWithLogitsLoss を直接使用
 - `Stage2StreamingAdapter` — 2-tuple → 3-tuple データ変換
 - `Stage2F1Callback` — サンプル平均 F1 スコア計算
 
@@ -183,7 +183,7 @@ for batch_idx, context in self._iterate_with_transfer(dataloader):
 #### テスト A: Loss を dummy に置換
 
 ```python
-# Stage2TrainingLoop._compute_policy_loss を一時的に変更:
+# RawLogitsTrainingLoop._compute_policy_loss を一時的に変更:
 def _compute_policy_loss(self, context):
     return context.outputs_policy.mean()  # Dummy loss
 ```
@@ -238,7 +238,7 @@ Stage 2 速度改善に関連する `update-model` ブランチ上のコミッ�
 ## 関連ファイル
 
 - `src/maou/app/learning/streaming_dataset.py` — StreamingStage2Dataset, Stage2StreamingAdapter
-- `src/maou/app/learning/training_loop.py` — TrainingLoop, Stage2TrainingLoop
+- `src/maou/app/learning/training_loop.py` — TrainingLoop, RawLogitsTrainingLoop
 - `src/maou/app/learning/callbacks.py` — Stage2F1Callback
 - `src/maou/app/learning/multi_stage_training.py` — Stage2ModelAdapter, run_stage2_with_training_loop()
 - `src/maou/interface/learn.py` — _run_stage2_streaming(), learn_multi_stage()

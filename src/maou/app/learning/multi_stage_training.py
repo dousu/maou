@@ -990,7 +990,7 @@ def run_stage2_with_training_loop(
     )
     from maou.app.learning.setup import SchedulerFactory
     from maou.app.learning.training_loop import (
-        Stage2TrainingLoop,
+        RawLogitsTrainingLoop,
     )
 
     _logger = logger or logging.getLogger(__name__)
@@ -1063,7 +1063,7 @@ def run_stage2_with_training_loop(
             callbacks.append(LRSchedulerStepCallback(scheduler))
 
     # TrainingLoop 作成
-    training_loop = Stage2TrainingLoop(
+    training_loop = RawLogitsTrainingLoop(
         model=model,
         device=device,
         optimizer=optimizer,
