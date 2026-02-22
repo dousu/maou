@@ -111,7 +111,7 @@ def _unpack_batch(
 ```python
 class Stage2StreamingAdapter(IterableDataset):
     """StreamingStage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
-    
+
     StreamingStage2Dataset は ``((board, hand), legal_moves)`` を yield するが，
     TrainingLoop._unpack_batch() は
     ``((board, hand), (labels_policy, labels_value, legal_move_mask))``
@@ -173,7 +173,7 @@ def run_stage2_with_training_loop(
     device: torch.device,
     logger: logging.Logger | None = None,
 ) -> tuple[StageResult, LegalMovesHead]:
-    
+
     # Stage2Dataset は通常の 2 要素タプルを返す
     # しかし config.dataloader は既に設定済みで，Stage2Dataset から来たもの
 ```
@@ -190,7 +190,7 @@ Stage2TrainingLoop に渡すと，2 要素のタプルが DataLoader から来�
 ```python
 class Stage2TrainingLoop(TrainingLoop):
     """Stage 2 (Legal Moves) 用の TrainingLoop サブクラス．
-    
+
     Stage 3 の ``_compute_policy_loss`` は ``log_softmax`` +
     ``normalize_policy_targets`` で方策分布を正規化するが，
     Stage 2 の ``LegalMovesLoss`` は生logitsに対するBCEWithLogitsLoss
@@ -402,7 +402,7 @@ for batch_idx, (inputs, targets) in enumerate(
 ```python
 class Stage2ModelAdapter(torch.nn.Module):
     """Stage 2 用のモデルアダプタ．
-    
+
     HeadlessNetwork と LegalMovesHead をラップし，
     TrainingLoop が期待する ``(policy, value)`` の2タプルを返す．
     ``value`` 出力はダミーゼロテンソルで，value loss は ``value_loss_ratio=0.0`` で無視される．

@@ -45,7 +45,10 @@ class _PairedDataset(Dataset):
     def __getitem__(
         self, idx: int
     ) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        return (self._board[idx], self._hand[idx]), self._targets[idx]
+        return (
+            self._board[idx],
+            self._hand[idx],
+        ), self._targets[idx]
 
 
 def _make_dummy_dataloader(
@@ -74,7 +77,10 @@ def _make_dummy_dataloader(
     hand_tensor = torch.randn(num_samples, hand_dim)
     targets = torch.zeros(num_samples, target_dim)
 
-    if wrap_stage1_adapter and stage == TrainingStage.REACHABLE_SQUARES:
+    if (
+        wrap_stage1_adapter
+        and stage == TrainingStage.REACHABLE_SQUARES
+    ):
         paired_dataset: Dataset = _PairedDataset(
             board_tensor, hand_tensor, targets
         )
@@ -97,7 +103,9 @@ def _make_dummy_dataloader(
             legal_move_mask=None を手動で伝播させる．
             """
             inputs_list, labels_list = zip(*batch)
-            boards = torch.stack([inp[0] for inp in inputs_list])
+            boards = torch.stack(
+                [inp[0] for inp in inputs_list]
+            )
             hands = torch.stack([inp[1] for inp in inputs_list])
             tgts = torch.stack([lbl[0] for lbl in labels_list])
             vals = torch.stack([lbl[1] for lbl in labels_list])
