@@ -5,7 +5,7 @@
 - Ingests preprocessing datasets from local folders via stage-specific file
   paths, then normalizes every CLI flag before wiring them into the training
   pipeline defined in `src/maou/infra/console/learn_model.py`. The CLI exposes
-  cache controls and cloud upload toggles so operators can mirror production
+  cloud upload toggles so operators can mirror production
   setups during experiments.【F:src/maou/infra/console/learn_model.py†L1-L639】
 - The interface (`maou.interface.learn`) converts the parsed flags into a
   `Learning.LearningOption`, instantiates the requested datasource, and then
@@ -13,47 +13,6 @@
   optimizers, checkpoints, and optional cloud uploads.【F:src/maou/interface/learn.py†L101-L266】【F:src/maou/app/learning/dl.py†L94-L209】
 
 ## CLI options
-
-### Input sources and caching
-
-| Flag | Required | Description |
-| --- | --- | --- |
-| `--input-file-packed` | optional | Tells file-based datasources to unpack bit-packed numpy blobs.【F:src/maou/infra/console/learn_model.py†L96-L130】 |
-| `--input-cache-mode {file,memory,mmap}` | default `file` | Cache strategy for local inputs. `file` uses standard file I/O, `memory` copies into RAM. `mmap` is **deprecated** and internally converted to `file`.【F:src/maou/infra/console/learn_model.py†L106-L113】【F:src/maou/interface/learn.py†L198-L210】 |
-
-
-#### `--input-cache-mode` 使い分けガイド
-
-##### 動作の仕組み
-
-両モードとも**全データをメモリに載せる**点は共通である．`file`は「ディスクから逐次読み込み」ではない．
-
-- **`file`モード(デフォルト)**: 各ファイルのデータを個別の配列としてメモリに保持する．アクセス時に`np.searchsorted()`でO(log F)（F=ファイル数）のファイル境界探索を行い，該当ファイルの配列から直接取得する．【F:src/maou/infra/file_system/file_data_source.py†L573-L611】
-- **`memory`モード**: 初期化時に全ファイルのデータを1つの配列に結合(`np.concatenate`)してメモリに保持する．O(1)の直接インデックスアクセスが可能．結合完了後に個別配列は解放されるため，定常状態のメモリ使用量は`file`と同等になる．【F:src/maou/infra/file_system/file_data_source.py†L446-L480】
-
-**注意**: `memory`モードの初期化時には，個別配列と結合後の配列が同時に存在するため，一時的にデータサイズの最大**2倍**のメモリを消費する．この2倍ピークは一時的であり，結合完了後に個別配列が解放される．
-
-##### 比較表
-
-| 観点 | `file` | `memory` |
-|------|--------|----------|
-| メモリ使用量 | データサイズ分 | 初期化時に最大2倍（定常状態はデータサイズ分） |
-| アクセス速度 | O(log F) `searchsorted`（F=ファイル数） | O(1) 直接アクセス |
-| 実効速度差 | ベースライン | <0.2%改善（実用上無視可能） |
-| OOMリスク | 低 | 高（データ>32GBで警告を出力）【F:src/maou/infra/file_system/file_data_source.py†L457-L464】 |
-| Stage 1/2 | そのまま使用 | `file`に強制変更【F:src/maou/infra/console/learn_model.py†L986-L992】 |
-
-##### 推奨ガイドライン
-
-- **大半のケース → `file`（デフォルト）推奨．** 速度差が<0.2%と実用上無視できるため，OOMリスクの低い`file`が安全な選択である．`memory`モードを選択しても速度改善は<0.2%であるため，メモリに十分な余裕がある場合でも積極的に`memory`を選ぶ理由は薄い．
-- `memory`の使用目安: データサイズが搭載メモリの1/4以下の場合（32GB警告閾値の半分=16GB相当が目安）．
-- ADR-003のベースライン構成（`file`モード）がパフォーマンス検証で最適と確認されている．`__getitems__()`によるバッチ一括取得も検証されたが却下（115%の性能劣化）されており，現状の`file`モードによる個別アクセス(`__getitem__` + PyTorch DataLoaderのC++バッチング)が既に最速の実用構成である．詳細は[ADR-003](../adr-003-training-performance-optimization-attempts.md)を参照．
-
-**注意**: 実際のプロセスメモリにはモデルパラメータ，DataLoaderワーカー，CUDAコンテキスト等も含まれるため，データサイズだけでメモリの余裕を判断できない．
-
-##### `mmap`モードについて
-
-`mmap`は**deprecated**である．CLIで指定した場合は`file`に自動変換される．【F:src/maou/infra/console/learn_model.py†L689-L698】
 
 ### Training hardware and performance knobs
 
@@ -67,7 +26,6 @@
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
-| `--cache-transforms/--no-cache-transforms` | format-dependent | HCPE datasources cache transforms by default; preprocessed tensors do not. Flags override the heuristic.【F:src/maou/interface/learn.py†L226-L239】 |
 | `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`.【F:src/maou/interface/learn.py†L132-L140】 |
 | `--tensorboard-histogram-frequency INT` + `--tensorboard-histogram-module PATTERN` | default `0` | Controls how often histogram dumps occur and which parameter names qualify.【F:src/maou/interface/learn.py†L233-L244】 |
 | `--no-streaming` | `false` | Disable streaming mode for file input; uses map-style dataset instead. Streaming is the default for multi-file inputs.【F:src/maou/infra/console/learn_model.py†L520-L524】 |
@@ -158,14 +116,14 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 
 ## Execution flow
 
-1. **Datasource selection** – The CLI collects stage-specific file paths and
-   cache settings, then passes them to the multi-stage training
+1. **Datasource selection** – The CLI collects stage-specific file paths,
+   then passes them to the multi-stage training
    interface.【F:src/maou/infra/console/learn_model.py†L122-L399】
 2. **Option normalization** – `learn.learn` validates ratios, batch sizes,
-   worker counts, optimizer parameters, cache settings, and scheduler names
+   worker counts, optimizer parameters, and scheduler names
    before building `Learning.LearningOption`. Defaults such as
-   `epoch=10`, `batch_size=1000`, `test_ratio=0.2`, and format-specific
-   `cache_transforms` are applied here.【F:src/maou/interface/learn.py†L101-L247】
+   `epoch=10`, `batch_size=1000`, `test_ratio=0.2` are applied
+   here.【F:src/maou/interface/learn.py†L101-L247】
 3. **Training setup** – The app-layer `Learning` object prepares DataLoaders,
    networks (`BACKBONE_ARCHITECTURES`), optimizers, schedulers, and callbacks
    (TensorBoard, checkpointing, optional cloud uploads) via
@@ -220,3 +178,10 @@ poetry run maou learn-model \
   `src/maou/interface/learn.py`.【F:src/maou/interface/learn.py†L12-L266】
 - Training setup, checkpoints, and logging –
   `src/maou/app/learning/dl.py`, `src/maou/app/learning/model_io.py`.【F:src/maou/app/learning/dl.py†L94-L209】【F:src/maou/app/learning/model_io.py†L1-L86】
+
+## 変更履歴
+
+- **2026-02-22**: `--cache-transforms`，`--input-cache-mode`，`--input-file-packed` を削除
+  - `--cache-transforms`: learn-model では transform=None 固定のため実質無効
+  - `--input-cache-mode`: Stage 1/2 で "file" 強制，Stage 3 streaming で無視．内部で "file" 固定
+  - `--input-file-packed`: Arrow IPC 移行に伴い不要

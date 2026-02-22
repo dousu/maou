@@ -34,24 +34,6 @@ S3: S3Type | None = getattr(common, "S3", None)
 
 @click.command("learn-model")
 @click.option(
-    "--input-file-packed",
-    type=bool,
-    is_flag=True,
-    help="Enable unpacking local numpy file.",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-cache-mode",
-    type=click.Choice(
-        ["file", "memory", "mmap"], case_sensitive=False
-    ),
-    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
-    default="file",
-    show_default=True,
-    required=False,
-)
-@click.option(
     "--gpu",
     type=str,
     help="PyTorch device (e.g., 'cuda:0' or 'cpu').",
@@ -181,15 +163,6 @@ S3: S3Type | None = getattr(common, "S3", None)
         "Only log histograms for parameter names matching this glob pattern."
         " Provide multiple times to add more filters."
     ),
-)
-@click.option(
-    "--cache-transforms/--no-cache-transforms",
-    default=None,
-    help=(
-        "Enable in-memory caching of dataset transforms when supported by the "
-        "input pipeline."
-    ),
-    required=False,
 )
 @click.option(
     "--gce-parameter",
@@ -562,8 +535,6 @@ S3: S3Type | None = getattr(common, "S3", None)
 )
 @common.handle_exception
 def learn_model(
-    input_file_packed: bool,
-    input_cache_mode: str,
     gpu: Optional[str],
     model_architecture: str,
     vit_embed_dim: Optional[int],
@@ -582,7 +553,6 @@ def learn_model(
     prefetch_factor: Optional[int],
     tensorboard_histogram_frequency: int,
     tensorboard_histogram_modules: tuple[str, ...],
-    cache_transforms: Optional[bool],
     gce_parameter: Optional[float],
     policy_loss_ratio: Optional[float],
     value_loss_ratio: Optional[float],
@@ -634,17 +604,6 @@ def learn_model(
     s3_bucket_name: Optional[str],
     s3_base_path: Optional[str],
 ) -> None:
-    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
-    if input_cache_mode.lower() == "mmap":
-        import warnings
-
-        warnings.warn(
-            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
-            DeprecationWarning,
-            stacklevel=1,
-        )
-        input_cache_mode = "file"
-
     # Check for mixing cloud providers for output
     if output_gcs and output_s3:
         error_msg = (
@@ -728,14 +687,6 @@ def learn_model(
     stage2_data_config: StageDataConfig | None = None
     stage3_data_config: StageDataConfig | None = None
 
-    # Stage1/2 では cache_mode を強制的に "file" にする（OOM防止）
-    stage12_cache_mode = "file"
-    if input_cache_mode.lower() == "memory":
-        app_logger.info(
-            "Stage 1/2: cache_mode='memory' is ignored for memory efficiency. "
-            "Using individual file mode instead."
-        )
-
     # Streaming source variables for multi-stage
     use_multi_streaming = False
     s1_streaming_source = None
@@ -751,7 +702,7 @@ def learn_model(
                     file_paths=_paths,
                     array_type="stage1",
                     bit_pack=False,
-                    cache_mode=stage12_cache_mode,
+                    cache_mode="file",
                 )
             ),
             array_type="stage1",
@@ -775,7 +726,7 @@ def learn_model(
                     file_paths=_paths,
                     array_type="stage2",
                     bit_pack=False,
-                    cache_mode=stage12_cache_mode,
+                    cache_mode="file",
                 )
             ),
             array_type="stage2",
@@ -793,9 +744,9 @@ def learn_model(
 
     if stage3_data_path is not None:
         _s3_paths = FileSystem.collect_files(stage3_data_path)
-        _s3_cache = input_cache_mode.lower()
+        _s3_cache = "file"
         _s3_at = "preprocessing"
-        _s3_bp = input_file_packed
+        _s3_bp = False
         stage3_data_config = StageDataConfig(
             create_datasource=lambda _p=_s3_paths,
             _a=_s3_at,
@@ -884,7 +835,6 @@ def learn_model(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
-            cache_transforms=cache_transforms,
             gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,
@@ -898,7 +848,6 @@ def learn_model(
             trainable_layers=trainable_layers,
             log_dir=log_dir,
             cloud_storage=cloud_storage,
-            input_cache_mode=input_cache_mode.lower(),
             architecture_config=architecture_config,
             streaming=use_multi_streaming,
             stage1_streaming_source=s1_streaming_source,

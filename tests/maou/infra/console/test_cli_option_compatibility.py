@@ -139,8 +139,6 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
     training_params = {
         # 入力関連
         "stage3-data-path",
-        "input-file-packed",
-        "input-cache-mode",
         # GPU/デバイス
         "gpu",
         # モデル
@@ -154,7 +152,6 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
         "dataloader-workers",
         "pin-memory",
         "prefetch-factor",
-        "cache-transforms",
         # 損失関数
         "gce-parameter",
         "policy-loss-ratio",
@@ -284,7 +281,6 @@ def _get_input_cache_mode_commands() -> list[
     import maou.infra.console.pretrain_cli as pretrain_cli
 
     return [
-        ("learn-model", learn_model.learn_model),
         ("benchmark-dataloader", utility.benchmark_dataloader),
         ("benchmark-training", utility.benchmark_training),
         ("pretrain", pretrain_cli.pretrain),
@@ -302,7 +298,6 @@ def _get_input_cache_mode_commands_with_modules() -> list[
     import maou.infra.console.pretrain_cli as pretrain_cli
 
     return [
-        ("learn-model", learn_model.learn_model, learn_model),
         (
             "benchmark-dataloader",
             utility.benchmark_dataloader,
@@ -375,3 +370,18 @@ def test_input_cache_mode_has_mmap_deprecation(
     assert "'mmap' is deprecated" in module_source, (
         f"{name} のモジュールに mmap→file の deprecation warning ロジックがありません"
     )
+
+
+def test_learn_model_removed_options_not_in_help() -> None:
+    """learn-modelから削除されたオプションがヘルプに表示されないことを確認する．"""
+    removed_options = {
+        "cache-transforms",
+        "no-cache-transforms",
+        "input-cache-mode",
+        "input-file-packed",
+    }
+    learn_options = get_command_options(learn_model.learn_model)
+    for opt in removed_options:
+        assert opt not in learn_options, (
+            f"learn-model に削除済みオプション --{opt} が残っています"
+        )
