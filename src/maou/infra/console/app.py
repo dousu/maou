@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from importlib import import_module
+from importlib.util import find_spec
 from types import ModuleType
 from typing import Any, Callable, MutableMapping, Sequence
 
@@ -13,10 +14,21 @@ from maou.infra.app_logging import (
 
 
 @dataclass(frozen=True)
+class PackageRequirement:
+    """サブコマンドが必要とするパッケージと対応するextrasグループ．"""
+
+    import_name: str
+    extras: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class LazyCommandSpec:
+    """遅延読み込みサブコマンドの定義．"""
+
     module_path: str
     attr_name: str
     missing_help: str | None = None
+    required_packages: tuple[PackageRequirement, ...] = ()
 
 
 class LazyGroup(click.Group):
@@ -54,6 +66,16 @@ class LazyGroup(click.Group):
         if lazy_definition is None:
             return None
 
+        # import 前のパッケージチェック
+        if lazy_definition.required_packages:
+            missing = self._check_packages(
+                lazy_definition.required_packages
+            )
+            if missing:
+                return self._get_dependency_error_command(
+                    cmd_name, missing
+                )
+
         module_path = lazy_definition.module_path
         attr_name = lazy_definition.attr_name
 
@@ -71,6 +93,93 @@ class LazyGroup(click.Group):
         lazy_command = getattr(module, attr_name)
         super().add_command(lazy_command)
         return lazy_command
+
+    @staticmethod
+    def _check_packages(
+        requirements: tuple[PackageRequirement, ...],
+    ) -> list[PackageRequirement]:
+        """インストールされていないパッケージを返す．
+
+        find_spec はメタデータ確認のみで副作用がないため，
+        重いパッケージ(torch等)でも高速にチェックできる．
+        """
+        return [
+            req
+            for req in requirements
+            if find_spec(req.import_name) is None
+        ]
+
+    @staticmethod
+    def _build_dependency_message(
+        cmd_name: str,
+        missing: list[PackageRequirement],
+    ) -> str:
+        """不足パッケージのエラーメッセージを組み立てる．"""
+        lines = [
+            f"Command '{cmd_name}' requires the following packages:"
+        ]
+        for req in missing:
+            lines.append(
+                f"  - {req.import_name} (not installed)"
+            )
+
+        # extras の集合を収集(順序保持)
+        extras_options: list[str] = []
+        seen: set[str] = set()
+        for req in missing:
+            for extra in req.extras:
+                if extra not in seen:
+                    seen.add(extra)
+                    extras_options.append(extra)
+
+        lines.append("")
+        lines.append("Install with one of:")
+        for extra in extras_options:
+            lines.append(f"  uv sync --extra {extra}")
+
+        return "\n".join(lines)
+
+    def _get_dependency_error_command(
+        self,
+        cmd_name: str,
+        missing: list[PackageRequirement],
+    ) -> click.Command:
+        """不足パッケージの詳細情報を持つフォールバックコマンドを返す．
+
+        --help 時にはヘルプテキストとして不足情報を表示し，
+        実行時には ClickException でインストール案内を出す．
+        """
+        fallback = self._fallback_commands.get(cmd_name)
+        if fallback is not None:
+            return fallback
+
+        dep_message = self._build_dependency_message(
+            cmd_name, missing
+        )
+
+        help_text = (
+            f"[requires additional packages]\n\n{dep_message}"
+        )
+
+        pkg_names = ", ".join(r.import_name for r in missing)
+        short_help = f"[requires: {pkg_names}]"
+
+        def _raise_missing_dependency(
+            *args: object, **kwargs: object
+        ) -> None:
+            raise click.ClickException(dep_message)
+
+        fallback_command = click.Command(
+            name=cmd_name,
+            callback=cast_command_callback(
+                _raise_missing_dependency
+            ),
+            help=help_text,
+            short_help=short_help,
+        )
+        self._fallback_commands[cmd_name] = fallback_command
+        super().add_command(fallback_command)
+        return fallback_command
 
     def _get_fallback_command(
         self,
@@ -113,6 +222,8 @@ def cast_command_callback(
     return func
 
 
+_TRAINING_EXTRAS = ("cpu", "cuda", "mpu", "tpu")
+
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     "hcpe-convert": LazyCommandSpec(
         "maou.infra.console.hcpe_convert", "hcpe_convert"
@@ -125,7 +236,12 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "learn_model",
         missing_help=(
             "Command 'learn-model' requires training dependencies. "
-            "Install with `uv sync --extra cpu` (or another training extra)."
+            "Install with `uv sync --extra cpu` "
+            "(or another training extra)."
+        ),
+        required_packages=(
+            PackageRequirement("torch", _TRAINING_EXTRAS),
+            PackageRequirement("torchinfo", _TRAINING_EXTRAS),
         ),
     ),
     "utility": LazyCommandSpec(
@@ -133,7 +249,11 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "utility",
         missing_help=(
             "Command 'utility' requires training dependencies. "
-            "Install with `uv sync --extra cpu` (or another training extra)."
+            "Install with `uv sync --extra cpu` "
+            "(or another training extra)."
+        ),
+        required_packages=(
+            PackageRequirement("torch", _TRAINING_EXTRAS),
         ),
     ),
     "evaluate": LazyCommandSpec(
@@ -144,9 +264,23 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             "Install with `uv sync --extra onnx-gpu-infer` "
             "or `uv sync --extra tensorrt-infer`."
         ),
+        required_packages=(
+            PackageRequirement(
+                "onnxruntime",
+                (
+                    "cpu-infer",
+                    "onnx-gpu-infer",
+                    "tensorrt-infer",
+                ),
+            ),
+        ),
     ),
     "pretrain": LazyCommandSpec(
-        "maou.infra.console.pretrain_cli", "pretrain"
+        "maou.infra.console.pretrain_cli",
+        "pretrain",
+        required_packages=(
+            PackageRequirement("torch", _TRAINING_EXTRAS),
+        ),
     ),
     "visualize": LazyCommandSpec(
         "maou.infra.console.visualize",
@@ -155,6 +289,11 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             "Command 'visualize' requires visualization dependencies. "
             "Install with `uv sync --extra visualize`."
         ),
+        required_packages=(
+            PackageRequirement("gradio", ("visualize",)),
+            PackageRequirement("matplotlib", ("visualize",)),
+            PackageRequirement("playwright", ("visualize",)),
+        ),
     ),
     "screenshot": LazyCommandSpec(
         "maou.infra.console.screenshot",
@@ -162,6 +301,9 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         missing_help=(
             "Command 'screenshot' requires visualization dependencies. "
             "Install with `uv sync --extra visualize`."
+        ),
+        required_packages=(
+            PackageRequirement("playwright", ("visualize",)),
         ),
     ),
 }
