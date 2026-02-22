@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from maou.domain.model.tracing import is_tracing
+
 
 class _FeedForward(nn.Module):
     """Two-layer feed-forward MLP with GELU activation and dropout."""
@@ -145,24 +147,13 @@ class ShogiMLPMixer(nn.Module):
     def _flatten_tokens(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, channels, height, width = x.shape
         tokens = height * width
-        token_error = "Spatial dimensions do not match the configured number of tokens"
-        channel_error = "Input channels do not match the configured channel dimension"
-        tracing = (
-            torch.jit.is_tracing()
-            or torch.onnx.is_in_onnx_export()
-        )
-        if tracing:
-            torch._assert(
-                tokens == self.num_tokens, token_error
-            )
-            torch._assert(
-                channels == self.input_channels, channel_error
-            )
-        else:
+        if not is_tracing():
             if tokens != self.num_tokens:
-                raise ValueError(token_error)
+                msg = "Spatial dimensions do not match the configured number of tokens"
+                raise ValueError(msg)
             if channels != self.input_channels:
-                raise ValueError(channel_error)
+                msg = "Input channels do not match the configured channel dimension"
+                raise ValueError(msg)
         x = x.view(batch_size, channels, tokens)
         return x.transpose(1, 2)
 

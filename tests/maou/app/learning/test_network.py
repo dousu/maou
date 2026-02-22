@@ -270,3 +270,48 @@ class TestNetworkForwardFeaturesRegression:
             )
 
         assert torch.allclose(via_network, via_headless)
+
+
+class TestValidateInputsTracingGuard:
+    """_validate_inputs のトレーシングガード動作を検証する．"""
+
+    def test_validate_inputs_skips_validation_during_tracing(
+        self,
+    ) -> None:
+        """トレーシング中はサイズ不一致でもエラーにならず分類のみ行う．"""
+        from unittest.mock import patch
+
+        model = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        # board_size は (9, 9) なので (5, 5) は不一致
+        wrong_size_input = torch.randint(0, 32, (1, 5, 5))
+
+        with patch(
+            "maou.app.learning.network.is_tracing",
+            return_value=True,
+        ):
+            input_type, tensor = model._validate_inputs(
+                wrong_size_input
+            )
+
+        assert input_type == "board"
+        assert tensor is wrong_size_input
+
+    def test_validate_inputs_raises_during_eager(self) -> None:
+        """通常実行時は従来通り ValueError を送出する．"""
+        model = HeadlessNetwork(
+            board_vocab_size=32,
+            embedding_dim=64,
+            hand_projection_dim=0,
+            architecture="resnet",
+            out_channels=(16, 32, 64, 64),
+        )
+        wrong_size_input = torch.randint(0, 32, (1, 5, 5))
+
+        with pytest.raises(ValueError, match="board size"):
+            model._validate_inputs(wrong_size_input)

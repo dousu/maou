@@ -16,6 +16,7 @@ from maou.domain.model.resnet import (
     BottleneckBlock,
 )
 from maou.domain.model.resnet import ResNet as DomainResNet
+from maou.domain.model.tracing import is_tracing
 from maou.domain.model.vision_transformer import (
     VisionTransformer,
     VisionTransformerConfig,
@@ -361,40 +362,50 @@ class HeadlessNetwork(nn.Module):
     def _validate_inputs(
         self, x: torch.Tensor
     ) -> tuple[Literal["board", "embedded"], torch.Tensor]:
+        # NOTE: x.dim() や channels による分岐は静的形状モード
+        # (dynamic=False)では specialization として正しく動作する．
+        # dynamic=True に切り替えた場合，これらの分岐が
+        # graph break を引き起こす可能性がある．
+        tracing = is_tracing()
+
         if x.dim() == 3:
-            height, width = x.shape[1:]
-            if (height, width) != self._board_size:
-                msg = (
-                    "Input board dimensions must match the configured board size. "
-                    f"Expected {self._board_size} but received {(height, width)}."
-                )
-                raise ValueError(msg)
-            if torch.is_floating_point(x):
-                msg = "Board identifiers must be integral tensors."
-                raise ValueError(msg)
+            if not tracing:
+                height, width = x.shape[1:]
+                if (height, width) != self._board_size:
+                    msg = (
+                        "Input board dimensions must match the configured board size. "
+                        f"Expected {self._board_size} but received {(height, width)}."
+                    )
+                    raise ValueError(msg)
+                if torch.is_floating_point(x):
+                    msg = "Board identifiers must be integral tensors."
+                    raise ValueError(msg)
             return "board", x
 
         if x.dim() == 4:
             _, channels, height, width = x.shape
-            if (height, width) != self._board_size:
-                msg = (
-                    "Input board dimensions must match the configured board size. "
-                    f"Expected {self._board_size} but received {(height, width)}."
-                )
-                raise ValueError(msg)
+            if not tracing:
+                if (height, width) != self._board_size:
+                    msg = (
+                        "Input board dimensions must match the configured board size. "
+                        f"Expected {self._board_size} but received {(height, width)}."
+                    )
+                    raise ValueError(msg)
             if channels == 1:
-                if torch.is_floating_point(x):
+                if not tracing and torch.is_floating_point(x):
                     msg = "Board identifiers must be integral tensors."
                     raise ValueError(msg)
                 return "board", x.squeeze(1)
             if channels == self._embedding_channels:
                 return "embedded", x
 
-        msg = (
-            "Inputs must be integer board IDs with shape (batch, 9, 9) or "
-            "embedded features shaped (batch, channels, 9, 9)."
-        )
-        raise ValueError(msg)
+        if not tracing:
+            msg = (
+                "Inputs must be integer board IDs with shape (batch, 9, 9) or "
+                "embedded features shaped (batch, channels, 9, 9)."
+            )
+            raise ValueError(msg)
+        return "board", x
 
     def load_state_dict(
         self,

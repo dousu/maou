@@ -86,3 +86,47 @@ def test_mlp_mixer_onnx_export_without_tracer_warning(
     assert not tracer_warnings, (
         "Expected no TracerWarning during ONNX export"
     )
+
+
+class TestFlattenTokensValidation:
+    """_flatten_tokens の入力検証とトレーシングガード動作を検証する．"""
+
+    def test_flatten_tokens_raises_on_wrong_spatial_dims(
+        self,
+    ) -> None:
+        """eager 実行時に不正な空間次元で ValueError が送出される．"""
+        model = ShogiMLPMixer(num_classes=2)
+        # 正しい空間次元は 9x9 = 81 tokens
+        wrong_spatial = torch.randn(1, 104, 5, 5)
+        with pytest.raises(
+            ValueError, match="Spatial dimensions"
+        ):
+            model._flatten_tokens(wrong_spatial)
+
+    def test_flatten_tokens_raises_on_wrong_channels(
+        self,
+    ) -> None:
+        """eager 実行時に不正なチャンネル数で ValueError が送出される．"""
+        model = ShogiMLPMixer(num_classes=2)
+        # 正しいチャンネル数は 104
+        wrong_channels = torch.randn(1, 50, 9, 9)
+        with pytest.raises(ValueError, match="Input channels"):
+            model._flatten_tokens(wrong_channels)
+
+    def test_flatten_tokens_skips_validation_during_tracing(
+        self,
+    ) -> None:
+        """トレーシング中は不正入力でもエラーが発生しない．"""
+        from unittest.mock import patch
+
+        model = ShogiMLPMixer(num_classes=2)
+        wrong_spatial = torch.randn(1, 104, 5, 5)
+
+        with patch(
+            "maou.domain.model.mlp_mixer.is_tracing",
+            return_value=True,
+        ):
+            result = model._flatten_tokens(wrong_spatial)
+
+        # view + transpose で (1, 25, 104) になる（5*5=25 tokens）
+        assert result.shape == (1, 25, 104)
