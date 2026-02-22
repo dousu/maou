@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from maou.app.utility.training_benchmark import BenchmarkResult
+import pytest
+
+from maou.app.utility.training_benchmark import (
+    BenchmarkResult,
+    TrainingBenchmarkConfig,
+)
+from maou.interface import utility_interface
 
 
 class TestBenchmarkResult:
@@ -16,6 +22,7 @@ class TestBenchmarkResult:
         measured_time: float = 4.75,
         measured_batches: int = 95,
         actual_average_batch_time: float = 0.05,
+        data_load_method: str = "map-style",
     ) -> BenchmarkResult:
         """テスト用の BenchmarkResult を生成する."""
         return BenchmarkResult(
@@ -37,6 +44,7 @@ class TestBenchmarkResult:
             average_loss=0.6,
             samples_per_second=640.0,
             batches_per_second=20.0,
+            data_load_method=data_load_method,
         )
 
     def test_warmup_fields_present(self) -> None:
@@ -112,3 +120,71 @@ class TestBenchmarkResult:
         assert result.warmup_time == 0.0
         assert result.warmup_batches == 0
         assert result.total_epoch_time == 10.0
+
+    def test_data_load_method_default(self) -> None:
+        """data_load_method のデフォルト値が map-style."""
+        result = self._make_result()
+        assert result.data_load_method == "map-style"
+
+    def test_data_load_method_streaming(self) -> None:
+        """data_load_method に streaming を設定できる."""
+        result = self._make_result(data_load_method="streaming")
+        assert result.data_load_method == "streaming"
+
+    def test_to_dict_includes_data_load_method(self) -> None:
+        """to_dict に data_load_method が含まれる."""
+        result = self._make_result(data_load_method="streaming")
+        d = result.to_dict()
+        assert "data_load_method" in d
+        assert d["data_load_method"] == "streaming"
+
+
+class TestTrainingBenchmarkConfig:
+    """TrainingBenchmarkConfig dataclass のテスト."""
+
+    def test_warmup_batches_default_is_10(self) -> None:
+        """warmup_batches デフォルトが10."""
+        config = TrainingBenchmarkConfig()
+        assert config.warmup_batches == 10
+
+    def test_streaming_defaults(self) -> None:
+        """streaming関連フィールドのデフォルト値."""
+        config = TrainingBenchmarkConfig()
+        assert config.streaming is False
+        assert config.streaming_train_source is None
+        assert config.streaming_val_source is None
+
+    def test_datasource_optional(self) -> None:
+        """datasource が None を許容する."""
+        config = TrainingBenchmarkConfig(datasource=None)
+        assert config.datasource is None
+
+
+class TestBenchmarkTrainingValidation:
+    """Interface層バリデーションのテスト."""
+
+    def test_non_streaming_without_datasource_raises_value_error(
+        self,
+    ) -> None:
+        """streaming=False かつ datasource=None で ValueError."""
+        with pytest.raises(
+            ValueError, match="datasource is required"
+        ):
+            utility_interface.benchmark_training(
+                datasource=None,
+                streaming=False,
+            )
+
+    def test_streaming_without_train_source_raises_value_error(
+        self,
+    ) -> None:
+        """streaming=True かつ streaming_train_source=None で ValueError."""
+        with pytest.raises(
+            ValueError,
+            match="streaming_train_source is required",
+        ):
+            utility_interface.benchmark_training(
+                datasource=None,
+                streaming=True,
+                streaming_train_source=None,
+            )

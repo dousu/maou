@@ -777,9 +777,9 @@ def benchmark_dataloader(
 @click.option(
     "--warmup-batches",
     type=int,
-    help="Number of warmup batches to exclude from timing (default: 5).",
+    help="Number of warmup batches to exclude from timing (default: 10).",
     required=False,
-    default=5,
+    default=10,
 )
 @click.option(
     "--max-batches",
@@ -906,19 +906,51 @@ def benchmark_training(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
+    streaming = False
+    streaming_train_source = None
+    streaming_val_source = None
+
     if stage3_data_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
-        datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(
-                stage3_data_path
-            ),
-            array_type=array_type,
-            bit_pack=input_file_packed,
-            cache_mode=input_cache_mode,
-        )
+        file_paths = FileSystem.collect_files(stage3_data_path)
+
+        if not no_streaming and len(file_paths) >= 2:
+            import random
+
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
+            )
+
+            rng = random.Random(42)
+            shuffled = list(file_paths)
+            rng.shuffle(shuffled)
+            effective_ratio = test_ratio or 0.2
+            n_val = max(1, int(len(shuffled) * effective_ratio))
+            n_train = len(shuffled) - n_val
+            if n_train < 1:
+                n_train = 1
+                n_val = len(shuffled) - 1
+
+            streaming_train_source = StreamingFileSource(
+                file_paths=shuffled[:n_train],
+                array_type=array_type,
+            )
+            streaming_val_source = StreamingFileSource(
+                file_paths=shuffled[n_train:],
+                array_type=array_type,
+            )
+            streaming = True
+            datasource = None
+        else:
+            datasource = FileDataSource.FileDataSourceSpliter(
+                file_paths=file_paths,
+                array_type=array_type,
+                bit_pack=input_file_packed,
+                cache_mode=input_cache_mode,
+            )
     elif (
         input_dataset_id is not None
         and input_table_name is not None
@@ -1091,6 +1123,9 @@ def benchmark_training(
         run_validation=run_validation,
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
+        streaming=streaming,
+        streaming_train_source=streaming_train_source,
+        streaming_val_source=streaming_val_source,
     )
 
     # Parse and display results

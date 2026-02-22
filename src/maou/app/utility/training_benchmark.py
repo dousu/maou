@@ -1,7 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
-from typing import Dict, Optional, cast
+from dataclasses import dataclass, replace
+from typing import Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -18,7 +18,20 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.resource_monitor import ResourceUsage
-from maou.app.learning.setup import TrainingSetup
+from maou.app.learning.setup import (
+    DataLoaderFactory,
+    DeviceConfig,
+    DeviceSetup,
+    LossOptimizerFactory,
+    ModelComponents,
+    ModelFactory,
+    SchedulerFactory,
+    TrainingSetup,
+)
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
+    StreamingKifDataset,
+)
 from maou.app.learning.training_loop import TrainingLoop
 
 
@@ -57,7 +70,9 @@ class BenchmarkResult:
     # リソース使用率情報
     resource_usage: Optional[ResourceUsage] = None
 
-    def to_dict(self) -> Dict[str, float]:
+    data_load_method: str = "map-style"
+
+    def to_dict(self) -> dict[str, object]:
         """ベンチマーク結果を辞書形式で返す．"""
         result = {
             "total_epoch_time": self.total_epoch_time,
@@ -78,6 +93,7 @@ class BenchmarkResult:
             "average_loss": self.average_loss,
             "samples_per_second": self.samples_per_second,
             "batches_per_second": self.batches_per_second,
+            "data_load_method": self.data_load_method,
         }
 
         # リソース使用率情報があれば追加
@@ -400,7 +416,9 @@ class SingleEpochBenchmark:
 class TrainingBenchmarkConfig:
     """Configuration for training benchmark."""
 
-    datasource: LearningDataSource.DataSourceSpliter
+    datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None
     gpu: Optional[str] = None
     compilation: bool = False
     detect_anomaly: bool = False
@@ -419,7 +437,7 @@ class TrainingBenchmarkConfig:
     optimizer_beta2: float = 0.999
     optimizer_eps: float = 1e-8
     lr_scheduler_name: Optional[str] = None
-    warmup_batches: int = 5
+    warmup_batches: int = 10
     max_batches: Optional[int] = None
     enable_profiling: bool = False
     test_ratio: float = 0.2
@@ -427,6 +445,9 @@ class TrainingBenchmarkConfig:
     sample_ratio: Optional[float] = None
     enable_resource_monitoring: bool = False
     model_architecture: BackboneArchitecture = "resnet"
+    streaming: bool = False
+    streaming_train_source: Optional[StreamingDataSource] = None
+    streaming_val_source: Optional[StreamingDataSource] = None
 
 
 class TrainingBenchmarkUseCase:
@@ -437,46 +458,188 @@ class TrainingBenchmarkUseCase:
     def __init__(self) -> None:
         pass
 
+    def _setup_streaming_components(
+        self,
+        config: TrainingBenchmarkConfig,
+    ) -> tuple[
+        DeviceConfig,
+        tuple[DataLoader, DataLoader],
+        ModelComponents,
+    ]:
+        """Streaming用のベンチマークコンポーネントをセットアップする．
+
+        Args:
+            config: ベンチマーク設定
+
+        Returns:
+            (DeviceConfig, (train_loader, val_loader), ModelComponents)
+
+        Raises:
+            ValueError: streaming_train_source が未設定の場合
+        """
+        if config.streaming_train_source is None:
+            raise ValueError(
+                "streaming_train_source is required "
+                "when streaming=True"
+            )
+
+        if config.detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
+
+        # Device setup
+        device_config = DeviceSetup.setup_device(
+            config.gpu, config.pin_memory
+        )
+
+        # Create streaming datasets
+        train_dataset = StreamingKifDataset(
+            streaming_source=config.streaming_train_source,
+            batch_size=config.batch_size,
+            shuffle=True,
+        )
+
+        if config.streaming_val_source is not None:
+            val_dataset: torch.utils.data.IterableDataset = StreamingKifDataset(
+                streaming_source=config.streaming_val_source,
+                batch_size=config.batch_size,
+                shuffle=False,
+            )
+            n_val_files = len(
+                config.streaming_val_source.file_paths
+            )
+        else:
+            _EmptyDataset = type(
+                "_EmptyDataset",
+                (torch.utils.data.IterableDataset,),
+                {"__iter__": lambda self: iter([])},
+            )
+            val_dataset = _EmptyDataset()
+            n_val_files = 0
+
+        # Create streaming dataloaders
+        n_train_files = len(
+            config.streaming_train_source.file_paths
+        )
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=device_config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+                n_train_files=n_train_files,
+                n_val_files=n_val_files,
+                file_paths=config.streaming_train_source.file_paths,
+            )
+        )
+
+        # Model creation
+        model = ModelFactory.create_shogi_model(
+            device_config.device,
+            architecture=config.model_architecture,
+        )
+
+        # Loss functions and optimizer
+        loss_fn_policy, loss_fn_value = (
+            LossOptimizerFactory.create_loss_functions(
+                config.gce_parameter
+            )
+        )
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            config.learning_ratio,
+            config.momentum,
+            optimizer_name=config.optimizer_name,
+            betas=(
+                config.optimizer_beta1,
+                config.optimizer_beta2,
+            ),
+            eps=config.optimizer_eps,
+        )
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=config.lr_scheduler_name,
+            max_epochs=1,
+            steps_per_epoch=len(training_loader),
+        )
+
+        model_components = ModelComponents(
+            model=model,
+            loss_fn_policy=loss_fn_policy,
+            loss_fn_value=loss_fn_value,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+        self.logger.info(
+            "Streaming benchmark components setup completed"
+        )
+
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )
+
     def execute(self, config: TrainingBenchmarkConfig) -> str:
         """Execute training benchmark and return JSON results."""
         self.logger.info("Starting training benchmark use case")
 
-        # Split data into training and validation sets
-        training_datasource, validation_datasource = (
-            config.datasource.train_test_split(
-                test_ratio=config.test_ratio
+        # Setup components (streaming or map-style)
+        if (
+            config.streaming
+            and config.streaming_train_source is not None
+        ):
+            device_config, dataloaders, model_components = (
+                self._setup_streaming_components(config)
             )
-        )
+            data_load_method = "streaming"
+        else:
+            if config.datasource is None:
+                raise ValueError(
+                    "datasource is required "
+                    "when streaming=False"
+                )
 
-        # Setup all training components using shared setup module
-        cache_transforms_enabled = (
-            config.cache_transforms
-            if config.cache_transforms is not None
-            else False
-        )
-        device_config, dataloaders, model_components = (
-            TrainingSetup.setup_training_components(
-                training_datasource=training_datasource,
-                validation_datasource=validation_datasource,
-                cache_transforms=cache_transforms_enabled,
-                gpu=config.gpu,
-                model_architecture=config.model_architecture,
-                batch_size=config.batch_size,
-                dataloader_workers=config.dataloader_workers,
-                pin_memory=config.pin_memory,
-                prefetch_factor=config.prefetch_factor,
-                gce_parameter=config.gce_parameter,
-                learning_ratio=config.learning_ratio,
-                momentum=config.momentum,
-                optimizer_name=config.optimizer_name,
-                optimizer_beta1=config.optimizer_beta1,
-                optimizer_beta2=config.optimizer_beta2,
-                optimizer_eps=config.optimizer_eps,
-                lr_scheduler_name=config.lr_scheduler_name,
-                max_epochs=1,
-                detect_anomaly=config.detect_anomaly,
+            # Split data into training and validation sets
+            training_datasource, validation_datasource = (
+                config.datasource.train_test_split(
+                    test_ratio=config.test_ratio
+                )
             )
-        )
+
+            # Setup all training components using shared setup module
+            cache_transforms_enabled = (
+                config.cache_transforms
+                if config.cache_transforms is not None
+                else False
+            )
+            device_config, dataloaders, model_components = (
+                TrainingSetup.setup_training_components(
+                    training_datasource=training_datasource,
+                    validation_datasource=validation_datasource,
+                    cache_transforms=cache_transforms_enabled,
+                    gpu=config.gpu,
+                    model_architecture=config.model_architecture,
+                    batch_size=config.batch_size,
+                    dataloader_workers=config.dataloader_workers,
+                    pin_memory=config.pin_memory,
+                    prefetch_factor=config.prefetch_factor,
+                    gce_parameter=config.gce_parameter,
+                    learning_ratio=config.learning_ratio,
+                    momentum=config.momentum,
+                    optimizer_name=config.optimizer_name,
+                    optimizer_beta1=config.optimizer_beta1,
+                    optimizer_beta2=config.optimizer_beta2,
+                    optimizer_eps=config.optimizer_eps,
+                    lr_scheduler_name=config.lr_scheduler_name,
+                    max_epochs=1,
+                    detect_anomaly=config.detect_anomaly,
+                )
+            )
+            data_load_method = "map-style"
 
         if config.compilation:
             self.logger.info(
@@ -512,6 +675,9 @@ class TrainingBenchmarkUseCase:
             max_batches=config.max_batches,
             enable_profiling=config.enable_profiling,
         )
+        training_result = replace(
+            training_result, data_load_method=data_load_method
+        )
 
         # Run validation benchmark if requested
         validation_result = None
@@ -520,6 +686,10 @@ class TrainingBenchmarkUseCase:
             validation_result = benchmark.benchmark_validation(
                 validation_loader,
                 max_batches=config.max_batches,
+            )
+            validation_result = replace(
+                validation_result,
+                data_load_method=data_load_method,
             )
 
         # Calculate sample ratio estimation if provided

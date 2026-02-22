@@ -6,6 +6,9 @@ from typing import Optional
 import torch
 
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
+)
 from maou.app.utility.dataloader_benchmark import (
     BenchmarkConfig,
     DataLoaderBenchmark,
@@ -144,7 +147,9 @@ def benchmark_dataloader(
 
 
 def benchmark_training(
-    datasource: LearningDataSource.DataSourceSpliter,
+    datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
     *,
     gpu: Optional[str] = None,
     compilation: bool = False,
@@ -180,6 +185,11 @@ def benchmark_training(
     run_validation: Optional[bool] = None,
     sample_ratio: Optional[float] = None,
     enable_resource_monitoring: Optional[bool] = None,
+    streaming: bool = False,
+    streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    streaming_val_source: Optional[StreamingDataSource] = None,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -212,6 +222,9 @@ def benchmark_training(
         run_validation: Also run validation benchmark (inference only)
         sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
         enable_resource_monitoring: Enable CPU, memory, and GPU usage monitoring
+        streaming: Whether to use streaming mode for data loading
+        streaming_train_source: Streaming data source for training
+        streaming_val_source: Streaming data source for validation
 
     Returns:
         JSON string with benchmark results and recommendations
@@ -337,7 +350,7 @@ def benchmark_training(
         )
 
     if warmup_batches is None:
-        warmup_batches = 5
+        warmup_batches = 10
     elif warmup_batches < 0:
         raise ValueError(
             f"warmup_batches must be non-negative, got {warmup_batches}"
@@ -365,6 +378,17 @@ def benchmark_training(
     ):
         raise ValueError(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
+        )
+
+    # Validate streaming/datasource requirements
+    if not streaming and datasource is None:
+        raise ValueError(
+            "datasource is required when streaming is disabled"
+        )
+    if streaming and streaming_train_source is None:
+        raise ValueError(
+            "streaming_train_source is required "
+            "when streaming is enabled"
         )
 
     config = TrainingBenchmarkConfig(
@@ -395,6 +419,9 @@ def benchmark_training(
         enable_resource_monitoring=enable_resource_monitoring,
         detect_anomaly=detect_anomaly,
         model_architecture=model_architecture,
+        streaming=streaming,
+        streaming_train_source=streaming_train_source,
+        streaming_val_source=streaming_val_source,
     )
 
     use_case = TrainingBenchmarkUseCase()

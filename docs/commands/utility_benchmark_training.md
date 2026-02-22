@@ -10,6 +10,11 @@
   warmup plus capped number of batches, and optionally profiles, validates, and
   tracks resource utilization before reporting actionable summaries and
   recommendations.【F:src/maou/app/utility/training_benchmark.py†L122-L699】
+- When local `.feather` files are provided via `--stage3-data-path` and there are
+  2 or more files, streaming mode is used by default. Streaming mode uses
+  `StreamingKifDataset` and `DataLoaderFactory.create_streaming_dataloaders()` for
+  memory-efficient, file-level data loading. Use `--no-streaming` to force
+  map-style dataset loading.
 
 ## CLI options
 
@@ -37,7 +42,8 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 | `--cache-transforms/--no-cache-transforms` | Dataset transform caching | Defaults to `True` for HCPE datasources and `False` otherwise unless overridden.【F:src/maou/infra/console/utility.py†L608-L616】【F:src/maou/interface/utility_interface.py†L250-L254】 |
 | Loss & optimizer knobs (`--gce-parameter`, `--policy-loss-ratio`, `--value-loss-ratio`, `--learning-ratio`, `--momentum`, `--optimizer`, `--optimizer-beta1`, `--optimizer-beta2`, `--optimizer-eps`) | Fine-tune optimization math | Range-checked before populating the benchmark config so unstable hyperparameters never reach the loop.【F:src/maou/infra/console/utility.py†L617-L683】【F:src/maou/interface/utility_interface.py†L255-L329】 |
 | Stage 1/2 loss & head knobs (`--stage1-pos-weight`, `--stage2-pos-weight`, `--stage2-gamma-pos`, `--stage2-gamma-neg`, `--stage2-clip`, `--stage2-hidden-dim`, `--stage2-head-dropout`, `--stage2-test-ratio`) | Multi-stage training params | Accepted for CLI compatibility with `learn-model`. Includes ASL (Asymmetric Loss) parameters, Stage 2 head architecture, and per-stage loss weights. |
-| `--warmup-batches INT`, `--max-batches INT` | Scope the run | Warmup batches are excluded from averages and `max_batches` caps how many iterations execute, keeping dry runs short.【F:src/maou/infra/console/utility.py†L684-L697】【F:src/maou/app/utility/training_benchmark.py†L122-L205】 |
+| `--no-streaming` | Data loading mode | Disables streaming mode and forces map-style dataset loading. Streaming is enabled by default when 2+ local files are provided via `--stage3-data-path`. With fewer than 2 files, map-style is used automatically regardless of this flag. |
+| `--warmup-batches INT`, `--max-batches INT` | Scope the run | Warmup batches (default 10) are excluded from averages and `max_batches` caps how many iterations execute, keeping dry runs short.【F:src/maou/infra/console/utility.py†L684-L697】【F:src/maou/app/utility/training_benchmark.py†L122-L205】 |
 | `--enable-profiling` | PyTorch profiler toggle | Enables the profiler inside `TrainingLoop.run_epoch` for deeper diagnostics.【F:src/maou/infra/console/utility.py†L698-L704】【F:src/maou/app/utility/training_benchmark.py†L176-L185】 |
 | `--run-validation` | Optional validation pass | Adds an inference-only benchmark with its own timing summary and metrics.【F:src/maou/infra/console/utility.py†L705-L711】【F:src/maou/app/utility/training_benchmark.py†L492-L699】 |
 | `--sample-ratio FLOAT` | Remote sampling | Enforced to `[0.01, 1.0]`. When set, the benchmark scales time/batch metrics to estimate a full epoch (printed under “Data Sampling Estimation”).【F:src/maou/infra/console/utility.py†L713-L868】【F:src/maou/app/utility/training_benchmark.py†L501-L545】 |
@@ -45,11 +51,15 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 
 ## Execution flow
 
-1. **Datasource split** – The use case invokes `datasource.train_test_split(test_ratio)` so training and validation loaders match
-   your intended split, including sampling limits when `--sample-ratio` is used.【F:src/maou/app/utility/training_benchmark.py†L422-L427】【F:src/maou/interface/utility_interface.py†L218-L359】
-2. **Training setup** – `TrainingSetup.setup_training_components` prepares
-   DataLoaders, networks, optimizer, scheduler, and callbacks using the normalized
-   options (cache transforms, pin-memory, anomaly detection, etc.).【F:src/maou/app/utility/training_benchmark.py†L429-L458】
+1. **Data setup** – In streaming mode, the CLI splits files into train/validation
+   sets at the file level and creates `StreamingFileSource` instances. In map-style
+   mode, the use case invokes `datasource.train_test_split(test_ratio)` for
+   sample-level splitting. Both modes respect `--test-ratio` for the split ratio.
+2. **Training setup** – In streaming mode,
+   `TrainingBenchmarkUseCase._setup_streaming_components` creates streaming
+   DataLoaders via `DataLoaderFactory.create_streaming_dataloaders`. In map-style
+   mode, `TrainingSetup.setup_training_components` prepares standard DataLoaders.
+   Both paths set up the network, optimizer, scheduler, and callbacks.
 3. **Warmup & batch caps** – `SingleEpochBenchmark.benchmark_epoch` wraps the
    training loop with a `TimingCallback`, discards the first `warmup_batches` from
    averages, and optionally halts after `max_batches`.【F:src/maou/app/utility/training_benchmark.py†L122-L205】
@@ -86,11 +96,14 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
   pin-memory) so you can immediately adjust `maou learn-model`. Additional fields
   in the JSON payload (`training_metrics`, `validation_metrics`, `estimation`,
   `recommendations`) make it easy to archive benchmark results.【F:src/maou/app/utility/training_benchmark.py†L614-L699】【F:src/maou/infra/console/utility.py†L991-L1020】
+- The JSON payload includes a `data_load_method` field (`"streaming"` or
+  `"map-style"`) in both `training_metrics` and `validation_metrics`, indicating
+  which data loading strategy was used for the benchmark run.
 
 ### Example invocation
 
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 --input-bucket-name shogi-data --input-prefix hcpe \
   --input-data-name training --input-local-cache-dir /tmp/cache \
   --gpu cuda:0 \
