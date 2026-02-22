@@ -323,3 +323,28 @@ class VisionTransformer(nn.Module):
             list[nn.Module]: Individual encoder blocks (num_layers groups, default 6).
         """
         return list(self.encoder)
+
+    def preprocess_for_blocks(
+        self, x: torch.Tensor
+    ) -> torch.Tensor:
+        """入力テンソルをエンコーダブロックが期待するトークン形式に変換する．
+
+        ``_encode_tokens()`` 内のブロック前処理と同じロジック．
+        reshape → token_projection → positional_embedding → dropout の順に処理する．
+
+        Args:
+            x: バックボーン入力テンソル (batch, channels, H, W)
+
+        Returns:
+            トークンテンソル (batch, num_tokens, embed_dim)
+        """
+        batch_size = x.shape[0]
+        tokens = x.permute(0, 2, 3, 1).reshape(
+            batch_size,
+            self.config.num_tokens,
+            self.config.input_channels,
+        )
+        tokens = self.token_projection(tokens)
+        tokens = tokens + self.positional_embedding
+        tokens = self.embedding_dropout(tokens)
+        return tokens

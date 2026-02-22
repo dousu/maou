@@ -264,3 +264,19 @@ class ResNet(nn.Module):
             self.layer3,
             self.layer4,
         ]
+
+    def preprocess_for_blocks(
+        self, x: torch.Tensor
+    ) -> torch.Tensor:
+        """前処理不要．入力をそのまま返す．
+
+        ResNet は freezable groups (layer1-4) が入力テンソルを
+        直接受け取るため，前処理は不要．
+
+        Args:
+            x: バックボーン入力テンソル (batch, channels, H, W)
+
+        Returns:
+            入力テンソルをそのまま返す
+        """
+        return x

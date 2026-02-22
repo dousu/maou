@@ -231,6 +231,28 @@ class ShogiMLPMixer(nn.Module):
         """
         return list(self.blocks)
 
+    def preprocess_for_blocks(
+        self, x: torch.Tensor
+    ) -> torch.Tensor:
+        """入力テンソルをブロックが期待するトークン形式に変換する．
+
+        ``forward_features()`` 内のブロック前処理と同じロジック．
+        flatten → input_norm → embedding → dropout の順に処理する．
+
+        Args:
+            x: バックボーン入力テンソル (batch, channels, H, W)
+
+        Returns:
+            トークンテンソル (batch, num_tokens, embed_dim)
+        """
+        tokens = self._flatten_tokens(x)
+        tokens = self.input_norm(tokens)
+        tokens = self.embedding(tokens)
+        tokens = F.dropout(
+            tokens, p=self.dropout_rate, training=self.training
+        )
+        return tokens
+
 
 def print_model_summary(model: ShogiMLPMixer) -> None:
     """Print a concise summary with parameter count for the given model."""
