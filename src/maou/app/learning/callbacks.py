@@ -117,6 +117,15 @@ class TrainingCallback(Protocol):
         """Called at the end of each epoch."""
         ...
 
+    def get_postfix(self) -> dict[str, str] | None:
+        """tqdm プログレスバーに表示するメトリクスを返す．
+
+        Returns:
+            キーと値が文字列の dict，または None（表示不要の場合）．
+            例: ``{"acc": "99.5%", "loss": "0.0012"}``
+        """
+        ...
+
 
 class BaseCallback:
     """Base callback implementation with no-op methods."""
@@ -182,6 +191,10 @@ class BaseCallback:
 
     def on_epoch_end(self, epoch_idx: int) -> None:
         pass
+
+    def get_postfix(self) -> dict[str, str] | None:
+        """tqdm プログレスバーに表示するメトリクスを返す．"""
+        return None
 
 
 class LoggingCallback(BaseCallback):
@@ -1107,6 +1120,18 @@ class Stage2F1Callback(BaseCallback):
         self._total_samples = 0
         self._num_batches = 0
 
+    def get_postfix(self) -> dict[str, str] | None:
+        """Running F1 スコアと loss を tqdm 用に返す．"""
+        if self._total_samples == 0:
+            return None
+        f1 = (self._total_f1 / self._total_samples).item()
+        loss = (
+            (self._total_loss / self._num_batches).item()
+            if self._num_batches > 0
+            else 0.0
+        )
+        return {"f1": f"{f1:.4f}", "loss": f"{loss:.4f}"}
+
 
 class Stage1AccuracyCallback(BaseCallback):
     """Stage 1 (Reachable Squares) 用のバイナリ精度計算コールバック．
@@ -1181,3 +1206,17 @@ class Stage1AccuracyCallback(BaseCallback):
             self._total_loss = torch.tensor(0.0)
         self._total_elements = 0
         self._num_batches = 0
+
+    def get_postfix(self) -> dict[str, str] | None:
+        """Running accuracy と loss を tqdm 用に返す．"""
+        if self._total_elements == 0:
+            return None
+        acc = (
+            self._total_correct / self._total_elements
+        ).item()
+        loss = (
+            (self._total_loss / self._num_batches).item()
+            if self._num_batches > 0
+            else 0.0
+        )
+        return {"acc": f"{acc:.1%}", "loss": f"{loss:.4f}"}

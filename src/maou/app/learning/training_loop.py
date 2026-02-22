@@ -166,6 +166,16 @@ class TrainingLoop:
                 for callback in self.callbacks:
                     callback.on_batch_end(context)
 
+                # tqdm postfix 更新
+                if isinstance(dataloader_iter, tqdm):
+                    postfix: dict[str, str] = {}
+                    for callback in self.callbacks:
+                        cb_postfix = callback.get_postfix()
+                        if cb_postfix is not None:
+                            postfix.update(cb_postfix)
+                    if postfix:
+                        dataloader_iter.set_postfix(postfix)
+
                 # プロファイラーのステップ
                 if profiler is not None:
                     profiler.step()

@@ -434,3 +434,86 @@ class TestStage1AccuracyCallbackReset:
         # After reset + one batch: accuracy = 2/3 (only new data)
         accuracy = callback.get_epoch_accuracy()
         assert abs(accuracy - 2.0 / 3.0) < 1e-6
+
+
+class TestGetPostfix:
+    """get_postfix() メソッドのテスト."""
+
+    def test_stage1_accuracy_callback_get_postfix(self) -> None:
+        """Stage1AccuracyCallback.get_postfix() が正しい dict を返す."""
+        from maou.app.learning.callbacks import (
+            Stage1AccuracyCallback,
+            TrainingContext,
+        )
+
+        callback = Stage1AccuracyCallback()
+        batch_size = 4
+        logits = torch.tensor([[2.0] * 81] * batch_size)
+        targets = torch.ones(batch_size, 81)
+        loss = torch.tensor(0.05)
+
+        context = TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=(torch.zeros(batch_size, 9, 9), torch.zeros(batch_size, 14)),
+            labels_policy=targets,
+            labels_value=torch.zeros(batch_size, 1),
+            legal_move_mask=None,
+            outputs_policy=logits,
+            loss=loss,
+        )
+        callback.on_batch_end(context)
+
+        postfix = callback.get_postfix()
+        assert postfix is not None
+        assert "acc" in postfix
+        assert "loss" in postfix
+        assert postfix["acc"].endswith("%")
+
+    def test_stage2_f1_callback_get_postfix(self) -> None:
+        """Stage2F1Callback.get_postfix() が正しい dict を返す."""
+        from maou.app.learning.callbacks import (
+            Stage2F1Callback,
+            TrainingContext,
+        )
+
+        callback = Stage2F1Callback()
+        batch_size = 4
+        num_classes = 1496
+        logits = torch.randn(batch_size, num_classes)
+        targets = torch.zeros(batch_size, num_classes)
+        targets[:, :10] = 1.0
+        loss = torch.tensor(0.1)
+
+        context = TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=(torch.zeros(batch_size, 9, 9), torch.zeros(batch_size, 14)),
+            labels_policy=targets,
+            labels_value=torch.zeros(batch_size, 1),
+            legal_move_mask=None,
+            outputs_policy=logits,
+            loss=loss,
+        )
+        callback.on_batch_end(context)
+
+        postfix = callback.get_postfix()
+        assert postfix is not None
+        assert "f1" in postfix
+        assert "loss" in postfix
+
+    def test_get_postfix_returns_none_when_no_data(self) -> None:
+        """データなし時に get_postfix() が None を返す."""
+        from maou.app.learning.callbacks import (
+            Stage1AccuracyCallback,
+            Stage2F1Callback,
+        )
+
+        assert Stage1AccuracyCallback().get_postfix() is None
+        assert Stage2F1Callback().get_postfix() is None
+
+    def test_base_callback_get_postfix_returns_none(self) -> None:
+        """BaseCallback.get_postfix() がデフォルトで None を返す."""
+        from maou.app.learning.callbacks import BaseCallback
+
+        assert BaseCallback().get_postfix() is None
