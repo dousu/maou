@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
     SingleStageTrainingLoop,
+    Stage1DatasetAdapter,
     StageConfig,
     TrainingStage,
 )
@@ -21,6 +22,32 @@ from maou.app.learning.network import (
 )
 
 
+class _PairedDataset(Dataset):
+    """TensorDataset を ((board, hand), target) 形式で返すラッパー．
+
+    Stage1DatasetAdapter でラップするために，
+    per-sample で (inputs, target) のタプルを返す必要がある．
+    """
+
+    def __init__(
+        self,
+        board: torch.Tensor,
+        hand: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> None:
+        self._board = board
+        self._hand = hand
+        self._targets = targets
+
+    def __len__(self) -> int:
+        return self._board.size(0)
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+        return (self._board[idx], self._hand[idx]), self._targets[idx]
+
+
 def _make_dummy_dataloader(
     *,
     batch_size: int = 4,
@@ -30,17 +57,57 @@ def _make_dummy_dataloader(
     target_dim: int = 81,
     hand_dim: int = PIECES_IN_HAND_VECTOR_SIZE,
     stage: TrainingStage = TrainingStage.REACHABLE_SQUARES,
+    wrap_stage1_adapter: bool = False,
 ) -> DataLoader:
     """ダミーの (board_tensor, hand_tensor), target データローダーを作成する．
 
     Stage 1 は ((board_tensor, hand_tensor), target) を返す．
     Stage 2 は TrainingLoop 互換形式 ((board_tensor, hand_tensor), (target, dummy_value, None)) を返す．
+
+    wrap_stage1_adapter=True の場合，Stage 1 のデータセットを
+    Stage1DatasetAdapter でラップし，TrainingLoop 互換の 3-tuple 形式
+    ((board, hand), (target, dummy_value, None)) を返す．
     """
     board_tensor = torch.randint(
         0, board_vocab_size, (num_samples, *board_size)
     )
     hand_tensor = torch.randn(num_samples, hand_dim)
     targets = torch.zeros(num_samples, target_dim)
+
+    if wrap_stage1_adapter and stage == TrainingStage.REACHABLE_SQUARES:
+        paired_dataset: Dataset = _PairedDataset(
+            board_tensor, hand_tensor, targets
+        )
+        adapted_dataset = Stage1DatasetAdapter(paired_dataset)
+
+        def stage1_collate_fn(
+            batch: list[
+                tuple[
+                    tuple[torch.Tensor, torch.Tensor],
+                    tuple[torch.Tensor, torch.Tensor, None],
+                ]
+            ],
+        ) -> tuple[
+            tuple[torch.Tensor, torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]:
+            """Stage1DatasetAdapter の出力を collate する．
+
+            default_collate は None を処理できないため，
+            legal_move_mask=None を手動で伝播させる．
+            """
+            inputs_list, labels_list = zip(*batch)
+            boards = torch.stack([inp[0] for inp in inputs_list])
+            hands = torch.stack([inp[1] for inp in inputs_list])
+            tgts = torch.stack([lbl[0] for lbl in labels_list])
+            vals = torch.stack([lbl[1] for lbl in labels_list])
+            return (boards, hands), (tgts, vals, None)
+
+        return DataLoader(
+            adapted_dataset,
+            batch_size=batch_size,
+            collate_fn=stage1_collate_fn,
+        )
 
     dataset = TensorDataset(board_tensor, hand_tensor, targets)
 
@@ -451,10 +518,12 @@ class TestThresholdErrorMessages:
 
             target_dim = MOVE_LABELS_NUM
 
+        wrap_adapter = stage == TrainingStage.REACHABLE_SQUARES
         dataloader = _make_dummy_dataloader(
             board_vocab_size=32,
             target_dim=target_dim,
             stage=stage,
+            wrap_stage1_adapter=wrap_adapter,
         )
         return StageConfig(
             stage=stage,

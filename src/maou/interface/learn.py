@@ -21,6 +21,7 @@ from maou.app.learning.dl import (
 )
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
+    Stage1DatasetAdapter,
     StageConfig,
     StageResult,
     TrainingStage,
@@ -35,6 +36,7 @@ from maou.app.learning.setup import (
     ModelFactory,
 )
 from maou.app.learning.streaming_dataset import (
+    Stage1StreamingAdapter,
     Stage2StreamingAdapter,
     StreamingDataSource,
     StreamingStage1Dataset,
@@ -579,7 +581,8 @@ def _run_stage1(
     datasource = data_config.create_datasource()
     train_ds, _ = datasource.train_test_split(test_ratio=0.0)
 
-    dataset = Stage1Dataset(datasource=train_ds)
+    raw_dataset = Stage1Dataset(datasource=train_ds)
+    dataset = Stage1DatasetAdapter(raw_dataset)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -748,11 +751,12 @@ def _run_stage1_streaming(
     Returns:
         Stage 1 の訓練結果
     """
-    dataset = StreamingStage1Dataset(
+    raw_dataset = StreamingStage1Dataset(
         streaming_source=streaming_source,
         batch_size=batch_size,
         shuffle=True,
     )
+    dataset = Stage1StreamingAdapter(raw_dataset)
     dataloader = DataLoader(
         dataset,
         batch_size=None,

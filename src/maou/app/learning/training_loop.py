@@ -833,3 +833,24 @@ class Stage2TrainingLoop(TrainingLoop):
         return self.loss_fn_policy(
             context.outputs_policy, context.labels_policy
         )
+
+
+class Stage1TrainingLoop(TrainingLoop):
+    """Stage 1 (Reachable Squares) 用の TrainingLoop．
+
+    ReachableSquaresLoss (BCEWithLogitsLoss) は生 logits を直接受け取るため，
+    親クラスの log_softmax とポリシーターゲット正規化をスキップする．
+    Stage2TrainingLoop と同じオーバーライドパターン．
+    """
+
+    def _compute_policy_loss(
+        self, context: TrainingContext
+    ) -> torch.Tensor:
+        """生logitsを直接 loss_fn_policy に渡す．"""
+        if context.outputs_policy is None:
+            raise RuntimeError(
+                "Policy outputs are required before computing the loss"
+            )
+        return self.loss_fn_policy(
+            context.outputs_policy, context.labels_policy
+        )

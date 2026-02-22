@@ -635,6 +635,47 @@ class Stage2StreamingAdapter(IterableDataset):
         self._dataset.set_epoch(epoch)
 
 
+class Stage1StreamingAdapter(IterableDataset):
+    """StreamingStage1Dataset を TrainingLoop の入力形式に変換するアダプタ．
+
+    StreamingStage1Dataset は ((board, hand), reachable_squares) を yield するが，
+    TrainingLoop._unpack_batch() は
+    ((board, hand), (labels_policy, labels_value, legal_move_mask))
+    を期待する．
+
+    Args:
+        dataset: ラップする StreamingStage1Dataset
+    """
+
+    def __init__(
+        self, dataset: "StreamingStage1Dataset"
+    ) -> None:
+        self._dataset = dataset
+
+    def __len__(self) -> int:
+        """tqdm 用のバッチ数推定を委譲する．"""
+        return len(self._dataset)
+
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            tuple[torch.Tensor, torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]
+    ]:
+        for inputs, targets in self._dataset:
+            dummy_value = torch.zeros(
+                targets.shape[0], 1, dtype=torch.float32
+            )
+            yield (inputs, (targets, dummy_value, None))
+
+    def set_epoch(self, epoch: int) -> None:
+        """エポックシードの委譲．"""
+        if hasattr(self._dataset, "set_epoch"):
+            self._dataset.set_epoch(epoch)
+
+
 # ============================================================================
 # Batch yield helpers
 # ============================================================================

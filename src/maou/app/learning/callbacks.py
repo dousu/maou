@@ -1106,3 +1106,78 @@ class Stage2F1Callback(BaseCallback):
             self._total_loss = torch.tensor(0.0)
         self._total_samples = 0
         self._num_batches = 0
+
+
+class Stage1AccuracyCallback(BaseCallback):
+    """Stage 1 (Reachable Squares) 用のバイナリ精度計算コールバック．
+
+    ``on_batch_end`` で element-wise バイナリ精度を GPU テンソル上に蓄積し，
+    エポック終了後に ``get_epoch_accuracy()`` で取得する．
+
+    GPU同期(`.item()`)はエポック終了時のみ行い，
+    バッチごとのGPUパイプラインストールを回避する．
+
+    精度計算ロジックは ``SingleStageTrainingLoop._train_epoch()``
+    のStage 1パス(element-wise binary classification)と同一:
+    ``(sigmoid(logits) > 0.5) == targets.bool()``
+    """
+
+    def __init__(self) -> None:
+        self._total_correct: torch.Tensor = torch.tensor(0.0)
+        self._total_elements: int = 0
+        self._total_loss: torch.Tensor = torch.tensor(0.0)
+        self._num_batches: int = 0
+        self._device_initialized: bool = False
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if not self._device_initialized:
+            self._total_correct = self._total_correct.to(device)
+            self._total_loss = self._total_loss.to(device)
+            self._device_initialized = True
+
+    def on_batch_end(self, context: TrainingContext) -> None:
+        """バッチごとに精度とlossをGPUテンソル上に蓄積する."""
+        if context.loss is not None:
+            self._ensure_device(context.loss.device)
+            self._total_loss += context.loss.detach()
+            self._num_batches += 1
+
+        if context.outputs_policy is None:
+            return
+
+        with torch.no_grad():
+            predictions = (
+                torch.sigmoid(context.outputs_policy) > 0.5
+            )
+            targets = context.labels_policy.bool()
+            correct = (predictions == targets).float().sum()
+            self._total_correct += correct
+            self._total_elements += (
+                context.labels_policy.numel()
+            )
+
+    def get_epoch_accuracy(self) -> float:
+        """エポックの element-wise バイナリ精度を返す."""
+        if self._total_elements == 0:
+            return 0.0
+        return (
+            self._total_correct / self._total_elements
+        ).item()
+
+    def get_average_loss(self) -> float:
+        """エポックの平均lossを返す."""
+        if self._num_batches == 0:
+            return 0.0
+        return (self._total_loss / self._num_batches).item()
+
+    def reset(self) -> None:
+        """エポック間でカウンタをリセットする."""
+        if self._device_initialized:
+            self._total_correct.zero_()
+            self._total_loss.zero_()
+        else:
+            self._total_correct = torch.tensor(0.0)
+            self._total_loss = torch.tensor(0.0)
+        self._total_elements = 0
+        self._num_batches = 0
