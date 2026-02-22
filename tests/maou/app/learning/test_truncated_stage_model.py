@@ -199,6 +199,32 @@ class TestTruncatedStageModelGradientFlow:
                     p.grad is None or p.grad.abs().sum() == 0
                 ), "Excluded group should have no gradients"
 
+    def test_excluded_groups_requires_grad_false(self) -> None:
+        """除外グループのパラメータが requires_grad=False であることを検証する．"""
+        backbone = _make_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        groups = backbone.backbone.get_freezable_groups()
+
+        # 使用グループ (layer1, layer2) は requires_grad=True
+        for group in groups[:2]:
+            for p in group.parameters():
+                assert p.requires_grad, (
+                    "Used group should have requires_grad=True"
+                )
+
+        # 除外グループ (layer3, layer4) は requires_grad=False
+        for group in groups[2:]:
+            for p in group.parameters():
+                assert not p.requires_grad, (
+                    "Excluded group should have requires_grad=False"
+                )
+
 
 class TestTruncatedStageModelValidation:
     """TruncatedStageModel のバリデーションテスト．"""

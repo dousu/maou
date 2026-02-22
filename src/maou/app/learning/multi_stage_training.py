@@ -290,6 +290,11 @@ class TruncatedStageModel(torch.nn.Module):
 
         self.head = head
 
+        # 除外グループのパラメータを凍結してメモリ浪費を防ぐ
+        for group in groups[n_use:]:
+            for param in group.parameters():
+                param.requires_grad = False
+
     @staticmethod
     def _compute_output_channels(
         partial: nn.Module,
@@ -452,9 +457,12 @@ def run_stage1_with_training_loop(
         logger=_logger,
     )
 
-    # Optimizer
+    # Optimizer (requires_grad のみ含める: TruncatedStageModel 時の除外グループを除く)
+    trainable_params = [
+        p for p in model.parameters() if p.requires_grad
+    ]
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=effective_lr
+        trainable_params, lr=effective_lr
     )
 
     # Callbacks
@@ -646,9 +654,12 @@ def run_stage2_with_training_loop(
         logger=_logger,
     )
 
-    # Optimizer
+    # Optimizer (requires_grad のみ含める: TruncatedStageModel 時の除外グループを除く)
+    trainable_params = [
+        p for p in model.parameters() if p.requires_grad
+    ]
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=effective_lr
+        trainable_params, lr=effective_lr
     )
 
     # Callbacks
