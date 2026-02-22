@@ -16,7 +16,10 @@ from torch.utils.data import DataLoader, Dataset
 from torchinfo import summary
 from tqdm.auto import tqdm
 
-from maou.app.learning.compilation import compile_module
+from maou.app.learning.compilation import (
+    compile_module,
+    warmup_compiled_model,
+)
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.setup import (
     ModelFactory,
@@ -284,7 +287,17 @@ class MaskedAutoencoderPretraining:
         )
         training_model: nn.Module
         if resolved_options.compilation:
+            self.logger.info(
+                "Compiling MAE model with torch.compile "
+                "(dynamic shapes enabled)"
+            )
             training_model = compile_module(model, dynamic=True)
+            dummy = torch.zeros(
+                resolved_options.batch_size,
+                model._flattened_size,
+                device=device,
+            )
+            warmup_compiled_model(training_model, dummy)
         else:
             training_model = model
         optimizer = torch.optim.Adam(

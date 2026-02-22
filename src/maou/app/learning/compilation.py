@@ -75,3 +75,47 @@ def compile_module(
         )
         return module
     return cast(torch.nn.Module, compiled)
+
+
+def warmup_compiled_model(
+    model: torch.nn.Module,
+    dummy_input: object,
+) -> None:
+    """ダミーフォワードパスで torch.compile のコンパイルを事前完了させる．
+
+    torch.compile は遅延コンパイルのため，最初の forward パスで
+    コンパイルが実行される．tqdm 開始前にこの関数を呼び出すことで，
+    速度表示への影響を防ぐ．
+
+    eval モードと ``torch.no_grad`` で実行するため，学習への影響はない．
+
+    Args:
+        model: コンパイル済みモジュール．
+        dummy_input: モデルの forward に渡すダミー入力．
+    """
+    import time
+
+    logger.info(
+        "torch.compile warmup: triggering compilation..."
+    )
+    was_training = model.training
+    model.eval()
+    start = time.monotonic()
+    try:
+        with torch.no_grad():
+            model(dummy_input)
+    except _FALLBACK_EXCEPTIONS as error:
+        logger.warning(
+            "torch.compile warmup failed with %s, "
+            "compilation will occur during training",
+            error,
+        )
+        return
+    finally:
+        model.train(was_training)
+    elapsed = time.monotonic() - start
+    logger.info(
+        "torch.compile warmup completed in %.1fs - "
+        "model is compiled and ready",
+        elapsed,
+    )

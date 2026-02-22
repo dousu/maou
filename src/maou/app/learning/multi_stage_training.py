@@ -198,6 +198,7 @@ class SingleStageTrainingLoop:
         if self.config.compilation:
             from maou.app.learning.compilation import (
                 compile_module,
+                warmup_compiled_model,
             )
 
             self.logger.info(
@@ -210,6 +211,19 @@ class SingleStageTrainingLoop:
                 "Compiling head model with torch.compile"
             )
             self.head = compile_module(self.head)
+            # Warmup: backbone + head を一括コンパイル
+            dummy_board = torch.zeros(
+                self.config.actual_batch_size,
+                9,
+                9,
+                dtype=torch.int64,
+                device=self.device,
+            )
+            with torch.no_grad():
+                dummy_features = self.model.forward_features(
+                    dummy_board
+                )
+            warmup_compiled_model(self.head, dummy_features)
 
         # Mixed precision scaler for GPU training
         self.scaler: torch.amp.GradScaler | None
@@ -694,12 +708,21 @@ def run_stage2_with_training_loop(
     if config.compilation:
         from maou.app.learning.compilation import (
             compile_module,
+            warmup_compiled_model,
         )
 
         _logger.info(
             "Compiling Stage 2 model with torch.compile"
         )
         model = cast(Stage2ModelAdapter, compile_module(model))
+        dummy_board = torch.zeros(
+            config.actual_batch_size,
+            9,
+            9,
+            dtype=torch.int64,
+            device=device,
+        )
+        warmup_compiled_model(model, (dummy_board, None))
 
     # Sqrt scaling for larger batch sizes
     effective_lr = config.learning_rate

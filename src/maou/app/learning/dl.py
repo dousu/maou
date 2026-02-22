@@ -27,7 +27,10 @@ from maou.app.learning.callbacks import (
     ValidationCallback,
     ValidationMetrics,
 )
-from maou.app.learning.compilation import compile_module
+from maou.app.learning.compilation import (
+    compile_module,
+    warmup_compiled_model,
+)
 from maou.app.learning.dataset import DataSource
 from maou.app.learning.model_io import ModelIO
 from maou.app.learning.network import (
@@ -282,11 +285,20 @@ class Learning:
         # Compile after freeze + optimizer setup
         if config.compilation:
             self.logger.info(
-                "Compiling model with torch.compile (dynamic shapes disabled)"
+                "Compiling model with torch.compile "
+                "(dynamic shapes disabled)"
             )
             self.model = cast(
                 Network, compile_module(self.model)
             )
+            dummy = torch.zeros(
+                config.batch_size,
+                9,
+                9,
+                dtype=torch.int64,
+                device=self.device,
+            )
+            warmup_compiled_model(self.model, dummy)
         self.__train()
 
         train_ds = self.training_loader.dataset
