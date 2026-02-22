@@ -107,7 +107,6 @@ def test_training_setup_uses_adamw_optimizer() -> None:
         TrainingSetup.setup_training_components(
             training_datasource=datasource,
             validation_datasource=datasource,
-            datasource_type="preprocess",
             gpu="cpu",
             batch_size=2,
             dataloader_workers=0,
@@ -134,7 +133,6 @@ def test_training_setup_supports_mlp_mixer_backbone() -> None:
         TrainingSetup.setup_training_components(
             training_datasource=datasource,
             validation_datasource=datasource,
-            datasource_type="preprocess",
             gpu="cpu",
             batch_size=2,
             dataloader_workers=0,
@@ -163,7 +161,6 @@ def test_training_setup_creates_warmup_cosine_decay_scheduler() -> (
         TrainingSetup.setup_training_components(
             training_datasource=datasource,
             validation_datasource=datasource,
-            datasource_type="preprocess",
             gpu="cpu",
             batch_size=2,
             dataloader_workers=0,
@@ -217,7 +214,6 @@ def test_training_setup_creates_cosine_annealing_scheduler() -> (
         TrainingSetup.setup_training_components(
             training_datasource=datasource,
             validation_datasource=datasource,
-            datasource_type="preprocess",
             gpu="cpu",
             batch_size=2,
             dataloader_workers=0,
@@ -267,7 +263,7 @@ def test_kifdataset_caches_transform_results_when_enabled(
     assert len(transform.calls) == len(datasource)
 
 
-def test_training_setup_enables_cache_for_hcpe_by_default(
+def test_training_setup_disables_cache_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_flags: list[bool] = []
@@ -303,7 +299,6 @@ def test_training_setup_enables_cache_for_hcpe_by_default(
         cls: type[DatasetFactory],
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        datasource_type: str,
         cache_transforms: bool = False,
     ) -> tuple[_StubDataset, _StubDataset]:
         cache_flags.append(cache_transforms)
@@ -320,7 +315,6 @@ def test_training_setup_enables_cache_for_hcpe_by_default(
     TrainingSetup.setup_training_components(
         training_datasource=datasource,
         validation_datasource=datasource,
-        datasource_type="hcpe",
         gpu="cpu",
         batch_size=2,
         dataloader_workers=0,
@@ -332,7 +326,7 @@ def test_training_setup_enables_cache_for_hcpe_by_default(
         optimizer_eps=1e-7,
     )
 
-    assert cache_flags == [True]
+    assert cache_flags == [False]
 
 
 def test_training_setup_respects_cache_transforms_override(
@@ -371,7 +365,6 @@ def test_training_setup_respects_cache_transforms_override(
         cls: type[DatasetFactory],
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        datasource_type: str,
         cache_transforms: bool = False,
     ) -> tuple[_StubDataset, _StubDataset]:
         cache_flags.append(cache_transforms)
@@ -388,7 +381,6 @@ def test_training_setup_respects_cache_transforms_override(
     TrainingSetup.setup_training_components(
         training_datasource=datasource,
         validation_datasource=datasource,
-        datasource_type="hcpe",
         cache_transforms=False,
         gpu="cpu",
         batch_size=2,
@@ -424,7 +416,6 @@ def test_training_setup_disables_anomaly_detection_by_default(
     TrainingSetup.setup_training_components(
         training_datasource=datasource,
         validation_datasource=datasource,
-        datasource_type="preprocess",
         gpu="cpu",
         batch_size=2,
         dataloader_workers=0,
@@ -459,7 +450,6 @@ def test_training_setup_enables_anomaly_detection_when_requested(
     TrainingSetup.setup_training_components(
         training_datasource=datasource,
         validation_datasource=datasource,
-        datasource_type="preprocess",
         gpu="cpu",
         batch_size=2,
         dataloader_workers=0,

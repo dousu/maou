@@ -23,7 +23,6 @@ def test_move_inputs_to_device_handles_nested_structures() -> (
 ):
     config = BenchmarkConfig(
         datasource=_DummyDataSource(),
-        datasource_type="hcpe",
         batch_size=1,
         device=torch.device("cpu"),
         pin_memory=False,

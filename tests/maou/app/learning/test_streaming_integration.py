@@ -160,7 +160,6 @@ class TestLearningOptionStreaming:
         mock_splitter = MagicMock()
         option = Learning.LearningOption(
             datasource=mock_splitter,
-            datasource_type="preprocess",
             compilation=False,
             test_ratio=0.2,
             epoch=1,
@@ -192,7 +191,6 @@ class TestLearningOptionStreaming:
         mock_splitter = MagicMock()
         option = Learning.LearningOption(
             datasource=mock_splitter,
-            datasource_type="preprocess",
             compilation=False,
             test_ratio=0.2,
             epoch=1,
@@ -234,7 +232,6 @@ class TestSetupStreamingComponents:
         mock_splitter = MagicMock()
         option = Learning.LearningOption(
             datasource=mock_splitter,
-            datasource_type="preprocess",
             compilation=False,
             test_ratio=0.2,
             epoch=1,
@@ -270,7 +267,6 @@ class TestSetupStreamingComponents:
         mock_splitter = MagicMock()
         option = Learning.LearningOption(
             datasource=mock_splitter,
-            datasource_type="preprocess",
             compilation=False,
             test_ratio=0.2,
             epoch=1,
@@ -310,7 +306,6 @@ class TestSetupStreamingComponents:
         val_source = FakePreprocessingSource()
         option = Learning.LearningOption(
             datasource=mock_splitter,
-            datasource_type="preprocess",
             compilation=False,
             test_ratio=0.2,
             epoch=1,

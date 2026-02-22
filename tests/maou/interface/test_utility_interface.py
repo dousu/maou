@@ -39,7 +39,6 @@ def test_benchmark_training_detect_anomaly_flag(
     datasource = _DummyDataSource()
     result = utility_interface.benchmark_training(
         datasource=datasource,
-        datasource_type="hcpe",
         detect_anomaly=True,
     )
 
