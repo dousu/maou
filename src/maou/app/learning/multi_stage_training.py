@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, cast
 
 import torch
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from maou.app.learning.network import (
@@ -222,6 +223,123 @@ class Stage2ModelAdapter(torch.nn.Module):
         return logits, dummy_value
 
 
+class TruncatedStageModel(torch.nn.Module):
+    """層分離時の Stage 1/2 用モデル．
+
+    バックボーンの最初の ``(total_groups - trainable_layers)`` 個のグループのみを使い，
+    投射層を経由してヘッドに接続する．Stage 3 で訓練する末尾グループは
+    forward pass に含めない．
+
+    ResNet アーキテクチャのみ対応．
+
+    Args:
+        backbone: 共有バックボーンネットワーク (ResNet のみ)
+        head: Stage 1 or Stage 2 用のヘッドモジュール
+        trainable_layers: Stage 3 で訓練する末尾グループ数
+    """
+
+    def __init__(
+        self,
+        backbone: HeadlessNetwork,
+        head: torch.nn.Module,
+        trainable_layers: int,
+    ) -> None:
+        super().__init__()
+
+        if backbone.architecture != "resnet":
+            msg = (
+                "TruncatedStageModel is only supported for ResNet "
+                f"architecture, got '{backbone.architecture}'."
+            )
+            raise TypeError(msg)
+
+        groups = backbone.backbone.get_freezable_groups()
+        total = len(groups)
+
+        if trainable_layers >= total:
+            msg = (
+                f"trainable_layers ({trainable_layers}) must be less "
+                f"than the total number of backbone groups ({total}). "
+                f"No groups would remain for Stage 1/2 training."
+            )
+            raise ValueError(msg)
+
+        n_use = total - trainable_layers
+
+        # HeadlessNetwork の embedding/hand_projection を参照
+        self.backbone = backbone
+
+        # 使用するグループの Sequential を構成 (元オブジェクトへの参照)
+        self.partial_backbone = nn.Sequential(*groups[:n_use])
+
+        # 投射層: 中間出力 -> embedding_dim
+        # backbone の実入力チャンネル = embedding + hand_projection
+        backbone_in_ch = (
+            backbone._embedding_channels
+            + backbone._hand_projection_dim
+        )
+        truncated_out_ch = self._compute_output_channels(
+            self.partial_backbone,
+            backbone_in_ch,
+            backbone._board_size,
+        )
+        self.projection_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.projection_linear = nn.Linear(
+            truncated_out_ch, backbone.embedding_dim
+        )
+
+        self.head = head
+
+    @staticmethod
+    def _compute_output_channels(
+        partial: nn.Module,
+        input_channels: int,
+        board_size: tuple[int, int],
+    ) -> int:
+        """ダミー入力を通して partial backbone の出力チャンネル数を推定する．"""
+        with torch.no_grad():
+            dummy = torch.zeros(1, input_channels, *board_size)
+            out = partial(dummy)
+        return int(out.shape[1])
+
+    def forward(
+        self, inputs: tuple[torch.Tensor, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """フォワードパスを実行し，(policy, dummy_value) を返す．
+
+        HeadlessNetwork の embedding 処理を再利用し，
+        partial backbone → projection → head の順に処理する．
+
+        Args:
+            inputs: (board, hand) のタプル
+
+        Returns:
+            (logits, dummy_value) のタプル
+        """
+        board_tensor, hand_tensor = (
+            self.backbone._separate_inputs(inputs)
+        )
+        embedded = self.backbone._prepare_inputs(board_tensor)
+
+        if self.backbone._hand_projection is not None:
+            combined = self.backbone._combine_board_and_hand(
+                embedded, hand_tensor
+            )
+        else:
+            combined = embedded
+
+        # partial backbone -> pool -> project -> head
+        features = self.partial_backbone(combined)
+        pooled = self.projection_pool(features)
+        projected = torch.flatten(pooled, 1)
+        projected = self.projection_linear(projected)
+        logits = self.head(projected)
+        dummy_value = torch.zeros(
+            logits.shape[0], 1, device=logits.device
+        )
+        return logits, dummy_value
+
+
 def _compute_effective_lr(
     learning_rate: float,
     actual_batch_size: int,
@@ -262,6 +380,7 @@ def run_stage1_with_training_loop(
     backbone: HeadlessNetwork,
     config: StageConfig,
     device: torch.device,
+    trainable_layers: int | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[StageResult, ReachableSquaresHead]:
     """TrainingLoop を使用して Stage 1 (Reachable Squares) を学習する．
@@ -297,7 +416,12 @@ def run_stage1_with_training_loop(
     )
 
     # Model adapter (TrainingLoop 互換)
-    model = Stage1ModelAdapter(backbone, reachable_head)
+    if trainable_layers is not None and trainable_layers > 0:
+        model: torch.nn.Module = TruncatedStageModel(
+            backbone, reachable_head, trainable_layers
+        )
+    else:
+        model = Stage1ModelAdapter(backbone, reachable_head)
     model.to(device)
 
     # torch.compile (オプション)
@@ -449,6 +573,7 @@ def run_stage2_with_training_loop(
     backbone: HeadlessNetwork,
     config: StageConfig,
     device: torch.device,
+    trainable_layers: int | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[StageResult, LegalMovesHead]:
     """TrainingLoop を使用して Stage 2 (Legal Moves) を学習する．
@@ -485,7 +610,12 @@ def run_stage2_with_training_loop(
     )
 
     # Model adapter (TrainingLoop 互換)
-    model = Stage2ModelAdapter(backbone, legal_moves_head)
+    if trainable_layers is not None and trainable_layers > 0:
+        model: torch.nn.Module = TruncatedStageModel(
+            backbone, legal_moves_head, trainable_layers
+        )
+    else:
+        model = Stage2ModelAdapter(backbone, legal_moves_head)
     model.to(device)
 
     # torch.compile (オプション)
@@ -668,6 +798,28 @@ class MultiStageTrainingOrchestrator:
         self.device = device
         self.model_dir = model_dir
         self.trainable_layers = trainable_layers
+
+        if (
+            trainable_layers is not None
+            and trainable_layers > 0
+        ):
+            if backbone.architecture != "resnet":
+                msg = (
+                    "Layer separation (trainable_layers) is only "
+                    "supported for ResNet architecture, "
+                    f"got '{backbone.architecture}'."
+                )
+                raise TypeError(msg)
+            groups = backbone.backbone.get_freezable_groups()
+            if trainable_layers >= len(groups):
+                msg = (
+                    f"trainable_layers ({trainable_layers}) must be "
+                    f"less than total backbone groups "
+                    f"({len(groups)}). No groups would remain "
+                    f"for Stage 1/2 training."
+                )
+                raise ValueError(msg)
+
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
     def run_all_stages(
@@ -707,6 +859,7 @@ class MultiStageTrainingOrchestrator:
                     backbone=self.backbone,
                     config=stage1_config,
                     device=self.device,
+                    trainable_layers=self.trainable_layers,
                     logger=self.logger,
                 )
             )
@@ -751,6 +904,7 @@ class MultiStageTrainingOrchestrator:
                     backbone=self.backbone,
                     config=stage2_config,
                     device=self.device,
+                    trainable_layers=self.trainable_layers,
                     logger=self.logger,
                 )
             )

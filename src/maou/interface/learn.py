@@ -1060,7 +1060,9 @@ def learn_multi_stage(
         optimizer_beta2: AdamW beta2 for Stage 3
         optimizer_eps: AdamW epsilon for Stage 3
         freeze_backbone: Freeze backbone in Stage 3
-        trainable_layers: Trainable backbone layers for Stage 3
+        trainable_layers: Number of trailing backbone groups to keep trainable
+            in Stage 3. When set with multi-stage, enables layer separation:
+            Stage 1/2 train only the first (total - N) groups via truncated model
         log_dir: Log directory for Stage 3
         cloud_storage: Cloud storage for Stage 3 model uploads
         input_cache_mode: Cache strategy for Stage 3 inputs
@@ -1142,6 +1144,7 @@ def learn_multi_stage(
         backbone=backbone,
         device=device,
         model_dir=model_dir,
+        trainable_layers=trainable_layers,
     )
 
     # Format results as JSON
