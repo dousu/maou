@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from maou.app.learning.setup import WarmupCosineDecayScheduler
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_scheduler_advances_with_start_epoch() -> None:
     """LR scheduler should advance when start_epoch > 0."""
 
@@ -34,6 +36,7 @@ def test_scheduler_advances_with_start_epoch() -> None:
     )  # Cosine annealing decreases LR
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_warmup_cosine_decay_scheduler_advances() -> None:
     """WarmupCosineDecayScheduler should advance correctly with per-step."""
 
@@ -83,6 +86,7 @@ def test_warmup_cosine_decay_scheduler_advances() -> None:
     assert lrs[2] > lrs[-1]  # Decay: decreasing
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_scheduler_state_after_multiple_steps() -> None:
     """Verify scheduler state is consistent after multiple steps."""
 

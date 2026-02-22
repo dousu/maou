@@ -162,6 +162,18 @@ testpaths = ["tests"]
 addopts = [
     "--import-mode=importlib",
 ]
+filterwarnings = [
+    # #1: DataLoader worker数超過 (DevContainer CPU制約)
+    "ignore::UserWarning:torch.utils.data.dataloader",
+    # #2: Polars cast時のNaN→int変換 (テストデータのNULLフィールド)
+    "ignore:invalid value encountered in cast:RuntimeWarning",
+    # #3: ONNX export API非推奨 (PyTorch外部依存)
+    "ignore::DeprecationWarning:torch.onnx",
+    # #5: fork() in multithreaded context (spawn移行後の残留警告対策)
+    "ignore::DeprecationWarning:multiprocessing.popen_fork",
+    # #6: pin_memory on CPU-only (テスト環境制約)
+    "ignore:.*pin_memory.*:UserWarning",
+]
 
 [tool.mypy]
 disallow_untyped_defs = true

@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import contextlib
 import logging
+import multiprocessing
 import queue
 import tempfile
 import threading
@@ -647,7 +648,8 @@ class PreProcess:
                 merge_thread.start()
 
                 with ProcessPoolExecutor(
-                    max_workers=max_workers
+                    max_workers=max_workers,
+                    mp_context=multiprocessing.get_context("spawn"),
                 ) as executor:
                     futures: dict = {}
                     data_iterator = iter(
