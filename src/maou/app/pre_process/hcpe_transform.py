@@ -649,7 +649,9 @@ class PreProcess:
 
                 with ProcessPoolExecutor(
                     max_workers=max_workers,
-                    mp_context=multiprocessing.get_context("spawn"),
+                    mp_context=multiprocessing.get_context(
+                        "spawn"
+                    ),
                 ) as executor:
                     futures: dict = {}
                     data_iterator = iter(
