@@ -205,9 +205,7 @@ class TestTruncatedStageModelGradientFlow:
         head = ReachableSquaresHead(
             input_dim=backbone.embedding_dim,
         )
-        TruncatedStageModel(
-            backbone, head, trainable_layers=2
-        )
+        TruncatedStageModel(backbone, head, trainable_layers=2)
 
         groups = backbone.backbone.get_freezable_groups()
 
@@ -257,29 +255,27 @@ class TestTruncatedStageModelValidation:
                 backbone, head, trainable_layers=5
             )
 
-    def test_non_resnet_architecture_raises_type_error(
+    def test_mlp_mixer_architecture_accepted(
         self,
     ) -> None:
-        """ResNet 以外のアーキテクチャで TypeError が発生することを検証する．"""
+        """MLP-Mixer アーキテクチャが受け入れられることを検証する．"""
         backbone = HeadlessNetwork(
             board_vocab_size=32,
             embedding_dim=64,
             architecture="mlp-mixer",
             architecture_config={
                 "embed_dim": 128,
-                "depth": 2,
+                "depth": 4,
             },
         )
         head = ReachableSquaresHead(
             input_dim=backbone.embedding_dim,
         )
 
-        with pytest.raises(
-            TypeError, match="only supported for ResNet"
-        ):
-            TruncatedStageModel(
-                backbone, head, trainable_layers=2
-            )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+        assert not model._is_resnet
 
 
 class TestOrchestratorValidation:
@@ -325,29 +321,27 @@ class TestOrchestratorValidation:
                 trainable_layers=4,
             )
 
-    def test_non_resnet_with_trainable_layers_raises_type_error(
+    def test_mlp_mixer_with_trainable_layers_accepted(
         self, tmp_path: pytest.TempPathFactory
     ) -> None:
-        """ResNet 以外 + trainable_layers > 0 で TypeError を検証する．"""
+        """MLP-Mixer + trainable_layers > 0 で orchestrator が受け入れられることを検証する．"""
         backbone = HeadlessNetwork(
             board_vocab_size=32,
             embedding_dim=64,
             architecture="mlp-mixer",
             architecture_config={
                 "embed_dim": 128,
-                "depth": 2,
+                "depth": 4,
             },
         )
 
-        with pytest.raises(
-            TypeError, match="only supported for ResNet"
-        ):
-            MultiStageTrainingOrchestrator(
-                backbone=backbone,
-                device=torch.device("cpu"),
-                model_dir=tmp_path / "checkpoints",  # type: ignore[operator]
-                trainable_layers=2,
-            )
+        orchestrator = MultiStageTrainingOrchestrator(
+            backbone=backbone,
+            device=torch.device("cpu"),
+            model_dir=tmp_path / "checkpoints",  # type: ignore[operator]
+            trainable_layers=2,
+        )
+        assert orchestrator.trainable_layers == 2
 
 
 class TestComputeOutputChannels:
@@ -371,3 +365,179 @@ class TestComputeOutputChannels:
         # out_channels=(16, 32, 64, 64) で expansion=4 (BottleneckBlock)
         # layer2 の出力: 32 * 4 = 128
         assert out_ch == 128
+
+
+def _make_mixer_backbone(
+    *,
+    hand_projection_dim: int = 0,
+) -> HeadlessNetwork:
+    """テスト用の小規模 MLP-Mixer HeadlessNetwork を生成する．"""
+    return HeadlessNetwork(
+        board_vocab_size=32,
+        hand_projection_dim=hand_projection_dim,
+        embedding_dim=64,
+        architecture="mlp-mixer",
+        architecture_config={
+            "embed_dim": 128,
+            "depth": 4,
+        },
+    )
+
+
+def _make_vit_backbone(
+    *,
+    hand_projection_dim: int = 0,
+) -> HeadlessNetwork:
+    """テスト用の小規模 ViT HeadlessNetwork を生成する．"""
+    return HeadlessNetwork(
+        board_vocab_size=32,
+        hand_projection_dim=hand_projection_dim,
+        embedding_dim=64,
+        architecture="vit",
+        architecture_config={
+            "embed_dim": 128,
+            "num_heads": 4,
+            "num_layers": 4,
+            "mlp_ratio": 2.0,
+        },
+    )
+
+
+class TestMixerTruncatedStageModel:
+    """MLP-Mixer での TruncatedStageModel テスト．"""
+
+    def test_forward_output_shape(self) -> None:
+        """MLP-Mixer で forward の出力形状が正しいことを検証する．"""
+        backbone = _make_mixer_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        board = torch.randint(0, 32, (4, 9, 9))
+        logits, dummy_value = model((board, None))
+
+        assert logits.shape == (4, 81)
+        assert dummy_value.shape == (4, 1)
+
+    def test_parameter_sharing(self) -> None:
+        """MLP-Mixer で partial_backbone が元の backbone とパラメータを共有することを検証する．"""
+        backbone = _make_mixer_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        groups = backbone.backbone.get_freezable_groups()
+        assert model.partial_backbone[0] is groups[0]
+        assert model.partial_backbone[1] is groups[1]
+
+    def test_gradient_flow(self) -> None:
+        """MLP-Mixer で使用ブロックに勾配あり，除外ブロックに勾配なしを検証する．"""
+        backbone = _make_mixer_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        board = torch.randint(0, 32, (4, 9, 9))
+        logits, _ = model((board, None))
+        loss = logits.sum()
+        loss.backward()
+
+        groups = backbone.backbone.get_freezable_groups()
+        # 使用ブロックに勾配あり
+        for group in groups[:2]:
+            has_grad = any(
+                p.grad is not None and p.grad.abs().sum() > 0
+                for p in group.parameters()
+            )
+            assert has_grad
+
+        # 除外ブロックは requires_grad=False
+        for group in groups[2:]:
+            for p in group.parameters():
+                assert not p.requires_grad
+
+    def test_truncation_norm_exists(self) -> None:
+        """MLP-Mixer で truncation_norm が作成されることを検証する．"""
+        backbone = _make_mixer_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        assert hasattr(model, "truncation_norm")
+        assert not hasattr(model, "projection_pool")
+        assert not hasattr(model, "projection_linear")
+
+
+class TestViTTruncatedStageModel:
+    """ViT での TruncatedStageModel テスト．"""
+
+    def test_forward_output_shape(self) -> None:
+        """ViT で forward の出力形状が正しいことを検証する．"""
+        backbone = _make_vit_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        board = torch.randint(0, 32, (4, 9, 9))
+        logits, dummy_value = model((board, None))
+
+        assert logits.shape == (4, 81)
+        assert dummy_value.shape == (4, 1)
+
+    def test_parameter_sharing(self) -> None:
+        """ViT で partial_backbone が元の backbone とパラメータを共有することを検証する．"""
+        backbone = _make_vit_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        groups = backbone.backbone.get_freezable_groups()
+        assert model.partial_backbone[0] is groups[0]
+        assert model.partial_backbone[1] is groups[1]
+
+    def test_gradient_flow(self) -> None:
+        """ViT で使用ブロックに勾配あり，除外ブロックに勾配なしを検証する．"""
+        backbone = _make_vit_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        board = torch.randint(0, 32, (4, 9, 9))
+        logits, _ = model((board, None))
+        loss = logits.sum()
+        loss.backward()
+
+        groups = backbone.backbone.get_freezable_groups()
+        # 使用ブロックに勾配あり
+        for group in groups[:2]:
+            has_grad = any(
+                p.grad is not None and p.grad.abs().sum() > 0
+                for p in group.parameters()
+            )
+            assert has_grad
+
+        # 除外ブロックは requires_grad=False
+        for group in groups[2:]:
+            for p in group.parameters():
+                assert not p.requires_grad

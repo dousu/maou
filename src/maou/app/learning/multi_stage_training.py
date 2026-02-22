@@ -227,13 +227,14 @@ class TruncatedStageModel(torch.nn.Module):
     """層分離時の Stage 1/2 用モデル．
 
     バックボーンの最初の ``(total_groups - trainable_layers)`` 個のグループのみを使い，
-    投射層を経由してヘッドに接続する．Stage 3 で訓練する末尾グループは
+    後処理を経由してヘッドに接続する．Stage 3 で訓練する末尾グループは
     forward pass に含めない．
 
-    ResNet アーキテクチャのみ対応．
+    ResNet の場合は Pool + Linear 投射を使用し，
+    MLP-Mixer/ViT の場合は LayerNorm + mean pooling を使用する．
 
     Args:
-        backbone: 共有バックボーンネットワーク (ResNet のみ)
+        backbone: 共有バックボーンネットワーク
         head: Stage 1 or Stage 2 用のヘッドモジュール
         trainable_layers: Stage 3 で訓練する末尾グループ数
     """
@@ -245,13 +246,6 @@ class TruncatedStageModel(torch.nn.Module):
         trainable_layers: int,
     ) -> None:
         super().__init__()
-
-        if backbone.architecture != "resnet":
-            msg = (
-                "TruncatedStageModel is only supported for ResNet "
-                f"architecture, got '{backbone.architecture}'."
-            )
-            raise TypeError(msg)
 
         groups = backbone.backbone.get_freezable_groups()
         total = len(groups)
@@ -268,25 +262,31 @@ class TruncatedStageModel(torch.nn.Module):
 
         # HeadlessNetwork の embedding/hand_projection を参照
         self.backbone = backbone
+        self._is_resnet = backbone.architecture == "resnet"
 
         # 使用するグループの Sequential を構成 (元オブジェクトへの参照)
         self.partial_backbone = nn.Sequential(*groups[:n_use])
 
-        # 投射層: 中間出力 -> embedding_dim
-        # backbone の実入力チャンネル = embedding + hand_projection
-        backbone_in_ch = (
-            backbone._embedding_channels
-            + backbone._hand_projection_dim
-        )
-        truncated_out_ch = self._compute_output_channels(
-            self.partial_backbone,
-            backbone_in_ch,
-            backbone._board_size,
-        )
-        self.projection_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.projection_linear = nn.Linear(
-            truncated_out_ch, backbone.embedding_dim
-        )
+        if self._is_resnet:
+            # ResNet: Pool + Linear 投射 (次元変化に対応)
+            backbone_in_ch = (
+                backbone._embedding_channels
+                + backbone._hand_projection_dim
+            )
+            truncated_out_ch = self._compute_output_channels(
+                self.partial_backbone,
+                backbone_in_ch,
+                backbone._board_size,
+            )
+            self.projection_pool = nn.AdaptiveAvgPool2d((1, 1))
+            self.projection_linear = nn.Linear(
+                truncated_out_ch, backbone.embedding_dim
+            )
+        else:
+            # MLP-Mixer/ViT: LayerNorm + mean pooling (次元不変)
+            self.truncation_norm = nn.LayerNorm(
+                backbone.embedding_dim
+            )
 
         self.head = head
 
@@ -313,7 +313,7 @@ class TruncatedStageModel(torch.nn.Module):
         """フォワードパスを実行し，(policy, dummy_value) を返す．
 
         HeadlessNetwork の embedding 処理を再利用し，
-        partial backbone → projection → head の順に処理する．
+        preprocess → partial backbone → 後処理 → head の順に処理する．
 
         Args:
             inputs: (board, hand) のタプル
@@ -333,11 +333,24 @@ class TruncatedStageModel(torch.nn.Module):
         else:
             combined = embedded
 
-        # partial backbone -> pool -> project -> head
-        features = self.partial_backbone(combined)
-        pooled = self.projection_pool(features)
-        projected = torch.flatten(pooled, 1)
-        projected = self.projection_linear(projected)
+        # 全アーキテクチャ共通: 前処理 + truncated blocks
+        preprocessed = (
+            self.backbone.backbone.preprocess_for_blocks(
+                combined
+            )
+        )
+        features = self.partial_backbone(preprocessed)
+
+        # アーキテクチャ別の後処理
+        if self._is_resnet:
+            pooled = self.projection_pool(features)
+            projected = torch.flatten(pooled, 1)
+            projected = self.projection_linear(projected)
+        else:
+            # MLP-Mixer/ViT: norm + mean pool
+            features = self.truncation_norm(features)
+            projected = features.mean(dim=1)
+
         logits = self.head(projected)
         dummy_value = torch.zeros(
             logits.shape[0], 1, device=logits.device
@@ -814,13 +827,6 @@ class MultiStageTrainingOrchestrator:
             trainable_layers is not None
             and trainable_layers > 0
         ):
-            if backbone.architecture != "resnet":
-                msg = (
-                    "Layer separation (trainable_layers) is only "
-                    "supported for ResNet architecture, "
-                    f"got '{backbone.architecture}'."
-                )
-                raise TypeError(msg)
             groups = backbone.backbone.get_freezable_groups()
             if trainable_layers >= len(groups):
                 msg = (
