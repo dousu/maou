@@ -455,7 +455,10 @@ class TestGetPostfix:
         context = TrainingContext(
             batch_idx=0,
             epoch_idx=0,
-            inputs=(torch.zeros(batch_size, 9, 9), torch.zeros(batch_size, 14)),
+            inputs=(
+                torch.zeros(batch_size, 9, 9),
+                torch.zeros(batch_size, 14),
+            ),
             labels_policy=targets,
             labels_value=torch.zeros(batch_size, 1),
             legal_move_mask=None,
@@ -488,7 +491,10 @@ class TestGetPostfix:
         context = TrainingContext(
             batch_idx=0,
             epoch_idx=0,
-            inputs=(torch.zeros(batch_size, 9, 9), torch.zeros(batch_size, 14)),
+            inputs=(
+                torch.zeros(batch_size, 9, 9),
+                torch.zeros(batch_size, 14),
+            ),
             labels_policy=targets,
             labels_value=torch.zeros(batch_size, 1),
             legal_move_mask=None,
@@ -502,7 +508,9 @@ class TestGetPostfix:
         assert "f1" in postfix
         assert "loss" in postfix
 
-    def test_get_postfix_returns_none_when_no_data(self) -> None:
+    def test_get_postfix_returns_none_when_no_data(
+        self,
+    ) -> None:
         """データなし時に get_postfix() が None を返す."""
         from maou.app.learning.callbacks import (
             Stage1AccuracyCallback,
@@ -512,7 +520,9 @@ class TestGetPostfix:
         assert Stage1AccuracyCallback().get_postfix() is None
         assert Stage2F1Callback().get_postfix() is None
 
-    def test_base_callback_get_postfix_returns_none(self) -> None:
+    def test_base_callback_get_postfix_returns_none(
+        self,
+    ) -> None:
         """BaseCallback.get_postfix() がデフォルトで None を返す."""
         from maou.app.learning.callbacks import BaseCallback
 
