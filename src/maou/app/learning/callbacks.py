@@ -1220,3 +1220,54 @@ class Stage1AccuracyCallback(BaseCallback):
             else 0.0
         )
         return {"acc": f"{acc:.1%}", "loss": f"{loss:.4f}"}
+
+
+class Stage3LossCallback(BaseCallback):
+    """Stage 3 (Policy+Value) 用の損失表示コールバック．
+
+    ``on_batch_end`` で損失をGPUテンソル上に蓄積し，
+    ``get_postfix()`` でtqdmプログレスバーにrunning lossを表示する．
+
+    GPU同期(``.item()``)はエポック終了時のみ行い，
+    バッチごとのGPUパイプラインストールを回避する．
+    """
+
+    def __init__(self) -> None:
+        self._total_loss: torch.Tensor = torch.tensor(0.0)
+        self._num_batches: int = 0
+        self._device_initialized: bool = False
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if not self._device_initialized:
+            self._total_loss = self._total_loss.to(device)
+            self._device_initialized = True
+
+    def on_batch_end(self, context: TrainingContext) -> None:
+        """バッチごとにlossをGPUテンソル上に蓄積する."""
+        if context.loss is None:
+            return
+        self._ensure_device(context.loss.device)
+        self._total_loss += context.loss.detach()
+        self._num_batches += 1
+
+    def get_average_loss(self) -> float:
+        """エポックの平均lossを返す."""
+        if self._num_batches == 0:
+            return 0.0
+        return (self._total_loss / self._num_batches).item()
+
+    def reset(self) -> None:
+        """エポック間でカウンタをリセットする."""
+        if self._device_initialized:
+            self._total_loss.zero_()
+        else:
+            self._total_loss = torch.tensor(0.0)
+        self._num_batches = 0
+
+    def get_postfix(self) -> dict[str, str] | None:
+        """Running loss を tqdm 用に返す．"""
+        if self._num_batches == 0:
+            return None
+        loss = (self._total_loss / self._num_batches).item()
+        return {"loss": f"{loss:.4f}"}

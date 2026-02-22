@@ -24,6 +24,7 @@ from torchinfo import summary
 from maou.app.learning.callbacks import (
     LoggingCallback,
     LRSchedulerStepCallback,
+    Stage3LossCallback,
     ValidationCallback,
     ValidationMetrics,
 )
@@ -458,11 +459,14 @@ class Learning:
             dataloader_length=len(self.training_loader),
             logger=self.logger,
         )
+        loss_callback = Stage3LossCallback()
 
         # Build callback list
         callbacks: list[
-            LoggingCallback | LRSchedulerStepCallback
-        ] = [logging_callback]
+            LoggingCallback
+            | LRSchedulerStepCallback
+            | Stage3LossCallback
+        ] = [logging_callback, loss_callback]
         if self.lr_scheduler is not None:
             callbacks.append(
                 LRSchedulerStepCallback(self.lr_scheduler)
@@ -563,6 +567,7 @@ class Learning:
             validation_callback = ValidationCallback(
                 logger=self.logger
             )
+            validation_loss_callback = Stage3LossCallback()
 
             # Create validation training loop
             validation_loop = TrainingLoop(
@@ -573,7 +578,10 @@ class Learning:
                 loss_fn_value=self.loss_fn_value,
                 policy_loss_ratio=self.policy_loss_ratio,
                 value_loss_ratio=self.value_loss_ratio,
-                callbacks=[validation_callback],
+                callbacks=[
+                    validation_callback,
+                    validation_loss_callback,
+                ],
                 logger=self.logger,
             )
 

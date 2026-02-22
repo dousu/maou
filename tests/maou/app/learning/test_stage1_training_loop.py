@@ -508,6 +508,38 @@ class TestGetPostfix:
         assert "f1" in postfix
         assert "loss" in postfix
 
+    def test_stage3_loss_callback_get_postfix(self) -> None:
+        """Stage3LossCallback.get_postfix() が正しい dict を返す."""
+        from maou.app.learning.callbacks import (
+            Stage3LossCallback,
+            TrainingContext,
+        )
+
+        callback = Stage3LossCallback()
+        batch_size = 4
+        loss = torch.tensor(0.05)
+
+        context = TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=(
+                torch.zeros(batch_size, 9, 9),
+                torch.zeros(batch_size, 14),
+            ),
+            labels_policy=torch.zeros(batch_size, 1496),
+            labels_value=torch.zeros(batch_size, 1),
+            legal_move_mask=None,
+            loss=loss,
+        )
+        callback.on_batch_end(context)
+
+        postfix = callback.get_postfix()
+        assert postfix is not None
+        assert "loss" in postfix
+        assert "acc" not in postfix
+        assert "f1" not in postfix
+        assert postfix["loss"] == "0.0500"
+
     def test_get_postfix_returns_none_when_no_data(
         self,
     ) -> None:
@@ -515,10 +547,12 @@ class TestGetPostfix:
         from maou.app.learning.callbacks import (
             Stage1AccuracyCallback,
             Stage2F1Callback,
+            Stage3LossCallback,
         )
 
         assert Stage1AccuracyCallback().get_postfix() is None
         assert Stage2F1Callback().get_postfix() is None
+        assert Stage3LossCallback().get_postfix() is None
 
     def test_base_callback_get_postfix_returns_none(
         self,
@@ -527,3 +561,121 @@ class TestGetPostfix:
         from maou.app.learning.callbacks import BaseCallback
 
         assert BaseCallback().get_postfix() is None
+
+
+class TestStage3LossCallback:
+    """Stage3LossCallback の基本動作を検証するテスト．"""
+
+    def test_accumulates_loss_across_batches(self) -> None:
+        """複数バッチの loss が正しく蓄積される."""
+        from maou.app.learning.callbacks import (
+            Stage3LossCallback,
+            TrainingContext,
+        )
+
+        callback = Stage3LossCallback()
+
+        for i, loss_val in enumerate([0.5, 0.3, 0.1]):
+            context = TrainingContext(
+                batch_idx=i,
+                epoch_idx=0,
+                inputs=(
+                    torch.zeros(1, 9, 9),
+                    torch.zeros(1, 14),
+                ),
+                labels_policy=torch.zeros(1, 1496),
+                labels_value=torch.zeros(1, 1),
+                legal_move_mask=None,
+                loss=torch.tensor(loss_val),
+            )
+            callback.on_batch_end(context)
+
+        avg_loss = callback.get_average_loss()
+        assert abs(avg_loss - 0.3) < 1e-6
+
+    def test_handles_none_loss(self) -> None:
+        """loss が None のバッチをスキップする."""
+        from maou.app.learning.callbacks import (
+            Stage3LossCallback,
+            TrainingContext,
+        )
+
+        callback = Stage3LossCallback()
+
+        context = TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=(
+                torch.zeros(1, 9, 9),
+                torch.zeros(1, 14),
+            ),
+            labels_policy=torch.zeros(1, 1496),
+            labels_value=torch.zeros(1, 1),
+            legal_move_mask=None,
+            loss=None,
+        )
+        callback.on_batch_end(context)
+
+        assert callback.get_average_loss() == 0.0
+        assert callback.get_postfix() is None
+
+    def test_get_average_loss_no_data(self) -> None:
+        """データなし時に get_average_loss() が 0.0 を返す."""
+        from maou.app.learning.callbacks import (
+            Stage3LossCallback,
+        )
+
+        callback = Stage3LossCallback()
+        assert callback.get_average_loss() == 0.0
+
+
+class TestStage3LossCallbackReset:
+    """Stage3LossCallback の reset 動作を検証するテスト．"""
+
+    def test_reset_clears_accumulated_loss(self) -> None:
+        """reset() 後に新しいデータのみが loss に反映される."""
+        from maou.app.learning.callbacks import (
+            Stage3LossCallback,
+            TrainingContext,
+        )
+
+        callback = Stage3LossCallback()
+
+        # First epoch: loss = 0.5
+        context_1 = TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=(
+                torch.zeros(1, 9, 9),
+                torch.zeros(1, 14),
+            ),
+            labels_policy=torch.zeros(1, 1496),
+            labels_value=torch.zeros(1, 1),
+            legal_move_mask=None,
+            loss=torch.tensor(0.5),
+        )
+        callback.on_batch_end(context_1)
+        assert abs(callback.get_average_loss() - 0.5) < 1e-6
+
+        # Reset
+        callback.reset()
+        assert callback.get_average_loss() == 0.0
+        assert callback.get_postfix() is None
+
+        # Second epoch: loss = 0.2
+        context_2 = TrainingContext(
+            batch_idx=0,
+            epoch_idx=1,
+            inputs=(
+                torch.zeros(1, 9, 9),
+                torch.zeros(1, 14),
+            ),
+            labels_policy=torch.zeros(1, 1496),
+            labels_value=torch.zeros(1, 1),
+            legal_move_mask=None,
+            loss=torch.tensor(0.2),
+        )
+        callback.on_batch_end(context_2)
+
+        # After reset + one batch: only new data
+        assert abs(callback.get_average_loss() - 0.2) < 1e-6
