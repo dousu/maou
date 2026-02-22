@@ -164,10 +164,10 @@
 - dl.py: Learning クラス (map-style, streaming 両対応)
   - 行 163-204: streaming コンポーネント vs map-style 判定
   - 行 325-451: _setup_streaming_components()
-  
+
 - setup.py: TrainingSetup.setup_training_components()
   - cache_transforms 判定 (transform is None で常に無効)
-  
+
 - streaming_dataset.py: StreamingKifDataset, StreamingStage1Dataset, StreamingStage2Dataset
   - worker file分割, epoch seed管理, batch yield
 

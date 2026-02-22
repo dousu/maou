@@ -20,7 +20,7 @@ This document provides a detailed investigation of the Maou project's code for:
 ```python
 class SingleEpochBenchmark:
     """Single epoch benchmark for training performance measurement."""
-    
+
     def __init__(
         self,
         *,
@@ -64,20 +64,20 @@ class SingleEpochBenchmark:
 
 1. **Data Loading Time**: Measured between previous batch end and current batch start
    - Formula: `batch_start_time - previous_batch_end_time`
-   
+
 2. **GPU Transfer Time**: DataLoader → GPU transfer
    - Measured: `on_data_transfer_start()` → `on_data_transfer_end()`
-   
+
 3. **Forward Pass Time**: Model forward computation
    - Measured: `on_forward_pass_start()` → `on_forward_pass_end()`
    - Pure forward = total_forward_time - loss_computation_time
-   
+
 4. **Loss Computation Time**: Loss function evaluation
    - Measured: `on_loss_computation_start()` → `on_loss_computation_end()`
-   
+
 5. **Backward Pass Time**: Gradient computation
    - Measured: `on_backward_pass_start()` → `on_backward_pass_end()`
-   
+
 6. **Optimizer Step Time**: Parameter update
    - Measured: `on_optimizer_step_start()` → `on_optimizer_step_end()`
 
@@ -97,13 +97,13 @@ class BenchmarkResult:
     average_batch_time: float            # Avg per-batch processing (excl. data loading)
     actual_average_batch_time: float     # Avg per-batch including all overhead
     total_batches: int                   # Processed batch count
-    
+
     # Warmup Information
     warmup_time: float                   # Time spent in warmup phase
     warmup_batches: int                  # Number of warmup batches
     measured_time: float                 # Time from end of warmup to epoch end
     measured_batches: int                # Batches after warmup
-    
+
     # Detailed Timing Breakdown (per batch, averaged)
     data_loading_time: float             # I/O + DataLoader overhead
     gpu_transfer_time: float             # CPU→GPU transfer
@@ -111,15 +111,15 @@ class BenchmarkResult:
     loss_computation_time: float         # Loss evaluation
     backward_pass_time: float            # Gradient computation
     optimizer_step_time: float           # Parameter update
-    
+
     # Performance Metrics
     samples_per_second: float            # Throughput metric
     batches_per_second: float            # Batch throughput
-    
+
     # Loss
     final_loss: float                    # Final batch loss
     average_loss: float                  # Average over measured batches
-    
+
     # Optional Resource Monitoring
     resource_usage: Optional[ResourceUsage] = None
 ```
@@ -173,11 +173,11 @@ class TrainingBenchmarkConfig:
 ```python
 class StreamingFileSource:
     """ファイル単位のストリーミングデータソース．
-    
+
     全ファイルを一度にメモリにロードする FileManager とは異なり，
     1ファイルずつ読み込み → 消費 → 解放のストリーミングパターンを使用する．
     """
-    
+
     def __init__(
         self,
         file_paths: list[Path],
@@ -215,7 +215,7 @@ def iter_files_columnar(
     self,
 ) -> Generator[ColumnarBatch, None, None]:
     """ファイル単位で ColumnarBatch をyieldする．
-    
+
     1. featherファイルをPolars DataFrameとして読み込み
     2. Polars DataFrame → ColumnarBatch に変換
     3. ColumnarBatch をyield
@@ -232,7 +232,7 @@ def iter_files_columnar_subset(
     file_paths: list[Path],
 ) -> Generator[ColumnarBatch, None, None]:
     """指定されたファイルパスのみを読み込む（worker分割用）．
-    
+
     DEBUG レベルでタイミング情報を出力:
     - ファイル読込時間 (t_load)
     - 変換時間 (t_conv)
@@ -243,12 +243,12 @@ def iter_files_columnar_subset(
         df = self._loader(fp)
         t_load = time.perf_counter() - t0
         logger.log(log_level, "File loaded: %d rows in %.2fs, converting...", len(df), t_load)
-        
+
         t1 = time.perf_counter()
         batch = self._converter(df)
         t_conv = time.perf_counter() - t1
         logger.debug("Conversion complete: %.2fs (file %d/%d)", t_conv, i+1, n)
-        
+
         del df
         yield batch
 ```
@@ -265,7 +265,7 @@ def _is_arrow_ipc_file_format(file_path: Path) -> bool:
 
 def _scan_row_count(file_path: Path) -> int:
     """featherファイルの行数のみを取得する．
-    
+
     - Arrow IPC File形式: メタデータのみ読み（高速）
     - Arrow IPC Stream形式: 全データ読み（警告ログ出力）
     """
@@ -294,28 +294,28 @@ def _scan_row_count(file_path: Path) -> int:
 @runtime_checkable
 class StreamingDataSource(Protocol):
     """ストリーミングデータソースのプロトコル．"""
-    
+
     @property
     def file_paths(self) -> list[Path]:
         """ファイルパスのリスト(worker分割用)."""
         ...
-    
+
     @property
     def total_rows(self) -> int:
         """全ファイルの合計行数."""
         ...
-    
+
     @property
     def row_counts(self) -> list[int]:
         """各ファイルの行数リスト."""
         ...
-    
+
     def iter_files_columnar(
         self,
     ) -> Generator[ColumnarBatch, None, None]:
         """ファイル単位で ColumnarBatch をyieldする."""
         ...
-    
+
     def iter_files_columnar_subset(
         self,
         file_paths: list[Path],
@@ -336,7 +336,7 @@ class StreamingDataSource(Protocol):
 ```python
 class StreamingKifDataset(IterableDataset):
     """IterableDataset版のKifDataset(バッチ単位yield)．"""
-    
+
     def __init__(
         self,
         *,
@@ -350,18 +350,18 @@ class StreamingKifDataset(IterableDataset):
         self._shuffle = shuffle
         self._seed = seed
         self._epoch = 0
-    
+
     def set_epoch(self, epoch: int) -> None:
         """エポック番号を設定（シード管理用）．"""
         self._epoch = epoch
-    
+
     def __iter__(self) -> Iterator[tuple[tuple[torch.Tensor, torch.Tensor], ...]]:
         """バッチ単位でTensorをyield．
-        
+
         persistent_workers対応:
         - worker_info.seed を使用（エポックごとに変更）
         - または (seed + epoch) で異なるシード生成
-        
+
         Worker分割:
         - _resolve_worker_files() でファイルをラウンドロビン分配
         - 各workerが担当ファイルのみ読み込み
@@ -372,9 +372,9 @@ class StreamingKifDataset(IterableDataset):
             epoch_seed = worker_info.seed  # persistent_workers対応
         else:
             epoch_seed = (self._seed or 0) + self._epoch
-        
+
         rng = np.random.default_rng(epoch_seed)
-        
+
         try:
             # Worker分割 + ファイル順シャッフル
             worker_files = _resolve_worker_files(
@@ -382,11 +382,11 @@ class StreamingKifDataset(IterableDataset):
                 shuffle=self._shuffle,
                 epoch_seed=epoch_seed,
             )
-            
+
             if not worker_files:
                 logger.debug("Worker %d: no files assigned", worker_id)
                 return
-            
+
             total_batches = 0
             file_count = 0
             for file_idx, columnar_batch in enumerate(
@@ -395,7 +395,7 @@ class StreamingKifDataset(IterableDataset):
                 file_count += 1
                 if file_idx == 0:
                     _log_worker_memory(worker_id, "after_first_file", level=logging.DEBUG)
-                
+
                 for batch in _yield_kif_batches(
                     columnar_batch,
                     batch_size=self._batch_size,
@@ -410,7 +410,7 @@ class StreamingKifDataset(IterableDataset):
                             os.getpid(),
                         )
                     yield batch
-            
+
             logger.debug(
                 "Worker %d: iteration complete (%d batches from %d files)",
                 worker_id,
@@ -426,7 +426,7 @@ class StreamingKifDataset(IterableDataset):
                 exc_info=True,
             )
             raise
-    
+
     def __len__(self) -> int:
         """バッチ数を返す(tqdmプログレスバー用)."""
         return _compute_total_batches(
@@ -449,7 +449,7 @@ ColumnarBatch.concatenate() で結合し，ファイルロード
 buffer: list[ColumnarBatch] = []
 for file_idx, columnar_batch in enumerate(self._source.iter_files_columnar_subset(worker_files)):
     buffer.append(columnar_batch)
-    
+
     if len(buffer) >= _FILES_PER_CONCAT:
         merged = ColumnarBatch.concatenate(buffer)
         buffer.clear()
@@ -473,18 +473,18 @@ def _resolve_worker_files(
     epoch_seed: int,
 ) -> list[Path]:
     """Workerファイル分割 + ファイル順シャッフルを行う共通関数．
-    
+
     1. オプショナルにファイル順をシャッフル (epoch_seed でランダマイズ)
     2. Worker数でラウンドロビン分配 (i % n_workers == worker_id)
     """
     file_paths = source.file_paths
-    
+
     # エポックごとのファイル順シャッフル
     if shuffle:
         file_rng = np.random.default_rng(epoch_seed + 1_000_000)
         file_indices = file_rng.permutation(len(file_paths))
         file_paths = [file_paths[i] for i in file_indices]
-    
+
     # Worker分割
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None:
@@ -502,7 +502,7 @@ def _resolve_worker_files(
             for i, fp in enumerate(file_paths)
             if i % n_workers == worker_id
         ]
-    
+
     return file_paths
 ```
 
@@ -520,22 +520,22 @@ def _yield_kif_batches(
     n = len(columnar_batch)
     if n == 0:
         return
-    
+
     indices = np.arange(n)
     if shuffle:
         rng.shuffle(indices)
-    
+
     for start in range(0, n, batch_size):
         batch_indices = indices[start : start + batch_size]
         batch = columnar_batch.slice(batch_indices)
-        
+
         # .clone() でPyTorch-nativeストレージに変換
         board_tensor = torch.from_numpy(batch.board_positions).clone()
         pieces_tensor = torch.from_numpy(batch.pieces_in_hand).clone()
         move_label_tensor = torch.from_numpy(batch.move_label).clone()
         result_value_tensor = torch.from_numpy(batch.result_value).float().unsqueeze(1)
         legal_move_mask_tensor = torch.ones_like(move_label_tensor)
-        
+
         yield (
             (board_tensor, pieces_tensor),
             (move_label_tensor, result_value_tensor, legal_move_mask_tensor),
@@ -623,7 +623,7 @@ def _clamp_workers(
     memory_limit: int | None = None,
 ) -> int:
     """ワーカー数をファイル数およびメモリ制約で制限する．
-    
+
     ストリーミングモードでは各ワーカーが1つ以上のファイルを担当するため，
     ファイル数を超えるワーカーは不要かつ有害(アイドルワーカーがリソース消費)．
     """
@@ -631,11 +631,11 @@ def _clamp_workers(
         return 0
     if requested_workers <= 0:
         return 0
-    
+
     effective = min(requested_workers, n_files)  # ファイル数で上限
     if memory_limit is not None and memory_limit > 0:
         effective = min(effective, memory_limit)  # メモリで上限
-    
+
     if effective < requested_workers:
         logger.info(
             "Clamped %s workers from %d to %d "
@@ -658,7 +658,7 @@ def _estimate_max_workers_by_memory(
     file_paths: list[Path] | None = None,
 ) -> int:
     """システムの利用可能メモリからワーカー数の上限を推定する．
-    
+
     利用可能メモリの50%をDataLoaderワーカーに割当．
     ファイルサイズベースの動的推定:
     - 圧縮済みファイルの平均サイズ
@@ -684,7 +684,7 @@ def _check_shm_size(
     logger: logging.Logger,
 ) -> None:
     """Linux環境で /dev/shm の空き容量を確認し不足時に警告する．
-    
+
     DataLoaderのワーカー間通信は共有メモリ(/dev/shm)を使用する．
     Docker等で /dev/shm サイズが制限されている場合，警告を発出．
     """
@@ -697,7 +697,7 @@ def _check_shm_size(
         * prefetch_factor
         / 1024
     )
-    
+
     if shm_available_mb < threshold_mb:
         logger.warning(
             "/dev/shm available space (%.0fMB) is below "
@@ -766,14 +766,14 @@ def create_streaming_dataloaders(
     file_paths: list[Path] | None = None,
 ) -> Tuple[DataLoader, DataLoader]:
     """Streaming用DataLoader作成．"""
-    
+
     # 1. Estimate memory limit based on available system resources
     memory_limit = _estimate_max_workers_by_memory(
         pin_memory=pin_memory,
         logger=cls.logger,
         file_paths=file_paths,
     )
-    
+
     # 2. Clamp worker counts (file count + memory limits)
     train_workers = cls._clamp_workers(
         dataloader_workers,
@@ -789,7 +789,7 @@ def create_streaming_dataloaders(
         cls.logger,
         memory_limit=memory_limit,
     )
-    
+
     # 3. Check /dev/shm capacity
     _check_shm_size(
         num_workers=max(train_workers, val_workers),
@@ -797,7 +797,7 @@ def create_streaming_dataloaders(
         prefetch_factor=prefetch_factor,
         logger=cls.logger,
     )
-    
+
     # 4. Setup worker init functions
     train_worker_init_fn = (
         default_worker_init_fn if train_workers > 0 else None
@@ -805,15 +805,15 @@ def create_streaming_dataloaders(
     val_worker_init_fn = (
         default_worker_init_fn if val_workers > 0 else None
     )
-    
+
     # 5. Setup multiprocessing context (spawn for Rust FFI safety)
     mp_context: str | None = "spawn" if train_workers > 0 else None
     mp_context_val: str | None = "spawn" if val_workers > 0 else None
-    
+
     # 6. Setup timeouts
     _STREAMING_TIMEOUT = 300 if train_workers > 0 else 0
     _STREAMING_TIMEOUT_VAL = 300 if val_workers > 0 else 0
-    
+
     # 7. Create training DataLoader
     training_loader = DataLoader(
         train_dataset,
@@ -827,7 +827,7 @@ def create_streaming_dataloaders(
         worker_init_fn=train_worker_init_fn,
         multiprocessing_context=mp_context,
     )
-    
+
     # 8. Create validation DataLoader
     validation_loader = DataLoader(
         val_dataset,
@@ -841,7 +841,7 @@ def create_streaming_dataloaders(
         worker_init_fn=val_worker_init_fn,
         multiprocessing_context=mp_context_val,
     )
-    
+
     # 9. Log batch counts
     if hasattr(train_dataset, "__len__"):
         cls.logger.info(
@@ -853,7 +853,7 @@ def create_streaming_dataloaders(
             "Streaming Validation: %d batches",
             len(val_dataset),
         )
-    
+
     return training_loader, validation_loader
 ```
 
@@ -903,7 +903,7 @@ def benchmark_training(
     # ... other params
 ) -> str:
     """Benchmark single epoch training performance with detailed timing analysis."""
-    
+
     # Validation & defaults
     if warmup_batches is None:
         warmup_batches = 5
@@ -911,23 +911,23 @@ def benchmark_training(
         raise ValueError(
             f"warmup_batches must be non-negative, got {warmup_batches}"
         )
-    
+
     if max_batches is None:
         max_batches = 100
     elif max_batches <= 0:
         raise ValueError(
             f"max_batches must be positive, got {max_batches}"
         )
-    
+
     if enable_profiling is None:
         enable_profiling = False
-    
+
     if run_validation is None:
         run_validation = False
-    
+
     if enable_resource_monitoring is None:
         enable_resource_monitoring = False
-    
+
     # Create config
     config = TrainingBenchmarkConfig(
         datasource=datasource,
@@ -958,7 +958,7 @@ def benchmark_training(
         detect_anomaly=detect_anomaly,
         model_architecture=model_architecture,
     )
-    
+
     use_case = TrainingBenchmarkUseCase()
     return use_case.execute(config)
 ```
@@ -1057,13 +1057,13 @@ if use_streaming:
         file_paths=stage1_file_paths,
         array_type="stage1",
     )
-    
+
     # Similar for Stage 2 and Stage 3
     s2_streaming_source = StreamingFileSource(
         file_paths=stage2_file_paths,
         array_type="stage2",
     )
-    
+
     s3_streaming_train_source = StreamingFileSource(
         file_paths=stage3_train_file_paths,
         array_type="stage3",
@@ -1129,4 +1129,3 @@ result = learn.run_multi_stage(
 - **File Format Detection**: Arrow IPC File (fast metadata read) vs Stream (requires full read)
 - **Stage 2 File Concatenation**: Group small files (10 at a time) before batching to reduce I/O
 - **Worker Memory Logging**: Debug logs show RSS memory after first file load
-
