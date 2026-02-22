@@ -30,7 +30,10 @@ from maou.app.learning.network import (
 )
 
 if TYPE_CHECKING:
-    from maou.app.learning.dataset import Stage1Dataset
+    from maou.app.learning.dataset import (
+        Stage1Dataset,
+        Stage2Dataset,
+    )
 
 
 class TrainingStage(IntEnum):
@@ -136,6 +139,35 @@ class Stage1DatasetAdapter(Dataset):
     """
 
     def __init__(self, dataset: "Stage1Dataset") -> None:
+        self._dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[
+        tuple[torch.Tensor, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor, None],
+    ]:
+        inputs, targets = self._dataset[idx]
+        dummy_value = torch.zeros(1, dtype=torch.float32)
+        return inputs, (targets, dummy_value, None)
+
+
+class Stage2DatasetAdapter(Dataset):
+    """Stage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
+
+    Stage2Dataset は ((board, hand), legal_moves) を返すが，
+    TrainingLoop._unpack_batch() は
+    ((board, hand), (labels_policy, labels_value, legal_move_mask))
+    を期待する．
+
+    Args:
+        dataset: ラップする Stage2Dataset
+    """
+
+    def __init__(self, dataset: "Stage2Dataset") -> None:
         self._dataset = dataset
 
     def __len__(self) -> int:

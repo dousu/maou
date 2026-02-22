@@ -421,6 +421,43 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--stage",
+    type=click.IntRange(1, 3),
+    default=3,
+    show_default=True,
+    help="Benchmark target stage (1: Reachable Squares, 2: Legal Moves, 3: Policy+Value).",
+)
+@click.option(
+    "--stage1-data-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+    help="Path to Stage 1 (reachable squares) training data directory.",
+)
+@click.option(
+    "--stage2-data-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+    help="Path to Stage 2 (legal moves) training data directory.",
+)
+@click.option(
+    "--stage12-lr-scheduler",
+    type=click.Choice(
+        ["warmup_cosine_decay", "cosine_annealing", "step"],
+        case_sensitive=False,
+    ),
+    default=None,
+    required=False,
+    help="Learning rate scheduler for Stage 1/2 benchmark.",
+)
+@click.option(
+    "--stage12-compilation/--no-stage12-compilation",
+    default=False,
+    show_default=True,
+    help="Enable/disable torch.compile for Stage 1/2 benchmark.",
+)
+@click.option(
     "--input-file-packed",
     type=bool,
     is_flag=True,
@@ -818,6 +855,11 @@ def benchmark_dataloader(
 @handle_exception
 def benchmark_training(
     stage3_data_path: Optional[Path],
+    stage: int,
+    stage1_data_path: Optional[Path],
+    stage2_data_path: Optional[Path],
+    stage12_lr_scheduler: Optional[str],
+    stage12_compilation: bool,
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
@@ -873,6 +915,15 @@ def benchmark_training(
     enable_resource_monitoring: Optional[bool],
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
+    if stage == 1 and stage1_data_path is None:
+        raise click.UsageError(
+            "--stage1-data-path is required when --stage=1"
+        )
+    if stage == 2 and stage2_data_path is None:
+        raise click.UsageError(
+            "--stage2-data-path is required when --stage=2"
+        )
+
     # Normalize cache_mode: "mmap" is deprecated, convert to "file"
     if input_cache_mode.lower() == "mmap":
         import warnings
@@ -909,6 +960,63 @@ def benchmark_training(
     streaming = False
     streaming_train_source = None
     streaming_val_source = None
+
+    stage1_datasource = None
+    if stage1_data_path is not None:
+        stage1_file_paths = FileSystem.collect_files(
+            stage1_data_path
+        )
+        stage1_datasource = (
+            FileDataSource.FileDataSourceSpliter(
+                file_paths=stage1_file_paths,
+                array_type="stage1",
+                bit_pack=False,
+                cache_mode="file",
+            )
+        )
+
+    stage2_datasource = None
+    stage2_streaming_train_source = None
+    stage2_streaming_val_source = None
+    if stage2_data_path is not None:
+        stage2_file_paths = FileSystem.collect_files(
+            stage2_data_path
+        )
+        if not no_streaming and len(stage2_file_paths) >= 2:
+            import random
+
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
+            )
+
+            rng = random.Random(42)
+            shuffled = list(stage2_file_paths)
+            rng.shuffle(shuffled)
+            effective_ratio = stage2_test_ratio or 0.2
+            n_val = max(1, int(len(shuffled) * effective_ratio))
+            n_train = len(shuffled) - n_val
+            if n_train < 1:
+                n_train = 1
+                n_val = len(shuffled) - 1
+
+            stage2_streaming_train_source = StreamingFileSource(
+                file_paths=shuffled[:n_train],
+                array_type="stage2",
+            )
+            stage2_streaming_val_source = StreamingFileSource(
+                file_paths=shuffled[n_train:],
+                array_type="stage2",
+            )
+            streaming = True
+        else:
+            stage2_datasource = (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=stage2_file_paths,
+                    array_type="stage2",
+                    bit_pack=False,
+                    cache_mode="file",
+                )
+            )
 
     if stage3_data_path is not None:
         if sample_ratio is not None:
@@ -1123,6 +1231,13 @@ def benchmark_training(
         run_validation=run_validation,
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
+        stage=stage,
+        stage1_datasource=stage1_datasource,
+        stage2_datasource=stage2_datasource,
+        stage2_streaming_train_source=stage2_streaming_train_source,
+        stage2_streaming_val_source=stage2_streaming_val_source,
+        stage12_lr_scheduler=stage12_lr_scheduler,
+        stage12_compilation=stage12_compilation,
         streaming=streaming,
         streaming_train_source=streaming_train_source,
         streaming_val_source=streaming_val_source,

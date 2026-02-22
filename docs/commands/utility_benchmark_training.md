@@ -4,6 +4,8 @@
 
 - Runs a timed, single-epoch dry run of the learning stack (datasource →
   DataLoader → network → optimizer) without touching production checkpoints.
+  Supports all three training stages: Stage 1 (Reachable Squares), Stage 2
+  (Legal Moves), and Stage 3 (Policy+Value).
   The CLI and flag definitions live in `src/maou/infra/console/utility.py` and
   fan into `utility_interface.benchmark_training`.【F:src/maou/infra/console/utility.py†L520-L1020】【F:src/maou/interface/utility_interface.py†L213-L359】
 - `TrainingBenchmarkUseCase` sets up the real training components, executes a
@@ -22,7 +24,12 @@
 
 | Flag(s) | Required | Description |
 | --- | --- | --- |
+| `--stage INT` (1, 2, 3) | optional (default 3) | Selects the training stage to benchmark: 1 = Reachable Squares, 2 = Legal Moves, 3 = Policy+Value. Stage 1/2 use adapter patterns to reuse the existing `SingleEpochBenchmark` infrastructure with stage-specific models and loss functions. |
+| `--stage1-data-path PATH` | required when `--stage=1` | Path to Stage 1 (reachable squares) training data directory. Uses map-style dataset loading only. |
+| `--stage2-data-path PATH` | required when `--stage=2` | Path to Stage 2 (legal moves) training data directory. Supports both map-style and streaming modes (streaming enabled by default when 2+ files are provided). |
 | `--stage3-data-path PATH` + optional `--input-file-packed` | one of the sources | Streams local `.npy` shards for Stage 3 (policy+value) benchmarking and can unpack bit-packed HCPE tensors. Supplying `--sample-ratio` here logs a warning because every file is already on disk.【F:src/maou/infra/console/utility.py†L520-L821】 |
+| `--stage12-lr-scheduler CHOICE` | optional | Learning rate scheduler for Stage 1/2 benchmarks. Choices: `warmup_cosine_decay`, `cosine_annealing`, `step`. Overrides `--lr-scheduler` for Stage 1/2. |
+| `--stage12-compilation/--no-stage12-compilation` | optional (default off) | Enable/disable `torch.compile` for Stage 1/2 benchmarks independently from `--compilation` (which applies to Stage 3). |
 | `--input-dataset-id` + `--input-table-name` | pair | Pulls from BigQuery with the same batching, cache sizing, clustering, and partition controls as `learn-model`. Missing GCP extras cause a hard error.【F:src/maou/infra/console/utility.py†L824-L868】 |
 | `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | provider-specific | Downloads tensors via `GCSDataSource`/`S3DataSource` splitters. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional sampling ratios; requires the respective optional extras.【F:src/maou/infra/console/utility.py†L869-L951】 |
 | BigQuery cache knobs (`--input-batch-size`, `--input-max-cached-bytes`, `--input-clustering-key`, `--input-partitioning-key-date`, `--input-local-cache`, `--input-local-cache-dir`) | optional | Forwarded untouched to mimic production ingestion behavior while benchmarking.【F:src/maou/infra/console/utility.py†L824-L848】 |
@@ -51,10 +58,12 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 
 ## Execution flow
 
-1. **Data setup** – In streaming mode, the CLI splits files into train/validation
-   sets at the file level and creates `StreamingFileSource` instances. In map-style
-   mode, the use case invokes `datasource.train_test_split(test_ratio)` for
-   sample-level splitting. Both modes respect `--test-ratio` for the split ratio.
+1. **Data setup** – The CLI routes to stage-specific setup based on `--stage`:
+   Stage 1 creates `Stage1ModelAdapter` + `ReachableSquaresLoss` (map-style only);
+   Stage 2 creates `Stage2ModelAdapter` + `LegalMovesLoss` (map-style or streaming
+   via `Stage2StreamingAdapter`); Stage 3 uses the existing full-model path. In
+   streaming mode, files are split at the file level; in map-style mode,
+   `datasource.train_test_split(test_ratio)` is used for sample-level splitting.
 2. **Training setup** – In streaming mode,
    `TrainingBenchmarkUseCase._setup_streaming_components` creates streaming
    DataLoaders via `DataLoaderFactory.create_streaming_dataloaders`. In map-style
@@ -62,7 +71,9 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
    Both paths set up the network, optimizer, scheduler, and callbacks.
 3. **Warmup & batch caps** – `SingleEpochBenchmark.benchmark_epoch` wraps the
    training loop with a `TimingCallback`, discards the first `warmup_batches` from
-   averages, and optionally halts after `max_batches`.【F:src/maou/app/utility/training_benchmark.py†L122-L205】
+   averages, and optionally halts after `max_batches`. When the dataset is small
+   (e.g., Stage 1 with ~1,105 samples), warmup is automatically clamped to
+   `max(0, estimated_batches - 2)` to prevent zero-division errors.【F:src/maou/app/utility/training_benchmark.py†L122-L205】
 4. **Profiling & monitoring** – When requested, the benchmark enables PyTorch’s
    profiler and the resource-monitoring callback to capture CPU/GPU utilization in
    addition to throughput.【F:src/maou/app/utility/training_benchmark.py†L152-L207】【F:src/maou/app/utility/training_benchmark.py†L176-L185】
@@ -100,9 +111,25 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
   `"map-style"`) in both `training_metrics` and `validation_metrics`, indicating
   which data loading strategy was used for the benchmark run.
 
-### Example invocation
+### Example invocations
 
 ```bash
+# Stage 1 benchmark (reachable squares, map-style only)
+uv run maou utility benchmark-training \
+  --stage 1 --stage1-data-path /data/stage1 \
+  --gpu cuda:0 --batch-size 256 --max-batches 10 --warmup-batches 1
+
+# Stage 2 benchmark (legal moves, streaming)
+uv run maou utility benchmark-training \
+  --stage 2 --stage2-data-path /data/stage2 \
+  --gpu cuda:0 --batch-size 512 --max-batches 50
+
+# Stage 3 benchmark (policy+value, default)
+uv run maou utility benchmark-training \
+  --stage3-data-path /data/stage3 \
+  --gpu cuda:0 --batch-size 512 --max-batches 100
+
+# Stage 3 via cloud (S3)
 uv run maou utility benchmark-training \
   --input-s3 --input-bucket-name shogi-data --input-prefix hcpe \
   --input-data-name training --input-local-cache-dir /tmp/cache \

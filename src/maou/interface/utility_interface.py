@@ -190,6 +190,21 @@ def benchmark_training(
         StreamingDataSource
     ] = None,
     streaming_val_source: Optional[StreamingDataSource] = None,
+    stage: int = 3,
+    stage1_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage2_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage2_streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage2_streaming_val_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage12_lr_scheduler: Optional[str] = None,
+    stage12_compilation: bool = False,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -380,16 +395,42 @@ def benchmark_training(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
         )
 
-    # Validate streaming/datasource requirements
-    if not streaming and datasource is None:
+    # Stage 1/2 LR scheduler 正規化
+    stage12_lr_scheduler_key = normalize_lr_scheduler_name(
+        stage12_lr_scheduler
+    )
+
+    # Validate stage and datasource requirements
+    if stage not in (1, 2, 3):
         raise ValueError(
-            "datasource is required when streaming is disabled"
+            f"stage must be 1, 2, or 3, got {stage}"
         )
-    if streaming and streaming_train_source is None:
+    if stage == 1 and stage1_datasource is None:
         raise ValueError(
-            "streaming_train_source is required "
-            "when streaming is enabled"
+            "stage1_datasource is required when stage=1"
         )
+    if stage == 2:
+        if not streaming and stage2_datasource is None:
+            raise ValueError(
+                "stage2_datasource is required "
+                "when stage=2 and streaming is disabled"
+            )
+        if streaming and stage2_streaming_train_source is None:
+            raise ValueError(
+                "stage2_streaming_train_source is required "
+                "when stage=2 and streaming is enabled"
+            )
+    if stage == 3:
+        if not streaming and datasource is None:
+            raise ValueError(
+                "datasource is required "
+                "when stage=3 and streaming is disabled"
+            )
+        if streaming and streaming_train_source is None:
+            raise ValueError(
+                "streaming_train_source is required "
+                "when stage=3 and streaming is enabled"
+            )
 
     config = TrainingBenchmarkConfig(
         datasource=datasource,
@@ -422,6 +463,21 @@ def benchmark_training(
         streaming=streaming,
         streaming_train_source=streaming_train_source,
         streaming_val_source=streaming_val_source,
+        stage=stage,
+        stage1_datasource=stage1_datasource,
+        stage2_datasource=stage2_datasource,
+        stage2_streaming_train_source=stage2_streaming_train_source,
+        stage2_streaming_val_source=stage2_streaming_val_source,
+        stage12_lr_scheduler_name=stage12_lr_scheduler_key,
+        stage12_compilation=stage12_compilation,
+        stage1_pos_weight=stage1_pos_weight or 1.0,
+        stage2_pos_weight=stage2_pos_weight or 1.0,
+        stage2_gamma_pos=stage2_gamma_pos or 0.0,
+        stage2_gamma_neg=stage2_gamma_neg or 0.0,
+        stage2_clip=stage2_clip or 0.0,
+        stage2_hidden_dim=stage2_hidden_dim or 128,
+        stage2_head_dropout=stage2_head_dropout or 0.0,
+        stage2_test_ratio=stage2_test_ratio or 0.2,
     )
 
     use_case = TrainingBenchmarkUseCase()

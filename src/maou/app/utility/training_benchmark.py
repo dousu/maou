@@ -108,7 +108,19 @@ class BenchmarkResult:
 
 
 class SingleEpochBenchmark:
-    """Single epoch benchmark for training performance measurement."""
+    """Single epoch benchmark for training performance measurement.
+
+    Args:
+        model: 学習対象のネットワークモデル
+        device: 学習に使用するデバイス
+        optimizer: オプティマイザ
+        loss_fn_policy: 方策損失関数
+        loss_fn_value: 価値損失関数
+        policy_loss_ratio: 方策損失の重み係数
+        value_loss_ratio: 価値損失の重み係数
+        enable_resource_monitoring: リソース監視を有効にするか
+        training_loop_class: 使用するTrainingLoopクラス（デフォルト: TrainingLoop）
+    """
 
     logger: logging.Logger = logging.getLogger(__name__)
 
@@ -123,6 +135,7 @@ class SingleEpochBenchmark:
         policy_loss_ratio: float,
         value_loss_ratio: float,
         enable_resource_monitoring: bool = False,
+        training_loop_class: type[TrainingLoop] = TrainingLoop,
     ):
         self.model = model
         self.device = device
@@ -134,6 +147,7 @@ class SingleEpochBenchmark:
         self.enable_resource_monitoring = (
             enable_resource_monitoring
         )
+        self.training_loop_class = training_loop_class
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -185,7 +199,7 @@ class SingleEpochBenchmark:
             )
 
         # Create training loop
-        training_loop = TrainingLoop(
+        training_loop = self.training_loop_class(
             model=self.model,
             device=self.device,
             optimizer=self.optimizer,
@@ -319,7 +333,7 @@ class SingleEpochBenchmark:
             )
 
         # Create training loop in evaluation mode
-        training_loop = TrainingLoop(
+        training_loop = self.training_loop_class(
             model=self.model,
             device=self.device,
             optimizer=self.optimizer,
@@ -448,6 +462,33 @@ class TrainingBenchmarkConfig:
     streaming: bool = False
     streaming_train_source: Optional[StreamingDataSource] = None
     streaming_val_source: Optional[StreamingDataSource] = None
+
+    # Stage 関連
+    stage: int = 3
+    stage1_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None
+    stage2_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None
+    stage2_streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None
+    stage2_streaming_val_source: Optional[
+        StreamingDataSource
+    ] = None
+    stage12_lr_scheduler_name: Optional[str] = None
+    stage12_compilation: bool = False
+
+    # Stage 1/2 Head パラメータ
+    stage1_pos_weight: float = 1.0
+    stage2_pos_weight: float = 1.0
+    stage2_gamma_pos: float = 0.0
+    stage2_gamma_neg: float = 0.0
+    stage2_clip: float = 0.0
+    stage2_hidden_dim: int = 128
+    stage2_head_dropout: float = 0.0
+    stage2_test_ratio: float = 0.2
 
 
 class TrainingBenchmarkUseCase:
@@ -583,65 +624,543 @@ class TrainingBenchmarkUseCase:
             model_components,
         )
 
+    def _setup_stage1_components(
+        self,
+        config: TrainingBenchmarkConfig,
+    ) -> tuple[
+        DeviceConfig,
+        tuple[DataLoader, DataLoader],
+        ModelComponents,
+    ]:
+        """Stage 1 (Reachable Squares) 用のベンチマークコンポーネントをセットアップする．
+
+        Args:
+            config: ベンチマーク設定
+
+        Returns:
+            (DeviceConfig, (train_loader, val_loader), ModelComponents)
+
+        Raises:
+            ValueError: stage1_datasource が未設定の場合
+        """
+        if config.stage1_datasource is None:
+            raise ValueError(
+                "stage1_datasource is required when stage=1"
+            )
+
+        if config.detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
+
+        device_config = DeviceSetup.setup_device(
+            config.gpu, config.pin_memory
+        )
+        device = device_config.device
+
+        # Backbone + Head
+        backbone = ModelFactory.create_shogi_backbone(
+            device, architecture=config.model_architecture
+        )
+        from maou.app.learning.network import (
+            ReachableSquaresHead,
+        )
+
+        reachable_head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+
+        # Model adapter
+        from maou.app.learning.multi_stage_training import (
+            Stage1DatasetAdapter,
+            Stage1ModelAdapter,
+        )
+
+        model: torch.nn.Module = Stage1ModelAdapter(
+            backbone, reachable_head
+        )
+        model.to(device)
+
+        # Loss functions
+        from maou.domain.loss.loss_fn import (
+            ReachableSquaresLoss,
+        )
+
+        loss_fn_policy: torch.nn.Module = ReachableSquaresLoss(
+            pos_weight=config.stage1_pos_weight,
+        )
+        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
+
+        # Optimizer
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            config.learning_ratio,
+            config.momentum,
+            optimizer_name=config.optimizer_name,
+            betas=(
+                config.optimizer_beta1,
+                config.optimizer_beta2,
+            ),
+            eps=config.optimizer_eps,
+        )
+
+        # LR Scheduler
+        lr_scheduler_name = (
+            config.stage12_lr_scheduler_name
+            or config.lr_scheduler_name
+        )
+
+        # Dataset + DataLoader
+        from maou.app.learning.dataset import Stage1Dataset
+
+        training_datasource, validation_datasource = (
+            config.stage1_datasource.train_test_split(
+                test_ratio=config.test_ratio
+            )
+        )
+        train_dataset = Stage1DatasetAdapter(
+            Stage1Dataset(datasource=training_datasource)
+        )
+        val_dataset = Stage1DatasetAdapter(
+            Stage1Dataset(datasource=validation_datasource)
+        )
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_dataloaders(
+                dataset_train=train_dataset,
+                dataset_validation=val_dataset,
+                batch_size=config.batch_size,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=device_config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+            )
+        )
+
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=lr_scheduler_name,
+            max_epochs=1,
+            steps_per_epoch=len(training_loader),
+        )
+
+        model_components = ModelComponents(
+            model=model,
+            loss_fn_policy=loss_fn_policy,
+            loss_fn_value=loss_fn_value,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+        self.logger.info(
+            "Stage 1 benchmark components setup completed"
+        )
+
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )
+
+    def _setup_stage2_components(
+        self,
+        config: TrainingBenchmarkConfig,
+    ) -> tuple[
+        DeviceConfig,
+        tuple[DataLoader, DataLoader],
+        ModelComponents,
+    ]:
+        """Stage 2 (Legal Moves) map-style 用のベンチマークコンポーネントをセットアップする．
+
+        Args:
+            config: ベンチマーク設定
+
+        Returns:
+            (DeviceConfig, (train_loader, val_loader), ModelComponents)
+
+        Raises:
+            ValueError: stage2_datasource が未設定の場合
+        """
+        if config.stage2_datasource is None:
+            raise ValueError(
+                "stage2_datasource is required "
+                "when stage=2 and streaming=False"
+            )
+
+        if config.detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
+
+        device_config = DeviceSetup.setup_device(
+            config.gpu, config.pin_memory
+        )
+        device = device_config.device
+
+        # Backbone + Head
+        backbone = ModelFactory.create_shogi_backbone(
+            device, architecture=config.model_architecture
+        )
+        from maou.app.learning.network import LegalMovesHead
+
+        legal_moves_head = LegalMovesHead(
+            input_dim=backbone.embedding_dim,
+            hidden_dim=config.stage2_hidden_dim
+            if config.stage2_hidden_dim > 0
+            else None,
+            dropout=config.stage2_head_dropout,
+        )
+
+        # Model adapter
+        from maou.app.learning.multi_stage_training import (
+            Stage2DatasetAdapter,
+            Stage2ModelAdapter,
+        )
+
+        model: torch.nn.Module = Stage2ModelAdapter(
+            backbone, legal_moves_head
+        )
+        model.to(device)
+
+        # Loss functions
+        from maou.domain.loss.loss_fn import LegalMovesLoss
+
+        loss_fn_policy: torch.nn.Module = LegalMovesLoss(
+            pos_weight=config.stage2_pos_weight,
+            gamma_pos=config.stage2_gamma_pos,
+            gamma_neg=config.stage2_gamma_neg,
+            clip=config.stage2_clip,
+        )
+        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
+
+        # Optimizer
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            config.learning_ratio,
+            config.momentum,
+            optimizer_name=config.optimizer_name,
+            betas=(
+                config.optimizer_beta1,
+                config.optimizer_beta2,
+            ),
+            eps=config.optimizer_eps,
+        )
+
+        # LR Scheduler
+        lr_scheduler_name = (
+            config.stage12_lr_scheduler_name
+            or config.lr_scheduler_name
+        )
+
+        # Dataset + DataLoader
+        from maou.app.learning.dataset import Stage2Dataset
+
+        training_datasource, validation_datasource = (
+            config.stage2_datasource.train_test_split(
+                test_ratio=config.stage2_test_ratio
+            )
+        )
+        train_dataset = Stage2DatasetAdapter(
+            Stage2Dataset(datasource=training_datasource)
+        )
+        val_dataset = Stage2DatasetAdapter(
+            Stage2Dataset(datasource=validation_datasource)
+        )
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_dataloaders(
+                dataset_train=train_dataset,
+                dataset_validation=val_dataset,
+                batch_size=config.batch_size,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=device_config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+            )
+        )
+
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=lr_scheduler_name,
+            max_epochs=1,
+            steps_per_epoch=len(training_loader),
+        )
+
+        model_components = ModelComponents(
+            model=model,
+            loss_fn_policy=loss_fn_policy,
+            loss_fn_value=loss_fn_value,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+        self.logger.info(
+            "Stage 2 benchmark components setup completed"
+        )
+
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )
+
+    def _setup_stage2_streaming_components(
+        self,
+        config: TrainingBenchmarkConfig,
+    ) -> tuple[
+        DeviceConfig,
+        tuple[DataLoader, DataLoader],
+        ModelComponents,
+    ]:
+        """Stage 2 (Legal Moves) streaming 用のベンチマークコンポーネントをセットアップする．
+
+        Args:
+            config: ベンチマーク設定
+
+        Returns:
+            (DeviceConfig, (train_loader, val_loader), ModelComponents)
+
+        Raises:
+            ValueError: stage2_streaming_train_source が未設定の場合
+        """
+        if config.stage2_streaming_train_source is None:
+            raise ValueError(
+                "stage2_streaming_train_source is required "
+                "when stage=2 and streaming=True"
+            )
+
+        if config.detect_anomaly:
+            torch.autograd.set_detect_anomaly(
+                mode=True, check_nan=True
+            )
+
+        device_config = DeviceSetup.setup_device(
+            config.gpu, config.pin_memory
+        )
+        device = device_config.device
+
+        # Backbone + Head
+        backbone = ModelFactory.create_shogi_backbone(
+            device, architecture=config.model_architecture
+        )
+        from maou.app.learning.network import LegalMovesHead
+
+        legal_moves_head = LegalMovesHead(
+            input_dim=backbone.embedding_dim,
+            hidden_dim=config.stage2_hidden_dim
+            if config.stage2_hidden_dim > 0
+            else None,
+            dropout=config.stage2_head_dropout,
+        )
+
+        # Model adapter
+        from maou.app.learning.multi_stage_training import (
+            Stage2ModelAdapter,
+        )
+
+        model: torch.nn.Module = Stage2ModelAdapter(
+            backbone, legal_moves_head
+        )
+        model.to(device)
+
+        # Streaming datasets
+        from maou.app.learning.streaming_dataset import (
+            Stage2StreamingAdapter,
+            StreamingStage2Dataset,
+        )
+
+        train_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
+            StreamingStage2Dataset(
+                streaming_source=config.stage2_streaming_train_source,
+                batch_size=config.batch_size,
+                shuffle=True,
+            )
+        )
+
+        if config.stage2_streaming_val_source is not None:
+            val_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
+                StreamingStage2Dataset(
+                    streaming_source=config.stage2_streaming_val_source,
+                    batch_size=config.batch_size,
+                    shuffle=False,
+                )
+            )
+            n_val_files = len(
+                config.stage2_streaming_val_source.file_paths
+            )
+        else:
+            _EmptyDataset = type(
+                "_EmptyDataset",
+                (torch.utils.data.IterableDataset,),
+                {"__iter__": lambda self: iter([])},
+            )
+            val_dataset = _EmptyDataset()
+            n_val_files = 0
+
+        n_train_files = len(
+            config.stage2_streaming_train_source.file_paths
+        )
+        training_loader, validation_loader = (
+            DataLoaderFactory.create_streaming_dataloaders(
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                dataloader_workers=config.dataloader_workers,
+                pin_memory=device_config.pin_memory,
+                prefetch_factor=config.prefetch_factor,
+                n_train_files=n_train_files,
+                n_val_files=n_val_files,
+                file_paths=config.stage2_streaming_train_source.file_paths,
+            )
+        )
+
+        # Loss functions
+        from maou.domain.loss.loss_fn import LegalMovesLoss
+
+        loss_fn_policy: torch.nn.Module = LegalMovesLoss(
+            pos_weight=config.stage2_pos_weight,
+            gamma_pos=config.stage2_gamma_pos,
+            gamma_neg=config.stage2_gamma_neg,
+            clip=config.stage2_clip,
+        )
+        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
+
+        # Optimizer
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            config.learning_ratio,
+            config.momentum,
+            optimizer_name=config.optimizer_name,
+            betas=(
+                config.optimizer_beta1,
+                config.optimizer_beta2,
+            ),
+            eps=config.optimizer_eps,
+        )
+
+        # LR Scheduler
+        lr_scheduler_name = (
+            config.stage12_lr_scheduler_name
+            or config.lr_scheduler_name
+        )
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=lr_scheduler_name,
+            max_epochs=1,
+            steps_per_epoch=len(training_loader),
+        )
+
+        model_components = ModelComponents(
+            model=model,
+            loss_fn_policy=loss_fn_policy,
+            loss_fn_value=loss_fn_value,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+        self.logger.info(
+            "Stage 2 streaming benchmark components setup completed"
+        )
+
+        return (
+            device_config,
+            (training_loader, validation_loader),
+            model_components,
+        )
+
     def execute(self, config: TrainingBenchmarkConfig) -> str:
         """Execute training benchmark and return JSON results."""
-        self.logger.info("Starting training benchmark use case")
+        self.logger.info(
+            "Starting training benchmark use case (stage=%d)",
+            config.stage,
+        )
 
-        # Setup components (streaming or map-style)
-        if (
-            config.streaming
-            and config.streaming_train_source is not None
-        ):
+        # Stage 別コンポーネントセットアップ
+        from maou.app.learning.training_loop import (
+            Stage2TrainingLoop,
+        )
+
+        training_loop_class: type[TrainingLoop] = TrainingLoop
+
+        if config.stage == 1:
             device_config, dataloaders, model_components = (
-                self._setup_streaming_components(config)
+                self._setup_stage1_components(config)
             )
-            data_load_method = "streaming"
-        else:
-            if config.datasource is None:
-                raise ValueError(
-                    "datasource is required "
-                    "when streaming=False"
-                )
-
-            # Split data into training and validation sets
-            training_datasource, validation_datasource = (
-                config.datasource.train_test_split(
-                    test_ratio=config.test_ratio
-                )
-            )
-
-            # Setup all training components using shared setup module
-            cache_transforms_enabled = (
-                config.cache_transforms
-                if config.cache_transforms is not None
-                else False
-            )
-            device_config, dataloaders, model_components = (
-                TrainingSetup.setup_training_components(
-                    training_datasource=training_datasource,
-                    validation_datasource=validation_datasource,
-                    cache_transforms=cache_transforms_enabled,
-                    gpu=config.gpu,
-                    model_architecture=config.model_architecture,
-                    batch_size=config.batch_size,
-                    dataloader_workers=config.dataloader_workers,
-                    pin_memory=config.pin_memory,
-                    prefetch_factor=config.prefetch_factor,
-                    gce_parameter=config.gce_parameter,
-                    learning_ratio=config.learning_ratio,
-                    momentum=config.momentum,
-                    optimizer_name=config.optimizer_name,
-                    optimizer_beta1=config.optimizer_beta1,
-                    optimizer_beta2=config.optimizer_beta2,
-                    optimizer_eps=config.optimizer_eps,
-                    lr_scheduler_name=config.lr_scheduler_name,
-                    max_epochs=1,
-                    detect_anomaly=config.detect_anomaly,
-                )
-            )
+            training_loop_class = Stage2TrainingLoop
             data_load_method = "map-style"
+        elif config.stage == 2:
+            if (
+                config.streaming
+                and config.stage2_streaming_train_source
+                is not None
+            ):
+                device_config, dataloaders, model_components = (
+                    self._setup_stage2_streaming_components(
+                        config
+                    )
+                )
+                data_load_method = "streaming"
+            else:
+                device_config, dataloaders, model_components = (
+                    self._setup_stage2_components(config)
+                )
+                data_load_method = "map-style"
+            training_loop_class = Stage2TrainingLoop
+        else:
+            # Stage 3: 既存のロジック
+            if (
+                config.streaming
+                and config.streaming_train_source is not None
+            ):
+                device_config, dataloaders, model_components = (
+                    self._setup_streaming_components(config)
+                )
+                data_load_method = "streaming"
+            else:
+                if config.datasource is None:
+                    raise ValueError(
+                        "datasource is required "
+                        "when streaming=False"
+                    )
 
-        if config.compilation:
+                training_datasource, validation_datasource = (
+                    config.datasource.train_test_split(
+                        test_ratio=config.test_ratio
+                    )
+                )
+
+                cache_transforms_enabled = (
+                    config.cache_transforms
+                    if config.cache_transforms is not None
+                    else False
+                )
+                device_config, dataloaders, model_components = (
+                    TrainingSetup.setup_training_components(
+                        training_datasource=training_datasource,
+                        validation_datasource=validation_datasource,
+                        cache_transforms=cache_transforms_enabled,
+                        gpu=config.gpu,
+                        model_architecture=config.model_architecture,
+                        batch_size=config.batch_size,
+                        dataloader_workers=config.dataloader_workers,
+                        pin_memory=config.pin_memory,
+                        prefetch_factor=config.prefetch_factor,
+                        gce_parameter=config.gce_parameter,
+                        learning_ratio=config.learning_ratio,
+                        momentum=config.momentum,
+                        optimizer_name=config.optimizer_name,
+                        optimizer_beta1=config.optimizer_beta1,
+                        optimizer_beta2=config.optimizer_beta2,
+                        optimizer_eps=config.optimizer_eps,
+                        lr_scheduler_name=config.lr_scheduler_name,
+                        max_epochs=1,
+                        detect_anomaly=config.detect_anomaly,
+                    )
+                )
+                data_load_method = "map-style"
+
+        should_compile = config.compilation
+        if (
+            config.stage in (1, 2)
+            and config.stage12_compilation
+        ):
+            should_compile = True
+        if should_compile:
             self.logger.info(
                 "Compiling model with torch.compile for benchmarking (dynamic shapes disabled)"
             )
@@ -652,10 +1171,36 @@ class TrainingBenchmarkUseCase:
         training_loader, validation_loader = dataloaders
         device = device_config.device
 
+        # warmup バッチ数の自動調整（全ステージ共通）
+        estimated_batches = len(training_loader)
+        if config.max_batches is not None:
+            estimated_batches = min(
+                estimated_batches, config.max_batches
+            )
+        effective_warmup = min(
+            config.warmup_batches, estimated_batches - 2
+        )
+        effective_warmup = max(0, effective_warmup)
+        if effective_warmup != config.warmup_batches:
+            self.logger.warning(
+                "warmup_batches を %d → %d に自動調整"
+                "(estimated_batches=%d)",
+                config.warmup_batches,
+                effective_warmup,
+                estimated_batches,
+            )
+
         # Get total number of batches in the full dataset
         total_batches_in_dataset = len(training_loader)
 
         # Create benchmark instance
+        # Stage 1/2: value_loss_ratio=0.0 でダミー value loss を無視
+        actual_value_loss_ratio = (
+            0.0
+            if config.stage in (1, 2)
+            else config.value_loss_ratio
+        )
+
         benchmark = SingleEpochBenchmark(
             model=model_components.model,
             device=device,
@@ -663,15 +1208,16 @@ class TrainingBenchmarkUseCase:
             loss_fn_policy=model_components.loss_fn_policy,
             loss_fn_value=model_components.loss_fn_value,
             policy_loss_ratio=config.policy_loss_ratio,
-            value_loss_ratio=config.value_loss_ratio,
+            value_loss_ratio=actual_value_loss_ratio,
             enable_resource_monitoring=config.enable_resource_monitoring,
+            training_loop_class=training_loop_class,
         )
 
         # Run training benchmark
         self.logger.info("Starting training benchmark...")
         training_result = benchmark.benchmark_epoch(
             training_loader,
-            warmup_batches=config.warmup_batches,
+            warmup_batches=effective_warmup,
             max_batches=config.max_batches,
             enable_profiling=config.enable_profiling,
         )

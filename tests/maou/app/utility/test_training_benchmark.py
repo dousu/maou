@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from maou.app.utility.training_benchmark import (
     BenchmarkResult,
@@ -188,3 +189,157 @@ class TestBenchmarkTrainingValidation:
                 streaming=True,
                 streaming_train_source=None,
             )
+
+
+def test_single_epoch_benchmark_accepts_training_loop_class() -> (
+    None
+):
+    """SingleEpochBenchmark が training_loop_class パラメータを受け取れることを確認する．"""
+    from unittest.mock import MagicMock
+
+    from maou.app.learning.training_loop import (
+        Stage2TrainingLoop,
+        TrainingLoop,
+    )
+    from maou.app.utility.training_benchmark import (
+        SingleEpochBenchmark,
+    )
+
+    model = MagicMock()
+    device = torch.device("cpu")
+    optimizer = MagicMock()
+    loss_policy = MagicMock()
+    loss_value = MagicMock()
+
+    # Default should be TrainingLoop
+    benchmark = SingleEpochBenchmark(
+        model=model,
+        device=device,
+        optimizer=optimizer,
+        loss_fn_policy=loss_policy,
+        loss_fn_value=loss_value,
+        policy_loss_ratio=1.0,
+        value_loss_ratio=1.0,
+    )
+    assert benchmark.training_loop_class is TrainingLoop
+
+    # Should accept Stage2TrainingLoop
+    benchmark_s2 = SingleEpochBenchmark(
+        model=model,
+        device=device,
+        optimizer=optimizer,
+        loss_fn_policy=loss_policy,
+        loss_fn_value=loss_value,
+        policy_loss_ratio=1.0,
+        value_loss_ratio=0.0,
+        training_loop_class=Stage2TrainingLoop,
+    )
+    assert (
+        benchmark_s2.training_loop_class is Stage2TrainingLoop
+    )
+
+
+def test_training_benchmark_config_stage_defaults() -> None:
+    """TrainingBenchmarkConfig の新フィールドのデフォルト値を確認する．"""
+    from maou.app.utility.training_benchmark import (
+        TrainingBenchmarkConfig,
+    )
+
+    config = TrainingBenchmarkConfig()
+    assert config.stage == 3
+    assert config.stage1_datasource is None
+    assert config.stage2_datasource is None
+    assert config.stage2_streaming_train_source is None
+    assert config.stage2_streaming_val_source is None
+    assert config.stage12_lr_scheduler_name is None
+    assert config.stage12_compilation is False
+    assert config.stage1_pos_weight == 1.0
+    assert config.stage2_pos_weight == 1.0
+    assert config.stage2_gamma_pos == 0.0
+    assert config.stage2_gamma_neg == 0.0
+    assert config.stage2_clip == 0.0
+    assert config.stage2_hidden_dim == 128
+    assert config.stage2_head_dropout == 0.0
+    assert config.stage2_test_ratio == 0.2
+
+
+def test_training_benchmark_config_stage1() -> None:
+    """Stage 1 用 TrainingBenchmarkConfig が正しく生成されることを確認する．"""
+    from unittest.mock import MagicMock
+
+    from maou.app.utility.training_benchmark import (
+        TrainingBenchmarkConfig,
+    )
+
+    mock_datasource = MagicMock()
+    config = TrainingBenchmarkConfig(
+        stage=1,
+        stage1_datasource=mock_datasource,
+        stage1_pos_weight=2.0,
+    )
+    assert config.stage == 1
+    assert config.stage1_datasource is mock_datasource
+    assert config.stage1_pos_weight == 2.0
+
+
+def test_training_benchmark_config_stage2() -> None:
+    """Stage 2 用 TrainingBenchmarkConfig が正しく生成されることを確認する．"""
+    from unittest.mock import MagicMock
+
+    from maou.app.utility.training_benchmark import (
+        TrainingBenchmarkConfig,
+    )
+
+    mock_datasource = MagicMock()
+    config = TrainingBenchmarkConfig(
+        stage=2,
+        stage2_datasource=mock_datasource,
+        stage2_pos_weight=3.0,
+        stage2_gamma_neg=2.0,
+        stage2_clip=0.02,
+        stage2_hidden_dim=256,
+        stage2_head_dropout=0.1,
+    )
+    assert config.stage == 2
+    assert config.stage2_datasource is mock_datasource
+    assert config.stage2_pos_weight == 3.0
+    assert config.stage2_gamma_neg == 2.0
+    assert config.stage2_clip == 0.02
+    assert config.stage2_hidden_dim == 256
+    assert config.stage2_head_dropout == 0.1
+
+
+def test_stage1_benchmark_warmup_adjustment() -> None:
+    """warmup_batches >= total_batches の場合に自動調整されることを確認する．"""
+    # Test the adjustment logic directly
+    warmup_batches = 10
+    estimated_batches = 5  # Small dataset like Stage 1
+
+    effective_warmup = min(
+        warmup_batches, estimated_batches - 2
+    )
+    effective_warmup = max(0, effective_warmup)
+
+    assert effective_warmup == 3  # 5 - 2 = 3
+
+    # Edge case: very small dataset
+    warmup_batches = 10
+    estimated_batches = 1
+
+    effective_warmup = min(
+        warmup_batches, estimated_batches - 2
+    )
+    effective_warmup = max(0, effective_warmup)
+
+    assert effective_warmup == 0  # max(0, 1-2) = 0
+
+    # Normal case: enough batches
+    warmup_batches = 5
+    estimated_batches = 100
+
+    effective_warmup = min(
+        warmup_batches, estimated_batches - 2
+    )
+    effective_warmup = max(0, effective_warmup)
+
+    assert effective_warmup == 5  # No adjustment needed

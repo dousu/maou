@@ -73,10 +73,6 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "vit-mlp-ratio",  # ViTアーキテクチャ設定（不要）
         "vit-dropout",  # ViTアーキテクチャ設定（不要）
         "gradient-checkpointing",  # ViTメモリ最適化（不要）
-        "stage",  # マルチステージ学習（不要）
-        "stage1-data-path",  # Stage 1データパス（不要）
-        "stage2-data-path",  # Stage 2データパス（不要）
-        "stage3-data-path",  # Stage 3データパス（不要）
         "stage1-threshold",  # Stage 1閾値（不要）
         "stage2-threshold",  # Stage 2閾値（不要）
         "stage1-max-epochs",  # Stage 1最大エポック（不要）
@@ -87,9 +83,6 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "stage2-max-epochs",  # Stage 2最大エポック（不要）
         "resume-reachable-head-from",  # Stage 1ヘッド再開（不要）
         "resume-legal-moves-head-from",  # Stage 2ヘッド再開（不要）
-        "stage12-lr-scheduler",  # Stage 1/2 LRスケジューラ（不要）
-        "stage12-compilation",  # Stage 1/2 torch.compile（不要）
-        "no-stage12-compilation",  # Stage 1/2 torch.compile無効化（不要）
         "log-dir",  # TensorBoardログディレクトリ（不要）
         "model-dir",  # モデル出力ディレクトリ（不要）
         "tensorboard-histogram-frequency",  # TensorBoard（不要）
