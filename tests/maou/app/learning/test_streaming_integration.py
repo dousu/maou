@@ -2,10 +2,9 @@
 
 Tests cover:
 1. LearningOption streaming fields
-2. set_epoch() calls in SingleStageTrainingLoop
-3. set_epoch() calls in Learning.__train() epoch loop
-4. training_loop.py batch_size=None handling
-5. _setup_streaming_components validation
+2. set_epoch() calls in Learning.__train() epoch loop
+3. training_loop.py batch_size=None handling
+4. _setup_streaming_components validation
 """
 
 from __future__ import annotations
@@ -20,21 +19,15 @@ from torch.utils.data import DataLoader
 
 from maou.app.learning.dl import Learning
 from maou.app.learning.multi_stage_training import (
-    SingleStageTrainingLoop,
-    StageConfig,
     TrainingStage,
 )
 from maou.app.learning.network import (
-    PIECES_IN_HAND_VECTOR_SIZE,
     HeadlessNetwork,
-    ReachableSquaresHead,
 )
 from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
-    StreamingStage1Dataset,
 )
 from maou.domain.data.columnar_batch import ColumnarBatch
-from maou.domain.loss.loss_fn import ReachableSquaresLoss
 from maou.domain.move.label import MOVE_LABELS_NUM
 
 # ============================================================================
@@ -357,125 +350,6 @@ class TestSetupStreamingComponents:
         )
         assert model_components.model is not None
         assert model_components.optimizer is not None
-
-
-# ============================================================================
-# set_epoch() integration in SingleStageTrainingLoop
-# ============================================================================
-
-
-class TestSingleStageSetEpoch:
-    """set_epoch() is called during SingleStageTrainingLoop.run()."""
-
-    def test_set_epoch_called_on_streaming_dataloader(
-        self,
-    ) -> None:
-        """set_epoch() is called for each epoch when dataset supports it."""
-        source = FakeStage1Source(n_files=1, rows_per_file=8)
-        dataset = StreamingStage1Dataset(
-            streaming_source=source,
-            batch_size=4,
-            shuffle=False,
-        )
-        dataloader = DataLoader(
-            dataset,
-            batch_size=None,
-            shuffle=False,
-            num_workers=0,
-        )
-
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=8,
-            board_size=(9, 9),
-            architecture="resnet",
-            layers=(1, 1, 1, 1),
-            strides=(1, 1, 1, 1),
-            out_channels=(8, 8, 8, 8),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=2,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=ReachableSquaresLoss(),
-            learning_rate=0.001,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        # Should have trained both epochs (threshold not met with random data)
-        assert result.epochs_trained == 2
-        # Verify set_epoch was applied (dataset._epoch should be the last epoch index)
-        assert dataset._epoch == 1
-
-    def test_set_epoch_not_called_on_non_streaming(
-        self,
-    ) -> None:
-        """No error when dataset doesn't have set_epoch()."""
-        # Use TensorDataset which has no set_epoch
-        from torch.utils.data import TensorDataset
-
-        board = torch.randint(0, 30, (8, 9, 9))
-        hand = torch.randn(8, PIECES_IN_HAND_VECTOR_SIZE)
-        targets = torch.zeros(8, 81)
-        dataset = TensorDataset(board, hand, targets)
-
-        def collate_fn(batch: list) -> tuple:
-            boards = torch.stack([b[0] for b in batch])
-            hands = torch.stack([b[1] for b in batch])
-            tgts = torch.stack([b[2] for b in batch])
-            return (boards, hands), tgts
-
-        dataloader = DataLoader(
-            dataset,
-            batch_size=4,
-            collate_fn=collate_fn,
-        )
-
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=8,
-            board_size=(9, 9),
-            architecture="resnet",
-            layers=(1, 1, 1, 1),
-            strides=(1, 1, 1, 1),
-            out_channels=(8, 8, 8, 8),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=ReachableSquaresLoss(),
-            learning_rate=0.001,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        # Should complete without error
-        result = loop.run()
-        assert result.epochs_trained == 1
 
 
 # ============================================================================

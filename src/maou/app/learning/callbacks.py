@@ -1039,8 +1039,7 @@ class Stage2F1Callback(BaseCallback):
     GPU同期(`.item()`)はエポック終了時のみ行い，
     バッチごとのGPUパイプラインストールを回避する．
 
-    F1計算ロジックは ``SingleStageTrainingLoop._train_epoch()``
-    のStage 2パス(multi-label binary classification)と同一．
+    F1計算ロジックは Stage 2 の multi-label binary classification に対応する．
     """
 
     def __init__(self) -> None:
@@ -1142,8 +1141,7 @@ class Stage1AccuracyCallback(BaseCallback):
     GPU同期(`.item()`)はエポック終了時のみ行い，
     バッチごとのGPUパイプラインストールを回避する．
 
-    精度計算ロジックは ``SingleStageTrainingLoop._train_epoch()``
-    のStage 1パス(element-wise binary classification)と同一:
+    精度計算ロジックは Stage 1 の element-wise binary classification に対応する:
     ``(sigmoid(logits) > 0.5) == targets.bool()``
     """
 

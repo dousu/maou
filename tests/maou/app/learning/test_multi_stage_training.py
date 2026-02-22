@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
-    SingleStageTrainingLoop,
     Stage1DatasetAdapter,
     StageConfig,
     TrainingStage,
@@ -140,86 +139,8 @@ def _make_dummy_dataloader(
     )
 
 
-class TestSingleStageTrainingLoopWithHeadlessNetwork:
-    """_train_epoch が HeadlessNetwork で正常に動作するテスト．"""
-
-    def test_train_epoch_stage1_completes(self) -> None:
-        """Stage 1: _train_epoch が HeadlessNetwork + ReachableSquaresHead で完走する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        loss, accuracy = loop._train_epoch(0)
-
-        assert isinstance(loss, float)
-        assert isinstance(accuracy, float)
-        assert loss > 0.0
-        assert 0.0 <= accuracy <= 1.0
-
-    def test_train_epoch_stage2_completes(self) -> None:
-        """Stage 2: _train_epoch が HeadlessNetwork + LegalMovesHead で完走する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        from maou.domain.move.label import MOVE_LABELS_NUM
-
-        head = LegalMovesHead(input_dim=backbone.embedding_dim)
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=MOVE_LABELS_NUM
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        loss, accuracy = loop._train_epoch(0)
-
-        assert isinstance(loss, float)
-        assert isinstance(accuracy, float)
-        assert loss > 0.0
-        assert 0.0 <= accuracy <= 1.0
+class TestBackboneForwardFeatures:
+    """HeadlessNetwork.forward_features() のテスト．"""
 
     def test_forward_features_receives_model_inputs(
         self,
@@ -239,257 +160,6 @@ class TestSingleStageTrainingLoopWithHeadlessNetwork:
         assert isinstance(features, torch.Tensor)
         assert features.shape[0] == 2
         assert features.shape[1] == backbone.embedding_dim
-
-    def test_run_stage1_e2e(self) -> None:
-        """Stage 1 E2E: SingleStageTrainingLoop.run が StageResult を返す．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=2,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        assert result.stage == TrainingStage.REACHABLE_SQUARES
-        assert result.epochs_trained >= 1
-        assert isinstance(result.achieved_accuracy, float)
-        assert isinstance(result.final_loss, float)
-
-    def test_run_stage2_e2e(self) -> None:
-        """Stage 2 E2E: SingleStageTrainingLoop.run が StageResult を返す．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        from maou.domain.move.label import MOVE_LABELS_NUM
-
-        head = LegalMovesHead(input_dim=backbone.embedding_dim)
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=MOVE_LABELS_NUM
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=2,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        assert result.stage == TrainingStage.LEGAL_MOVES
-        assert result.epochs_trained >= 1
-        assert isinstance(result.achieved_accuracy, float)
-        assert isinstance(result.final_loss, float)
-
-    def test_optimizer_includes_all_parameters(self) -> None:
-        """SingleStageTrainingLoopがbackbone+headの全パラメータでoptimizerを生成する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        # optimizerのパラメータ数 = backbone + head のパラメータ数
-        optimizer_param_count = sum(
-            1
-            for group in loop.optimizer.param_groups
-            for _ in group["params"]
-        )
-        expected_param_count = len(
-            list(backbone.parameters())
-        ) + len(list(head.parameters()))
-        assert optimizer_param_count == expected_param_count
-
-        # learning_rateが正しく設定されている
-        assert loop.optimizer.param_groups[0]["lr"] == 1e-3
-
-
-class TestSingleStageTrainingLoopWithHandProjection:
-    """hand_projection_dim > 0 の HeadlessNetwork で Stage 1/2 が動作するテスト．"""
-
-    def test_train_epoch_stage1_with_hand_projection(
-        self,
-    ) -> None:
-        """Stage 1: hand_projection_dim > 0 で _train_epoch が完走する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=16,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        loss, accuracy = loop._train_epoch(0)
-
-        assert isinstance(loss, float)
-        assert isinstance(accuracy, float)
-        assert loss > 0.0
-        assert 0.0 <= accuracy <= 1.0
-
-    def test_train_epoch_stage2_with_hand_projection(
-        self,
-    ) -> None:
-        """Stage 2: hand_projection_dim > 0 で _train_epoch が完走する．"""
-        from maou.domain.move.label import MOVE_LABELS_NUM
-
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=16,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = LegalMovesHead(input_dim=backbone.embedding_dim)
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=MOVE_LABELS_NUM
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        loss, accuracy = loop._train_epoch(0)
-
-        assert isinstance(loss, float)
-        assert isinstance(accuracy, float)
-        assert loss > 0.0
-        assert 0.0 <= accuracy <= 1.0
-
-    def test_run_stage1_e2e_with_hand_projection(
-        self,
-    ) -> None:
-        """Stage 1 E2E: hand_projection_dim > 0 で StageResult を返す．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=16,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=2,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        assert result.stage == TrainingStage.REACHABLE_SQUARES
-        assert result.epochs_trained >= 1
-        assert isinstance(result.achieved_accuracy, float)
-        assert isinstance(result.final_loss, float)
 
 
 class TestThresholdErrorMessages:
@@ -605,76 +275,6 @@ class TestThresholdErrorMessages:
 class TestStage2F1Metric:
     """Stage2のF1メトリック計算を検証するテスト．"""
 
-    def test_stage2_f1_metric_computation(self) -> None:
-        """既知のlogits/targetsでF1スコアが正しく計算されることを検証する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        from maou.domain.move.label import MOVE_LABELS_NUM
-
-        head = LegalMovesHead(input_dim=backbone.embedding_dim)
-
-        # 手計算可能なtargetsを作成: 最初の10ラベルが合法手
-        num_samples = 4
-        targets = torch.zeros(num_samples, MOVE_LABELS_NUM)
-        targets[:, :10] = 1.0  # 全サンプルで最初の10手が合法
-
-        board_tensor = torch.randint(0, 32, (num_samples, 9, 9))
-        hand_tensor = torch.randn(
-            num_samples, PIECES_IN_HAND_VECTOR_SIZE
-        )
-
-        dataset = TensorDataset(
-            board_tensor, hand_tensor, targets
-        )
-
-        def collate_fn(
-            batch: list[tuple[torch.Tensor, ...]],
-        ) -> tuple[
-            tuple[torch.Tensor, torch.Tensor], torch.Tensor
-        ]:
-            boards = torch.stack([b[0] for b in batch])
-            hands = torch.stack([b[1] for b in batch])
-            tgts = torch.stack([b[2] for b in batch])
-            return (boards, hands), tgts
-
-        dataloader = DataLoader(
-            dataset,
-            batch_size=num_samples,
-            collate_fn=collate_fn,
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=1,
-            accuracy_threshold=0.0,  # 閾値チェックを無効化
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        # F1スコアは0〜1の範囲
-        assert 0.0 <= result.achieved_accuracy <= 1.0
-        # ランダム重みの初期状態ではF1は低いはず（全部0予測に近い）
-        # 重要: accuracyなら~98%になるが，F1なら低くなることを検証
-        assert result.achieved_accuracy < 0.9, (
-            f"F1 should be low with random weights, got {result.achieved_accuracy:.4f}. "
-            "If this is high, the metric may still be element-wise accuracy."
-        )
-
     def test_stage2_f1_known_values(self) -> None:
         """F1の計算ロジックを直接テストする（ネットワーク不使用）．"""
         # TP=5, FP=2, FN=3 のケース
@@ -737,166 +337,6 @@ class TestStage2F1Metric:
         assert abs(f1.item() - expected_f1) < 1e-5, (
             f"F1 mismatch: got {f1.item():.6f}, expected {expected_f1:.6f}"
         )
-
-    def test_stage1_still_uses_accuracy(self) -> None:
-        """Stage1ではF1ではなくelement-wise accuracyが使われることを検証する．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-
-        # ターゲットを全て0にすることで，ランダムweightsでもaccuracyが高くなる
-        # （element-wise accuracyなら0予測で~50%は正解する）
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.0,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        result = loop.run()
-
-        # Stage1はelement-wise accuracy: ターゲットが全0なので高い精度になるはず
-        assert result.achieved_accuracy > 0.3, (
-            f"Stage1 accuracy unexpectedly low: {result.achieved_accuracy:.4f}"
-        )
-
-
-class TestLRSqrtScaling:
-    """sqrt LRスケーリングのテスト．"""
-
-    def test_no_scaling_when_batch_sizes_equal(self) -> None:
-        """base_batch_size == actual_batch_sizeの場合，LRは変更されない．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-            base_batch_size=256,
-            actual_batch_size=256,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        actual_lr = loop.optimizer.param_groups[0]["lr"]
-        assert actual_lr == pytest.approx(1e-3)
-
-    def test_sqrt_scaling_applied(self) -> None:
-        """actual_batch_size > base_batch_sizeの場合，sqrt scalingが適用される．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-            base_batch_size=256,
-            actual_batch_size=4096,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        expected_lr = 1e-3 * math.sqrt(
-            4096 / 256
-        )  # = 1e-3 * 4.0
-        actual_lr = loop.optimizer.param_groups[0]["lr"]
-        assert actual_lr == pytest.approx(expected_lr)
-
-    def test_no_scaling_when_smaller_batch(self) -> None:
-        """actual_batch_size < base_batch_sizeの場合，LRは変更されない．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
-            stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-            base_batch_size=256,
-            actual_batch_size=128,
-        )
-
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
-        )
-
-        actual_lr = loop.optimizer.param_groups[0]["lr"]
-        assert actual_lr == pytest.approx(1e-3)
 
 
 class TestTensorAccumulation:
@@ -1021,155 +461,398 @@ class TestStage12Compilation:
         assert isinstance(compiled_backbone, torch.nn.Module)
         assert isinstance(compiled_head, torch.nn.Module)
 
-    def test_compilation_disabled_by_default(self) -> None:
-        """compilation=Falseの場合，モデルはそのまま使用される．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
+
+# ============================================================
+# Production パステスト (run_stage1/2_with_training_loop)
+# ============================================================
+
+
+def _make_backbone(
+    *,
+    board_vocab_size: int = 32,
+    hand_projection_dim: int = 0,
+) -> HeadlessNetwork:
+    """テスト用の小規模 HeadlessNetwork を生成する．"""
+    return HeadlessNetwork(
+        board_vocab_size=board_vocab_size,
+        hand_projection_dim=hand_projection_dim,
+        embedding_dim=64,
+        architecture="resnet",
+        out_channels=(16, 32, 64, 64),
+    )
+
+
+def _make_stage_config(
+    *,
+    stage: TrainingStage = TrainingStage.REACHABLE_SQUARES,
+    max_epochs: int = 1,
+    accuracy_threshold: float = 0.0,
+    batch_size: int = 4,
+    num_samples: int = 8,
+    learning_rate: float = 1e-3,
+    lr_scheduler_name: str | None = None,
+    base_batch_size: int = 256,
+    actual_batch_size: int = 256,
+    compilation: bool = False,
+    head_hidden_dim: int | None = None,
+    head_dropout: float = 0.0,
+    board_vocab_size: int = 32,
+    hand_dim: int = PIECES_IN_HAND_VECTOR_SIZE,
+) -> StageConfig:
+    """テスト用の StageConfig を生成する．"""
+    from maou.domain.move.label import MOVE_LABELS_NUM
+
+    if stage == TrainingStage.REACHABLE_SQUARES:
+        target_dim = 81
+    else:
+        target_dim = MOVE_LABELS_NUM
+
+    dataloader = _make_dummy_dataloader(
+        batch_size=batch_size,
+        num_samples=num_samples,
+        board_vocab_size=board_vocab_size,
+        target_dim=target_dim,
+        hand_dim=hand_dim,
+        stage=stage,
+        wrap_stage1_adapter=(
+            stage == TrainingStage.REACHABLE_SQUARES
+        ),
+    )
+
+    return StageConfig(
+        stage=stage,
+        max_epochs=max_epochs,
+        accuracy_threshold=accuracy_threshold,
+        dataloader=dataloader,
+        loss_fn=torch.nn.BCEWithLogitsLoss(),
+        learning_rate=learning_rate,
+        lr_scheduler_name=lr_scheduler_name,
+        base_batch_size=base_batch_size,
+        actual_batch_size=actual_batch_size,
+        compilation=compilation,
+        head_hidden_dim=head_hidden_dim,
+        head_dropout=head_dropout,
+    )
+
+
+class TestRunStage1WithTrainingLoop:
+    """run_stage1_with_training_loop() の直接テスト．"""
+
+    def test_stage1_e2e_completes(self) -> None:
+        """Stage 1 の E2E 訓練が完走し，正しい StageResult を返す．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
         )
 
-        config = StageConfig(
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+        )
+        device = torch.device("cpu")
+
+        result, head = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.stage == TrainingStage.REACHABLE_SQUARES
+        assert result.epochs_trained >= 1
+        assert isinstance(result.achieved_accuracy, float)
+        assert 0.0 <= result.achieved_accuracy <= 1.0
+        assert isinstance(result.final_loss, float)
+        assert result.final_loss > 0.0
+        assert isinstance(head, ReachableSquaresHead)
+
+    def test_stage1_with_hand_projection(self) -> None:
+        """hand_projection_dim > 0 で E2E 訓練が完走する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        backbone = _make_backbone(hand_projection_dim=8)
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
+        device = torch.device("cpu")
+
+        result, head = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.stage == TrainingStage.REACHABLE_SQUARES
+        assert result.epochs_trained >= 1
+        assert isinstance(result.achieved_accuracy, float)
+        assert isinstance(head, ReachableSquaresHead)
+
+    def test_stage1_uses_accuracy_metric(self) -> None:
+        """Stage 1 が element-wise accuracy メトリックを使用する．
+
+        ターゲットが全ゼロのため，ランダム重みでも
+        accuracy は一定以上の値(> 0.3)になるはず．
+        """
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
             max_epochs=1,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
-            compilation=False,
+        )
+        device = torch.device("cpu")
+
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
         )
 
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
+        # 全ゼロターゲットに対してランダム重みでも
+        # accuracy > 0.3 が期待される
+        assert result.achieved_accuracy > 0.3
+
+    def test_stage1_threshold_early_stopping(self) -> None:
+        """accuracy_threshold=0.0 で即座に threshold_met=True になる．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
         )
 
-        # Model should be the original HeadlessNetwork, not a compiled wrapper
-        assert isinstance(loop.model, HeadlessNetwork)
-
-
-class TestSchedulerIntegration:
-    """SingleStageTrainingLoopのスケジューラ統合テスト．"""
-
-    def test_scheduler_created_when_configured(self) -> None:
-        """lr_scheduler_nameが設定されている場合，スケジューラが生成される．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
-        )
-
-        config = StageConfig(
+        backbone = _make_backbone()
+        config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=10,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
+            max_epochs=5,
+            accuracy_threshold=0.0,
+        )
+        device = torch.device("cpu")
+
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.threshold_met is True
+        # threshold=0.0 なので 1 エポックで達成
+        assert result.epochs_trained == 1
+
+    def test_stage1_streaming_set_epoch(self) -> None:
+        """streaming DataLoader で set_epoch が呼ばれることを確認する．"""
+        from unittest.mock import MagicMock
+
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+            accuracy_threshold=1.0,
+        )
+        device = torch.device("cpu")
+
+        # DataLoader の dataset に set_epoch を追加
+        mock_set_epoch = MagicMock()
+        config.dataloader.dataset.set_epoch = mock_set_epoch
+
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.epochs_trained == 2
+        assert mock_set_epoch.call_count == 2
+        mock_set_epoch.assert_any_call(0)
+        mock_set_epoch.assert_any_call(1)
+
+    def test_stage1_non_streaming_no_error(self) -> None:
+        """非 streaming DataLoader でエラーが発生しないことを確認する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
+        device = torch.device("cpu")
+
+        # set_epoch がないデータセットでもエラーなし
+        assert not hasattr(
+            config.dataloader.dataset, "set_epoch"
+        )
+
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.epochs_trained >= 1
+
+    def test_stage1_with_scheduler(self) -> None:
+        """lr_scheduler_name 指定時に訓練が完走する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+            accuracy_threshold=1.0,
             lr_scheduler_name="warmup_cosine_decay",
         )
+        device = torch.device("cpu")
 
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
         )
 
-        assert loop.lr_scheduler is not None
+        assert result.epochs_trained == 2
+        assert isinstance(result.final_loss, float)
 
-    def test_no_scheduler_when_none(self) -> None:
-        """lr_scheduler_nameがNoneの場合，スケジューラは生成されない．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
+    def test_stage1_without_scheduler(self) -> None:
+        """lr_scheduler_name=None で訓練が完走する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
         )
 
-        config = StageConfig(
+        backbone = _make_backbone()
+        config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=10,
-            accuracy_threshold=0.99,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
             lr_scheduler_name=None,
         )
+        device = torch.device("cpu")
 
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
         )
 
-        assert loop.lr_scheduler is None
+        assert result.epochs_trained >= 1
 
-    def test_scheduler_step_called_per_batch(self) -> None:
-        """各バッチ後にLRが変化する（スケジューラが動作している）．"""
-        backbone = HeadlessNetwork(
-            board_vocab_size=32,
-            embedding_dim=64,
-            hand_projection_dim=0,
-            architecture="resnet",
-            out_channels=(16, 32, 64, 64),
-        )
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32, target_dim=81
+    def test_stage1_compilation_disabled(self) -> None:
+        """compilation=False で訓練が正常に完走する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
         )
 
-        config = StageConfig(
+        backbone = _make_backbone()
+        config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=3,
-            accuracy_threshold=1.0,  # Unreachable threshold, ensure all epochs run
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
+            compilation=False,
+        )
+        device = torch.device("cpu")
+
+        result, _ = run_stage1_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.epochs_trained >= 1
+
+
+class TestRunStage2WithTrainingLoop:
+    """run_stage2_with_training_loop() の直接テスト．"""
+
+    def test_stage2_e2e_completes(self) -> None:
+        """Stage 2 の E2E 訓練が完走し，正しい StageResult を返す．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage2_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.LEGAL_MOVES,
+            max_epochs=2,
+        )
+        device = torch.device("cpu")
+
+        result, head = run_stage2_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.stage == TrainingStage.LEGAL_MOVES
+        assert result.epochs_trained >= 1
+        assert isinstance(result.achieved_accuracy, float)
+        assert 0.0 <= result.achieved_accuracy <= 1.0
+        assert isinstance(result.final_loss, float)
+        assert result.final_loss > 0.0
+        assert isinstance(head, LegalMovesHead)
+
+    def test_stage2_with_hand_projection(self) -> None:
+        """hand projection 付きで Stage 2 E2E が完走する．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage2_with_training_loop,
+        )
+
+        backbone = _make_backbone(hand_projection_dim=8)
+        config = _make_stage_config(
+            stage=TrainingStage.LEGAL_MOVES,
+        )
+        device = torch.device("cpu")
+
+        result, head = run_stage2_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert result.stage == TrainingStage.LEGAL_MOVES
+        assert result.epochs_trained >= 1
+        assert isinstance(head, LegalMovesHead)
+
+    def test_stage2_uses_f1_metric(self) -> None:
+        """Stage 2 が F1 メトリックを使用し，ランダム重みで低い値を返す．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage2_with_training_loop,
+        )
+
+        backbone = _make_backbone()
+        config = _make_stage_config(
+            stage=TrainingStage.LEGAL_MOVES,
+            max_epochs=1,
+        )
+        device = torch.device("cpu")
+
+        result, _ = run_stage2_with_training_loop(
+            backbone=backbone, config=config, device=device
+        )
+
+        assert 0.0 <= result.achieved_accuracy <= 1.0
+        # ランダム重み + 全ゼロターゲットで F1 は低い
+        assert result.achieved_accuracy < 0.9
+
+
+class TestEffectiveLRComputation:
+    """_compute_effective_lr() のユニットテスト．"""
+
+    def test_no_scaling_when_equal(self) -> None:
+        """base == actual の場合，LR は変化しない．"""
+        from maou.app.learning.multi_stage_training import (
+            _compute_effective_lr,
+        )
+
+        result = _compute_effective_lr(
             learning_rate=1e-3,
-            lr_scheduler_name="warmup_cosine_decay",
+            actual_batch_size=256,
+            base_batch_size=256,
+        )
+        assert result == pytest.approx(1e-3)
+
+    def test_sqrt_scaling_applied(self) -> None:
+        """actual > base の場合，sqrt スケーリングが適用される．"""
+        from maou.app.learning.multi_stage_training import (
+            _compute_effective_lr,
         )
 
-        loop = SingleStageTrainingLoop(
-            model=backbone,
-            head=head,
-            device=torch.device("cpu"),
-            config=config,
+        result = _compute_effective_lr(
+            learning_rate=1e-3,
+            actual_batch_size=4096,
+            base_batch_size=256,
+        )
+        expected = 1e-3 * math.sqrt(4096 / 256)
+        assert result == pytest.approx(expected)
+
+    def test_no_scaling_when_smaller(self) -> None:
+        """actual < base の場合，LR は変化しない．"""
+        from maou.app.learning.multi_stage_training import (
+            _compute_effective_lr,
         )
 
-        initial_lr = loop.optimizer.param_groups[0]["lr"]
-
-        # Run training — scheduler should step after each batch
-        loop.run()
-
-        final_lr = loop.optimizer.param_groups[0]["lr"]
-
-        # After 3 epochs of per-step warmup+cosine decay, LR should have changed
-        assert initial_lr != final_lr
+        result = _compute_effective_lr(
+            learning_rate=1e-3,
+            actual_batch_size=128,
+            base_batch_size=256,
+        )
+        assert result == pytest.approx(1e-3)
