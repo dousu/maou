@@ -223,9 +223,6 @@ class LoggingCallback(BaseCallback):
                 self.last_loss = float(
                     self.running_loss
                 ) / float(self.record_num)
-                self.logger.info(
-                    f"  batch {context.batch_idx + 1} loss: {self.last_loss}"
-                )
                 tb_x = (
                     context.epoch_idx * self.dataloader_length
                     + context.batch_idx
