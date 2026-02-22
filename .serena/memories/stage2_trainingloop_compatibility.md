@@ -479,14 +479,19 @@ Stage 2 では正規化を**バイパス** し，生 logits を直接 LegalMoves
 ```
 Stage2Dataset (2-tuple)
   ↓
+Stage2DatasetAdapter (3-tuple conversion: adds dummy_value + None mask)
+  ↓
 DataLoader (batch_size=256)
-  ↓ (batching via default collate_fn)
-Batched 2-tuple: ((board, hand), legal_moves)
   ↓
-SingleStageTrainingLoop._train_epoch() (2-element unpack)
+3-tuple: ((board, hand), (labels_policy, labels_value, legal_move_mask))
   ↓
-loss_fn(logits, targets)
+run_stage2_with_training_loop() → RawLogitsTrainingLoop + Stage2F1Callback
+  ↓
+loss_fn(raw_logits, targets)
 ```
+
+NOTE: SingleStageTrainingLoop は削除済み．通常 Stage2 も Stage2DatasetAdapter +
+RawLogitsTrainingLoop を使用するようになった．
 
 ### Streaming Stage2
 ```
@@ -521,7 +526,7 @@ loss_fn(raw_logits, targets)
 | **TrainingLoop._unpack_batch()** | 3-tuple のアンパック: `(inputs, (labels_policy, labels_value, legal_move_mask))` |
 | **Stage2TrainingLoop._compute_policy_loss()** | log_softmax + normalization をスキップ，生 logits を直接渡す |
 | **Stage2ModelAdapter** | model(inputs) → (policy, dummy_value) の 2-tuple を返す |
-| **SingleStageTrainingLoop** | 2-tuple をアンパック (Stage1/3用) |
+| **run_stage1/2_with_training_loop()** | Production パスで TrainingLoop + callback を使用 |
 
 ---
 
