@@ -8,6 +8,7 @@ import torch
 from maou.app.utility.training_benchmark import (
     BenchmarkResult,
     TrainingBenchmarkConfig,
+    TrainingBenchmarkUseCase,
 )
 from maou.interface import utility_interface
 
@@ -344,3 +345,207 @@ def test_stage1_benchmark_warmup_adjustment() -> None:
     effective_warmup = max(0, effective_warmup)
 
     assert effective_warmup == 5  # No adjustment needed
+
+
+class TestTrainingBenchmarkConfigNewFields:
+    """新規追加フィールドのデフォルト値テスト."""
+
+    def test_architecture_config_default(self) -> None:
+        """architecture_config のデフォルト値が None であること."""
+        config = TrainingBenchmarkConfig()
+        assert config.architecture_config is None
+
+    def test_freeze_backbone_default(self) -> None:
+        """freeze_backbone のデフォルト値が False であること."""
+        config = TrainingBenchmarkConfig()
+        assert config.freeze_backbone is False
+
+    def test_trainable_layers_default(self) -> None:
+        """trainable_layers のデフォルト値が None であること."""
+        config = TrainingBenchmarkConfig()
+        assert config.trainable_layers is None
+
+    def test_stage1_batch_size_default(self) -> None:
+        """stage1_batch_size のデフォルト値が None であること."""
+        config = TrainingBenchmarkConfig()
+        assert config.stage1_batch_size is None
+
+    def test_stage2_batch_size_default(self) -> None:
+        """stage2_batch_size のデフォルト値が None であること."""
+        config = TrainingBenchmarkConfig()
+        assert config.stage2_batch_size is None
+
+    def test_stage1_batch_size_override(self) -> None:
+        """stage1_batch_size の上書きが反映されること."""
+        config = TrainingBenchmarkConfig(stage1_batch_size=512)
+        assert config.stage1_batch_size == 512
+
+    def test_stage2_batch_size_override(self) -> None:
+        """stage2_batch_size の上書きが反映されること."""
+        config = TrainingBenchmarkConfig(stage2_batch_size=128)
+        assert config.stage2_batch_size == 128
+
+    def test_architecture_config_with_vit(self) -> None:
+        """ViT architecture_config が正しく設定されること."""
+        config = TrainingBenchmarkConfig(
+            model_architecture="vit",
+            architecture_config={
+                "embed_dim": 256,
+                "num_layers": 4,
+            },
+        )
+        assert config.architecture_config == {
+            "embed_dim": 256,
+            "num_layers": 4,
+        }
+
+
+class TestBenchmarkTrainingNewValidation:
+    """新規パラメータのバリデーションテスト."""
+
+    def test_negative_trainable_layers_raises(self) -> None:
+        """trainable_layers が負の値でエラーになること."""
+        with pytest.raises(
+            ValueError, match="trainable_layers"
+        ):
+            utility_interface.benchmark_training(
+                trainable_layers=-1,
+            )
+
+    def test_zero_stage1_batch_size_raises(self) -> None:
+        """stage1_batch_size が 0 でエラーになること."""
+        with pytest.raises(
+            ValueError, match="stage1_batch_size"
+        ):
+            utility_interface.benchmark_training(
+                stage1_batch_size=0,
+            )
+
+    def test_zero_stage2_batch_size_raises(self) -> None:
+        """stage2_batch_size が 0 でエラーになること."""
+        with pytest.raises(
+            ValueError, match="stage2_batch_size"
+        ):
+            utility_interface.benchmark_training(
+                stage2_batch_size=0,
+            )
+
+
+class TestResolveTrainableLayers:
+    """TrainingBenchmarkUseCase._resolve_trainable_layers のテスト."""
+
+    def setup_method(self) -> None:
+        """テスト用の use case インスタンスを作成."""
+        self.use_case = TrainingBenchmarkUseCase()
+
+    def test_both_unset_returns_none(self) -> None:
+        """両方未設定の場合 None を返すこと."""
+        config = TrainingBenchmarkConfig()
+        assert (
+            self.use_case._resolve_trainable_layers(config)
+            is None
+        )
+
+    def test_freeze_backbone_only_returns_zero(self) -> None:
+        """freeze_backbone のみ True の場合 0 を返すこと."""
+        config = TrainingBenchmarkConfig(freeze_backbone=True)
+        assert (
+            self.use_case._resolve_trainable_layers(config) == 0
+        )
+
+    def test_trainable_layers_only(self) -> None:
+        """trainable_layers のみ設定の場合その値を返すこと."""
+        config = TrainingBenchmarkConfig(trainable_layers=3)
+        assert (
+            self.use_case._resolve_trainable_layers(config) == 3
+        )
+
+    def test_both_set_prefers_trainable_layers(self) -> None:
+        """両方設定の場合 trainable_layers を優先すること."""
+        config = TrainingBenchmarkConfig(
+            freeze_backbone=True, trainable_layers=2
+        )
+        assert (
+            self.use_case._resolve_trainable_layers(config) == 2
+        )
+
+
+class TestApplyLayerFreezing:
+    """TrainingBenchmarkUseCase._apply_layer_freezing のテスト."""
+
+    def setup_method(self) -> None:
+        """テスト用の use case インスタンスを作成."""
+        self.use_case = TrainingBenchmarkUseCase()
+
+    def test_freeze_network_stage3(self) -> None:
+        """Stage 3 モデル (Network) でのフリーズ."""
+        from maou.app.learning.setup import ModelFactory
+
+        model = ModelFactory.create_shogi_model(
+            torch.device("cpu")
+        )
+        # 凍結前は全パラメータが学習可能
+        trainable_before = sum(
+            1 for p in model.parameters() if p.requires_grad
+        )
+        assert trainable_before > 0
+
+        self.use_case._apply_layer_freezing(
+            model, trainable_layers=0
+        )
+
+        # backbone + hand_projection が凍結される
+        # policy/value head は学習可能のまま
+        trainable_after = sum(
+            1 for p in model.parameters() if p.requires_grad
+        )
+        assert trainable_after < trainable_before
+        assert trainable_after > 0  # head のパラメータは残る
+
+    def test_freeze_stage1_adapter(self) -> None:
+        """Stage 1 アダプタ (backbone wrapper) でのフリーズ."""
+        from maou.app.learning.multi_stage_training import (
+            Stage1ModelAdapter,
+        )
+        from maou.app.learning.network import (
+            ReachableSquaresHead,
+        )
+        from maou.app.learning.setup import ModelFactory
+
+        backbone = ModelFactory.create_shogi_backbone(
+            torch.device("cpu")
+        )
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim
+        )
+        model = Stage1ModelAdapter(backbone, head)
+
+        self.use_case._apply_layer_freezing(
+            model, trainable_layers=0
+        )
+
+        # backbone のパラメータが凍結されている
+        frozen_count = sum(
+            1
+            for p in backbone.parameters()
+            if not p.requires_grad
+        )
+        assert frozen_count > 0
+
+    def test_unsupported_model_does_not_freeze(self) -> None:
+        """freeze_except_last_n も backbone も持たないモデルでは凍結されないこと."""
+        model = torch.nn.Linear(10, 10)
+        trainable_before = sum(
+            1 for p in model.parameters() if p.requires_grad
+        )
+
+        # Should not raise, just log a warning and return
+        self.use_case._apply_layer_freezing(
+            model, trainable_layers=0
+        )
+
+        # Parameters should remain unchanged (no freezing applied)
+        trainable_after = sum(
+            1 for p in model.parameters() if p.requires_grad
+        )
+        assert trainable_after == trainable_before

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
@@ -602,6 +602,42 @@ def benchmark_dataloader(
     show_default=True,
 )
 @click.option(
+    "--vit-embed-dim",
+    type=int,
+    default=None,
+    help="ViT: embedding dimension (default: 512).",
+)
+@click.option(
+    "--vit-num-layers",
+    type=int,
+    default=None,
+    help="ViT: number of encoder layers (default: 6).",
+)
+@click.option(
+    "--vit-num-heads",
+    type=int,
+    default=None,
+    help="ViT: number of attention heads (default: 8).",
+)
+@click.option(
+    "--vit-mlp-ratio",
+    type=float,
+    default=None,
+    help="ViT: MLP hidden dimension ratio (default: 4.0).",
+)
+@click.option(
+    "--vit-dropout",
+    type=float,
+    default=None,
+    help="ViT: dropout rate (default: 0.1).",
+)
+@click.option(
+    "--gradient-checkpointing",
+    is_flag=True,
+    default=False,
+    help="Enable gradient checkpointing to reduce activation memory. Only effective with ViT architecture.",
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
@@ -806,6 +842,36 @@ def benchmark_dataloader(
     help="Validation split ratio for Stage 2 (0.0 = no split, e.g. 0.1 = 10%% validation).",
 )
 @click.option(
+    "--freeze-backbone",
+    is_flag=True,
+    default=False,
+    help="Freeze backbone parameters (embedding, backbone, pool, hand projection).",
+)
+@click.option(
+    "--trainable-layers",
+    type=int,
+    default=None,
+    help=(
+        "Number of trailing backbone layer groups to keep trainable. "
+        "0 = freeze all backbone layers. "
+        "Unset = no freezing (all layers trainable)."
+    ),
+)
+@click.option(
+    "--stage1-batch-size",
+    type=int,
+    default=None,
+    help="Batch size for Stage 1 (default: inherits --batch-size).",
+    required=False,
+)
+@click.option(
+    "--stage2-batch-size",
+    type=int,
+    default=None,
+    help="Batch size for Stage 2 (default: inherits --batch-size).",
+    required=False,
+)
+@click.option(
     "--no-streaming",
     is_flag=True,
     default=False,
@@ -880,6 +946,12 @@ def benchmark_training(
     input_max_workers: int,
     gpu: Optional[str],
     model_architecture: utility_interface.BackboneArchitecture,
+    vit_embed_dim: Optional[int],
+    vit_num_layers: Optional[int],
+    vit_num_heads: Optional[int],
+    vit_mlp_ratio: Optional[float],
+    vit_dropout: Optional[float],
+    gradient_checkpointing: bool,
     compilation: bool,
     detect_anomaly: bool,
     test_ratio: float,
@@ -906,6 +978,10 @@ def benchmark_training(
     stage2_hidden_dim: Optional[int],
     stage2_head_dropout: float,
     stage2_test_ratio: float,
+    freeze_backbone: bool,
+    trainable_layers: Optional[int],
+    stage1_batch_size: Optional[int],
+    stage2_batch_size: Optional[int],
     no_streaming: bool,
     warmup_batches: int,
     max_batches: int,
@@ -1194,6 +1270,26 @@ def benchmark_training(
             "a GCS bucket, or an S3 bucket."
         )
 
+    # Build architecture_config from ViT-specific options
+    architecture_key = model_architecture.lower()
+    architecture_config: dict[str, Any] | None = None
+    if architecture_key == "vit":
+        vit_overrides: dict[str, Any] = {}
+        if vit_embed_dim is not None:
+            vit_overrides["embed_dim"] = vit_embed_dim
+        if vit_num_layers is not None:
+            vit_overrides["num_layers"] = vit_num_layers
+        if vit_num_heads is not None:
+            vit_overrides["num_heads"] = vit_num_heads
+        if vit_mlp_ratio is not None:
+            vit_overrides["mlp_ratio"] = vit_mlp_ratio
+        if vit_dropout is not None:
+            vit_overrides["dropout"] = vit_dropout
+        if gradient_checkpointing:
+            vit_overrides["gradient_checkpointing"] = True
+        if vit_overrides:
+            architecture_config = vit_overrides
+
     # Run benchmark
     result_json = utility_interface.benchmark_training(
         datasource=datasource,
@@ -1207,6 +1303,7 @@ def benchmark_training(
         prefetch_factor=prefetch_factor,
         cache_transforms=cache_transforms,
         model_architecture=model_architecture,
+        architecture_config=architecture_config,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
@@ -1225,6 +1322,10 @@ def benchmark_training(
         stage2_hidden_dim=stage2_hidden_dim,
         stage2_head_dropout=stage2_head_dropout,
         stage2_test_ratio=stage2_test_ratio,
+        freeze_backbone=freeze_backbone,
+        trainable_layers=trainable_layers,
+        stage1_batch_size=stage1_batch_size,
+        stage2_batch_size=stage2_batch_size,
         warmup_batches=warmup_batches,
         max_batches=max_batches,
         enable_profiling=enable_profiling,

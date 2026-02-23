@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass, replace
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -490,6 +490,17 @@ class TrainingBenchmarkConfig:
     stage2_head_dropout: float = 0.0
     stage2_test_ratio: float = 0.2
 
+    # ViT architecture config
+    architecture_config: dict[str, Any] | None = None
+
+    # Layer freezing
+    freeze_backbone: bool = False
+    trainable_layers: Optional[int] = None
+
+    # Stage-specific batch sizes
+    stage1_batch_size: Optional[int] = None
+    stage2_batch_size: Optional[int] = None
+
 
 class TrainingBenchmarkUseCase:
     """Use case for training performance benchmarking."""
@@ -580,6 +591,7 @@ class TrainingBenchmarkUseCase:
         model = ModelFactory.create_shogi_model(
             device_config.device,
             architecture=config.model_architecture,
+            architecture_config=config.architecture_config,
         )
 
         # Loss functions and optimizer
@@ -660,7 +672,9 @@ class TrainingBenchmarkUseCase:
 
         # Backbone + Head
         backbone = ModelFactory.create_shogi_backbone(
-            device, architecture=config.model_architecture
+            device,
+            architecture=config.model_architecture,
+            architecture_config=config.architecture_config,
         )
         from maou.app.learning.network import (
             ReachableSquaresHead,
@@ -724,11 +738,16 @@ class TrainingBenchmarkUseCase:
         val_dataset = Stage1DatasetAdapter(
             Stage1Dataset(datasource=validation_datasource)
         )
+        stage1_effective_batch_size = (
+            config.stage1_batch_size
+            if config.stage1_batch_size is not None
+            else config.batch_size
+        )
         training_loader, validation_loader = (
             DataLoaderFactory.create_dataloaders(
                 dataset_train=train_dataset,
                 dataset_validation=val_dataset,
-                batch_size=config.batch_size,
+                batch_size=stage1_effective_batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
@@ -797,7 +816,9 @@ class TrainingBenchmarkUseCase:
 
         # Backbone + Head
         backbone = ModelFactory.create_shogi_backbone(
-            device, architecture=config.model_architecture
+            device,
+            architecture=config.model_architecture,
+            architecture_config=config.architecture_config,
         )
         from maou.app.learning.network import LegalMovesHead
 
@@ -864,11 +885,16 @@ class TrainingBenchmarkUseCase:
         val_dataset = Stage2DatasetAdapter(
             Stage2Dataset(datasource=validation_datasource)
         )
+        stage2_effective_batch_size = (
+            config.stage2_batch_size
+            if config.stage2_batch_size is not None
+            else config.batch_size
+        )
         training_loader, validation_loader = (
             DataLoaderFactory.create_dataloaders(
                 dataset_train=train_dataset,
                 dataset_validation=val_dataset,
-                batch_size=config.batch_size,
+                batch_size=stage2_effective_batch_size,
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
@@ -937,7 +963,9 @@ class TrainingBenchmarkUseCase:
 
         # Backbone + Head
         backbone = ModelFactory.create_shogi_backbone(
-            device, architecture=config.model_architecture
+            device,
+            architecture=config.model_architecture,
+            architecture_config=config.architecture_config,
         )
         from maou.app.learning.network import LegalMovesHead
 
@@ -965,10 +993,15 @@ class TrainingBenchmarkUseCase:
             StreamingStage2Dataset,
         )
 
+        stage2_effective_batch_size = (
+            config.stage2_batch_size
+            if config.stage2_batch_size is not None
+            else config.batch_size
+        )
         train_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
             StreamingStage2Dataset(
                 streaming_source=config.stage2_streaming_train_source,
-                batch_size=config.batch_size,
+                batch_size=stage2_effective_batch_size,
                 shuffle=True,
             )
         )
@@ -977,7 +1010,7 @@ class TrainingBenchmarkUseCase:
             val_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
                 StreamingStage2Dataset(
                     streaming_source=config.stage2_streaming_val_source,
-                    batch_size=config.batch_size,
+                    batch_size=stage2_effective_batch_size,
                     shuffle=False,
                 )
             )
@@ -1063,6 +1096,95 @@ class TrainingBenchmarkUseCase:
             model_components,
         )
 
+    def _resolve_trainable_layers(
+        self, config: TrainingBenchmarkConfig
+    ) -> Optional[int]:
+        """Resolve effective trainable_layers from config options.
+
+        Returns:
+            int if freezing should be applied, None otherwise.
+        """
+        if (
+            config.trainable_layers is not None
+            and config.freeze_backbone
+        ):
+            self.logger.warning(
+                "Both freeze_backbone and trainable_layers specified. "
+                "Using trainable_layers=%d.",
+                config.trainable_layers,
+            )
+            return config.trainable_layers
+
+        if config.trainable_layers is not None:
+            return config.trainable_layers
+
+        if config.freeze_backbone:
+            return 0
+
+        return None
+
+    def _apply_layer_freezing(
+        self,
+        model: torch.nn.Module,
+        trainable_layers: int,
+    ) -> None:
+        """Freeze backbone parameters with optional partial unfreezing.
+
+        Args:
+            model: The model (Network or stage adapter) to freeze.
+            trainable_layers: Number of trailing backbone groups
+                to keep trainable.
+        """
+        frozen_count = 0
+        # Network (Stage 3) has freeze_except_last_n directly
+        if hasattr(model, "freeze_except_last_n"):
+            frozen_count = model.freeze_except_last_n(  # type: ignore[operator]
+                trainable_layers
+            )
+            if hasattr(model, "_hand_projection"):
+                hand_proj = cast(
+                    torch.nn.Module,
+                    model._hand_projection,  # type: ignore[union-attr]
+                )
+                for param in hand_proj.parameters():
+                    param.requires_grad = False
+                    frozen_count += 1
+        # Stage1/2 adapters wrap backbone
+        elif hasattr(model, "backbone"):
+            backbone = model.backbone
+            if hasattr(backbone, "freeze_except_last_n"):
+                frozen_count = backbone.freeze_except_last_n(  # type: ignore[operator]
+                    trainable_layers
+                )
+                if hasattr(backbone, "_hand_projection"):
+                    bb_hand_proj = cast(
+                        torch.nn.Module,
+                        backbone._hand_projection,  # type: ignore[union-attr]
+                    )
+                    for param in bb_hand_proj.parameters():
+                        param.requires_grad = False
+                        frozen_count += 1
+            else:
+                self.logger.warning(
+                    "Model backbone does not support "
+                    "freeze_except_last_n; "
+                    "skipping layer freezing."
+                )
+                return
+        else:
+            self.logger.warning(
+                "Model does not support layer freezing; "
+                "skipping."
+            )
+            return
+
+        self.logger.info(
+            "Frozen %d backbone parameters "
+            "(trainable_layers=%d).",
+            frozen_count,
+            trainable_layers,
+        )
+
     def execute(self, config: TrainingBenchmarkConfig) -> str:
         """Execute training benchmark and return JSON results."""
         self.logger.info(
@@ -1136,6 +1258,7 @@ class TrainingBenchmarkUseCase:
                         cache_transforms=cache_transforms_enabled,
                         gpu=config.gpu,
                         model_architecture=config.model_architecture,
+                        architecture_config=config.architecture_config,
                         batch_size=config.batch_size,
                         dataloader_workers=config.dataloader_workers,
                         pin_memory=config.pin_memory,
@@ -1154,6 +1277,52 @@ class TrainingBenchmarkUseCase:
                 )
                 data_load_method = "map-style"
 
+        training_loader, validation_loader = dataloaders
+        device = device_config.device
+
+        # Apply layer freezing (before compilation)
+        effective_trainable_layers = (
+            self._resolve_trainable_layers(config)
+        )
+        if effective_trainable_layers is not None:
+            self._apply_layer_freezing(
+                model_components.model,
+                effective_trainable_layers,
+            )
+
+            # Recreate optimizer with only trainable parameters
+            model_components.optimizer = (
+                LossOptimizerFactory.create_optimizer(
+                    model_components.model,
+                    config.learning_ratio,
+                    config.momentum,
+                    optimizer_name=config.optimizer_name,
+                    betas=(
+                        config.optimizer_beta1,
+                        config.optimizer_beta2,
+                    ),
+                    eps=config.optimizer_eps,
+                )
+            )
+
+            # Recreate lr_scheduler bound to the new optimizer
+            lr_scheduler_name = config.lr_scheduler_name
+            if (
+                config.stage in (1, 2)
+                and config.stage12_lr_scheduler_name
+            ):
+                lr_scheduler_name = (
+                    config.stage12_lr_scheduler_name
+                )
+            model_components.lr_scheduler = (
+                SchedulerFactory.create_scheduler(
+                    model_components.optimizer,
+                    lr_scheduler_name=lr_scheduler_name,
+                    max_epochs=1,
+                    steps_per_epoch=len(training_loader),
+                )
+            )
+
         should_compile = config.compilation
         if (
             config.stage in (1, 2)
@@ -1167,9 +1336,6 @@ class TrainingBenchmarkUseCase:
             model_components.model = compile_module(
                 model_components.model
             )
-
-        training_loader, validation_loader = dataloaders
-        device = device_config.device
 
         # warmup バッチ数の自動調整（全ステージ共通）
         estimated_batches = len(training_loader)

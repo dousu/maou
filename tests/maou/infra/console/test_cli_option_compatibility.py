@@ -65,19 +65,9 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "resume-backbone-from",  # コンポーネント別再開（不要）
         "resume-policy-head-from",  # コンポーネント別再開（不要）
         "resume-value-head-from",  # コンポーネント別再開（不要）
-        "freeze-backbone",  # バックボーン凍結（不要）
-        "trainable-layers",  # バックボーン凍結制御（不要）
-        "vit-embed-dim",  # ViTアーキテクチャ設定（不要）
-        "vit-num-layers",  # ViTアーキテクチャ設定（不要）
-        "vit-num-heads",  # ViTアーキテクチャ設定（不要）
-        "vit-mlp-ratio",  # ViTアーキテクチャ設定（不要）
-        "vit-dropout",  # ViTアーキテクチャ設定（不要）
-        "gradient-checkpointing",  # ViTメモリ最適化（不要）
         "stage1-threshold",  # Stage 1閾値（不要）
         "stage2-threshold",  # Stage 2閾値（不要）
         "stage1-max-epochs",  # Stage 1最大エポック（不要）
-        "stage1-batch-size",  # Stage 1バッチサイズ（不要）
-        "stage2-batch-size",  # Stage 2バッチサイズ（不要）
         "stage1-learning-rate",  # Stage 1学習率（不要）
         "stage2-learning-rate",  # Stage 2学習率（不要）
         "stage2-max-epochs",  # Stage 2最大エポック（不要）
@@ -192,7 +182,6 @@ def test_option_consistency_documentation() -> None:
         "resume-backbone-from",
         "resume-policy-head-from",
         "resume-value-head-from",
-        "freeze-backbone",
         "log-dir",
         "model-dir",
         "tensorboard-histogram-frequency",

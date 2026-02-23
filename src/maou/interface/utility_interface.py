@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
@@ -205,6 +205,11 @@ def benchmark_training(
     ] = None,
     stage12_lr_scheduler: Optional[str] = None,
     stage12_compilation: bool = False,
+    architecture_config: dict[str, Any] | None = None,
+    freeze_backbone: bool = False,
+    trainable_layers: Optional[int] = None,
+    stage1_batch_size: Optional[int] = None,
+    stage2_batch_size: Optional[int] = None,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -240,6 +245,11 @@ def benchmark_training(
         streaming: Whether to use streaming mode for data loading
         streaming_train_source: Streaming data source for training
         streaming_val_source: Streaming data source for validation
+        architecture_config: ViT architecture overrides (e.g. embed_dim, num_layers)
+        freeze_backbone: Freeze backbone parameters
+        trainable_layers: Number of trailing backbone groups to keep trainable
+        stage1_batch_size: Batch size override for Stage 1
+        stage2_batch_size: Batch size override for Stage 2
 
     Returns:
         JSON string with benchmark results and recommendations
@@ -395,6 +405,22 @@ def benchmark_training(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
         )
 
+    # trainable_layers validation
+    if trainable_layers is not None and trainable_layers < 0:
+        raise ValueError(
+            f"trainable_layers must be non-negative, got {trainable_layers}"
+        )
+
+    # stage batch size validation
+    if stage1_batch_size is not None and stage1_batch_size <= 0:
+        raise ValueError(
+            f"stage1_batch_size must be positive, got {stage1_batch_size}"
+        )
+    if stage2_batch_size is not None and stage2_batch_size <= 0:
+        raise ValueError(
+            f"stage2_batch_size must be positive, got {stage2_batch_size}"
+        )
+
     # Stage 1/2 LR scheduler 正規化
     stage12_lr_scheduler_key = normalize_lr_scheduler_name(
         stage12_lr_scheduler
@@ -478,6 +504,11 @@ def benchmark_training(
         stage2_hidden_dim=stage2_hidden_dim or 128,
         stage2_head_dropout=stage2_head_dropout or 0.0,
         stage2_test_ratio=stage2_test_ratio or 0.2,
+        architecture_config=architecture_config,
+        freeze_backbone=freeze_backbone,
+        trainable_layers=trainable_layers,
+        stage1_batch_size=stage1_batch_size,
+        stage2_batch_size=stage2_batch_size,
     )
 
     use_case = TrainingBenchmarkUseCase()
