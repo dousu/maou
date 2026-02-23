@@ -19,3 +19,15 @@ class FreezableBackbone(Protocol):
                 Freezing proceeds from the first element (lowest layer).
         """
         ...
+
+    def get_output_norm(self) -> nn.Module | None:
+        """Return the final normalization module applied after all groups.
+
+        This module is unfrozen whenever any encoder groups are trainable,
+        since it must adapt to distribution shifts from trainable blocks.
+
+        Returns:
+            nn.Module | None: The output normalization module, or None
+                if the backbone has no such module.
+        """
+        ...

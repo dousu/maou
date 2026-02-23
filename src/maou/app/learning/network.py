@@ -201,6 +201,8 @@ class HeadlessNetwork(nn.Module):
         Strategy: freeze ALL backbone parameters first, then selectively
         unfreeze the last n groups. This ensures non-group parameters
         (e.g. input_norm, token_projection) are always frozen.
+        When n > 0, the backbone's output normalization (if any) is also
+        unfrozen to prevent distribution mismatch.
 
         Args:
             n: Number of trailing backbone groups to keep trainable.
@@ -250,6 +252,26 @@ class HeadlessNetwork(nn.Module):
         for group in groups[freeze_count:]:
             for param in group.parameters():
                 param.requires_grad = True
+
+        # 4. Unfreeze the post-encoder output norm when any blocks are trainable.
+        # The norm bridges encoder output and heads; freezing it creates a
+        # distribution mismatch bottleneck during fine-tuning.
+        if n_clamped > 0:
+            output_norm = self.backbone.get_output_norm()
+            if output_norm is not None:
+                norm_param_count = sum(
+                    p.numel() for p in output_norm.parameters()
+                )
+                for param in output_norm.parameters():
+                    param.requires_grad = True
+                if norm_param_count > 0:
+                    logger.info(
+                        "Unfreezing output norm: %d parameters (%d tensors).",
+                        norm_param_count,
+                        sum(
+                            1 for _ in output_norm.parameters()
+                        ),
+                    )
 
         # Count frozen parameters
         frozen_params = sum(

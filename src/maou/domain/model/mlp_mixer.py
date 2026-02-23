@@ -231,6 +231,14 @@ class ShogiMLPMixer(nn.Module):
         """
         return list(self.blocks)
 
+    def get_output_norm(self) -> nn.Module | None:
+        """Return the final LayerNorm applied after mixer blocks.
+
+        Returns:
+            nn.Module: The output LayerNorm.
+        """
+        return self.norm
+
     def preprocess_for_blocks(
         self, x: torch.Tensor
     ) -> torch.Tensor:

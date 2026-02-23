@@ -156,7 +156,7 @@ def test_clamp_n_exceeding_total_groups(
 def test_mlp_mixer_non_group_params_always_frozen(
     n: int,
 ) -> None:
-    """MLP-Mixer's input_norm, embedding, and norm should always be frozen."""
+    """MLP-Mixer's input_norm and embedding should always be frozen."""
     net = _create_network("mlp-mixer")
 
     net.freeze_except_last_n(n)
@@ -169,10 +169,6 @@ def test_mlp_mixer_non_group_params_always_frozen(
         assert not param.requires_grad, (
             f"backbone.embedding should be frozen with n={n}"
         )
-    for param in net.backbone.norm.parameters():
-        assert not param.requires_grad, (
-            f"backbone.norm should be frozen with n={n}"
-        )
 
 
 # --- Non-group params always frozen (ViT) ---
@@ -180,7 +176,7 @@ def test_mlp_mixer_non_group_params_always_frozen(
 
 @pytest.mark.parametrize("n", [0, 2, 3, 999])
 def test_vit_non_group_params_always_frozen(n: int) -> None:
-    """ViT's token_projection, positional_embedding, and norm should always be frozen."""
+    """ViT's token_projection and positional_embedding should always be frozen."""
     net = _create_network("vit")
 
     net.freeze_except_last_n(n)
@@ -194,10 +190,6 @@ def test_vit_non_group_params_always_frozen(n: int) -> None:
     ), (
         f"backbone.positional_embedding should be frozen with n={n}"
     )
-    for param in net.backbone.norm.parameters():
-        assert not param.requires_grad, (
-            f"backbone.norm should be frozen with n={n}"
-        )
 
 
 # --- Frozen count returned ---
@@ -231,3 +223,65 @@ def test_full_freeze_freezes_more_than_partial(
     frozen_partial = net_partial.freeze_except_last_n(1)
 
     assert frozen_full > frozen_partial
+
+
+# --- Output norm unfreezing ---
+
+
+def test_vit_output_norm_trainable_when_partial_freeze() -> (
+    None
+):
+    """ViT final LayerNorm is trainable when trainable_layers > 0."""
+    net = _create_network("vit")
+
+    net.freeze_except_last_n(2)
+
+    for param in net.backbone.norm.parameters():
+        assert param.requires_grad, (
+            "backbone.norm should be trainable with n=2"
+        )
+
+
+def test_vit_output_norm_frozen_when_full_freeze() -> None:
+    """ViT final LayerNorm is frozen when trainable_layers = 0."""
+    net = _create_network("vit")
+
+    net.freeze_except_last_n(0)
+
+    for param in net.backbone.norm.parameters():
+        assert not param.requires_grad, (
+            "backbone.norm should be frozen with n=0"
+        )
+
+
+def test_mlp_mixer_output_norm_trainable_when_partial_freeze() -> (
+    None
+):
+    """MLP-Mixer final LayerNorm is trainable when trainable_layers > 0."""
+    net = _create_network("mlp-mixer")
+
+    net.freeze_except_last_n(2)
+
+    for param in net.backbone.norm.parameters():
+        assert param.requires_grad, (
+            "backbone.norm should be trainable with n=2"
+        )
+
+
+def test_resnet_unaffected_by_output_norm() -> None:
+    """ResNet freeze behavior unchanged (get_output_norm returns None)."""
+    net = _create_network("resnet")
+
+    assert net.backbone.get_output_norm() is None
+
+    net.freeze_except_last_n(2)
+
+    # layer3 and layer4 should be trainable
+    for param in net.backbone.layer3.parameters():
+        assert param.requires_grad, (
+            "layer3 should be trainable with n=2"
+        )
+    for param in net.backbone.layer4.parameters():
+        assert param.requires_grad, (
+            "layer4 should be trainable with n=2"
+        )

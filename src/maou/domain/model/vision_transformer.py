@@ -324,6 +324,14 @@ class VisionTransformer(nn.Module):
         """
         return list(self.encoder)
 
+    def get_output_norm(self) -> nn.Module | None:
+        """Return the final LayerNorm applied after encoder blocks.
+
+        Returns:
+            nn.Module: The output LayerNorm.
+        """
+        return self.norm
+
     def preprocess_for_blocks(
         self, x: torch.Tensor
     ) -> torch.Tensor:

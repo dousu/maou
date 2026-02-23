@@ -265,6 +265,16 @@ class ResNet(nn.Module):
             self.layer4,
         ]
 
+    def get_output_norm(self) -> nn.Module | None:
+        """Return the output normalization module.
+
+        ResNet has no final normalization layer.
+
+        Returns:
+            None: ResNet does not use output normalization.
+        """
+        return None
+
     def preprocess_for_blocks(
         self, x: torch.Tensor
     ) -> torch.Tensor:
