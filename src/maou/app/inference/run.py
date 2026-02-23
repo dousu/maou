@@ -8,7 +8,10 @@ import numpy as np
 
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
-from maou.app.pre_process.feature import make_board_id_positions
+from maou.app.pre_process.feature import (
+    make_board_id_positions,
+    make_pieces_in_hand,
+)
 from maou.domain.board.shogi import Board
 from maou.domain.move.label import (
     IllegalMove,
@@ -47,7 +50,6 @@ class InferenceRunner:
 
     def infer(self, config: InferenceOption) -> Dict[str, str]:
         # 特徴量の作成
-        input_data: np.ndarray
         board: Board
         if config.sfen is not None:
             board = Board()
@@ -58,8 +60,11 @@ class InferenceRunner:
             raise ValueError(
                 "Either sfen or board must be provided."
             )
-        input_data = make_board_id_positions(board).astype(
+        board_data = make_board_id_positions(board).astype(
             np.int64
+        )
+        hand_data = make_pieces_in_hand(board).astype(
+            np.float32
         )
 
         # 推論
@@ -68,7 +73,8 @@ class InferenceRunner:
         if config.model_type == ModelType.ONNX:
             policy_labels, value = ONNXInference.infer(
                 config.model_path,
-                input_data,
+                board_data,
+                hand_data,
                 config.num_moves,
                 config.cuda,
             )
@@ -87,7 +93,8 @@ class InferenceRunner:
                 ) from exc
             policy_labels, value = TensorRTInference.infer(
                 config.model_path,
-                input_data,
+                board_data,
+                hand_data,
                 config.num_moves,
                 config.cuda,
             )

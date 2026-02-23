@@ -434,24 +434,37 @@ class ModelIO:
             "Saving model to {}".format(onnx_model_path)
         )
         dummy_data = create_empty_preprocessing_array(1)
-        dummy_board = np.asarray(
-            dummy_data[0]["boardIdPositions"], dtype=np.uint8
+        dummy_board = (
+            torch.from_numpy(
+                np.asarray(
+                    dummy_data[0]["boardIdPositions"],
+                    dtype=np.uint8,
+                ).astype(np.int64)
+            )
+            .unsqueeze(0)
+            .to(device)
         )
-        dummy_input = (
-            torch.from_numpy(dummy_board.astype(np.int64))
+        dummy_hand = (
+            torch.from_numpy(
+                np.asarray(
+                    dummy_data[0]["piecesInHand"],
+                    dtype=np.uint8,
+                ).astype(np.float32)
+            )
             .unsqueeze(0)
             .to(device)
         )
         torch.onnx.export(
             model=model,
-            args=(dummy_input,),
+            args=((dummy_board, dummy_hand),),
             f=onnx_model_path,
             export_params=True,
-            input_names=["input"],
+            input_names=["board", "hand"],
             output_names=["policy", "value"],
             opset_version=20,
             dynamic_axes={
-                "input": {0: "batch_size"},
+                "board": {0: "batch_size"},
+                "hand": {0: "batch_size"},
                 "policy": {0: "batch_size"},
                 "value": {0: "batch_size"},
             },

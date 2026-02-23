@@ -11,7 +11,8 @@ class ONNXInference:
     @staticmethod
     def infer(
         path: Path,
-        input_data: np.ndarray,
+        board_data: np.ndarray,
+        hand_data: np.ndarray,
         num: int,
         cuda_available: bool,
     ) -> tuple[list[int], float]:
@@ -35,10 +36,11 @@ class ONNXInference:
         session = ort.InferenceSession(
             path, sess_options=options, providers=providers
         )
-        # Add batch dimension: (9, 9) -> (1, 9, 9)
-        batched_input = np.expand_dims(input_data, axis=0)
+        batched_board = np.expand_dims(board_data, axis=0)
+        batched_hand = np.expand_dims(hand_data, axis=0)
         outputs = session.run(
-            ["policy", "value"], {"input": batched_input}
+            ["policy", "value"],
+            {"board": batched_board, "hand": batched_hand},
         )
         policy_labels: list[int] = list(
             np.argsort(outputs[0][0])[::-1][:num]  # type: ignore

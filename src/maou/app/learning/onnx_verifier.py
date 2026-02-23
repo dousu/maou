@@ -393,25 +393,40 @@ class ONNXExportVerifier:
                     dummy_data[0]["boardIdPositions"],
                     dtype=np.uint8,
                 )
+                dummy_hand = np.asarray(
+                    dummy_data[0]["piecesInHand"],
+                    dtype=np.uint8,
+                )
 
-                # PyTorch inference
-                pytorch_input = (
+                # PyTorch inference (2入力: board + hand)
+                pytorch_board = (
                     torch.from_numpy(
                         dummy_board.astype(np.int64)
                     )
                     .unsqueeze(0)
                     .to(device)
                 )
+                pytorch_hand = (
+                    torch.from_numpy(
+                        dummy_hand.astype(np.float32)
+                    )
+                    .unsqueeze(0)
+                    .to(device)
+                )
                 pytorch_policy, pytorch_value = pytorch_model(
-                    pytorch_input
+                    (pytorch_board, pytorch_hand)
                 )
 
-                # ONNX inference
-                onnx_input = dummy_board.astype(
+                # ONNX inference (2入力: board + hand)
+                onnx_board = dummy_board.astype(
                     np.int64
                 ).reshape(1, 9, 9)
+                onnx_hand = dummy_hand.astype(
+                    np.float32
+                ).reshape(1, 14)
                 onnx_outputs = session.run(
-                    ["policy", "value"], {"input": onnx_input}
+                    ["policy", "value"],
+                    {"board": onnx_board, "hand": onnx_hand},
                 )
                 onnx_policy = onnx_outputs[0]
                 onnx_value = onnx_outputs[1]
@@ -496,7 +511,7 @@ class ONNXExportVerifier:
         # Check expected structure
         success = (
             graph_valid
-            and input_names == ["input"]
+            and input_names == ["board", "hand"]
             and output_names == ["policy", "value"]
         )
 

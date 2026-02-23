@@ -51,14 +51,15 @@ class TensorRTInference:
 
         # ONNXではバッチサイズ可変なのでプロファイルを設定する
         profile = builder.create_optimization_profile()
-        input_tensor = network.get_input(0)
-        non_batch_dims = tuple(input_tensor.shape[1:])
-        profile.set_shape(
-            input_tensor.name,
-            min=(1,) + non_batch_dims,
-            opt=(4000,) + non_batch_dims,
-            max=(10000,) + non_batch_dims,
-        )
+        for i in range(network.num_inputs):  # type: ignore[attr-defined]
+            input_tensor = network.get_input(i)
+            non_batch_dims = tuple(input_tensor.shape[1:])
+            profile.set_shape(
+                input_tensor.name,
+                min=(1,) + non_batch_dims,
+                opt=(4000,) + non_batch_dims,
+                max=(10000,) + non_batch_dims,
+            )
         builder_config.add_optimization_profile(profile)
 
         logger.info(
@@ -73,7 +74,8 @@ class TensorRTInference:
     @staticmethod
     def infer(
         onnx_path: Path,
-        input_data: np.ndarray,
+        board_data: np.ndarray,
+        hand_data: np.ndarray,
         num: int,
         cuda_available: bool,
     ) -> tuple[list[int], float]:
@@ -161,18 +163,29 @@ class TensorRTInference:
         )
         context = engine.create_execution_context()
 
-        input_name = engine.get_tensor_name(0)
+        # 入力テンソル: board
+        board_name = engine.get_tensor_name(0)
         (
-            host_input_ctype_array,
-            cuda_input,
-            input_nbytes,
-            input_shape,
-        ) = cuda_malloc(engine, input_name, batch_size)
-        context.set_tensor_address(input_name, cuda_input)
-        # EXPLICIT_BATCHにしているのでshapeを渡す必要がある
-        context.set_input_shape(input_name, input_shape)
+            host_board_ctype_array,
+            cuda_board,
+            board_nbytes,
+            board_shape,
+        ) = cuda_malloc(engine, board_name, batch_size)
+        context.set_tensor_address(board_name, cuda_board)
+        context.set_input_shape(board_name, board_shape)
 
-        output_policy_name = engine.get_tensor_name(1)
+        # 入力テンソル: hand
+        hand_name = engine.get_tensor_name(1)
+        (
+            host_hand_ctype_array,
+            cuda_hand,
+            hand_nbytes,
+            hand_shape,
+        ) = cuda_malloc(engine, hand_name, batch_size)
+        context.set_tensor_address(hand_name, cuda_hand)
+        context.set_input_shape(hand_name, hand_shape)
+
+        output_policy_name = engine.get_tensor_name(2)
         (
             host_output_policy_ctype_array,
             cuda_output_policy,
@@ -183,7 +196,7 @@ class TensorRTInference:
             output_policy_name, cuda_output_policy
         )
 
-        output_value_name = engine.get_tensor_name(2)
+        output_value_name = engine.get_tensor_name(3)
         (
             host_output_value_ctype_array,
             cuda_output_value,
@@ -193,20 +206,31 @@ class TensorRTInference:
         context.set_tensor_address(
             output_value_name, cuda_output_value
         )
-        # inputの転送 host -> gpu
-        # np.copyto(self.host[:data.size], data.flat, casting='safe')
-        # cudart.cudaMemcpyAsync(inp.device, inp.host, inp.nbytes, cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, stream)
-        # Add batch dimension before flattening: (9, 9) -> (1, 9, 9) -> flat
-        batched_input = np.expand_dims(input_data, axis=0)
+        # boardの転送 host -> gpu
+        batched_board = np.expand_dims(board_data, axis=0)
         np.copyto(
-            host_input_ctype_array,
-            batched_input.astype(np.int64).ravel(),
+            host_board_ctype_array,
+            batched_board.astype(np.int64).ravel(),
             casting="safe",
         )
         cudart.cudaMemcpyAsync(
-            cuda_input,
-            host_input_ctype_array,
-            input_nbytes,
+            cuda_board,
+            host_board_ctype_array,
+            board_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+            stream,
+        )
+        # handの転送 host -> gpu
+        batched_hand = np.expand_dims(hand_data, axis=0)
+        np.copyto(
+            host_hand_ctype_array,
+            batched_hand.astype(np.float32).ravel(),
+            casting="safe",
+        )
+        cudart.cudaMemcpyAsync(
+            cuda_hand,
+            host_hand_ctype_array,
+            hand_nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
             stream,
         )
@@ -241,8 +265,10 @@ class TensorRTInference:
         value: float = host_output_value_ctype_array[0].item()  # type: ignore
 
         # メモリ解放
-        cudart.cudaFree(cuda_input)
-        cudart.cudaFreeHost(host_input_ctype_array.ctypes.data)
+        cudart.cudaFree(cuda_board)
+        cudart.cudaFreeHost(host_board_ctype_array.ctypes.data)
+        cudart.cudaFree(cuda_hand)
+        cudart.cudaFreeHost(host_hand_ctype_array.ctypes.data)
         cudart.cudaFree(cuda_output_policy)
         cudart.cudaFreeHost(
             host_output_policy_ctype_array.ctypes.data

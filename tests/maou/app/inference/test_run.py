@@ -55,6 +55,9 @@ class TestInferenceRunner:
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
             patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
+            patch(
                 "maou.app.inference.run.ONNXInference.infer"
             ) as mock_onnx_infer,
             patch(
@@ -64,6 +67,9 @@ class TestInferenceRunner:
             # モックの設定
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             mock_onnx_infer.return_value = (
                 [0, 1, 2, 3, 4],
@@ -116,6 +122,9 @@ class TestInferenceRunner:
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
             patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
+            patch(
                 "maou.app.inference.run.ONNXInference.infer"
             ) as mock_onnx_infer,
             patch(
@@ -125,6 +134,9 @@ class TestInferenceRunner:
             # モックの設定
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             mock_onnx_infer.return_value = ([0, 1, 2], 0.5)
             mock_make_usi.side_effect = ["7g7f", "2g2f", "6i7h"]
@@ -178,6 +190,9 @@ class TestInferenceRunner:
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
             patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
+            patch(
                 "maou.app.inference.run.ONNXInference.infer"
             ) as mock_onnx_infer,
             patch(
@@ -186,6 +201,9 @@ class TestInferenceRunner:
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             mock_onnx_infer.return_value = ([0], 0.0)
             mock_make_usi.return_value = "7g7f"
@@ -202,7 +220,7 @@ class TestInferenceRunner:
             # cudaオプションが正しく渡されたか確認
             mock_onnx_infer.assert_called_once()
             call_args = mock_onnx_infer.call_args
-            assert call_args[0][3] is True  # cuda=True
+            assert call_args[0][4] is True  # cuda=True
 
     def test_infer_with_illegal_move(
         self,
@@ -216,6 +234,9 @@ class TestInferenceRunner:
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
             patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
+            patch(
                 "maou.app.inference.run.ONNXInference.infer"
             ) as mock_onnx_infer,
             patch(
@@ -224,6 +245,9 @@ class TestInferenceRunner:
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             mock_onnx_infer.return_value = ([0, 1, 2], 0.0)
 
@@ -264,10 +288,16 @@ class TestInferenceRunner:
             patch(
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
+            patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
             patch("builtins.__import__") as mock_import,
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
 
             # TensorRTインポート時にModuleNotFoundErrorを発生
@@ -315,6 +345,9 @@ class TestInferenceRunner:
             patch(
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
+            patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
             patch.dict(
                 sys.modules,
                 {
@@ -327,6 +360,9 @@ class TestInferenceRunner:
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             mock_make_usi.side_effect = ["7g7f", "2g2f"]
 
@@ -361,9 +397,15 @@ class TestInferenceRunner:
             patch(
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
+            patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
 
             # Enumに存在しない値を強制的に設定（通常はありえないが，堅牢性テスト）
@@ -411,6 +453,9 @@ class TestInferenceRunner:
                 "maou.app.inference.run.make_board_id_positions"
             ) as mock_make_board,
             patch(
+                "maou.app.inference.run.make_pieces_in_hand"
+            ) as mock_make_hand,
+            patch(
                 "maou.app.inference.run.ONNXInference.infer"
             ) as mock_onnx_infer,
             patch(
@@ -419,6 +464,9 @@ class TestInferenceRunner:
         ):
             mock_make_board.return_value = np.zeros(
                 (9, 9), dtype=np.int64
+            )
+            mock_make_hand.return_value = np.zeros(
+                (14,), dtype=np.uint8
             )
             # value = 2.0 → winrate ≈ 0.88, eval ≈ 1200
             mock_onnx_infer.return_value = ([0], 2.0)
@@ -455,6 +503,9 @@ class TestInferenceRunner:
                     "maou.app.inference.run.make_board_id_positions"
                 ) as mock_make_board,
                 patch(
+                    "maou.app.inference.run.make_pieces_in_hand"
+                ) as mock_make_hand,
+                patch(
                     "maou.app.inference.run.ONNXInference.infer"
                 ) as mock_onnx_infer,
                 patch(
@@ -463,6 +514,9 @@ class TestInferenceRunner:
             ):
                 mock_make_board.return_value = np.zeros(
                     (9, 9), dtype=np.int64
+                )
+                mock_make_hand.return_value = np.zeros(
+                    (14,), dtype=np.uint8
                 )
                 mock_onnx_infer.return_value = (
                     list(range(num_moves)),
@@ -484,7 +538,7 @@ class TestInferenceRunner:
                 # ONNXInference.inferにnum_movesが正しく渡されている
                 mock_onnx_infer.assert_called_once()
                 call_args = mock_onnx_infer.call_args
-                assert call_args[0][2] == num_moves
+                assert call_args[0][3] == num_moves
 
                 # 結果に正しい手数が含まれている
                 policies = result["Policy"].split(", ")

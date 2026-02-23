@@ -138,31 +138,44 @@ def test_verify_onnx_functional_equivalence_fp32(
         create_empty_preprocessing_array,
     )
 
-    # Export model to ONNX
+    # Export model to ONNX (2入力: board + hand)
     onnx_path = tmp_path / "test_model.onnx"
 
     dummy_data = create_empty_preprocessing_array(1)
     import numpy as np
 
-    dummy_board = np.asarray(
-        dummy_data[0]["boardIdPositions"], dtype=np.uint8
+    dummy_board = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["boardIdPositions"],
+                dtype=np.uint8,
+            ).astype(np.int64)
+        )
+        .unsqueeze(0)
+        .to(device)
     )
-    dummy_input = (
-        torch.from_numpy(dummy_board.astype(np.int64))
+    dummy_hand = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["piecesInHand"],
+                dtype=np.uint8,
+            ).astype(np.float32)
+        )
         .unsqueeze(0)
         .to(device)
     )
 
     torch.onnx.export(
         model=sample_model,
-        args=(dummy_input,),
+        args=((dummy_board, dummy_hand),),
         f=onnx_path,
         export_params=True,
-        input_names=["input"],
+        input_names=["board", "hand"],
         output_names=["policy", "value"],
         opset_version=20,
         dynamic_axes={
-            "input": {0: "batch_size"},
+            "board": {0: "batch_size"},
+            "hand": {0: "batch_size"},
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
@@ -201,31 +214,44 @@ def test_verify_onnx_functional_equivalence_fp16(
         create_empty_preprocessing_array,
     )
 
-    # Export model to ONNX FP32 first
+    # Export model to ONNX FP32 first (2入力: board + hand)
     onnx_path = tmp_path / "test_model.onnx"
 
     dummy_data = create_empty_preprocessing_array(1)
     import numpy as np
 
-    dummy_board = np.asarray(
-        dummy_data[0]["boardIdPositions"], dtype=np.uint8
+    dummy_board = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["boardIdPositions"],
+                dtype=np.uint8,
+            ).astype(np.int64)
+        )
+        .unsqueeze(0)
+        .to(device)
     )
-    dummy_input = (
-        torch.from_numpy(dummy_board.astype(np.int64))
+    dummy_hand = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["piecesInHand"],
+                dtype=np.uint8,
+            ).astype(np.float32)
+        )
         .unsqueeze(0)
         .to(device)
     )
 
     torch.onnx.export(
         model=sample_model,
-        args=(dummy_input,),
+        args=((dummy_board, dummy_hand),),
         f=onnx_path,
         export_params=True,
-        input_names=["input"],
+        input_names=["board", "hand"],
         output_names=["policy", "value"],
         opset_version=20,
         dynamic_axes={
-            "input": {0: "batch_size"},
+            "board": {0: "batch_size"},
+            "hand": {0: "batch_size"},
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
@@ -269,31 +295,44 @@ def test_verify_onnx_graph_structure(
         create_empty_preprocessing_array,
     )
 
-    # Export model to ONNX
+    # Export model to ONNX (2入力: board + hand)
     onnx_path = tmp_path / "test_model.onnx"
 
     dummy_data = create_empty_preprocessing_array(1)
     import numpy as np
 
-    dummy_board = np.asarray(
-        dummy_data[0]["boardIdPositions"], dtype=np.uint8
+    dummy_board = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["boardIdPositions"],
+                dtype=np.uint8,
+            ).astype(np.int64)
+        )
+        .unsqueeze(0)
+        .to(device)
     )
-    dummy_input = (
-        torch.from_numpy(dummy_board.astype(np.int64))
+    dummy_hand = (
+        torch.from_numpy(
+            np.asarray(
+                dummy_data[0]["piecesInHand"],
+                dtype=np.uint8,
+            ).astype(np.float32)
+        )
         .unsqueeze(0)
         .to(device)
     )
 
     torch.onnx.export(
         model=sample_model,
-        args=(dummy_input,),
+        args=((dummy_board, dummy_hand),),
         f=onnx_path,
         export_params=True,
-        input_names=["input"],
+        input_names=["board", "hand"],
         output_names=["policy", "value"],
         opset_version=20,
         dynamic_axes={
-            "input": {0: "batch_size"},
+            "board": {0: "batch_size"},
+            "hand": {0: "batch_size"},
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
@@ -304,6 +343,6 @@ def test_verify_onnx_graph_structure(
     )
 
     assert report.success
-    assert report.input_names == ["input"]
+    assert report.input_names == ["board", "hand"]
     assert report.output_names == ["policy", "value"]
     assert report.graph_valid
