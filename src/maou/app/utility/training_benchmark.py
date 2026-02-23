@@ -688,6 +688,7 @@ class TrainingBenchmarkUseCase:
         from maou.app.learning.multi_stage_training import (
             Stage1DatasetAdapter,
             Stage1ModelAdapter,
+            pre_stage_collate_fn,
         )
 
         model: torch.nn.Module = Stage1ModelAdapter(
@@ -751,6 +752,7 @@ class TrainingBenchmarkUseCase:
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
+                collate_fn=pre_stage_collate_fn,
             )
         )
 
@@ -834,6 +836,7 @@ class TrainingBenchmarkUseCase:
         from maou.app.learning.multi_stage_training import (
             Stage2DatasetAdapter,
             Stage2ModelAdapter,
+            pre_stage_collate_fn,
         )
 
         model: torch.nn.Module = Stage2ModelAdapter(
@@ -898,6 +901,7 @@ class TrainingBenchmarkUseCase:
                 dataloader_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
+                collate_fn=pre_stage_collate_fn,
             )
         )
 

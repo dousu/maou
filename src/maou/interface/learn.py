@@ -22,9 +22,11 @@ from maou.app.learning.dl import (
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
     Stage1DatasetAdapter,
+    Stage2DatasetAdapter,
     StageConfig,
     StageResult,
     TrainingStage,
+    pre_stage_collate_fn,
 )
 from maou.app.learning.network import (
     BACKBONE_ARCHITECTURES,
@@ -589,6 +591,7 @@ def _run_stage1(
         shuffle=True,
         num_workers=0,
         pin_memory=(device.type == "cuda"),
+        collate_fn=pre_stage_collate_fn,
     )
 
     stage_config = StageConfig(
@@ -668,24 +671,28 @@ def _run_stage2(
         test_ratio=stage2_test_ratio
     )
 
-    dataset = Stage2Dataset(datasource=train_ds)
+    raw_dataset = Stage2Dataset(datasource=train_ds)
+    dataset = Stage2DatasetAdapter(raw_dataset)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         pin_memory=(device.type == "cuda"),
+        collate_fn=pre_stage_collate_fn,
     )
 
     val_dataloader: Optional[DataLoader] = None
     if stage2_test_ratio > 0.0 and val_ds is not None:
-        val_dataset = Stage2Dataset(datasource=val_ds)
+        val_raw_dataset = Stage2Dataset(datasource=val_ds)
+        val_dataset = Stage2DatasetAdapter(val_raw_dataset)
         val_dataloader = DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=0,
             pin_memory=(device.type == "cuda"),
+            collate_fn=pre_stage_collate_fn,
         )
 
     stage_config = StageConfig(

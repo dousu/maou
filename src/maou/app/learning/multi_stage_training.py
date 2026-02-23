@@ -129,9 +129,8 @@ class Stage1DatasetAdapter(Dataset):
     ((board, hand), (labels_policy, labels_value, legal_move_mask))
     を期待する．
 
-    PyTorch の default_collate は None を正しく処理する（全サンプルが
-    None の場合，バッチレベルでも None を返す）ため，legal_move_mask=None
-    はそのまま伝播する．
+    PyTorch の default_collate は None を処理できないため，
+    DataLoader 作成時には pre_stage_collate_fn を collate_fn に指定すること．
 
     Args:
         dataset: ラップする Stage1Dataset
@@ -162,6 +161,9 @@ class Stage2DatasetAdapter(Dataset):
     ((board, hand), (labels_policy, labels_value, legal_move_mask))
     を期待する．
 
+    PyTorch の default_collate は None を処理できないため，
+    DataLoader 作成時には pre_stage_collate_fn を collate_fn に指定すること．
+
     Args:
         dataset: ラップする Stage2Dataset
     """
@@ -181,6 +183,31 @@ class Stage2DatasetAdapter(Dataset):
         inputs, targets = self._dataset[idx]
         dummy_value = torch.zeros(1, dtype=torch.float32)
         return inputs, (targets, dummy_value, None)
+
+
+def pre_stage_collate_fn(
+    batch: list[
+        tuple[
+            tuple[torch.Tensor, torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]
+    ],
+) -> tuple[
+    tuple[torch.Tensor, torch.Tensor],
+    tuple[torch.Tensor, torch.Tensor, None],
+]:
+    """Stage1/Stage2 DatasetAdapter の出力をバッチに collate する．
+
+    両アダプタは legal_move_mask=None を含むタプルを返すが，
+    PyTorch の default_collate は None を処理できないため，
+    None を手動で伝播させるカスタム collate 関数が必要．
+    """
+    inputs_list, labels_list = zip(*batch)
+    boards = torch.stack([inp[0] for inp in inputs_list])
+    hands = torch.stack([inp[1] for inp in inputs_list])
+    targets = torch.stack([lbl[0] for lbl in labels_list])
+    values = torch.stack([lbl[1] for lbl in labels_list])
+    return (boards, hands), (targets, values, None)
 
 
 class Stage2ModelAdapter(torch.nn.Module):

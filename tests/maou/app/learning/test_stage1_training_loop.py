@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 
 from maou.app.learning.callbacks import (
     Stage1AccuracyCallback,
@@ -679,3 +680,81 @@ class TestStage3LossCallbackReset:
 
         # After reset + one batch: only new data
         assert abs(callback.get_average_loss() - 0.2) < 1e-6
+
+
+class TestPreStageCollateFn:
+    """pre_stage_collate_fn のユニットテスト．"""
+
+    def test_pre_stage_collate_fn_stacks_tensors(
+        self,
+    ) -> None:
+        """テンソルが正しく stack される．"""
+        from maou.app.learning.multi_stage_training import (
+            pre_stage_collate_fn,
+        )
+
+        batch = [
+            (
+                (torch.ones(9, 9), torch.ones(14)),
+                (torch.ones(81), torch.zeros(1), None),
+            ),
+            (
+                (torch.zeros(9, 9), torch.zeros(14)),
+                (torch.zeros(81), torch.zeros(1), None),
+            ),
+        ]
+
+        (boards, hands), (targets, values, mask) = (
+            pre_stage_collate_fn(batch)
+        )
+
+        assert boards.shape == (2, 9, 9)
+        assert hands.shape == (2, 14)
+        assert targets.shape == (2, 81)
+        assert values.shape == (2, 1)
+        assert mask is None
+
+    def test_pre_stage_collate_fn_with_dataloader(
+        self,
+    ) -> None:
+        """DataLoader(num_workers=0) で TypeError が発生しない．"""
+        from maou.app.learning.multi_stage_training import (
+            Stage1DatasetAdapter,
+            pre_stage_collate_fn,
+        )
+
+        class FakeDataset:
+            """Fake Stage1Dataset returning per-sample 2-tuple."""
+
+            def __len__(self) -> int:
+                return 4
+
+            def __getitem__(
+                self, idx: int
+            ) -> tuple[
+                tuple[torch.Tensor, torch.Tensor],
+                torch.Tensor,
+            ]:
+                board = torch.randint(0, 32, (9, 9))
+                hand = torch.randn(14)
+                target = torch.zeros(81)
+                return (board, hand), target
+
+        adapter = Stage1DatasetAdapter(FakeDataset())
+        dataloader = DataLoader(
+            adapter,
+            batch_size=2,
+            num_workers=0,
+            collate_fn=pre_stage_collate_fn,
+        )
+
+        for (boards, hands), (
+            targets,
+            values,
+            mask,
+        ) in dataloader:
+            assert boards.shape == (2, 9, 9)
+            assert hands.shape == (2, 14)
+            assert targets.shape == (2, 81)
+            assert values.shape == (2, 1)
+            assert mask is None

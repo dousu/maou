@@ -12,6 +12,7 @@ from maou.app.learning.multi_stage_training import (
     Stage1DatasetAdapter,
     StageConfig,
     TrainingStage,
+    pre_stage_collate_fn,
 )
 from maou.app.learning.network import (
     PIECES_IN_HAND_VECTOR_SIZE,
@@ -85,35 +86,25 @@ def _make_dummy_dataloader(
         )
         adapted_dataset = Stage1DatasetAdapter(paired_dataset)
 
-        def stage1_collate_fn(
-            batch: list[
-                tuple[
-                    tuple[torch.Tensor, torch.Tensor],
-                    tuple[torch.Tensor, torch.Tensor, None],
-                ]
-            ],
-        ) -> tuple[
-            tuple[torch.Tensor, torch.Tensor],
-            tuple[torch.Tensor, torch.Tensor, None],
-        ]:
-            """Stage1DatasetAdapter の出力を collate する．
-
-            default_collate は None を処理できないため，
-            legal_move_mask=None を手動で伝播させる．
-            """
-            inputs_list, labels_list = zip(*batch)
-            boards = torch.stack(
-                [inp[0] for inp in inputs_list]
-            )
-            hands = torch.stack([inp[1] for inp in inputs_list])
-            tgts = torch.stack([lbl[0] for lbl in labels_list])
-            vals = torch.stack([lbl[1] for lbl in labels_list])
-            return (boards, hands), (tgts, vals, None)
-
         return DataLoader(
             adapted_dataset,
             batch_size=batch_size,
-            collate_fn=stage1_collate_fn,
+            collate_fn=pre_stage_collate_fn,
+        )
+
+    if stage == TrainingStage.LEGAL_MOVES:
+        from maou.app.learning.multi_stage_training import (
+            Stage2DatasetAdapter,
+        )
+
+        paired_dataset: Dataset = _PairedDataset(
+            board_tensor, hand_tensor, targets
+        )
+        adapted_dataset = Stage2DatasetAdapter(paired_dataset)
+        return DataLoader(
+            adapted_dataset,
+            batch_size=batch_size,
+            collate_fn=pre_stage_collate_fn,
         )
 
     dataset = TensorDataset(board_tensor, hand_tensor, targets)
@@ -122,14 +113,11 @@ def _make_dummy_dataloader(
         batch: list[tuple[torch.Tensor, ...]],
     ) -> tuple[
         tuple[torch.Tensor, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor, None] | torch.Tensor,
+        torch.Tensor,
     ]:
         boards = torch.stack([b[0] for b in batch])
         hands = torch.stack([b[1] for b in batch])
         tgts = torch.stack([b[2] for b in batch])
-        if stage == TrainingStage.LEGAL_MOVES:
-            dummy_value = torch.zeros(tgts.shape[0], 1)
-            return (boards, hands), (tgts, dummy_value, None)
         return (boards, hands), tgts
 
     return DataLoader(

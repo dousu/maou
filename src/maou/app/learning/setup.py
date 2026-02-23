@@ -8,7 +8,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -447,6 +447,7 @@ class DataLoaderFactory:
         pin_memory: bool,
         prefetch_factor: int = 2,
         drop_last_train: bool = True,
+        collate_fn: Callable | None = None,
     ) -> Tuple[DataLoader, DataLoader]:
         """学習・検証用DataLoaderの作成.
 
@@ -503,6 +504,7 @@ class DataLoaderFactory:
             drop_last=drop_last_train,
             timeout=120 if train_workers > 0 else 0,
             worker_init_fn=train_worker_init_fn,
+            collate_fn=collate_fn,
         )
 
         # Validation DataLoader
@@ -519,6 +521,7 @@ class DataLoaderFactory:
             drop_last=False,  # validationでは全データを使用
             timeout=120 if val_workers > 0 else 0,
             worker_init_fn=val_worker_init_fn,
+            collate_fn=collate_fn,
         )
 
         cls.logger.info(
