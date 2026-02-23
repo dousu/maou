@@ -224,7 +224,6 @@ def learn(
     optimizer_beta1: Optional[float] = None,
     optimizer_beta2: Optional[float] = None,
     optimizer_eps: Optional[float] = None,
-    resume_from: Optional[Path] = None,
     start_epoch: Optional[int] = None,
     resume_backbone_from: Optional[Path] = None,
     resume_policy_head_from: Optional[Path] = None,
@@ -245,6 +244,7 @@ def learn(
         StreamingDataSource
     ] = None,
     streaming_val_source: Optional[StreamingDataSource] = None,
+    save_split_params: bool = False,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -270,7 +270,6 @@ def learn(
         optimizer_beta1: AdamW beta1 parameter
         optimizer_beta2: AdamW beta2 parameter
         optimizer_eps: AdamW epsilon parameter
-        resume_from: Checkpoint file to resume from
         start_epoch: Starting epoch number for training
         resume_backbone_from: Backbone parameter file to resume from
         resume_policy_head_from: Policy head parameter file to resume from
@@ -448,9 +447,6 @@ def learn(
     if model_dir is None:
         model_dir = Path("./models")
 
-    # ファイル指定の場合は存在するかチェック
-    if resume_from is not None:
-        file_validation(resume_from)
     # 指定されたディレクトリが存在しない場合は自動で作成する
     if log_dir is not None:
         dir_init(log_dir)
@@ -497,7 +493,6 @@ def learn(
         optimizer_beta2=optimizer_beta2,
         optimizer_eps=optimizer_eps,
         detect_anomaly=detect_anomaly,
-        resume_from=resume_from,
         start_epoch=start_epoch,
         resume_backbone_from=resume_backbone_from,
         resume_policy_head_from=resume_policy_head_from,
@@ -514,6 +509,7 @@ def learn(
         streaming=streaming,
         streaming_train_source=streaming_train_source,
         streaming_val_source=streaming_val_source,
+        save_split_params=save_split_params,
     )
 
     learning_result = Learning(
@@ -1025,6 +1021,7 @@ def learn_multi_stage(
     stage3_streaming_val_source: Optional[
         StreamingDataSource
     ] = None,
+    save_split_params: bool = False,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -1372,6 +1369,7 @@ def learn_multi_stage(
             streaming=streaming,
             streaming_train_source=stage3_streaming_train_source,
             streaming_val_source=stage3_streaming_val_source,
+            save_split_params=save_split_params,
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result

@@ -264,6 +264,7 @@ class ModelIO:
         verify_export: bool = False,
         architecture_config: Optional[dict[str, Any]] = None,
         hand_projection_dim: Optional[int] = None,
+        save_split_params: bool = False,
     ) -> None:
         try:
             import onnx
@@ -368,61 +369,67 @@ class ModelIO:
             model, architecture
         )
 
-        # state_dictを3つのコンポーネントに分割
-        full_state_dict = model.state_dict()
-        (
-            backbone_dict,
-            policy_head_dict,
-            value_head_dict,
-            _reachable_head_dict,
-            _legal_moves_head_dict,
-        ) = ModelIO.split_state_dict(full_state_dict)
+        if save_split_params:
+            # state_dictを3つのコンポーネントに分割
+            full_state_dict = model.state_dict()
+            (
+                backbone_dict,
+                policy_head_dict,
+                value_head_dict,
+                _reachable_head_dict,
+                _legal_moves_head_dict,
+            ) = ModelIO.split_state_dict(full_state_dict)
 
-        # 3つの別ファイルに保存
-        backbone_path = (
-            dir
-            / "model_{}_{}_{}_backbone.pt".format(
-                id, model_tag, epoch
-            )
-        )
-        policy_head_path = (
-            dir
-            / "model_{}_{}_{}_policy_head.pt".format(
-                id, model_tag, epoch
-            )
-        )
-        value_head_path = (
-            dir
-            / "model_{}_{}_{}_value_head.pt".format(
-                id, model_tag, epoch
-            )
-        )
-
-        logger.info(
-            f"Saving model components (tag: {model_tag}):\n"
-            f"  Backbone: {backbone_path}\n"
-            f"  Policy Head: {policy_head_path}\n"
-            f"  Value Head: {value_head_path}"
-        )
-
-        torch.save(backbone_dict, backbone_path)
-        torch.save(policy_head_dict, policy_head_path)
-        torch.save(value_head_dict, value_head_path)
-
-        # クラウドストレージに3つのファイルをアップロード
-        if cloud_storage is not None:
-            for component_path in [
-                backbone_path,
-                policy_head_path,
-                value_head_path,
-            ]:
-                logger.info(
-                    f"Uploading model component to cloud storage ({component_path})"
+            # 3つの別ファイルに保存
+            backbone_path = (
+                dir
+                / "model_{}_{}_{}_backbone.pt".format(
+                    id, model_tag, epoch
                 )
-                cloud_storage.upload_from_local(
-                    local_path=component_path,
-                    cloud_path=str(component_path),
+            )
+            policy_head_path = (
+                dir
+                / "model_{}_{}_{}_policy_head.pt".format(
+                    id, model_tag, epoch
                 )
+            )
+            value_head_path = (
+                dir
+                / "model_{}_{}_{}_value_head.pt".format(
+                    id, model_tag, epoch
+                )
+            )
+
+            logger.info(
+                f"Saving model components (tag: {model_tag}):\n"
+                f"  Backbone: {backbone_path}\n"
+                f"  Policy Head: {policy_head_path}\n"
+                f"  Value Head: {value_head_path}"
+            )
+
+            torch.save(backbone_dict, backbone_path)
+            torch.save(policy_head_dict, policy_head_path)
+            torch.save(value_head_dict, value_head_path)
+
+            # クラウドストレージに3つのファイルをアップロード
+            if cloud_storage is not None:
+                for component_path in [
+                    backbone_path,
+                    policy_head_path,
+                    value_head_path,
+                ]:
+                    logger.info(
+                        f"Uploading model component to cloud storage ({component_path})"
+                    )
+                    cloud_storage.upload_from_local(
+                        local_path=component_path,
+                        cloud_path=str(component_path),
+                    )
+        else:
+            logger.info(
+                "Split parameter files not saved. "
+                "Use --save-split-params to enable."
+            )
         # AMPのような高速化をしたいので一部FP16にする
         # TensorRTに変換するときはONNXのFP32を利用してBuilderFlag.FP16を指定する
 

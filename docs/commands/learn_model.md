@@ -102,7 +102,7 @@ ViTエンコーダのGPU活性化メモリを約93%削減するオプション�
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--resume-from PATH` | optional | Must point to an existing checkpoint file before training resumes.【F:src/maou/interface/learn.py†L249-L266】 |
+| `--save-split-params` | `false` | Save backbone and head parameters as separate `.pt` files (for mix-and-match loading via `--resume-backbone-from` etc.). |
 | `--resume-backbone-from PATH` | optional | Backbone parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L418-L422】 |
 | `--resume-policy-head-from PATH` | optional | Policy head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L423-L428】 |
 | `--resume-value-head-from PATH` | optional | Value head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L429-L434】 |
@@ -185,3 +185,6 @@ poetry run maou learn-model \
   - `--cache-transforms`: learn-model では transform=None 固定のため実質無効
   - `--input-cache-mode`: Stage 1/2 で "file" 強制，Stage 3 streaming で無視．内部で "file" 固定
   - `--input-file-packed`: Arrow IPC 移行に伴い不要
+- **2026-02-23**: `--resume-from` を削除，`--save-split-params` を追加
+  - `--resume-from`: 未使用のレガシーオプション．分割パラメータファイルによる再開は `--resume-backbone-from` 等で対応
+  - `--save-split-params`: backbone/head パラメータを個別 `.pt` ファイルとして保存するオプション

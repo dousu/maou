@@ -84,7 +84,6 @@ class Learning:
 
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
-    resume_from: Optional[Path]
     model: Network
     scaler: Optional[GradScaler]
     model_architecture: BackboneArchitecture
@@ -114,7 +113,6 @@ class Learning:
         optimizer_beta2: float
         optimizer_eps: float
         detect_anomaly: bool = False
-        resume_from: Optional[Path] = None
         resume_backbone_from: Optional[Path] = None
         resume_policy_head_from: Optional[Path] = None
         resume_value_head_from: Optional[Path] = None
@@ -136,6 +134,7 @@ class Learning:
         tensorboard_histogram_modules: (
             tuple[str, ...] | None
         ) = None
+        save_split_params: bool = False
 
     def __init__(
         self,
@@ -644,6 +643,7 @@ class Learning:
                     cloud_storage=self.__cloud_storage,
                     architecture_config=self.architecture_config,
                     hand_projection_dim=self.model.hand_projection_dim,
+                    save_split_params=self.config.save_split_params,
                 )
 
             # SummaryWriterのイベントをGCSに保存する
@@ -869,31 +869,6 @@ class Learning:
         ]
         self.logger.info("\n".join(lines))
 
-    def _load_resume_state_dict(
-        self, state_dict: MutableMapping[str, torch.Tensor]
-    ) -> None:
-        """Load a checkpoint while remaining compatible with compiled models."""
-
-        if hasattr(self.model, "_orig_mod"):
-            needs_prefix = any(
-                not key.startswith("_orig_mod.")
-                for key in state_dict.keys()
-            )
-            if needs_prefix:
-                state_dict = {
-                    f"_orig_mod.{key}": value
-                    for key, value in state_dict.items()
-                }
-
-        try:
-            self.model.load_state_dict(state_dict)
-        except RuntimeError as exc:
-            self.logger.error(
-                "Failed to load checkpoint into model: %s",
-                exc,
-            )
-            raise
-
     def _load_component_state_dict(
         self, state_dict: MutableMapping[str, torch.Tensor]
     ) -> None:
@@ -939,16 +914,6 @@ class Learning:
         Args:
             config: Learning configuration with resume paths.
         """
-        if config.resume_from is not None:
-            state_dict: MutableMapping[str, torch.Tensor] = (
-                torch.load(
-                    config.resume_from,
-                    weights_only=True,
-                    map_location=self.device,
-                )
-            )
-            self._load_resume_state_dict(state_dict)
-
         if config.resume_backbone_from is not None:
             backbone_dict = ModelIO.load_backbone(
                 config.resume_backbone_from, self.device

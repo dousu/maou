@@ -244,12 +244,6 @@ S3: S3Type | None = getattr(common, "S3", None)
     show_default=True,
 )
 @click.option(
-    "--resume-from",
-    type=click.Path(path_type=Path),
-    help="Checkpoint file to resume training.",
-    required=False,
-)
-@click.option(
     "--start-epoch",
     type=int,
     help=(
@@ -275,6 +269,13 @@ S3: S3Type | None = getattr(common, "S3", None)
     type=click.Path(exists=True, path_type=Path),
     help="Value head parameter file to resume training.",
     required=False,
+)
+@click.option(
+    "--save-split-params",
+    is_flag=True,
+    default=False,
+    help="Save backbone and head parameters as separate files "
+    "(for mix-and-match loading via --resume-backbone-from etc.).",
 )
 @click.option(
     "--freeze-backbone",
@@ -563,11 +564,11 @@ def learn_model(
     optimizer_beta1: float,
     optimizer_beta2: float,
     optimizer_eps: float,
-    resume_from: Optional[Path],
     start_epoch: Optional[int],
     resume_backbone_from: Optional[Path],
     resume_policy_head_from: Optional[Path],
     resume_value_head_from: Optional[Path],
+    save_split_params: bool,
     freeze_backbone: bool,
     trainable_layers: Optional[int],
     stage: str,
@@ -854,5 +855,6 @@ def learn_model(
             stage2_streaming_source=s2_streaming_source,
             stage3_streaming_train_source=s3_streaming_train_source,
             stage3_streaming_val_source=s3_streaming_val_source,
+            save_split_params=save_split_params,
         )
     )
