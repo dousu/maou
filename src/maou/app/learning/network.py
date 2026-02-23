@@ -151,6 +151,11 @@ class HeadlessNetwork(nn.Module):
 
         return self._embedding_dim
 
+    @property
+    def hand_projection_dim(self) -> int:
+        """持ち駒射影の次元数を返す．"""
+        return self._hand_projection_dim
+
     def forward_features(self, x: ModelInputs) -> torch.Tensor:
         """Return pooled convolutional features from the shared backbone.
 

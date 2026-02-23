@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -262,6 +262,8 @@ class ModelIO:
         architecture: BackboneArchitecture,
         cloud_storage: Optional[CloudStorage] = None,
         verify_export: bool = False,
+        architecture_config: Optional[dict[str, Any]] = None,
+        hand_projection_dim: Optional[int] = None,
     ) -> None:
         try:
             import onnx
@@ -286,7 +288,10 @@ class ModelIO:
             )
 
         model = ModelFactory.create_shogi_model(
-            device, architecture=architecture
+            device,
+            architecture=architecture,
+            architecture_config=architecture_config,
+            hand_projection_dim=hand_projection_dim,
         )
 
         # torch.compile()で生成されたモデルのstate_dictは_orig_mod.プレフィックス付き

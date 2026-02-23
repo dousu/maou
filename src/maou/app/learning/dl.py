@@ -642,6 +642,8 @@ class Learning:
                     device=self.device,
                     architecture=self.model_architecture,
                     cloud_storage=self.__cloud_storage,
+                    architecture_config=self.architecture_config,
+                    hand_projection_dim=self.model.hand_projection_dim,
                 )
 
             # SummaryWriterのイベントをGCSに保存する

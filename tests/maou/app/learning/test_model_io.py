@@ -191,3 +191,45 @@ def test_onnx_fp16_without_onnxsim() -> None:
         # ファイルが正常に保存されたことを確認
         assert fp16_path.exists()
         assert fp16_path.stat().st_size > 0
+
+
+def test_save_model_with_custom_architecture_config() -> None:
+    """カスタムarchitecture_configとhand_projection_dim指定時のsave_modelが成功すること．"""
+    import tempfile
+    from pathlib import Path
+
+    device = torch.device("cpu")
+    architecture_config = {"num_layers": 2, "hidden_dim": 64}
+    hand_projection_dim = 16
+
+    trained_model = ModelFactory.create_shogi_model(
+        device,
+        architecture="resnet",
+        architecture_config=architecture_config,
+        hand_projection_dim=hand_projection_dim,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ModelIO.save_model(
+            trained_model=trained_model,
+            dir=Path(tmpdir),
+            id="test",
+            epoch=1,
+            device=device,
+            architecture="resnet",
+            architecture_config=architecture_config,
+            hand_projection_dim=hand_projection_dim,
+        )
+
+        # ONNXファイルが生成されていることを確認
+        onnx_files = list(Path(tmpdir).glob("*.onnx"))
+        assert len(onnx_files) >= 1, (
+            "ONNX model file was not generated"
+        )
+
+        # FP32 ONNXファイルのサイズが正常
+        fp32_files = [
+            f for f in onnx_files if "fp16" not in f.name
+        ]
+        assert len(fp32_files) == 1
+        assert fp32_files[0].stat().st_size > 0
