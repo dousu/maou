@@ -1570,3 +1570,10 @@ utility.add_command(benchmark_dataloader)
 utility.add_command(benchmark_training)
 utility.add_command(generate_stage1_data)
 utility.add_command(generate_stage2_data)
+
+# screenshot command (defined in screenshot.py, moved under utility group)
+from maou.infra.console.screenshot import (  # noqa: E402
+    screenshot,
+)
+
+utility.add_command(screenshot)

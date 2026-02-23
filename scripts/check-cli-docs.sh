@@ -16,7 +16,7 @@ declare -A CLI_DOC_MAP=(
   ["hcpe_convert.py"]="hcpe_convert.md"
   ["pre_process.py"]="pre_process.md"
   ["visualize.py"]="visualize.md"
-  ["screenshot.py"]="screenshot.md"
+  # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 
 # utility.py は特殊: 関連ドキュメントのうち少なくとも1つがstagedであればパス
@@ -25,10 +25,11 @@ UTILITY_DOCS=(
   "utility_benchmark_training.md"
   "generate-stage1-data.md"
   "generate-stage2-data.md"
+  "utility_screenshot.md"
 )
 
 # 除外ファイル（マッピング不要）
-EXCLUDED=("app.py" "common.py" "__init__.py")
+EXCLUDED=("app.py" "common.py" "screenshot.py" "__init__.py")
 
 # ステージングされたファイルを1パスで分類（空白を含むパスにも対応）
 CLI_FILES=()

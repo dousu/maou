@@ -15,7 +15,7 @@ Captures screenshots of Gradio web interfaces using Python Playwright headless b
 Capture a screenshot of the running Gradio server:
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -45,7 +45,7 @@ sleep 10
 #### Basic Screenshot
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 ```
@@ -53,7 +53,7 @@ uv run maou screenshot \
 #### Base64 Output (for Claude Vision API)
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --base64
 ```
@@ -61,7 +61,7 @@ uv run maou screenshot \
 #### Capture Specific Element
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#search-results" \
   --output /tmp/search-results.png
@@ -72,7 +72,7 @@ uv run maou screenshot \
 By default, full page screenshots are captured. To capture only the visible viewport:
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --no-full-page \
   --output /tmp/viewport-only.png
@@ -139,11 +139,11 @@ uv run maou visualize --use-mock-data &
 sleep 10
 
 # Capture multiple screenshots
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/main-view.png
 
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/mode-badge.png
@@ -158,7 +158,7 @@ Use `--action` to interact with the UI before taking a screenshot:
 
 ```bash
 # Fill a search field and click search
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "fill:#id-search-input input:mock_id_0" \
   --action "click:#id-search-btn" \
@@ -166,13 +166,13 @@ uv run maou screenshot \
   --output /tmp/search-result.png
 
 # Switch to a different tab
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(3)" \
   --output /tmp/analytics-tab.png
 
 # Wait for loading to finish
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "wait-hidden:.loading-spinner" \
   --output /tmp/loaded.png
@@ -202,7 +202,7 @@ uv run playwright install --with-deps chromium
 Increase timeout for slow-loading pages:
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --timeout 60000
 ```
@@ -213,7 +213,7 @@ Verify the selector exists in the page:
 
 ```bash
 # Try the default container first
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --wait-for "body"
 ```
@@ -231,7 +231,7 @@ lsof -i :7860 || uv run maou visualize --use-mock-data &
 If the screenshot shows "Loading..." instead of actual UI content, increase settle time:
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --settle-time 5000
 ```

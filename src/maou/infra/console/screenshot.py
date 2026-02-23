@@ -1,6 +1,6 @@
 """スクリーンショットCLIコマンド実装（インフラ層）．
 
-`maou screenshot`コマンドの実装を提供する．
+`maou utility screenshot`コマンドの実装を提供する．
 Playwright を使用してGradio UIのスクリーンショットを取得する．
 """
 
@@ -387,16 +387,16 @@ def screenshot(
 
     Examples:
         # Basic screenshot
-        maou screenshot --url http://localhost:7860 --output /tmp/test.png
+        maou utility screenshot --url http://localhost:7860 --output /tmp/test.png
 
         # Base64 output for Claude Vision API
-        maou screenshot --url http://localhost:7860 --base64
+        maou utility screenshot --url http://localhost:7860 --base64
 
         # Capture specific element
-        maou screenshot --url http://localhost:7860 --selector "#mode-badge"
+        maou utility screenshot --url http://localhost:7860 --selector "#mode-badge"
 
         # Full page screenshot
-        maou screenshot --url http://localhost:7860 --full-page
+        maou utility screenshot --url http://localhost:7860 --full-page
 
     Gradio UI Selectors:
         .gradio-container    Main container (default wait target)
@@ -407,14 +407,14 @@ def screenshot(
 
     Action Examples:
         # ID search then capture board
-        maou screenshot \\
+        maou utility screenshot \\
           --action "fill:#id-search-input input:mock_id_0" \\
           --action "click:#id-search-btn" \\
           --action "wait:#board-display svg" \\
           --output /tmp/id-search.png
 
         # Switch to data analysis tab
-        maou screenshot \\
+        maou utility screenshot \\
           --action "click:button[role='tab']:nth-of-type(3)" \\
           --output /tmp/analytics.png
     """

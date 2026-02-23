@@ -295,17 +295,6 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             PackageRequirement("playwright", ("visualize",)),
         ),
     ),
-    "screenshot": LazyCommandSpec(
-        "maou.infra.console.screenshot",
-        "screenshot",
-        missing_help=(
-            "Command 'screenshot' requires visualization dependencies. "
-            "Install with `uv sync --extra visualize`."
-        ),
-        required_packages=(
-            PackageRequirement("playwright", ("visualize",)),
-        ),
-    ),
 }
 
 

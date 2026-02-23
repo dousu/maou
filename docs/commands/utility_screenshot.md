@@ -1,4 +1,4 @@
-# `maou screenshot`
+# `maou utility screenshot`
 
 ## Overview
 
@@ -65,31 +65,31 @@ uv sync --extra visualize && uv run playwright install chromium
 ### 基本的なスクリーンショット
 
 ```bash
-maou screenshot --url http://localhost:7860 --output /tmp/test.png
+maou utility screenshot --url http://localhost:7860 --output /tmp/test.png
 ```
 
 ### Base64出力（Claude Vision API向け）
 
 ```bash
-maou screenshot --url http://localhost:7860 --base64
+maou utility screenshot --url http://localhost:7860 --base64
 ```
 
 ### 特定要素のキャプチャ
 
 ```bash
-maou screenshot --url http://localhost:7860 --selector "#mode-badge"
+maou utility screenshot --url http://localhost:7860 --selector "#mode-badge"
 ```
 
 ### フルページスクリーンショット
 
 ```bash
-maou screenshot --url http://localhost:7860 --full-page
+maou utility screenshot --url http://localhost:7860 --full-page
 ```
 
 ### ID検索後に盤面をキャプチャ
 
 ```bash
-maou screenshot \
+maou utility screenshot \
   --action "fill:#id-search-input input:mock_id_0" \
   --action "click:#id-search-btn" \
   --action "wait:#board-display svg" \
@@ -99,7 +99,7 @@ maou screenshot \
 ### データ分析タブに切り替えてキャプチャ
 
 ```bash
-maou screenshot \
+maou utility screenshot \
   --action "click:button[role='tab']:nth-of-type(3)" \
   --output /tmp/analytics.png
 ```

@@ -38,7 +38,7 @@ sleep 8
 
 ```bash
 # 撮影（各チェック項目ごとにオプションを変える）
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-XXXX.png \
   --settle-time 3000
@@ -70,7 +70,7 @@ sleep 2
 #### Check 1.1: フルページ初期状態
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0101-initial-full.png \
   --settle-time 5000
@@ -87,7 +87,7 @@ uv run maou screenshot \
 #### Check 1.2: モードバッジ
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/check-0102-mode-badge.png
@@ -109,7 +109,7 @@ uv run maou screenshot \
 
 ```bash
 # ID 検索でレコードを表示してから盤面を撮影
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "fill:#id-search-input input:mock_id_0" \
   --action "click:#id-search-btn" \
@@ -134,7 +134,7 @@ uv run maou screenshot \
 `--array-type stage1` で起動．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "wait:#board-display svg" \
   --selector "#board-display" \
@@ -152,7 +152,7 @@ uv run maou screenshot \
 `--array-type stage2` で起動．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "wait:#board-display svg" \
   --selector "#board-display" \
@@ -169,7 +169,7 @@ uv run maou screenshot \
 `--array-type preprocessing` で起動．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "wait:#board-display svg" \
   --selector "#board-display" \
@@ -193,7 +193,7 @@ HCPE の盤面で将棋のルール・表示規則を重点的に確認する．
 フルページスクリーンショットで座標を確認．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "wait:#board-display svg" \
   --selector "#board-display" \
@@ -209,7 +209,7 @@ uv run maou screenshot \
 #### Check 3.2: 駒の表示
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0302-pieces.png
 ```
@@ -223,7 +223,7 @@ uv run maou screenshot \
 #### Check 3.3: 持ち駒の表示
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0303-pieces-in-hand.png
 ```
@@ -243,7 +243,7 @@ uv run maou screenshot \
 #### Check 4.1: 概要タブの詳細表示
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0401-overview-tab.png
 ```
@@ -265,7 +265,7 @@ uv run maou screenshot \
 検索結果タブをクリックしてテーブルを表示し，撮影する．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(2)" \
   --output /tmp/check-0501-search-results.png
@@ -280,7 +280,7 @@ uv run maou screenshot \
 #### Check 5.2: ページナビゲーション
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#page-info" \
   --output /tmp/check-0502-page-info.png
@@ -301,7 +301,7 @@ uv run maou screenshot \
 `--array-type hcpe` で起動．データ分析タブに切り替えて確認．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(3)" \
   --output /tmp/check-0601-analytics-hcpe.png
@@ -318,7 +318,7 @@ uv run maou screenshot \
 `--array-type stage1` で起動．データ分析タブに切り替えて確認．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(3)" \
   --output /tmp/check-0602-analytics-stage1.png
@@ -332,7 +332,7 @@ uv run maou screenshot \
 `--array-type stage2` で起動．データ分析タブに切り替えて確認．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(3)" \
   --output /tmp/check-0603-analytics-stage2.png
@@ -350,7 +350,7 @@ uv run maou screenshot \
 #### Check 7.1: レコードインジケータ
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#record-indicator" \
   --output /tmp/check-0701-record-indicator.png
@@ -369,7 +369,7 @@ uv run maou screenshot \
 サーバー起動直後，検索未実行の状態を確認．
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0801-no-search.png
 ```
@@ -386,7 +386,7 @@ uv run maou screenshot \
 #### Check 9.1: ワイド画面（1920x1080）
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0901-wide.png \
   --width 1920 --height 1080 \
@@ -401,7 +401,7 @@ uv run maou screenshot \
 #### Check 9.2: 標準画面（1280x720）
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0902-standard.png \
   --width 1280 --height 720 \
@@ -415,7 +415,7 @@ uv run maou screenshot \
 #### Check 9.3: ナロー画面（768x1024）
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/check-0903-narrow.png \
   --width 768 --height 1024 \
@@ -437,7 +437,7 @@ uv run maou screenshot \
 
 ```bash
 # 検索結果タブに切り替えてテーブル行をクリック
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:button[role='tab']:nth-of-type(2)" \
   --action "click:#search-results-table [data-testid='cell-1-0']" \
@@ -460,7 +460,7 @@ uv run maou screenshot \
 
 ```bash
 # Array Type ドロップダウンをクリックしてデータソース変更UIを撮影
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:#array-type-dropdown" \
   --settle-time 1000 \
@@ -474,7 +474,7 @@ uv run maou screenshot \
 #### Check 11.2: インデクシング完了後の状態
 
 ```bash
-uv run maou screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --action "click:#array-type-dropdown" \
   --action "wait-hidden:.loading-spinner" \

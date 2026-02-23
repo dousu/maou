@@ -43,23 +43,23 @@ Expected output: `Version 1.40.x` or higher
 
 ## Screenshot Command
 
-The screenshot functionality is available via the `maou screenshot` CLI command.
+The screenshot functionality is available via the `maou utility screenshot` CLI command.
 
 ### Basic Usage
 
 ```bash
 # Basic screenshot
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/screenshot.png
 
 # Base64 output for Claude Vision API
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --base64
 
 # Capture specific element
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#search-results"
 ```
@@ -103,7 +103,7 @@ poetry run maou visualize --use-mock-data &
 sleep 10
 
 # 2. Capture screenshot
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 
@@ -118,18 +118,18 @@ lsof -ti :7860 | xargs kill -9 2>/dev/null || true
 
 ```bash
 # Main view
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/main-view.png
 
 # Mode badge only
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/mode-badge.png
 
 # Full page with scroll
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --full-page \
   --output /tmp/full-page.png
@@ -155,7 +155,7 @@ Gradio is a Single Page Application (SPA) that loads content dynamically and kee
 For slow-loading pages，increase timeout:
 
 ```bash
-poetry run maou screenshot \
+poetry run maou utility screenshot \
   --url http://localhost:7860 \
   --timeout 60000
 ```
