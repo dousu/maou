@@ -12,6 +12,7 @@ from maou.app.learning.multi_stage_training import (
     Stage1DatasetAdapter,
     StageConfig,
     TrainingStage,
+    TruncatedStageModel,
     pre_stage_collate_fn,
 )
 from maou.app.learning.network import (
@@ -937,3 +938,71 @@ class TestEffectiveLRComputation:
             base_batch_size=256,
         )
         assert result == pytest.approx(1e-3)
+
+
+class TestTruncatedStageModelFreeze:
+    """TruncatedStageModel のバックボーン凍結テスト．"""
+
+    def test_trailing_groups_frozen(self) -> None:
+        """trainable_layers 個の末尾グループが requires_grad=False になる．"""
+        backbone = _make_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        trainable_layers = 2
+
+        _model = TruncatedStageModel(
+            backbone, head, trainable_layers=trainable_layers
+        )
+
+        groups = backbone.backbone.get_freezable_groups()
+        total = len(groups)
+        n_use = total - trainable_layers
+
+        # 使用グループ (前半) は requires_grad=True
+        for i, group in enumerate(groups[:n_use]):
+            for name, param in group.named_parameters():
+                assert param.requires_grad, (
+                    f"Group {i} param {name} should be trainable"
+                )
+
+        # 除外グループ (後半) は requires_grad=False
+        for i, group in enumerate(groups[n_use:]):
+            for name, param in group.named_parameters():
+                assert not param.requires_grad, (
+                    f"Frozen group {n_use + i} param {name} "
+                    "should have requires_grad=False"
+                )
+
+    def test_head_remains_trainable(self) -> None:
+        """TruncatedStageModel のヘッドは凍結されない．"""
+        backbone = _make_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=2
+        )
+
+        for name, param in model.head.named_parameters():
+            assert param.requires_grad, (
+                f"Head param {name} should be trainable"
+            )
+
+    def test_trainable_layers_propagated(self) -> None:
+        """trainable_layers=1 でも正しく partial backbone が構成される．"""
+        backbone = _make_backbone()
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+
+        groups = backbone.backbone.get_freezable_groups()
+        total = len(groups)
+
+        model = TruncatedStageModel(
+            backbone, head, trainable_layers=1
+        )
+
+        # partial_backbone は (total - 1) 個のグループから成る
+        assert len(model.partial_backbone) == total - 1

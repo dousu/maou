@@ -411,13 +411,10 @@ def run_stage1_with_training_loop(
 
     # model から head を取得
     model = components.model
-    if not hasattr(model, "head"):
-        msg = (
-            "Cannot extract ReachableSquaresHead from "
-            f"{type(model).__name__}"
-        )
-        raise TypeError(msg)
-    reachable_head: ReachableSquaresHead = model.head
+    reachable_head = model.head  # type: ignore[union-attr]
+    assert isinstance(reachable_head, ReachableSquaresHead), (
+        f"Expected ReachableSquaresHead, got {type(reachable_head).__name__}"
+    )
 
     # Callbacks
     accuracy_callback = Stage1AccuracyCallback()
@@ -560,13 +557,10 @@ def run_stage2_with_training_loop(
 
     # model から head を取得
     model = components.model
-    if not hasattr(model, "head"):
-        msg = (
-            "Cannot extract LegalMovesHead from "
-            f"{type(model).__name__}"
-        )
-        raise TypeError(msg)
-    legal_moves_head: LegalMovesHead = model.head
+    legal_moves_head = model.head  # type: ignore[union-attr]
+    assert isinstance(legal_moves_head, LegalMovesHead), (
+        f"Expected LegalMovesHead, got {type(legal_moves_head).__name__}"
+    )
 
     # Callbacks
     f1_callback = Stage2F1Callback()

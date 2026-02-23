@@ -703,6 +703,7 @@ class StageComponentFactory:
             effective_lr,
             momentum,
             optimizer_name=optimizer_name,
+            weight_decay=0.0,
         )
         lr_scheduler = SchedulerFactory.create_scheduler(
             optimizer,
@@ -792,6 +793,7 @@ class StageComponentFactory:
             effective_lr,
             momentum,
             optimizer_name=optimizer_name,
+            weight_decay=0.0,
         )
         lr_scheduler = SchedulerFactory.create_scheduler(
             optimizer,
