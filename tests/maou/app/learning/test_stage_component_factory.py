@@ -503,9 +503,9 @@ class TestStreamingDataPipeline:
                 for _ in range(len(self._file_paths)):
                     yield self._make_batch(10)
 
-            def iter_files_columnar_subset(
+            def iter_files_columnar_subset(  # type: ignore[no-untyped-def]
                 self, file_paths: list[Path]
-            ):  # type: ignore[no-untyped-def]
+            ):
                 target_set = {str(fp) for fp in file_paths}
                 for fp in self._file_paths:
                     if str(fp) in target_set:
@@ -560,9 +560,9 @@ class TestStreamingDataPipeline:
                 for _ in range(len(self._file_paths)):
                     yield self._make_batch(10)
 
-            def iter_files_columnar_subset(
+            def iter_files_columnar_subset(  # type: ignore[no-untyped-def]
                 self, file_paths: list[Path]
-            ):  # type: ignore[no-untyped-def]
+            ):
                 target_set = {str(fp) for fp in file_paths}
                 for fp in self._file_paths:
                     if str(fp) in target_set:
