@@ -28,6 +28,9 @@ from maou.app.learning.setup import (
     SchedulerFactory,
     TrainingSetup,
 )
+from maou.app.learning.stage_component_factory import (
+    StageComponentFactory,
+)
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
     StreamingKifDataset,
@@ -676,99 +679,51 @@ class TrainingBenchmarkUseCase:
             architecture=config.model_architecture,
             architecture_config=config.architecture_config,
         )
-        from maou.app.learning.network import (
-            ReachableSquaresHead,
-        )
 
-        reachable_head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim,
-        )
-
-        # Model adapter
-        from maou.app.learning.multi_stage_training import (
-            Stage1DatasetAdapter,
-            Stage1ModelAdapter,
-            pre_stage_collate_fn,
-        )
-
-        model: torch.nn.Module = Stage1ModelAdapter(
-            backbone, reachable_head
-        )
-        model.to(device)
-
-        # Loss functions
-        from maou.domain.loss.loss_fn import (
-            ReachableSquaresLoss,
-        )
-
-        loss_fn_policy: torch.nn.Module = ReachableSquaresLoss(
-            pos_weight=config.stage1_pos_weight,
-        )
-        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
-
-        # Optimizer
-        optimizer = LossOptimizerFactory.create_optimizer(
-            model,
-            config.learning_ratio,
-            config.momentum,
-            optimizer_name=config.optimizer_name,
-            betas=(
-                config.optimizer_beta1,
-                config.optimizer_beta2,
-            ),
-            eps=config.optimizer_eps,
-        )
-
-        # LR Scheduler
-        lr_scheduler_name = (
-            config.stage12_lr_scheduler_name
-            or config.lr_scheduler_name
-        )
-
-        # Dataset + DataLoader
-        from maou.app.learning.dataset import Stage1Dataset
-
-        training_datasource, validation_datasource = (
-            config.stage1_datasource.train_test_split(
-                test_ratio=config.test_ratio
-            )
-        )
-        train_dataset = Stage1DatasetAdapter(
-            Stage1Dataset(datasource=training_datasource)
-        )
-        val_dataset = Stage1DatasetAdapter(
-            Stage1Dataset(datasource=validation_datasource)
-        )
-        stage1_effective_batch_size = (
-            config.stage1_batch_size
-            if config.stage1_batch_size is not None
-            else config.batch_size
-        )
-        training_loader, validation_loader = (
-            DataLoaderFactory.create_dataloaders(
-                dataset_train=train_dataset,
-                dataset_validation=val_dataset,
-                batch_size=stage1_effective_batch_size,
-                dataloader_workers=config.dataloader_workers,
+        components = (
+            StageComponentFactory.create_stage1_components(
+                datasource=config.stage1_datasource,
+                backbone=backbone,
+                device=device,
+                batch_size=(
+                    config.stage1_batch_size
+                    if config.stage1_batch_size is not None
+                    else config.batch_size
+                ),
+                learning_rate=config.learning_ratio,
+                pos_weight=config.stage1_pos_weight,
+                lr_scheduler_name=(
+                    config.stage12_lr_scheduler_name
+                    or config.lr_scheduler_name
+                ),
+                optimizer_name=config.optimizer_name,
+                momentum=config.momentum,
+                num_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
-                collate_fn=pre_stage_collate_fn,
+                total_epochs=1,
             )
         )
 
-        lr_scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
-            lr_scheduler_name=lr_scheduler_name,
-            max_epochs=1,
-            steps_per_epoch=len(training_loader),
-        )
+        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
 
         model_components = ModelComponents(
-            model=model,
-            loss_fn_policy=loss_fn_policy,
+            model=components.model,
+            loss_fn_policy=components.loss_fn,
             loss_fn_value=loss_fn_value,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
+            optimizer=components.optimizer,
+            lr_scheduler=components.lr_scheduler,
+        )
+
+        # Stage 1 has no validation - provide empty loader
+        # for benchmark interface compatibility
+        _EmptyDataset = type(
+            "_EmptyDataset",
+            (torch.utils.data.IterableDataset,),
+            {"__iter__": lambda self: iter([])},
+        )
+        empty_loader: DataLoader = DataLoader(
+            _EmptyDataset(), batch_size=1
         )
 
         self.logger.info(
@@ -777,7 +732,7 @@ class TrainingBenchmarkUseCase:
 
         return (
             device_config,
-            (training_loader, validation_loader),
+            (components.train_dataloader, empty_loader),
             model_components,
         )
 
@@ -822,103 +777,59 @@ class TrainingBenchmarkUseCase:
             architecture=config.model_architecture,
             architecture_config=config.architecture_config,
         )
-        from maou.app.learning.network import LegalMovesHead
 
-        legal_moves_head = LegalMovesHead(
-            input_dim=backbone.embedding_dim,
-            hidden_dim=config.stage2_hidden_dim
-            if config.stage2_hidden_dim > 0
-            else None,
-            dropout=config.stage2_head_dropout,
-        )
-
-        # Model adapter
-        from maou.app.learning.multi_stage_training import (
-            Stage2DatasetAdapter,
-            Stage2ModelAdapter,
-            pre_stage_collate_fn,
-        )
-
-        model: torch.nn.Module = Stage2ModelAdapter(
-            backbone, legal_moves_head
-        )
-        model.to(device)
-
-        # Loss functions
-        from maou.domain.loss.loss_fn import LegalMovesLoss
-
-        loss_fn_policy: torch.nn.Module = LegalMovesLoss(
-            pos_weight=config.stage2_pos_weight,
-            gamma_pos=config.stage2_gamma_pos,
-            gamma_neg=config.stage2_gamma_neg,
-            clip=config.stage2_clip,
-        )
-        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
-
-        # Optimizer
-        optimizer = LossOptimizerFactory.create_optimizer(
-            model,
-            config.learning_ratio,
-            config.momentum,
-            optimizer_name=config.optimizer_name,
-            betas=(
-                config.optimizer_beta1,
-                config.optimizer_beta2,
-            ),
-            eps=config.optimizer_eps,
-        )
-
-        # LR Scheduler
-        lr_scheduler_name = (
-            config.stage12_lr_scheduler_name
-            or config.lr_scheduler_name
-        )
-
-        # Dataset + DataLoader
-        from maou.app.learning.dataset import Stage2Dataset
-
-        training_datasource, validation_datasource = (
-            config.stage2_datasource.train_test_split(
-                test_ratio=config.stage2_test_ratio
-            )
-        )
-        train_dataset = Stage2DatasetAdapter(
-            Stage2Dataset(datasource=training_datasource)
-        )
-        val_dataset = Stage2DatasetAdapter(
-            Stage2Dataset(datasource=validation_datasource)
-        )
-        stage2_effective_batch_size = (
-            config.stage2_batch_size
-            if config.stage2_batch_size is not None
-            else config.batch_size
-        )
-        training_loader, validation_loader = (
-            DataLoaderFactory.create_dataloaders(
-                dataset_train=train_dataset,
-                dataset_validation=val_dataset,
-                batch_size=stage2_effective_batch_size,
-                dataloader_workers=config.dataloader_workers,
+        components = (
+            StageComponentFactory.create_stage2_components(
+                datasource=config.stage2_datasource,
+                backbone=backbone,
+                device=device,
+                batch_size=(
+                    config.stage2_batch_size
+                    if config.stage2_batch_size is not None
+                    else config.batch_size
+                ),
+                learning_rate=config.learning_ratio,
+                pos_weight=config.stage2_pos_weight,
+                gamma_pos=config.stage2_gamma_pos,
+                gamma_neg=config.stage2_gamma_neg,
+                clip=config.stage2_clip,
+                head_hidden_dim=config.stage2_hidden_dim,
+                head_dropout=config.stage2_head_dropout,
+                test_ratio=config.stage2_test_ratio,
+                lr_scheduler_name=(
+                    config.stage12_lr_scheduler_name
+                    or config.lr_scheduler_name
+                ),
+                optimizer_name=config.optimizer_name,
+                momentum=config.momentum,
+                num_workers=config.dataloader_workers,
                 pin_memory=device_config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
-                collate_fn=pre_stage_collate_fn,
+                total_epochs=1,
             )
         )
 
-        lr_scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
-            lr_scheduler_name=lr_scheduler_name,
-            max_epochs=1,
-            steps_per_epoch=len(training_loader),
-        )
+        loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
 
         model_components = ModelComponents(
-            model=model,
-            loss_fn_policy=loss_fn_policy,
+            model=components.model,
+            loss_fn_policy=components.loss_fn,
             loss_fn_value=loss_fn_value,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
+            optimizer=components.optimizer,
+            lr_scheduler=components.lr_scheduler,
         )
+
+        validation_loader = components.val_dataloader
+        if validation_loader is None:
+            _EmptyDataset = type(
+                "_EmptyDataset",
+                (torch.utils.data.IterableDataset,),
+                {"__iter__": lambda self: iter([])},
+            )
+            empty_loader: DataLoader = DataLoader(
+                _EmptyDataset(), batch_size=1
+            )
+            validation_loader = empty_loader
 
         self.logger.info(
             "Stage 2 benchmark components setup completed"
@@ -926,7 +837,7 @@ class TrainingBenchmarkUseCase:
 
         return (
             device_config,
-            (training_loader, validation_loader),
+            (components.train_dataloader, validation_loader),
             model_components,
         )
 
@@ -971,6 +882,28 @@ class TrainingBenchmarkUseCase:
             architecture=config.model_architecture,
             architecture_config=config.architecture_config,
         )
+
+        # Data pipeline from factory
+        pipeline = StageComponentFactory.create_stage2_streaming_data_pipeline(
+            streaming_source=config.stage2_streaming_train_source,
+            batch_size=(
+                config.stage2_batch_size
+                if config.stage2_batch_size is not None
+                else config.batch_size
+            ),
+            pos_weight=config.stage2_pos_weight,
+            gamma_pos=config.stage2_gamma_pos,
+            gamma_neg=config.stage2_gamma_neg,
+            clip=config.stage2_clip,
+            dataloader_workers=config.dataloader_workers,
+            pin_memory=device_config.pin_memory,
+            prefetch_factor=config.prefetch_factor,
+        )
+
+        # Model (keep existing model creation - not in streaming data pipeline)
+        from maou.app.learning.multi_stage_training import (
+            Stage2ModelAdapter,
+        )
         from maou.app.learning.network import LegalMovesHead
 
         legal_moves_head = LegalMovesHead(
@@ -980,84 +913,13 @@ class TrainingBenchmarkUseCase:
             else None,
             dropout=config.stage2_head_dropout,
         )
-
-        # Model adapter
-        from maou.app.learning.multi_stage_training import (
-            Stage2ModelAdapter,
-        )
-
         model: torch.nn.Module = Stage2ModelAdapter(
             backbone, legal_moves_head
         )
         model.to(device)
 
-        # Streaming datasets
-        from maou.app.learning.streaming_dataset import (
-            Stage2StreamingAdapter,
-            StreamingStage2Dataset,
-        )
-
-        stage2_effective_batch_size = (
-            config.stage2_batch_size
-            if config.stage2_batch_size is not None
-            else config.batch_size
-        )
-        train_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
-            StreamingStage2Dataset(
-                streaming_source=config.stage2_streaming_train_source,
-                batch_size=stage2_effective_batch_size,
-                shuffle=True,
-            )
-        )
-
-        if config.stage2_streaming_val_source is not None:
-            val_dataset: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
-                StreamingStage2Dataset(
-                    streaming_source=config.stage2_streaming_val_source,
-                    batch_size=stage2_effective_batch_size,
-                    shuffle=False,
-                )
-            )
-            n_val_files = len(
-                config.stage2_streaming_val_source.file_paths
-            )
-        else:
-            _EmptyDataset = type(
-                "_EmptyDataset",
-                (torch.utils.data.IterableDataset,),
-                {"__iter__": lambda self: iter([])},
-            )
-            val_dataset = _EmptyDataset()
-            n_val_files = 0
-
-        n_train_files = len(
-            config.stage2_streaming_train_source.file_paths
-        )
-        training_loader, validation_loader = (
-            DataLoaderFactory.create_streaming_dataloaders(
-                train_dataset=train_dataset,
-                val_dataset=val_dataset,
-                dataloader_workers=config.dataloader_workers,
-                pin_memory=device_config.pin_memory,
-                prefetch_factor=config.prefetch_factor,
-                n_train_files=n_train_files,
-                n_val_files=n_val_files,
-                file_paths=config.stage2_streaming_train_source.file_paths,
-            )
-        )
-
-        # Loss functions
-        from maou.domain.loss.loss_fn import LegalMovesLoss
-
-        loss_fn_policy: torch.nn.Module = LegalMovesLoss(
-            pos_weight=config.stage2_pos_weight,
-            gamma_pos=config.stage2_gamma_pos,
-            gamma_neg=config.stage2_gamma_neg,
-            clip=config.stage2_clip,
-        )
+        # Loss, optimizer, scheduler
         loss_fn_value: torch.nn.Module = torch.nn.MSELoss()
-
-        # Optimizer
         optimizer = LossOptimizerFactory.create_optimizer(
             model,
             config.learning_ratio,
@@ -1069,26 +931,68 @@ class TrainingBenchmarkUseCase:
             ),
             eps=config.optimizer_eps,
         )
-
-        # LR Scheduler
-        lr_scheduler_name = (
-            config.stage12_lr_scheduler_name
-            or config.lr_scheduler_name
-        )
         lr_scheduler = SchedulerFactory.create_scheduler(
             optimizer,
-            lr_scheduler_name=lr_scheduler_name,
+            lr_scheduler_name=(
+                config.stage12_lr_scheduler_name
+                or config.lr_scheduler_name
+            ),
             max_epochs=1,
-            steps_per_epoch=len(training_loader),
+            steps_per_epoch=len(pipeline.train_dataloader),
         )
 
         model_components = ModelComponents(
             model=model,
-            loss_fn_policy=loss_fn_policy,
+            loss_fn_policy=pipeline.loss_fn,
             loss_fn_value=loss_fn_value,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
         )
+
+        # Streaming validation loader
+        if config.stage2_streaming_val_source is not None:
+            from maou.app.learning.streaming_dataset import (
+                Stage2StreamingAdapter,
+                StreamingStage2Dataset,
+            )
+
+            val_batch_size = (
+                config.stage2_batch_size
+                if config.stage2_batch_size is not None
+                else config.batch_size
+            )
+            val_dataset_raw: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
+                StreamingStage2Dataset(
+                    streaming_source=config.stage2_streaming_val_source,
+                    batch_size=val_batch_size,
+                    shuffle=False,
+                )
+            )
+            _, validation_loader = (
+                DataLoaderFactory.create_streaming_dataloaders(
+                    train_dataset=pipeline.train_dataloader.dataset,
+                    val_dataset=val_dataset_raw,
+                    dataloader_workers=config.dataloader_workers,
+                    pin_memory=device_config.pin_memory,
+                    prefetch_factor=config.prefetch_factor,
+                    n_train_files=len(
+                        config.stage2_streaming_train_source.file_paths
+                    ),
+                    n_val_files=len(
+                        config.stage2_streaming_val_source.file_paths
+                    ),
+                    file_paths=config.stage2_streaming_train_source.file_paths,
+                )
+            )
+        else:
+            _EmptyDataset = type(
+                "_EmptyDataset",
+                (torch.utils.data.IterableDataset,),
+                {"__iter__": lambda self: iter([])},
+            )
+            validation_loader = DataLoader(
+                _EmptyDataset(), batch_size=1
+            )
 
         self.logger.info(
             "Stage 2 streaming benchmark components setup completed"
@@ -1096,7 +1000,7 @@ class TrainingBenchmarkUseCase:
 
         return (
             device_config,
-            (training_loader, validation_loader),
+            (pipeline.train_dataloader, validation_loader),
             model_components,
         )
 
@@ -1397,16 +1301,40 @@ class TrainingBenchmarkUseCase:
 
         # Run validation benchmark if requested
         validation_result = None
+        validation_skipped_reason: Optional[str] = None
+
         if config.run_validation:
-            self.logger.info("Starting validation benchmark...")
-            validation_result = benchmark.benchmark_validation(
-                validation_loader,
-                max_batches=config.max_batches,
-            )
-            validation_result = replace(
-                validation_result,
-                data_load_method=data_load_method,
-            )
+            if config.stage == 1:
+                validation_skipped_reason = (
+                    "Stage 1 does not support validation "
+                    "(accuracy threshold is used instead). "
+                    "--run-validation is ignored."
+                )
+                self.logger.warning(validation_skipped_reason)
+            elif (
+                config.stage == 2
+                and config.stage2_test_ratio == 0.0
+            ):
+                validation_skipped_reason = (
+                    "--run-validation requires "
+                    "--stage2-test-ratio > 0. "
+                    "Skipping validation."
+                )
+                self.logger.warning(validation_skipped_reason)
+            else:
+                self.logger.info(
+                    "Starting validation benchmark..."
+                )
+                validation_result = (
+                    benchmark.benchmark_validation(
+                        validation_loader,
+                        max_batches=config.max_batches,
+                    )
+                )
+                validation_result = replace(
+                    validation_result,
+                    data_load_method=data_load_method,
+                )
 
         # Calculate sample ratio estimation if provided
         estimation_results = {}
@@ -1626,6 +1554,13 @@ class TrainingBenchmarkUseCase:
             )
             output["validation_metrics"] = (
                 validation_result.to_dict()
+            )
+
+        if validation_skipped_reason is not None:
+            output["benchmark_results"][
+                "validation_skipped"
+            ] = (  # type: ignore[index]
+                validation_skipped_reason
             )
 
         return json.dumps(output, indent=2)

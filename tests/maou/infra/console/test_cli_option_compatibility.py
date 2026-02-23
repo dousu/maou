@@ -83,6 +83,7 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "output-s3",  # S3出力（不要）
         "s3-bucket-name",  # S3（不要）
         "s3-base-path",  # S3（不要）
+        "save-split-params",  # データ分割パラメータ保存（不要）
     }
 
     # 除外リストを適用してチェック対象を絞る

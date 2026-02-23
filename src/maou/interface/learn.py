@@ -8,12 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Optional
 
 import torch
-from torch.utils.data import DataLoader, IterableDataset
 
-from maou.app.learning.dataset import (
-    Stage1Dataset,
-    Stage2Dataset,
-)
 from maou.app.learning.dl import (
     CloudStorage,
     Learning,
@@ -21,32 +16,23 @@ from maou.app.learning.dl import (
 )
 from maou.app.learning.multi_stage_training import (
     MultiStageTrainingOrchestrator,
-    Stage1DatasetAdapter,
-    Stage2DatasetAdapter,
     StageConfig,
     StageResult,
     TrainingStage,
-    pre_stage_collate_fn,
 )
 from maou.app.learning.network import (
     BACKBONE_ARCHITECTURES,
     BackboneArchitecture,
 )
 from maou.app.learning.setup import (
-    DataLoaderFactory,
     DeviceSetup,
     ModelFactory,
 )
-from maou.app.learning.streaming_dataset import (
-    Stage1StreamingAdapter,
-    Stage2StreamingAdapter,
-    StreamingDataSource,
-    StreamingStage1Dataset,
-    StreamingStage2Dataset,
+from maou.app.learning.stage_component_factory import (
+    StageComponentFactory,
 )
-from maou.domain.loss.loss_fn import (
-    LegalMovesLoss,
-    ReachableSquaresLoss,
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
 )
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
@@ -577,27 +563,21 @@ def _run_stage1(
         Stage 1 の訓練結果
     """
     datasource = data_config.create_datasource()
-    train_ds, _ = datasource.train_test_split(test_ratio=0.0)
-
-    raw_dataset = Stage1Dataset(datasource=train_ds)
-    dataset = Stage1DatasetAdapter(raw_dataset)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
-        pin_memory=(device.type == "cuda"),
-        collate_fn=pre_stage_collate_fn,
+    pipeline = (
+        StageComponentFactory.create_stage1_data_pipeline(
+            datasource,
+            batch_size=batch_size,
+            pos_weight=stage1_pos_weight,
+            pin_memory=(device.type == "cuda"),
+        )
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.REACHABLE_SQUARES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=dataloader,
-        loss_fn=ReachableSquaresLoss(
-            pos_weight=stage1_pos_weight
-        ),
+        dataloader=pipeline.train_dataloader,
+        loss_fn=pipeline.loss_fn,
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
@@ -663,45 +643,25 @@ def _run_stage2(
         Stage 2 の訓練結果
     """
     datasource = data_config.create_datasource()
-    train_ds, val_ds = datasource.train_test_split(
-        test_ratio=stage2_test_ratio
-    )
-
-    raw_dataset = Stage2Dataset(datasource=train_ds)
-    dataset = Stage2DatasetAdapter(raw_dataset)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
-        pin_memory=(device.type == "cuda"),
-        collate_fn=pre_stage_collate_fn,
-    )
-
-    val_dataloader: Optional[DataLoader] = None
-    if stage2_test_ratio > 0.0 and val_ds is not None:
-        val_raw_dataset = Stage2Dataset(datasource=val_ds)
-        val_dataset = Stage2DatasetAdapter(val_raw_dataset)
-        val_dataloader = DataLoader(
-            val_dataset,
+    pipeline = (
+        StageComponentFactory.create_stage2_data_pipeline(
+            datasource,
             batch_size=batch_size,
-            shuffle=False,
-            num_workers=0,
+            pos_weight=stage2_pos_weight,
+            gamma_pos=stage2_gamma_pos,
+            gamma_neg=stage2_gamma_neg,
+            clip=stage2_clip,
+            test_ratio=stage2_test_ratio,
             pin_memory=(device.type == "cuda"),
-            collate_fn=pre_stage_collate_fn,
         )
+    )
 
     stage_config = StageConfig(
         stage=TrainingStage.LEGAL_MOVES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=dataloader,
-        loss_fn=LegalMovesLoss(
-            pos_weight=stage2_pos_weight,
-            gamma_pos=stage2_gamma_pos,
-            gamma_neg=stage2_gamma_neg,
-            clip=stage2_clip,
-        ),
+        dataloader=pipeline.train_dataloader,
+        loss_fn=pipeline.loss_fn,
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
@@ -709,7 +669,7 @@ def _run_stage2(
         compilation=compilation,
         head_hidden_dim=stage2_head_hidden_dim,
         head_dropout=stage2_head_dropout,
-        val_dataloader=val_dataloader,
+        val_dataloader=pipeline.val_dataloader,
     )
 
     results = orchestrator.run_all_stages(
@@ -754,28 +714,18 @@ def _run_stage1_streaming(
     Returns:
         Stage 1 の訓練結果
     """
-    raw_dataset = StreamingStage1Dataset(
-        streaming_source=streaming_source,
+    pipeline = StageComponentFactory.create_stage1_streaming_data_pipeline(
+        streaming_source,
         batch_size=batch_size,
-        shuffle=True,
-    )
-    dataset = Stage1StreamingAdapter(raw_dataset)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=None,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=(device.type == "cuda"),
+        pos_weight=stage1_pos_weight,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.REACHABLE_SQUARES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=dataloader,
-        loss_fn=ReachableSquaresLoss(
-            pos_weight=stage1_pos_weight
-        ),
+        dataloader=pipeline.train_dataloader,
+        loss_fn=pipeline.loss_fn,
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,
@@ -850,45 +800,25 @@ def _run_stage2_streaming(
             stage2_test_ratio,
         )
 
-    raw_dataset = StreamingStage2Dataset(
-        streaming_source=streaming_source,
+    pipeline = StageComponentFactory.create_stage2_streaming_data_pipeline(
+        streaming_source,
         batch_size=batch_size,
-        shuffle=True,
-    )
-    dataset = Stage2StreamingAdapter(raw_dataset)
-
-    # Stage 2 streaming ではバリデーション分割を行わないため，
-    # train のみの DataLoader を DataLoaderFactory 経由で作成する．
-    # n_val_files=0 により val 側は num_workers=0 となる．
-    _EmptyDataset = type(
-        "_EmptyDataset",
-        (IterableDataset,),
-        {"__iter__": lambda self: iter([])},
-    )
-    dataloader, _ = (
-        DataLoaderFactory.create_streaming_dataloaders(
-            train_dataset=dataset,
-            val_dataset=_EmptyDataset(),
-            dataloader_workers=dataloader_workers,
-            pin_memory=pin_memory,
-            prefetch_factor=prefetch_factor,
-            n_train_files=len(streaming_source.file_paths),
-            n_val_files=0,
-            file_paths=streaming_source.file_paths,
-        )
+        pos_weight=stage2_pos_weight,
+        gamma_pos=stage2_gamma_pos,
+        gamma_neg=stage2_gamma_neg,
+        clip=stage2_clip,
+        test_ratio=stage2_test_ratio,
+        dataloader_workers=dataloader_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.LEGAL_MOVES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=dataloader,
-        loss_fn=LegalMovesLoss(
-            pos_weight=stage2_pos_weight,
-            gamma_pos=stage2_gamma_pos,
-            gamma_neg=stage2_gamma_neg,
-            clip=stage2_clip,
-        ),
+        dataloader=pipeline.train_dataloader,
+        loss_fn=pipeline.loss_fn,
         learning_rate=learning_rate,
         lr_scheduler_name=lr_scheduler_name,
         base_batch_size=256,

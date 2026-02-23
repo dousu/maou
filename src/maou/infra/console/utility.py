@@ -1363,6 +1363,13 @@ def benchmark_training(
             result["benchmark_results"]["ValidationSummary"]
         )
 
+    if "validation_skipped" in result["benchmark_results"]:
+        click.echo()
+        click.echo(
+            f"Validation: skipped - "
+            f"{result['benchmark_results']['validation_skipped']}"
+        )
+
     # Display estimation results if sample_ratio was used
     if "estimation" in result and result["estimation"]:
         click.echo()

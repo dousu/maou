@@ -549,3 +549,220 @@ class TestApplyLayerFreezing:
             1 for p in model.parameters() if p.requires_grad
         )
         assert trainable_after == trainable_before
+
+
+class TestValidationWarningLogic:
+    """Validation 警告ロジックのテスト (タスク#2)．
+
+    execute() 内の validation 分岐を検証する．
+    重いコンポーネント(モデル生成，学習)はモックで代替する．
+    """
+
+    def _make_fake_benchmark_result(self) -> BenchmarkResult:
+        """ダミーの BenchmarkResult を生成する．"""
+        return BenchmarkResult(
+            total_epoch_time=1.0,
+            average_batch_time=0.1,
+            actual_average_batch_time=0.1,
+            total_batches=10,
+            warmup_time=0.2,
+            warmup_batches=2,
+            measured_time=0.8,
+            measured_batches=8,
+            data_loading_time=0.01,
+            gpu_transfer_time=0.005,
+            forward_pass_time=0.05,
+            loss_computation_time=0.01,
+            backward_pass_time=0.02,
+            optimizer_step_time=0.01,
+            final_loss=0.5,
+            average_loss=0.6,
+            samples_per_second=100.0,
+            batches_per_second=10.0,
+            data_load_method="map-style",
+        )
+
+    def _run_execute_with_patches(
+        self,
+        config: TrainingBenchmarkConfig,
+    ) -> str:
+        """パッチ適用済みの execute() を実行し JSON 文字列を返す．"""
+        from unittest.mock import MagicMock, patch
+
+        use_case = TrainingBenchmarkUseCase()
+        fake_result = self._make_fake_benchmark_result()
+
+        # setup メソッドのモック返却値
+        device_config = MagicMock()
+        device_config.device = torch.device("cpu")
+        device_config.pin_memory = False
+
+        train_loader = MagicMock()
+        train_loader.__len__ = MagicMock(return_value=10)
+        val_loader = MagicMock()
+        val_loader.__len__ = MagicMock(return_value=5)
+        dataloaders = (train_loader, val_loader)
+
+        model_components = MagicMock()
+        model_components.model = MagicMock()
+        model_components.optimizer = MagicMock()
+        model_components.lr_scheduler = None
+
+        setup_return = (
+            device_config,
+            dataloaders,
+            model_components,
+        )
+
+        # SingleEpochBenchmark のモック
+        mock_benchmark = MagicMock()
+        mock_benchmark.benchmark_epoch.return_value = (
+            fake_result
+        )
+        mock_benchmark.benchmark_validation.return_value = (
+            fake_result
+        )
+
+        with (
+            patch.object(
+                use_case,
+                "_setup_stage1_components",
+                return_value=setup_return,
+            ),
+            patch.object(
+                use_case,
+                "_setup_stage2_components",
+                return_value=setup_return,
+            ),
+            patch.object(
+                use_case,
+                "_setup_stage2_streaming_components",
+                return_value=setup_return,
+            ),
+            patch(
+                "maou.app.utility.training_benchmark.SingleEpochBenchmark",
+                return_value=mock_benchmark,
+            ),
+            patch(
+                "maou.app.utility.training_benchmark.compile_module",
+                side_effect=lambda m: m,
+            ),
+        ):
+            return use_case.execute(config)
+
+    def test_stage1_run_validation_emits_warning(
+        self,
+    ) -> None:
+        """Stage 1 + run_validation=True → validation_skipped が JSON 出力に含まれる．"""
+        import json
+
+        config = TrainingBenchmarkConfig(
+            stage=1,
+            run_validation=True,
+        )
+        result_json = self._run_execute_with_patches(config)
+        result = json.loads(result_json)
+
+        # validation_skipped キーが出力に含まれる
+        assert (
+            "validation_skipped" in result["benchmark_results"]
+        )
+        assert (
+            "Stage 1"
+            in result["benchmark_results"]["validation_skipped"]
+        )
+        # ValidationSummary は出力に含まれない
+        assert (
+            "ValidationSummary"
+            not in result["benchmark_results"]
+        )
+
+    def test_stage2_run_validation_no_test_ratio_emits_warning(
+        self,
+    ) -> None:
+        """Stage 2 + run_validation=True + stage2_test_ratio=0 → validation_skipped が出力される．"""
+        import json
+
+        config = TrainingBenchmarkConfig(
+            stage=2,
+            run_validation=True,
+            stage2_test_ratio=0.0,
+        )
+        result_json = self._run_execute_with_patches(config)
+        result = json.loads(result_json)
+
+        assert (
+            "validation_skipped" in result["benchmark_results"]
+        )
+        assert (
+            "test-ratio"
+            in result["benchmark_results"]["validation_skipped"]
+        )
+        assert (
+            "ValidationSummary"
+            not in result["benchmark_results"]
+        )
+
+    def test_stage2_run_validation_with_test_ratio_executes(
+        self,
+    ) -> None:
+        """Stage 2 + run_validation=True + stage2_test_ratio>0 → validation が実行される．"""
+        import json
+
+        config = TrainingBenchmarkConfig(
+            stage=2,
+            run_validation=True,
+            stage2_test_ratio=0.2,
+        )
+        result_json = self._run_execute_with_patches(config)
+        result = json.loads(result_json)
+
+        # validation_skipped がない
+        assert (
+            "validation_skipped"
+            not in result["benchmark_results"]
+        )
+        # ValidationSummary が存在する
+        assert (
+            "ValidationSummary" in result["benchmark_results"]
+        )
+
+    def test_validation_skipped_json_output_stage1(
+        self,
+    ) -> None:
+        """Stage 1 スキップ時 JSON に validation_skipped キーと理由が含まれる．"""
+        import json
+
+        config = TrainingBenchmarkConfig(
+            stage=1,
+            run_validation=True,
+        )
+        result_json = self._run_execute_with_patches(config)
+        result = json.loads(result_json)
+
+        skipped = result["benchmark_results"].get(
+            "validation_skipped"
+        )
+        assert skipped is not None
+        assert "Stage 1" in skipped
+        assert "ignored" in skipped.lower()
+
+    def test_validation_skipped_json_output_stage2_no_ratio(
+        self,
+    ) -> None:
+        """Stage 2 + test_ratio=0 スキップ時 JSON に validation_skipped キーと理由が含まれる．"""
+        import json
+
+        config = TrainingBenchmarkConfig(
+            stage=2,
+            run_validation=True,
+            stage2_test_ratio=0.0,
+        )
+        result_json = self._run_execute_with_patches(config)
+        result = json.loads(result_json)
+
+        skipped = result["benchmark_results"].get(
+            "validation_skipped"
+        )
+        assert skipped is not None
+        assert "stage2-test-ratio" in skipped
