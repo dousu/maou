@@ -97,7 +97,7 @@ def _make_dummy_dataloader(
             Stage2DatasetAdapter,
         )
 
-        paired_dataset: Dataset = _PairedDataset(
+        paired_dataset = _PairedDataset(
             board_tensor, hand_tensor, targets
         )
         adapted_dataset = Stage2DatasetAdapter(paired_dataset)
