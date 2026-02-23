@@ -869,6 +869,43 @@ class LossOptimizerFactory:
             "Expected 'adamw' or 'sgd'."
         )
 
+    @staticmethod
+    def compute_effective_lr(
+        learning_rate: float,
+        actual_batch_size: int,
+        base_batch_size: int,
+        logger: logging.Logger | None = None,
+    ) -> float:
+        """バッチサイズに基づく LR sqrt スケーリングを計算する．
+
+        actual_batch_size > base_batch_size の場合，
+        effective_lr = learning_rate * sqrt(actual / base) を返す．
+
+        Args:
+            learning_rate: ベース学習率．
+            actual_batch_size: 実際のバッチサイズ．
+            base_batch_size: 基準バッチサイズ(デフォルト 256)．
+            logger: ロガー(スケーリング情報の出力用)．
+
+        Returns:
+            スケーリング後の学習率．
+        """
+        if actual_batch_size > base_batch_size:
+            scale = math.sqrt(
+                actual_batch_size / base_batch_size
+            )
+            effective_lr = learning_rate * scale
+            if logger is not None:
+                logger.info(
+                    "LR sqrt scaling: base_lr=%.6f, scale=%.2f, "
+                    "effective_lr=%.6f",
+                    learning_rate,
+                    scale,
+                    effective_lr,
+                )
+            return effective_lr
+        return learning_rate
+
 
 class WarmupCosineDecayScheduler(LRScheduler):
     """Linear warmup followed by cosine decay scheduler.

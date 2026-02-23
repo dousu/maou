@@ -23,6 +23,7 @@ from maou.app.learning.multi_stage_training import (
 from maou.app.learning.network import (
     BACKBONE_ARCHITECTURES,
     BackboneArchitecture,
+    HeadlessNetwork,
 )
 from maou.app.learning.setup import (
     DeviceSetup,
@@ -531,15 +532,16 @@ def _run_stage1(
     *,
     data_config: StageDataConfig,
     orchestrator: MultiStageTrainingOrchestrator,
-    backbone: "torch.nn.Module",
+    backbone: "HeadlessNetwork",
+    device: torch.device,
     batch_size: int,
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
+    trainable_layers: Optional[int] = None,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) を実行し結果を返す．
 
@@ -547,48 +549,48 @@ def _run_stage1(
     関数終了時にスコープから外れ，GCの解放対象になる．
 
     Args:
-        data_config: Stage 1 データソース設定
-        orchestrator: マルチステージオーケストレータ
-        backbone: バックボーンネットワーク
-        batch_size: バッチサイズ
-        learning_rate: 学習率
-        max_epochs: 最大エポック数
-        threshold: 精度閾値
-        device: 計算デバイス
-        lr_scheduler_name: 学習率スケジューラ名
-        compilation: torch.compileを有効化するか
-        stage1_pos_weight: 正例の重み(デフォルト: 1.0)
+        data_config: Stage 1 データソース設定．
+        orchestrator: マルチステージオーケストレータ．
+        backbone: バックボーンネットワーク．
+        device: 計算デバイス．
+        batch_size: バッチサイズ．
+        learning_rate: 学習率．
+        max_epochs: 最大エポック数．
+        threshold: 精度閾値．
+        lr_scheduler_name: 学習率スケジューラ名．
+        compilation: torch.compileを有効化するか．
+        stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
+        trainable_layers: 訓練可能レイヤー数．
 
     Returns:
-        Stage 1 の訓練結果
+        Stage 1 の訓練結果．
     """
     datasource = data_config.create_datasource()
-    pipeline = (
-        StageComponentFactory.create_stage1_data_pipeline(
-            datasource,
-            batch_size=batch_size,
-            pos_weight=stage1_pos_weight,
-            pin_memory=(device.type == "cuda"),
-        )
+    components = StageComponentFactory.create_stage1_components(
+        datasource,
+        backbone,
+        device,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        pos_weight=stage1_pos_weight,
+        lr_scheduler_name=lr_scheduler_name,
+        compilation=compilation,
+        actual_batch_size=batch_size,
+        base_batch_size=256,
+        trainable_layers=trainable_layers,
+        pin_memory=(device.type == "cuda"),
+        total_epochs=max_epochs,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.REACHABLE_SQUARES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=pipeline.train_dataloader,
-        loss_fn=pipeline.loss_fn,
-        learning_rate=learning_rate,
-        lr_scheduler_name=lr_scheduler_name,
-        base_batch_size=256,
-        actual_batch_size=batch_size,
-        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
+        stage1_components=components,
         stage1_config=stage_config,
-        stage2_config=None,
-        stage3_config=None,
         save_checkpoints=True,
     )
 
@@ -599,12 +601,12 @@ def _run_stage2(
     *,
     data_config: StageDataConfig,
     orchestrator: MultiStageTrainingOrchestrator,
-    backbone: "torch.nn.Module",
+    backbone: "HeadlessNetwork",
+    device: torch.device,
     batch_size: int,
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
     stage2_pos_weight: float = 1.0,
@@ -614,6 +616,7 @@ def _run_stage2(
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
     stage2_test_ratio: float = 0.0,
+    trainable_layers: Optional[int] = None,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
 
@@ -621,61 +624,60 @@ def _run_stage2(
     関数終了時にスコープから外れ，GCの解放対象になる．
 
     Args:
-        data_config: Stage 2 データソース設定
-        orchestrator: マルチステージオーケストレータ
-        backbone: バックボーンネットワーク
-        batch_size: バッチサイズ
-        learning_rate: 学習率
-        max_epochs: 最大エポック数
-        threshold: 精度閾値
-        device: 計算デバイス
-        lr_scheduler_name: 学習率スケジューラ名
-        compilation: torch.compileを有効化するか
-        stage2_pos_weight: 正例の重み(デフォルト: 1.0)
-        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)
-        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)
-        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
-        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
-        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
-        stage2_test_ratio: 検証データ分割比率(デフォルト: 0.0で分割なし)
+        data_config: Stage 2 データソース設定．
+        orchestrator: マルチステージオーケストレータ．
+        backbone: バックボーンネットワーク．
+        device: 計算デバイス．
+        batch_size: バッチサイズ．
+        learning_rate: 学習率．
+        max_epochs: 最大エポック数．
+        threshold: 精度閾値．
+        lr_scheduler_name: 学習率スケジューラ名．
+        compilation: torch.compileを有効化するか．
+        stage2_pos_weight: 正例の重み(デフォルト: 1.0)．
+        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)．
+        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)．
+        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)．
+        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)．
+        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)．
+        stage2_test_ratio: 検証データ分割比率(デフォルト: 0.0で分割なし)．
+        trainable_layers: 訓練可能レイヤー数．
 
     Returns:
-        Stage 2 の訓練結果
+        Stage 2 の訓練結果．
     """
     datasource = data_config.create_datasource()
-    pipeline = (
-        StageComponentFactory.create_stage2_data_pipeline(
-            datasource,
-            batch_size=batch_size,
-            pos_weight=stage2_pos_weight,
-            gamma_pos=stage2_gamma_pos,
-            gamma_neg=stage2_gamma_neg,
-            clip=stage2_clip,
-            test_ratio=stage2_test_ratio,
-            pin_memory=(device.type == "cuda"),
-        )
+    components = StageComponentFactory.create_stage2_components(
+        datasource,
+        backbone,
+        device,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        pos_weight=stage2_pos_weight,
+        gamma_pos=stage2_gamma_pos,
+        gamma_neg=stage2_gamma_neg,
+        clip=stage2_clip,
+        head_hidden_dim=stage2_head_hidden_dim,
+        head_dropout=stage2_head_dropout,
+        test_ratio=stage2_test_ratio,
+        lr_scheduler_name=lr_scheduler_name,
+        compilation=compilation,
+        actual_batch_size=batch_size,
+        base_batch_size=256,
+        trainable_layers=trainable_layers,
+        pin_memory=(device.type == "cuda"),
+        total_epochs=max_epochs,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.LEGAL_MOVES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=pipeline.train_dataloader,
-        loss_fn=pipeline.loss_fn,
-        learning_rate=learning_rate,
-        lr_scheduler_name=lr_scheduler_name,
-        base_batch_size=256,
-        actual_batch_size=batch_size,
-        compilation=compilation,
-        head_hidden_dim=stage2_head_hidden_dim,
-        head_dropout=stage2_head_dropout,
-        val_dataloader=pipeline.val_dataloader,
     )
 
     results = orchestrator.run_all_stages(
-        stage1_config=None,
+        stage2_components=components,
         stage2_config=stage_config,
-        stage3_config=None,
         save_checkpoints=True,
     )
 
@@ -686,57 +688,60 @@ def _run_stage1_streaming(
     *,
     streaming_source: StreamingDataSource,
     orchestrator: MultiStageTrainingOrchestrator,
-    backbone: "torch.nn.Module",
+    backbone: "HeadlessNetwork",
+    device: torch.device,
     batch_size: int,
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
+    trainable_layers: Optional[int] = None,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
 
     Args:
-        streaming_source: ストリーミングデータソース
-        orchestrator: マルチステージオーケストレータ
-        backbone: バックボーンネットワーク
-        batch_size: バッチサイズ
-        learning_rate: 学習率
-        max_epochs: 最大エポック数
-        threshold: 精度閾値
-        device: 計算デバイス
-        lr_scheduler_name: 学習率スケジューラ名
-        compilation: torch.compileを有効化するか
-        stage1_pos_weight: 正例の重み(デフォルト: 1.0)
+        streaming_source: ストリーミングデータソース．
+        orchestrator: マルチステージオーケストレータ．
+        backbone: バックボーンネットワーク．
+        device: 計算デバイス．
+        batch_size: バッチサイズ．
+        learning_rate: 学習率．
+        max_epochs: 最大エポック数．
+        threshold: 精度閾値．
+        lr_scheduler_name: 学習率スケジューラ名．
+        compilation: torch.compileを有効化するか．
+        stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
+        trainable_layers: 訓練可能レイヤー数．
 
     Returns:
-        Stage 1 の訓練結果
+        Stage 1 の訓練結果．
     """
-    pipeline = StageComponentFactory.create_stage1_streaming_data_pipeline(
+    components = StageComponentFactory.create_stage1_streaming_components(
         streaming_source,
+        backbone,
+        device,
         batch_size=batch_size,
+        learning_rate=learning_rate,
         pos_weight=stage1_pos_weight,
+        lr_scheduler_name=lr_scheduler_name,
+        compilation=compilation,
+        actual_batch_size=batch_size,
+        base_batch_size=256,
+        trainable_layers=trainable_layers,
+        total_epochs=max_epochs,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.REACHABLE_SQUARES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=pipeline.train_dataloader,
-        loss_fn=pipeline.loss_fn,
-        learning_rate=learning_rate,
-        lr_scheduler_name=lr_scheduler_name,
-        base_batch_size=256,
-        actual_batch_size=batch_size,
-        compilation=compilation,
     )
 
     results = orchestrator.run_all_stages(
+        stage1_components=components,
         stage1_config=stage_config,
-        stage2_config=None,
-        stage3_config=None,
         save_checkpoints=True,
     )
 
@@ -747,12 +752,12 @@ def _run_stage2_streaming(
     *,
     streaming_source: StreamingDataSource,
     orchestrator: MultiStageTrainingOrchestrator,
-    backbone: "torch.nn.Module",
+    backbone: "HeadlessNetwork",
+    device: torch.device,
     batch_size: int,
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    device: torch.device,
     lr_scheduler_name: Optional[str] = None,
     compilation: bool = False,
     stage2_pos_weight: float = 1.0,
@@ -765,33 +770,35 @@ def _run_stage2_streaming(
     dataloader_workers: int = 0,
     pin_memory: bool = False,
     prefetch_factor: int = 2,
+    trainable_layers: Optional[int] = None,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
     Args:
-        streaming_source: ストリーミングデータソース
-        orchestrator: マルチステージオーケストレータ
-        backbone: バックボーンネットワーク
-        batch_size: バッチサイズ
-        learning_rate: 学習率
-        max_epochs: 最大エポック数
-        threshold: 精度閾値
-        device: 計算デバイス
-        lr_scheduler_name: 学習率スケジューラ名
-        compilation: torch.compileを有効化するか
-        stage2_pos_weight: 正例の重み(デフォルト: 1.0)
-        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)
-        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)
-        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)
-        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)
-        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)
-        stage2_test_ratio: 検証データ分割比率(ストリーミングでは未対応，デフォルト: 0.0)
-        dataloader_workers: DataLoaderワーカー数(デフォルト: 0)
-        pin_memory: pinned memoryを有効にするか(デフォルト: False)
-        prefetch_factor: 各workerの先読みバッチ数(デフォルト: 2)
+        streaming_source: ストリーミングデータソース．
+        orchestrator: マルチステージオーケストレータ．
+        backbone: バックボーンネットワーク．
+        device: 計算デバイス．
+        batch_size: バッチサイズ．
+        learning_rate: 学習率．
+        max_epochs: 最大エポック数．
+        threshold: 精度閾値．
+        lr_scheduler_name: 学習率スケジューラ名．
+        compilation: torch.compileを有効化するか．
+        stage2_pos_weight: 正例の重み(デフォルト: 1.0)．
+        stage2_gamma_pos: ASL正例フォーカシングパラメータ(デフォルト: 0.0)．
+        stage2_gamma_neg: ASL負例フォーカシングパラメータ(デフォルト: 0.0)．
+        stage2_clip: ASL負例クリッピングマージン(デフォルト: 0.0)．
+        stage2_head_hidden_dim: ヘッドの隠れ層次元(Noneで既定値)．
+        stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)．
+        stage2_test_ratio: 検証データ分割比率(ストリーミングでは未対応)．
+        dataloader_workers: DataLoaderワーカー数(デフォルト: 0)．
+        pin_memory: pinned memoryを有効にするか(デフォルト: False)．
+        prefetch_factor: 各workerの先読みバッチ数(デフォルト: 2)．
+        trainable_layers: 訓練可能レイヤー数．
 
     Returns:
-        Stage 2 の訓練結果
+        Stage 2 の訓練結果．
     """
     if stage2_test_ratio > 0.0:
         logger.warning(
@@ -800,38 +807,39 @@ def _run_stage2_streaming(
             stage2_test_ratio,
         )
 
-    pipeline = StageComponentFactory.create_stage2_streaming_data_pipeline(
+    components = StageComponentFactory.create_stage2_streaming_components(
         streaming_source,
+        backbone,
+        device,
         batch_size=batch_size,
+        learning_rate=learning_rate,
         pos_weight=stage2_pos_weight,
         gamma_pos=stage2_gamma_pos,
         gamma_neg=stage2_gamma_neg,
         clip=stage2_clip,
+        head_hidden_dim=stage2_head_hidden_dim,
+        head_dropout=stage2_head_dropout,
         test_ratio=stage2_test_ratio,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        lr_scheduler_name=lr_scheduler_name,
+        compilation=compilation,
+        actual_batch_size=batch_size,
+        base_batch_size=256,
+        trainable_layers=trainable_layers,
+        total_epochs=max_epochs,
     )
 
     stage_config = StageConfig(
         stage=TrainingStage.LEGAL_MOVES,
         max_epochs=max_epochs,
         accuracy_threshold=threshold,
-        dataloader=pipeline.train_dataloader,
-        loss_fn=pipeline.loss_fn,
-        learning_rate=learning_rate,
-        lr_scheduler_name=lr_scheduler_name,
-        base_batch_size=256,
-        actual_batch_size=batch_size,
-        compilation=compilation,
-        head_hidden_dim=stage2_head_hidden_dim,
-        head_dropout=stage2_head_dropout,
     )
 
     results = orchestrator.run_all_stages(
-        stage1_config=None,
+        stage2_components=components,
         stage2_config=stage_config,
-        stage3_config=None,
         save_checkpoints=True,
     )
 
@@ -1129,28 +1137,30 @@ def learn_multi_stage(
                 streaming_source=stage1_streaming_source,
                 orchestrator=orchestrator,
                 backbone=backbone,
+                device=device,
                 batch_size=effective_stage1_batch,
                 learning_rate=effective_stage1_lr,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
-                device=device,
                 lr_scheduler_name=resolved_stage1_scheduler,
                 compilation=stage12_compilation,
                 stage1_pos_weight=stage1_pos_weight,
+                trainable_layers=trainable_layers,
             )
         else:
             stage1_result = _run_stage1(
                 data_config=stage1_data_config,
                 orchestrator=orchestrator,
                 backbone=backbone,
+                device=device,
                 batch_size=effective_stage1_batch,
                 learning_rate=effective_stage1_lr,
                 max_epochs=stage1_max_epochs,
                 threshold=stage1_threshold,
-                device=device,
                 lr_scheduler_name=resolved_stage1_scheduler,
                 compilation=stage12_compilation,
                 stage1_pos_weight=stage1_pos_weight,
+                trainable_layers=trainable_layers,
             )
         results_dict["stages_completed"].append(
             {
@@ -1172,11 +1182,11 @@ def learn_multi_stage(
                 streaming_source=stage2_streaming_source,
                 orchestrator=orchestrator,
                 backbone=backbone,
+                device=device,
                 batch_size=effective_stage2_batch,
                 learning_rate=effective_stage2_lr,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
-                device=device,
                 lr_scheduler_name=resolved_stage2_scheduler,
                 compilation=stage12_compilation,
                 stage2_pos_weight=stage2_pos_weight,
@@ -1189,17 +1199,18 @@ def learn_multi_stage(
                 dataloader_workers=dataloader_workers or 0,
                 pin_memory=pin_memory or False,
                 prefetch_factor=prefetch_factor or 2,
+                trainable_layers=trainable_layers,
             )
         else:
             stage2_result = _run_stage2(
                 data_config=stage2_data_config,
                 orchestrator=orchestrator,
                 backbone=backbone,
+                device=device,
                 batch_size=effective_stage2_batch,
                 learning_rate=effective_stage2_lr,
                 max_epochs=stage2_max_epochs,
                 threshold=stage2_threshold,
-                device=device,
                 lr_scheduler_name=resolved_stage2_scheduler,
                 compilation=stage12_compilation,
                 stage2_pos_weight=stage2_pos_weight,
@@ -1209,6 +1220,7 @@ def learn_multi_stage(
                 stage2_head_hidden_dim=stage2_head_hidden_dim,
                 stage2_head_dropout=stage2_head_dropout,
                 stage2_test_ratio=stage2_test_ratio,
+                trainable_layers=trainable_layers,
             )
         results_dict["stages_completed"].append(
             {
