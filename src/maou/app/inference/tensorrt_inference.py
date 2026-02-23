@@ -52,12 +52,12 @@ class TensorRTInference:
         # ONNXではバッチサイズ可変なのでプロファイルを設定する
         profile = builder.create_optimization_profile()
         input_tensor = network.get_input(0)
-        t, h, w = input_tensor.shape[1:]
+        non_batch_dims = tuple(input_tensor.shape[1:])
         profile.set_shape(
             input_tensor.name,
-            min=(1, t, h, w),
-            opt=(4000, t, h, w),
-            max=(10000, t, h, w),
+            min=(1,) + non_batch_dims,
+            opt=(4000,) + non_batch_dims,
+            max=(10000,) + non_batch_dims,
         )
         builder_config.add_optimization_profile(profile)
 
