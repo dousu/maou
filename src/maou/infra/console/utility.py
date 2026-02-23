@@ -1264,6 +1264,13 @@ def benchmark_training(
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
+    elif (
+        stage1_data_path is not None
+        or stage2_data_path is not None
+    ):
+        # Stage 1/2 only benchmark: stage-specific datasources are already
+        # initialized above, so the main datasource is not needed.
+        datasource = None
     else:
         raise Exception(
             "Please specify an input directory, a BigQuery table, "
