@@ -1,7 +1,10 @@
 """Tests for multi-stage training loop with HeadlessNetwork backbone."""
 
+from __future__ import annotations
+
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
@@ -21,6 +24,11 @@ from maou.app.learning.network import (
     LegalMovesHead,
     ReachableSquaresHead,
 )
+
+if TYPE_CHECKING:
+    from maou.app.learning.stage_component_factory import (
+        StageComponents,
+    )
 
 
 class _PairedDataset(Dataset):
