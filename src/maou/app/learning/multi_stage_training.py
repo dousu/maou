@@ -12,15 +12,14 @@ accuracy thresholds,with fail-fast error handling if thresholds aren't met.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
 from maou.app.learning.network import (
     HeadlessNetwork,
@@ -32,6 +31,9 @@ if TYPE_CHECKING:
     from maou.app.learning.dataset import (
         Stage1Dataset,
         Stage2Dataset,
+    )
+    from maou.app.learning.stage_component_factory import (
+        StageComponents,
     )
 
 
@@ -45,26 +47,16 @@ class TrainingStage(IntEnum):
 
 @dataclass(frozen=True)
 class StageConfig:
-    """Configuration for a single training stage.
+    """学習ステージの制御パラメータ．
 
-    This dataclass encapsulates all parameters needed to train one stage,
-    including data,loss function,and stopping criteria.
-    The optimizer is created internally by the training loop using this config.
+    学習ループの動作制御(エポック数，閾値)のみを保持する．
+    モデル・データ・オプティマイザ等のコンポーネントは
+    StageComponents で管理する．
     """
 
     stage: TrainingStage
     max_epochs: int
-    accuracy_threshold: float  # e.g.,0.99 for 99% accuracy
-    dataloader: DataLoader
-    loss_fn: torch.nn.Module
-    learning_rate: float
-    lr_scheduler_name: Optional[str] = None
-    base_batch_size: int = 256
-    actual_batch_size: int = 256
-    compilation: bool = False
-    head_hidden_dim: int | None = None
-    head_dropout: float = 0.0
-    val_dataloader: Optional[DataLoader] = None
+    accuracy_threshold: float
 
 
 @dataclass(frozen=True)
@@ -385,47 +377,11 @@ class TruncatedStageModel(torch.nn.Module):
         return logits, dummy_value
 
 
-def _compute_effective_lr(
-    learning_rate: float,
-    actual_batch_size: int,
-    base_batch_size: int,
-    logger: logging.Logger | None = None,
-) -> float:
-    """バッチサイズに基づく LR sqrt スケーリングを計算する．
-
-    actual_batch_size > base_batch_size の場合，
-    effective_lr = learning_rate * sqrt(actual / base) を返す．
-
-    Args:
-        learning_rate: ベース学習率
-        actual_batch_size: 実際のバッチサイズ
-        base_batch_size: 基準バッチサイズ(デフォルト 256)
-        logger: ロガー(スケーリング情報の出力用)
-
-    Returns:
-        スケーリング後の学習率
-    """
-    if actual_batch_size > base_batch_size:
-        scale = math.sqrt(actual_batch_size / base_batch_size)
-        effective_lr = learning_rate * scale
-        if logger is not None:
-            logger.info(
-                "LR sqrt scaling: base_lr=%.6f, scale=%.2f, "
-                "effective_lr=%.6f",
-                learning_rate,
-                scale,
-                effective_lr,
-            )
-        return effective_lr
-    return learning_rate
-
-
 def run_stage1_with_training_loop(
     *,
-    backbone: HeadlessNetwork,
+    components: StageComponents,
     config: StageConfig,
     device: torch.device,
-    trainable_layers: int | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[StageResult, ReachableSquaresHead]:
     """TrainingLoop を使用して Stage 1 (Reachable Squares) を学習する．
@@ -434,10 +390,10 @@ def run_stage1_with_training_loop(
     高スループットな学習を実現する．
 
     Args:
-        backbone: 共有バックボーンネットワーク
-        config: Stage 1 の学習設定
-        device: 学習デバイス (CPU or CUDA)
-        logger: ロガー
+        components: Stage 1 のコンポーネント一式．
+        config: Stage 1 の学習制御パラメータ．
+        device: 学習デバイス (CPU or CUDA)．
+        logger: ロガー．
 
     Returns:
         (StageResult, ReachableSquaresHead) のタプル．
@@ -447,86 +403,38 @@ def run_stage1_with_training_loop(
         LRSchedulerStepCallback,
         Stage1AccuracyCallback,
     )
-    from maou.app.learning.setup import SchedulerFactory
     from maou.app.learning.training_loop import (
         Stage1TrainingLoop,
     )
 
     _logger = logger or logging.getLogger(__name__)
 
-    # Head 作成
-    reachable_head = ReachableSquaresHead(
-        input_dim=backbone.embedding_dim,
-        hidden_dim=config.head_hidden_dim,
-    )
-
-    # Model adapter (TrainingLoop 互換)
-    if trainable_layers is not None and trainable_layers > 0:
-        model: torch.nn.Module = TruncatedStageModel(
-            backbone, reachable_head, trainable_layers
+    # model から head を取得
+    model = components.model
+    if not hasattr(model, "head"):
+        msg = (
+            "Cannot extract ReachableSquaresHead from "
+            f"{type(model).__name__}"
         )
-    else:
-        model = Stage1ModelAdapter(backbone, reachable_head)
-    model.to(device)
-
-    # torch.compile (オプション)
-    if config.compilation:
-        from maou.app.learning.compilation import (
-            compile_module,
-            warmup_compiled_model,
-        )
-
-        _logger.info(
-            "Compiling Stage 1 model with torch.compile"
-        )
-        model = cast(Stage1ModelAdapter, compile_module(model))
-        dummy_board = torch.zeros(
-            config.actual_batch_size,
-            9,
-            9,
-            dtype=torch.int64,
-            device=device,
-        )
-        warmup_compiled_model(model, (dummy_board, None))
-
-    # Sqrt scaling for larger batch sizes
-    effective_lr = _compute_effective_lr(
-        config.learning_rate,
-        config.actual_batch_size,
-        config.base_batch_size,
-        logger=_logger,
-    )
-
-    # Optimizer (requires_grad のみ含める: TruncatedStageModel 時の除外グループを除く)
-    trainable_params = [
-        p for p in model.parameters() if p.requires_grad
-    ]
-    optimizer = torch.optim.Adam(
-        trainable_params, lr=effective_lr
-    )
+        raise TypeError(msg)
+    reachable_head: ReachableSquaresHead = model.head
 
     # Callbacks
     accuracy_callback = Stage1AccuracyCallback()
     callbacks: list = [accuracy_callback]
 
     # LR Scheduler (optional)
-    if config.lr_scheduler_name is not None:
-        steps_per_epoch = len(config.dataloader)
-        scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
-            lr_scheduler_name=config.lr_scheduler_name,
-            max_epochs=config.max_epochs,
-            steps_per_epoch=steps_per_epoch,
+    if components.lr_scheduler is not None:
+        callbacks.append(
+            LRSchedulerStepCallback(components.lr_scheduler)
         )
-        if scheduler is not None:
-            callbacks.append(LRSchedulerStepCallback(scheduler))
 
     # TrainingLoop 作成
     training_loop = Stage1TrainingLoop(
         model=model,
         device=device,
-        optimizer=optimizer,
-        loss_fn_policy=config.loss_fn,
+        optimizer=components.optimizer,
+        loss_fn_policy=components.loss_fn,
         loss_fn_value=torch.nn.MSELoss(),
         policy_loss_ratio=1.0,
         value_loss_ratio=0.0,
@@ -547,14 +455,14 @@ def run_stage1_with_training_loop(
 
     for epoch in range(config.max_epochs):
         # IterableDataset のエポックシード更新
-        ds = config.dataloader.dataset
+        ds = components.train_dataloader.dataset
         if hasattr(ds, "set_epoch"):
             ds.set_epoch(epoch)
 
         accuracy_callback.reset()
 
         training_loop.run_epoch(
-            dataloader=config.dataloader,
+            dataloader=components.train_dataloader,
             epoch_idx=epoch,
             progress_bar=True,
             train_mode=True,
@@ -572,8 +480,10 @@ def run_stage1_with_training_loop(
             epoch_accuracy * 100,
         )
 
-        if optimizer.param_groups:
-            current_lr = optimizer.param_groups[0]["lr"]
+        if components.optimizer.param_groups:
+            current_lr = components.optimizer.param_groups[0][
+                "lr"
+            ]
             _logger.info(
                 "Stage 1 Epoch %d: LR = %.6f",
                 epoch + 1,
@@ -618,10 +528,9 @@ def run_stage1_with_training_loop(
 
 def run_stage2_with_training_loop(
     *,
-    backbone: HeadlessNetwork,
+    components: StageComponents,
     config: StageConfig,
     device: torch.device,
-    trainable_layers: int | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[StageResult, LegalMovesHead]:
     """TrainingLoop を使用して Stage 2 (Legal Moves) を学習する．
@@ -630,10 +539,10 @@ def run_stage2_with_training_loop(
     高スループットな学習を実現する．
 
     Args:
-        backbone: 共有バックボーンネットワーク
-        config: Stage 2 の学習設定
-        device: 学習デバイス (CPU or CUDA)
-        logger: ロガー
+        components: Stage 2 のコンポーネント一式．
+        config: Stage 2 の学習制御パラメータ．
+        device: 学習デバイス (CPU or CUDA)．
+        logger: ロガー．
 
     Returns:
         (StageResult, LegalMovesHead) のタプル．
@@ -643,87 +552,38 @@ def run_stage2_with_training_loop(
         LRSchedulerStepCallback,
         Stage2F1Callback,
     )
-    from maou.app.learning.setup import SchedulerFactory
     from maou.app.learning.training_loop import (
         RawLogitsTrainingLoop,
     )
 
     _logger = logger or logging.getLogger(__name__)
 
-    # Head 作成
-    legal_moves_head = LegalMovesHead(
-        input_dim=backbone.embedding_dim,
-        hidden_dim=config.head_hidden_dim,
-        dropout=config.head_dropout,
-    )
-
-    # Model adapter (TrainingLoop 互換)
-    if trainable_layers is not None and trainable_layers > 0:
-        model: torch.nn.Module = TruncatedStageModel(
-            backbone, legal_moves_head, trainable_layers
+    # model から head を取得
+    model = components.model
+    if not hasattr(model, "head"):
+        msg = (
+            "Cannot extract LegalMovesHead from "
+            f"{type(model).__name__}"
         )
-    else:
-        model = Stage2ModelAdapter(backbone, legal_moves_head)
-    model.to(device)
-
-    # torch.compile (オプション)
-    if config.compilation:
-        from maou.app.learning.compilation import (
-            compile_module,
-            warmup_compiled_model,
-        )
-
-        _logger.info(
-            "Compiling Stage 2 model with torch.compile"
-        )
-        model = cast(Stage2ModelAdapter, compile_module(model))
-        dummy_board = torch.zeros(
-            config.actual_batch_size,
-            9,
-            9,
-            dtype=torch.int64,
-            device=device,
-        )
-        warmup_compiled_model(model, (dummy_board, None))
-
-    # Sqrt scaling for larger batch sizes
-    effective_lr = _compute_effective_lr(
-        config.learning_rate,
-        config.actual_batch_size,
-        config.base_batch_size,
-        logger=_logger,
-    )
-
-    # Optimizer (requires_grad のみ含める: TruncatedStageModel 時の除外グループを除く)
-    trainable_params = [
-        p for p in model.parameters() if p.requires_grad
-    ]
-    optimizer = torch.optim.Adam(
-        trainable_params, lr=effective_lr
-    )
+        raise TypeError(msg)
+    legal_moves_head: LegalMovesHead = model.head
 
     # Callbacks
     f1_callback = Stage2F1Callback()
     callbacks: list = [f1_callback]
 
     # LR Scheduler (optional)
-    if config.lr_scheduler_name is not None:
-        steps_per_epoch = len(config.dataloader)
-        scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
-            lr_scheduler_name=config.lr_scheduler_name,
-            max_epochs=config.max_epochs,
-            steps_per_epoch=steps_per_epoch,
+    if components.lr_scheduler is not None:
+        callbacks.append(
+            LRSchedulerStepCallback(components.lr_scheduler)
         )
-        if scheduler is not None:
-            callbacks.append(LRSchedulerStepCallback(scheduler))
 
     # TrainingLoop 作成
     training_loop = RawLogitsTrainingLoop(
         model=model,
         device=device,
-        optimizer=optimizer,
-        loss_fn_policy=config.loss_fn,
+        optimizer=components.optimizer,
+        loss_fn_policy=components.loss_fn,
         loss_fn_value=torch.nn.MSELoss(),
         policy_loss_ratio=1.0,
         value_loss_ratio=0.0,
@@ -744,14 +604,14 @@ def run_stage2_with_training_loop(
 
     for epoch in range(config.max_epochs):
         # IterableDataset のエポックシード更新
-        ds = config.dataloader.dataset
+        ds = components.train_dataloader.dataset
         if hasattr(ds, "set_epoch"):
             ds.set_epoch(epoch)
 
         f1_callback.reset()
 
         training_loop.run_epoch(
-            dataloader=config.dataloader,
+            dataloader=components.train_dataloader,
             epoch_idx=epoch,
             progress_bar=True,
             train_mode=True,
@@ -769,8 +629,10 @@ def run_stage2_with_training_loop(
             epoch_f1 * 100,
         )
 
-        if optimizer.param_groups:
-            current_lr = optimizer.param_groups[0]["lr"]
+        if components.optimizer.param_groups:
+            current_lr = components.optimizer.param_groups[0][
+                "lr"
+            ]
             _logger.info(
                 "Stage 2 Epoch %d: LR = %.6f",
                 epoch + 1,
@@ -869,7 +731,9 @@ class MultiStageTrainingOrchestrator:
     def run_all_stages(
         self,
         *,
+        stage1_components: Optional[StageComponents] = None,
         stage1_config: Optional[StageConfig] = None,
+        stage2_components: Optional[StageComponents] = None,
         stage2_config: Optional[StageConfig] = None,
         stage3_config: Optional[StageConfig] = None,
         save_checkpoints: bool = True,
@@ -877,8 +741,10 @@ class MultiStageTrainingOrchestrator:
         """Run all configured stages sequentially.
 
         Args:
-            stage1_config: Configuration for Stage 1 (reachable squares)
-            stage2_config: Configuration for Stage 2 (legal moves)
+            stage1_components: Stage 1 のコンポーネント一式．
+            stage1_config: Stage 1 の学習制御パラメータ．
+            stage2_components: Stage 2 のコンポーネント一式．
+            stage2_config: Stage 2 の学習制御パラメータ．
             stage3_config: Configuration for Stage 3 (policy + value)
             save_checkpoints: Whether to save checkpoints after each stage
 
@@ -891,7 +757,10 @@ class MultiStageTrainingOrchestrator:
         results: dict[TrainingStage, StageResult] = {}
 
         # Stage 1: Reachable Squares
-        if stage1_config is not None:
+        if (
+            stage1_components is not None
+            and stage1_config is not None
+        ):
             self.logger.info("=" * 60)
             self.logger.info(
                 "STAGE 1: REACHABLE SQUARES LEARNING"
@@ -900,10 +769,9 @@ class MultiStageTrainingOrchestrator:
 
             result, reachable_head = (
                 run_stage1_with_training_loop(
-                    backbone=self.backbone,
+                    components=stage1_components,
                     config=stage1_config,
                     device=self.device,
-                    trainable_layers=self.trainable_layers,
                     logger=self.logger,
                 )
             )
@@ -938,17 +806,19 @@ class MultiStageTrainingOrchestrator:
             )
 
         # Stage 2: Legal Moves
-        if stage2_config is not None:
+        if (
+            stage2_components is not None
+            and stage2_config is not None
+        ):
             self.logger.info("=" * 60)
             self.logger.info("STAGE 2: LEGAL MOVES LEARNING")
             self.logger.info("=" * 60)
 
             result, legal_moves_head = (
                 run_stage2_with_training_loop(
-                    backbone=self.backbone,
+                    components=stage2_components,
                     config=stage2_config,
                     device=self.device,
-                    trainable_layers=self.trainable_layers,
                     logger=self.logger,
                 )
             )

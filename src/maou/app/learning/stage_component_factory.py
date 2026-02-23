@@ -329,6 +329,10 @@ class StageComponentFactory:
         pos_weight: float = 1.0,
         lr_scheduler_name: Optional[str] = None,
         compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
+        head_hidden_dim: Optional[int] = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         num_workers: int = 0,
@@ -347,6 +351,10 @@ class StageComponentFactory:
             pos_weight: 正例の重み．
             lr_scheduler_name: 学習率スケジューラ名．
             compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR 計算用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
+            head_hidden_dim: ヘッドの隠れ層次元数．
             optimizer_name: オプティマイザ名．
             momentum: モメンタム．
             num_workers: DataLoader のワーカー数．
@@ -368,40 +376,20 @@ class StageComponentFactory:
             )
         )
 
-        from maou.app.learning.multi_stage_training import (
-            Stage1ModelAdapter,
-        )
-        from maou.app.learning.network import (
-            ReachableSquaresHead,
-        )
-
-        head = ReachableSquaresHead(
-            input_dim=backbone.embedding_dim
-        )
-        model: torch.nn.Module = Stage1ModelAdapter(
-            backbone, head
-        )
-        model.to(device)
-
-        optimizer = LossOptimizerFactory.create_optimizer(
-            model,
-            learning_rate,
-            momentum,
-            optimizer_name=optimizer_name,
-        )
-        lr_scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
+        return StageComponentFactory._build_stage1_model_and_optimizer(
+            backbone,
+            device,
+            pipeline,
+            learning_rate=learning_rate,
             lr_scheduler_name=lr_scheduler_name,
-            max_epochs=total_epochs,
-            steps_per_epoch=len(pipeline.train_dataloader),
-        )
-        return StageComponents(
-            model=model,
-            train_dataloader=pipeline.train_dataloader,
-            val_dataloader=pipeline.val_dataloader,
-            loss_fn=pipeline.loss_fn,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
+            trainable_layers=trainable_layers,
+            head_hidden_dim=head_hidden_dim,
+            optimizer_name=optimizer_name,
+            momentum=momentum,
+            total_epochs=total_epochs,
         )
 
     @staticmethod
@@ -421,6 +409,9 @@ class StageComponentFactory:
         test_ratio: float = 0.0,
         lr_scheduler_name: Optional[str] = None,
         compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         num_workers: int = 0,
@@ -445,6 +436,9 @@ class StageComponentFactory:
             test_ratio: テストデータの割合．
             lr_scheduler_name: 学習率スケジューラ名．
             compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR 計算用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
             optimizer_name: オプティマイザ名．
             momentum: モメンタム．
             num_workers: DataLoader のワーカー数．
@@ -470,26 +464,243 @@ class StageComponentFactory:
             )
         )
 
-        from maou.app.learning.multi_stage_training import (
-            Stage2ModelAdapter,
+        return StageComponentFactory._build_stage2_model_and_optimizer(
+            backbone,
+            device,
+            pipeline,
+            learning_rate=learning_rate,
+            head_hidden_dim=head_hidden_dim,
+            head_dropout=head_dropout,
+            lr_scheduler_name=lr_scheduler_name,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
+            trainable_layers=trainable_layers,
+            optimizer_name=optimizer_name,
+            momentum=momentum,
+            total_epochs=total_epochs,
         )
-        from maou.app.learning.network import LegalMovesHead
 
-        head = LegalMovesHead(
+    @staticmethod
+    def create_stage1_streaming_components(
+        streaming_source: StreamingDataSource,
+        backbone: HeadlessNetwork,
+        device: torch.device,
+        *,
+        batch_size: int,
+        learning_rate: float,
+        pos_weight: float = 1.0,
+        lr_scheduler_name: Optional[str] = None,
+        compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
+        head_hidden_dim: Optional[int] = None,
+        optimizer_name: str = "adamw",
+        momentum: float = 0.9,
+        total_epochs: int = 1,
+    ) -> StageComponents:
+        """Stage1 用のストリーミングコンポーネント一式を生成する．
+
+        Args:
+            streaming_source: ストリーミングデータソース．
+            backbone: バックボーンネットワーク．
+            device: 使用デバイス．
+            batch_size: バッチサイズ．
+            learning_rate: 学習率．
+            pos_weight: 正例の重み．
+            lr_scheduler_name: 学習率スケジューラ名．
+            compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR 計算用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
+            head_hidden_dim: ヘッドの隠れ層次元数．
+            optimizer_name: オプティマイザ名．
+            momentum: モメンタム．
+            total_epochs: 総エポック数．
+
+        Returns:
+            Stage1 のストリーミングコンポーネント一式．
+        """
+        pipeline = StageComponentFactory.create_stage1_streaming_data_pipeline(
+            streaming_source,
+            batch_size=batch_size,
+            pos_weight=pos_weight,
+        )
+
+        return StageComponentFactory._build_stage1_model_and_optimizer(
+            backbone,
+            device,
+            pipeline,
+            learning_rate=learning_rate,
+            lr_scheduler_name=lr_scheduler_name,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
+            trainable_layers=trainable_layers,
+            head_hidden_dim=head_hidden_dim,
+            optimizer_name=optimizer_name,
+            momentum=momentum,
+            total_epochs=total_epochs,
+        )
+
+    @staticmethod
+    def create_stage2_streaming_components(
+        streaming_source: StreamingDataSource,
+        backbone: HeadlessNetwork,
+        device: torch.device,
+        *,
+        batch_size: int,
+        learning_rate: float,
+        pos_weight: float = 1.0,
+        gamma_pos: float = 0.0,
+        gamma_neg: float = 0.0,
+        clip: float = 0.0,
+        head_hidden_dim: Optional[int] = None,
+        head_dropout: float = 0.0,
+        test_ratio: float = 0.0,
+        dataloader_workers: int = 0,
+        pin_memory: bool = False,
+        prefetch_factor: int = 2,
+        lr_scheduler_name: Optional[str] = None,
+        compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
+        optimizer_name: str = "adamw",
+        momentum: float = 0.9,
+        total_epochs: int = 1,
+    ) -> StageComponents:
+        """Stage2 用のストリーミングコンポーネント一式を生成する．
+
+        Args:
+            streaming_source: ストリーミングデータソース．
+            backbone: バックボーンネットワーク．
+            device: 使用デバイス．
+            batch_size: バッチサイズ．
+            learning_rate: 学習率．
+            pos_weight: 正例の重み．
+            gamma_pos: Asymmetric Focal Loss の正例ガンマ．
+            gamma_neg: Asymmetric Focal Loss の負例ガンマ．
+            clip: Asymmetric Focal Loss のクリップ値．
+            head_hidden_dim: ヘッドの隠れ層次元数．
+            head_dropout: ヘッドのドロップアウト率．
+            test_ratio: テストデータの割合．
+            dataloader_workers: DataLoader のワーカー数．
+            pin_memory: ピンメモリを使用するかどうか．
+            prefetch_factor: プリフェッチファクター．
+            lr_scheduler_name: 学習率スケジューラ名．
+            compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR 計算用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
+            optimizer_name: オプティマイザ名．
+            momentum: モメンタム．
+            total_epochs: 総エポック数．
+
+        Returns:
+            Stage2 のストリーミングコンポーネント一式．
+        """
+        pipeline = StageComponentFactory.create_stage2_streaming_data_pipeline(
+            streaming_source,
+            batch_size=batch_size,
+            pos_weight=pos_weight,
+            gamma_pos=gamma_pos,
+            gamma_neg=gamma_neg,
+            clip=clip,
+            test_ratio=test_ratio,
+            dataloader_workers=dataloader_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
+        )
+
+        return StageComponentFactory._build_stage2_model_and_optimizer(
+            backbone,
+            device,
+            pipeline,
+            learning_rate=learning_rate,
+            head_hidden_dim=head_hidden_dim,
+            head_dropout=head_dropout,
+            lr_scheduler_name=lr_scheduler_name,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
+            trainable_layers=trainable_layers,
+            optimizer_name=optimizer_name,
+            momentum=momentum,
+            total_epochs=total_epochs,
+        )
+
+    @staticmethod
+    def _build_stage1_model_and_optimizer(
+        backbone: HeadlessNetwork,
+        device: torch.device,
+        pipeline: StageDataPipeline,
+        *,
+        learning_rate: float,
+        lr_scheduler_name: Optional[str] = None,
+        compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
+        head_hidden_dim: Optional[int] = None,
+        optimizer_name: str = "adamw",
+        momentum: float = 0.9,
+        total_epochs: int = 1,
+    ) -> StageComponents:
+        """Stage1 の model/optimizer/scheduler を生成する共通ロジック．
+
+        通常データソースとストリーミングデータソースの両方で使用する．
+
+        Args:
+            backbone: バックボーンネットワーク．
+            device: 使用デバイス．
+            pipeline: データパイプライン．
+            learning_rate: 学習率．
+            lr_scheduler_name: 学習率スケジューラ名．
+            compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR + warmup 用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
+            head_hidden_dim: ヘッドの隠れ層次元数．
+            optimizer_name: オプティマイザ名．
+            momentum: モメンタム．
+            total_epochs: 総エポック数．
+
+        Returns:
+            Stage1 のコンポーネント一式．
+        """
+        from maou.app.learning.network import (
+            ReachableSquaresHead,
+        )
+
+        head = ReachableSquaresHead(
             input_dim=backbone.embedding_dim,
             hidden_dim=head_hidden_dim
             if head_hidden_dim and head_hidden_dim > 0
             else None,
-            dropout=head_dropout,
         )
-        model: torch.nn.Module = Stage2ModelAdapter(
-            backbone, head
-        )
-        model.to(device)
 
+        model = StageComponentFactory._build_model(
+            backbone,
+            head,
+            device,
+            trainable_layers=trainable_layers,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            stage_name="Stage 1",
+        )
+
+        effective_lr = (
+            LossOptimizerFactory.compute_effective_lr(
+                learning_rate,
+                actual_batch_size,
+                base_batch_size,
+            )
+        )
         optimizer = LossOptimizerFactory.create_optimizer(
             model,
-            learning_rate,
+            effective_lr,
             momentum,
             optimizer_name=optimizer_name,
         )
@@ -507,3 +718,175 @@ class StageComponentFactory:
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
         )
+
+    @staticmethod
+    def _build_stage2_model_and_optimizer(
+        backbone: HeadlessNetwork,
+        device: torch.device,
+        pipeline: StageDataPipeline,
+        *,
+        learning_rate: float,
+        head_hidden_dim: Optional[int] = None,
+        head_dropout: float = 0.0,
+        lr_scheduler_name: Optional[str] = None,
+        compilation: bool = False,
+        actual_batch_size: int = 256,
+        base_batch_size: int = 256,
+        trainable_layers: Optional[int] = None,
+        optimizer_name: str = "adamw",
+        momentum: float = 0.9,
+        total_epochs: int = 1,
+    ) -> StageComponents:
+        """Stage2 の model/optimizer/scheduler を生成する共通ロジック．
+
+        通常データソースとストリーミングデータソースの両方で使用する．
+
+        Args:
+            backbone: バックボーンネットワーク．
+            device: 使用デバイス．
+            pipeline: データパイプライン．
+            learning_rate: 学習率．
+            head_hidden_dim: ヘッドの隠れ層次元数．
+            head_dropout: ヘッドのドロップアウト率．
+            lr_scheduler_name: 学習率スケジューラ名．
+            compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: 実際のバッチサイズ(effective LR + warmup 用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            trainable_layers: 訓練可能レイヤー数(TruncatedStageModel用)．
+            optimizer_name: オプティマイザ名．
+            momentum: モメンタム．
+            total_epochs: 総エポック数．
+
+        Returns:
+            Stage2 のコンポーネント一式．
+        """
+        from maou.app.learning.network import LegalMovesHead
+
+        head = LegalMovesHead(
+            input_dim=backbone.embedding_dim,
+            hidden_dim=head_hidden_dim
+            if head_hidden_dim and head_hidden_dim > 0
+            else None,
+            dropout=head_dropout,
+        )
+
+        model = StageComponentFactory._build_model(
+            backbone,
+            head,
+            device,
+            trainable_layers=trainable_layers,
+            compilation=compilation,
+            actual_batch_size=actual_batch_size,
+            stage_name="Stage 2",
+        )
+
+        effective_lr = (
+            LossOptimizerFactory.compute_effective_lr(
+                learning_rate,
+                actual_batch_size,
+                base_batch_size,
+            )
+        )
+        optimizer = LossOptimizerFactory.create_optimizer(
+            model,
+            effective_lr,
+            momentum,
+            optimizer_name=optimizer_name,
+        )
+        lr_scheduler = SchedulerFactory.create_scheduler(
+            optimizer,
+            lr_scheduler_name=lr_scheduler_name,
+            max_epochs=total_epochs,
+            steps_per_epoch=len(pipeline.train_dataloader),
+        )
+        return StageComponents(
+            model=model,
+            train_dataloader=pipeline.train_dataloader,
+            val_dataloader=pipeline.val_dataloader,
+            loss_fn=pipeline.loss_fn,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+        )
+
+    @staticmethod
+    def _build_model(
+        backbone: HeadlessNetwork,
+        head: torch.nn.Module,
+        device: torch.device,
+        *,
+        trainable_layers: Optional[int] = None,
+        compilation: bool = False,
+        actual_batch_size: int = 256,
+        stage_name: str = "",
+    ) -> torch.nn.Module:
+        """model を生成する共通ロジック．
+
+        trainable_layers が指定されている場合は TruncatedStageModel，
+        そうでなければ Stage*ModelAdapter を使用する．
+        compilation が有効な場合は torch.compile + warmup を実行する．
+
+        Args:
+            backbone: バックボーンネットワーク．
+            head: ステージヘッド．
+            device: 使用デバイス．
+            trainable_layers: 訓練可能レイヤー数．
+            compilation: コンパイルを有効にするかどうか．
+            actual_batch_size: warmup のダミー入力サイズ．
+            stage_name: ログ用ステージ名．
+
+        Returns:
+            生成されたモデル．
+        """
+        if (
+            trainable_layers is not None
+            and trainable_layers > 0
+        ):
+            from maou.app.learning.multi_stage_training import (
+                TruncatedStageModel,
+            )
+
+            model: torch.nn.Module = TruncatedStageModel(
+                backbone,
+                head,
+                trainable_layers,
+            )
+        else:
+            from maou.app.learning.multi_stage_training import (
+                Stage1ModelAdapter,
+                Stage2ModelAdapter,
+            )
+            from maou.app.learning.network import (
+                LegalMovesHead,
+                ReachableSquaresHead,
+            )
+
+            if isinstance(head, ReachableSquaresHead):
+                model = Stage1ModelAdapter(backbone, head)
+            elif isinstance(head, LegalMovesHead):
+                model = Stage2ModelAdapter(backbone, head)
+            else:
+                msg = f"Unsupported head type: {type(head).__name__}"
+                raise TypeError(msg)
+        model.to(device)
+
+        if compilation:
+            from maou.app.learning.compilation import (
+                compile_module,
+                warmup_compiled_model,
+            )
+
+            logger.info(
+                "Compiling %s model with torch.compile",
+                stage_name,
+            )
+            model = compile_module(model)
+            dummy_board = torch.zeros(
+                actual_batch_size,
+                9,
+                9,
+                dtype=torch.int64,
+                device=device,
+            )
+            warmup_compiled_model(model, (dummy_board, None))
+
+        return model

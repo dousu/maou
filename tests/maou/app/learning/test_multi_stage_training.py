@@ -177,27 +177,10 @@ class TestThresholdErrorMessages:
         threshold: float = 0.99,
     ) -> StageConfig:
         """テスト用のStageConfigを作成する．"""
-        if stage == TrainingStage.REACHABLE_SQUARES:
-            target_dim = 81
-        else:
-            from maou.domain.move.label import MOVE_LABELS_NUM
-
-            target_dim = MOVE_LABELS_NUM
-
-        wrap_adapter = stage == TrainingStage.REACHABLE_SQUARES
-        dataloader = _make_dummy_dataloader(
-            board_vocab_size=32,
-            target_dim=target_dim,
-            stage=stage,
-            wrap_stage1_adapter=wrap_adapter,
-        )
         return StageConfig(
             stage=stage,
             max_epochs=1,
             accuracy_threshold=threshold,
-            dataloader=dataloader,
-            loss_fn=torch.nn.BCEWithLogitsLoss(),
-            learning_rate=1e-3,
         )
 
     def test_stage1_error_message_format(
@@ -209,12 +192,16 @@ class TestThresholdErrorMessages:
             TrainingStage.REACHABLE_SQUARES,
             threshold=0.99,
         )
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
 
         with pytest.raises(
             RuntimeError,
             match=r"Stage 1 failed to meet accuracy threshold",
         ) as exc_info:
             orchestrator.run_all_stages(
+                stage1_components=components,
                 stage1_config=config,
                 save_checkpoints=False,
             )
@@ -236,9 +223,15 @@ class TestThresholdErrorMessages:
             TrainingStage.REACHABLE_SQUARES,
             threshold=0.0,
         )
+        stage1_components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
         stage2_config = self._make_stage_config(
             TrainingStage.LEGAL_MOVES,
             threshold=0.99,
+        )
+        stage2_components = _make_stage_components(
+            stage=TrainingStage.LEGAL_MOVES,
         )
 
         with pytest.raises(
@@ -246,7 +239,9 @@ class TestThresholdErrorMessages:
             match=r"Stage 2 failed to meet accuracy threshold",
         ) as exc_info:
             orchestrator.run_all_stages(
+                stage1_components=stage1_components,
                 stage1_config=stage1_config,
+                stage2_components=stage2_components,
                 stage2_config=stage2_config,
                 save_checkpoints=False,
             )
@@ -475,20 +470,42 @@ def _make_stage_config(
     stage: TrainingStage = TrainingStage.REACHABLE_SQUARES,
     max_epochs: int = 1,
     accuracy_threshold: float = 0.0,
+) -> StageConfig:
+    """テスト用のスリム StageConfig を生成する(3フィールド)．"""
+    return StageConfig(
+        stage=stage,
+        max_epochs=max_epochs,
+        accuracy_threshold=accuracy_threshold,
+    )
+
+
+def _make_stage_components(
+    *,
+    backbone: HeadlessNetwork | None = None,
+    stage: TrainingStage = TrainingStage.REACHABLE_SQUARES,
     batch_size: int = 4,
     num_samples: int = 8,
     learning_rate: float = 1e-3,
     lr_scheduler_name: str | None = None,
-    base_batch_size: int = 256,
-    actual_batch_size: int = 256,
-    compilation: bool = False,
-    head_hidden_dim: int | None = None,
-    head_dropout: float = 0.0,
     board_vocab_size: int = 32,
     hand_dim: int = PIECES_IN_HAND_VECTOR_SIZE,
-) -> StageConfig:
-    """テスト用の StageConfig を生成する．"""
+    max_epochs: int = 1,
+) -> "StageComponents":
+    """テスト用の StageComponents を生成する．"""
+    from maou.app.learning.multi_stage_training import (
+        Stage1ModelAdapter,
+        Stage2ModelAdapter,
+    )
+    from maou.app.learning.setup import SchedulerFactory
+    from maou.app.learning.stage_component_factory import (
+        StageComponents,
+    )
     from maou.domain.move.label import MOVE_LABELS_NUM
+
+    if backbone is None:
+        backbone = _make_backbone(
+            board_vocab_size=board_vocab_size
+        )
 
     if stage == TrainingStage.REACHABLE_SQUARES:
         target_dim = 81
@@ -507,19 +524,39 @@ def _make_stage_config(
         ),
     )
 
-    return StageConfig(
-        stage=stage,
-        max_epochs=max_epochs,
-        accuracy_threshold=accuracy_threshold,
-        dataloader=dataloader,
-        loss_fn=torch.nn.BCEWithLogitsLoss(),
-        learning_rate=learning_rate,
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+
+    if stage == TrainingStage.REACHABLE_SQUARES:
+        head = ReachableSquaresHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model: torch.nn.Module = Stage1ModelAdapter(
+            backbone, head
+        )
+    else:
+        head = LegalMovesHead(
+            input_dim=backbone.embedding_dim,
+        )
+        model = Stage2ModelAdapter(backbone, head)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate
+    )
+
+    lr_scheduler = SchedulerFactory.create_scheduler(
+        optimizer,
         lr_scheduler_name=lr_scheduler_name,
-        base_batch_size=base_batch_size,
-        actual_batch_size=actual_batch_size,
-        compilation=compilation,
-        head_hidden_dim=head_hidden_dim,
-        head_dropout=head_dropout,
+        max_epochs=max_epochs,
+        steps_per_epoch=len(dataloader),
+    )
+
+    return StageComponents(
+        model=model,
+        train_dataloader=dataloader,
+        val_dataloader=None,
+        loss_fn=loss_fn,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
     )
 
 
@@ -532,7 +569,10 @@ class TestRunStage1WithTrainingLoop:
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
             max_epochs=2,
@@ -540,7 +580,9 @@ class TestRunStage1WithTrainingLoop:
         device = torch.device("cpu")
 
         result, head = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.stage == TrainingStage.REACHABLE_SQUARES
@@ -558,13 +600,19 @@ class TestRunStage1WithTrainingLoop:
         )
 
         backbone = _make_backbone(hand_projection_dim=8)
+        components = _make_stage_components(
+            backbone=backbone,
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
         )
         device = torch.device("cpu")
 
         result, head = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.stage == TrainingStage.REACHABLE_SQUARES
@@ -582,15 +630,18 @@ class TestRunStage1WithTrainingLoop:
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
-            max_epochs=1,
         )
         device = torch.device("cpu")
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         # 全ゼロターゲットに対してランダム重みでも
@@ -603,7 +654,10 @@ class TestRunStage1WithTrainingLoop:
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=5,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
             max_epochs=5,
@@ -612,7 +666,9 @@ class TestRunStage1WithTrainingLoop:
         device = torch.device("cpu")
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.threshold_met is True
@@ -627,7 +683,10 @@ class TestRunStage1WithTrainingLoop:
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
             max_epochs=2,
@@ -637,10 +696,14 @@ class TestRunStage1WithTrainingLoop:
 
         # DataLoader の dataset に set_epoch を追加
         mock_set_epoch = MagicMock()
-        config.dataloader.dataset.set_epoch = mock_set_epoch
+        components.train_dataloader.dataset.set_epoch = (
+            mock_set_epoch
+        )
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.epochs_trained == 2
@@ -654,7 +717,9 @@ class TestRunStage1WithTrainingLoop:
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
         )
@@ -662,71 +727,85 @@ class TestRunStage1WithTrainingLoop:
 
         # set_epoch がないデータセットでもエラーなし
         assert not hasattr(
-            config.dataloader.dataset, "set_epoch"
+            components.train_dataloader.dataset, "set_epoch"
         )
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.epochs_trained >= 1
 
     def test_stage1_with_scheduler(self) -> None:
-        """lr_scheduler_name 指定時に訓練が完走する．"""
+        """lr_scheduler 指定時に訓練が完走する．"""
         from maou.app.learning.multi_stage_training import (
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            max_epochs=2,
+            lr_scheduler_name="warmup_cosine_decay",
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
             max_epochs=2,
             accuracy_threshold=1.0,
-            lr_scheduler_name="warmup_cosine_decay",
         )
         device = torch.device("cpu")
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.epochs_trained == 2
         assert isinstance(result.final_loss, float)
 
     def test_stage1_without_scheduler(self) -> None:
-        """lr_scheduler_name=None で訓練が完走する．"""
+        """lr_scheduler=None で訓練が完走する．"""
         from maou.app.learning.multi_stage_training import (
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
-        config = _make_stage_config(
+        components = _make_stage_components(
             stage=TrainingStage.REACHABLE_SQUARES,
             lr_scheduler_name=None,
+        )
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
         )
         device = torch.device("cpu")
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.epochs_trained >= 1
 
     def test_stage1_compilation_disabled(self) -> None:
-        """compilation=False で訓練が正常に完走する．"""
+        """compilation=False (components に含まれない) で訓練が正常に完走する．"""
         from maou.app.learning.multi_stage_training import (
             run_stage1_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.REACHABLE_SQUARES,
-            compilation=False,
         )
         device = torch.device("cpu")
 
         result, _ = run_stage1_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.epochs_trained >= 1
@@ -741,7 +820,10 @@ class TestRunStage2WithTrainingLoop:
             run_stage2_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.LEGAL_MOVES,
+            max_epochs=2,
+        )
         config = _make_stage_config(
             stage=TrainingStage.LEGAL_MOVES,
             max_epochs=2,
@@ -749,7 +831,9 @@ class TestRunStage2WithTrainingLoop:
         device = torch.device("cpu")
 
         result, head = run_stage2_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.stage == TrainingStage.LEGAL_MOVES
@@ -767,13 +851,19 @@ class TestRunStage2WithTrainingLoop:
         )
 
         backbone = _make_backbone(hand_projection_dim=8)
+        components = _make_stage_components(
+            backbone=backbone,
+            stage=TrainingStage.LEGAL_MOVES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.LEGAL_MOVES,
         )
         device = torch.device("cpu")
 
         result, head = run_stage2_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert result.stage == TrainingStage.LEGAL_MOVES
@@ -786,15 +876,18 @@ class TestRunStage2WithTrainingLoop:
             run_stage2_with_training_loop,
         )
 
-        backbone = _make_backbone()
+        components = _make_stage_components(
+            stage=TrainingStage.LEGAL_MOVES,
+        )
         config = _make_stage_config(
             stage=TrainingStage.LEGAL_MOVES,
-            max_epochs=1,
         )
         device = torch.device("cpu")
 
         result, _ = run_stage2_with_training_loop(
-            backbone=backbone, config=config, device=device
+            components=components,
+            config=config,
+            device=device,
         )
 
         assert 0.0 <= result.achieved_accuracy <= 1.0
@@ -803,15 +896,15 @@ class TestRunStage2WithTrainingLoop:
 
 
 class TestEffectiveLRComputation:
-    """_compute_effective_lr() のユニットテスト．"""
+    """LossOptimizerFactory.compute_effective_lr() のユニットテスト．"""
 
     def test_no_scaling_when_equal(self) -> None:
         """base == actual の場合，LR は変化しない．"""
-        from maou.app.learning.multi_stage_training import (
-            _compute_effective_lr,
+        from maou.app.learning.setup import (
+            LossOptimizerFactory,
         )
 
-        result = _compute_effective_lr(
+        result = LossOptimizerFactory.compute_effective_lr(
             learning_rate=1e-3,
             actual_batch_size=256,
             base_batch_size=256,
@@ -820,11 +913,11 @@ class TestEffectiveLRComputation:
 
     def test_sqrt_scaling_applied(self) -> None:
         """actual > base の場合，sqrt スケーリングが適用される．"""
-        from maou.app.learning.multi_stage_training import (
-            _compute_effective_lr,
+        from maou.app.learning.setup import (
+            LossOptimizerFactory,
         )
 
-        result = _compute_effective_lr(
+        result = LossOptimizerFactory.compute_effective_lr(
             learning_rate=1e-3,
             actual_batch_size=4096,
             base_batch_size=256,
@@ -834,11 +927,11 @@ class TestEffectiveLRComputation:
 
     def test_no_scaling_when_smaller(self) -> None:
         """actual < base の場合，LR は変化しない．"""
-        from maou.app.learning.multi_stage_training import (
-            _compute_effective_lr,
+        from maou.app.learning.setup import (
+            LossOptimizerFactory,
         )
 
-        result = _compute_effective_lr(
+        result = LossOptimizerFactory.compute_effective_lr(
             learning_rate=1e-3,
             actual_batch_size=128,
             base_batch_size=256,
