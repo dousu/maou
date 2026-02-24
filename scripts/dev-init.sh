@@ -75,6 +75,8 @@ fi
 
 uv generate-shell-completion bash >> ~/.bash_completion
 
+cargo fetch
+
 # Install dependencies with CPU extra (uses lightweight PyTorch from pytorch-cpu index)
 uv sync --extra cpu --extra visualize --group dev
 
