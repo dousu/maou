@@ -1,19 +1,48 @@
-"""Centralized numpy dtype schemas for Maou project.
+"""Centralized data schemas for Maou project.
 
-This module defines all numpy structured array schemas used throughout
-the project for HCPE data and preprocessing features, ensuring consistency
-and type safety across all layers.
+This module defines Polars-based schemas for all data structures:
+
+**Polars Schemas (Primary)**:
+- HCPE format: Game records with positions and evaluations
+- Preprocessing format: Neural network training features
+- Intermediate format: Aggregation data for preprocessing
+- Stage1/Stage2 formats: Multi-stage training data
+
+**Data Pipeline**:
+- Arrow IPC (.feather) files for high-performance I/O
+- Polars DataFrames for all processing
+- Zero-copy integration with Rust backend
+- Direct Polars → Parquet for BigQuery uploads
+
+**Legacy Numpy Support (Minimal)**:
+- Conversion functions for PyTorch Dataset compatibility
+- Kept for stable Polars → numpy → PyTorch pipeline
+- ONNX export utilities require numpy structured arrays
+
+**Migration Status** (Phase 2-3 Complete):
+- ✅ BigQueryFeatureStore: Now uses Polars → Parquet directly
+- ✅ ObjectStorageFeatureStore: Accepts Polars DataFrames
+- ✅ HCPE Converter: Outputs Polars DataFrames (.feather)
+- ✅ Preprocessing: Outputs Polars DataFrames (.feather)
+- ✅ Validation functions: Removed (use schema enforcement)
+- ⚠️  PyTorch Dataset: Intentionally uses numpy (zero-copy to tensors)
 """
-
-from typing import Any, Dict
 
 import numpy as np
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
-from maou.domain.board.shogi import FEATURES_NUM
-from maou.domain.data.compression import (
-    unpack_preprocessing_fields,
-)
+from maou.domain.move.label import MOVE_LABELS_NUM
+
+# ============================================================================
+# Numpy dtype definitions (Required for BigQuery and cloud storage)
+# ============================================================================
+# These numpy schemas are maintained for:
+# 1. BigQuery integration (numpy_dtype_to_bigquery_type)
+# 2. Cloud storage FeatureStore (BigQuery, GCS, S3 expect numpy arrays)
+# 3. Polars ↔ numpy conversions (convert_*_df_to_numpy)
+# 4. Backward compatibility with existing cloud storage formats
+#
+# DO NOT DELETE unless all cloud storage backends are migrated to Polars.
+# ============================================================================
 
 
 class SchemaValidationError(Exception):
@@ -80,10 +109,15 @@ def get_intermediate_dtype() -> np.dtype:
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features",
+                "boardIdPositions",
                 np.uint8,
-                (FEATURES_NUM, 9, 9),
-            ),  # Board feature representation
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand counts for both players
             (
                 "count",
                 np.int32,
@@ -95,13 +129,8 @@ def get_intermediate_dtype() -> np.dtype:
             ),  # Move label for training
             (
                 "winCount",
-                np.int32,
-            ),  # Win count
-            (
-                "legalMoveMask",
-                np.uint8,
-                (MOVE_LABELS_NUM,),
-            ),  # Legal move mask
+                np.float32,
+            ),  # Sum of result values
         ]
     )
 
@@ -109,7 +138,7 @@ def get_intermediate_dtype() -> np.dtype:
 def get_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for preprocessed training data.
 
-    This schema is used for storing neural network training features
+    This schema is used for storing neural network training inputs
     after preprocessing HCPE data.
 
     Returns:
@@ -119,10 +148,15 @@ def get_preprocessing_dtype() -> np.dtype:
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features",
+                "boardIdPositions",
                 np.uint8,
-                (FEATURES_NUM, 9, 9),
-            ),  # Board feature representation
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
             (
                 "moveLabel",
                 np.float16,
@@ -132,11 +166,6 @@ def get_preprocessing_dtype() -> np.dtype:
                 "resultValue",
                 np.float16,
             ),  # Game result value (0 to 1)
-            (
-                "legalMoveMask",
-                np.uint8,
-                (MOVE_LABELS_NUM,),
-            ),  # Legal move mask
         ]
     )
 
@@ -144,32 +173,25 @@ def get_preprocessing_dtype() -> np.dtype:
 def get_packed_preprocessing_dtype() -> np.dtype:
     """Get numpy dtype for bit-packed compressed preprocessed training data.
 
-    This schema uses bit packing to compress the features and legalMoveMask
-    fields, achieving approximately 8x storage reduction for these binary fields.
-
-    The compressed fields are:
-    - features: (104, 9, 9) uint8 → (1053,) uint8 packed bits
-    - legalMoveMask: (1496,) uint8 → (187,) uint8 packed bits
+    This schema maintains compatibility with storage backends that
+    expect the compressed preprocessing representation.
 
     Returns:
         numpy.dtype: Structured dtype for compressed preprocessed training data
     """
-    # Calculate packed sizes (bits rounded up to byte boundary)
-    features_packed_size = (
-        FEATURES_NUM * 9 * 9 + 7
-    ) // 8  # 1053 bytes
-    legal_moves_packed_size = (
-        MOVE_LABELS_NUM + 7
-    ) // 8  # 187 bytes
-
     return np.dtype(
         [
             ("id", np.uint64),  # Unique identifier
             (
-                "features_packed",
+                "boardIdPositions",
                 np.uint8,
-                (features_packed_size,),
-            ),  # Bit-packed board features
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
             (
                 "moveLabel",
                 np.float16,
@@ -179,64 +201,8 @@ def get_packed_preprocessing_dtype() -> np.dtype:
                 "resultValue",
                 np.float16,
             ),  # Game result value (-1 to 1)
-            (
-                "legalMoveMask_packed",
-                np.uint8,
-                (legal_moves_packed_size,),
-            ),  # Bit-packed legal move mask
         ]
     )
-
-
-def validate_hcpe_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to HCPE schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_hcpe_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check eval range
-        if np.any(
-            (array["eval"] < -32767) | (array["eval"] > 32767)
-        ):
-            raise SchemaValidationError(
-                "eval values out of range [-32767, 32767]"
-            )
-
-        # Check gameResult values
-        valid_results = {-1, 0, 1}  # BLACK_WIN, DRAW, WHITE_WIN
-        if not all(
-            result in valid_results
-            for result in array["gameResult"]
-        ):
-            raise SchemaValidationError(
-                "Invalid gameResult values"
-            )
-
-        # Check moves count
-        if np.any(array["moves"] < 0):
-            raise SchemaValidationError(
-                "moves count cannot be negative"
-            )
-
-    return True
 
 
 def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
@@ -283,255 +249,6 @@ def numpy_dtype_to_bigquery_type(numpy_dtype: np.dtype) -> str:
         raise ValueError(
             f"Unsupported numpy dtype: {numpy_dtype.name} (kind: {numpy_dtype.kind})"
         )
-
-
-def get_bigquery_schema_for_hcpe() -> list[dict]:
-    """Get BigQuery schema definition for HCPE data.
-
-    Returns:
-        list: BigQuery schema fields as dictionaries
-    """
-    hcpe_dtype = get_hcpe_dtype()
-    schema = []
-
-    if hcpe_dtype.fields is not None:
-        for field_name, field_info in hcpe_dtype.fields.items():
-            field_dtype = field_info[
-                0
-            ]  # First element is always dtype
-            schema.append(
-                {
-                    "name": field_name,
-                    "type": numpy_dtype_to_bigquery_type(
-                        field_dtype
-                    ),
-                    "mode": "REQUIRED",
-                }
-            )
-
-    return schema
-
-
-def get_bigquery_schema_for_preprocessing() -> list[dict]:
-    """Get BigQuery schema definition for preprocessing data.
-
-    Returns:
-        list: BigQuery schema fields as dictionaries
-    """
-    preprocessing_dtype = get_preprocessing_dtype()
-    schema = []
-
-    if preprocessing_dtype.fields is not None:
-        for (
-            field_name,
-            field_info,
-        ) in preprocessing_dtype.fields.items():
-            field_dtype = field_info[
-                0
-            ]  # First element is always dtype
-            schema.append(
-                {
-                    "name": field_name,
-                    "type": numpy_dtype_to_bigquery_type(
-                        field_dtype
-                    ),
-                    "mode": "REQUIRED",
-                }
-            )
-
-    return schema
-
-
-def validate_preprocessing_array(array: np.ndarray) -> bool:
-    """Validate that array conforms to preprocessing schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_preprocessing_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check moveLabel range
-        if np.any(
-            (array["moveLabel"] < 0)
-            | (array["moveLabel"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "moveLabel values out of range [0, 1]"
-            )
-
-        # Check resultValue range
-        if np.any(
-            (array["resultValue"] < 0.0)
-            | (array["resultValue"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "resultValue values out of range [0.0, 1.0]"
-            )
-
-        # Check features shape
-        expected_features_shape = (FEATURES_NUM, 9, 9)
-        if (
-            array["features"].shape[1:]
-            != expected_features_shape
-        ):
-            raise SchemaValidationError(
-                f"Invalid features shape. Expected: {expected_features_shape}, "
-                f"Got: {array['features'].shape[1:]}"
-            )
-
-    return True
-
-
-def validate_compressed_preprocessing_array(
-    array: np.ndarray,
-) -> bool:
-    """Validate that array conforms to compressed preprocessing schema.
-
-    Args:
-        array: numpy array to validate
-
-    Returns:
-        bool: True if array is valid
-
-    Raises:
-        SchemaValidationError: If validation fails
-    """
-    expected_dtype = get_packed_preprocessing_dtype()
-
-    if not isinstance(array, np.ndarray):
-        raise SchemaValidationError("Expected numpy ndarray")
-
-    if array.dtype != expected_dtype:
-        raise SchemaValidationError(
-            f"Invalid dtype. Expected: {expected_dtype}, Got: {array.dtype}"
-        )
-
-    # Validate field constraints
-    if len(array) > 0:
-        # Check moveLabel range
-        if np.any(
-            (array["moveLabel"] < 0)
-            | (array["moveLabel"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "moveLabel values out of range [0, 1]"
-            )
-
-        # Check resultValue range
-        if np.any(
-            (array["resultValue"] < 0.0)
-            | (array["resultValue"] > 1.0)
-        ):
-            raise SchemaValidationError(
-                "resultValue values out of range [0.0, 1.0]"
-            )
-
-        # Check packed features shape
-        features_packed_size = (FEATURES_NUM * 9 * 9 + 7) // 8
-        expected_features_packed_shape = (features_packed_size,)
-        if (
-            array["features_packed"].shape[1:]
-            != expected_features_packed_shape
-        ):
-            raise SchemaValidationError(
-                f"Invalid features_packed shape. Expected: "
-                f"{expected_features_packed_shape}, Got: "
-                f"{array['features_packed'].shape[1:]}"
-            )
-
-        # Check packed legal moves shape
-        legal_moves_packed_size = (MOVE_LABELS_NUM + 7) // 8
-        expected_legal_moves_packed_shape = (
-            legal_moves_packed_size,
-        )
-        if (
-            array["legalMoveMask_packed"].shape[1:]
-            != expected_legal_moves_packed_shape
-        ):
-            raise SchemaValidationError(
-                f"Invalid legalMoveMask_packed shape. Expected: "
-                f"{expected_legal_moves_packed_shape}, Got: "
-                f"{array['legalMoveMask_packed'].shape[1:]}"
-            )
-
-    return True
-
-
-def get_schema_info() -> Dict[str, Dict[str, Any]]:
-    """Get information about all available schemas.
-
-    Returns:
-        Dict containing schema information including field names,
-        types, and descriptions for documentation purposes.
-    """
-    return {
-        "hcpe": {
-            "dtype": get_hcpe_dtype(),
-            "description": "HCPE format for game positions and evaluations",
-            "fields": {
-                "hcp": "Huffman coded position (32 bytes)",
-                "eval": "Position evaluation (-32767 to 32767)",
-                "bestMove16": "Best move in 16-bit format",
-                "gameResult": "Game result (BLACK_WIN, WHITE_WIN, DRAW)",
-                "id": "Unique identifier for position",
-                "partitioningKey": "Date for partitioning",
-                "ratings": "Player ratings [black, white]",
-                "endgameStatus": "Endgame status description",
-                "moves": "Number of moves in game",
-            },
-        },
-        "preprocessing": {
-            "dtype": get_preprocessing_dtype(),
-            "description": "Preprocessed training data for neural networks",
-            "fields": {
-                "id": "Unique identifier",
-                "features": f"Board feature representation ({FEATURES_NUM}, 9, 9)",
-                "moveLabel": (
-                    "Move label for training "
-                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)"
-                ),
-                "resultValue": "Game result value (0.0 to 1.0)",
-                "legalMoveMask": f"Legal move mask ({MOVE_LABELS_NUM} elements)",
-            },
-        },
-        "packed_preprocessing": {
-            "dtype": get_packed_preprocessing_dtype(),
-            "description": (
-                "Bit-packed compressed preprocessed training data (8x size reduction)"
-            ),
-            "fields": {
-                "id": "Unique identifier",
-                "features_packed": (
-                    f"Bit-packed board features "
-                    f"({(FEATURES_NUM * 9 * 9 + 7) // 8} bytes)"
-                ),
-                "moveLabel": (
-                    "Move label for training "
-                    f"({MOVE_LABELS_NUM} elements, 0.0 to 1.0)",
-                ),
-                "resultValue": "Game result value (0.0 to 1.0)",
-                "legalMoveMask_packed": (
-                    f"Bit-packed legal move mask ({(MOVE_LABELS_NUM + 7) // 8} bytes)"
-                ),
-            },
-        },
-    }
 
 
 def create_empty_hcpe_array(size: int) -> np.ndarray:
@@ -586,87 +303,907 @@ def create_empty_packed_preprocessing_array(
     )
 
 
-def convert_array_from_packed_format(
-    compressed_array: np.ndarray,
-) -> np.ndarray:
-    """Convert compressed preprocessing array to standard format.
+def get_stage1_dtype() -> np.dtype:
+    """Get numpy dtype for Stage 1 (reachable squares) training data.
 
-    Args:
-        compressed_array: Compressed preprocessing array
+    This schema is used for training the reachable squares prediction head，
+    which learns which board squares pieces can move to.
 
     Returns:
-        Standard preprocessing array with unpacked fields
+        numpy.dtype: Structured dtype for Stage 1 data
     """
-
-    # Create empty standard array
-    standard_dtype = get_preprocessing_dtype()
-    standard_array = np.empty(
-        len(compressed_array), dtype=standard_dtype
-    )
-
-    # Copy non-packed fields directly
-    standard_array["id"] = compressed_array["id"]
-    standard_array["moveLabel"] = compressed_array["moveLabel"]
-    standard_array["resultValue"] = compressed_array[
-        "resultValue"
-    ]
-
-    # Unpack binary fields for each record
-    for i in range(len(compressed_array)):
-        packed_features = compressed_array[i]["features_packed"]
-        packed_legal_moves = compressed_array[i][
-            "legalMoveMask_packed"
+    return np.dtype(
+        [
+            ("id", np.uint64),  # Unique identifier
+            (
+                "boardIdPositions",
+                np.uint8,
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
+            (
+                "reachableSquares",
+                np.uint8,
+                (9, 9),
+            ),  # Binary: 1=reachable，0=not
         ]
-        features, legal_moves = unpack_preprocessing_fields(
-            packed_features, packed_legal_moves
-        )
-        standard_array[i]["features"] = features
-        standard_array[i]["legalMoveMask"] = legal_moves
-
-    return standard_array
+    )
 
 
-def convert_record_from_packed_format(
-    compressed_record: np.ndarray,
-) -> np.ndarray:
-    """Convert compressed preprocessing record to standard format.
+def get_stage2_dtype() -> np.dtype:
+    """Get numpy dtype for Stage 2 (legal moves) training data.
 
-    Args:
-        compressed_record: Compressed preprocessing record
+    This schema is used for training the legal moves prediction head，
+    which learns which moves are legal in a given position.
 
     Returns:
-        Standard preprocessing record with unpacked fields
+        numpy.dtype: Structured dtype for Stage 2 data
     """
-
-    # Create empty standard array
-    standard_dtype = get_preprocessing_dtype()
-    standard_array = np.empty(
-        (),
-        dtype=standard_dtype,
+    return np.dtype(
+        [
+            ("id", np.uint64),  # Unique identifier
+            (
+                "boardIdPositions",
+                np.uint8,
+                (9, 9),
+            ),  # Board position identifiers
+            (
+                "piecesInHand",
+                np.uint8,
+                (14,),
+            ),  # Pieces in hand for both players
+            (
+                "legalMovesLabel",
+                np.uint8,
+                (MOVE_LABELS_NUM,),
+            ),  # Binary multi-label: 1=legal，0=illegal
+        ]
     )
 
-    # Copy non-packed fields directly
-    standard_array["id"] = compressed_record["id"]
-    standard_array["moveLabel"] = compressed_record["moveLabel"]
-    standard_array["resultValue"] = compressed_record[
-        "resultValue"
-    ]
 
-    # Unpack binary fields for each record
-    packed_features = compressed_record["features_packed"]
-    packed_legal_moves = compressed_record[
-        "legalMoveMask_packed"
-    ]
-    features, legal_moves = unpack_preprocessing_fields(
-        packed_features, packed_legal_moves
+def create_empty_stage1_array(size: int) -> np.ndarray:
+    """Create empty Stage 1 array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with Stage 1 schema
+    """
+    return np.zeros(size, dtype=get_stage1_dtype())
+
+
+def create_empty_stage2_array(size: int) -> np.ndarray:
+    """Create empty Stage 2 array with proper schema.
+
+    Args:
+        size: Number of elements in array
+
+    Returns:
+        numpy.ndarray: Empty array with Stage 2 schema
+    """
+    return np.zeros(size, dtype=get_stage2_dtype())
+
+
+# ============================================================================
+# Polars Schema Definitions
+# ============================================================================
+
+
+try:
+    import polars as pl
+
+    POLARS_AVAILABLE = True
+except ImportError:
+    POLARS_AVAILABLE = False
+
+
+def get_hcpe_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for HCPE format．
+
+    HCPEフォーマット用のPolarsスキーマを返す．
+    Feather形式での保存時にはArrowのFixed-sizeスキーマが使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    return {
+        "hcp": pl.Binary(),  # 32-byte fixed in Arrow
+        "eval": pl.Int16(),
+        "bestMove16": pl.Int16(),
+        "gameResult": pl.Int8(),
+        "id": pl.Utf8(),
+        "partitioningKey": pl.Date(),
+        "ratings": pl.List(pl.UInt16),  # Fixed size 2 in Arrow
+        "endgameStatus": pl.Utf8(),
+        "moves": pl.Int16(),
+    }
+
+
+def get_preprocessing_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Get Polars schema for preprocessing format．
+
+    前処理済みデータ用のPolarsスキーマを返す．
+    学習用の特徴量データ（盤面，持ち駒，指し手ラベル，結果値）を含む．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board (fixed in Arrow)
+        "piecesInHand": pl.List(
+            pl.UInt8
+        ),  # 14 elements (fixed in Arrow)
+        "moveLabel": pl.List(
+            pl.Float32
+        ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
+        "resultValue": pl.Float32(),
+    }
+
+
+def create_empty_hcpe_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty HCPE DataFrame with proper schema．
+
+    指定されたサイズの空のHCPE DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: HCPEスキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_hcpe_df(100)
+        >>> len(df)
+        100
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    schema = get_hcpe_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    # Create DataFrame with null values
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
     )
-    standard_array["features"] = features
-    standard_array["legalMoveMask"] = legal_moves
-
-    return standard_array
 
 
-# Constants for backward compatibility
-HCPE_DTYPE = get_hcpe_dtype()
-PREPROCESSING_DTYPE = get_preprocessing_dtype()
-PACKED_PREPROCESSING_DTYPE = get_packed_preprocessing_dtype()
+def get_intermediate_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Get Polars schema for intermediate data format．
+
+    中間データ用のPolarsスキーマを返す．
+    前処理の中間段階で使用される集計データ（盤面ごとの統計情報）を含む．
+
+    Returns:
+        dict[str, pl.DataType]: Polarsスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),  # Board hash
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board (fixed in Arrow)
+        "piecesInHand": pl.List(
+            pl.UInt8
+        ),  # 14 elements (fixed in Arrow)
+        "count": pl.Int32(),  # Number of occurrences
+        "moveLabelCount": pl.List(
+            pl.Int32
+        ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
+        "winCount": pl.Float32(),  # Sum of win values
+    }
+
+
+def get_stage1_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for Stage 1 (reachable squares) training data．
+
+    Stage 1学習用のPolarsスキーマを返す．
+    到達可能マス予測ヘッドの学習に使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Stage 1データ用のPolarsスキーマ
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_stage1_polars_schema()
+        >>> df = pl.DataFrame(data, schema=schema)
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements
+        "reachableSquares": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 binary
+    }
+
+
+def get_stage2_polars_schema() -> dict[str, "pl.DataType"]:
+    """Get Polars schema for Stage 2 (legal moves) training data．
+
+    Stage 2学習用のPolarsスキーマを返す．
+    合法手予測ヘッドの学習に使用される．
+
+    Returns:
+        dict[str, pl.DataType]: Stage 2データ用のPolarsスキーマ
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_stage2_polars_schema()
+        >>> df = pl.DataFrame(data, schema=schema)
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    return {
+        "id": pl.UInt64(),
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 board
+        "piecesInHand": pl.List(pl.UInt8),  # 14 elements
+        "legalMovesLabel": pl.List(
+            pl.UInt8
+        ),  # MOVE_LABELS_NUM elements
+    }
+
+
+def create_empty_intermediate_df(
+    size: int = 0,
+) -> "pl.DataFrame":
+    """Create empty intermediate DataFrame with proper schema．
+
+    指定されたサイズの空の中間DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: 中間データスキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_intermediate_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    schema = get_intermediate_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def create_empty_preprocessing_df(
+    size: int = 0,
+) -> "pl.DataFrame":
+    """Create empty preprocessing DataFrame with proper schema．
+
+    指定されたサイズの空の前処理済みDataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: 前処理スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_preprocessing_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    schema = get_preprocessing_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def create_empty_stage1_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty Stage 1 DataFrame with proper schema．
+
+    指定されたサイズの空のStage 1 DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: Stage 1スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_stage1_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    schema = get_stage1_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def create_empty_stage2_df(size: int = 0) -> "pl.DataFrame":
+    """Create empty Stage 2 DataFrame with proper schema．
+
+    指定されたサイズの空のStage 2 DataFrameを作成する．
+
+    Args:
+        size: 作成する行数（デフォルト: 0）
+
+    Returns:
+        pl.DataFrame: Stage 2スキーマを持つ空のDataFrame
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> df = create_empty_stage2_df(1000)
+        >>> len(df)
+        1000
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    schema = get_stage2_polars_schema()
+
+    if size == 0:
+        return pl.DataFrame(schema=schema)
+
+    return pl.DataFrame(
+        {
+            col: pl.Series(
+                values=[], dtype=dtype
+            ).extend_constant(None, size)
+            for col, dtype in schema.items()
+        }
+    )
+
+
+def get_board_position_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Polars schema for board piece positions (9x9 grid)．
+
+    盤面の駒配置を表すPolarsスキーマ．
+    9x9のネストされたリストでPieceId値を格納する．
+
+    Returns:
+        dict[str, pl.DataType]: boardIdPositions列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_board_position_polars_schema()
+        >>> schema["boardIdPositions"]
+        List(List(UInt8))
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "boardIdPositions": pl.List(
+            pl.List(pl.UInt8)
+        ),  # 9x9 nested lists
+    }
+
+
+def get_hcp_polars_schema() -> dict[str, "pl.DataType"]:
+    """Polars schema for HuffmanCodedPos binary data．
+
+    HuffmanCodedPos形式の局面データを表すPolarsスキーマ．
+    32バイトのバイナリデータとして格納する．
+
+    Returns:
+        dict[str, pl.DataType]: hcp列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_hcp_polars_schema()
+        >>> schema["hcp"]
+        Binary
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "hcp": pl.Binary(),  # 32-byte binary blob
+    }
+
+
+def get_piece_planes_polars_schema() -> dict[
+    str, "pl.DataType"
+]:
+    """Polars schema for piece feature planes (104x9x9)．
+
+    駒の特徴平面を表すPolarsスキーマ．
+    104チャンネル×9×9のネストされたリストでfloat32値を格納する．
+
+    Returns:
+        dict[str, pl.DataType]: piecePlanes列のスキーマ定義
+
+    Raises:
+        ImportError: Polarsが利用不可の場合
+
+    Example:
+        >>> schema = get_piece_planes_polars_schema()
+        >>> schema["piecePlanes"]
+        List(List(List(Float32)))
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    import polars as pl
+
+    return {
+        "piecePlanes": pl.List(
+            pl.List(pl.List(pl.Float32))
+        ),  # 104x9x9 nested lists
+    }
+
+
+# ============================================================================
+# Polars DataFrame ↔ numpy structured array conversions
+# ============================================================================
+
+
+def _explode_list_column(
+    series: "pl.Series",
+    n: int,
+    shape: tuple[int, ...],
+    dtype: np.dtype,  # type: ignore[type-arg]
+    nest_depth: int = 1,
+) -> np.ndarray:
+    """Convert a Polars List column to numpy via explode (zero-copy path).
+
+    Falls back to to_list() if null values are present.
+
+    Args:
+        series: Polars Series of List type
+        n: Number of rows
+        shape: Target shape per row (e.g. (14,) or (9, 9))
+        dtype: Target numpy dtype
+        nest_depth: Number of explode() calls (1 for List, 2 for List[List])
+
+    Returns:
+        numpy.ndarray with shape (n, *shape)
+    """
+    if series.null_count() > 0:
+        # Fallback: null rows present, use to_list() with zero-fill
+        zero_fill: list = [0] * shape[-1]
+        if nest_depth == 2:
+            zero_fill = [
+                [0] * shape[-1] for _ in range(shape[0])
+            ]
+        items = series.to_list()
+        items = [
+            item if item is not None else zero_fill
+            for item in items
+        ]
+        return np.array(items, dtype=dtype)
+
+    # Fast path: no nulls, use explode -> to_numpy -> reshape
+    col = series
+    for _ in range(nest_depth):
+        col = col.explode()
+    result = col.to_numpy().reshape(n, *shape)
+    if result.dtype != dtype:
+        result = result.astype(dtype)
+    return result
+
+
+def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
+    """Convert HCPE Polars DataFrame to numpy structured array．
+
+    Args:
+        df: Polars DataFrame with HCPE schema
+
+    Returns:
+        numpy.ndarray: Structured array with HCPE dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    import polars as pl
+
+    # Get target dtype
+    dtype = get_hcpe_dtype()
+    array = np.empty(len(df), dtype=dtype)
+
+    # Convert fields with null handling
+    # hcp: binary data (32 bytes)
+    hcp_list = df["hcp"].to_list()
+    # Convert each bytes object to list of uint8
+    hcp_arrays = []
+    for row in hcp_list:
+        if row is None:
+            hcp_arrays.append([0] * 32)
+        elif isinstance(row, bytes):
+            hcp_arrays.append(list(row))
+        else:
+            # Try to convert to bytes first
+            hcp_arrays.append(list(bytes(row)))
+    array["hcp"] = np.array(hcp_arrays, dtype=np.uint8)
+
+    array["eval"] = df["eval"].to_numpy()
+    array["bestMove16"] = df["bestMove16"].to_numpy()
+    array["gameResult"] = df["gameResult"].to_numpy()
+    array["id"] = df["id"].to_numpy()
+
+    # partitioningKey: handle nulls
+    partitioning_key = (
+        df["partitioningKey"].cast(pl.Date).to_numpy()
+    )
+    array["partitioningKey"] = partitioning_key
+
+    # ratings: list of 2 uint16 values
+    ratings_list = df["ratings"].to_list()
+    ratings_arrays = [
+        item if item is not None else [0, 0]
+        for item in ratings_list
+    ]
+    array["ratings"] = np.array(ratings_arrays, dtype=np.uint16)
+
+    array["endgameStatus"] = df["endgameStatus"].to_numpy()
+    array["moves"] = df["moves"].to_numpy()
+
+    return array
+
+
+def convert_preprocessing_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
+    """Convert preprocessing Polars DataFrame to numpy structured array．
+
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
+
+    Args:
+        df: Polars DataFrame with preprocessing schema
+
+    Returns:
+        numpy.ndarray: Structured array with preprocessing dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    n = len(df)
+    dtype = get_preprocessing_dtype()
+    array = np.empty(n, dtype=dtype)
+
+    # Scalar fields
+    id_values = df["id"].to_numpy()
+    if id_values.dtype == np.float64:
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
+    array["id"] = id_values
+    array["resultValue"] = df["resultValue"].to_numpy()
+
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
+    )
+
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
+    )
+
+    # 1D List column: moveLabel List[Float32] -> (N, MOVE_LABELS_NUM)
+    # Polarsの内部データはFloat32だが，structured arrayのtarget dtypeはfloat16．
+    # float16を指定することで_explode_list_column内のastype変換後の中間配列が
+    # float32の半分のサイズになり，定常メモリを削減する．
+    array["moveLabel"] = _explode_list_column(
+        df["moveLabel"],
+        n,
+        (MOVE_LABELS_NUM,),
+        np.dtype(np.float16),
+        nest_depth=1,
+    )
+
+    return array
+
+
+def convert_numpy_to_preprocessing_df(
+    array: np.ndarray,
+) -> "pl.DataFrame":
+    """Convert numpy structured array to preprocessing Polars DataFrame．
+
+    Args:
+        array: numpy structured array with preprocessing dtype
+
+    Returns:
+        pl.DataFrame: Polars DataFrame with preprocessing schema
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    import polars as pl
+
+    # Convert numpy structured array to dict
+    data = {
+        "id": array["id"].tolist(),
+        "boardIdPositions": array["boardIdPositions"].tolist(),
+        "piecesInHand": array["piecesInHand"].tolist(),
+        "moveLabel": array["moveLabel"].tolist(),
+        "resultValue": array["resultValue"].tolist(),
+    }
+
+    # Create DataFrame with proper schema
+    df = pl.DataFrame(
+        data, schema=get_preprocessing_polars_schema()
+    )
+
+    return df
+
+
+def convert_stage1_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
+    """Convert Stage 1 Polars DataFrame to numpy structured array．
+
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
+
+    Args:
+        df: Polars DataFrame with Stage 1 schema
+
+    Returns:
+        numpy.ndarray: Structured array with Stage 1 dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    n = len(df)
+    dtype = get_stage1_dtype()
+    array = np.empty(n, dtype=dtype)
+
+    # Scalar field
+    id_values = df["id"].to_numpy()
+    if id_values.dtype == np.float64:
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
+    array["id"] = id_values
+
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
+    )
+
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
+    )
+
+    # 2D List column: reachableSquares List[List[UInt8]] -> (N, 9, 9)
+    array["reachableSquares"] = _explode_list_column(
+        df["reachableSquares"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
+    )
+
+    return array
+
+
+def convert_stage2_df_to_numpy(
+    df: "pl.DataFrame",
+) -> np.ndarray:
+    """Convert Stage 2 Polars DataFrame to numpy structured array．
+
+    Uses explode() + to_numpy() + reshape() pattern to avoid
+    expensive to_list() Python list materialization．
+
+    Args:
+        df: Polars DataFrame with Stage 2 schema
+
+    Returns:
+        numpy.ndarray: Structured array with Stage 2 dtype
+
+    Raises:
+        ImportError: If polars is not installed
+    """
+    if not POLARS_AVAILABLE:
+        raise ImportError(
+            "polars is not installed. Install with: uv add polars"
+        )
+
+    n = len(df)
+    dtype = get_stage2_dtype()
+    array = np.empty(n, dtype=dtype)
+
+    # Scalar field
+    id_values = df["id"].to_numpy()
+    if id_values.dtype == np.float64:
+        id_values = np.nan_to_num(id_values, nan=0.0).astype(
+            np.uint64
+        )
+    array["id"] = id_values
+
+    # 2D List column: boardIdPositions List[List[UInt8]] -> (N, 9, 9)
+    array["boardIdPositions"] = _explode_list_column(
+        df["boardIdPositions"],
+        n,
+        (9, 9),
+        np.dtype(np.uint8),
+        nest_depth=2,
+    )
+
+    # 1D List column: piecesInHand List[UInt8] -> (N, 14)
+    array["piecesInHand"] = _explode_list_column(
+        df["piecesInHand"],
+        n,
+        (14,),
+        np.dtype(np.uint8),
+        nest_depth=1,
+    )
+
+    # 1D List column: legalMovesLabel List[UInt8] -> (N, MOVE_LABELS_NUM)
+    array["legalMovesLabel"] = _explode_list_column(
+        df["legalMovesLabel"],
+        n,
+        (MOVE_LABELS_NUM,),
+        np.dtype(np.uint8),
+        nest_depth=1,
+    )
+
+    return array

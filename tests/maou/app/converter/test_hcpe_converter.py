@@ -62,7 +62,7 @@ class TestHCPEConverter:
         assert output_dir.exists()
         for p in input_paths:
             output_file = (
-                output_dir / p.with_suffix(".npy").name
+                output_dir / p.with_suffix(".feather").name
             )
             assert output_file.exists()
 
@@ -126,14 +126,21 @@ class TestHCPEConverter:
         self,
         default_fixture: typing.Annotated[None, pytest.fixture],
     ) -> None:
+        import shutil
+
         input_paths = [
             Path(
                 "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
             ),
         ]
         output_dir = Path(
-            "tests/maou/app/converter/resources/test_dir/output_not_exists"
+            "tests/maou/app/converter/resources/test_dir/output_auto_created"
         )
+
+        # Clean up if exists from previous run
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+
         option: hcpe_converter.HCPEConverter.ConvertOption = (
             hcpe_converter.HCPEConverter.ConvertOption(
                 input_paths=input_paths,
@@ -147,8 +154,15 @@ class TestHCPEConverter:
             )
         )
 
-        with pytest.raises(FileNotFoundError):
-            self.test_class.convert(option)
+        # Output directory is now auto-created, so no error should be raised
+        self.test_class.convert(option)
+
+        # Verify output directory was created
+        assert output_dir.exists()
+
+        # Clean up
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
 
     def test_conversion_filter_min_rating(
         self,
@@ -183,11 +197,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_min_moves(
@@ -223,11 +237,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_max_moves(
@@ -263,11 +277,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert not (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_filter_allowed_endgame_status(
@@ -306,15 +320,15 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_3").with_suffix(".npy").name
+            / Path("test_data_3").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_composite_filter_(
@@ -353,15 +367,15 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert not (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_2").with_suffix(".npy").name
+            / Path("test_data_2").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
-            / Path("test_data_3").with_suffix(".npy").name
+            / Path("test_data_3").with_suffix(".feather").name
         ).exists()
 
     def test_conversion_no_moves(
@@ -398,11 +412,11 @@ class TestHCPEConverter:
         assert output_dir.exists()
         assert (
             output_dir
-            / Path("test_data_1").with_suffix(".npy").name
+            / Path("test_data_1").with_suffix(".feather").name
         ).exists()
         assert not (
             output_dir
             / Path("test_data_no_moves")
-            .with_suffix(".npy")
+            .with_suffix(".feather")
             .name
         ).exists()

@@ -1,0 +1,17 @@
+[package]
+name = "maou_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+arrow = { workspace = true }
+maou_io = { path = "../maou_io" }
+maou_index = { path = "../maou_index" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

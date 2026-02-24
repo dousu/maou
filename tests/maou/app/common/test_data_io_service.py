@@ -1,264 +1,377 @@
-"""Tests for data I/O service."""
+"""Tests for data I/O service.
+
+Updated to use DataFrame-based methods with Polars.
+"""
 
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import polars as pl
 import pytest
 
 from maou.app.common.data_io_service import (
     DataIOService,
 )
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.domain.data.array_io import DataIOError
 from maou.domain.data.schema import (
-    create_empty_hcpe_array,
-    create_empty_preprocessing_array,
+    create_empty_hcpe_df,
+    create_empty_preprocessing_df,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 
 class TestDataIOService:
-    """Test DataIOService functionality."""
+    """Test DataIOService functionality with DataFrame-based I/O."""
 
-    def test_load_array_hcpe(self) -> None:
-        """Test explicit loading of HCPE array."""
+    def test_load_dataframe_hcpe(self) -> None:
+        """Test loading of HCPE DataFrame."""
         # Create test HCPE data
-        hcpe_array = create_empty_hcpe_array(3)
-        hcpe_array["eval"] = [100, -50, 0]
-        hcpe_array["id"] = ["test1", "test2", "test3"]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_hcpe_game.npy"
-
-            # Save using domain I/O directly
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
-            )
-
-            save_hcpe_array(hcpe_array, file_path)
-
-            # The .npy file should be created using tofile()
-            assert file_path.exists()
-
-            # Load using service with explicit type
-            loaded_array = DataIOService.load_array(
-                file_path, array_type="hcpe"
-            )
-
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
-
-    def test_load_array_preprocessing(self) -> None:
-        """Test explicit loading of preprocessing array."""
-        # Create test preprocessing data
-        prep_array = create_empty_preprocessing_array(2)
-        prep_array["moveLabel"] = np.array(
+        hcpe_df = create_empty_hcpe_df(3)
+        hcpe_df = hcpe_df.with_columns(
             [
-                np.bincount(arr, minlength=MOVE_LABELS_NUM)
-                for arr in [[50], [100]]
+                pl.Series("eval", [100, -50, 0]),
+                pl.Series("id", ["test1", "test2", "test3"]),
             ]
         )
-        prep_array["resultValue"] = [1.0, 0.0]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = (
-                Path(temp_dir) / "test_preprocessing_data.npy"
+                Path(temp_dir) / "test_hcpe_game.feather"
             )
 
-            # Save using domain I/O directly
-            from maou.domain.data.array_io import (
-                save_preprocessing_array,
+            # Save using service
+            DataIOService.save_dataframe(
+                hcpe_df, file_path, array_type="hcpe"
             )
 
-            save_preprocessing_array(prep_array, file_path)
-
-            # The .npy file should be created using tofile()
+            # The .feather file should exist
             assert file_path.exists()
 
-            # Load using service with explicit type
-            loaded_array = DataIOService.load_array(
+            # Load using service
+            loaded_df = DataIOService.load_dataframe(
+                file_path, array_type="hcpe"
+            )
+
+            # Verify data
+            assert loaded_df.shape == hcpe_df.shape
+            assert loaded_df["eval"].to_list() == [100, -50, 0]
+            assert loaded_df["id"].to_list() == [
+                "test1",
+                "test2",
+                "test3",
+            ]
+
+    def test_load_dataframe_preprocessing(self) -> None:
+        """Test loading of preprocessing DataFrame."""
+        # Create test preprocessing data
+        prep_df = create_empty_preprocessing_df(2)
+
+        # Create sample move labels (normalized)
+        move_label_1 = np.zeros(
+            MOVE_LABELS_NUM, dtype=np.float16
+        )
+        move_label_1[50] = 1.0
+        move_label_2 = np.zeros(
+            MOVE_LABELS_NUM, dtype=np.float16
+        )
+        move_label_2[100] = 1.0
+
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series(
+                    "moveLabel",
+                    [
+                        move_label_1.tolist(),
+                        move_label_2.tolist(),
+                    ],
+                ),
+                pl.Series("resultValue", [1.0, 0.0]),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = (
+                Path(temp_dir)
+                / "test_preprocessing_data.feather"
+            )
+
+            # Save using service
+            DataIOService.save_dataframe(
+                prep_df, file_path, array_type="preprocessing"
+            )
+
+            # The .feather file should exist
+            assert file_path.exists()
+
+            # Load using service
+            loaded_df = DataIOService.load_dataframe(
                 file_path, array_type="preprocessing"
             )
 
-            np.testing.assert_array_equal(
-                loaded_array, prep_array
-            )
+            # Verify data
+            assert loaded_df.shape == prep_df.shape
+            assert loaded_df["resultValue"].to_list() == [
+                1.0,
+                0.0,
+            ]
 
-    def test_load_array_with_mmap(self) -> None:
-        """Test loading array with memory mapping."""
-        hcpe_array = create_empty_hcpe_array(5)
+    def test_save_dataframe_hcpe(self) -> None:
+        """Test saving of HCPE DataFrame."""
+        hcpe_df = create_empty_hcpe_df(2)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_mmap_hcpe.npy"
-
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
+            file_path = (
+                Path(temp_dir) / "test_save_hcpe.feather"
             )
 
-            save_hcpe_array(hcpe_array, file_path)
+            # Save using service
+            DataIOService.save_dataframe(
+                hcpe_df, file_path, array_type="hcpe"
+            )
 
-            # The .npy file should be created using tofile()
+            # Verify file was created
             assert file_path.exists()
 
-            # Load with memory mapping
-            loaded_array = DataIOService.load_array(
-                file_path, mmap_mode="r", array_type="hcpe"
+            # Load and verify
+            loaded_df = DataIOService.load_dataframe(
+                file_path, array_type="hcpe"
             )
 
-            assert isinstance(loaded_array, np.memmap)
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
+            assert loaded_df.shape == hcpe_df.shape
 
-    def test_save_array_hcpe(self) -> None:
-        """Test explicit saving of HCPE array."""
-        hcpe_array = create_empty_hcpe_array(2)
+    def test_save_dataframe_preprocessing(self) -> None:
+        """Test saving of preprocessing DataFrame."""
+        prep_df = create_empty_preprocessing_df(3)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_save_hcpe.npy"
-
-            # Save using service with explicit type
-            DataIOService.save_array(
-                hcpe_array, file_path, array_type="hcpe"
+            file_path = (
+                Path(temp_dir)
+                / "test_save_preprocessing.feather"
             )
 
-            # Load using domain I/O to verify
-            from maou.domain.data.array_io import (
-                load_hcpe_array,
+            # Save using service
+            DataIOService.save_dataframe(
+                prep_df, file_path, array_type="preprocessing"
             )
 
-            loaded_array = load_hcpe_array(file_path)
-
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
-
-    def test_save_array_compressed(self) -> None:
-        """Test saving array with compression."""
-        prep_array = create_empty_preprocessing_array(3)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test_compressed.npy"
-
-            # Save compressed
-            DataIOService.save_array(
-                prep_array,
-                file_path,
-                array_type="preprocessing",
-                bit_pack=True,
-            )
+            # Verify file was created
+            assert file_path.exists()
 
             # Load and verify
-            loaded_array = DataIOService.load_array(
-                file_path,
-                array_type="preprocessing",
-                bit_pack=True,
-            )
-            np.testing.assert_array_equal(
-                loaded_array, prep_array
+            loaded_df = DataIOService.load_dataframe(
+                file_path, array_type="preprocessing"
             )
 
-    def test_explicit_type_specification(self) -> None:
-        """Test that explicit type specification works correctly."""
-        hcpe_array = create_empty_hcpe_array(1)
+            assert loaded_df.shape == prep_df.shape
+
+    def test_roundtrip_hcpe_dataframe(self) -> None:
+        """Test roundtrip save/load for HCPE DataFrame preserves data."""
+        hcpe_df = create_empty_hcpe_df(5)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [10, -20, 30, -40, 50]),
+                pl.Series(
+                    "id", ["id1", "id2", "id3", "id4", "id5"]
+                ),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Test HCPE loading with explicit type
-            hcpe_file = Path(temp_dir) / "game_data.hcpe.npy"
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
+            file_path = (
+                Path(temp_dir) / "roundtrip_hcpe.feather"
             )
 
-            save_hcpe_array(hcpe_array, hcpe_file)
-
-            loaded_array = DataIOService.load_array(
-                hcpe_file, array_type="hcpe"
-            )
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
+            # Save
+            DataIOService.save_dataframe(
+                hcpe_df, file_path, array_type="hcpe"
             )
 
-    def test_load_invalid_array_type(self) -> None:
-        """Test error handling for invalid array type specification."""
-        hcpe_array = create_empty_hcpe_array(2)
+            # Load
+            loaded_df = DataIOService.load_dataframe(
+                file_path, array_type="hcpe"
+            )
+
+            # Verify
+            assert loaded_df["eval"].to_list() == [
+                10,
+                -20,
+                30,
+                -40,
+                50,
+            ]
+            assert loaded_df["id"].to_list() == [
+                "id1",
+                "id2",
+                "id3",
+                "id4",
+                "id5",
+            ]
+
+    def test_roundtrip_preprocessing_dataframe(self) -> None:
+        """Test roundtrip save/load for preprocessing DataFrame."""
+        prep_df = create_empty_preprocessing_df(2)
+
+        # Set some board positions
+        board_1 = [[i + j for j in range(9)] for i in range(9)]
+        board_2 = [
+            [(i * 9 + j) % 30 for j in range(9)]
+            for i in range(9)
+        ]
+
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series(
+                    "boardIdPositions", [board_1, board_2]
+                ),
+                pl.Series("resultValue", [0.5, -0.5]),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "test.npy"
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
+            file_path = (
+                Path(temp_dir)
+                / "roundtrip_preprocessing.feather"
             )
 
-            save_hcpe_array(hcpe_array, file_path)
+            # Save
+            DataIOService.save_dataframe(
+                prep_df, file_path, array_type="preprocessing"
+            )
+
+            # Load
+            loaded_df = DataIOService.load_dataframe(
+                file_path, array_type="preprocessing"
+            )
+
+            # Verify
+            assert loaded_df["resultValue"].to_list() == [
+                0.5,
+                -0.5,
+            ]
+            assert (
+                loaded_df["boardIdPositions"].to_list()[0]
+                == board_1
+            )
+            assert (
+                loaded_df["boardIdPositions"].to_list()[1]
+                == board_2
+            )
+
+    def test_load_dataframe_file_not_found(self) -> None:
+        """Test error handling for non-existent file."""
+        with pytest.raises(DataIOError):
+            DataIOService.load_dataframe(
+                "non_existent_file.feather", array_type="hcpe"
+            )
+
+    def test_load_dataframe_invalid_type(self) -> None:
+        """Test error handling for invalid array type."""
+        hcpe_df = create_empty_hcpe_df(1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test.feather"
+
+            DataIOService.save_dataframe(
+                hcpe_df, file_path, array_type="hcpe"
+            )
 
             # Should raise error with invalid type
             with pytest.raises(DataIOError):
-                DataIOService.load_array(
+                DataIOService.load_dataframe(
                     file_path,
                     array_type="invalid",  # type: ignore
                 )
 
-    def test_load_file_not_found(self) -> None:
-        """Test error handling for non-existent file."""
-        with pytest.raises(
-            DataIOError, match="Failed to load array"
-        ):
-            DataIOService.load_array(
-                "non_existent_file.npy", array_type="hcpe"
-            )
-
-
-class TestConvenienceFunctions:
-    """Test convenience functions for backward compatibility."""
-
-    def test_load_numpy_array(self) -> None:
-        """Test load_numpy_array convenience function."""
-        hcpe_array = create_empty_hcpe_array(3)
+    def test_save_dataframe_creates_parent_directory(
+        self,
+    ) -> None:
+        """Test that save_dataframe creates parent directories if needed."""
+        hcpe_df = create_empty_hcpe_df(1)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "convenience.npy"
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
+            # Create nested path
+            file_path = (
+                Path(temp_dir)
+                / "subdir1"
+                / "subdir2"
+                / "test.feather"
             )
 
-            save_hcpe_array(hcpe_array, file_path)
-
-            # The convenience function uses auto-detection which may fail with tofile()
-            # For now, we'll use the interface function with explicit type
-            from maou.interface.data_io import load_array
-
-            loaded_array = load_array(
-                file_path, array_type="hcpe", mmap_mode="r"
-            )
-            assert isinstance(loaded_array, np.memmap)
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
+            # Parent directories should be created automatically
+            DataIOService.save_dataframe(
+                hcpe_df, file_path, array_type="hcpe"
             )
 
-    def test_save_numpy_array(self) -> None:
-        """Test save_numpy_array convenience function."""
-        prep_array = create_empty_preprocessing_array(2)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "convenience_save.npy"
-
-            # Use interface function with explicit type instead of convenience function
-            from maou.interface.data_io import (
-                load_array,
-                save_array,
-            )
-
-            save_array(
-                prep_array,
-                file_path,
-                array_type="preprocessing",
-            )
-
-            # Verify file was created and is readable
             assert file_path.exists()
-            loaded_array = load_array(
-                file_path, array_type="preprocessing"
-            )
-            np.testing.assert_array_equal(
-                loaded_array, prep_array
-            )
+            assert file_path.parent.exists()
+
+
+class TestDataFrameBytes:
+    """Test byte serialization methods."""
+
+    def test_load_dataframe_from_bytes_hcpe(self) -> None:
+        """Test loading HCPE DataFrame from bytes."""
+        hcpe_df = create_empty_hcpe_df(2)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [100, -50]),
+            ]
+        )
+
+        # Convert to bytes
+        bytes_data = DataIOService.save_dataframe_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
+
+        # Load from bytes
+        loaded_df = DataIOService.load_dataframe_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
+
+        assert loaded_df["eval"].to_list() == [100, -50]
+
+    def test_load_dataframe_from_bytes_preprocessing(
+        self,
+    ) -> None:
+        """Test loading preprocessing DataFrame from bytes."""
+        prep_df = create_empty_preprocessing_df(1)
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("resultValue", [0.75]),
+            ]
+        )
+
+        # Convert to bytes
+        bytes_data = DataIOService.save_dataframe_to_bytes(
+            prep_df, array_type="preprocessing"
+        )
+
+        # Load from bytes
+        loaded_df = DataIOService.load_dataframe_from_bytes(
+            bytes_data, array_type="preprocessing"
+        )
+
+        assert loaded_df["resultValue"].to_list() == [0.75]
+
+    def test_bytes_roundtrip_preserves_data(self) -> None:
+        """Test that bytes serialization roundtrip preserves data."""
+        hcpe_df = create_empty_hcpe_df(3)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("id", ["a", "b", "c"]),
+                pl.Series("eval", [1, 2, 3]),
+            ]
+        )
+
+        # Roundtrip
+        bytes_data = DataIOService.save_dataframe_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
+        loaded_df = DataIOService.load_dataframe_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
+
+        # Verify
+        assert loaded_df["id"].to_list() == ["a", "b", "c"]
+        assert loaded_df["eval"].to_list() == [1, 2, 3]

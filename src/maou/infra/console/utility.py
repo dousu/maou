@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
+import maou.interface.learn as learn
+import maou.interface.utility_interface as utility_interface
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -16,13 +18,12 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import utility_interface
 
 
 @click.command("benchmark-dataloader")
 @click.option(
-    "--input-dir",
-    help="Input data directory.",
+    "--stage3-data-path",
+    help="Stage 3 (policy+value) training data path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
 )
@@ -47,13 +48,6 @@ from maou.interface import utility_interface
     required=False,
 )
 @click.option(
-    "--input-format",
-    help="Input format: 'hcpe' or 'preprocess'.",
-    type=str,
-    default="hcpe",
-    required=False,
-)
-@click.option(
     "--input-batch-size",
     help="Batch size for reading from BigQuery.",
     type=int,
@@ -66,6 +60,16 @@ from maou.interface import utility_interface
     type=int,
     default=500 * 1024 * 1024,
     required=False,
+)
+@click.option(
+    "--input-cache-mode",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
+    required=False,
+    show_default=True,
 )
 @click.option(
     "--input-clustering-key",
@@ -182,13 +186,13 @@ from maou.interface import utility_interface
 )
 @handle_exception
 def benchmark_dataloader(
-    input_dir: Optional[Path],
+    stage3_data_path: Optional[Path],
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
-    input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -208,17 +212,18 @@ def benchmark_dataloader(
     sample_ratio: Optional[float],
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
-    # Validate input_format early
-    if input_format not in ("hcpe", "preprocess"):
-        raise ValueError(
-            "Please specify a valid input_format ('hcpe' or 'preprocess')."
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
         )
-    # Convert input_format to array_type for data sources
-    array_type = (
-        "preprocessing"
-        if input_format == "preprocess"
-        else "hcpe"
-    )
+        input_cache_mode = "file"
+
+    array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -240,15 +245,18 @@ def benchmark_dataloader(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_dir is not None:
+    if stage3_data_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
         datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_dir),
+            file_paths=FileSystem.collect_files(
+                stage3_data_path
+            ),
             array_type=array_type,
             bit_pack=input_file_packed,
+            cache_mode=input_cache_mode,
         )
     elif (
         input_dataset_id is not None
@@ -291,7 +299,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -333,7 +341,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -375,7 +383,7 @@ def benchmark_dataloader(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -388,7 +396,6 @@ def benchmark_dataloader(
     # Run benchmark
     result_json = utility_interface.benchmark_dataloader(
         datasource=datasource,
-        datasource_type=input_format,
         gpu=gpu,
         batch_size=batch_size,
         pin_memory=pin_memory,
@@ -408,10 +415,47 @@ def benchmark_dataloader(
 
 @click.command("benchmark-training")
 @click.option(
-    "--input-dir",
-    help="Input data directory.",
+    "--stage3-data-path",
+    help="Stage 3 (policy+value) training data path.",
     type=click.Path(exists=True, path_type=Path),
     required=False,
+)
+@click.option(
+    "--stage",
+    type=click.IntRange(1, 3),
+    default=3,
+    show_default=True,
+    help="Benchmark target stage (1: Reachable Squares, 2: Legal Moves, 3: Policy+Value).",
+)
+@click.option(
+    "--stage1-data-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+    help="Path to Stage 1 (reachable squares) training data directory.",
+)
+@click.option(
+    "--stage2-data-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+    help="Path to Stage 2 (legal moves) training data directory.",
+)
+@click.option(
+    "--stage12-lr-scheduler",
+    type=click.Choice(
+        ["warmup_cosine_decay", "cosine_annealing", "step"],
+        case_sensitive=False,
+    ),
+    default=None,
+    required=False,
+    help="Learning rate scheduler for Stage 1/2 benchmark.",
+)
+@click.option(
+    "--stage12-compilation/--no-stage12-compilation",
+    default=False,
+    show_default=True,
+    help="Enable/disable torch.compile for Stage 1/2 benchmark.",
 )
 @click.option(
     "--input-file-packed",
@@ -434,13 +478,6 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
-    "--input-format",
-    help="Input format: 'hcpe' or 'preprocess'.",
-    type=str,
-    default="hcpe",
-    required=False,
-)
-@click.option(
     "--input-batch-size",
     help="Batch size for reading from BigQuery.",
     type=int,
@@ -453,6 +490,16 @@ def benchmark_dataloader(
     type=int,
     default=500 * 1024 * 1024,
     required=False,
+)
+@click.option(
+    "--input-cache-mode",
+    type=click.Choice(
+        ["file", "memory", "mmap"], case_sensitive=False
+    ),
+    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
+    default="file",
+    required=False,
+    show_default=True,
 )
 @click.option(
     "--input-clustering-key",
@@ -541,9 +588,67 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--model-architecture",
+    type=click.Choice(
+        list(learn.SUPPORTED_MODEL_ARCHITECTURES),
+        case_sensitive=False,
+    ),
+    help=(
+        "Backbone architecture to use. Supported values: "
+        + ", ".join(learn.SUPPORTED_MODEL_ARCHITECTURES)
+    ),
+    required=False,
+    default="resnet",
+    show_default=True,
+)
+@click.option(
+    "--vit-embed-dim",
+    type=int,
+    default=None,
+    help="ViT: embedding dimension (default: 512).",
+)
+@click.option(
+    "--vit-num-layers",
+    type=int,
+    default=None,
+    help="ViT: number of encoder layers (default: 6).",
+)
+@click.option(
+    "--vit-num-heads",
+    type=int,
+    default=None,
+    help="ViT: number of attention heads (default: 8).",
+)
+@click.option(
+    "--vit-mlp-ratio",
+    type=float,
+    default=None,
+    help="ViT: MLP hidden dimension ratio (default: 4.0).",
+)
+@click.option(
+    "--vit-dropout",
+    type=float,
+    default=None,
+    help="ViT: dropout rate (default: 0.1).",
+)
+@click.option(
+    "--gradient-checkpointing",
+    is_flag=True,
+    default=False,
+    help="Enable gradient checkpointing to reduce activation memory. Only effective with ViT architecture.",
+)
+@click.option(
     "--compilation",
     type=bool,
     help="Enable PyTorch compilation.",
+    required=False,
+    default=False,
+)
+@click.option(
+    "--detect-anomaly",
+    type=bool,
+    is_flag=True,
+    help="Enable torch.autograd anomaly detection (default: disabled).",
     required=False,
     default=False,
 )
@@ -583,6 +688,15 @@ def benchmark_dataloader(
     default=2,
 )
 @click.option(
+    "--cache-transforms/--no-cache-transforms",
+    default=None,
+    help=(
+        "Enable in-memory caching of dataset transforms when supported by the "
+        "input pipeline."
+    ),
+    required=False,
+)
+@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter (default: 0.1).",
@@ -618,11 +732,157 @@ def benchmark_dataloader(
     default=0.9,
 )
 @click.option(
+    "--lr-scheduler",
+    type=click.Choice(
+        list(learn.SUPPORTED_LR_SCHEDULERS.values()),
+        case_sensitive=False,
+    ),
+    help="Learning rate scheduler to apply.",
+    required=False,
+    default=learn.SUPPORTED_LR_SCHEDULERS[
+        "warmup_cosine_decay"
+    ],
+    show_default=True,
+)
+@click.option(
+    "--optimizer",
+    type=click.Choice(["adamw", "sgd"], case_sensitive=False),
+    help="Optimizer to use (default: adamw).",
+    required=False,
+    default="adamw",
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta1",
+    type=float,
+    help="AdamW beta1 parameter (default: 0.9).",
+    required=False,
+    default=0.9,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-beta2",
+    type=float,
+    help="AdamW beta2 parameter (default: 0.999).",
+    required=False,
+    default=0.999,
+    show_default=True,
+)
+@click.option(
+    "--optimizer-eps",
+    type=float,
+    help="AdamW epsilon parameter (default: 1e-08).",
+    required=False,
+    default=1e-8,
+    show_default=True,
+)
+@click.option(
+    "--stage1-pos-weight",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Positive class weight for Stage 1 loss.",
+)
+@click.option(
+    "--stage2-pos-weight",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Positive class weight for Stage 2 BCE loss. Usually 1.0 when ASL is enabled.",
+)
+@click.option(
+    "--stage2-gamma-pos",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL positive focusing parameter for Stage 2."
+        " 0.0 = no down-weighting of positive loss (recommended)."
+    ),
+)
+@click.option(
+    "--stage2-gamma-neg",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL negative focusing parameter for Stage 2."
+        " 0.0 = standard BCE, 2.0 = recommended for imbalanced data."
+    ),
+)
+@click.option(
+    "--stage2-clip",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "ASL negative probability clipping margin for Stage 2."
+        " 0.0 = disabled, 0.02 = recommended."
+    ),
+)
+@click.option(
+    "--stage2-hidden-dim",
+    type=int,
+    default=None,
+    show_default=True,
+    help="Hidden layer dimension for Stage 2 head. None = single linear layer.",
+)
+@click.option(
+    "--stage2-head-dropout",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Dropout rate for Stage 2 head (requires --stage2-hidden-dim).",
+)
+@click.option(
+    "--stage2-test-ratio",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Validation split ratio for Stage 2 (0.0 = no split, e.g. 0.1 = 10%% validation).",
+)
+@click.option(
+    "--freeze-backbone",
+    is_flag=True,
+    default=False,
+    help="Freeze backbone parameters (embedding, backbone, pool, hand projection).",
+)
+@click.option(
+    "--trainable-layers",
+    type=int,
+    default=None,
+    help=(
+        "Number of trailing backbone layer groups to keep trainable. "
+        "0 = freeze all backbone layers. "
+        "Unset = no freezing (all layers trainable)."
+    ),
+)
+@click.option(
+    "--stage1-batch-size",
+    type=int,
+    default=None,
+    help="Batch size for Stage 1 (default: inherits --batch-size).",
+    required=False,
+)
+@click.option(
+    "--stage2-batch-size",
+    type=int,
+    default=None,
+    help="Batch size for Stage 2 (default: inherits --batch-size).",
+    required=False,
+)
+@click.option(
+    "--no-streaming",
+    is_flag=True,
+    default=False,
+    help="Disable streaming mode for file input (use map-style dataset instead).",
+)
+@click.option(
     "--warmup-batches",
     type=int,
-    help="Number of warmup batches to exclude from timing (default: 5).",
+    help="Number of warmup batches to exclude from timing (default: 10).",
     required=False,
-    default=5,
+    default=10,
 )
 @click.option(
     "--max-batches",
@@ -660,13 +920,18 @@ def benchmark_dataloader(
 )
 @handle_exception
 def benchmark_training(
-    input_dir: Optional[Path],
+    stage3_data_path: Optional[Path],
+    stage: int,
+    stage1_data_path: Optional[Path],
+    stage2_data_path: Optional[Path],
+    stage12_lr_scheduler: Optional[str],
+    stage12_compilation: bool,
     input_file_packed: bool,
     input_dataset_id: Optional[str],
     input_table_name: Optional[str],
-    input_format: str,
     input_batch_size: int,
     input_max_cached_bytes: int,
+    input_cache_mode: str,
     input_clustering_key: Optional[str],
     input_partitioning_key_date: Optional[str],
     input_local_cache: bool,
@@ -680,17 +945,44 @@ def benchmark_training(
     input_data_name: Optional[str],
     input_max_workers: int,
     gpu: Optional[str],
+    model_architecture: utility_interface.BackboneArchitecture,
+    vit_embed_dim: Optional[int],
+    vit_num_layers: Optional[int],
+    vit_num_heads: Optional[int],
+    vit_mlp_ratio: Optional[float],
+    vit_dropout: Optional[float],
+    gradient_checkpointing: bool,
     compilation: bool,
+    detect_anomaly: bool,
     test_ratio: float,
     batch_size: int,
     dataloader_workers: int,
     pin_memory: Optional[bool],
     prefetch_factor: int,
+    cache_transforms: Optional[bool],
     gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
     learning_ratio: float,
     momentum: float,
+    lr_scheduler: str,
+    optimizer: str,
+    optimizer_beta1: float,
+    optimizer_beta2: float,
+    optimizer_eps: float,
+    stage1_pos_weight: float,
+    stage2_pos_weight: float,
+    stage2_gamma_pos: float,
+    stage2_gamma_neg: float,
+    stage2_clip: float,
+    stage2_hidden_dim: Optional[int],
+    stage2_head_dropout: float,
+    stage2_test_ratio: float,
+    freeze_backbone: bool,
+    trainable_layers: Optional[int],
+    stage1_batch_size: Optional[int],
+    stage2_batch_size: Optional[int],
+    no_streaming: bool,
     warmup_batches: int,
     max_batches: int,
     enable_profiling: Optional[bool],
@@ -699,17 +991,27 @@ def benchmark_training(
     enable_resource_monitoring: Optional[bool],
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
-    # Validate input_format early
-    if input_format not in ("hcpe", "preprocess"):
-        raise ValueError(
-            "Please specify a valid input_format ('hcpe' or 'preprocess')."
+    if stage == 1 and stage1_data_path is None:
+        raise click.UsageError(
+            "--stage1-data-path is required when --stage=1"
         )
-    # Convert input_format to array_type for data sources
-    array_type = (
-        "preprocessing"
-        if input_format == "preprocess"
-        else "hcpe"
-    )
+    if stage == 2 and stage2_data_path is None:
+        raise click.UsageError(
+            "--stage2-data-path is required when --stage=2"
+        )
+
+    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
+    if input_cache_mode.lower() == "mmap":
+        import warnings
+
+        warnings.warn(
+            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        input_cache_mode = "file"
+
+    array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -731,23 +1033,108 @@ def benchmark_training(
         raise ValueError(error_msg)
 
     # Initialize datasource (similar to learn_model command)
-    if input_dir is not None:
+    streaming = False
+    streaming_train_source = None
+    streaming_val_source = None
+
+    stage1_datasource = None
+    if stage1_data_path is not None:
+        stage1_file_paths = FileSystem.collect_files(
+            stage1_data_path
+        )
+        stage1_datasource = (
+            FileDataSource.FileDataSourceSpliter(
+                file_paths=stage1_file_paths,
+                array_type="stage1",
+                bit_pack=False,
+                cache_mode="file",
+            )
+        )
+
+    stage2_datasource = None
+    stage2_streaming_train_source = None
+    stage2_streaming_val_source = None
+    if stage2_data_path is not None:
+        stage2_file_paths = FileSystem.collect_files(
+            stage2_data_path
+        )
+        if not no_streaming and len(stage2_file_paths) >= 2:
+            import random
+
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
+            )
+
+            rng = random.Random(42)
+            shuffled = list(stage2_file_paths)
+            rng.shuffle(shuffled)
+            effective_ratio = stage2_test_ratio or 0.2
+            n_val = max(1, int(len(shuffled) * effective_ratio))
+            n_train = len(shuffled) - n_val
+            if n_train < 1:
+                n_train = 1
+                n_val = len(shuffled) - 1
+
+            stage2_streaming_train_source = StreamingFileSource(
+                file_paths=shuffled[:n_train],
+                array_type="stage2",
+            )
+            stage2_streaming_val_source = StreamingFileSource(
+                file_paths=shuffled[n_train:],
+                array_type="stage2",
+            )
+            streaming = True
+        else:
+            stage2_datasource = (
+                FileDataSource.FileDataSourceSpliter(
+                    file_paths=stage2_file_paths,
+                    array_type="stage2",
+                    bit_pack=False,
+                    cache_mode="file",
+                )
+            )
+
+    if stage3_data_path is not None:
         if sample_ratio is not None:
             app_logger.warning(
                 "sample_ratio is ignored for local file data source."
             )
-        if (
-            input_format != "hcpe"
-            and input_format != "preprocess"
-        ):
-            raise Exception(
-                "Please specify a valid input_format ('hcpe' or 'preprocess')."
+        file_paths = FileSystem.collect_files(stage3_data_path)
+
+        if not no_streaming and len(file_paths) >= 2:
+            import random
+
+            from maou.infra.file_system.streaming_file_source import (
+                StreamingFileSource,
             )
-        datasource = FileDataSource.FileDataSourceSpliter(
-            file_paths=FileSystem.collect_files(input_dir),
-            array_type=array_type,
-            bit_pack=input_file_packed,
-        )
+
+            rng = random.Random(42)
+            shuffled = list(file_paths)
+            rng.shuffle(shuffled)
+            effective_ratio = test_ratio or 0.2
+            n_val = max(1, int(len(shuffled) * effective_ratio))
+            n_train = len(shuffled) - n_val
+            if n_train < 1:
+                n_train = 1
+                n_val = len(shuffled) - 1
+
+            streaming_train_source = StreamingFileSource(
+                file_paths=shuffled[:n_train],
+                array_type=array_type,
+            )
+            streaming_val_source = StreamingFileSource(
+                file_paths=shuffled[n_train:],
+                array_type=array_type,
+            )
+            streaming = True
+            datasource = None
+        else:
+            datasource = FileDataSource.FileDataSourceSpliter(
+                file_paths=file_paths,
+                array_type=array_type,
+                bit_pack=input_file_packed,
+                cache_mode=input_cache_mode,
+            )
     elif (
         input_dataset_id is not None
         and input_table_name is not None
@@ -789,7 +1176,7 @@ def benchmark_training(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -831,7 +1218,7 @@ def benchmark_training(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -873,38 +1260,95 @@ def benchmark_training(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
+    elif (
+        stage1_data_path is not None
+        or stage2_data_path is not None
+    ):
+        # Stage 1/2 only benchmark: stage-specific datasources are already
+        # initialized above, so the main datasource is not needed.
+        datasource = None
     else:
         raise Exception(
             "Please specify an input directory, a BigQuery table, "
             "a GCS bucket, or an S3 bucket."
         )
 
+    # Build architecture_config from ViT-specific options
+    architecture_key = model_architecture.lower()
+    architecture_config: dict[str, Any] | None = None
+    if architecture_key == "vit":
+        vit_overrides: dict[str, Any] = {}
+        if vit_embed_dim is not None:
+            vit_overrides["embed_dim"] = vit_embed_dim
+        if vit_num_layers is not None:
+            vit_overrides["num_layers"] = vit_num_layers
+        if vit_num_heads is not None:
+            vit_overrides["num_heads"] = vit_num_heads
+        if vit_mlp_ratio is not None:
+            vit_overrides["mlp_ratio"] = vit_mlp_ratio
+        if vit_dropout is not None:
+            vit_overrides["dropout"] = vit_dropout
+        if gradient_checkpointing:
+            vit_overrides["gradient_checkpointing"] = True
+        if vit_overrides:
+            architecture_config = vit_overrides
+
     # Run benchmark
     result_json = utility_interface.benchmark_training(
         datasource=datasource,
-        datasource_type=input_format,
         gpu=gpu,
         compilation=compilation,
+        detect_anomaly=detect_anomaly,
         test_ratio=test_ratio,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        cache_transforms=cache_transforms,
+        model_architecture=model_architecture,
+        architecture_config=architecture_config,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
         momentum=momentum,
+        lr_scheduler=lr_scheduler,
+        optimizer_name=optimizer,
+        optimizer_beta1=optimizer_beta1,
+        optimizer_beta2=optimizer_beta2,
+        optimizer_eps=optimizer_eps,
+        stage1_pos_weight=stage1_pos_weight,
+        stage2_pos_weight=stage2_pos_weight,
+        stage2_gamma_pos=stage2_gamma_pos,
+        stage2_gamma_neg=stage2_gamma_neg,
+        stage2_clip=stage2_clip,
+        stage2_hidden_dim=stage2_hidden_dim,
+        stage2_head_dropout=stage2_head_dropout,
+        stage2_test_ratio=stage2_test_ratio,
+        freeze_backbone=freeze_backbone,
+        trainable_layers=trainable_layers,
+        stage1_batch_size=stage1_batch_size,
+        stage2_batch_size=stage2_batch_size,
         warmup_batches=warmup_batches,
         max_batches=max_batches,
         enable_profiling=enable_profiling,
         run_validation=run_validation,
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
+        stage=stage,
+        stage1_datasource=stage1_datasource,
+        stage2_datasource=stage2_datasource,
+        stage2_streaming_train_source=stage2_streaming_train_source,
+        stage2_streaming_val_source=stage2_streaming_val_source,
+        stage12_lr_scheduler=stage12_lr_scheduler,
+        stage12_compilation=stage12_compilation,
+        streaming=streaming,
+        streaming_train_source=streaming_train_source,
+        streaming_val_source=streaming_val_source,
     )
 
     # Parse and display results
@@ -917,6 +1361,13 @@ def benchmark_training(
         click.echo()
         click.echo(
             result["benchmark_results"]["ValidationSummary"]
+        )
+
+    if "validation_skipped" in result["benchmark_results"]:
+        click.echo()
+        click.echo(
+            f"Validation: skipped - "
+            f"{result['benchmark_results']['validation_skipped']}"
         )
 
     # Display estimation results if sample_ratio was used
@@ -942,6 +1393,180 @@ def benchmark_training(
     click.echo(result["benchmark_results"]["Recommendations"])
 
 
+@click.command("generate-stage1-data")
+@click.option(
+    "--output-dir",
+    help="Output directory for Stage 1 training data.",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@handle_exception
+def generate_stage1_data(output_dir: Path) -> None:
+    """Generate Stage 1 training data for learning piece movement rules.
+
+    Creates minimal board positions with single pieces to learn basic movement:
+
+    \b
+    - Board patterns: 1 piece on board (normal or promoted)
+    - Hand patterns: 1 piece in hand (normal pieces only)
+
+    \b
+    Total patterns: ~1,105
+    Output format: Arrow IPC (.feather) with LZ4 compression
+
+    \b
+    Example:
+        maou utility generate-stage1-data --output-dir ./stage1_data/
+    """
+    app_logger.info("Generating Stage 1 training data...")
+
+    result_json = utility_interface.generate_stage1_data(
+        output_dir=output_dir
+    )
+    result = json.loads(result_json)
+
+    click.echo(
+        f"✓ Generated {result['total_patterns']} patterns"
+    )
+    click.echo(f"✓ Saved to: {result['output_file']}")
+    click.echo()
+    click.echo("Stage 1 data generation complete!")
+
+
+@click.command("generate-stage2-data")
+@click.option(
+    "--input-path",
+    help="Input directory containing HCPE feather files.",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+@click.option(
+    "--output-dir",
+    help="Directory for output files.",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@click.option(
+    "--output-gcs",
+    type=bool,
+    is_flag=True,
+    help="Output features to Google Cloud Storage.",
+    required=False,
+)
+@click.option(
+    "--output-bucket-name",
+    help="GCS bucket name for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-prefix",
+    help="GCS prefix path for output.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--output-data-name",
+    help="Name to identify the data in GCS for output.",
+    type=str,
+    default="stage2",
+    required=False,
+)
+@click.option(
+    "--chunk-size",
+    help="Positions per output chunk (default: 100000).",
+    type=int,
+    default=100_000,
+    required=False,
+)
+@click.option(
+    "--intermediate-cache-dir",
+    help="Directory for intermediate data cache (default: temporary directory).",
+    type=click.Path(path_type=Path),
+    required=False,
+)
+@handle_exception
+def generate_stage2_data(
+    input_path: Path,
+    output_dir: Path,
+    output_gcs: bool,
+    output_bucket_name: Optional[str],
+    output_prefix: Optional[str],
+    output_data_name: str,
+    chunk_size: int,
+    intermediate_cache_dir: Optional[Path],
+) -> None:
+    """Generate Stage 2 training data for legal moves prediction.
+
+    \b
+    Creates training data for the legal moves prediction head from HCPE data:
+
+    \b
+    Phase 1: Collect unique positions (deduplication via board hash)
+    Phase 2: Generate legal move labels for each unique position
+
+    \b
+    Output format: Arrow IPC (.feather) with LZ4 compression
+
+    \b
+    Example:
+        maou utility generate-stage2-data --input-path ./converted_hcpe/ --output-dir ./stage2_data/
+    """
+    import json
+
+    app_logger.info("Generating Stage 2 training data...")
+
+    result_json = utility_interface.generate_stage2_data(
+        input_dir=input_path,
+        output_dir=output_dir,
+        output_data_name=output_data_name,
+        chunk_size=chunk_size,
+        cache_dir=intermediate_cache_dir,
+    )
+    result = json.loads(result_json)
+
+    click.echo(
+        f"✓ Input: {result['total_input_positions']} positions"
+    )
+    click.echo(
+        f"✓ Unique: {result['total_unique_positions']} positions"
+    )
+    click.echo(f"✓ Output: {len(result['output_files'])} files")
+    for f in result["output_files"]:
+        click.echo(f"  - {f}")
+
+    # GCS upload if requested
+    if (
+        output_gcs
+        and output_bucket_name is not None
+        and output_prefix is not None
+    ):
+        if HAS_GCS:
+            try:
+                from maou.infra.gcs.gcs import GCS
+
+                gcs = GCS(bucket_name=output_bucket_name)
+                for file_path_str in result["output_files"]:
+                    file_path = Path(file_path_str)
+                    gcs_path = (
+                        f"{output_prefix}{file_path.name}"
+                    )
+                    gcs.upload(
+                        local_path=file_path,
+                        remote_path=gcs_path,
+                    )
+                    click.echo(f"✓ Uploaded to GCS: {gcs_path}")
+            except Exception as e:
+                app_logger.error(f"GCS upload failed: {e}")
+        else:
+            app_logger.warning(
+                "GCS support not available. Install google-cloud-storage."
+            )
+
+    click.echo()
+    click.echo("Stage 2 data generation complete!")
+
+
 @click.group()
 def utility() -> None:
     """Utility commands for ML development experiments."""
@@ -950,3 +1575,12 @@ def utility() -> None:
 
 utility.add_command(benchmark_dataloader)
 utility.add_command(benchmark_training)
+utility.add_command(generate_stage1_data)
+utility.add_command(generate_stage2_data)
+
+# screenshot command (defined in screenshot.py, moved under utility group)
+from maou.infra.console.screenshot import (  # noqa: E402
+    screenshot,
+)
+
+utility.add_command(screenshot)

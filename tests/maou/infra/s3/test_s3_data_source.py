@@ -7,10 +7,14 @@ from pathlib import Path
 
 import google_crc32c
 import numpy as np
+import polars as pl
 import pytest
 from botocore.exceptions import ClientError
 
-from maou.domain.data.schema import create_empty_hcpe_array
+from maou.domain.data.schema import (
+    create_empty_hcpe_array,
+    get_hcpe_polars_schema,
+)
 from maou.infra.s3.s3_data_source import S3DataSource
 from maou.infra.s3.s3_feature_store import S3FeatureStore
 
@@ -72,6 +76,34 @@ class TestS3DataSource:
             )
 
         return data
+
+    def __numpy_to_dataframe(
+        self, array: np.ndarray
+    ) -> pl.DataFrame:
+        """numpy構造化配列をPolars DataFrameに変換する"""
+        schema = get_hcpe_polars_schema()
+        data_dict = {}
+        assert array.dtype.names is not None
+        assert array.dtype.fields is not None
+        for field in array.dtype.names:
+            field_data = array[field]
+            field_dtype = array.dtype.fields[field][0]
+
+            # Handle binary fields (convert uint8 arrays to bytes)
+            if field == "hcp" or (
+                field_dtype.shape
+                and field_dtype.base == np.dtype("uint8")
+            ):
+                data_dict[field] = [
+                    bytes(row)
+                    if hasattr(row, "__iter__")
+                    else bytes([row])
+                    for row in field_data
+                ]
+            else:
+                data_dict[field] = field_data.tolist()
+
+        return pl.DataFrame(data_dict, schema=schema)
 
     @pytest.fixture
     def temp_cache_dir(self, tmp_path: Path) -> Path:
@@ -148,10 +180,11 @@ class TestS3DataSource:
         ]
         with feature_store.feature_store():
             for i, structured_array in enumerate(data):
+                df = self.__numpy_to_dataframe(structured_array)
                 feature_store.store_features(
                     name=f"test-data-{i}",
                     key_columns=["id"],
-                    structured_array=structured_array,
+                    dataframe=df,
                 )
         data_source = S3DataSource(
             bucket_name=self.bucket,
@@ -209,10 +242,11 @@ class TestS3DataSource:
         with feature_store.feature_store():
             for i, structured_array in enumerate(data):
                 # clustering_keyを指定する
+                df = self.__numpy_to_dataframe(structured_array)
                 feature_store.store_features(
                     name=f"test-data-{i}",
                     key_columns=["id"],
-                    structured_array=structured_array,
+                    dataframe=df,
                     clustering_key="partitioningKey",
                 )
         data_source = S3DataSource(
@@ -269,10 +303,11 @@ class TestS3DataSource:
         with feature_store.feature_store():
             for i, structured_array in enumerate(data):
                 # partitioning_key_dateを指定する
+                df = self.__numpy_to_dataframe(structured_array)
                 feature_store.store_features(
                     name=f"test-data-{i}",
                     key_columns=["id"],
-                    structured_array=structured_array,
+                    dataframe=df,
                     partitioning_key_date="partitioningKey",
                 )
         data_source = S3DataSource(
@@ -329,10 +364,11 @@ class TestS3DataSource:
         with feature_store.feature_store():
             for i, structured_array in enumerate(data):
                 # partitioning_key_dateを指定する
+                df = self.__numpy_to_dataframe(structured_array)
                 feature_store.store_features(
                     name=f"test-data-{i}",
                     key_columns=["id"],
-                    structured_array=structured_array,
+                    dataframe=df,
                     partitioning_key_date="partitioningKey",
                 )
         spliter = S3DataSource.DataSourceSpliter(
@@ -392,10 +428,11 @@ class TestS3DataSource:
         with feature_store.feature_store():
             for i, structured_array in enumerate(data):
                 # partitioning_key_dateを指定する
+                df = self.__numpy_to_dataframe(structured_array)
                 feature_store.store_features(
                     name=f"test-data-{i}",
                     key_columns=["id"],
-                    structured_array=structured_array,
+                    dataframe=df,
                     partitioning_key_date="partitioningKey",
                 )
         data_source = S3DataSource(

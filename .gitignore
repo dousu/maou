@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Rust build artifacts
+target/
+*.pyd
+*.dylib
+
 # Distribution / packaging
 .Python
 build/
@@ -140,3 +145,11 @@ checkpoints/
 **/.claude/settings.local.json
 
 settings.json
+# Allow .claude/settings.json to be committed (plugin configuration)
+!.claude/settings.json
+test_*.html
+stage1_data/
+
+スクリーンショット*
+.claude/settings.local.json
+docs/plans/

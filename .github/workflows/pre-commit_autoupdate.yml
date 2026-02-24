@@ -12,16 +12,15 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install poetry
-        run: pipx install poetry
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: 'poetry'
       - name: Install dependencies
-        run: |
-          poetry env use '3.12'
-          poetry install
+        run: uv sync --group dev
       - name: Auto-update pre-commit & git diff
         id: git
         continue-on-error: true
@@ -34,7 +33,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${branch_name}
-          poetry run pre-commit autoupdate
+          uv run pre-commit autoupdate
           git add -N .
           git diff --name-only --exit-code
       - name: Create PR

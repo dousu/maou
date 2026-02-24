@@ -1,11 +1,12 @@
 from pathlib import Path
+from typing import Optional
 
 import click
 
+import maou.interface.infer as infer
 from maou.infra.console.common import (
     handle_exception,
 )
-from maou.interface import infer
 
 
 @click.command("evaluate")
@@ -18,9 +19,11 @@ from maou.interface import infer
 )
 @click.option(
     "--model-path",
-    help="ONNX Model file path.",
+    help="ONNX Model file path. "
+    "Required when --engine-path is not specified.",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
+    default=None,
+    required=False,
 )
 @click.option(
     "--cuda/--no-cuda",
@@ -43,13 +46,36 @@ from maou.interface import infer
     type=str,
     required=True,
 )
+@click.option(
+    "--trt-workspace-size",
+    help="TensorRT workspace size in MB. "
+    "Default is sufficient for this project's models. "
+    "Increase for larger models or max speed. "
+    "Decrease if GPU memory is limited.",
+    type=int,
+    default=256,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--engine-path",
+    help="Pre-built TensorRT engine file path. "
+    "When specified, the engine is loaded from this file "
+    "and ONNX-to-TensorRT build is skipped. "
+    "Build an engine first with `maou build-engine`.",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+)
 @handle_exception
 def evaluate_board(
     model_type: str,
-    model_path: Path,
+    model_path: Optional[Path],
     cuda: bool,
     num_moves: int,
     sfen: str,
+    trt_workspace_size: int,
+    engine_path: Optional[Path],
 ) -> None:
     """Evaluate a Shogi board position using a specified model.
 
@@ -62,7 +88,13 @@ def evaluate_board(
         model_path: Path to the model file.
         num_moves: Number of top moves to return.
         sfen: SFEN string representing the board position.
+        trt_workspace_size: TensorRT workspace size in MB.
+        engine_path: Pre-built TensorRT engine file path.
     """
+    if engine_path is None and model_path is None:
+        raise click.UsageError(
+            "--model-path or --engine-path is required."
+        )
     click.echo(
         infer.infer(
             model_type=model_type,
@@ -70,5 +102,7 @@ def evaluate_board(
             num_moves=num_moves,
             cuda=cuda,
             sfen=sfen,
+            trt_workspace_size=trt_workspace_size,
+            engine_path=engine_path,
         )
     )

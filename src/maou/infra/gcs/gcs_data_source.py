@@ -23,7 +23,7 @@ class GCSDataSource(ObjectStorageDataSource):
             return [
                 (blob.name, blob.size)
                 for blob in blobs
-                if blob.name.endswith(".npy")
+                if blob.name.endswith(".feather")
             ]
 
         @staticmethod

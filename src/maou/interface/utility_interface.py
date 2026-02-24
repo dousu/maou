@@ -1,17 +1,25 @@
 import json
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import torch
 
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.streaming_dataset import (
+    StreamingDataSource,
+)
 from maou.app.utility.dataloader_benchmark import (
     BenchmarkConfig,
     DataLoaderBenchmark,
 )
 from maou.app.utility.training_benchmark import (
+    BackboneArchitecture,
     TrainingBenchmarkConfig,
     TrainingBenchmarkUseCase,
+)
+from maou.interface.learn import (
+    normalize_lr_scheduler_name,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -19,7 +27,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 def benchmark_dataloader(
     datasource: LearningDataSource.DataSourceSpliter,
-    datasource_type: str,
     *,
     gpu: Optional[str] = None,
     batch_size: Optional[int] = None,
@@ -31,7 +38,6 @@ def benchmark_dataloader(
 
     Args:
         datasource: Training data source splitter
-        datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         batch_size: Batch size for benchmarking
         pin_memory: Enable pinned memory for GPU transfers
@@ -41,11 +47,6 @@ def benchmark_dataloader(
     Returns:
         JSON string with benchmark results and recommendations
     """
-    # Validate datasource type
-    if datasource_type not in ("hcpe", "preprocess"):
-        raise ValueError(
-            f"Data source type `{datasource_type}` is invalid."
-        )
 
     # Set device
     if gpu is not None and gpu != "cpu":
@@ -101,7 +102,6 @@ def benchmark_dataloader(
     # Create benchmark configuration
     config = BenchmarkConfig(
         datasource=training_datasource,
-        datasource_type=datasource_type,
         batch_size=batch_size,
         device=device,
         pin_memory=pin_memory,
@@ -147,82 +147,256 @@ def benchmark_dataloader(
 
 
 def benchmark_training(
-    datasource: LearningDataSource.DataSourceSpliter,
-    datasource_type: str,
+    datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
     *,
     gpu: Optional[str] = None,
     compilation: bool = False,
+    detect_anomaly: bool = False,
     test_ratio: Optional[float] = None,
     batch_size: Optional[int] = None,
     dataloader_workers: Optional[int] = None,
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
+    cache_transforms: Optional[bool] = None,
+    model_architecture: Optional[BackboneArchitecture] = None,
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
+    lr_scheduler: Optional[str] = None,
+    optimizer_name: Optional[str] = None,
+    optimizer_beta1: Optional[float] = None,
+    optimizer_beta2: Optional[float] = None,
+    optimizer_eps: Optional[float] = None,
+    stage1_pos_weight: Optional[float] = None,
+    stage2_pos_weight: Optional[float] = None,
+    stage2_gamma_pos: Optional[float] = None,
+    stage2_gamma_neg: Optional[float] = None,
+    stage2_clip: Optional[float] = None,
+    stage2_hidden_dim: Optional[int] = None,
+    stage2_head_dropout: Optional[float] = None,
+    stage2_test_ratio: Optional[float] = None,
     warmup_batches: Optional[int] = None,
     max_batches: Optional[int] = None,
     enable_profiling: Optional[bool] = None,
     run_validation: Optional[bool] = None,
     sample_ratio: Optional[float] = None,
     enable_resource_monitoring: Optional[bool] = None,
+    streaming: bool = False,
+    streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    streaming_val_source: Optional[StreamingDataSource] = None,
+    stage: int = 3,
+    stage1_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage2_datasource: Optional[
+        LearningDataSource.DataSourceSpliter
+    ] = None,
+    stage2_streaming_train_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage2_streaming_val_source: Optional[
+        StreamingDataSource
+    ] = None,
+    stage12_lr_scheduler: Optional[str] = None,
+    stage12_compilation: bool = False,
+    architecture_config: dict[str, Any] | None = None,
+    freeze_backbone: bool = False,
+    trainable_layers: Optional[int] = None,
+    stage1_batch_size: Optional[int] = None,
+    stage2_batch_size: Optional[int] = None,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
 
     Args:
         datasource: Training data source splitter
-        datasource_type: Type of data source ('hcpe' or 'preprocess')
         gpu: GPU device to use for benchmarking
         compilation: Whether to compile the model
+        detect_anomaly: Enable torch.autograd anomaly detection
         test_ratio: Test set ratio for validation benchmark
         batch_size: Training batch size
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
+        cache_transforms: Enable in-memory caching of dataset transforms
+        model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
         momentum: Optimizer momentum
+        lr_scheduler: Learning rate scheduler to apply
+        optimizer_name: Optimizer selection ('adamw' or 'sgd')
+        optimizer_beta1: AdamW beta1 parameter
+        optimizer_beta2: AdamW beta2 parameter
+        optimizer_eps: AdamW epsilon parameter
         warmup_batches: Number of warmup batches to exclude from timing
         max_batches: Maximum number of batches to process
         enable_profiling: Enable PyTorch profiler for detailed analysis
         run_validation: Also run validation benchmark (inference only)
         sample_ratio: Ratio of data to sample for cloud sources (0.01-1.0)
         enable_resource_monitoring: Enable CPU, memory, and GPU usage monitoring
+        streaming: Whether to use streaming mode for data loading
+        streaming_train_source: Streaming data source for training
+        streaming_val_source: Streaming data source for validation
+        architecture_config: ViT architecture overrides (e.g. embed_dim, num_layers)
+        freeze_backbone: Freeze backbone parameters
+        trainable_layers: Number of trailing backbone groups to keep trainable
+        stage1_batch_size: Batch size override for Stage 1
+        stage2_batch_size: Batch size override for Stage 2
 
     Returns:
         JSON string with benchmark results and recommendations
     """
-    # Create configuration with defaults
-    config = TrainingBenchmarkConfig(
-        datasource=datasource,
-        datasource_type=datasource_type,
-        gpu=gpu,
-        compilation=compilation,
-        test_ratio=test_ratio or 0.2,
-        batch_size=batch_size or 1000,
-        dataloader_workers=dataloader_workers or 0,
-        pin_memory=pin_memory,
-        prefetch_factor=prefetch_factor or 2,
-        gce_parameter=gce_parameter or 0.7,
-        policy_loss_ratio=policy_loss_ratio or 1.0,
-        value_loss_ratio=value_loss_ratio or 1.0,
-        learning_ratio=learning_ratio or 0.01,
-        momentum=momentum or 0.9,
-        warmup_batches=warmup_batches or 5,
-        max_batches=max_batches or 100,
-        enable_profiling=enable_profiling or False,
-        run_validation=run_validation or False,
-        sample_ratio=sample_ratio,
-        enable_resource_monitoring=enable_resource_monitoring
-        or False,
-    )
 
-    # Validate sample_ratio
+    if test_ratio is None:
+        test_ratio = 0.2
+    elif not 0.0 < test_ratio < 1.0:
+        raise ValueError(
+            f"test_ratio must be between 0 and 1, got {test_ratio}"
+        )
+
+    if batch_size is None:
+        batch_size = 1000
+    elif batch_size <= 0:
+        raise ValueError(
+            f"batch_size must be positive, got {batch_size}"
+        )
+
+    if dataloader_workers is None:
+        dataloader_workers = 0
+    elif dataloader_workers < 0:
+        raise ValueError(
+            "dataloader_workers must be non-negative, "
+            f"got {dataloader_workers}"
+        )
+
+    if pin_memory is None:
+        pin_memory = False
+
+    if prefetch_factor is None:
+        prefetch_factor = 2
+    elif prefetch_factor <= 0:
+        raise ValueError(
+            f"prefetch_factor must be positive, got {prefetch_factor}"
+        )
+
+    if cache_transforms is None:
+        cache_transforms_enabled = False
+    else:
+        cache_transforms_enabled = cache_transforms
+
+    if model_architecture is None:
+        model_architecture = "resnet"
+
+    if gce_parameter is None:
+        gce_parameter = 0.7
+    elif not 0.0 < gce_parameter <= 1.0:
+        raise ValueError(
+            f"gce_parameter must be between 0 and 1, got {gce_parameter}"
+        )
+
+    if policy_loss_ratio is None:
+        policy_loss_ratio = 1.0
+    elif policy_loss_ratio <= 0:
+        raise ValueError(
+            "policy_loss_ratio must be positive, "
+            f"got {policy_loss_ratio}"
+        )
+
+    if value_loss_ratio is None:
+        value_loss_ratio = 1.0
+    elif value_loss_ratio <= 0:
+        raise ValueError(
+            "value_loss_ratio must be positive, "
+            f"got {value_loss_ratio}"
+        )
+
+    if learning_ratio is None:
+        learning_ratio = 0.01
+    elif learning_ratio <= 0:
+        raise ValueError(
+            f"learning_ratio must be positive, got {learning_ratio}"
+        )
+
+    if momentum is None:
+        momentum = 0.9
+    elif not 0.0 <= momentum <= 1.0:
+        raise ValueError(
+            f"momentum must be between 0 and 1, got {momentum}"
+        )
+
+    lr_scheduler_key = normalize_lr_scheduler_name(lr_scheduler)
+    if lr_scheduler_key is None:
+        lr_scheduler_key = "warmup_cosine_decay"
+
+    if optimizer_name is None:
+        optimizer_name = "adamw"
+    optimizer_key = optimizer_name.lower()
+    if optimizer_key not in {"adamw", "sgd"}:
+        raise ValueError(
+            "optimizer_name must be 'adamw' or 'sgd', "
+            f"got {optimizer_name}"
+        )
+
+    if optimizer_beta1 is None:
+        optimizer_beta1 = 0.9
+    elif not 0.0 < optimizer_beta1 < 1.0:
+        raise ValueError(
+            "optimizer_beta1 must be between 0 and 1, "
+            f"got {optimizer_beta1}"
+        )
+
+    if optimizer_beta2 is None:
+        optimizer_beta2 = 0.999
+    elif not 0.0 < optimizer_beta2 < 1.0:
+        raise ValueError(
+            "optimizer_beta2 must be between 0 and 1, "
+            f"got {optimizer_beta2}"
+        )
+
+    if optimizer_beta2 <= optimizer_beta1:
+        raise ValueError(
+            "optimizer_beta2 must be greater than optimizer_beta1 "
+            f"(got {optimizer_beta1} and {optimizer_beta2})"
+        )
+
+    if optimizer_eps is None:
+        optimizer_eps = 1e-8
+    elif optimizer_eps <= 0:
+        raise ValueError(
+            f"optimizer_eps must be positive, got {optimizer_eps}"
+        )
+
+    if warmup_batches is None:
+        warmup_batches = 10
+    elif warmup_batches < 0:
+        raise ValueError(
+            f"warmup_batches must be non-negative, got {warmup_batches}"
+        )
+
+    if max_batches is None:
+        max_batches = 100
+    elif max_batches <= 0:
+        raise ValueError(
+            f"max_batches must be positive, got {max_batches}"
+        )
+
+    if enable_profiling is None:
+        enable_profiling = False
+
+    if run_validation is None:
+        run_validation = False
+
+    if enable_resource_monitoring is None:
+        enable_resource_monitoring = False
+
     if (
         sample_ratio is not None
         and not 0.01 <= sample_ratio <= 1.0
@@ -231,6 +405,170 @@ def benchmark_training(
             f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
         )
 
-    # Execute use case
+    # trainable_layers validation
+    if trainable_layers is not None and trainable_layers < 0:
+        raise ValueError(
+            f"trainable_layers must be non-negative, got {trainable_layers}"
+        )
+
+    # stage batch size validation
+    if stage1_batch_size is not None and stage1_batch_size <= 0:
+        raise ValueError(
+            f"stage1_batch_size must be positive, got {stage1_batch_size}"
+        )
+    if stage2_batch_size is not None and stage2_batch_size <= 0:
+        raise ValueError(
+            f"stage2_batch_size must be positive, got {stage2_batch_size}"
+        )
+
+    # Stage 1/2 LR scheduler 正規化
+    stage12_lr_scheduler_key = normalize_lr_scheduler_name(
+        stage12_lr_scheduler
+    )
+
+    # Validate stage and datasource requirements
+    if stage not in (1, 2, 3):
+        raise ValueError(
+            f"stage must be 1, 2, or 3, got {stage}"
+        )
+    if stage == 1 and stage1_datasource is None:
+        raise ValueError(
+            "stage1_datasource is required when stage=1"
+        )
+    if stage == 2:
+        if not streaming and stage2_datasource is None:
+            raise ValueError(
+                "stage2_datasource is required "
+                "when stage=2 and streaming is disabled"
+            )
+        if streaming and stage2_streaming_train_source is None:
+            raise ValueError(
+                "stage2_streaming_train_source is required "
+                "when stage=2 and streaming is enabled"
+            )
+    if stage == 3:
+        if not streaming and datasource is None:
+            raise ValueError(
+                "datasource is required "
+                "when stage=3 and streaming is disabled"
+            )
+        if streaming and streaming_train_source is None:
+            raise ValueError(
+                "streaming_train_source is required "
+                "when stage=3 and streaming is enabled"
+            )
+
+    config = TrainingBenchmarkConfig(
+        datasource=datasource,
+        gpu=gpu,
+        compilation=compilation,
+        test_ratio=test_ratio,
+        batch_size=batch_size,
+        dataloader_workers=dataloader_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        cache_transforms=cache_transforms_enabled,
+        gce_parameter=gce_parameter,
+        policy_loss_ratio=policy_loss_ratio,
+        value_loss_ratio=value_loss_ratio,
+        learning_ratio=learning_ratio,
+        momentum=momentum,
+        lr_scheduler_name=lr_scheduler_key,
+        optimizer_name=optimizer_key,
+        optimizer_beta1=optimizer_beta1,
+        optimizer_beta2=optimizer_beta2,
+        optimizer_eps=optimizer_eps,
+        warmup_batches=warmup_batches,
+        max_batches=max_batches,
+        enable_profiling=enable_profiling,
+        run_validation=run_validation,
+        sample_ratio=sample_ratio,
+        enable_resource_monitoring=enable_resource_monitoring,
+        detect_anomaly=detect_anomaly,
+        model_architecture=model_architecture,
+        streaming=streaming,
+        streaming_train_source=streaming_train_source,
+        streaming_val_source=streaming_val_source,
+        stage=stage,
+        stage1_datasource=stage1_datasource,
+        stage2_datasource=stage2_datasource,
+        stage2_streaming_train_source=stage2_streaming_train_source,
+        stage2_streaming_val_source=stage2_streaming_val_source,
+        stage12_lr_scheduler_name=stage12_lr_scheduler_key,
+        stage12_compilation=stage12_compilation,
+        stage1_pos_weight=stage1_pos_weight or 1.0,
+        stage2_pos_weight=stage2_pos_weight or 1.0,
+        stage2_gamma_pos=stage2_gamma_pos or 0.0,
+        stage2_gamma_neg=stage2_gamma_neg or 0.0,
+        stage2_clip=stage2_clip or 0.0,
+        stage2_hidden_dim=stage2_hidden_dim or 128,
+        stage2_head_dropout=stage2_head_dropout or 0.0,
+        stage2_test_ratio=stage2_test_ratio or 0.2,
+        architecture_config=architecture_config,
+        freeze_backbone=freeze_backbone,
+        trainable_layers=trainable_layers,
+        stage1_batch_size=stage1_batch_size,
+        stage2_batch_size=stage2_batch_size,
+    )
+
     use_case = TrainingBenchmarkUseCase()
     return use_case.execute(config)
+
+
+def generate_stage1_data(output_dir: Path) -> str:
+    """Generate Stage 1 training data for piece movement learning.
+
+    Args:
+        output_dir: Output directory for generated data
+
+    Returns:
+        JSON string with generation results
+    """
+    from maou.app.utility.stage1_data_generation import (
+        Stage1DataGenerationConfig,
+        Stage1DataGenerationUseCase,
+    )
+
+    config = Stage1DataGenerationConfig(output_dir=output_dir)
+    use_case = Stage1DataGenerationUseCase()
+    result = use_case.execute(config)
+
+    return json.dumps(result, indent=2)
+
+
+def generate_stage2_data(
+    *,
+    input_dir: Path,
+    output_dir: Path,
+    output_data_name: str = "stage2",
+    chunk_size: int = 100_000,
+    cache_dir: Optional[Path] = None,
+) -> str:
+    """Generate Stage 2 training data for legal moves prediction.
+
+    Args:
+        input_dir: HCPE featherファイルのディレクトリ
+        output_dir: 出力先ディレクトリ
+        output_data_name: 出力ファイル名ベース
+        chunk_size: チャンクサイズ(局面数)
+        cache_dir: 中間データキャッシュディレクトリ
+
+    Returns:
+        JSON string with generation results
+    """
+    from maou.app.utility.stage2_data_generation import (
+        Stage2DataGenerationConfig,
+        Stage2DataGenerationUseCase,
+    )
+
+    config = Stage2DataGenerationConfig(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        output_data_name=output_data_name,
+        chunk_size=chunk_size,
+        cache_dir=cache_dir,
+    )
+    use_case = Stage2DataGenerationUseCase()
+    result = use_case.execute(config)
+
+    return json.dumps(result, indent=2)

@@ -1,262 +1,247 @@
-"""Tests for interface data I/O module."""
+"""Tests for interface data I/O module.
+
+Updated to use DataFrame-based methods with Polars.
+The interface now provides load_df_from_bytes/save_df_to_bytes for cloud storage integration.
+"""
 
 import tempfile
 from pathlib import Path
 
-import numpy as np
-import pytest
+import polars as pl
 
-from maou.domain.data.array_io import DataIOError
 from maou.domain.data.schema import (
-    create_empty_hcpe_array,
-    create_empty_preprocessing_array,
+    create_empty_hcpe_df,
+    create_empty_preprocessing_df,
 )
 from maou.interface.data_io import (
-    load_array,
-    save_array,
+    load_df_from_bytes,
+    save_df_to_bytes,
 )
 
 
 class TestInterfaceDataIO:
-    """Test interface layer data I/O functions."""
+    """Test interface layer DataFrame I/O functions."""
 
-    def test_load_array_basic(self) -> None:
-        """Test basic array loading functionality."""
-        hcpe_array = create_empty_hcpe_array(5)
-        hcpe_array["eval"] = [10, 20, 30, 40, 50]
-        hcpe_array["id"] = ["a", "b", "c", "d", "e"]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "interface_test.npy"
-
-            # Save using domain I/O
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
-            )
-
-            save_hcpe_array(hcpe_array, file_path)
-
-            # Check for the actual .npy file that was created
-            assert file_path.exists()
-
-            # Load using interface
-            loaded_array = load_array(
-                file_path, array_type="hcpe"
-            )
-
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
-
-    def test_load_array_with_mmap(self) -> None:
-        """Test loading array with memory mapping through interface."""
-        prep_array = create_empty_preprocessing_array(3)
-        prep_array["id"] = [100, 200, 300]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "mmap_test.npy"
-
-            from maou.domain.data.array_io import (
-                save_preprocessing_array,
-            )
-
-            save_preprocessing_array(
-                prep_array, file_path, bit_pack=False
-            )
-
-            # Check for the actual .npy file that was created
-            assert file_path.exists()
-
-            # Load with memory mapping
-            loaded_array = load_array(
-                file_path,
-                mmap_mode="r",
-                array_type="preprocessing",
-                bit_pack=False,
-            )
-
-            assert isinstance(loaded_array, np.memmap)
-            np.testing.assert_array_equal(
-                loaded_array, prep_array
-            )
-
-    def test_save_array_basic(self) -> None:
-        """Test basic array saving functionality."""
-        hcpe_array = create_empty_hcpe_array(2)
-        hcpe_array["eval"] = [500, -250]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "save_test.npy"
-
-            # Save using interface
-            save_array(hcpe_array, file_path, array_type="hcpe")
-
-            # Check for the actual .npy file that was created
-            assert file_path.exists()
-            loaded_array = load_array(
-                file_path, array_type="hcpe"
-            )
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
-
-    def test_save_array_compressed(self) -> None:
-        """Test saving compressed arrays through interface."""
-        prep_array = create_empty_preprocessing_array(4)
-        # moveLabel is a (MOVE_LABELS_NUM,) array, so we set one element per record
-        for i in range(4):
-            prep_array[i]["moveLabel"][0] = 0.1 * (i + 1)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "compressed_test.npz"
-
-            # Save compressed
-            save_array(
-                prep_array,
-                file_path,
-                bit_pack=True,
-                array_type="preprocessing",
-            )
-
-            # Load and verify
-            loaded_array = load_array(
-                file_path, array_type="preprocessing"
-            )
-            np.testing.assert_array_equal(
-                loaded_array, prep_array
-            )
-
-    def test_explicit_type_specification(self) -> None:
-        """Test explicit type specification through interface."""
-        # Test with HCPE array
-        hcpe_array = create_empty_hcpe_array(3)
-        hcpe_array["moves"] = [50, 75, 100]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            hcpe_file = (
-                Path(temp_dir) / "explicit_hcpe_game.npy"
-            )
-
-            from maou.domain.data.array_io import (
-                save_hcpe_array,
-            )
-
-            save_hcpe_array(hcpe_array, hcpe_file)
-
-            # Check for the actual .npy file that was created
-            assert hcpe_file.exists()
-
-            # Load with explicit type specification
-            loaded_array = load_array(
-                hcpe_file, array_type="hcpe"
-            )
-            np.testing.assert_array_equal(
-                loaded_array, hcpe_array
-            )
-
-    def test_error_handling(self) -> None:
-        """Test error handling in interface layer."""
-        with pytest.raises(DataIOError):
-            load_array(
-                "non_existent_file.npy", array_type="hcpe"
-            )
-
-
-class TestIntegrationWithInfrastructure:
-    """Test integration scenarios that infrastructure layer would use."""
-
-    def test_typical_data_source_usage(self) -> None:
-        """Test typical usage pattern from DataSource classes."""
-        # Create multiple files like DataSource would encounter
-        hcpe_arrays = [
-            create_empty_hcpe_array(2),
-            create_empty_hcpe_array(3),
-            create_empty_hcpe_array(1),
-        ]
-
-        for i, array in enumerate(hcpe_arrays):
-            array["eval"] = (
-                np.arange(len(array)) * (i + 1) * 100
-            )
-            array["id"] = [
-                f"file{i}_row{j}" for j in range(len(array))
+    def test_save_and_load_hcpe_bytes(self) -> None:
+        """Test saving and loading HCPE DataFrame to/from bytes."""
+        hcpe_df = create_empty_hcpe_df(5)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [10, 20, 30, 40, 50]),
+                pl.Series("id", ["a", "b", "c", "d", "e"]),
             ]
+        )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_paths = []
+        # Save to bytes
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
 
-            # Save multiple files
-            for i, array in enumerate(hcpe_arrays):
-                file_path = (
-                    Path(temp_dir) / f"data_hcpe_{i}.npy"
-                )
-                file_paths.append(file_path)
-                from maou.domain.data.array_io import (
-                    save_hcpe_array,
-                )
+        # Load from bytes
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
 
-                save_hcpe_array(array, file_path)
-
-            # Simulate DataSource usage pattern
-            total_rows = 0
-            for file_path in file_paths:
-                # Check for the actual .npy file that was created
-                assert file_path.exists()
-
-                # This is how DataSource classes typically load files with explicit type
-                data = load_array(
-                    file_path, mmap_mode="r", array_type="hcpe"
-                )
-                total_rows += data.shape[0]
-
-                # Verify we can access individual records
-                assert len(data) > 0
-                assert data[0]["id"] is not None
-
-            assert total_rows == sum(
-                len(arr) for arr in hcpe_arrays
-            )
-
-    def test_batch_iteration_pattern(self) -> None:
-        """Test batch iteration pattern used by DataSource.iter_batches()."""
-        prep_arrays = [
-            create_empty_preprocessing_array(5),
-            create_empty_preprocessing_array(3),
+        # Verify
+        assert loaded_df.shape == hcpe_df.shape
+        assert loaded_df["eval"].to_list() == [
+            10,
+            20,
+            30,
+            40,
+            50,
+        ]
+        assert loaded_df["id"].to_list() == [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
         ]
 
+    def test_save_and_load_preprocessing_bytes(self) -> None:
+        """Test saving and loading preprocessing DataFrame to/from bytes."""
+        prep_df = create_empty_preprocessing_df(3)
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("id", [100, 200, 300]),
+                pl.Series("resultValue", [0.5, -0.5, 0.0]),
+            ]
+        )
+
+        # Save to bytes
+        bytes_data = save_df_to_bytes(
+            prep_df, array_type="preprocessing"
+        )
+
+        # Load from bytes
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="preprocessing"
+        )
+
+        # Verify
+        assert loaded_df.shape == prep_df.shape
+        assert loaded_df["id"].to_list() == [100, 200, 300]
+        assert loaded_df["resultValue"].to_list() == [
+            0.5,
+            -0.5,
+            0.0,
+        ]
+
+    def test_hcpe_bytes_roundtrip_preserves_data(self) -> None:
+        """Test that HCPE roundtrip preserves all data."""
+        hcpe_df = create_empty_hcpe_df(2)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("eval", [500, -250]),
+                pl.Series("id", ["x", "y"]),
+            ]
+        )
+
+        # Roundtrip
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
+
+        # Verify exact match
+        assert loaded_df["eval"].to_list() == [500, -250]
+        assert loaded_df["id"].to_list() == ["x", "y"]
+
+    def test_preprocessing_bytes_roundtrip_preserves_data(
+        self,
+    ) -> None:
+        """Test that preprocessing roundtrip preserves all data."""
+        prep_df = create_empty_preprocessing_df(4)
+
+        # Set some board positions
+        board_positions = [
+            [[j for j in range(9)] for _ in range(9)]
+            for _ in range(4)
+        ]
+
+        prep_df = prep_df.with_columns(
+            [
+                pl.Series("boardIdPositions", board_positions),
+                pl.Series("resultValue", [0.1, 0.2, 0.3, 0.4]),
+            ]
+        )
+
+        # Roundtrip
+        bytes_data = save_df_to_bytes(
+            prep_df, array_type="preprocessing"
+        )
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="preprocessing"
+        )
+
+        # Verify
+        assert loaded_df["resultValue"].to_list() == [
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+        ]
+        assert (
+            loaded_df["boardIdPositions"].to_list()
+            == board_positions
+        )
+
+    def test_bytes_compression_effectiveness(self) -> None:
+        """Test that bytes serialization produces compact output."""
+        # Create a moderately sized DataFrame
+        prep_df = create_empty_preprocessing_df(100)
+
+        bytes_data = save_df_to_bytes(
+            prep_df, array_type="preprocessing"
+        )
+
+        # Bytes should be reasonably sized (not megabytes for empty data)
+        assert len(bytes_data) < 100_000  # Less than 100KB
+
+    def test_empty_dataframe_bytes_roundtrip(self) -> None:
+        """Test that empty DataFrames can be serialized and deserialized."""
+        hcpe_df = create_empty_hcpe_df(0)
+
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="hcpe"
+        )
+
+        assert len(loaded_df) == 0
+        assert loaded_df.schema == hcpe_df.schema
+
+    def test_stage1_bytes_roundtrip(self) -> None:
+        """Test stage1 DataFrame bytes serialization."""
+        from maou.domain.data.schema import (
+            create_empty_stage1_df,
+        )
+
+        stage1_df = create_empty_stage1_df(2)
+        stage1_df = stage1_df.with_columns(
+            [
+                pl.Series("id", [1, 2]),
+            ]
+        )
+
+        bytes_data = save_df_to_bytes(
+            stage1_df, array_type="stage1"
+        )
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="stage1"
+        )
+
+        assert loaded_df["id"].to_list() == [1, 2]
+
+    def test_stage2_bytes_roundtrip(self) -> None:
+        """Test stage2 DataFrame bytes serialization."""
+        from maou.domain.data.schema import (
+            create_empty_stage2_df,
+        )
+
+        stage2_df = create_empty_stage2_df(3)
+        stage2_df = stage2_df.with_columns(
+            [
+                pl.Series("id", [10, 20, 30]),
+            ]
+        )
+
+        bytes_data = save_df_to_bytes(
+            stage2_df, array_type="stage2"
+        )
+        loaded_df = load_df_from_bytes(
+            bytes_data, array_type="stage2"
+        )
+
+        assert loaded_df["id"].to_list() == [10, 20, 30]
+
+    def test_bytes_can_be_written_to_file(self) -> None:
+        """Test that bytes output can be written to file and read back."""
+        hcpe_df = create_empty_hcpe_df(1)
+        hcpe_df = hcpe_df.with_columns(
+            [
+                pl.Series("id", ["test"]),
+            ]
+        )
+
+        bytes_data = save_df_to_bytes(
+            hcpe_df, array_type="hcpe"
+        )
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_paths = []
+            file_path = Path(temp_dir) / "test.bytes"
 
-            for i, array in enumerate(prep_arrays):
-                # moveLabel is a (MOVE_LABELS_NUM,) array, so we set one element per record
-                for j in range(len(array)):
-                    array[j]["moveLabel"][0] = 0.01 * (
-                        j + i * 1000
-                    )
-                file_path = (
-                    Path(temp_dir)
-                    / f"batch_preprocessing_{i}.npy"
-                )
-                file_paths.append(file_path)
-                from maou.domain.data.array_io import (
-                    save_preprocessing_array,
-                )
+            # Write bytes to file
+            file_path.write_bytes(bytes_data)
 
-                save_preprocessing_array(array, file_path)
+            # Read back
+            read_bytes = file_path.read_bytes()
+            loaded_df = load_df_from_bytes(
+                read_bytes, array_type="hcpe"
+            )
 
-            # Simulate iter_batches() usage
-            batches = []
-            for file_path in file_paths:
-                # Check for the actual .npy file that was created
-                assert file_path.exists()
-
-                data = load_array(
-                    file_path,
-                    mmap_mode="r",
-                    array_type="preprocessing",
-                )
-                batches.append((str(file_path), data))
-
-            assert len(batches) == 2
-            assert batches[0][1].shape[0] == 5
-            assert batches[1][1].shape[0] == 3
+            assert loaded_df["id"].to_list() == ["test"]

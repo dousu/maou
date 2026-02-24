@@ -1,0 +1,235 @@
+"""DataFrame byte serialization for cloud storage．
+
+このモジュールは，Polars DataFrameをバイト列に変換してクラウドストレージに
+アップロード/ダウンロードするための関数を提供する．Arrow IPC File形式を
+使用し，LZ4圧縮により高速かつ効率的なシリアライゼーションを実現する．
+後方互換性のため，読み込み時はStream形式のデータも自動判定して読み込む．
+"""
+
+import io
+import logging
+from typing import Literal
+
+import polars as pl
+
+logger = logging.getLogger(__name__)
+
+
+# Arrow IPC File形式のマジックバイト
+_ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
+
+
+def _write_ipc_file(df: pl.DataFrame) -> bytes:
+    """DataFrameをArrow IPC File形式でシリアライズする．
+
+    Args:
+        df: Polars DataFrame
+
+    Returns:
+        LZ4圧縮されたArrow IPC Fileバイト列
+    """
+    buffer = io.BytesIO()
+    df.write_ipc(buffer, compression="lz4")
+    return buffer.getvalue()
+
+
+def _read_ipc_auto(data: bytes) -> pl.DataFrame:
+    """Arrow IPC File形式またはStream形式のバイト列を自動判定して読み込む．
+
+    先頭8バイトのマジックバイトでFile/Stream形式を判定し，
+    適切な方法でデシリアライズする．既存のStream形式データとの
+    後方互換性を保証する．
+
+    Args:
+        data: Arrow IPC形式のバイト列
+
+    Returns:
+        デシリアライズされたDataFrame
+    """
+    buffer = io.BytesIO(data)
+    if data[:8] == _ARROW_FILE_MAGIC:
+        return pl.read_ipc(buffer)
+    else:
+        return pl.read_ipc_stream(buffer)
+
+
+def save_hcpe_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize HCPE DataFrame to bytes using Arrow IPC format．
+
+    Args:
+        df: HCPE Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC bytes
+
+    Example:
+        >>> df = pl.read_ipc("hcpe_data.feather")
+        >>> bytes_data = save_hcpe_df_to_bytes(df)
+        >>> # Upload bytes_data to S3/GCS
+    """
+    return _write_ipc_file(df)
+
+
+def load_hcpe_df_from_bytes(data: bytes) -> pl.DataFrame:
+    """Deserialize HCPE DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC bytes
+
+    Returns:
+        pl.DataFrame: HCPE DataFrame
+
+    Example:
+        >>> # Download bytes_data from S3/GCS
+        >>> df = load_hcpe_df_from_bytes(bytes_data)
+    """
+    return _read_ipc_auto(data)
+
+
+def save_preprocessing_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize preprocessing DataFrame to bytes using Arrow IPC format．
+
+    Args:
+        df: Preprocessing Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC bytes
+
+    Example:
+        >>> df = pl.read_ipc("preprocessing_data.feather")
+        >>> bytes_data = save_preprocessing_df_to_bytes(df)
+        >>> # Upload bytes_data to S3/GCS
+    """
+    return _write_ipc_file(df)
+
+
+def load_preprocessing_df_from_bytes(
+    data: bytes,
+) -> pl.DataFrame:
+    """Deserialize preprocessing DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC bytes
+
+    Returns:
+        pl.DataFrame: Preprocessing DataFrame
+
+    Example:
+        >>> # Download bytes_data from S3/GCS
+        >>> df = load_preprocessing_df_from_bytes(bytes_data)
+    """
+    return _read_ipc_auto(data)
+
+
+def save_stage1_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize Stage 1 DataFrame to bytes using Arrow IPC format．
+
+    Args:
+        df: Stage 1 Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC bytes
+    """
+    return _write_ipc_file(df)
+
+
+def load_stage1_df_from_bytes(data: bytes) -> pl.DataFrame:
+    """Deserialize Stage 1 DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC bytes
+
+    Returns:
+        pl.DataFrame: Stage 1 DataFrame
+    """
+    return _read_ipc_auto(data)
+
+
+def save_stage2_df_to_bytes(df: pl.DataFrame) -> bytes:
+    """Serialize Stage 2 DataFrame to bytes using Arrow IPC format．
+
+    Args:
+        df: Stage 2 Polars DataFrame
+
+    Returns:
+        bytes: Compressed Arrow IPC bytes
+    """
+    return _write_ipc_file(df)
+
+
+def load_stage2_df_from_bytes(data: bytes) -> pl.DataFrame:
+    """Deserialize Stage 2 DataFrame from bytes．
+
+    Args:
+        data: Compressed Arrow IPC bytes
+
+    Returns:
+        pl.DataFrame: Stage 2 DataFrame
+    """
+    return _read_ipc_auto(data)
+
+
+def save_df_to_bytes(
+    df: pl.DataFrame,
+    *,
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
+) -> bytes:
+    """Generic DataFrame to bytes serialization with array_type dispatch．
+
+    Args:
+        df: Polars DataFrame
+        array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
+
+    Returns:
+        bytes: Compressed Arrow IPC bytes
+
+    Raises:
+        ValueError: If array_type is not supported
+    """
+    if array_type == "hcpe":
+        return save_hcpe_df_to_bytes(df)
+    elif array_type == "preprocessing":
+        return save_preprocessing_df_to_bytes(df)
+    elif array_type == "stage1":
+        return save_stage1_df_to_bytes(df)
+    elif array_type == "stage2":
+        return save_stage2_df_to_bytes(df)
+    else:
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )
+
+
+def load_df_from_bytes(
+    data: bytes,
+    *,
+    array_type: Literal[
+        "hcpe", "preprocessing", "stage1", "stage2"
+    ],
+) -> pl.DataFrame:
+    """Generic bytes to DataFrame deserialization with array_type dispatch．
+
+    Args:
+        data: Compressed Arrow IPC bytes
+        array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
+
+    Returns:
+        pl.DataFrame: Deserialized DataFrame
+
+    Raises:
+        ValueError: If array_type is not supported
+    """
+    if array_type == "hcpe":
+        return load_hcpe_df_from_bytes(data)
+    elif array_type == "preprocessing":
+        return load_preprocessing_df_from_bytes(data)
+    elif array_type == "stage1":
+        return load_stage1_df_from_bytes(data)
+    elif array_type == "stage2":
+        return load_stage2_df_from_bytes(data)
+    else:
+        raise ValueError(
+            f"Unsupported array_type: {array_type}"
+        )

@@ -1,18 +1,33 @@
+from __future__ import annotations
+
 import abc
 import contextlib
 import logging
+import multiprocessing
+import queue
 import tempfile
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ContextManager, Dict, Generator, Optional
+from typing import (
+    TYPE_CHECKING,
+    ContextManager,
+    Dict,
+    Generator,
+    Optional,
+)
 
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.app.pre_process.label import MOVE_LABELS_NUM
 from maou.app.pre_process.transform import Transform
-from maou.domain.data.array_io import save_preprocessing_array
+from maou.domain.data.array_io import save_preprocessing_df
+from maou.domain.move.label import MOVE_LABELS_NUM
+
+if TYPE_CHECKING:
+    import polars as pl
+
 from maou.domain.data.intermediate_store import (
     IntermediateDataStore,
 )
@@ -35,7 +50,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -47,6 +62,8 @@ class DataSource:
 
     Provides iteration over batches of HCPE data for processing
     into neural network training features.
+
+    Supports both numpy arrays (legacy) and Polars DataFrames (modern).
     """
 
     @abc.abstractmethod
@@ -57,7 +74,67 @@ class DataSource:
     def iter_batches(
         self,
     ) -> Generator[tuple[str, np.ndarray], None, None]:
+        """Iterate over batches as numpy structured arrays (legacy)．
+
+        Yields:
+            tuple[str, np.ndarray]: (batch_name, numpy_array)
+        """
         pass
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+        """Iterate over batches as Polars DataFrames (modern)．
+
+        Default implementation converts numpy arrays to DataFrames．
+        Subclasses can override for more efficient implementations．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for DataFrame iteration. "
+                "Install with: uv add polars"
+            )
+
+        from maou.domain.data.schema import (
+            get_hcpe_polars_schema,
+        )
+
+        schema = get_hcpe_polars_schema()
+
+        # Default: convert numpy arrays to DataFrames
+        import numpy as np
+
+        for name, array in self.iter_batches():
+            # Convert structured array to dict of lists
+            data = {}
+            assert array.dtype.names is not None
+            assert array.dtype.fields is not None
+            for field in array.dtype.names:
+                field_data = array[field]
+                field_dtype = array.dtype.fields[field][0]
+
+                # Handle binary fields (convert uint8 arrays to bytes)
+                if field == "hcp" or (
+                    field_dtype.shape
+                    and field_dtype.base == np.dtype("uint8")
+                ):
+                    # Multi-dimensional uint8 field like hcp - convert to bytes
+                    data[field] = [
+                        bytes(row)
+                        if hasattr(row, "__iter__")
+                        else bytes([row])
+                        for row in field_data
+                    ]
+                else:
+                    data[field] = field_data.tolist()
+
+            df = pl.DataFrame(data, schema=schema)
+            yield name, df
 
     @abc.abstractmethod
     def total_pages(self) -> int:
@@ -106,7 +183,10 @@ class PreProcess:
     def _process_single_array(
         data: np.ndarray,
     ) -> Dict[int, dict]:
-        """Process a chunk of records (optimized: compute feature/mask only for unique boards).
+        """Process a chunk of records (optimized: 1-pass for hash/move/result).
+
+        統合ループでhash + move_label + game_resultを1パスで計算し，
+        set_hcpの呼び出しを4N+U回からN+U回に削減する．
 
         Returns:
             Dictionary mapping board hash to aggregated data
@@ -116,39 +196,37 @@ class PreProcess:
         # 一度だけBoardオブジェクトを作成し，全ての盤面で再利用
         board = shogi.Board()
 
-        # ハッシュ値を計算してソート
+        # 統合ループ: hash + move_label + game_result を1パスで (N回のset_hcp)
         n = len(data)
         hashs = np.empty(n, dtype=np.uint64)
+        move_labels = np.empty(n, dtype=np.int32)
+        wins = np.empty(n, dtype=np.float32)
         for i in range(n):
             board.set_hcp(data["hcp"][i])
             hashs[i] = board.hash()
+            move_labels[i] = (
+                Transform.board_move_label_from_board(
+                    board,
+                    data["bestMove16"][i],  # type: ignore
+                )
+            )
+            wins[i] = Transform.board_game_result_from_board(
+                board,
+                data["gameResult"][i],  # type: ignore
+            )
 
         # ソートしてユニーク盤面を特定
         idx = np.argsort(hashs, kind="mergesort")
         sorted_hash = hashs[idx]
+        sorted_move_labels = move_labels[idx]
+        sorted_wins = wins[idx]
 
-        # ユニーク値とその出現回数を取得
-        uniq_hash, inverse_indices = np.unique(
+        # ユニーク値を取得
+        uniq_hash, _ = np.unique(
             sorted_hash, return_inverse=True
         )
 
-        # 各盤面のデータを事前に計算（ソート順）
-        sorted_move_labels = np.empty(n, dtype=np.int32)
-        sorted_wins = np.empty(n, dtype=np.float32)
-
-        for i in range(n):
-            orig_idx = idx[i]
-            board.set_hcp(data["hcp"][orig_idx])
-            sorted_move_labels[i] = Transform.board_move_label(
-                data["hcp"][orig_idx],
-                data["bestMove16"][orig_idx],  # type: ignore
-            )
-            sorted_wins[i] = Transform.board_game_result(
-                data["hcp"][orig_idx],
-                data["gameResult"][orig_idx],  # type: ignore
-            )
-
-        # ユニーク盤面ごとに集計
+        # ユニーク盤面ごとに集計 (U回のset_hcp)
         result = {}
         start_idx = 0
         for u_idx, hash_val in enumerate(uniq_hash):
@@ -167,20 +245,20 @@ class PreProcess:
             win_sum = np.sum(sorted_wins[start_idx:end_idx])
             count = end_idx - start_idx
 
-            # 最初の出現位置のHCPを使って特徴量とマスクを計算
+            # 最初の出現位置のHCPを使って特徴量を計算 (set_hcp 1回)
             orig_idx = idx[start_idx]
             board.set_hcp(data["hcp"][orig_idx])
+            (
+                board_id_positions,
+                pieces_in_hand,
+            ) = Transform.board_feature_from_board(board)
 
             result[int(hash_val)] = {
                 "count": count,
                 "winCount": win_sum,
                 "moveLabelCount": move_counts,
-                "features": Transform.board_feature(
-                    data["hcp"][orig_idx]
-                ),
-                "legalMoveMask": Transform.board_legal_move_mask(
-                    data["hcp"][orig_idx]
-                ),
+                "boardIdPositions": board_id_positions,
+                "piecesInHand": pieces_in_hand,
             }
 
             start_idx = end_idx
@@ -202,28 +280,71 @@ class PreProcess:
             )
 
         # ディスクストアに追加/更新
-        self.intermediate_store.add_or_update_batch(
-            batch_result
-        )
+        # Convert batch_result (dict) to Polars DataFrame
+        # Note: This is a temporary conversion - ideally batch_result
+        # should already be a DataFrame
+        import polars as pl
 
-    def aggregate_intermediate_data(self) -> np.ndarray:
+        records = []
+        for hash_id, data in batch_result.items():
+            records.append(
+                {
+                    "hash_id": hash_id,
+                    "count": data["count"],
+                    "win_count": data["winCount"],
+                    "move_label_count": data[
+                        "moveLabelCount"
+                    ].tolist()
+                    if hasattr(data["moveLabelCount"], "tolist")
+                    else data["moveLabelCount"],
+                    "board_id_positions": data[
+                        "boardIdPositions"
+                    ].tolist()
+                    if hasattr(
+                        data["boardIdPositions"], "tolist"
+                    )
+                    else data["boardIdPositions"],
+                    "pieces_in_hand": data[
+                        "piecesInHand"
+                    ].tolist()
+                    if hasattr(data["piecesInHand"], "tolist")
+                    else data["piecesInHand"],
+                }
+            )
+        batch_df = pl.DataFrame(
+            records,
+            schema={
+                "hash_id": pl.UInt64,
+                "count": pl.Int32,
+                "win_count": pl.Float64,
+                "move_label_count": pl.List(pl.Int32),
+                "board_id_positions": pl.List(
+                    pl.List(pl.UInt8)
+                ),
+                "pieces_in_hand": pl.List(pl.UInt8),
+            },
+        )
+        self.intermediate_store.add_dataframe_batch(batch_df)
+
+    def aggregate_intermediate_data(self) -> "pl.DataFrame":
         """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．
 
         Returns:
-            前処理済みデータの構造化配列
+            前処理済みデータのPolars DataFrame
 
         Note:
             This method loads all data into memory at once.
             For large datasets, this may cause memory exhaustion.
             Use aggregate_intermediate_data_chunked() for better memory efficiency.
         """
+
         if self.intermediate_store is None:
             raise RuntimeError(
                 "Intermediate store not initialized"
             )
 
-        # ディスクストアから最終配列を生成
-        return self.intermediate_store.finalize_to_array()
+        # ディスクストアから最終DataFrameを生成
+        return self.intermediate_store.finalize_to_dataframe()
 
     def aggregate_intermediate_data_chunked(
         self,
@@ -265,24 +386,23 @@ class PreProcess:
             desc="Aggregating chunks",
             unit="chunk",
         ) as pbar:
-            for (
-                chunk_data
-            ) in self.intermediate_store.iter_finalize_chunks(
-                chunk_size=chunk_size,
-                delete_after_yield=False,
+            for chunk_df in (
+                self.intermediate_store.iter_finalize_chunks_df(
+                    chunk_size=chunk_size,
+                    delete_after_yield=False,
+                )
             ):
                 # ローカルファイル出力（output_dirが指定されている場合）
                 if output_dir is not None:
-                    chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.npy"
+                    chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.feather"
                     chunk_path = output_dir / chunk_filename
 
-                    save_preprocessing_array(
-                        chunk_data, chunk_path, bit_pack=True
-                    )
+                    # chunk_df is already a Polars DataFrame - no conversion needed
+                    save_preprocessing_df(chunk_df, chunk_path)
 
                     self.logger.debug(
                         f"Saved chunk {chunk_idx} to local file: {chunk_path} "
-                        f"({len(chunk_data)} positions)"
+                        f"({len(chunk_df)} positions)"
                     )
 
                 # feature_storeへの出力（feature_storeが指定されている場合）
@@ -290,14 +410,14 @@ class PreProcess:
                     self.__feature_store.store_features(
                         name=output_filename,
                         key_columns=["id"],
-                        structured_array=chunk_data,
+                        dataframe=chunk_df,
                     )
                     self.logger.debug(
                         f"Stored chunk {chunk_idx} to feature store "
-                        f"({len(chunk_data)} positions)"
+                        f"({len(chunk_df)} positions)"
                     )
 
-                total_processed += len(chunk_data)
+                total_processed += len(chunk_df)
                 chunk_idx += 1
 
                 # プログレスバーを更新（チャンクごと）
@@ -305,12 +425,12 @@ class PreProcess:
                 pbar.set_postfix(
                     {
                         "positions": f"{total_processed:,}",
-                        "chunk_size": len(chunk_data),
+                        "chunk_size": len(chunk_df),
                     }
                 )
 
                 # 明示的にメモリ解放
-                del chunk_data
+                del chunk_df
 
         self.logger.info(
             f"Aggregation complete: {total_processed} positions "
@@ -346,7 +466,7 @@ class PreProcess:
             temp_dir = tempfile.mkdtemp(
                 prefix="maou_preprocess_"
             )
-            db_path = Path(temp_dir) / "intermediate.db"
+            db_path = Path(temp_dir) / "intermediate.duckdb"
             self.logger.info(
                 f"Using temporary directory: {temp_dir}"
             )
@@ -356,7 +476,7 @@ class PreProcess:
             )
             db_path = (
                 self.__intermediate_cache_dir
-                / "intermediate.db"
+                / "intermediate.duckdb"
             )
             self.logger.info(
                 f"Using cache directory: {self.__intermediate_cache_dir}"
@@ -477,9 +597,9 @@ class PreProcess:
                     )
                 else:
                     # 小規模データ: 従来の一括処理
-                    array = self.aggregate_intermediate_data()
+                    df = self.aggregate_intermediate_data()
                     pre_process_result["aggregated"] = (
-                        f"success {len(array)} rows"
+                        f"success {len(df)} rows"
                     )
 
                     # Store results
@@ -487,31 +607,56 @@ class PreProcess:
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
-                            structured_array=array,
+                            dataframe=df,
                         )
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        save_preprocessing_array(
-                            array,
+                        # df is already a Polars DataFrame - no conversion needed
+                        save_preprocessing_df(
+                            df,
                             option.output_dir
-                            / f"{base_name}.npy",
-                            bit_pack=True,
+                            / f"{base_name}.feather",
                         )
             else:
-                # 並列処理（メモリ効率化版）
+                # 並列処理（非同期merge版）
+                # merge専用スレッドでワーカー遊休時間を排除
+                merge_queue: queue.Queue[
+                    Optional[Dict[int, dict]]
+                ] = queue.Queue(maxsize=max_workers)
+                merge_errors: list[Exception] = []
+
+                def _merge_worker(
+                    q: queue.Queue[Optional[Dict[int, dict]]],
+                ) -> None:
+                    while True:
+                        item = q.get()
+                        if item is None:
+                            break
+                        try:
+                            self.merge_intermediate_data(item)
+                        except Exception as e:
+                            merge_errors.append(e)
+                        finally:
+                            q.task_done()
+
+                merge_thread = threading.Thread(
+                    target=_merge_worker,
+                    args=(merge_queue,),
+                    daemon=True,
+                )
+                merge_thread.start()
+
                 with ProcessPoolExecutor(
-                    max_workers=max_workers
+                    max_workers=max_workers,
+                    mp_context=multiprocessing.get_context(
+                        "spawn"
+                    ),
                 ) as executor:
-                    # メモリ効率化: 逐次サブミット方式
-                    # 全ジョブを一度にサブミットせず、max_workers個ずつ処理
-                    futures = {}
+                    futures: dict = {}
                     data_iterator = iter(
                         self.__datasource.iter_batches()
                     )
-
-                    # バッチ数をカウント（プログレスバー用）
-                    batch_count = 0
 
                     # 初回のmax_workers個をサブミット
                     for _ in range(max_workers):
@@ -522,29 +667,22 @@ class PreProcess:
                                 data,
                             )
                             futures[future] = dataname
-                            batch_count += 1
                         except StopIteration:
                             break
 
-                    # プログレスバー初期化（バッチ数ベース）
                     pbar = tqdm(
                         desc=f"PreProcess (parallel {max_workers} workers)",
                         total=total_batches,
                     )
 
-                    # ジョブが完了するたびに新しいジョブをサブミット
+                    # 完了したfutureの結果をmergeキューに投入し，
+                    # 即座に次のワーカー結果を回収
                     while futures:
-                        # 完了したジョブを取得
-                        done_futures = []
                         for future in as_completed(futures):
-                            dataname = futures[future]
+                            dataname = futures.pop(future)
                             try:
                                 batch_result = future.result()
-                                self.merge_intermediate_data(
-                                    batch_result
-                                )
-                                # 明示的にメモリ解放
-                                del batch_result
+                                merge_queue.put(batch_result)
                             except Exception as exc:
                                 self.logger.error(
                                     f"{dataname} processing failed: {exc}"
@@ -553,7 +691,10 @@ class PreProcess:
                                     f"Dataname {dataname} generated an exception: {exc}"
                                 )
 
-                            done_futures.append(future)
+                            # mergeスレッドのエラーチェック
+                            if merge_errors:
+                                raise merge_errors[0]
+
                             pbar.update(1)
 
                             # 新しいジョブをサブミット
@@ -568,18 +709,20 @@ class PreProcess:
                                 futures[new_future] = (
                                     new_dataname
                                 )
-                                batch_count += 1
                             except StopIteration:
                                 pass
 
-                            # 最初に完了したジョブのみ処理して次へ
+                            # 1件処理したらas_completedを再取得
                             break
 
-                        # 完了したジョブを削除
-                        for future in done_futures:
-                            del futures[future]
-
                     pbar.close()
+
+                # mergeキューの残りを処理して終了
+                merge_queue.put(None)
+                merge_thread.join()
+
+                if merge_errors:
+                    raise merge_errors[0]
 
                 # チェック: ユニーク局面数を取得してリソース要件を確認
                 total_count = (
@@ -673,25 +816,25 @@ class PreProcess:
                     )
                 else:
                     # 小規模データ: 従来の一括処理
-                    array = self.aggregate_intermediate_data()
+                    df = self.aggregate_intermediate_data()
                     pre_process_result["aggregated"] = (
-                        f"success {len(array)} rows"
+                        f"success {len(df)} rows"
                     )
                     # Store results
                     if self.__feature_store is not None:
                         self.__feature_store.store_features(
                             name=option.output_filename,
                             key_columns=["id"],
-                            structured_array=array,
+                            dataframe=df,
                         )
 
                     if option.output_dir is not None:
                         base_name = Path(option.output_filename)
-                        save_preprocessing_array(
-                            array,
+                        # df is already a Polars DataFrame - no conversion needed
+                        save_preprocessing_df(
+                            df,
                             option.output_dir
-                            / f"{base_name}.npy",
-                            bit_pack=True,
+                            / f"{base_name}.feather",
                         )
 
         # クリーンアップ: ディスクストアを閉じて削除

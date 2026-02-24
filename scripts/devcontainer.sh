@@ -5,7 +5,7 @@ set -eux
 # 必要ならインストールするが少しでも軽くしたいので基本しない
 # build-essentialとか
 sudo apt update
-sudo apt install -y cmake
+sudo apt install -y cmake tmux clang lld
 sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 
 # gcloud CLIのインストール

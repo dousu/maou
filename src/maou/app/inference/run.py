@@ -2,21 +2,24 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
-from maou.app.inference.tensorrt_inference import (
-    TensorRTInference,
+from maou.app.pre_process.feature import (
+    make_board_id_positions,
+    make_pieces_in_hand,
 )
-from maou.app.pre_process.feature import make_feature
-from maou.app.pre_process.label import (
+from maou.domain.board.shogi import Board
+from maou.domain.move.label import (
     IllegalMove,
     make_usi_move_from_label,
 )
-from maou.domain.board.shogi import Board
+
+if TYPE_CHECKING:
+    pass
 
 
 class ModelType(Enum):
@@ -37,17 +40,32 @@ class InferenceRunner:
 
     @dataclass(kw_only=True, frozen=True)
     class InferenceOption:
-        model_path: Path
-        model_type: ModelType
+        model_path: Optional[Path] = None
+        model_type: ModelType = ModelType.ONNX
         cuda: bool = False
         num_moves: int = 5
         board_view: bool = True
         sfen: Optional[str] = None
         board: Optional[Board] = None
+        trt_workspace_size_mb: int = 256
+        engine_path: Optional[Path] = None
 
     def infer(self, config: InferenceOption) -> Dict[str, str]:
+        # engine_path 指定時は自動的に TENSORRT 扱い
+        effective_model_type = config.model_type
+        if config.engine_path is not None:
+            effective_model_type = ModelType.TENSORRT
+
+        # model_path と engine_path のどちらかは必須
+        if (
+            config.model_path is None
+            and config.engine_path is None
+        ):
+            raise ValueError(
+                "Either model_path or engine_path must be provided."
+            )
+
         # 特徴量の作成
-        input_data: np.ndarray
         board: Board
         if config.sfen is not None:
             board = Board()
@@ -58,35 +76,54 @@ class InferenceRunner:
             raise ValueError(
                 "Either sfen or board must be provided."
             )
-        input_data = make_feature(board).astype(np.float32)
+        board_data = make_board_id_positions(board).astype(
+            np.int64
+        )
+        hand_data = make_pieces_in_hand(board).astype(
+            np.float32
+        )
 
         # 推論
         policy_labels: list[int] = []
         value: float = 0.0
-        if config.model_type == ModelType.ONNX:
+        if effective_model_type == ModelType.ONNX:
             policy_labels, value = ONNXInference.infer(
                 config.model_path,
-                input_data,
+                board_data,
+                hand_data,
                 config.num_moves,
                 config.cuda,
             )
-        elif config.model_type == ModelType.TENSORRT:
+        elif effective_model_type == ModelType.TENSORRT:
+            try:
+                from maou.app.inference.tensorrt_inference import (
+                    TensorRTInference,
+                )
+            except ModuleNotFoundError as exc:
+                missing_dep = exc.name or "tensorrt"
+                raise RuntimeError(
+                    "TensorRT inference requires optional dependency "
+                    f"'{missing_dep}'. Install with "
+                    "`uv sync --extra tensorrt-infer` before using "
+                    "`--model-type TENSORRT`."
+                ) from exc
             policy_labels, value = TensorRTInference.infer(
                 config.model_path,
-                input_data,
+                board_data,
+                hand_data,
                 config.num_moves,
                 config.cuda,
+                workspace_size_mb=config.trt_workspace_size_mb,
+                engine_path=config.engine_path,
             )
         else:
             raise ValueError(
-                f"Unsupported model type: {config.model_type.name}"
+                f"Unsupported model type: {effective_model_type.name}"
             )
 
         # 推論結果を評価
         result: Dict[str, str] = {}
-        winrate = Evaluation.get_winrate_from_eval(
-            board.get_turn(), value
-        )
+        winrate = Evaluation.get_winrate_from_eval(value)
         eval = Evaluation.get_eval_from_winrate(winrate)
         usis: list[str] = []
         for policy_label in policy_labels:

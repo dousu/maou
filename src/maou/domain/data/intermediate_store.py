@@ -1,28 +1,25 @@
 """Disk-based intermediate data storage for memory-efficient preprocessing.
 
-This module provides a SQLite-based persistent storage for intermediate
-preprocessing data, allowing processing of datasets larger than available RAM.
+This module provides a DuckDB-based persistent storage for intermediate
+preprocessing data with Arrow IPC integration，allowing processing of
+datasets larger than available RAM．
 """
 
 import logging
-import pickle
 import shutil
-import sqlite3
 from pathlib import Path
 from typing import Dict, Generator, Optional
 
-import numpy as np
+import duckdb
+import polars as pl
 
-from maou.domain.data.compression import (
-    compress_sparse_int_array,
-    decompress_sparse_int_array,
-    pack_features_array,
-    pack_legal_moves_mask,
-    unpack_features_array,
-    unpack_legal_moves_mask,
+from maou._rust.maou_io import (
+    add_sparse_arrays_rust,
+    compress_sparse_array_rust,
+    expand_sparse_array_rust,
 )
 from maou.domain.data.schema import (
-    create_empty_preprocessing_array,
+    get_preprocessing_polars_schema,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -54,23 +51,23 @@ def estimate_resource_requirements(
 
     Returns:
         Dictionary with estimated requirements in GB:
-        - intermediate_store_gb: SQLite database size
+        - intermediate_store_gb: DuckDB database size
         - finalize_memory_gb: Memory for aggregation (per chunk)
         - output_file_gb: Final output file size
         - peak_disk_gb_chunked: Peak disk usage with chunked output
         - peak_disk_gb_bulk: Peak disk usage with bulk output
     """
     # レコードあたりのサイズ（バイト）
-    # move_label_countをsparse圧縮: 平均20個の非ゼロ要素と仮定
+    # move_label_countをRust sparse圧縮: 平均20個の非ゼロ要素
     # 20 indices (uint16) + 20 values (int32) = 40 + 80 = 120バイト
-    # 従来の6000バイトから約50分の1に削減
+    # DuckDBのcolumnar storageにより更に効率的（約30-40%削減）
     intermediate_per_record = (
-        1.5 * 1024
-    )  # 約1.5KB/レコード (sparse圧縮後)
+        1.0 * 1024
+    )  # 約1.0KB/レコード (DuckDB columnar + sparse)
     memory_per_record = 12.9 * 1024  # 約12.9KB/レコード
     output_per_record = (
         4.5 * 1024
-    )  # 約4.5KB/レコード（bit-pack圧縮後）
+    )  # 約4.5KB/レコード（LZ4圧縮後）
 
     # GB単位に変換
     intermediate_gb = (
@@ -95,15 +92,12 @@ def estimate_resource_requirements(
         / 1024
     )
 
-    # SQLiteオーバーヘッド（インデックス・WAL等）: +20%
-    intermediate_gb *= 1.2
+    # DuckDBオーバーヘッド（メタデータ等）: +10% (SQLiteより低い)
+    intermediate_gb *= 1.1
 
     # ピークディスク容量の推定:
     # - チャンク分割モード:
     #   各チャンク処理時: intermediate + 出力中のチャンク + 安全マージン
-    #   VACUUM実行により削除分は即座に回収されるため，
-    #   intermediate は最大でも初期サイズ（徐々に削減）
-    #   出力は1チャンク分(約4.5GB)ずつ増加
     # - 一括モード: intermediate + output（最後まで両方残る）
     peak_disk_chunked = (
         intermediate_gb + (output_gb / 10) + 5
@@ -122,247 +116,205 @@ def estimate_resource_requirements(
 class IntermediateDataStore:
     """Disk-based storage for intermediate preprocessing data.
 
-    Uses SQLite for efficient storage and retrieval of intermediate data
-    during preprocessing, reducing memory footprint significantly.
+    Uses DuckDB for efficient Arrow-native storage and retrieval of
+    intermediate data during preprocessing，reducing memory footprint
+    significantly with zero-copy Arrow operations．
     """
 
     def __init__(
         self,
         db_path: Path,
         batch_size: int = 1000,
-        enable_vacuum: bool = False,
+        enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to DuckDB database file
             batch_size: Number of records to batch before committing
-            enable_vacuum: If True, run VACUUM after each chunk deletion.
-                         If False (default), only run VACUUM at the end.
-                         VACUUM is expensive (1-2 min per call for large DBs).
+            enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         self.db_path = db_path
         self.batch_size = batch_size
-        self.enable_vacuum = enable_vacuum
-        self._batch_buffer: Dict[int, dict] = {}
-        self._conn: Optional[sqlite3.Connection] = None
+        self.enable_vacuum = (
+            enable_vacuum  # Unused but kept for compatibility
+        )
+        self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._init_database()
 
     def _init_database(self) -> None:
-        """Initialize SQLite database with schema."""
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.execute("PRAGMA journal_mode=WAL")  # 高速化
-        self._conn.execute(
-            "PRAGMA synchronous=NORMAL"
-        )  # 高速化
-        self._conn.execute(
-            "PRAGMA cache_size=-64000"
-        )  # 64MB cache
+        """Initialize DuckDB database with Arrow-compatible schema."""
+        self._conn = duckdb.connect(str(self.db_path))
 
-        # AUTO_VACUUM=INCREMENTAL: 削除時に自動で領域回収（VACUUMより高速）
-        # 既存DBには影響しないため、新規作成時のみ有効
-        try:
-            self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        except sqlite3.OperationalError:
-            pass  # 既存DBでは変更不可
+        # Register Rust UDFs for sparse array merging
+        self._register_udfs()
 
-        # Create table for intermediate data
-        # Note: hash_id is stored as TEXT to handle uint64 values
+        # Create table with Arrow-native types
+        # Note: DuckDB supports UBIGINT for uint64 natively
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS intermediate_data (
-                hash_id TEXT PRIMARY KEY,
+                hash_id UBIGINT PRIMARY KEY,
                 count INTEGER NOT NULL,
-                win_count REAL NOT NULL,
-                move_label_count BLOB NOT NULL,
-                features BLOB NOT NULL,
-                legal_move_mask BLOB NOT NULL
+                win_count FLOAT NOT NULL,
+                move_label_indices USMALLINT[] NOT NULL,  -- Sparse: non-zero indices
+                move_label_values INTEGER[] NOT NULL,     -- Sparse: corresponding values
+                board_id_positions UTINYINT[][] NOT NULL, -- 9x9 board
+                pieces_in_hand UTINYINT[] NOT NULL        -- 14 pieces
             )
             """
         )
         self._conn.commit()
 
-    def add_or_update_batch(
-        self, batch: Dict[int, dict]
-    ) -> None:
-        """Add or update a batch of intermediate data.
+        logger.debug(
+            f"Initialized DuckDB intermediate store at {self.db_path}"
+        )
+
+    def _register_udfs(self) -> None:
+        """Register Rust-backed UDFs for sparse array merging in DuckDB."""
+        assert self._conn is not None
+
+        def _merge_sparse_indices(
+            ei: list[int],
+            ev: list[int],
+            ni: list[int],
+            nv: list[int],
+        ) -> list[int]:
+            merged_indices, _ = add_sparse_arrays_rust(
+                list(ei), list(ev), list(ni), list(nv)
+            )
+            return list(merged_indices)
+
+        def _merge_sparse_values(
+            ei: list[int],
+            ev: list[int],
+            ni: list[int],
+            nv: list[int],
+        ) -> list[int]:
+            _, merged_values = add_sparse_arrays_rust(
+                list(ei), list(ev), list(ni), list(nv)
+            )
+            return list(merged_values)
+
+        self._conn.create_function(
+            "merge_sparse_indices",
+            _merge_sparse_indices,
+        )
+        self._conn.create_function(
+            "merge_sparse_values",
+            _merge_sparse_values,
+        )
+
+    def bulk_upsert(self, df: pl.DataFrame) -> None:
+        """Bulk upsert batch data from Polars DataFrame using DuckDB SQL.
+
+        Replaces the old row-by-row add_dataframe_batch/flush_buffer pattern
+        with a single INSERT ... ON CONFLICT DO UPDATE statement．
 
         Args:
-            batch: Dictionary mapping hash_id to data dict with keys:
-                   count, winCount, moveLabelCount, features, legalMoveMask
+            df: Polars DataFrame with columns:
+                - hash_id: uint64
+                - count: int32
+                - win_count: float64
+                - move_label_count: list[int32]  # 1496 elements (dense)
+                - board_id_positions: list[list[uint8]]  # 9x9 board
+                - pieces_in_hand: list[uint8]  # 14 elements
+
+        Expected DataFrame structure (aggregated by hash_id):
+            Each row represents one unique board position with aggregated statistics
         """
-        # Add to batch buffer
-        for hash_id, data in batch.items():
-            if hash_id in self._batch_buffer:
-                # Merge with existing buffer entry
-                self._batch_buffer[hash_id]["count"] += data[
-                    "count"
-                ]
-                self._batch_buffer[hash_id]["winCount"] += data[
-                    "winCount"
-                ]
-                self._batch_buffer[hash_id][
-                    "moveLabelCount"
-                ] += data["moveLabelCount"]
-            else:
-                # Add new buffer entry
-                self._batch_buffer[hash_id] = {
-                    "count": data["count"],
-                    "winCount": data["winCount"],
-                    "moveLabelCount": data[
-                        "moveLabelCount"
-                    ].copy(),
-                    "features": data["features"],
-                    "legalMoveMask": data["legalMoveMask"],
-                }
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
 
-        # Flush buffer if it exceeds batch size
-        if len(self._batch_buffer) >= self.batch_size:
-            self._flush_buffer()
-
-    def _flush_buffer(self) -> None:
-        """Flush batch buffer to database."""
-        if not self._batch_buffer or self._conn is None:
+        if df.is_empty():
             return
 
-        cursor = self._conn.cursor()
+        # Compress dense move_label_count to sparse format per row
+        indices_list: list[list[int]] = []
+        values_list: list[list[int]] = []
+        for move_label_count in df[
+            "move_label_count"
+        ].to_list():
+            indices, values = compress_sparse_array_rust(
+                move_label_count
+            )
+            indices_list.append(list(indices))
+            values_list.append(list(values))
 
-        # Begin transaction for batch insert/update
-        cursor.execute("BEGIN TRANSACTION")
-
-        flush_count = len(self._batch_buffer)
+        # Build DataFrame with sparse columns for DuckDB
+        batch_df = df.select(
+            [
+                "hash_id",
+                "count",
+                "win_count",
+                "board_id_positions",
+                "pieces_in_hand",
+            ]
+        ).with_columns(
+            [
+                pl.Series(
+                    "move_label_indices",
+                    indices_list,
+                    dtype=pl.List(pl.UInt16),
+                ),
+                pl.Series(
+                    "move_label_values",
+                    values_list,
+                    dtype=pl.List(pl.Int32),
+                ),
+            ]
+        )
 
         try:
-            for hash_id, data in self._batch_buffer.items():
-                # Convert hash_id to string for SQLite
-                hash_id_str = str(hash_id)
+            # Register Polars DataFrame as DuckDB view
+            self._conn.register("batch_df", batch_df.to_arrow())
 
-                # Check if record exists
-                cursor.execute(
-                    "SELECT count, win_count, move_label_count "
-                    "FROM intermediate_data WHERE hash_id = ?",
-                    (hash_id_str,),
-                )
-                existing = cursor.fetchone()
-
-                if existing:
-                    # Update existing record
-                    existing_count = existing[0]
-                    existing_win_count = pickle.loads(
-                        existing[1]
-                    )
-                    # Decompress sparse move_label_count
-                    indices, values = pickle.loads(existing[2])
-                    existing_move_label_count = (
-                        decompress_sparse_int_array(
-                            indices, values, 1496
-                        )
-                    )
-
-                    new_count = existing_count + data["count"]
-                    new_win_count = (
-                        existing_win_count + data["winCount"]
-                    )
-                    new_move_label_count = (
-                        existing_move_label_count
-                        + data["moveLabelCount"]
-                    )
-
-                    # Compress sparse move_label_count
-                    indices, values = compress_sparse_int_array(
-                        new_move_label_count
-                    )
-
-                    cursor.execute(
-                        """
-                        UPDATE intermediate_data
-                        SET count = ?, win_count = ?, move_label_count = ?
-                        WHERE hash_id = ?
-                        """,
-                        (
-                            new_count,
-                            pickle.dumps(
-                                new_win_count,
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            pickle.dumps(
-                                (indices, values),
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            hash_id_str,
-                        ),
-                    )
-                else:
-                    # Insert new record
-                    # Compress features and legalMoveMask using bit packing
-                    packed_features = pack_features_array(
-                        data["features"]
-                    )
-                    packed_legal_mask = pack_legal_moves_mask(
-                        data["legalMoveMask"]
-                    )
-
-                    # Compress sparse move_label_count
-                    indices, values = compress_sparse_int_array(
-                        data["moveLabelCount"]
-                    )
-
-                    cursor.execute(
-                        """
-                        INSERT INTO intermediate_data
-                        (hash_id, count, win_count, move_label_count,
-                         features, legal_move_mask)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            hash_id_str,
-                            data["count"],
-                            pickle.dumps(
-                                data["winCount"],
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            pickle.dumps(
-                                (indices, values),
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            pickle.dumps(
-                                packed_features,
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                            pickle.dumps(
-                                packed_legal_mask,
-                                protocol=pickle.HIGHEST_PROTOCOL,
-                            ),
-                        ),
-                    )
-
-            cursor.execute("COMMIT")
-
-            # 定期的にWAL checkpointを実行してWALファイルサイズを抑制
-            # get_total_count()を使うと無限ループになるため、直接COUNT
-            cursor.execute(
-                "SELECT COUNT(*) FROM intermediate_data"
+            # Single SQL UPSERT: insert new records or merge with existing
+            self._conn.execute(
+                """
+                INSERT INTO intermediate_data
+                SELECT hash_id, count, win_count,
+                       move_label_indices, move_label_values,
+                       board_id_positions, pieces_in_hand
+                FROM batch_df
+                ON CONFLICT (hash_id) DO UPDATE SET
+                    count = intermediate_data.count + excluded.count,
+                    win_count = intermediate_data.win_count + excluded.win_count,
+                    move_label_indices = merge_sparse_indices(
+                        intermediate_data.move_label_indices,
+                        intermediate_data.move_label_values,
+                        excluded.move_label_indices,
+                        excluded.move_label_values),
+                    move_label_values = merge_sparse_values(
+                        intermediate_data.move_label_indices,
+                        intermediate_data.move_label_values,
+                        excluded.move_label_indices,
+                        excluded.move_label_values)
+                """
             )
-            total_records = cursor.fetchone()[0]
-            if total_records % 10000 < flush_count:
-                logger.debug(
-                    f"Running WAL checkpoint at {total_records} records..."
-                )
-                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+
+            self._conn.commit()
 
             logger.debug(
-                f"Flushed {flush_count} records to database"
+                f"Bulk upserted {len(batch_df)} records to DuckDB"
             )
         except Exception as e:
-            try:
-                cursor.execute("ROLLBACK")
-            except sqlite3.OperationalError:
-                pass  # トランザクションがない場合はスキップ
-            logger.error(f"Failed to flush buffer: {e}")
+            if self._conn is not None:
+                self._conn.rollback()
+            logger.error(f"Failed to bulk upsert: {e}")
             raise
         finally:
-            # Clear buffer
-            self._batch_buffer.clear()
+            self._conn.unregister("batch_df")
+
+    def add_dataframe_batch(self, df: pl.DataFrame) -> None:
+        """Add or update batch data from Polars DataFrame.
+
+        Compatibility wrapper that delegates to bulk_upsert()．
+
+        Args:
+            df: Polars DataFrame (see bulk_upsert for column specification)
+        """
+        self.bulk_upsert(df)
 
     def get_total_count(self) -> int:
         """Get total number of unique positions in database.
@@ -373,15 +325,13 @@ class IntermediateDataStore:
         if self._conn is None:
             raise RuntimeError("Database not initialized")
 
-        # Flush any remaining buffer
-        self._flush_buffer()
-
-        cursor = self._conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM intermediate_data")
-        return cursor.fetchone()[0]
+        result = self._conn.execute(
+            "SELECT COUNT(*) FROM intermediate_data"
+        ).fetchone()
+        return result[0] if result else 0
 
     def get_database_size(self) -> int:
-        """Get current size of SQLite database file in bytes.
+        """Get current size of DuckDB database file in bytes.
 
         Returns:
             int: Database file size in bytes
@@ -389,13 +339,7 @@ class IntermediateDataStore:
         if not self.db_path.exists():
             return 0
 
-        # SQLite database size (include WAL file if exists)
-        db_size = self.db_path.stat().st_size
-        wal_path = self.db_path.with_suffix(".db-wal")
-        if wal_path.exists():
-            db_size += wal_path.stat().st_size
-
-        return db_size
+        return self.db_path.stat().st_size
 
     def check_disk_space(
         self,
@@ -457,53 +401,144 @@ class IntermediateDataStore:
 
         return result
 
-    def finalize_to_array(self) -> np.ndarray:
-        """Convert all stored data to final preprocessing array.
+    @staticmethod
+    def _expand_and_normalize_move_labels(
+        indices_col: list[list[int]],
+        values_col: list[list[int]],
+        counts: list[int],
+    ) -> list[list[float]]:
+        """sparse展開と正規化をバッチで処理する．
+
+        Args:
+            indices_col: sparse indicesのリスト
+            values_col: sparse valuesのリスト
+            counts: 各レコードのcount値
 
         Returns:
-            numpy.ndarray: Preprocessing array with all aggregated data
+            正規化されたmove label確率のリスト(各要素は1496長のfloatリスト)
+        """
+        result = []
+        for indices, values, count in zip(
+            indices_col, values_col, counts
+        ):
+            dense = expand_sparse_array_rust(
+                list(indices), list(values), 1496
+            )
+            normalized = [val / count for val in dense]
+            result.append(normalized)
+        return result
+
+    def _read_chunk_as_polars(
+        self, limit: int, offset: int
+    ) -> pl.DataFrame:
+        """DuckDBからチャンクをPolars DataFrameとして直接読み出す．
+
+        Args:
+            limit: 読み出す行数
+            offset: オフセット
+
+        Returns:
+            DuckDBから直接変換されたPolars DataFrame
+        """
+        assert self._conn is not None
+        return self._conn.execute(
+            """
+            SELECT hash_id, count, win_count,
+                   move_label_indices, move_label_values,
+                   board_id_positions, pieces_in_hand
+            FROM intermediate_data
+            ORDER BY hash_id
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).pl()
+
+    def _finalize_chunk(
+        self, raw_df: pl.DataFrame
+    ) -> pl.DataFrame:
+        """生のDuckDBチャンクを最終形式のDataFrameに変換する．
+
+        sparse展開・正規化・カラムリネームを行う．
+
+        Args:
+            raw_df: DuckDBから読み出した生のDataFrame
+
+        Returns:
+            最終形式のPreprocessing DataFrame
+        """
+        # バッチでsparse展開と正規化
+        move_labels = self._expand_and_normalize_move_labels(
+            raw_df["move_label_indices"].to_list(),
+            raw_df["move_label_values"].to_list(),
+            raw_df["count"].to_list(),
+        )
+
+        # resultValue = win_count / count
+        result_values = raw_df["win_count"] / raw_df["count"]
+
+        return pl.DataFrame(
+            {
+                "id": raw_df["hash_id"],
+                "boardIdPositions": raw_df[
+                    "board_id_positions"
+                ],
+                "piecesInHand": raw_df["pieces_in_hand"],
+                "moveLabel": pl.Series(
+                    move_labels,
+                    dtype=pl.List(pl.Float32),
+                ),
+                "resultValue": result_values.cast(pl.Float32),
+            },
+            schema=get_preprocessing_polars_schema(),
+        )
+
+    def finalize_to_dataframe(self) -> pl.DataFrame:
+        """Convert all stored data to final preprocessing Polars DataFrame.
+
+        Returns:
+            pl.DataFrame: Preprocessing DataFrame with all aggregated data
 
         Note:
             This method loads all data into memory at once.
-            For large datasets (>1M positions), use finalize_to_chunks() instead
+            For large datasets (>1M positions), use iter_finalize_chunks_df() instead
             to avoid memory exhaustion.
 
             This method does NOT delete intermediate data during processing
-            since all data needs to be available until the final array is complete.
+            since all data needs to be available until the final DataFrame is complete.
         """
+        assert self._conn is not None, (
+            "Database connection not initialized"
+        )
+
         total_count = self.get_total_count()
 
         logger.info(
-            f"Finalizing {total_count} unique positions from database"
+            f"Finalizing {total_count} unique positions from DuckDB database"
         )
 
-        # Create output array
-        target_data = create_empty_preprocessing_array(
-            total_count
+        if total_count == 0:
+            return pl.DataFrame(
+                schema=get_preprocessing_polars_schema()
+            )
+
+        # DuckDB → Polars直接変換 + バッチsparse展開
+        raw_df = self._read_chunk_as_polars(total_count, 0)
+        df = self._finalize_chunk(raw_df)
+
+        logger.info(
+            f"Finalized {total_count} records to DataFrame"
         )
+        return df
 
-        # Process all chunks into the single array
-        # Don't delete during processing since we need all data in memory
-        offset = 0
-        for chunk in self.iter_finalize_chunks(
-            chunk_size=total_count, delete_after_yield=False
-        ):
-            chunk_size = len(chunk)
-            target_data[offset : offset + chunk_size] = chunk
-            offset += chunk_size
-
-        logger.info(f"Finalized {total_count} records to array")
-        return target_data
-
-    def iter_finalize_chunks(
+    def iter_finalize_chunks_df(
         self,
         chunk_size: int = 1_000_000,
         delete_after_yield: bool = True,
-    ) -> Generator[np.ndarray, None, None]:
-        """Iterate over finalized chunks of preprocessing data.
+    ) -> Generator[pl.DataFrame, None, None]:
+        """Iterate over finalized chunks of preprocessing data as Polars DataFrames.
 
         This is a memory-efficient way to process large datasets.
-        Each chunk is yielded as a separate array, allowing for
+        Each chunk is yielded as a separate DataFrame, allowing for
         chunked file output without loading all data into memory.
 
         Args:
@@ -512,7 +547,7 @@ class IntermediateDataStore:
                               after yielding to save disk space (default: True)
 
         Yields:
-            numpy.ndarray: Chunks of preprocessing array
+            pl.DataFrame: Chunks of preprocessing DataFrame
 
         Note:
             When delete_after_yield=True, processed records are deleted from
@@ -521,9 +556,6 @@ class IntermediateDataStore:
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
-
-        # Flush any remaining buffer
-        self._flush_buffer()
 
         total_count = self.get_total_count()
 
@@ -537,92 +569,35 @@ class IntermediateDataStore:
                 "intermediate data will be freed as chunks are processed"
             )
 
-        cursor = self._conn.cursor()
         processed_count = 0
 
         while processed_count < total_count:
-            # Calculate current chunk size
             current_chunk_size = min(
                 chunk_size, total_count - processed_count
             )
 
-            # Create output array for this chunk
-            chunk_data = create_empty_preprocessing_array(
-                current_chunk_size
-            )
-
-            # Read chunk from database (always from offset 0 if deleting)
-            # When delete_after_yield=True, we always read from the beginning
-            # since we delete processed records
+            # 削除モードならoffset=0（先頭から読む），
+            # 非削除モードなら処理済み分をスキップ
             read_offset = (
                 0 if delete_after_yield else processed_count
             )
 
-            cursor.execute(
-                """
-                    SELECT hash_id, count, win_count, move_label_count,
-                           features, legal_move_mask
-                    FROM intermediate_data
-                    LIMIT ? OFFSET ?
-                    """,
-                (current_chunk_size, read_offset),
+            # DuckDB → Polars直接変換
+            raw_df = self._read_chunk_as_polars(
+                current_chunk_size, read_offset
             )
 
-            rows = cursor.fetchall()
-            hash_ids_to_delete = []
+            # 削除用にhash_idを保持
+            hash_ids_to_delete: list[int] = []
+            if delete_after_yield:
+                hash_ids_to_delete = raw_df["hash_id"].to_list()
 
-            for i, row in enumerate(rows):
-                (
-                    hash_id,
-                    count,
-                    win_count,
-                    move_label_count_blob,
-                    features_blob,
-                    legal_move_mask_blob,
-                ) = row
-
-                # Track hash_id for deletion
-                if delete_after_yield:
-                    hash_ids_to_delete.append(hash_id)
-
-                # Deserialize all binary data
-                win_count = pickle.loads(win_count)
-                # Decompress sparse move_label_count
-                indices, values = pickle.loads(
-                    move_label_count_blob
-                )
-                move_label_count = decompress_sparse_int_array(
-                    indices, values, 1496
-                )
-                # Decompress features and legalMoveMask from bit-packed format
-                packed_features = pickle.loads(features_blob)
-                packed_legal_mask = pickle.loads(
-                    legal_move_mask_blob
-                )
-                features = unpack_features_array(
-                    packed_features
-                )
-                legal_move_mask = unpack_legal_moves_mask(
-                    packed_legal_mask
-                )
-
-                # Convert to native Python types
-                count = int(count)
-                win_count = float(win_count)
-
-                # Populate output array (convert hash_id back to uint64)
-                chunk_data["id"][i] = int(hash_id)
-                chunk_data["features"][i] = features
-                chunk_data["moveLabel"][i] = (
-                    move_label_count / count
-                )
-                chunk_data["resultValue"][i] = win_count / count
-                chunk_data["legalMoveMask"][i] = legal_move_mask
+            # バッチsparse展開 + 正規化
+            chunk_df = self._finalize_chunk(raw_df)
 
             processed_count += current_chunk_size
 
-            # Yield the chunk before deletion to ensure data is safely written
-            yield chunk_data
+            yield chunk_df
 
             # Delete processed records to free disk space
             if delete_after_yield and hash_ids_to_delete:
@@ -635,76 +610,47 @@ class IntermediateDataStore:
                     f"Database size: {db_size_mb:.1f} MB"
                 )
 
-        # 最後に1回だけVACUUMを実行（全チャンク処理後）
-        if delete_after_yield and not self.enable_vacuum:
-            logger.info(
-                "Running final VACUUM to reclaim all disk space..."
-            )
-            if self._conn is not None:
-                cursor = self._conn.cursor()
-                cursor.execute("VACUUM")
-                final_db_size_mb = (
-                    self.get_database_size() / 1024 / 1024
-                )
-                logger.info(
-                    f"VACUUM completed. Final database size: {final_db_size_mb:.1f} MB"
-                )
+        logger.info(
+            f"Finalized all {total_count} records from DuckDB database"
+        )
 
-    def _delete_records(self, hash_ids: list[str]) -> None:
+    def _delete_records(self, hash_ids: list[int]) -> None:
         """Delete records from database by hash_id.
 
         Args:
-            hash_ids: List of hash_id strings to delete
+            hash_ids: List of hash_id integers to delete
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
 
-        cursor = self._conn.cursor()
-        cursor.execute("BEGIN TRANSACTION")
-
         try:
+            self._conn.begin()
+
             # Delete in batches to avoid SQL statement length limits
             batch_size = 500
             for i in range(0, len(hash_ids), batch_size):
                 batch = hash_ids[i : i + batch_size]
                 placeholders = ",".join("?" * len(batch))
-                cursor.execute(
+                self._conn.execute(
                     f"DELETE FROM intermediate_data WHERE hash_id IN ({placeholders})",
                     batch,
                 )
 
-            cursor.execute("COMMIT")
+            self._conn.commit()
 
-            # INCREMENTAL VACUUMで段階的に領域回収（高速）
-            # AUTO_VACUUM=INCREMENTALが有効な場合のみ動作
-            cursor.execute("PRAGMA incremental_vacuum")
-
-            # オプションでVACUUM実行（全データベース再構築、遅い）
-            if self.enable_vacuum:
-                logger.info(
-                    "Running VACUUM to reclaim disk space..."
-                )
-                cursor.execute("VACUUM")
-                logger.info("VACUUM completed")
-            else:
-                logger.debug(
-                    "VACUUM skipped (enable_vacuum=False). "
-                    "Disk space will be reclaimed at the end."
-                )
+            # DuckDB automatically reclaims space (no VACUUM needed)
+            logger.debug(
+                f"Deleted {len(hash_ids)} records from DuckDB"
+            )
 
         except Exception as e:
-            try:
-                cursor.execute("ROLLBACK")
-            except sqlite3.OperationalError:
-                pass  # トランザクションがない場合はスキップ
+            if self._conn is not None:
+                self._conn.rollback()
             logger.error(f"Failed to delete records: {e}")
             raise
 
     def close(self) -> None:
         """Close database connection and cleanup."""
-        # Flush any remaining buffer
-        self._flush_buffer()
-
         if self._conn is not None:
             self._conn.close()
             self._conn = None

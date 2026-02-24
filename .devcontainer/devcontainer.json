@@ -1,18 +1,24 @@
 {
 	"name": "Ubuntu",
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
+	"postCreateCommand": "bash scripts/devcontainer.sh && bash scripts/dev-init.sh",
+	"containerEnv": {
+		"SCCACHE_CACHE_SIZE": "1G",
+		"SCCACHE_DIR": "/home/vscode/.cache/sccache"
+	},
+	"mounts": [
+		"type=volume,source=maou-cargo-registry,target=/usr/local/cargo/registry",
+		"type=volume,source=maou-sccache-cache,target=/home/vscode/.cache/sccache"
+	],
 	"features": {
-		// Python
-		// https://github.com/devcontainers/features/tree/main/src/python
 		"ghcr.io/devcontainers/features/python:1": {
-			"version": 3.12
+			"version": "3.12"
 		},
-		// Node.js
-		// https://github.com/devcontainers/features/tree/main/src/node
-		"ghcr.io/devcontainers/features/node:1": {},
-		// GitHub CLI
-		// https://github.com/devcontainers/features/tree/main/src/github-cli
-		"ghcr.io/devcontainers/features/github-cli:1": {}
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/rust:1": {
+			"version": "latest",
+			"profile": "default"
+		}
 	},
 	"customizations": {
 		"vscode": {
@@ -21,7 +27,6 @@
 				"python.analysis.typeCheckingMode": "basic",
 				"[python]": {
 					"editor.formatOnSave": true,
-					"editor.defaultFormatter": "charliermarsh.ruff",
 					"editor.codeActionsOnSave": {
 						"source.fixAll.ruff": "explicit",
 						"source.organizeImports.ruff": "explicit"
@@ -34,9 +39,7 @@
     			"python.testing.pytestEnabled": true
 			},
 			"extensions": [
-				"esbenp.prettier-vscode",
-				"charliermarsh.ruff",
-				"GitHub.copilot"
+				"esbenp.prettier-vscode"
 			]
 		}
 	}

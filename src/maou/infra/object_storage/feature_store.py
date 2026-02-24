@@ -1,15 +1,13 @@
-import base64
 import contextlib
-import hashlib
 import logging
 import multiprocessing as mp
 from collections.abc import Generator
 from typing import Literal, Optional
 
-import numpy as np
+import polars as pl
 
-from maou.interface import converter, preprocess
-from maou.interface.data_io import save_array_to_bytes
+import maou.interface.converter as converter
+import maou.interface.preprocess as preprocess
 
 # Use 'spawn' start method to avoid fork() issues in multi-threaded environments
 # This is required for compatibility with cloud storage clients (GCS, S3)
@@ -50,7 +48,7 @@ class ObjectStorageFeatureStore(
 
         # 特徴量書き込み周りの設定
         # バッファを初期化
-        self.__buffer: list[np.ndarray] = []
+        self.__buffer: list[pl.DataFrame] = []
         self.__buffer_size: int = 0
         self.bundle_id: int = 1
         # upload用のワーカー数
@@ -80,13 +78,6 @@ class ObjectStorageFeatureStore(
         """データ名からGCSのパスを取得する."""
         return f"{self.prefix}/{self.data_name}"
 
-    def __short_hash(self, text: str, length: int = 4) -> str:
-        digest = hashlib.sha256(text.encode()).digest()
-        b64 = base64.urlsafe_b64encode(digest).decode()
-        # 中央部分を切り出す
-        start = (len(b64) - length) // 2
-        return b64[start : start + length]
-
     # context managerを使って特徴量ストア用の動作のflushを管理する
     @contextlib.contextmanager
     def feature_store(self) -> Generator[None, None, None]:
@@ -102,7 +93,7 @@ class ObjectStorageFeatureStore(
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -113,8 +104,8 @@ class ObjectStorageFeatureStore(
         # key_columnsやpruning keyの制約は関係ないのでチェックしない
 
         # バッファに追加
-        self.__buffer.append(structured_array)
-        self.__buffer_size += structured_array.nbytes
+        self.__buffer.append(dataframe)
+        self.__buffer_size += int(dataframe.estimated_size())
         self.logger.debug(
             f"Buffered table size: {self.__buffer_size} bytes"
         )
@@ -145,20 +136,27 @@ class ObjectStorageFeatureStore(
             return
 
         try:
+            from maou.domain.data.dataframe_io import (
+                save_hcpe_df_to_bytes,
+                save_preprocessing_df_to_bytes,
+            )
+
             num = len(self.__buffer)
-            array = np.concatenate(self.__buffer)
-            size_mb = array.nbytes // pow(1024, 2)
-            schema_key = str(array.dtype)
-            schema_hash = self.__short_hash(schema_key)
-            file_name = f"batch{self.bundle_id}_{num}arrays_{size_mb}MB_{schema_hash}.npy"
+            # Concatenate DataFrames
+            df = pl.concat(self.__buffer)
+            size_mb = df.estimated_size() // pow(1024, 2)
+
+            file_name = f"batch{self.bundle_id}_{num}dfs_{size_mb}MB.feather"
             object_path = (
                 f"{self.__get_data_path()}/{file_name}"
             )
-            byte_data = save_array_to_bytes(
-                array=array,
-                array_type=self.array_type,
-                bit_pack=True,
-            )
+
+            # Serialize DataFrame to bytes using Arrow IPC format
+            if self.array_type == "hcpe":
+                byte_data = save_hcpe_df_to_bytes(df)
+            else:
+                byte_data = save_preprocessing_df_to_bytes(df)
+
             self.queue.put((object_path, byte_data))
             self.bundle_id += 1
             self.__buffer_size = 0

@@ -24,7 +24,6 @@ intermediate_dict[hash_id] = {
     "winCount": float32,                      # 4 bytes
     "moveLabelCount": np.int64[1496],        # 11,968 bytes
     "features": np.uint8[104, 9, 9],         # 8,424 bytes
-    "legalMoveMask": np.uint8[1496],         # 1,496 bytes
 }
 # + hash_id (uint64): 8 bytes
 # + Python辞書オーバーヘッド: 約200 bytes
@@ -125,8 +124,7 @@ intermediate_dict[hash_id] = {
 │  │       ├─ count (INTEGER)                                │
 │  │       ├─ win_count (BLOB, pickled)                      │
 │  │       ├─ move_label_count (BLOB, pickled numpy array)  │
-│  │       ├─ features (BLOB, pickled numpy array)          │
-│  │       └─ legal_move_mask (BLOB, pickled numpy array)   │
+│  │       └─ features (BLOB, pickled numpy array)          │
 │  ├─ バッチバッファ（メモリ）                               │
 │  │   └─ 1000レコード単位でフラッシュ                      │
 │  └─ 最適化                                                  │
@@ -154,8 +152,7 @@ CREATE TABLE IF NOT EXISTS intermediate_data (
     count INTEGER NOT NULL,                -- 出現回数
     win_count BLOB NOT NULL,               -- 勝利数（pickled float32）
     move_label_count BLOB NOT NULL,        -- 手のラベル数（pickled np.int64[1496]）
-    features BLOB NOT NULL,                -- 特徴量（pickled np.uint8[104,9,9]）
-    legal_move_mask BLOB NOT NULL          -- 合法手マスク（pickled np.uint8[1496]）
+    features BLOB NOT NULL                 -- 特徴量（pickled np.uint8[104,9,9]）
 );
 ```
 

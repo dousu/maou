@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "GPL-3.0-only"}
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "click>=8.1.7",
     "cshogi>=0.9.2",
@@ -15,6 +15,9 @@ dependencies = [
     "numpy>=1.19.0",
     "google-crc32c>=1.6.0",
     "psutil>=6.0.0",
+    "polars>=1.0.0",
+    "duckdb (>=1.4.3,<2.0.0)",
+    "plotly>=6.5.0,<7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -25,16 +28,16 @@ cpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
     "onnxruntime-tools",
-    "onnxsim",
+    "onnxslim",
 ]
 cuda = [
     "torch>=2.6.0,<=2.7.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
-    "pynvml>=11.4.1",
+    "nvidia-ml-py>=11.4.1",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
+    "onnxslim",
 ]
 mpu = [
     "torch>=2.6.0,<=2.7.0",
@@ -42,7 +45,7 @@ mpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
+    "onnxslim",
 ]
 tpu = [
     "torch-xla>=2.6.0,<=2.7.0",
@@ -51,7 +54,7 @@ tpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
-    "onnxsim",
+    "onnxslim",
 ]
 cpu-infer = [
     "onnxruntime",
@@ -75,51 +78,111 @@ gcp = [
 aws = [
     "boto3>=1.34.0",
 ]
+# 可視化ツール用のextra
+visualize = [
+    "gradio>=6.0.0,<7.0.0",
+    "huggingface-hub>=0.19.3,<1.0.0",
+    "matplotlib>=3.5.0",
+    "playwright>=1.40.0",
+]
 
 [project.scripts]
 maou = "maou.infra.console.app:main"
 
-[tool.poetry]
-packages = [{include = "maou", from = "src"}]
+[tool.uv]
+package = true
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cuda" },
+    { extra = "mpu" },
+    { extra = "tpu" },
+  ],
+]
 
-[tool.poetry.group.dev.dependencies]
-pre-commit = "^4.3.0"
-flake8 = "^7.2.0"
-yamllint = "^1.37.1"
-isort = "^6.1.0"
-commitizen = "^4.9.1"
-pytest = "^8.4.2"
-ruff = "^0.14.1"
-types-tqdm = "^4.67.0.20250809"
-mypy = "^1.18.2"
-google-cloud-storage = "^3.4.1"
-google-cloud-bigquery = {version = "^3.38.0", extras = ["pandas"]}
-google-cloud-bigquery-storage = "^2.33.1"
-boto3 = "^1.40.54"
-autopep8 = "^2.3.2"
-yapf = "^0.43.0"
-netron = "^8.6.8"
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+  { index = "pytorch-cuda", extra = "mpu" },
+  { index = "pytorch-cuda", extra = "tpu" },
+]
+serena-agent = { git = "https://github.com/oraios/serena" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.maturin]
+python-source = "src"
+module-name = "maou._rust"
+manifest-path = "rust/maou_rust/Cargo.toml"
+binding = "pyo3"
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "flake8>=7.2.0",
+    "yamllint>=1.37.1",
+    "isort>=6.1.0",
+    "commitizen>=4.9.1",
+    "pytest>=8.4.2",
+    "ruff>=0.14.1",
+    "types-tqdm>=4.67.0.20250809",
+    "mypy>=1.18.2",
+    "google-cloud-storage>=3.4.1",
+    "google-cloud-bigquery[pandas]>=3.38.0",
+    "google-cloud-bigquery-storage>=2.33.1",
+    "boto3>=1.40.54",
+    "autopep8>=2.3.2",
+    "yapf>=0.43.0",
+    "netron>=8.6.8",
+    "maturin[patchelf]>=1.7.0",
+    "pytest-cov>=4.0.0",
+    "serena-agent",
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
 tag_format = "$version"
 version_scheme = "pep440"
-version_provider = "poetry"
+version_provider = "pep621"
 update_changelog_on_bump = true
 major_version_zero = true
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 addopts = [
     "--import-mode=importlib",
+]
+filterwarnings = [
+    # #1: DataLoader worker数超過 (DevContainer CPU制約)
+    "ignore::UserWarning:torch.utils.data.dataloader",
+    # #2: Polars cast時のNaN→int変換 (テストデータのNULLフィールド)
+    "ignore:invalid value encountered in cast:RuntimeWarning",
+    # #3: ONNX export API非推奨 (PyTorch外部依存)
+    "ignore::DeprecationWarning:torch.onnx",
+    # #5: fork() in multithreaded context (spawn移行後の残留警告対策)
+    "ignore::DeprecationWarning:multiprocessing.popen_fork",
+    # #6: pin_memory on CPU-only (テスト環境制約)
+    "ignore:.*pin_memory.*:UserWarning",
 ]
 
 [tool.mypy]
 disallow_untyped_defs = true
 ignore_missing_imports = true
+explicit_package_bases = true
 mypy_path = ["./typings"]
 
 [[tool.mypy.overrides]]
@@ -130,17 +193,14 @@ module = [
   "torchinfo",
   "google_crc32c",
   "google.cloud",
+  "torch.onnx",
   "maou.*",
 ]
 
 [tool.isort]
 profile = "black"
+line_length = 64
 
 [tool.ruff]
 line-length = 64
 indent-width = 4
-
-[[tool.poetry.source]]
-name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu128"
-priority = "explicit"

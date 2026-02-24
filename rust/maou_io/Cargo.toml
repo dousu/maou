@@ -1,0 +1,15 @@
+[package]
+name = "maou_io"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "maou_io"
+crate-type = ["lib"]
+
+[dependencies]
+arrow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

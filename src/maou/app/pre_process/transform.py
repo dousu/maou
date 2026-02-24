@@ -2,13 +2,17 @@ import logging
 
 import numpy as np
 
-from maou.app.pre_process.feature import make_feature
-from maou.app.pre_process.label import (
+from maou.app.pre_process.feature import (
+    make_board_id_positions,
+    make_board_id_positions_fast,
+    make_pieces_in_hand,
+)
+from maou.domain.board import shogi
+from maou.domain.move.label import (
     MOVE_LABELS_NUM,
     make_move_label,
     make_result_value,
 )
-from maou.domain.board import shogi
 
 
 class Transform:
@@ -27,7 +31,7 @@ class Transform:
         move16: int,
         game_result: int,
         eval: int,
-    ) -> tuple[np.ndarray, int, float, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, int, float, np.ndarray]:
         """Transform HCPE data into training features.
 
         Args:
@@ -37,7 +41,8 @@ class Transform:
             eval: Position evaluation score
 
         Returns:
-            Tuple of (features, move_label, result_value, legal_move_mask)
+            Tuple of (board_id_positions, pieces_in_hand, move_label,
+            result_value, legal_move_mask)
         """
 
         # self.logger.debug(f"hcp type: {type(hcp)}")
@@ -47,8 +52,8 @@ class Transform:
         board.set_hcp(hcp)
 
         try:
-            # 入力特徴量
-            features = make_feature(board)
+            board_id_positions = make_board_id_positions(board)
+            pieces_in_hand = make_pieces_in_hand(board)
 
             # 教師データ
             # move label
@@ -88,7 +93,8 @@ class Transform:
             raise
 
         return (
-            features,
+            board_id_positions,
+            pieces_in_hand,
             move_label,
             result_value,
             legal_move_mask,
@@ -98,7 +104,7 @@ class Transform:
         self, valid_labels: list[int], num_classes: int
     ) -> np.ndarray:
         """有効なラベルのリストから対応するマスクを作成する."""
-        mask = np.zeros((num_classes), dtype=np.uint8)
+        mask = np.zeros((num_classes,), dtype=np.uint8)
         mask[valid_labels] = 1
         return mask
 
@@ -142,25 +148,79 @@ class Transform:
             game_result: ゲーム結果 (0=引き分け, 1=先手勝ち, 2=後手勝ち)
 
         Returns:
-            対応する結果値 (0=手番側負け, 0.5=引き分け, 2=手番側勝ち)
+            対応する結果値 (0=手番側負け, 0.5=引き分け, 1=手番側勝ち)
         """
         board = shogi.Board()
         board.set_hcp(hcp)
         return make_result_value(board.get_turn(), game_result)
 
     @staticmethod
-    def board_feature(hcp: np.ndarray) -> np.ndarray:
-        """HCP形式の盤面から、駒配置の特徴量を取得する.
+    def board_feature(
+        hcp: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """HCP形式の盤面から、盤面IDと持ち駒情報を取得する.
 
         Args:
             hcp: HCP形式の盤面
 
         Returns:
-            駒配置の特徴量 (FEATURES_NUM x 9 x 9)
+            盤面ID (9x9) と持ち駒情報 (14,)
         """
         board = shogi.Board()
         board.set_hcp(hcp)
-        return make_feature(board)
+        return (
+            make_board_id_positions(board),
+            make_pieces_in_hand(board),
+        )
+
+    @staticmethod
+    def board_move_label_from_board(
+        board: shogi.Board, move16: int
+    ) -> int:
+        """構築済みBoardからmove labelを計算（set_hcpスキップ）．
+
+        Args:
+            board: 構築済みBoardインスタンス
+            move16: 16ビット形式の手
+
+        Returns:
+            対応する手ラベル
+        """
+        return make_move_label(board.get_turn(), move16)
+
+    @staticmethod
+    def board_game_result_from_board(
+        board: shogi.Board, game_result: int
+    ) -> float:
+        """構築済みBoardからgame resultを計算（set_hcpスキップ）．
+
+        Args:
+            board: 構築済みBoardインスタンス
+            game_result: ゲーム結果
+
+        Returns:
+            対応する結果値
+        """
+        return make_result_value(board.get_turn(), game_result)
+
+    @staticmethod
+    def board_feature_from_board(
+        board: shogi.Board,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """構築済みBoardからfeatureを計算（set_hcpスキップ）．
+
+        numpy lookup tableによる高速変換を使用する．
+
+        Args:
+            board: 構築済みBoardインスタンス
+
+        Returns:
+            盤面ID (9x9) と持ち駒情報 (14,)
+        """
+        return (
+            make_board_id_positions_fast(board),
+            make_pieces_in_hand(board),
+        )
 
     @staticmethod
     def board_legal_move_mask(hcp: np.ndarray) -> np.ndarray:

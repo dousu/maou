@@ -1,0 +1,274 @@
+"""ファイル単位ストリーミングデータソースモジュール．
+
+全ファイルを一度にメモリにロードする ``FileManager`` とは異なり，
+1ファイルずつ読み込み → ``ColumnarBatch`` に変換 → yield → GC解放の
+ストリーミングパターンを使用する．
+
+ピークメモリは「1ファイル分のPolars DataFrame + 対応するColumnarBatch」に抑えられる．
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Generator
+from pathlib import Path
+from typing import Callable, Literal
+
+import polars as pl
+
+from maou.domain.data.columnar_batch import (
+    ColumnarBatch,
+    convert_preprocessing_df_to_columnar,
+    convert_stage1_df_to_columnar,
+    convert_stage2_df_to_columnar,
+)
+from maou.domain.data.rust_io import (
+    load_hcpe_df,
+    load_preprocessing_df,
+    load_stage1_df,
+    load_stage2_df,
+)
+
+logger = logging.getLogger(__name__)
+
+# Feather loader dispatch table
+_FEATHER_LOADERS: dict[str, Callable[[Path], pl.DataFrame]] = {
+    "hcpe": load_hcpe_df,
+    "preprocessing": load_preprocessing_df,
+    "stage1": load_stage1_df,
+    "stage2": load_stage2_df,
+}
+
+# ColumnarBatch converter dispatch table
+_COLUMNAR_CONVERTERS: dict[
+    str, Callable[[pl.DataFrame], ColumnarBatch]
+] = {
+    "preprocessing": convert_preprocessing_df_to_columnar,
+    "stage1": convert_stage1_df_to_columnar,
+    "stage2": convert_stage2_df_to_columnar,
+}
+
+
+class StreamingFileSource:
+    """ファイル単位のストリーミングデータソース．
+
+    全ファイルを一度にメモリにロードする ``FileManager`` とは異なり，
+    1ファイルずつ読み込み → 消費 → 解放のストリーミングパターンを使用する．
+
+    Attributes:
+        file_paths: featherファイルパスのリスト．
+        total_rows: 全ファイルの合計行数(初期化時にスキャン)．
+    """
+
+    def __init__(
+        self,
+        file_paths: list[Path],
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ],
+    ) -> None:
+        """ストリーミングデータソースを初期化する．
+
+        初期化時にはファイルパスとローダーの設定のみを行い，
+        行数スキャンは ``total_rows`` の初回アクセス時まで遅延する．
+
+        Args:
+            file_paths: featherファイルパスのリスト
+            array_type: データタイプ("hcpe", "preprocessing", "stage1", "stage2")
+
+        Raises:
+            ValueError: サポートされていないarray_typeの場合
+        """
+        if array_type not in _FEATHER_LOADERS:
+            raise ValueError(
+                f"Unsupported array_type: {array_type}. "
+                f"Supported: {list(_FEATHER_LOADERS.keys())}"
+            )
+        if (
+            array_type == "hcpe"
+            and array_type not in _COLUMNAR_CONVERTERS
+        ):
+            raise ValueError(
+                "hcpe array_type is not supported for streaming columnar conversion. "
+                "Use 'preprocessing', 'stage1', or 'stage2'."
+            )
+
+        self._file_paths = list(file_paths)
+        self._array_type = array_type
+        self._loader = _FEATHER_LOADERS[array_type]
+        self._converter = _COLUMNAR_CONVERTERS[array_type]
+
+        # 行数スキャンは遅延実行(total_rows初回アクセス時)
+        self._total_rows: int | None = None
+        self._row_counts: list[int] | None = None
+
+        logger.info(
+            "StreamingFileSource initialized (lazy): "
+            "%d files, array_type=%s",
+            len(self._file_paths),
+            array_type,
+        )
+
+    @property
+    def file_paths(self) -> list[Path]:
+        """ファイルパスのリスト(シャッフル・worker分割用に公開)."""
+        return list(self._file_paths)
+
+    def _ensure_row_counts(self) -> None:
+        """行数スキャンを実行する(未実行の場合のみ)．
+
+        初回呼び出し時に全ファイルの行数をスキャンし，
+        ``_total_rows`` と ``_row_counts`` を設定する．
+        2回目以降の呼び出しでは何もしない．
+        """
+        if self._row_counts is not None:
+            return
+
+        self._total_rows = 0
+        self._row_counts = []
+        for fp in self._file_paths:
+            row_count = _scan_row_count(fp)
+            self._row_counts.append(row_count)
+            self._total_rows += row_count
+
+        logger.info(
+            "StreamingFileSource scanned: "
+            "%d files, %d total rows",
+            len(self._file_paths),
+            self._total_rows,
+        )
+
+    @property
+    def total_rows(self) -> int:
+        """全ファイルの合計行数(初回アクセス時にスキャン実行)."""
+        self._ensure_row_counts()
+        assert self._total_rows is not None  # noqa: S101
+        return self._total_rows
+
+    @property
+    def row_counts(self) -> list[int]:
+        """各ファイルの行数リスト(初回アクセス時にスキャン実行)."""
+        self._ensure_row_counts()
+        assert self._row_counts is not None  # noqa: S101
+        return list(self._row_counts)
+
+    def iter_files_columnar(
+        self,
+    ) -> Generator[ColumnarBatch, None, None]:
+        """ファイル単位で ``ColumnarBatch`` をyieldする．
+
+        各ファイルについて:
+
+        1. featherファイルをPolars DataFrameとして読み込み
+        2. Polars DataFrame → ``ColumnarBatch`` に変換
+        3. ``ColumnarBatch`` をyield
+        4. (次のイテレーションでPolars DataFrameの参照が外れ，GC解放対象になる)
+
+        Yields:
+            1ファイル分のデータを含む ``ColumnarBatch``
+        """
+        for fp in self._file_paths:
+            df = self._loader(fp)
+            batch = self._converter(df)
+            del df  # DF参照を即座に切る(GC対象にする)
+            yield batch
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        """指定されたファイルパスのみを読み込み ``ColumnarBatch`` をyieldする．
+
+        workerファイル分割時に，各workerが担当ファイルのみを読み込むために使用する．
+        DEBUG レベルでファイル読込・変換のタイミングを出力し，ボトルネック特定に使用する．
+
+        Args:
+            file_paths: 読み込むファイルパスのリスト
+
+        Yields:
+            1ファイル分のデータを含む ``ColumnarBatch``
+        """
+        n = len(file_paths)
+        for i, fp in enumerate(file_paths):
+            log_level = logging.DEBUG
+            logger.log(
+                log_level,
+                "Loading file %d/%d: %s",
+                i + 1,
+                n,
+                fp.name,
+            )
+            t0 = time.perf_counter()
+            df = self._loader(fp)
+            t_load = time.perf_counter() - t0
+            logger.log(
+                log_level,
+                "File loaded: %d rows in %.2fs, converting...",
+                len(df),
+                t_load,
+            )
+            t1 = time.perf_counter()
+            batch = self._converter(df)
+            t_conv = time.perf_counter() - t1
+            logger.debug(
+                "Conversion complete: %.2fs (file %d/%d)",
+                t_conv,
+                i + 1,
+                n,
+            )
+            del df  # DF参照を即座に切る(GC対象にする)
+            yield batch
+
+
+# Arrow IPC File形式のマジックバイト (先頭8バイト)
+_ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
+
+
+def _is_arrow_ipc_file_format(file_path: Path) -> bool:
+    """ファイルがArrow IPC File形式かどうかを判定する．
+
+    先頭8バイトのマジックバイトで判定する．
+    Stream形式の場合はFalseを返す．
+
+    Args:
+        file_path: 判定するファイルのパス
+
+    Returns:
+        Arrow IPC File形式ならTrue，Stream形式ならFalse
+    """
+    with open(file_path, "rb") as f:
+        header = f.read(8)
+    return header == _ARROW_FILE_MAGIC
+
+
+def _scan_row_count(file_path: Path) -> int:
+    """featherファイルの行数のみを取得する．
+
+    Arrow IPC File形式の場合はメタデータから高速に取得する．
+    Stream形式の場合は ``pl.read_ipc_stream`` でDataFrameの行数を取得する．
+
+    Args:
+        file_path: featherファイルのパス
+
+    Returns:
+        ファイル内の行数
+    """
+    if _is_arrow_ipc_file_format(file_path):
+        # File形式: メタデータのみ読み（高速）
+        lf = pl.scan_ipc(file_path)
+        return lf.select(pl.len()).collect().item()
+    else:
+        # Stream形式: DataFrameの高さを取得
+        # Note: Stream形式ではメタデータのみの読み出しが不可能なため，
+        # 全データを読む必要がある．大規模ファイルではメモリ使用量に注意．
+        logger.warning(
+            "File %s is Arrow IPC Stream format. "
+            "Reading full data for row count "
+            "(consider converting to File format).",
+            file_path,
+        )
+        df = pl.read_ipc_stream(file_path)
+        row_count = df.height
+        del df
+        return row_count

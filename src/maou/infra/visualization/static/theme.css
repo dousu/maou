@@ -1,0 +1,173 @@
+/**
+ * Maou将棋データ可視化ツール - モダン・ミニマリストテーマ
+ *
+ * デザイン哲学:
+ * - Apple/Vercel風のクリーンなデザイン
+ * - 暖色系ニュートラルカラー（快適性）
+ * - モダンなブルーアクセント（技術的印象）
+ * - 洗練されたタイポグラフィ
+ * - 控えめなアニメーション
+ */
+
+:root {
+    /* ========================================
+       Neutral Base Colors
+       ======================================== */
+    --bg-primary: #fafafa;           /* メイン背景 */
+    --bg-secondary: #f5f5f5;         /* パネル背景 */
+    --bg-tertiary: #ffffff;          /* カード/浮いた面 */
+    --bg-board: #f9f6f0;             /* 盤面（微妙な暖色） */
+
+    /* ========================================
+       Text Colors
+       ======================================== */
+    --text-primary: #1a1a1a;         /* メインテキスト */
+    --text-secondary: #2d3748;       /* セカンダリテキスト（濃く改善） */
+    --text-tertiary: #718096;        /* 無効化テキスト（濃く改善） */
+
+    /* ========================================
+       Shogi Piece Colors
+       ======================================== */
+    --piece-black: #2c2c2c;          /* 先手駒（コントラスト強化） */
+    --piece-white: #c41e3a;          /* 後手駒（伝統的赤） */
+
+    /* ========================================
+       Board Elements
+       ======================================== */
+    --grid-lines: #d4c5a9;           /* ソフトなグリッド（薄い茶） */
+    --board-shadow: rgba(0, 0, 0, 0.08);
+
+    /* ========================================
+       Accent Colors
+       ======================================== */
+    --accent-primary: #0070f3;       /* Vercelブルー（アクション） */
+    --accent-success: #00c853;       /* 成功状態 */
+    --accent-warning: #ff9800;       /* 警告 */
+    --accent-error: #f44336;         /* エラー */
+
+    /* ========================================
+       Highlight Colors
+       ======================================== */
+    --highlight-primary: rgba(0, 112, 243, 0.12);
+    --highlight-reachable: rgba(76, 175, 80, 0.15);  /* Stage1用 */
+    --highlight-legal: rgba(255, 152, 0, 0.15);      /* Stage2用 */
+
+    /* ========================================
+       Borders & Shadows
+       ======================================== */
+    --border-light: #e5e5e5;
+    --border-medium: #d4d4d4;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+
+    /* ========================================
+       Typography
+       ======================================== */
+    /* UI Text - システムフォントスタック */
+    --font-primary: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+
+    /* Code/Data - モノスペースフォント */
+    --font-mono: "SF Mono", "Monaco", "Roboto Mono", "Consolas", monospace;
+
+    /* Shogi Pieces - 明朝体 */
+    --font-pieces: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+
+    /* ========================================
+       Type Scale
+       ======================================== */
+    --text-xs: 11px;      /* ラベル */
+    --text-sm: 13px;      /* セカンダリ */
+    --text-base: 15px;    /* 本文 */
+    --text-lg: 17px;      /* 強調 */
+    --text-xl: 20px;      /* サブ見出し */
+    --text-2xl: 24px;     /* セクション見出し */
+    --text-3xl: 30px;     /* ページタイトル */
+
+    /* ========================================
+       Spacing Scale
+       ======================================== */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-12: 48px;
+
+    /* ========================================
+       Border Radius
+       ======================================== */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+
+    /* ========================================
+       Transitions
+       ======================================== */
+    --transition-fast: 0.15s ease;
+    --transition-base: 0.2s ease;
+    --transition-slow: 0.3s ease;
+
+    /* ========================================
+       Responsive Breakpoints
+       ======================================== */
+    --breakpoint-sm: 640px;   /* スマートフォン */
+    --breakpoint-md: 768px;   /* タブレット */
+    --breakpoint-lg: 1024px;  /* ラップトップ */
+    --breakpoint-xl: 1280px;  /* デスクトップ */
+    --breakpoint-2xl: 1536px; /* 大画面 */
+
+    /* ========================================
+       Container Widths
+       ======================================== */
+    --container-sm: 640px;
+    --container-md: 768px;
+    --container-lg: 1024px;
+    --container-xl: 1280px;
+}
+
+/* ========================================
+   Global Resets
+   ======================================== */
+* {
+    box-sizing: border-box;
+}
+
+/* ========================================
+   Typography Base Styles
+   ======================================== */
+body {
+    font-family: var(--font-primary);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+h1 {
+    font-size: var(--text-3xl);
+}
+
+h2 {
+    font-size: var(--text-2xl);
+}
+
+h3 {
+    font-size: var(--text-xl);
+}
+
+code, pre {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+}

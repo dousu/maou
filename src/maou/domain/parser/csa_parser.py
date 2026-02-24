@@ -11,6 +11,14 @@ class CSAParser(parser.Parser):
 
     CSA (Computer Shogi Association) is a standard format for representing
     Shogi games. This parser extracts game information using the cshogi library.
+
+    **Design Note: cshogi Dependency**
+    This parser is intentionally coupled to cshogi.CSA.Parser as CSA parsing is
+    an implementation detail. The Parser abstract base class provides abstraction
+    at the domain boundary.
+
+    If replacing cshogi with another library, create a new CSAParser implementation
+    rather than wrapping the existing one.
     """
 
     def parse(self, content: str) -> None:

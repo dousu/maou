@@ -3,6 +3,7 @@ from typing import Optional
 
 import click
 
+import maou.interface.preprocess as preprocess
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -18,7 +19,6 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface import preprocess
 
 
 @click.command("pre-process")
@@ -322,7 +322,7 @@ def pre_process(
         else:
             error_msg = (
                 "BigQuery input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -354,7 +354,7 @@ def pre_process(
         else:
             error_msg = (
                 "GCS input requested but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -386,7 +386,7 @@ def pre_process(
         else:
             error_msg = (
                 "S3 input requested but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
             app_logger.error(error_msg)
             raise ImportError(error_msg)
@@ -443,7 +443,7 @@ def pre_process(
             app_logger.warning(
                 "BigQuery output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
     elif (
         output_gcs
@@ -470,7 +470,7 @@ def pre_process(
             app_logger.warning(
                 "GCS output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E gcp'"
+                "Install with 'uv sync --extra gcp'"
             )
     elif (
         output_s3
@@ -497,7 +497,7 @@ def pre_process(
             app_logger.warning(
                 "S3 output requested "
                 "but required packages are not installed. "
-                "Install with 'poetry install -E aws'"
+                "Install with 'uv sync --extra aws'"
             )
     click.echo(
         preprocess.transform(

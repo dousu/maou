@@ -3,18 +3,20 @@ import contextlib
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import ContextManager, Dict, Generator, Optional
 
 import numpy as np
+import polars as pl
 from tqdm.auto import tqdm
 
 from maou.domain.board import shogi
-from maou.domain.data.array_io import (
-    load_hcpe_array,
-    save_hcpe_array,
+from maou.domain.data.array_io import save_hcpe_df
+from maou.domain.data.rust_io import load_hcpe_df
+from maou.domain.data.schema import (
+    get_hcpe_polars_schema,
 )
-from maou.domain.data.schema import create_empty_hcpe_array
 from maou.domain.parser.csa_parser import CSAParser
 from maou.domain.parser.kif_parser import KifParser
 from maou.domain.parser.parser import Parser
@@ -37,7 +39,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
         *,
         name: str,
         key_columns: list[str],
-        structured_array: np.ndarray,
+        dataframe: pl.DataFrame,
         clustering_key: Optional[str] = None,
         partitioning_key_date: Optional[str] = None,
     ) -> None:
@@ -95,7 +97,7 @@ class HCPEConverter:
         allowed_endgame_status: Optional[list[str]],
         exclude_moves: Optional[list[int]],
     ) -> tuple[str, str]:
-        """Process a single file and return (file_path, result)."""
+        """Process a single file using Polars DataFrames (outputs .feather files)．"""
         logger = logging.getLogger(__name__)
 
         def game_filter(
@@ -162,8 +164,19 @@ class HCPEConverter:
                 )
                 return (str(file), "skipped (no moves)")
 
-            # HCPE配列の初期化
-            hcpes = create_empty_hcpe_array(1024)
+            # Polars用にデータをリストで収集
+            hcpe_data: dict[str, list] = {
+                "hcp": [],
+                "eval": [],
+                "bestMove16": [],
+                "gameResult": [],
+                "id": [],
+                "partitioningKey": [],
+                "ratings": [],
+                "endgameStatus": [],
+                "moves": [],
+            }
+
             board = shogi.Board()
             board.set_sfen(parser.init_pos_sfen())
 
@@ -200,40 +213,57 @@ class HCPEConverter:
                     )
                     continue
 
-                hcpe = hcpes[idx]
-                board.to_hcp(hcpe["hcp"])
-                # 16bitに収める
+                # HCP (Huffman Coded Position)
+                # to_hcp() expects numpy array, not bytearray
+                hcp_array = np.zeros(32, dtype=np.uint8)
+                board.to_hcp(hcp_array)
+                # Convert to bytes for Polars Binary type
+                hcpe_data["hcp"].append(hcp_array.tobytes())
+
+                # 評価値（16bitに収める）
                 eval = min(32767, max(score, -32767))
-                # 手番側の評価値にする (ここは表現の問題で前処理としてもよさそう)
+                # 手番側の評価値にする
                 if board.get_turn() == shogi.Turn.BLACK:
-                    hcpe["eval"] = eval
+                    hcpe_data["eval"].append(eval)
                 else:
-                    hcpe["eval"] = -eval
+                    hcpe_data["eval"].append(-eval)
+
                 # moveは32bitになっているので16bitに変換する
-                # 上位16bitを単に削っていて，上位16bitは移動する駒と取った駒の種類が入っている
-                # 特に動かす駒の種類の情報が抜けているので注意
-                hcpe["bestMove16"] = shogi.move16(move)
-                hcpe["gameResult"] = parser.winner()
-                hcpe["id"] = (
+                hcpe_data["bestMove16"].append(
+                    shogi.move16(move)
+                )
+                hcpe_data["gameResult"].append(parser.winner())
+                hcpe_data["id"].append(
                     f"{file.with_suffix('.hcpe').name}_{idx}"
                 )
+
                 # 棋譜共通情報を記録
-                hcpe["partitioningKey"] = np.datetime64(
-                    partitioning_key_value.isoformat()
+                hcpe_data["partitioningKey"].append(
+                    datetime.fromisoformat(
+                        partitioning_key_value.isoformat()
+                    ).date()
                 )
-                hcpe["ratings"] = ratings
-                hcpe["endgameStatus"] = endgame
-                hcpe["moves"] = moves
+                # Convert ratings to uint16
+                hcpe_data["ratings"].append(
+                    [int(r) for r in ratings]
+                )
+                hcpe_data["endgameStatus"].append(endgame)
+                hcpe_data["moves"].append(moves)
 
                 # 局面に指し手を反映させる
                 board.push_move(move)
 
-            # ファイルを保存
-            save_hcpe_array(
-                hcpes[: idx + 1],
-                output_dir / file.with_suffix(".npy").name,
+            # Polars DataFrameを作成
+            df = pl.DataFrame(
+                hcpe_data, schema=get_hcpe_polars_schema()
             )
-            return (str(file), f"success {idx + 1} rows")
+
+            # ファイルを保存（.feather形式）
+            save_hcpe_df(
+                df,
+                output_dir / file.with_suffix(".feather").name,
+            )
+            return (str(file), f"success {len(df)} rows")
 
         except Exception as e:
             logger.error(f"Error processing file {file}: {e}")
@@ -294,19 +324,17 @@ class HCPEConverter:
                         self.__feature_store is not None
                         and result.startswith("success")
                     ):
-                        # Load the saved file and store it in feature store
-                        npy_file = (
+                        # Load the saved .feather file and convert to numpy array for feature store
+                        feather_file = (
                             option.output_dir
-                            / file.with_suffix(".npy").name
+                            / file.with_suffix(".feather").name
                         )
-                        if npy_file.exists():
-                            structured_array = load_hcpe_array(
-                                npy_file, mmap_mode="r"
-                            )
+                        if feather_file.exists():
+                            df = load_hcpe_df(feather_file)
                             self.__feature_store.store_features(
                                 name=file.name,
                                 key_columns=["id"],
-                                structured_array=structured_array,
+                                dataframe=df,
                                 clustering_key=None,
                                 partitioning_key_date="partitioningKey",
                             )
@@ -349,26 +377,23 @@ class HCPEConverter:
                                 self.__feature_store is not None
                                 and result.startswith("success")
                             ):
-                                # Load the saved file and store it in feature store
-                                npy_file = (
+                                # Load the saved .feather file and convert to numpy array for feature store
+                                feather_file = (
                                     option.output_dir
                                     / file.with_suffix(
-                                        ".npy"
+                                        ".feather"
                                     ).name
                                 )
-                                if npy_file.exists():
-                                    structured_array = (
-                                        load_hcpe_array(
-                                            npy_file,
-                                            mmap_mode="r",
-                                        )
+                                if feather_file.exists():
+                                    df = load_hcpe_df(
+                                        feather_file
                                     )
                                     self.__feature_store.store_features(
                                         name=file.with_suffix(
                                             ".hcpe"
                                         ).name,
                                         key_columns=["id"],
-                                        structured_array=structured_array,
+                                        dataframe=df,
                                         clustering_key=None,
                                         partitioning_key_date="partitioningKey",
                                     )

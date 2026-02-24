@@ -2,20 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Development Guidelines
-
-When working on the Maou project, please follow these core principles:
-
-1. **Clean Architecture**: Strictly maintain dependency flow: `infra → interface → app → domain`
-2. **Type Safety**: Type hints are required for all code. No exceptions.
-3. **Code Quality**: Follow established patterns and maintain consistency.
-4. **Testing**: New features require tests. Bug fixes need regression tests.
-5. **Performance**: Optimize for S3 operations with parallel processing where applicable.
-6. **Documentation**: Public APIs must have docstrings.
-
 ## Project Overview
 
-Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python following Clean Architecture principles. The name "maou" translates to "demon king" in Japanese.
+Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python following Clean Architecture principles.
 
 ### Core Components
 - **Domain Layer**: Business logic and entities (network models, loss functions, parsers)
@@ -23,373 +12,132 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - **Interface Layer**: Adapters between app and infrastructure
 - **Infrastructure Layer**: External systems (cloud storage, databases, logging)
 
-## Core Development Rules
+### Data Pipeline
+- **Data Format**: Arrow IPC (.feather) with LZ4 compression
+- **Data Processing**: Polars DataFrames
+- **I/O Backend**: Rust (PyO3 + maturin) for high-performance file I/O
+- **Legacy Support**: Numpy .npy format still supported
+
+## Critical Rules (MUST)
+
+### Architecture
+- MUST maintain dependency flow: `infra → interface → app → domain`
+- MUST NOT introduce circular dependencies between layers
+
+### Code Quality
+- MUST add type hints to all code
+- MUST add docstrings to public APIs
+- MUST run pre-commit hooks (NEVER use `--no-verify`)
+
+### Serena MCP
+- MUST NOT call multiple Serena MCP tools in parallel (to prevent OOM in memory-constrained DevContainer)
+- MUST call Serena tools sequentially, one at a time
+
+### Forbidden Actions
+- MUST NOT use pip directly (use `uv` only)
+- MUST NOT create `__init__.py` unless absolutely necessary
+- MUST NOT skip pre-commit hooks
+- MUST NOT commit secrets (.env, credentials)
+
+### Documentation
+- MUST update `docs/commands/` when modifying CLI commands or options in `src/maou/infra/console/`
+- MUST create a new `docs/commands/<command-name>.md` when adding a new CLI command
+- MUST remove `docs/commands/<command-name>.md` when removing a CLI command
+- MUST follow the existing documentation format (Overview + CLI options tables)
+
+## Code Exploration Policy (MUST)
+
+コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.
+
+### Covered Operations
+- ファイル検索（Glob/Grep）を複数回行う調査
+- 複数ファイルを読んでコードを理解する作業
+- エラー原因の調査
+- 実装方法を決めるための既存コード調査
+
+### MUST NOT: Direct Multi-file Exploration
+以下の操作を直接行うことを禁止:
+- 調査目的での連続的なGrep/Glob実行
+- 複数ファイルを順次Readして回る探索
+- トラブルシューティング時のコード調査
+
+### Exceptions (Direct Access Allowed)
+1. **ユーザーが明示的にファイルパスを指定** - 「src/foo.pyを読んで」
+2. **単一ファイルの特定行を確認** - エラーメッセージの「file:line」参照
+3. **Exploreで特定済みファイルへのアクセス** - 既知の場所への編集
+
+### Decision Criteria
+- 「どこにあるか分からない」→ Explore必須
+- 「このファイルのこの部分」→ 直接アクセス可
+
+## Development Guidelines (SHOULD)
+
+### Tool Priority (Serena MCP)
+SHOULD prefer Serena tools for token efficiency:
+1. `find_symbol` - Find definitions
+2. `find_referencing_symbols` - Find usages
+3. Glob/Grep - File/text search
+4. Read - Full file (last resort)
 
 ### Package Management
+- SHOULD use `uv sync` for dependencies
+- SHOULD use `uv add` for new packages
+- SHOULD use `uv run` for script execution
 
-**ONLY use Poetry. NEVER use pip directly.**
+### Git Workflow
+- SHOULD follow commit format: `feat|fix|docs|refactor|test|perf: message`
+- SHOULD run QA pipeline before commit:
+  `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/`
 
+### Agent Teams
+- SHOULD limit team agents to 2 or fewer in 8GB RAM DevContainer environments
+- SHOULD consider memory impact when adding agents (each agent spawns its own MCP server processes)
+
+### Testing
+- SHOULD write tests for new features
+- SHOULD write regression tests for bug fixes
+- Test path: `src/maou/{layer}/{module}/file.py` → `tests/maou/{layer}/{module}/test_file.py`
+
+## Quick Reference
+
+### Common Commands
 ```bash
-# Install dependencies
-poetry install
+# Dependencies
+uv sync                                    # Base install
+uv sync --extra cpu                        # CPU PyTorch
+uv sync --extra cuda                       # CUDA PyTorch
+uv sync --extra cpu --extra visualize      # Testing with visualization
+uv sync --extra cuda --extra visualize     # Full development
 
-# Environment-specific installations
-poetry install -E cpu -E gcp      # CPU + GCP
-poetry install -E cuda -E aws     # CUDA + AWS
-poetry install -E tpu -E gcp      # TPU + GCP
-
-# Add/remove dependencies
-poetry add package-name
-poetry add --group dev package-name
-poetry remove package-name
+# Development
+uv run pytest                              # Run tests
+uv run maturin develop                     # Build Rust extension
+uv run maou --help                         # CLI help
 ```
 
-### Code Quality Standards
-
-#### Required Standards
-- **Type hints**: Required for all functions, methods, and class attributes
-- **Docstrings**: Required for all public APIs
-- **Line length**: 88 characters maximum
-- **Function size**: Functions must be focused and small
-- **Architecture**: Follow Clean Architecture dependency rules
-
-#### Architecture Compliance
-- **Domain layer**: No dependencies on other layers
-- **App layer**: Only depends on domain layer
-- **Interface layer**: Adapts between app and infrastructure
-- **Infrastructure layer**: Implements external system integrations
-
-### Testing Requirements
-
-**Framework**: Use pytest
-
-```bash
-pytest                           # Run all tests
-pytest --cov=src/maou           # Run with coverage
-TEST_GCP=true pytest            # Test GCP features
-TEST_AWS=true pytest            # Test AWS features
-```
-
-#### Test Requirements
-- **New features**: Must include comprehensive tests
-- **Bug fixes**: Must include regression tests
-- **Edge cases**: Test error scenarios and boundary conditions
-- **Integration tests**: Test cloud provider integrations when applicable
-
-## Python Tools
-
-### Essential Commands
-
-```bash
-# Type checking (required before commits)
-poetry run mypy src/
-
-# Code formatting
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-
-# Linting
-poetry run flake8 src/
-
-# Complete quality pipeline (run before commits)
-poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/ && poetry run mypy src/
-```
-
-### Pre-commit Hooks
-```bash
-poetry run bash scripts/pre-commit.sh    # Install hooks
-pre-commit run --all-files               # Run manually
-```
-
-## Environment Setup
-
-### Initial Setup
-```bash
-bash scripts/dev-init.sh                 # Initialize environment
-poetry env info --path                   # Get environment path
-poetry run bash scripts/pre-commit.sh    # Setup hooks
-```
-
-### Cloud Authentication
-
-#### Google Cloud Platform (GCP)
-```bash
-gcloud auth application-default login
-gcloud config set project "your-project-id"
-```
-
-#### Amazon Web Services (AWS)
-```bash
-aws configure sso --use-device-code --profile default
-aws sso login --use-device-code --profile default  # Renew token
-```
-
-## CLI Commands
-
-The project provides main CLI commands following the data pipeline:
-
-### 1. Game Record Conversion
-```bash
-poetry run maou hcpe-convert \
-  --input-path /path/to/records \
-  --input-format csa \
-  --output-dir /path/to/output
-```
-
-### 2. Data Pre-processing
-```bash
-poetry run maou pre-process \
-  --input-path /path/to/hcpe \
-  --output-dir /path/to/processed
-```
-
-### 3. Model Training
-```bash
-poetry run maou learn-model \
-  --input-dir /path/to/processed \
-  --gpu cuda:0 \
-  --epoch 10 \
-  --batch-size 256
-```
-
-### 4. Performance Optimization
-```bash
-# Benchmark DataLoader configurations
-poetry run maou utility benchmark-dataloader \
-  --input-dir /path/to/processed \
-  --gpu cuda:0 \
-  --batch-size 256
-
-# Benchmark training performance
-poetry run maou utility benchmark-training \
-  --input-dir /path/to/processed \
-  --gpu cuda:0 \
-  --batch-size 256
-```
-
-### Cloud Storage Integration
-
-#### S3 Operations
-```bash
-# Upload with parallel processing
-poetry run maou hcpe-convert \
-  --output-s3 \
-  --bucket-name my-bucket \
-  --max-workers 8
-
-# Download with caching
-poetry run maou pre-process \
-  --input-s3 \
-  --input-bucket-name my-bucket \
-  --input-local-cache-dir ./cache \
-  --max-workers 16
-```
-
-#### GCS Operations
-```bash
-# Similar to S3, replace --output-s3 with --output-gcs
-poetry run maou hcpe-convert \
-  --output-gcs \
-  --bucket-name my-bucket \
-  --max-workers 8
-```
-
-#### Array Bundling for Efficient Caching
-**New Feature**: Bundle small numpy arrays into ~1GB chunks for optimal I/O performance.
-
-```bash
-# Enable bundling for S3/GCS downloads
-poetry run maou pre-process \
-  --input-s3 \
-  --input-bucket-name my-bucket \
-  --input-local-cache-dir ./cache \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.0 \
-  --max-workers 16
-
-# Enable bundling for learning workflows
-poetry run maou learn-model \
-  --input-s3 \
-  --input-bucket-name my-bucket \
-  --input-local-cache-dir ./cache \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.5 \
-  --gpu cuda:0
-```
-
-**Benefits of Array Bundling:**
-- **I/O Efficiency**: Reduces file count from thousands to dozens
-- **Cache Management**: 1GB chunks are easier to manage than many small files
-- **Memory Optimization**: Uses memory mapping for efficient access
-- **Performance**: Significantly faster data loading for training
-
-**How it Works:**
-1. Downloads individual arrays from cloud storage
-2. Combines arrays into ~1GB bundles locally
-3. Creates metadata files for fast array lookup
-4. Uses memory mapping for efficient data access during training
-
-## Architecture
-
-The project follows Clean Architecture principles with strict dependency rules:
-
-### Dependency Rules
-**Critical**: Dependencies must flow in one direction only:
-```
-infra → interface → app → domain
-```
-
-### Data I/O Architecture
-
-#### Centralized Schema Management
-```python
-from maou.domain.data.schema import get_hcpe_dtype, get_preprocessing_dtype
-from maou.domain.data.io import save_hcpe_array, load_hcpe_array
-
-# Standardized data types
-hcpe_dtype = get_hcpe_dtype()
-preprocessing_dtype = get_preprocessing_dtype()
-
-# High-performance I/O
-save_hcpe_array(array, "output.hcpe.npy", validate=True)
-loaded_array = load_hcpe_array("input.hcpe.npy", validate=True)
-```
-
-#### Explicit Array Type System
-**CRITICAL**: Always specify `array_type` parameter:
-
-```python
-# File system data source
-datasource = FileDataSource(
-    file_paths=paths,
-    array_type="hcpe"  # REQUIRED
-)
-
-# S3 data source
-datasource = S3DataSource(
-    bucket_name="my-bucket",
-    array_type="preprocessing"  # REQUIRED
-)
-```
-
-Available types: `"hcpe"` (game records), `"preprocessing"` (training features)
-
-## Neural Network Architecture
-
-### BottleneckBlock Implementation
-The project uses optimized BottleneckBlock architecture (1x1→3x3→1x1 convolution):
-
-**Shogi-optimized configuration:**
-- Layers: [2, 2, 2, 1] - Wide and shallow
-- Bottleneck widths: [24, 48, 96, 144]
-- ~40% fewer parameters than ResNet-50
-
-### Mixed Precision Training
-Automatic mixed precision (AMP) enabled for CUDA:
-- 1.5-2x faster training on GPU
-- ~50% GPU memory reduction
-- Maintains FP32 accuracy
-
-## Performance Optimization
-
-### Recommended Workflow
-1. **DataLoader Benchmarking**: Find optimal settings
-2. **Training Performance Analysis**: Identify bottlenecks
-3. **Apply Optimizations**: Use recommended settings
-
-### Sample Ratio for Large Datasets
-Use `--sample-ratio` for efficient benchmarking:
-```bash
-poetry run maou utility benchmark-training \
-  --input-s3 \
-  --sample-ratio 0.1 \
-  --gpu cuda:0
-```
-
-## Debugging and Logging
-
-### Log Level Control
-```bash
-export MAOU_LOG_LEVEL=DEBUG    # Detailed logging
-export MAOU_LOG_LEVEL=INFO     # Default
-export MAOU_LOG_LEVEL=WARNING  # Minimal
-
-# Or use CLI flag
-poetry run maou --debug-mode hcpe-convert ...
-```
-
-## Error Resolution
-
-### CI Failure Resolution Order
-1. **Code Formatting**: `poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/`
-2. **Type Errors**: `poetry run mypy src/`
-3. **Linting Issues**: `poetry run flake8 src/`
-4. **Test Failures**: `pytest --tb=short`
-
-## Commit Guidelines
-
-### Quality Checks Before Commits
-```bash
-# Complete pre-commit pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-pytest
-```
-
-### Commit Message Format
-Use conventional commit format:
-- `feat`: New features
-- `fix`: Bug fixes
-- `docs`: Documentation
-- `refactor`: Code refactoring
-- `test`: Testing
-- `perf`: Performance
-
-### Atomic Commits
-- One logical change per commit
-- Build-passing commits
-- Self-contained changes
-
-## Pull Requests
-
-### Mandatory Requirements
-1. **Quality Assurance**: All checks must pass
-2. **Detailed Description**: Problem, solution, impact, testing
-3. **Code Review**: Appropriate reviewers assigned
-
-### Strict Prohibitions
-- ❌ `Co-authored-by` trailers
-- ❌ AI tool references
-- ❌ Generic commit messages
-- ❌ Multiple unrelated changes
-- ❌ Breaking tests
-
-## 日本語記述規則
-
-コード内日本語使用時の規則:
-
-### 句読点
-- **句点**: `，`(全角コンマ)
-- **読点**: `．`(全角ピリオド)
-
-### 括弧
-- **括弧**: 半角括弧`()`のみ使用
-
-### 例
-```python
-def process_shogi_game(game_data: str) -> ProcessingResult:
-    """
-    将棋の棋譜データを処理し，HCPE形式に変換する．
-
-    Args:
-        game_data: CSA形式またはKIF形式の棋譜データ
-
-    Returns:
-        変換結果を含むProcessingResultオブジェクト
-    """
-```
-
-Run `poetry run maou --help` for detailed CLI options and examples.
+### Japanese Writing Rules (日本語記述規則)
+- 句点: `，` (全角コンマ)
+- 読点: `．` (全角ピリオド)
+- 括弧: `()` (半角のみ)
+
+## Documentation Links
+
+| Topic | Document |
+|-------|----------|
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Testing | [docs/testing-guide.md](docs/testing-guide.md) |
+| Code Quality | [docs/code-quality.md](docs/code-quality.md) |
+| Rust Backend | [docs/rust-backend.md](docs/rust-backend.md) |
+| Performance | [docs/performance.md](docs/performance.md) |
+| LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
+| Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |
+| CLI Commands | [docs/commands/](docs/commands/) |
+| Shogi Visualization | [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) |
+
+### ⚠️ Visualization 実装時の必読ドキュメント
+
+`maou visualize` や将棋盤描画に関する実装を行う前に，
+**必ず** [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) を読むこと．
+
+将棋の座標系は一般的な row-major 配列とは異なり，`square = col * 9 + row` である．
+この規則を理解せずに実装すると，駒の位置や矢印の方向が90度回転するバグが発生する．

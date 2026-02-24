@@ -1,0 +1,272 @@
+"""Rust-based Arrow IPC I/O with Polars DataFrames．
+
+このモジュールはRustで実装されたArrow IPC（Feather形式）ファイルI/Oを，
+Polars DataFrameとして扱うためのPythonラッパーを提供する．
+
+主な特徴:
+- ゼロコピー変換（Polars ↔ Arrow RecordBatch）
+- LZ4圧縮による高速I/Oとストレージ削減
+- 型安全なインターフェース
+"""
+
+from pathlib import Path
+from typing import Union, cast
+
+import polars as pl
+
+try:
+    from maou._rust.maou_io import (
+        load_feather_file,
+        load_hcpe_feather,
+        load_preprocessing_feather,
+        save_feather_file,
+        save_hcpe_feather,
+        save_preprocessing_feather,
+    )
+
+    RUST_BACKEND_AVAILABLE = True
+except ImportError as e:
+    RUST_BACKEND_AVAILABLE = False
+    _import_error = e
+
+
+def _check_rust_backend() -> None:
+    """Rustバックエンドが利用可能かチェックする．"""
+    if not RUST_BACKEND_AVAILABLE:
+        raise ImportError(
+            f"Rust backend not available. Build with: uv run maturin develop\n"
+            f"Original error: {_import_error}"
+        )
+
+
+def save_hcpe_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """HCPE DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
+
+    Polars DataFrameをArrow RecordBatchに変換し，Rustで実装された
+    高速I/O関数でLZ4圧縮付きFeather形式ファイルとして保存する．
+
+    Args:
+        df: HCPEスキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+    """
+    _check_rust_backend()
+
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Polars → Arrow Table → RecordBatch（ゼロコピー）
+    arrow_table = df.to_arrow()
+    # Convert Table to RecordBatch (combine all batches)
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
+
+    # Rust関数を呼び出し
+    save_hcpe_feather(arrow_batch, str(file_path))
+
+
+def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
+    """HCPE DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
+
+    Rustで実装された高速I/O関数でFeather形式ファイルを読み込み，
+    Arrow RecordBatchをPolars DataFrameに変換して返す．
+    Stream形式とFile形式の両方に自動対応．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        HCPEスキーマを持つPolars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+    """
+    _check_rust_backend()
+
+    # Rust関数を呼び出し（Stream/File形式自動判定）
+    arrow_batch = load_hcpe_feather(str(file_path))
+    # Arrow → Polars（ゼロコピー）
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
+def save_preprocessing_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """前処理済みDataFrameを.featherファイルに保存する（Rustバックエンド使用）．
+
+    Args:
+        df: 前処理スキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+    """
+    _check_rust_backend()
+
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Polars → Arrow Table → RecordBatch
+    arrow_table = df.to_arrow()
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
+    save_preprocessing_feather(arrow_batch, str(file_path))
+
+
+def load_preprocessing_df(
+    file_path: Union[Path, str],
+) -> pl.DataFrame:
+    """前処理済みDataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
+
+    Stream形式とFile形式の両方に自動対応．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        前処理スキーマを持つPolars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+    """
+    _check_rust_backend()
+
+    # Rust関数を呼び出し（Stream/File形式自動判定）
+    arrow_batch = load_preprocessing_feather(str(file_path))
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
+def save_stage1_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """Stage 1 DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
+
+    Args:
+        df: Stage 1スキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+
+    Example:
+        >>> from maou.domain.data.schema import get_stage1_polars_schema
+        >>> df = pl.DataFrame(data, schema=get_stage1_polars_schema())
+        >>> save_stage1_df(df, "stage1_data.feather")
+    """
+    _check_rust_backend()
+
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Polars → Arrow Table → RecordBatch（ゼロコピー）
+    arrow_table = df.to_arrow()
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
+
+    save_feather_file(arrow_batch, str(file_path))
+
+
+def load_stage1_df(file_path: Union[Path, str]) -> pl.DataFrame:
+    """Stage 1 DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
+
+    Stream形式とFile形式の両方に自動対応．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        Stage 1スキーマを持つPolars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+
+    Example:
+        >>> df = load_stage1_df("stage1_data.feather")
+        >>> print(f"Loaded {len(df)} Stage 1 records")
+    """
+    _check_rust_backend()
+
+    arrow_batch = load_feather_file(str(file_path))
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
+def save_stage2_df(
+    df: pl.DataFrame, file_path: Union[Path, str]
+) -> None:
+    """Stage 2 DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
+
+    Args:
+        df: Stage 2スキーマを持つPolars DataFrame
+        file_path: 出力ファイルパス（.feather拡張子推奨）
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+
+    Example:
+        >>> from maou.domain.data.schema import get_stage2_polars_schema
+        >>> df = pl.DataFrame(data, schema=get_stage2_polars_schema())
+        >>> save_stage2_df(df, "stage2_data.feather")
+    """
+    _check_rust_backend()
+
+    # Create parent directories if they don't exist
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Polars → Arrow Table → RecordBatch（ゼロコピー）
+    arrow_table = df.to_arrow()
+    arrow_batch = (
+        arrow_table.to_batches()[0]
+        if len(arrow_table) > 0
+        else arrow_table.to_batches(max_chunksize=None)[0]
+    )
+
+    save_feather_file(arrow_batch, str(file_path))
+
+
+def load_stage2_df(file_path: Union[Path, str]) -> pl.DataFrame:
+    """Stage 2 DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
+
+    Stream形式とFile形式の両方に自動対応．
+
+    Args:
+        file_path: 入力ファイルパス（.feather拡張子）
+
+    Returns:
+        Stage 2スキーマを持つPolars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+
+    Example:
+        >>> df = load_stage2_df("stage2_data.feather")
+        >>> print(f"Loaded {len(df)} Stage 2 records")
+    """
+    _check_rust_backend()
+
+    arrow_batch = load_feather_file(str(file_path))
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))

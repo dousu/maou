@@ -1,0 +1,46 @@
+[workspace]
+members = ["rust/maou_io", "rust/maou_rust", "rust/maou_index"]
+resolver = "2"
+
+[workspace.dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3-polars = { version = "0.19" }
+polars = { version = "0.45", features = [
+    "lazy",
+    "ipc",
+    # Only include optional dtypes actually used (analyzed from schema.py and index.rs)
+    # This replaces dtype-full which compiles 18+ optional dtypes
+    # Note: Core types (i32, i64, u32, u64, f32, f64) are always available
+    "dtype-i8",    # Used in HCPE and preprocessing schemas
+    "dtype-i16",   # Used in HCPE and preprocessing schemas
+    "dtype-u8",    # Used in board representations
+    "dtype-u16",   # Used in move labels and indexing
+    "dtype-date",  # Used for timestamp fields
+    # u64 is a core type, no feature flag needed
+] }
+arrow = { version = "53.0", features = ["ipc", "ipc_compression", "pyarrow"] }
+thiserror = "2.0"
+tempfile = "3.0"
+
+# Build profile optimizations for memory-constrained environments
+[profile.dev]
+opt-level = 0
+codegen-units = 16  # Parallel codegen to reduce peak memory (required for 4GB RAM environments)
+incremental = false  # Disabled for sccache compatibility
+# Reduce debuginfo to save disk space and build time
+debug = 1  # Line tables only
+
+[profile.release]
+opt-level = 3
+codegen-units = 1  # Sequential even for release (memory over speed)
+lto = "thin"  # Thin link-time optimization
+incremental = true
+# Strip debuginfo for smaller binaries (maturin handles this)
+strip = "debuginfo"
+
+# Balanced profile for production builds with memory constraints
+[profile.mem-opt]
+inherits = "release"
+opt-level = 2  # Moderate optimization
+codegen-units = 1
+lto = "thin"
