@@ -153,7 +153,7 @@ Colab 環境では Rust ツールチェインをインストールせず，プ�
 
 ### レイヤー3: DevContainer でのビルド高速化 (sccache)
 
-#### 方針: sccache (ローカルディスク) + `incremental = false` + `codegen-units = 1`
+#### 方針: sccache (ローカルディスク) + `incremental = false` + `codegen-units = 16`
 
 `RUSTC_WRAPPER=sccache` を設定し，Cargo の incremental compilation を無効化する．
 sccache のローカルディスクキャッシュでクレート単位のキャッシュを行う．
@@ -227,7 +227,7 @@ sccache が価値を持つのは `target/` が存在しない場合(クリーン
 **判定理由**:
 
 - `incremental = true` はクレート内の部分再コンパイル(サブクレート粒度)が可能だが，本プロジェクトのクレートは小さい(maou_io: 4ファイル，maou_index: 3ファイル，maou_rust: 1ファイル)ため，クレート全体再コンパイルとの差は小さい
-- `Cargo.toml` では `codegen-units = 1` だが，`scripts/dev-init.sh` が cargo ユーザー設定で `codegen-units = 16` に上書きしていた．sccache 採用に合わせて `codegen-units = 1` に統一する(理由: sccache はクレート全体をキャッシュするため codegen-units の値はキャッシュ効率に影響しない．メモリ節約とキャッシュキーの安定性のため 1 に統一)
+- `Cargo.toml` では `codegen-units = 1` を維持 (CI は 7GB RAM で問題なし)．`scripts/dev-init.sh` では `codegen-units = 16` を維持する (理由: polars-core 等の大きな依存クレートのコンパイル時に `codegen-units = 1` ではピークメモリが増大し 4GB 環境で OOM が発生するため．sccache のキャッシュキーは値が固定されていれば安定するため，16 でも問題ない)
 - `target/` の消失は DevContainer の再作成，ディスク容量逼迫時の `cargo clean`，`.venv` 再作成時の `uv sync` で頻繁に発生する
 - sccache なら `target/` が消えても依存クレート(polars, arrow, pyo3 等)のキャッシュが残り，フルリビルドの大部分をスキップできる
 
@@ -263,13 +263,8 @@ incremental = false  # sccache との併用のため無効化 (現在は true)
 
 **scripts/dev-init.sh:**
 ```bash
-# 現在の設定:
 # [profile.dev]
-# codegen-units = 16
-#
-# 変更後:
-# [profile.dev]
-# codegen-units = 1    # sccache 採用に合わせて統一 (メモリ節約 + キャッシュキー安定性)
+# codegen-units = 16  # Parallel codegen to reduce peak memory (required for 4GB RAM)
 # incremental = false
 ```
 
@@ -401,7 +396,7 @@ export RUSTC_WRAPPER="sccache"
 ### 5. DevContainer のディスク容量 → 解決済み
 
 `SCCACHE_CACHE_SIZE="1G"` を設定する．
-`debug=1` + `codegen-units=1` 条件での実キャッシュサイズは ~300-500MB であり，1GB で十分なマージンがある．
+`debug=1` + `codegen-units=16` 条件での実キャッシュサイズは ~300-500MB であり，1GB で十分なマージンがある．
 DevContainer では dev profile のみキャッシュする想定．
 
 | 依存グループ | 推定 rlib サイズ |
@@ -468,7 +463,7 @@ Rust ビルドを完全にスキップする案．以下の理由で今回のス
 5. `RUSTC_WRAPPER=sccache` の設定を追加
 6. `SCCACHE_CACHE_SIZE="1G"` の設定を追加
 7. `Cargo.toml` の `[profile.dev]` で `incremental = false` に変更
-8. `scripts/dev-init.sh` の cargo ユーザー設定で `codegen-units = 1` + `incremental = false` に変更
+8. `scripts/dev-init.sh` の cargo ユーザー設定で `codegen-units = 16` + `incremental = false` に変更
 9. `.devcontainer/devcontainer.json` の `mounts` 設定で `~/.cargo/registry/` を DevContainer の volume で永続化し，`cargo fetch` のキャッシュを有効化
 10. DevContainer 再作成でのビルド時間を計測・検証
 

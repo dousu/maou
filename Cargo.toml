@@ -25,7 +25,7 @@ tempfile = "3.0"
 # Build profile optimizations for memory-constrained environments
 [profile.dev]
 opt-level = 0
-codegen-units = 1  # Sequential compilation reduces memory usage
+codegen-units = 1  # Better optimization quality (dev-init.sh overrides to 16 for memory-constrained environments)
 incremental = false  # Disabled for sccache compatibility
 # Reduce debuginfo to save disk space and build time
 debug = 1  # Line tables only
