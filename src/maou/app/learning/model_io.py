@@ -268,6 +268,7 @@ class ModelIO:
     ) -> None:
         try:
             import onnx
+            import onnxslim
             from onnxruntime.transformers import float16
         except ImportError as exc:
             raise ModuleNotFoundError(
@@ -275,18 +276,6 @@ class ModelIO:
                 "Install with `uv sync --extra cpu` or "
                 "`uv sync --extra cpu-infer` to enable model export."
             ) from exc
-
-        # onnxsim is optional (no Python 3.12 wheels available)
-        try:
-            import onnxsim
-
-            onnxsim_available = True
-        except ImportError:
-            onnxsim_available = False
-            logger.warning(
-                "onnxsim not available. "
-                "ONNX model simplification will be skipped."
-            )
 
         model = ModelFactory.create_shogi_model(
             device,
@@ -482,17 +471,8 @@ class ModelIO:
         onnx_model = onnx.shape_inference.infer_shapes(
             onnx_model
         )
-        if onnxsim_available:
-            onnx_model_simp, check = onnxsim.simplify(
-                onnx_model
-            )
-            if not check:
-                raise RuntimeError("onnxsim.simplify failed")
-            onnx.save(onnx_model_simp, onnx_model_path)
-        else:
-            # Skip simplification, save with shape inference only
-            onnx_model_simp = onnx_model
-            onnx.save(onnx_model_simp, onnx_model_path)
+        onnx_model_simp = onnxslim.slim(onnx_model)
+        onnx.save(onnx_model_simp, onnx_model_path)
 
         # ONNX FP32の検証
         if verify_export:
@@ -583,14 +563,6 @@ class ModelIO:
                     f"ONNX FP16 functional equivalence check failed: {func_report_fp16.summary()}"
                 )
 
-        # simplifyを挟もうとしたらエラーになったので一旦やめておく
-        # onnx_model_fp16 = onnx.shape_inference.infer_shapes(
-        #     onnx_model_fp16
-        # )
-        # onnx_model_simp_fp16, check = onnxsim.simplify(onnx_model_fp16)
-        # if not check:
-        #     raise RuntimeError("onnxsim.simplify failed")
-        # onnx.save(onnx_model_simp_fp16, onnx_model_fp16_path)
         if cloud_storage is not None:
             logger.info(
                 f"Uploading model to cloud storage ({onnx_model_fp16_path})"

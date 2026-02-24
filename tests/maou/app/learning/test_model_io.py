@@ -113,9 +113,10 @@ def test_generate_model_tag_trainable_layers_positive() -> None:
 # --- Fix 2: onnx_model_simp UnboundLocalError テスト ---
 
 
-def test_onnx_fp16_without_onnxsim() -> None:
-    """onnxsim未インストール時にFP16変換パスでUnboundLocalErrorが発生しないこと．"""
+def test_onnx_fp16_with_onnxslim() -> None:
+    """onnxslim.slim()を使ったONNXモデル最適化とFP16変換が正常に動作すること．"""
     import onnx
+    import onnxslim
     from onnxruntime.transformers import float16
 
     # 最小限のONNXモデルを作成
@@ -174,20 +175,15 @@ def test_onnx_fp16_without_onnxsim() -> None:
             },
         )
 
-        # onnxsim未インストールの状態をシミュレート
+        # ONNX最適化: shape inference → onnxslim.slim()
         onnx_model = onnx.load(f=onnx_path)
         onnx_model = onnx.shape_inference.infer_shapes(
             onnx_model
         )
+        onnx_model_simp = onnxslim.slim(onnx_model)
+        onnx.save(onnx_model_simp, onnx_path)
 
-        onnxsim_available = False
-        if onnxsim_available:
-            pass  # pragma: no cover
-        else:
-            onnx_model_simp = onnx_model
-            onnx.save(onnx_model_simp, onnx_path)
-
-        # FP16変換 — onnx_model_simp が定義されていればUnboundLocalErrorは発生しない
+        # FP16変換
         onnx_model_fp16 = float16.convert_float_to_float16(
             model=onnx_model_simp,
             keep_io_types=True,

@@ -1413,6 +1413,7 @@ aws = [
 cpu = [
     { name = "onnxruntime" },
     { name = "onnxruntime-tools" },
+    { name = "onnxslim" },
     { name = "torch", version = "2.7.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
     { name = "torch", version = "2.7.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
     { name = "torch-tb-profiler" },
@@ -1425,6 +1426,7 @@ cuda = [
     { name = "nvidia-ml-py" },
     { name = "onnxruntime-gpu" },
     { name = "onnxruntime-tools" },
+    { name = "onnxslim" },
     { name = "torch", version = "2.7.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" } },
     { name = "torch-tb-profiler" },
     { name = "torchinfo" },
@@ -1437,6 +1439,7 @@ gcp = [
 mpu = [
     { name = "onnxruntime-gpu" },
     { name = "onnxruntime-tools" },
+    { name = "onnxslim" },
     { name = "torch", version = "2.7.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" } },
     { name = "torch-tb-profiler" },
     { name = "torchinfo" },
@@ -1454,6 +1457,7 @@ tensorrt-infer = [
 tpu = [
     { name = "onnxruntime-gpu" },
     { name = "onnxruntime-tools" },
+    { name = "onnxslim" },
     { name = "torch", version = "2.7.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" } },
     { name = "torch-tb-profiler" },
     { name = "torch-xla" },
@@ -1516,6 +1520,10 @@ requires-dist = [
     { name = "onnxruntime-tools", marker = "extra == 'cuda'" },
     { name = "onnxruntime-tools", marker = "extra == 'mpu'" },
     { name = "onnxruntime-tools", marker = "extra == 'tpu'" },
+    { name = "onnxslim", marker = "extra == 'cpu'" },
+    { name = "onnxslim", marker = "extra == 'cuda'" },
+    { name = "onnxslim", marker = "extra == 'mpu'" },
+    { name = "onnxslim", marker = "extra == 'tpu'" },
     { name = "playwright", marker = "extra == 'visualize'", specifier = ">=1.40.0" },
     { name = "plotly", specifier = ">=6.5.0,<7.0.0" },
     { name = "polars", specifier = ">=1.0.0" },
@@ -2110,6 +2118,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fd/b5/c36283fef3b1d492a39d1b5f3f195965fbf002b168633daad302c51d8f4c/onnxruntime_tools-1.7.0.tar.gz", hash = "sha256:6dbdcee49424e066bcd10357c37d51bc422ae26494e3c2f0c1970d534f967f6d", size = 141435, upload-time = "2021-03-25T21:42:42.571Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/b0/db0e73356df0aaa8737e6f13c0dac499b5d904d3fa267c8ebf24515e8001/onnxruntime_tools-1.7.0-py3-none-any.whl", hash = "sha256:1dff888b5c482ac5bc627f12e108445fefcb3d600c43f63633975316fe617ad8", size = 212695, upload-time = "2021-03-25T21:42:40.551Z" },
+]
+
+[[package]]
+name = "onnxslim"
+version = "0.1.85"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama" },
+    { name = "ml-dtypes" },
+    { name = "onnx" },
+    { name = "packaging" },
+    { name = "sympy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/78/5e008f265b9051c450eef0384688a54f33044f45186190e044f264ebc01a/onnxslim-0.1.85.tar.gz", hash = "sha256:48c76c6b8820de932e2b2fb93ed4267ba9f5f74c751763dcf8bac32acb132a26", size = 592366, upload-time = "2026-02-11T18:33:42.44Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/d3/a85fcee3f440752288e8209da58eb86e3af7c70b5c2831c1b02f4c688985/onnxslim-0.1.85-py3-none-any.whl", hash = "sha256:12d3d5531635d835a0c15a37ca297e35513f133fac117e8a57b4dbbe6588de72", size = 234397, upload-time = "2026-02-11T18:33:40.97Z" },
 ]
 
 [[package]]

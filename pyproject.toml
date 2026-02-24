@@ -28,6 +28,7 @@ cpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
     "onnxruntime-tools",
+    "onnxslim",
 ]
 cuda = [
     "torch>=2.6.0,<=2.7.0",
@@ -36,6 +37,7 @@ cuda = [
     "nvidia-ml-py>=11.4.1",
     "onnxruntime-gpu",
     "onnxruntime-tools",
+    "onnxslim",
 ]
 mpu = [
     "torch>=2.6.0,<=2.7.0",
@@ -43,6 +45,7 @@ mpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
+    "onnxslim",
 ]
 tpu = [
     "torch-xla>=2.6.0,<=2.7.0",
@@ -51,6 +54,7 @@ tpu = [
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
     "onnxruntime-tools",
+    "onnxslim",
 ]
 cpu-infer = [
     "onnxruntime",
