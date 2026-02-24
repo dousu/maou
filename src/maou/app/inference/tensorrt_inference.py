@@ -69,6 +69,10 @@ class TensorRTInference:
             network, builder_config
         )
         if serialized_engine is None:
+            logger.error(
+                "TensorRT engine build failed for: %s",
+                onnx_path,
+            )
             raise RuntimeError(
                 "Failed to build TensorRT engine. "
                 "Check ONNX model compatibility and available GPU memory."
@@ -167,6 +171,9 @@ class TensorRTInference:
             serialized_engine
         )
         if engine is None:
+            logger.error(
+                "Failed to deserialize TensorRT engine"
+            )
             raise RuntimeError(
                 "Failed to deserialize TensorRT engine. "
                 "The serialized engine may be corrupted or incompatible."

@@ -4,7 +4,6 @@ TensorRT/CUDAモジュールはGPU環境でのみ利用可能なため，
 モックで差し替えてテストする．
 """
 
-import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -105,11 +104,10 @@ class TestBuildEngineFromOnnx:
                     Path("/dummy/model.onnx")
                 )
 
-    def test_no_success_log_on_build_failure(
+    def test_logs_error_and_no_success_on_build_failure(
         self,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """ビルド失敗時に成功ログが出力されない．"""
+        """ビルド失敗時にエラーログが出力され，成功ログが出力されない．"""
         trt_mock = _create_trt_mock()
         cuda_mocks = _create_cuda_mocks()
 
@@ -135,22 +133,35 @@ class TestBuildEngineFromOnnx:
             sys.modules.pop(
                 "maou.app.inference.tensorrt_inference", None
             )
+            from maou.app.inference import tensorrt_inference
             from maou.app.inference.tensorrt_inference import (
                 TensorRTInference,
             )
 
             with (
-                caplog.at_level(logging.INFO),
+                patch.object(
+                    tensorrt_inference.logger, "error"
+                ) as mock_error,
+                patch.object(
+                    tensorrt_inference.logger, "info"
+                ) as mock_info,
                 pytest.raises(RuntimeError),
             ):
                 TensorRTInference._build_engine_from_onnx(
                     Path("/dummy/model.onnx")
                 )
 
-            assert (
-                "TensorRT engine built successfully"
-                not in caplog.text
+            # エラーログが出力されたこと
+            mock_error.assert_called_once()
+            assert "TensorRT engine build failed for" in str(
+                mock_error.call_args
             )
+            # 成功ログが出力されていないこと
+            for call in mock_info.call_args_list:
+                assert (
+                    "TensorRT engine built successfully"
+                    not in str(call)
+                )
 
 
 class TestDeserializeEngine:
