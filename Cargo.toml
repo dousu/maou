@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
 pyo3-polars = { version = "0.19" }
-polars = { version = "0.45", features = [
+polars = { version = "0.53", features = [
     "lazy",
     "ipc",
     # Only include optional dtypes actually used (analyzed from schema.py and index.rs)
@@ -20,7 +20,7 @@ polars = { version = "0.45", features = [
 ] }
 arrow = { version = "53.0", features = ["ipc", "ipc_compression", "pyarrow"] }
 thiserror = "2.0"
-tempfile = "3.0"
+tempfile = "3.26"
 
 # Build profile optimizations for memory-constrained environments
 [profile.dev]
