@@ -377,6 +377,11 @@ class TestInferenceRunner:
 
             # TensorRTInference.inferが呼ばれたことを確認
             mock_tensorrt_class.infer.assert_called_once()
+            # workspace_size_mbが渡されていることを確認
+            call_kwargs = mock_tensorrt_class.infer.call_args
+            assert (
+                call_kwargs.kwargs["workspace_size_mb"] == 256
+            )
 
             # 結果の検証
             assert "Policy" in result
@@ -426,6 +431,7 @@ class TestInferenceRunner:
         assert config.board_view is True
         assert config.sfen is None
         assert config.board is None
+        assert config.trt_workspace_size_mb == 256
 
     def test_inference_option_frozen(
         self, mock_model_path: Path

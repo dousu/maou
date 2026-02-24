@@ -43,6 +43,17 @@ from maou.infra.console.common import (
     type=str,
     required=True,
 )
+@click.option(
+    "--trt-workspace-size",
+    help="TensorRT workspace size in MB. "
+    "Default is sufficient for this project's models. "
+    "Increase for larger models or max speed. "
+    "Decrease if GPU memory is limited.",
+    type=int,
+    default=256,
+    show_default=True,
+    required=False,
+)
 @handle_exception
 def evaluate_board(
     model_type: str,
@@ -50,6 +61,7 @@ def evaluate_board(
     cuda: bool,
     num_moves: int,
     sfen: str,
+    trt_workspace_size: int,
 ) -> None:
     """Evaluate a Shogi board position using a specified model.
 
@@ -62,6 +74,7 @@ def evaluate_board(
         model_path: Path to the model file.
         num_moves: Number of top moves to return.
         sfen: SFEN string representing the board position.
+        trt_workspace_size: TensorRT workspace size in MB.
     """
     click.echo(
         infer.infer(
@@ -70,5 +83,6 @@ def evaluate_board(
             num_moves=num_moves,
             cuda=cuda,
             sfen=sfen,
+            trt_workspace_size=trt_workspace_size,
         )
     )

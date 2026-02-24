@@ -21,6 +21,7 @@
 | `--cuda/--no-cuda` | default `--no-cuda` | Turns GPU execution on or off for both ONNX Runtime and TensorRT. TensorRT requires `--cuda` (see guardrails below).【F:src/maou/infra/console/evaluate_board.py†L25-L33】【F:src/maou/app/inference/run.py†L80-L139】 |
 | `--num-moves INT` | default `5` | Controls how many candidate moves are requested from the backend. The value is stored inside `InferenceRunner.InferenceOption.num_moves`.【F:src/maou/infra/console/evaluate_board.py†L34-L42】【F:src/maou/app/inference/run.py†L40-L103】 |
 | `--sfen STRING` | ✅ | Full SFEN describing the position (piece placement, side to move, hands, move count). The string is passed to `Board.set_sfen`, so anything accepted by `cshogi` works here.【F:src/maou/infra/console/evaluate_board.py†L43-L51】【F:src/maou/domain/board/shogi.py†L1-L77】 |
+| `--trt-workspace-size INT` | default `256` | TensorRT workspace size in MB. Default is sufficient for this project's models. Increase for larger models or max speed. Decrease if GPU memory is limited. Only used with `--model-type TENSORRT`. |
 
 ## Execution flow
 

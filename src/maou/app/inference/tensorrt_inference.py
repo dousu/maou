@@ -15,6 +15,7 @@ class TensorRTInference:
     @staticmethod
     def _build_engine_from_onnx(
         onnx_path: Path,
+        workspace_size_mb: int = 256,
     ) -> bytes:
         """ONNXモデルから現在のGPUに適したTensorRTエンジンを生成"""
 
@@ -42,7 +43,8 @@ class TensorRTInference:
         # build engine
         builder_config = builder.create_builder_config()
         builder_config.set_memory_pool_limit(
-            trt.MemoryPoolType.WORKSPACE, 1 << 30
+            trt.MemoryPoolType.WORKSPACE,
+            workspace_size_mb * (1 << 20),
         )
 
         # FP16最適化
@@ -87,12 +89,16 @@ class TensorRTInference:
         hand_data: np.ndarray,
         num: int,
         cuda_available: bool,
+        workspace_size_mb: int = 256,
     ) -> tuple[list[int], float]:
         if not cuda_available:
             raise ValueError("TensorRT requires CUDA.")
 
         serialized_engine = (
-            TensorRTInference._build_engine_from_onnx(onnx_path)
+            TensorRTInference._build_engine_from_onnx(
+                onnx_path,
+                workspace_size_mb=workspace_size_mb,
+            )
         )
 
         # TensorRTのサンプルコードを参考に実装した

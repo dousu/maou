@@ -13,6 +13,7 @@ def infer(
     cuda: bool,
     num_moves: int,
     sfen: str,
+    trt_workspace_size: int = 256,
 ) -> str:
     try:
         model_type_enum = ModelType[model_type]
@@ -26,6 +27,7 @@ def infer(
         cuda=cuda,
         num_moves=num_moves,
         sfen=sfen,
+        trt_workspace_size_mb=trt_workspace_size,
     )
     runner = InferenceRunner()
     result = runner.infer(option)

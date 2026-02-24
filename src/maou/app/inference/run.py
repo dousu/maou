@@ -47,6 +47,7 @@ class InferenceRunner:
         board_view: bool = True
         sfen: Optional[str] = None
         board: Optional[Board] = None
+        trt_workspace_size_mb: int = 256
 
     def infer(self, config: InferenceOption) -> Dict[str, str]:
         # 特徴量の作成
@@ -97,6 +98,7 @@ class InferenceRunner:
                 hand_data,
                 config.num_moves,
                 config.cuda,
+                workspace_size_mb=config.trt_workspace_size_mb,
             )
         else:
             raise ValueError(

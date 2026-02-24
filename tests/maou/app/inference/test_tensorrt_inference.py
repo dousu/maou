@@ -215,3 +215,68 @@ class TestDeserializeEngine:
                     num=5,
                     cuda_available=True,
                 )
+
+
+class TestWorkspaceSize:
+    """workspace_size_mb パラメータのテスト．"""
+
+    def _build_with_workspace_size(
+        self, workspace_size_mb: int
+    ) -> MagicMock:
+        """指定したworkspace_size_mbでビルドし，builder_configモックを返す．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        parser_mock = MagicMock()
+        parser_mock.parse_from_file.return_value = True
+        parser_mock.num_errors = 0
+        trt_mock.OnnxParser.return_value = parser_mock
+
+        builder_mock = MagicMock()
+        builder_mock.platform_has_fast_fp16 = False
+        network_mock = MagicMock()
+        network_mock.num_inputs = 0
+        builder_mock.create_network.return_value = network_mock
+        builder_mock.build_serialized_network.return_value = (
+            b"dummy_engine"
+        )
+        trt_mock.Builder.return_value = builder_mock
+
+        builder_config_mock = MagicMock()
+        builder_mock.create_builder_config.return_value = (
+            builder_config_mock
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            TensorRTInference._build_engine_from_onnx(
+                Path("/dummy/model.onnx"),
+                workspace_size_mb=workspace_size_mb,
+            )
+
+        return builder_config_mock
+
+    def test_default_workspace_size(self) -> None:
+        """デフォルト値(256MB)で正しいバイト数が設定される．"""
+        config_mock = self._build_with_workspace_size(256)
+        config_mock.set_memory_pool_limit.assert_called_once_with(
+            0,  # trt.MemoryPoolType.WORKSPACE のモック値
+            256 * (1 << 20),
+        )
+
+    def test_custom_workspace_size(self) -> None:
+        """カスタム値(512MB)で正しいバイト数が設定される．"""
+        config_mock = self._build_with_workspace_size(512)
+        config_mock.set_memory_pool_limit.assert_called_once_with(
+            0,
+            512 * (1 << 20),
+        )
