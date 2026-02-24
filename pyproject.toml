@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 # GPU種類ごとのextra
 cpu = [
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
@@ -31,7 +31,7 @@ cpu = [
     "onnxslim",
 ]
 cuda = [
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "nvidia-ml-py>=11.4.1",
@@ -40,7 +40,7 @@ cuda = [
     "onnxslim",
 ]
 mpu = [
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
@@ -48,8 +48,8 @@ mpu = [
     "onnxslim",
 ]
 tpu = [
-    "torch-xla>=2.6.0,<=2.7.0",
-    "torch>=2.6.0,<=2.7.0",
+    "torch-xla>=2.6.0,<=2.9.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
@@ -81,7 +81,7 @@ aws = [
 # 可視化ツール用のextra
 visualize = [
     "gradio>=6.0.0,<7.0.0",
-    "huggingface-hub>=0.19.3,<1.0.0",
+    "huggingface-hub>=0.19.3,<2.0.0",
     "matplotlib>=3.5.0",
     "playwright>=1.40.0",
 ]
