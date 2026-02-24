@@ -1,0 +1,53 @@
+name: Build Wheel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-wheel
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1.50.0
+        with:
+          target: x86_64-unknown-linux-gnu
+          manylinux: "2_28"
+          sccache: "true"
+          args: --release --out dist -i python3.11 python3.12
+          before-script-linux: yum install -y clang lld
+
+      - name: Generate build info
+        id: build-info
+        run: echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
+
+      - name: Delete existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete latest --yes --cleanup-tag || true
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2.5.0
+        with:
+          tag_name: latest
+          name: Development Build
+          body: |
+            Prebuilt wheels for development use (Colab, etc.).
+
+            - **Commit**: ${{ github.sha }}
+            - **Built at**: ${{ steps.build-info.outputs.datetime }}
+            - **Platform**: manylinux_2_28 x86_64
+            - **Python**: CPython 3.11, 3.12
+          files: dist/*.whl
+          make_latest: "true"
+          fail_on_unmatched_files: true
