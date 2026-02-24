@@ -256,6 +256,20 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             PackageRequirement("torch", _TRAINING_EXTRAS),
         ),
     ),
+    "build-engine": LazyCommandSpec(
+        "maou.infra.console.build_engine",
+        "build_engine",
+        missing_help=(
+            "Command 'build-engine' requires TensorRT dependencies. "
+            "Install with `uv sync --extra tensorrt-infer`."
+        ),
+        required_packages=(
+            PackageRequirement(
+                "tensorrt",
+                ("tensorrt-infer",),
+            ),
+        ),
+    ),
     "evaluate": LazyCommandSpec(
         "maou.infra.console.evaluate_board",
         "evaluate_board",

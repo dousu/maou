@@ -1,7 +1,7 @@
 import ctypes
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import tensorrt as trt
@@ -13,11 +13,66 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class TensorRTInference:
     @staticmethod
-    def _build_engine_from_onnx(
+    def save_engine(
+        serialized_engine: bytes, path: Path
+    ) -> None:
+        """シリアライズ済みTensorRTエンジンをファイルに保存する．
+
+        Args:
+            serialized_engine: ビルド済みのシリアライズドエンジンバイト列．
+            path: 保存先ファイルパス．
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(serialized_engine)
+        logger.info(
+            "TensorRT engine saved to: %s (%d MB)",
+            path,
+            len(serialized_engine) >> 20,
+        )
+
+    @staticmethod
+    def load_engine(path: Path) -> bytes:
+        """ファイルからシリアライズ済みTensorRTエンジンを読み込む．
+
+        Args:
+            path: エンジンファイルパス．
+
+        Returns:
+            シリアライズドエンジンバイト列．
+
+        Raises:
+            FileNotFoundError: ファイルが存在しない場合．
+            RuntimeError: ファイル読み込みに失敗した場合．
+        """
+        if not path.exists():
+            raise FileNotFoundError(
+                f"TensorRT engine file not found: {path}"
+            )
+        logger.info("Loading TensorRT engine from: %s", path)
+        data = path.read_bytes()
+        if len(data) == 0:
+            raise RuntimeError(
+                f"TensorRT engine file is empty: {path}"
+            )
+        return data
+
+    @staticmethod
+    def build_engine_from_onnx(
         onnx_path: Path,
         workspace_size_mb: int = 256,
     ) -> bytes:
-        """ONNXモデルから現在のGPUに適したTensorRTエンジンを生成"""
+        """ONNXモデルから現在のGPUに適したTensorRTエンジンを生成する．
+
+        Args:
+            onnx_path: ONNXモデルファイルパス．
+            workspace_size_mb: TensorRTワークスペースサイズ(MB)．
+
+        Returns:
+            シリアライズ済みエンジンバイト列．
+
+        Raises:
+            RuntimeError: ONNXパースまたはエンジンビルドに失敗した場合．
+        """
 
         # builder
         trt_logger = trt.Logger(trt.Logger.WARNING)
@@ -84,22 +139,49 @@ class TensorRTInference:
 
     @staticmethod
     def infer(
-        onnx_path: Path,
+        onnx_path: Optional[Path],
         board_data: np.ndarray,
         hand_data: np.ndarray,
         num: int,
         cuda_available: bool,
         workspace_size_mb: int = 256,
+        engine_path: Optional[Path] = None,
     ) -> tuple[list[int], float]:
+        """TensorRTエンジンで推論を実行する．
+
+        Args:
+            onnx_path: ONNXモデルファイルパス．engine_path未指定時は必須．
+            board_data: 盤面特徴量．
+            hand_data: 持ち駒特徴量．
+            num: 上位候補手数．
+            cuda_available: CUDA利用可否．
+            workspace_size_mb: TensorRTワークスペースサイズ(MB)．
+            engine_path: ビルド済みエンジンファイルパス．指定時はONNXビルドをスキップ．
+
+        Returns:
+            上位ラベルリストと評価値のタプル．
+
+        Raises:
+            ValueError: CUDAが無効またはonnx_pathが未指定の場合．
+        """
         if not cuda_available:
             raise ValueError("TensorRT requires CUDA.")
 
-        serialized_engine = (
-            TensorRTInference._build_engine_from_onnx(
-                onnx_path,
-                workspace_size_mb=workspace_size_mb,
+        if engine_path is not None:
+            serialized_engine = TensorRTInference.load_engine(
+                engine_path
             )
-        )
+        else:
+            if onnx_path is None:
+                raise ValueError(
+                    "onnx_path is required when engine_path is not specified."
+                )
+            serialized_engine = (
+                TensorRTInference.build_engine_from_onnx(
+                    onnx_path,
+                    workspace_size_mb=workspace_size_mb,
+                )
+            )
 
         # TensorRTのサンプルコードを参考に実装した
         # https://github.com/NVIDIA/TensorRT/blob/main/samples/python/common_runtime.py

@@ -58,7 +58,7 @@ def _create_cuda_mocks() -> dict[str, MagicMock]:
 
 
 class TestBuildEngineFromOnnx:
-    """_build_engine_from_onnx のエラーハンドリングテスト．"""
+    """build_engine_from_onnx のエラーハンドリングテスト．"""
 
     def test_raises_runtime_error_when_build_returns_none(
         self,
@@ -100,7 +100,7 @@ class TestBuildEngineFromOnnx:
                 RuntimeError,
                 match="Failed to build TensorRT engine",
             ):
-                TensorRTInference._build_engine_from_onnx(
+                TensorRTInference.build_engine_from_onnx(
                     Path("/dummy/model.onnx")
                 )
 
@@ -147,7 +147,7 @@ class TestBuildEngineFromOnnx:
                 ) as mock_info,
                 pytest.raises(RuntimeError),
             ):
-                TensorRTInference._build_engine_from_onnx(
+                TensorRTInference.build_engine_from_onnx(
                     Path("/dummy/model.onnx")
                 )
 
@@ -200,7 +200,7 @@ class TestDeserializeEngine:
             with (
                 patch.object(
                     TensorRTInference,
-                    "_build_engine_from_onnx",
+                    "build_engine_from_onnx",
                     return_value=b"dummy_engine_bytes",
                 ),
                 pytest.raises(
@@ -258,7 +258,7 @@ class TestWorkspaceSize:
                 TensorRTInference,
             )
 
-            TensorRTInference._build_engine_from_onnx(
+            TensorRTInference.build_engine_from_onnx(
                 Path("/dummy/model.onnx"),
                 workspace_size_mb=workspace_size_mb,
             )
@@ -280,3 +280,307 @@ class TestWorkspaceSize:
             0,
             512 * (1 << 20),
         )
+
+
+class TestSaveEngine:
+    """save_engine のテスト．"""
+
+    def test_save_engine_creates_file(
+        self, tmp_path: Path
+    ) -> None:
+        """save_engine でバイト列がファイルに正しく書き込まれること．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            engine_data = b"dummy_engine_bytes_12345"
+            engine_file = tmp_path / "test.engine"
+            TensorRTInference.save_engine(
+                engine_data, engine_file
+            )
+
+            assert engine_file.exists()
+            assert engine_file.read_bytes() == engine_data
+
+    def test_save_engine_creates_parent_dirs(
+        self, tmp_path: Path
+    ) -> None:
+        """存在しない親ディレクトリが自動作成されること．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            engine_data = b"dummy_engine_bytes"
+            engine_file = (
+                tmp_path / "nested" / "dir" / "test.engine"
+            )
+            TensorRTInference.save_engine(
+                engine_data, engine_file
+            )
+
+            assert engine_file.exists()
+            assert engine_file.read_bytes() == engine_data
+
+
+class TestLoadEngine:
+    """load_engine のテスト．"""
+
+    def test_load_engine_returns_bytes(
+        self, tmp_path: Path
+    ) -> None:
+        """保存済みファイルからバイト列が正しく読み込まれること．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            engine_data = b"dummy_engine_bytes_67890"
+            engine_file = tmp_path / "test.engine"
+            engine_file.write_bytes(engine_data)
+
+            result = TensorRTInference.load_engine(engine_file)
+            assert result == engine_data
+
+    def test_load_engine_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """存在しないパスで FileNotFoundError が送出されること．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            with pytest.raises(
+                FileNotFoundError,
+                match="TensorRT engine file not found",
+            ):
+                TensorRTInference.load_engine(
+                    tmp_path / "nonexistent.engine"
+                )
+
+    def test_load_engine_empty_file(
+        self, tmp_path: Path
+    ) -> None:
+        """空ファイルで RuntimeError が送出されること．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            engine_file = tmp_path / "empty.engine"
+            engine_file.write_bytes(b"")
+
+            with pytest.raises(
+                RuntimeError,
+                match="TensorRT engine file is empty",
+            ):
+                TensorRTInference.load_engine(engine_file)
+
+
+class TestInferWithEnginePath:
+    """engine_path を指定した infer() のテスト．"""
+
+    def test_infer_with_engine_path_skips_build(
+        self, tmp_path: Path
+    ) -> None:
+        """engine_path 指定時に build_engine_from_onnx が呼ばれないこと．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        cudart_mock = cuda_mocks["cuda.bindings.runtime"]
+
+        # deserialize_cuda_engine が成功を返すように設定
+        runtime_mock = MagicMock()
+        runtime_mock.deserialize_cuda_engine.return_value = (
+            MagicMock()
+        )
+        trt_mock.Runtime.return_value = runtime_mock
+
+        # cudaStreamCreate が成功を返すように設定
+        cudart_mock.cudaStreamCreate.return_value = (
+            MagicMock(),
+            MagicMock(),
+        )
+
+        # エンジンファイルを作成
+        engine_file = tmp_path / "test.engine"
+        engine_file.write_bytes(b"dummy_engine_bytes")
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            with patch.object(
+                TensorRTInference,
+                "build_engine_from_onnx",
+            ) as mock_build:
+                try:
+                    TensorRTInference.infer(
+                        onnx_path=None,
+                        board_data=MagicMock(),
+                        hand_data=MagicMock(),
+                        num=5,
+                        cuda_available=True,
+                        engine_path=engine_file,
+                    )
+                except Exception:
+                    pass  # 推論処理はモックなので途中で例外は許容
+
+                # build_engine_from_onnx が呼ばれていないことを確認
+                mock_build.assert_not_called()
+
+    def test_infer_without_engine_path_builds(self) -> None:
+        """engine_path=None 時に従来通り build_engine_from_onnx が呼ばれること（後方互換性）．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        cudart_mock = cuda_mocks["cuda.bindings.runtime"]
+
+        # deserialize_cuda_engine が成功を返すように設定
+        runtime_mock = MagicMock()
+        runtime_mock.deserialize_cuda_engine.return_value = (
+            MagicMock()
+        )
+        trt_mock.Runtime.return_value = runtime_mock
+
+        # cudaStreamCreate が成功を返すように設定
+        cudart_mock.cudaStreamCreate.return_value = (
+            MagicMock(),
+            MagicMock(),
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            with patch.object(
+                TensorRTInference,
+                "build_engine_from_onnx",
+                return_value=b"dummy_engine_bytes",
+            ) as mock_build:
+                try:
+                    TensorRTInference.infer(
+                        onnx_path=Path("/dummy/model.onnx"),
+                        board_data=MagicMock(),
+                        hand_data=MagicMock(),
+                        num=5,
+                        cuda_available=True,
+                    )
+                except Exception:
+                    pass  # 推論処理はモックなので途中で例外は許容
+
+                # build_engine_from_onnx が呼ばれたことを確認
+                mock_build.assert_called_once()
+
+    def test_infer_with_engine_path_does_not_require_onnx_path(
+        self, tmp_path: Path
+    ) -> None:
+        """engine_path 指定時に onnx_path=None を明示的に渡してもエラーにならないこと．"""
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        cudart_mock = cuda_mocks["cuda.bindings.runtime"]
+
+        # deserialize_cuda_engine が成功を返すように設定
+        runtime_mock = MagicMock()
+        runtime_mock.deserialize_cuda_engine.return_value = (
+            MagicMock()
+        )
+        trt_mock.Runtime.return_value = runtime_mock
+
+        # cudaStreamCreate が成功を返すように設定
+        cudart_mock.cudaStreamCreate.return_value = (
+            MagicMock(),
+            MagicMock(),
+        )
+
+        # エンジンファイルを作成
+        engine_file = tmp_path / "test.engine"
+        engine_file.write_bytes(b"dummy_engine_bytes")
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            # onnx_path=None かつ engine_path 指定で ValueError が出ないことを確認
+            # (推論処理自体はモックなので途中で例外が出ても問題ない)
+            try:
+                TensorRTInference.infer(
+                    onnx_path=None,
+                    board_data=MagicMock(),
+                    hand_data=MagicMock(),
+                    num=5,
+                    cuda_available=True,
+                    engine_path=engine_file,
+                )
+            except ValueError:
+                pytest.fail(
+                    "ValueError should not be raised when engine_path is specified with onnx_path=None"
+                )
+            except Exception:
+                pass  # 推論処理中のその他の例外は許容
