@@ -323,16 +323,18 @@ GitHub Actions でのビルドは DevContainer (2-core / 4GB RAM) より高ス�
 **lld (LLVM linker)** — 採用
 
 - Rust エコシステムで最も広く使われている代替リンカー
-- `rust-lld` として Rust に同梱されつつある (Rust 1.90.0+ で Linux x86_64 のデフォルト化が進行中)
-- Thin LTO に対応しており，本プロジェクトの `lto = "thin"` 設定と互換
+- `rust-lld` として Rust に同梱されつつある ([Rust 1.90.0 (2025年9月) で Linux x86_64 のデフォルトに](https://blog.rust-lang.org/2025/09/01/rust-lld-on-1.90.0-stable/))
+- Thin LTO にネイティブ対応 (LLVM ツールチェインの一部であり，LLVM bitcode を直接処理)
 - maturin-action の manylinux_2_28 コンテナで利用可能
-- 将来的に `.cargo/config.toml` のリンカー設定を削除できる可能性あり (Rust デフォルトになった場合)
+- 将来的に `.cargo/config.toml` のリンカー設定を削除できる可能性あり (Rust デフォルト化後)
+- sccache との組み合わせ: `rustflags` でリンカーを指定するとキャッシュキーに影響する既知の問題あり ([sccache#1755](https://github.com/mozilla/sccache/issues/1755))．ただし sccache は `cdylib` をキャッシュしないため，rlib クレートへの影響のみ
 
 **mold** — 不採用
 
 - 最も高速なリンカーだが，本プロジェクトの cdylib では lld との差が 100ms 未満と推定される
-- **LTO に非対応**: 本プロジェクトの release プロファイルは `lto = "thin"` を使用しているため，CI の wheel ビルド (`--release`) では mold を使えない
-- manylinux コンテナへのインストールに追加手順が必要
+- **LTO に非対応**: LTO 使用時に `lto-wrapper: fatal error` が発生する既知の問題あり ([mold#1226](https://github.com/rui314/mold/issues/1226), [rust#119332](https://github.com/rust-lang/rust/issues/119332))．本プロジェクトの release プロファイルは `lto = "thin"` のため CI wheel ビルドで使えない
+- manylinux_2014 コンテナでは古い glibc (2.17) との `.gnu.linkonce` 互換性問題あり．manylinux_2_28 以降なら使用可能
+- sccache との組み合わせでキャッシュミスが発生する既知の問題あり ([sccache#1755](https://github.com/mozilla/sccache/issues/1755))
 - ライセンス: v2.0 以降 MIT (以前は AGPL)
 
 **GNU ld** — 不採用
@@ -342,9 +344,10 @@ GitHub Actions でのビルドは DevContainer (2-core / 4GB RAM) より高ス�
 
 **gold (GNU)** — 不採用
 
-- 2025年2月に**非推奨化** (binutils 2.44)
+- [2025年2月に非推奨化](https://www.phoronix.com/news/GNU-Gold-Linker-Deprecated) (binutils 2.44)
+- Rust が `#[used]` 属性で使用する `SHF_GNU_RETAIN` セクションを誤処理する問題あり ([rust#141748](https://github.com/rust-lang/rust/issues/141748))
 - メモリ使用量が最も大きい
-- 今後のメンテナンスが期待できない
+- 新たなメンテナーが見つからない限り binutils から削除予定
 
 #### DevContainer vs GitHub Actions でリンカーを分ける案
 
@@ -454,3 +457,9 @@ DevContainer のワークスペースパスが変わるとキャッシュがヒ�
 - [softprops/action-gh-release](https://github.com/softprops/action-gh-release) - GitHub Release Action
 - [Maturin Distribution Guide](https://www.maturin.rs/distribution.html)
 - [uv: Settings Reference](https://docs.astral.sh/uv/reference/settings/)
+- [Rust 1.90.0: Faster linking with rust-lld on Linux](https://blog.rust-lang.org/2025/09/01/rust-lld-on-1.90.0-stable/) - lld のデフォルト化
+- [Enabling rust-lld on nightly](https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux/) - lld nightly 検証結果
+- [mold GitHub Repository](https://github.com/rui314/mold) - mold リンカー
+- [GNU Gold Linker Is Deprecated (Phoronix)](https://www.phoronix.com/news/GNU-Gold-Linker-Deprecated) - gold 非推奨化
+- [mold fails to link with LTO (mold#1226)](https://github.com/rui314/mold/issues/1226) - mold LTO 問題
+- [sccache cache miss with mold (sccache#1755)](https://github.com/mozilla/sccache/issues/1755) - リンカーとキャッシュキーの問題
