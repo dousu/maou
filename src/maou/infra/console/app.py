@@ -289,13 +289,6 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             ),
         ),
     ),
-    "pretrain": LazyCommandSpec(
-        "maou.infra.console.pretrain_cli",
-        "pretrain",
-        required_packages=(
-            PackageRequirement("torch", _TRAINING_EXTRAS),
-        ),
-    ),
     "visualize": LazyCommandSpec(
         "maou.infra.console.visualize",
         "visualize",

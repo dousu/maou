@@ -256,17 +256,13 @@ def _find_option(
 # ------------------------------------------------------------------
 
 
-# テスト対象コマンドの遅延取得（pretrain_cli の import を分離）
 def _get_input_cache_mode_commands() -> list[
     tuple[str, click.Command]
 ]:
     """--input-cache-mode を持つ全コマンドを取得する．"""
-    import maou.infra.console.pretrain_cli as pretrain_cli
-
     return [
         ("benchmark-dataloader", utility.benchmark_dataloader),
         ("benchmark-training", utility.benchmark_training),
-        ("pretrain", pretrain_cli.pretrain),
     ]
 
 
@@ -278,8 +274,6 @@ def _get_input_cache_mode_commands_with_modules() -> list[
     デコレータで包まれたコールバックからモジュールを特定できないため，
     コマンドとモジュールの対応を明示的に定義する．
     """
-    import maou.infra.console.pretrain_cli as pretrain_cli
-
     return [
         (
             "benchmark-dataloader",
@@ -291,7 +285,6 @@ def _get_input_cache_mode_commands_with_modules() -> list[
             utility.benchmark_training,
             utility,
         ),
-        ("pretrain", pretrain_cli.pretrain, pretrain_cli),
     ]
 
 
