@@ -3,7 +3,7 @@
 	"image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
 	"postCreateCommand": "bash scripts/devcontainer.sh && bash scripts/dev-init.sh",
 	"containerEnv": {
-		"SCCACHE_CACHE_SIZE": "2G",
+		"SCCACHE_CACHE_SIZE": "1G",
 		"SCCACHE_DIR": "/home/vscode/.cache/sccache"
 	},
 	"mounts": [

@@ -400,8 +400,8 @@ export RUSTC_WRAPPER="sccache"
 
 ### 5. DevContainer のディスク容量 → 解決済み
 
-`SCCACHE_CACHE_SIZE="2G"` を設定する．
-依存クレートの rlib サイズ見積もりにより，2GB は十分な容量である．
+`SCCACHE_CACHE_SIZE="1G"` を設定する．
+`debug=1` + `codegen-units=1` 条件での実キャッシュサイズは ~300-500MB であり，1GB で十分なマージンがある．
 DevContainer では dev profile のみキャッシュする想定．
 
 | 依存グループ | 推定 rlib サイズ |
@@ -416,7 +416,7 @@ DevContainer では dev profile のみキャッシュする想定．
 なお，dev profile では `debug = 1` (line tables only) のためデバッグ情報が少なく，実際の rlib サイズは上記見積もりの下限寄りになると想定される．
 
 ```bash
-export SCCACHE_CACHE_SIZE="2G"  # キャッシュ上限を 2GB に制限
+export SCCACHE_CACHE_SIZE="1G"  # キャッシュ上限を 1GB に制限
 ```
 
 ### 6. sccache のパス依存性
@@ -466,7 +466,7 @@ Rust ビルドを完全にスキップする案．以下の理由で今回のス
 
 4. `scripts/dev-init.sh` に sccache バイナリのインストールを追加
 5. `RUSTC_WRAPPER=sccache` の設定を追加
-6. `SCCACHE_CACHE_SIZE="2G"` の設定を追加
+6. `SCCACHE_CACHE_SIZE="1G"` の設定を追加
 7. `Cargo.toml` の `[profile.dev]` で `incremental = false` に変更
 8. `scripts/dev-init.sh` の cargo ユーザー設定で `codegen-units = 1` + `incremental = false` に変更
 9. `.devcontainer/devcontainer.json` の `mounts` 設定で `~/.cargo/registry/` を DevContainer の volume で永続化し，`cargo fetch` のキャッシュを有効化
