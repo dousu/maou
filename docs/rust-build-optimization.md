@@ -474,8 +474,8 @@ Rust ビルドを完全にスキップする案．以下の理由で今回のス
 
 ### Phase 3: ドキュメント更新
 
-9. `docs/rust-backend.md` に Colab でのプリビルト wheel インストール手順を追加
-10. `docs/rust-backend.md` に sccache のセットアップ手順を追加
+11. `docs/rust-backend.md` に Colab でのプリビルト wheel インストール手順を追加
+12. `docs/rust-backend.md` に sccache のセットアップ手順を追加
 
 ---
 
