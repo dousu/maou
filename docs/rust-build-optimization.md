@@ -225,10 +225,17 @@ sccache が価値を持つのは `target/` が存在しない場合(クリーン
 
 **判定理由**:
 
-- `incremental = true` はクレート内の部分再コンパイルが可能だが，本プロジェクトのクレートは小さい(maou_io: 4ファイル，maou_index: 3ファイル，maou_rust: 1ファイル)ため，クレート全体再コンパイルとの差は小さい
+- `incremental = true` はクレート内の部分再コンパイル(サブクレート粒度)が可能だが，本プロジェクトのクレートは小さい(maou_io: 4ファイル，maou_index: 3ファイル，maou_rust: 1ファイル)ため，クレート全体再コンパイルとの差は小さい
 - さらに `codegen-units = 1` が設定されているため，コード生成フェーズは分割されず incremental の恩恵が限定的
 - `target/` の消失は DevContainer の再作成，ディスク容量逼迫時の `cargo clean`，`.venv` 再作成時の `uv sync` で頻繁に発生する
 - sccache なら `target/` が消えても依存クレート(polars, arrow, pyo3 等)のキャッシュが残り，フルリビルドの大部分をスキップできる
+
+**既知のトレードオフ**:
+
+- sccache はキャッシュミス時に**約 8% のオーバーヘッド**が発生する(ハッシュ計算+キャッシュ書き込み，[NeoSmart ベンチマーク 2024](https://neosmart.net/blog/benchmarking-rust-compilation-speedups-and-slowdowns-from-sccache-and-zthreads/))
+- `incremental = false` にすると，コード変更時は変更クレート全体の再コンパイルになるため，`incremental = true` 比で**コード変更→ビルドのサイクルは若干遅くなる**
+- 一方，sccache のキャッシュヒット時は**約 80% の高速化**(同ベンチマーク)が報告されており，target/ 消失時のリカバリ効果が大きい
+- `maou_rust` (`cdylib`) はいずれの設定でもキャッシュ不可のため，最終リンクステップの時間は変わらない
 
 #### sccache がローカルで効果を発揮するシーン
 
@@ -330,19 +337,13 @@ DevContainer のディスク容量によってはキャッシュサイズの上�
 export SCCACHE_CACHE_SIZE="2G"  # キャッシュ上限を 2GB に制限
 ```
 
-### 6. sccache のキャッシュミス時のオーバーヘッド
-
-sccache はキャッシュミス時に約 8% のオーバーヘッドが報告されている．
-ハッシュ計算やキャッシュストアへの書き込みが原因．
-初回ビルド時はすべてキャッシュミスになるため，sccache なしより若干遅くなる可能性がある．
-
-### 7. sccache のパス依存性
+### 6. sccache のパス依存性
 
 sccache のキャッシュキーにはソースファイルの**絶対パス**が含まれる．
 DevContainer のワークスペースパスが変わるとキャッシュがヒットしない可能性がある．
 通常の Codespaces 利用では問題にならないが，異なるパスにクローンした場合は注意．
 
-### 8. セキュリティ
+### 7. セキュリティ
 
 - GitHub Releases の wheel は公開リポジトリの場合，誰でもダウンロード可能
 - wheel にはコンパイル済みバイナリが含まれるため，CI の整合性が重要
