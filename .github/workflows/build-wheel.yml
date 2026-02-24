@@ -27,27 +27,23 @@ jobs:
           args: --release --out dist -i python3.11 python3.12
           before-script-linux: yum install -y clang lld
 
-      - name: Generate build info
-        id: build-info
-        run: echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
-
       - name: Delete existing release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release delete latest --yes --cleanup-tag || true
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2.5.0
-        with:
-          tag_name: latest
-          name: Development Build
-          body: |
-            Prebuilt wheels for development use (Colab, etc.).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls dist/*.whl 1>/dev/null 2>&1 || { echo "::error::No wheel files found in dist/"; exit 1; }
+          gh release create latest \
+            --title "Development Build" \
+            --notes "Prebuilt wheels for development use (Colab, etc.).
 
-            - **Commit**: ${{ github.sha }}
-            - **Built at**: ${{ steps.build-info.outputs.datetime }}
-            - **Platform**: manylinux_2_28 x86_64
-            - **Python**: CPython 3.11, 3.12
-          files: dist/*.whl
-          make_latest: "true"
-          fail_on_unmatched_files: true
+          - **Commit**: ${{ github.sha }}
+          - **Built at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - **Platform**: manylinux_2_28 x86_64
+          - **Python**: CPython 3.11, 3.12" \
+            --latest \
+            dist/*.whl
