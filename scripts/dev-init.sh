@@ -15,6 +15,7 @@ SCCACHE_VERSION="0.12.0"
 if ! command -v sccache &> /dev/null; then
     echo "Installing sccache v${SCCACHE_VERSION}..."
     curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+    # Install to /usr/local/cargo/bin/ (CARGO_HOME set by DevContainer Rust feature, already in PATH)
     mv "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/cargo/bin/
     rm -rf "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
     echo "sccache installed: $(sccache --version)"
