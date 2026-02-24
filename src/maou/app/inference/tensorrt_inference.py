@@ -68,6 +68,11 @@ class TensorRTInference:
         serialized_engine = builder.build_serialized_network(
             network, builder_config
         )
+        if serialized_engine is None:
+            raise RuntimeError(
+                "Failed to build TensorRT engine. "
+                "Check ONNX model compatibility and available GPU memory."
+            )
         logger.info("TensorRT engine built successfully")
         return serialized_engine
 
@@ -161,6 +166,11 @@ class TensorRTInference:
         engine = runtime.deserialize_cuda_engine(
             serialized_engine
         )
+        if engine is None:
+            raise RuntimeError(
+                "Failed to deserialize TensorRT engine. "
+                "The serialized engine may be corrupted or incompatible."
+            )
         context = engine.create_execution_context()
 
         # 入力テンソル: board
