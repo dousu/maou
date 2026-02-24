@@ -45,7 +45,7 @@ jobs = 1
 rustc-wrapper = "sccache"
 
 [profile.dev]
-codegen-units = 1
+codegen-units = 16  # Parallel codegen to reduce peak memory (required for 4GB RAM)
 incremental = false
 
 [profile.release]
@@ -62,7 +62,7 @@ echo "  jobs = 1"
 echo "  rustc-wrapper = sccache"
 echo "  lto = false (release)"
 echo "  incremental = false (dev), true (release)"
-echo "  codegen-units = 1 (dev), 16 (release)"
+echo "  codegen-units = 16 (dev), 16 (release)"
 
 # Install rust-analyzer for Serena LSP integration
 echo "Installing rust-analyzer..."
