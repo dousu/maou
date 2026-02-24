@@ -11,7 +11,6 @@ DOC_DIR="docs/commands/"
 # マッピングテーブル: CLIファイル名 → ドキュメントファイル名
 declare -A CLI_DOC_MAP=(
   ["learn_model.py"]="learn_model.md"
-  ["pretrain_cli.py"]="pretrain.md"
   ["evaluate_board.py"]="evaluate.md"
   ["hcpe_convert.py"]="hcpe_convert.md"
   ["pre_process.py"]="pre_process.md"
