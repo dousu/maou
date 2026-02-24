@@ -10,6 +10,22 @@ if ! command -v rustup &> /dev/null; then
     source "$HOME/.cargo/env"
 fi
 
+# Install sccache for Rust build caching
+SCCACHE_VERSION="0.12.0"
+if ! command -v sccache &> /dev/null; then
+    echo "Installing sccache v${SCCACHE_VERSION}..."
+    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+    mv "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/cargo/bin/
+    rm -rf "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+    echo "sccache installed: $(sccache --version)"
+fi
+
+# Ensure sccache cache directory is writable by current user
+# Docker named volumes may create the target directory as root on first mount
+if [ -n "${SCCACHE_DIR:-}" ] && [ -d "${SCCACHE_DIR}" ] && [ ! -w "${SCCACHE_DIR}" ]; then
+    sudo chown -R "$(id -u):$(id -g)" "${SCCACHE_DIR}"
+fi
+
 # Memory-optimized Rust build configuration for 2-core/3GB environments
 # Uses user-level cargo config so it applies even through PEP 517 build isolation
 CARGO_USER_CONFIG="$HOME/.cargo/config.toml"
@@ -22,9 +38,11 @@ $CARGO_USER_CONFIG_MARKER
 [build]
 target-dir = "/tmp/cargo-target"
 jobs = 1
+rustc-wrapper = "sccache"
 
 [profile.dev]
-codegen-units = 16
+codegen-units = 1
+incremental = false
 
 [profile.release]
 lto = false
@@ -37,9 +55,10 @@ fi
 echo "Memory-optimized Rust build settings (via $CARGO_USER_CONFIG):"
 echo "  target-dir = /tmp/cargo-target"
 echo "  jobs = 1"
-echo "  lto = false"
-echo "  incremental = true"
-echo "  codegen-units = 16"
+echo "  rustc-wrapper = sccache"
+echo "  lto = false (release)"
+echo "  incremental = false (dev), true (release)"
+echo "  codegen-units = 1 (dev), 16 (release)"
 
 # Install rust-analyzer for Serena LSP integration
 echo "Installing rust-analyzer..."
@@ -57,6 +76,9 @@ uv sync --extra cpu --extra visualize --group dev
 
 # Verify Rust module is built correctly
 uv run python -c "from maou._rust.maou_io import hello; print(hello())"
+
+# Show sccache statistics
+sccache --show-stats
 
 # Clean up uv cache
 # shellcheck source=/dev/null
