@@ -24,23 +24,56 @@ poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
 
 ### Non-Interactive Environment (Google Colab / Jupyter Notebook)
 
-For non-interactive environments like Google Colab, use `-y` flag for automatic acceptance. **Note**: In Colab, environment variables don't persist across cells (`!` commands run in separate shells).
+Colab では Rust ツールチェインのインストールは不要．
+GitHub Releases にプリビルト wheel が配置されており，`uv pip install` でインストールできる．
 
-**Recommended approach** (run all in one cell):
-```bash
-!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-  source "$HOME/.cargo/env" && \
-  poetry run maturin develop
+#### Prebuilt Wheel Installation
+
+```python
+# Colab セル
+# Python バージョンに応じて cp311 または cp312 の wheel を指定
+!pip install uv
+!uv pip install --system "maou @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+!uv pip install --system "maou[cuda]"  # GPU 依存の追加インストール
 ```
 
-For memory-constrained environments (2-4GB), add build optimizations:
-```bash
-!curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-  export PATH="$HOME/.cargo/bin:$PATH" && \
-  export CARGO_BUILD_JOBS=1 && \
-  export RUSTFLAGS="-C codegen-units=1 -C incremental=1" && \
-  poetry run maturin develop
+**Notes:**
+- `--system` フラグは Colab のシステム Python 環境にインストールするために必要
+- wheel は main ブランチへの push 時に自動ビルドされる (`.github/workflows/build-wheel.yml`)
+- wheel には Python コード，コンパイル済み Rust 拡張 (`_rust.so`)，CLI エントリポイントがすべて含まれる
+- GPU 依存 (PyTorch CUDA 版等) は wheel に含まれないため `maou[cuda]` で別途インストール
+
+#### Using maou CLI in Colab
+
+wheel のインストールにより `maou` コマンドが利用可能になる:
+
+```python
+# CLI ヘルプの表示
+!maou --help
+
+# サブコマンドの例
+!maou hcpe-convert --help   # HCPE ファイルの変換
+!maou pre-process --help    # データの前処理
+!maou learn-model --help    # モデルの学習
+!maou evaluate --help       # 局面の評価
+!maou build-engine --help   # TensorRT エンジンのビルド
+!maou visualize --help      # 将棋盤の可視化
+!maou utility --help        # ユーティリティ (ベンチマーク等)
 ```
+
+**Available Subcommands:**
+
+| Subcommand | Description | Required Extras |
+|---|---|---|
+| `hcpe-convert` | HCPE ファイルを Arrow IPC 形式に変換 | — |
+| `pre-process` | 学習データの前処理 | — |
+| `learn-model` | モデルの学習 | `torch` |
+| `evaluate` | 局面の評価値を計算 | `onnxruntime` |
+| `build-engine` | ONNX → TensorRT エンジン変換 | `tensorrt` |
+| `visualize` | 将棋盤の可視化 | `gradio`, `matplotlib` |
+| `utility` | ベンチマーク・スクリーンショット等 | `torch` |
+
+各サブコマンドの詳細は [docs/commands/](commands/) を参照．
 
 ## Development Workflow
 
@@ -66,6 +99,38 @@ cargo clippy --manifest-path rust/maou_io/Cargo.toml
 - Large dependency trees (288 packages) with complex feature interactions
 
 **Solution:** The project is pre-configured with memory-optimized build settings that reduce peak memory usage from 3.0-3.5GB to 1.0-1.5GB (60-70% reduction).
+
+### sccache (Build Cache)
+
+DevContainer では [sccache](https://github.com/mozilla/sccache) によるビルドキャッシュが有効化されている．
+sccache は `rustc` の呼び出しをラップし，コンパイル結果をクレート単位でキャッシュする．
+
+**Effect:** `target/` ディレクトリが消失した場合 (DevContainer 再作成，`cargo clean` 等) でも，
+依存クレート (polars, arrow, pyo3 等) の rlib がキャッシュから復元され，フルリビルドを回避できる．
+
+**Configuration (automatically applied by `dev-init.sh`):**
+
+| Setting | Value | Location |
+|---|---|---|
+| `rustc-wrapper` | `sccache` | `~/.cargo/config.toml` |
+| `SCCACHE_CACHE_SIZE` | `1G` | `devcontainer.json` containerEnv |
+| `SCCACHE_DIR` | `/home/vscode/.cache/sccache` | `devcontainer.json` containerEnv |
+| `incremental` | `false` (dev profile) | `Cargo.toml` + `~/.cargo/config.toml` |
+
+**Useful commands:**
+
+```bash
+# キャッシュ統計の表示
+sccache --show-stats
+
+# キャッシュのクリア
+sccache --zero-stats
+```
+
+**Limitations:**
+- `cdylib` (`maou_rust`) はキャッシュ対象外．最終的な `.so` の生成は常に実行される
+- sccache と incremental compilation は併用不可のため，`incremental = false` に設定済み
+- 通常のコード変更→ビルドサイクルでは sccache は関与しない (Cargo の fingerprint が先にスキップを判断)
 
 ### Automatic Optimizations
 
