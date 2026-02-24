@@ -12,12 +12,15 @@ fi
 
 # Install sccache for Rust build caching
 SCCACHE_VERSION="0.12.0"
+SCCACHE_SHA256="b0e89ead6899224a4ba2b90e9073bf1ce036d95bab30f3dc33c1e1468bc4ad44"
 if ! command -v sccache &> /dev/null; then
     echo "Installing sccache v${SCCACHE_VERSION}..."
-    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/sccache.tar.gz
+    echo "${SCCACHE_SHA256}  /tmp/sccache.tar.gz" | sha256sum -c -
+    tar xz -f /tmp/sccache.tar.gz
     # Install to /usr/local/cargo/bin/ (CARGO_HOME set by DevContainer Rust feature, already in PATH)
     mv "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/cargo/bin/
-    rm -rf "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+    rm -rf "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl" /tmp/sccache.tar.gz
     echo "sccache installed: $(sccache --version)"
 fi
 
