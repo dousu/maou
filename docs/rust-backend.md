@@ -33,15 +33,39 @@ GitHub Releases にプリビルト wheel が配置されており，`uv pip inst
 # Colab セル
 # Python バージョンに応じて cp311 または cp312 の wheel を指定
 !pip install uv
-!uv pip install --system "maou @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
-!uv pip install --system "maou[cuda]"  # GPU 依存の追加インストール
+!uv pip install --system "maou[cuda] @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
 ```
+
+extras を `[]` 内に指定することで，wheel のインストールと依存パッケージの追加を 1 コマンドで実行できる:
+
+```bash
+# 複数 extras を指定する場合
+uv pip install --system "maou[cuda,gcp] @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+
+# extras なし (Rust 拡張のみ)
+uv pip install --system "maou @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+```
+
+**Available Extras:**
+
+| Category | Extra | Description |
+|---|---|---|
+| GPU / Accelerator | `cpu` | PyTorch (CPU) + ONNX Runtime |
+| | `cuda` | PyTorch (CUDA) + ONNX Runtime GPU |
+| | `mpu` | PyTorch + ONNX Runtime GPU (MPU 環境向け) |
+| | `tpu` | PyTorch + torch-xla (TPU 環境向け) |
+| Inference | `cpu-infer` | ONNX Runtime (CPU 推論のみ) |
+| | `onnx-gpu-infer` | ONNX Runtime GPU (GPU 推論のみ) |
+| | `tensorrt-infer` | TensorRT + ONNX Runtime GPU |
+| Cloud | `gcp` | Google Cloud Storage + BigQuery |
+| | `aws` | AWS (boto3) |
+| Visualization | `visualize` | Gradio + Matplotlib + Playwright |
 
 **Notes:**
 - `--system` フラグは Colab のシステム Python 環境にインストールするために必要
 - wheel は main ブランチへの push 時に自動ビルドされる (`.github/workflows/build-wheel.yml`)
 - wheel には Python コード，コンパイル済み Rust 拡張 (`_rust.so`)，CLI エントリポイントがすべて含まれる
-- GPU 依存 (PyTorch CUDA 版等) は wheel に含まれないため `maou[cuda]` で別途インストール
+- GPU / 推論 / クラウド等の依存は wheel に含まれないため extras で指定する
 
 #### Using maou CLI in Colab
 
