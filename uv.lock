@@ -1452,7 +1452,6 @@ tensorrt-infer = [
 ]
 visualize = [
     { name = "gradio" },
-    { name = "huggingface-hub" },
     { name = "matplotlib" },
     { name = "playwright" },
 ]
@@ -1492,7 +1491,6 @@ requires-dist = [
     { name = "google-cloud-storage", marker = "extra == 'gcp'", specifier = ">=2.19.0" },
     { name = "google-crc32c", specifier = ">=1.6.0" },
     { name = "gradio", marker = "extra == 'visualize'", specifier = ">=6.0.0,<7.0.0" },
-    { name = "huggingface-hub", marker = "extra == 'visualize'", specifier = ">=0.19.3,<1.0.0" },
     { name = "matplotlib", marker = "extra == 'visualize'", specifier = ">=3.5.0" },
     { name = "numpy", specifier = ">=1.19.0" },
     { name = "nvidia-ml-py", marker = "extra == 'cuda'", specifier = ">=11.4.1" },
