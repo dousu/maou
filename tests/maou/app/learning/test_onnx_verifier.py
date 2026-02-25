@@ -149,7 +149,7 @@ def test_verify_onnx_functional_equivalence_fp32(
             np.asarray(
                 dummy_data[0]["boardIdPositions"],
                 dtype=np.uint8,
-            ).astype(np.int64)
+            ).astype(np.int32)
         )
         .unsqueeze(0)
         .to(device)
@@ -226,7 +226,7 @@ def test_verify_onnx_functional_equivalence_fp16(
             np.asarray(
                 dummy_data[0]["boardIdPositions"],
                 dtype=np.uint8,
-            ).astype(np.int64)
+            ).astype(np.int32)
         )
         .unsqueeze(0)
         .to(device)
@@ -308,7 +308,7 @@ def test_verify_onnx_graph_structure(
             np.asarray(
                 dummy_data[0]["boardIdPositions"],
                 dtype=np.uint8,
-            ).astype(np.int64)
+            ).astype(np.int32)
         )
         .unsqueeze(0)
         .to(device)
