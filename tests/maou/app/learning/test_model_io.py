@@ -173,6 +173,7 @@ def test_onnx_fp16_with_onnxslim() -> None:
                 "policy": {0: "batch_size"},
                 "value": {0: "batch_size"},
             },
+            dynamo=False,
         )
 
         # ONNX最適化: shape inference → onnxslim.slim()

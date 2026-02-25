@@ -32,10 +32,6 @@ maouプロジェクトでは，以下の2種類のextrasを定義しています
   - 用途: Apple Silicon（M1/M2/M3チップ）のMPSを使用した学習や推論
   - 特記事項: 標準のPyTorchパッケージにMPSサポートが含まれています
 
-- **tpu**: Google TPU環境用
-  - 含まれるライブラリ: torch-xla, torch, torchinfo, tensorboard, torch-tb-profiler
-  - 用途: Google Cloud TPUを使用した高速な学習
-
 ### 2. クラウドプロバイダごとのextra
 
 異なるクラウドプロバイダに応じた依存関係を管理します：
@@ -67,9 +63,6 @@ poetry install -E cpu -E aws
 
 # CUDA + AWS環境用
 poetry install -E cuda -E aws
-
-# TPU + GCP環境用（Google Cloud TPU環境）
-poetry install -E tpu -E gcp
 
 # MPU + AWS環境用（Apple Silicon + AWS）
 poetry install -E mpu -E aws

@@ -423,6 +423,7 @@ class ModelIO:
         # TensorRTに変換するときはONNXのFP32を利用してBuilderFlag.FP16を指定する
 
         # torch.onnx.export (統合モデルとしてエクスポート)
+        # TorchScriptエクスポーターを使用（PyTorch 2.10でデフォルト変更のため）
         onnx_model_path = dir / "model_{}_{}_{}.onnx".format(
             id, model_tag, epoch
         )
@@ -464,6 +465,7 @@ class ModelIO:
                 "policy": {0: "batch_size"},
                 "value": {0: "batch_size"},
             },
+            dynamo=False,
         )
 
         # ONNX最適化

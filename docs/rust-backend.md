@@ -53,7 +53,6 @@ uv pip install --system "maou @ https://github.com/{owner}/{repo}/releases/downl
 | GPU / Accelerator | `cpu` | PyTorch (CPU) + ONNX Runtime |
 | | `cuda` | PyTorch (CUDA) + ONNX Runtime GPU |
 | | `mpu` | PyTorch + ONNX Runtime GPU (MPU 環境向け) |
-| | `tpu` | PyTorch + torch-xla (TPU 環境向け) |
 | Inference | `cpu-infer` | ONNX Runtime (CPU 推論のみ) |
 | | `onnx-gpu-infer` | ONNX Runtime GPU (GPU 推論のみ) |
 | | `tensorrt-infer` | TensorRT + ONNX Runtime GPU |

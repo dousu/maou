@@ -1659,14 +1659,13 @@ class GradioVisualizationServer:
             )
 
             next_btn.click(
-                fn=lambda page,
-                min_eval,
-                max_eval,
-                page_size: min(
-                    page + 1,
-                    self._calculate_total_pages(
-                        min_eval, max_eval, page_size
-                    ),
+                fn=lambda page, min_eval, max_eval, page_size: (
+                    min(
+                        page + 1,
+                        self._calculate_total_pages(
+                            min_eval, max_eval, page_size
+                        ),
+                    )
                 ),
                 inputs=[
                     current_page,

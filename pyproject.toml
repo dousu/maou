@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 # GPU種類ごとのextra
 cpu = [
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
@@ -31,7 +31,7 @@ cpu = [
     "onnxslim",
 ]
 cuda = [
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "nvidia-ml-py>=11.4.1",
@@ -40,16 +40,7 @@ cuda = [
     "onnxslim",
 ]
 mpu = [
-    "torch>=2.6.0,<=2.7.0",
-    "torchinfo>=1.8.0",
-    "torch-tb-profiler>=0.4.3",
-    "onnxruntime-gpu",
-    "onnxruntime-tools",
-    "onnxslim",
-]
-tpu = [
-    "torch-xla>=2.6.0,<=2.7.0",
-    "torch>=2.6.0,<=2.7.0",
+    "torch>=2.6.0,<=2.10.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
@@ -96,7 +87,6 @@ conflicts = [
     { extra = "cpu" },
     { extra = "cuda" },
     { extra = "mpu" },
-    { extra = "tpu" },
   ],
 ]
 
@@ -105,7 +95,6 @@ torch = [
   { index = "pytorch-cpu", extra = "cpu" },
   { index = "pytorch-cuda", extra = "cuda" },
   { index = "pytorch-cuda", extra = "mpu" },
-  { index = "pytorch-cuda", extra = "tpu" },
 ]
 serena-agent = { git = "https://github.com/oraios/serena" }
 
@@ -177,6 +166,8 @@ filterwarnings = [
     "ignore::DeprecationWarning:multiprocessing.popen_fork",
     # #6: pin_memory on CPU-only (テスト環境制約)
     "ignore:.*pin_memory.*:UserWarning",
+    # #7: torch.jit.is_tracing() deprecated in PyTorch 2.9+ (TorchScript sunset)
+    "ignore::DeprecationWarning:torch.jit",
 ]
 
 [tool.mypy]
