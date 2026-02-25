@@ -886,7 +886,7 @@ class StageComponentFactory:
                 actual_batch_size,
                 9,
                 9,
-                dtype=torch.int64,
+                dtype=torch.int32,
                 device=device,
             )
             warmup_compiled_model(model, (dummy_board, None))

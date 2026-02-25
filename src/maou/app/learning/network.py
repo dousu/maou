@@ -382,7 +382,7 @@ class HeadlessNetwork(nn.Module):
         if input_type == "embedded":
             return tensor
 
-        board_tensor = tensor.to(torch.long)
+        board_tensor = tensor.to(torch.int32)
         embedded = self.embedding(board_tensor)
         return embedded.permute(0, 3, 1, 2).contiguous()
 
