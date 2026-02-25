@@ -116,8 +116,9 @@ MOVE_LABELS_NUM = MoveCategoryStartLabel.HI + 81
 _DROP_LABEL_OFFSETS = {
     HandPiece.FU: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
     HandPiece.KY: lambda to_sq, to_x, to_y: to_sq - (to_x + 1),
-    HandPiece.KE: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1) * 2,
+    HandPiece.KE: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1) * 2
+    ),
     HandPiece.GI: lambda to_sq, to_x, to_y: to_sq,
     HandPiece.KI: lambda to_sq, to_x, to_y: to_sq,
     HandPiece.KA: lambda to_sq, to_x, to_y: to_sq,
@@ -182,48 +183,53 @@ _DIRECTION_DOWN_RIGHT = (-1, 1)
 # Pre-computed label offset calculations for each direction
 _LABEL_OFFSETS = {
     _DIRECTION_UP: lambda to_sq, to_x, to_y: to_sq - to_x,
-    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1),
+    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1)
+    ),
     _DIRECTION_LEFT: lambda to_sq, to_x, to_y: to_sq - 9,
     _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: to_sq,
-    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - to_x
-    - 8,
+    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x - 8
+    ),
     _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: to_sq - to_x,
-    _DIRECTION_DOWN_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - to_x
-    - 9,
-    _DIRECTION_DOWN_RIGHT: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1),
-    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1) * 2
-    - to_x * 2
-    - 5,
-    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1) * 2
-    - to_x * 2,
+    _DIRECTION_DOWN_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x - 9
+    ),
+    _DIRECTION_DOWN_RIGHT: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1)
+    ),
+    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1) * 2 - to_x * 2 - 5
+    ),
+    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1) * 2 - to_x * 2
+    ),
 }
 
 # Pre-computed promotion label offsets
 _PROMOTION_LABEL_OFFSETS = {
     _DIRECTION_UP: lambda to_sq, to_x, to_y: to_sq - to_x * 6,
-    _DIRECTION_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6
-    - 3,
-    _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6,
-    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6
-    - 3,
-    _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6,
-    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: to_sq
-    - (to_x + 1),
-    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6
-    - 3,
-    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: to_sq
-    - to_x * 6,
+    _DIRECTION_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6 - 3
+    ),
+    _DIRECTION_RIGHT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6
+    ),
+    _DIRECTION_UP_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6 - 3
+    ),
+    _DIRECTION_UP_RIGHT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6
+    ),
+    _DIRECTION_DOWN: lambda to_sq, to_x, to_y: (
+        to_sq - (to_x + 1)
+    ),
+    _DIRECTION_KEIMA_LEFT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6 - 3
+    ),
+    _DIRECTION_KEIMA_RIGHT: lambda to_sq, to_x, to_y: (
+        to_sq - to_x * 6
+    ),
 }
 
 
