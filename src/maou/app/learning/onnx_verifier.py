@@ -401,7 +401,7 @@ class ONNXExportVerifier:
                 # PyTorch inference (2入力: board + hand)
                 pytorch_board = (
                     torch.from_numpy(
-                        dummy_board.astype(np.int64)
+                        dummy_board.astype(np.int32)
                     )
                     .unsqueeze(0)
                     .to(device)
@@ -419,7 +419,7 @@ class ONNXExportVerifier:
 
                 # ONNX inference (2入力: board + hand)
                 onnx_board = dummy_board.astype(
-                    np.int64
+                    np.int32
                 ).reshape(1, 9, 9)
                 onnx_hand = dummy_hand.astype(
                     np.float32

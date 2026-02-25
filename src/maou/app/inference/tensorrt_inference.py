@@ -13,6 +13,91 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class TensorRTInference:
     @staticmethod
+    def _convert_int64_to_int32(onnx_path: Path) -> bytes:
+        """TensorRT互換性のためにONNXモデルのInt64をInt32に変換する．
+
+        TensorRTはInt64演算のサポートが限定的なため，
+        ONNXグラフ内のInt64型をInt32型に変換してからパースする．
+
+        Args:
+            onnx_path: ONNXモデルファイルパス．
+
+        Returns:
+            変換後のONNXモデルのシリアライズバイト列．
+        """
+        import onnx
+        from onnx import TensorProto, numpy_helper
+
+        model = onnx.load(str(onnx_path))
+        converted = False
+
+        # 入力テンソルの型変換
+        for inp in model.graph.input:
+            if (
+                inp.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                inp.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                logger.info(
+                    "Converted input '%s' from INT64 to INT32",
+                    inp.name,
+                )
+                converted = True
+
+        # Castノードのターゲット型変換
+        for node in model.graph.node:
+            if node.op_type == "Cast":
+                for attr in node.attribute:
+                    if (
+                        attr.name == "to"
+                        and attr.i == TensorProto.INT64
+                    ):
+                        attr.i = TensorProto.INT32
+                        converted = True
+
+        # 初期化テンソルの型変換
+        for initializer in model.graph.initializer:
+            if initializer.data_type == TensorProto.INT64:
+                data = numpy_helper.to_array(initializer)
+                new_init = numpy_helper.from_array(
+                    data.astype(np.int32), initializer.name
+                )
+                initializer.CopyFrom(new_init)
+                converted = True
+
+        # value_infoの型変換
+        for vi in model.graph.value_info:
+            if (
+                vi.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                vi.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                converted = True
+
+        # 出力テンソルの型変換
+        for out in model.graph.output:
+            if (
+                out.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                out.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                converted = True
+
+        if converted:
+            logger.info(
+                "ONNX model Int64 -> Int32 conversion applied "
+                "for TensorRT compatibility"
+            )
+
+        return model.SerializeToString()
+
+    @staticmethod
     def save_engine(
         serialized_engine: bytes, path: Path
     ) -> None:
@@ -85,11 +170,12 @@ class TensorRTInference:
         )
         network = builder.create_network(network_flags)
 
-        # import model using the ONNX parser
-        parser = trt.OnnxParser(network, trt_logger)
-        success = parser.parse_from_file(
-            str(onnx_path.absolute())
+        # Int64→Int32変換してからパース(TensorRTはInt64サポートが限定的)
+        onnx_bytes = TensorRTInference._convert_int64_to_int32(
+            onnx_path
         )
+        parser = trt.OnnxParser(network, trt_logger)
+        success = parser.parse(onnx_bytes)
         for idx in range(parser.num_errors):
             logger.error(parser.get_error(idx))
         if not success:
@@ -315,7 +401,7 @@ class TensorRTInference:
         batched_board = np.expand_dims(board_data, axis=0)
         np.copyto(
             host_board_ctype_array,
-            batched_board.astype(np.int64).ravel(),
+            batched_board.astype(np.int32).ravel(),
             casting="safe",
         )
         cudart.cudaMemcpyAsync(

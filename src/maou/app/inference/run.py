@@ -77,7 +77,7 @@ class InferenceRunner:
                 "Either sfen or board must be provided."
             )
         board_data = make_board_id_positions(board).astype(
-            np.int64
+            np.int32
         )
         hand_data = make_pieces_in_hand(board).astype(
             np.float32

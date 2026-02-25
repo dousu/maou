@@ -279,7 +279,7 @@ class Learning:
                 9,
                 9,
             ),
-            dtypes=[torch.int64],
+            dtypes=[torch.int32],
         )
 
         # Compile after freeze + optimizer setup
@@ -295,7 +295,7 @@ class Learning:
                 config.batch_size,
                 9,
                 9,
-                dtype=torch.int64,
+                dtype=torch.int32,
                 device=self.device,
             )
             warmup_compiled_model(self.model, dummy)

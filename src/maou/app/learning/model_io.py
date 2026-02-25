@@ -435,7 +435,7 @@ class ModelIO:
                 np.asarray(
                     dummy_data[0]["boardIdPositions"],
                     dtype=np.uint8,
-                ).astype(np.int64)
+                ).astype(np.int32)
             )
             .unsqueeze(0)
             .to(device)
