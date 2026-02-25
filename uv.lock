@@ -2,24 +2,21 @@ version = 1
 revision = 3
 requires-python = ">=3.11, <3.13"
 resolution-markers = [
-    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu'",
-    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and sys_platform != 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and sys_platform == 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
-    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu' and extra != 'extra-4-maou-tpu'",
+    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu'",
+    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu'",
+    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version < '3.12' and sys_platform != 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version < '3.12' and sys_platform == 'darwin' and extra == 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
+    "python_full_version < '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra != 'extra-4-maou-mpu'",
 ]
 conflicts = [[
     { package = "maou", extra = "cpu" },
     { package = "maou", extra = "cuda" },
     { package = "maou", extra = "mpu" },
-    { package = "maou", extra = "tpu" },
 ]]
 
 [[package]]
@@ -212,7 +209,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -298,7 +295,7 @@ name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
@@ -428,7 +425,7 @@ wheels = [
 
 [package.optional-dependencies]
 toml = [
-    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 
 [[package]]
@@ -436,7 +433,7 @@ name = "cryptography"
 version = "46.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/60/04/ee2a9e8542e4fa2773b81771ff8349ff19cdd56b7258a0cc442639052edb/cryptography-46.0.5.tar.gz", hash = "sha256:abace499247268e3757271b2f1e244b36b06f8515cf27c4d49468fc9eb16e93d", size = 750064, upload-time = "2026-02-10T19:18:38.255Z" }
 wheels = [
@@ -511,7 +508,7 @@ wheels = [
 all = [
     { name = "nvidia-cuda-nvcc-cu12" },
     { name = "nvidia-cuda-nvrtc-cu12" },
-    { name = "nvidia-cufile-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "nvidia-cufile-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "nvidia-nvjitlink-cu12" },
 ]
 
@@ -1139,7 +1136,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -1413,8 +1410,8 @@ cpu = [
     { name = "onnxruntime" },
     { name = "onnxruntime-tools" },
     { name = "onnxslim" },
-    { name = "torch", version = "2.7.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
-    { name = "torch", version = "2.7.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "torch", version = "2.7.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
+    { name = "torch", version = "2.7.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-4-maou-cpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "torch-tb-profiler" },
     { name = "torchinfo" },
 ]
@@ -1452,15 +1449,6 @@ tensorrt-infer = [
     { name = "tensorrt-cu12" },
     { name = "tensorrt-dispatch-cu12" },
     { name = "tensorrt-lean-cu12" },
-]
-tpu = [
-    { name = "onnxruntime-gpu" },
-    { name = "onnxruntime-tools" },
-    { name = "onnxslim" },
-    { name = "torch", version = "2.7.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" } },
-    { name = "torch-tb-profiler" },
-    { name = "torch-xla" },
-    { name = "torchinfo" },
 ]
 visualize = [
     { name = "gradio" },
@@ -1514,15 +1502,12 @@ requires-dist = [
     { name = "onnxruntime-gpu", marker = "extra == 'mpu'" },
     { name = "onnxruntime-gpu", marker = "extra == 'onnx-gpu-infer'" },
     { name = "onnxruntime-gpu", marker = "extra == 'tensorrt-infer'" },
-    { name = "onnxruntime-gpu", marker = "extra == 'tpu'" },
     { name = "onnxruntime-tools", marker = "extra == 'cpu'" },
     { name = "onnxruntime-tools", marker = "extra == 'cuda'" },
     { name = "onnxruntime-tools", marker = "extra == 'mpu'" },
-    { name = "onnxruntime-tools", marker = "extra == 'tpu'" },
     { name = "onnxslim", marker = "extra == 'cpu'" },
     { name = "onnxslim", marker = "extra == 'cuda'" },
     { name = "onnxslim", marker = "extra == 'mpu'" },
-    { name = "onnxslim", marker = "extra == 'tpu'" },
     { name = "playwright", marker = "extra == 'visualize'", specifier = ">=1.40.0" },
     { name = "plotly", specifier = ">=6.5.0,<7.0.0" },
     { name = "polars", specifier = ">=1.0.0" },
@@ -1530,22 +1515,18 @@ requires-dist = [
     { name = "tensorrt-cu12", marker = "extra == 'tensorrt-infer'" },
     { name = "tensorrt-dispatch-cu12", marker = "extra == 'tensorrt-infer'" },
     { name = "tensorrt-lean-cu12", marker = "extra == 'tensorrt-infer'" },
-    { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.6.0,<=2.7.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "maou", extra = "cpu" } },
-    { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.6.0,<=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "cuda" } },
-    { name = "torch", marker = "extra == 'mpu'", specifier = ">=2.6.0,<=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "mpu" } },
-    { name = "torch", marker = "extra == 'tpu'", specifier = ">=2.6.0,<=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "tpu" } },
+    { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "maou", extra = "cpu" } },
+    { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "cuda" } },
+    { name = "torch", marker = "extra == 'mpu'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "mpu" } },
     { name = "torch-tb-profiler", marker = "extra == 'cpu'", specifier = ">=0.4.3" },
     { name = "torch-tb-profiler", marker = "extra == 'cuda'", specifier = ">=0.4.3" },
     { name = "torch-tb-profiler", marker = "extra == 'mpu'", specifier = ">=0.4.3" },
-    { name = "torch-tb-profiler", marker = "extra == 'tpu'", specifier = ">=0.4.3" },
-    { name = "torch-xla", marker = "extra == 'tpu'", specifier = ">=2.6.0,<=2.7.0" },
     { name = "torchinfo", marker = "extra == 'cpu'", specifier = ">=1.8.0" },
     { name = "torchinfo", marker = "extra == 'cuda'", specifier = ">=1.8.0" },
     { name = "torchinfo", marker = "extra == 'mpu'", specifier = ">=1.8.0" },
-    { name = "torchinfo", marker = "extra == 'tpu'", specifier = ">=1.8.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-provides-extras = ["cpu", "cuda", "mpu", "tpu", "cpu-infer", "onnx-gpu-infer", "tensorrt-infer", "gcp", "aws", "visualize"]
+provides-extras = ["cpu", "cuda", "mpu", "cpu-infer", "onnx-gpu-infer", "tensorrt-infer", "gcp", "aws", "visualize"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1705,12 +1686,12 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "sse-starlette" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/25/1a/9c8a5362e3448d585081d6c7aa95898a64e0ac59d3e26169ae6c3ca5feaf/mcp-1.23.0.tar.gz", hash = "sha256:84e0c29316d0a8cf0affd196fd000487ac512aa3f771b63b2ea864e22961772b", size = 596506, upload-time = "2025-12-02T13:40:02.558Z" }
 wheels = [
@@ -1761,7 +1742,7 @@ name = "mypy"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
@@ -2720,7 +2701,7 @@ name = "pytest"
 version = "9.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -2998,7 +2979,7 @@ name = "ruamel-yaml"
 version = "0.18.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ruamel-yaml-clib", marker = "platform_python_implementation == 'CPython' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "ruamel-yaml-clib", marker = "platform_python_implementation == 'CPython' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/39/87/6da0df742a4684263261c253f00edd5829e6aca970fff69e75028cccc547/ruamel.yaml-0.18.14.tar.gz", hash = "sha256:7227b76aaec364df15936730efbf7d72b30c0b79b1d578bbb8e3dcb2d81f52b7", size = 145511, upload-time = "2025-06-09T08:51:09.828Z" }
 wheels = [
@@ -3507,20 +3488,6 @@ wheels = [
 ]
 
 [[package]]
-name = "torch-xla"
-version = "2.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "numpy" },
-    { name = "pyyaml" },
-    { name = "requests" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/3e/e0dc52ddf2058359cf088eb58faf928512996085f3fdd9f51e670d97202f/torch_xla-2.7.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:1a2b323e107bc58b9605df6194046be21be1f5ea8ef0bb3fa666b21bea49292f", size = 96551244, upload-time = "2025-04-24T18:46:58.269Z" },
-]
-
-[[package]]
 name = "torchinfo"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3534,7 +3501,7 @@ name = "tqdm"
 version = "4.67.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-tpu') or (extra == 'extra-4-maou-mpu' and extra == 'extra-4-maou-tpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [

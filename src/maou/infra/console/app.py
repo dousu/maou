@@ -230,7 +230,7 @@ def cast_command_callback(
     return func
 
 
-_TRAINING_EXTRAS = ("cpu", "cuda", "mpu", "tpu")
+_TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
 
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     "hcpe-convert": LazyCommandSpec(

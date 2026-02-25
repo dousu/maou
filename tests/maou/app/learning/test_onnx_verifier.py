@@ -179,6 +179,7 @@ def test_verify_onnx_functional_equivalence_fp32(
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
+        dynamo=False,
     )
 
     report = (
@@ -255,6 +256,7 @@ def test_verify_onnx_functional_equivalence_fp16(
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
+        dynamo=False,
     )
 
     # Convert to FP16
@@ -336,6 +338,7 @@ def test_verify_onnx_graph_structure(
             "policy": {0: "batch_size"},
             "value": {0: "batch_size"},
         },
+        dynamo=False,
     )
 
     report = ONNXExportVerifier.verify_onnx_graph_structure(

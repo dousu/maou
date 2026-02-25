@@ -76,6 +76,7 @@ def test_mlp_mixer_onnx_export_without_tracer_warning(
             (x,),
             tmp_path / "shogi_mixer.onnx",
             opset_version=12,
+            dynamo=False,
         )
 
     tracer_warnings = [
