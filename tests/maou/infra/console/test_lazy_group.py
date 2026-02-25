@@ -239,6 +239,60 @@ class TestCheckPackages:
         assert "Install with one of:" in result.output
 
 
+class TestUnknownOptions:
+    """未知のオプション付き実行時の挙動テスト．"""
+
+    def test_unknown_option_shows_dependency_error(
+        self, runner: CliRunner
+    ) -> None:
+        """未知のオプション付きでもインストール案内が表示される．"""
+        spec = LazyCommandSpec(
+            "fake.module",
+            "fake_cmd",
+            required_packages=(
+                PackageRequirement("gradio", ("visualize",)),
+            ),
+        )
+        cli = _make_group({"visualize": spec})
+
+        with patch(
+            "maou.infra.console.app.find_spec",
+            side_effect=_mock_find_spec({"gradio"}),
+        ):
+            result = runner.invoke(
+                cli, ["visualize", "--share"]
+            )
+
+        assert "No such option" not in result.output
+        assert "gradio (not installed)" in result.output
+        assert "uv sync --extra visualize" in result.output
+
+    def test_unknown_option_with_value_shows_dependency_error(
+        self, runner: CliRunner
+    ) -> None:
+        """値付き未知オプションでもインストール案内が表示される．"""
+        spec = LazyCommandSpec(
+            "fake.module",
+            "fake_cmd",
+            required_packages=(
+                PackageRequirement("gradio", ("visualize",)),
+            ),
+        )
+        cli = _make_group({"visualize": spec})
+
+        with patch(
+            "maou.infra.console.app.find_spec",
+            side_effect=_mock_find_spec({"gradio"}),
+        ):
+            result = runner.invoke(
+                cli,
+                ["visualize", "--port", "8080", "--share"],
+            )
+
+        assert "No such option" not in result.output
+        assert "gradio (not installed)" in result.output
+
+
 class TestHelpDisplay:
     """--help 表示時の挙動テスト．"""
 
