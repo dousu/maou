@@ -226,9 +226,32 @@ torchinfo = [
 - [#16368 - Switching torch extra between pypi & torch backend](https://github.com/astral-sh/uv/issues/16368) - PyPI/torch backend 切り替え問題(Open)
 - [#11498 - uv sync: environment markers ignored when extra is given](https://github.com/astral-sh/uv/issues/11498) - environment markers 無視問題(Open)
 
+## 解決
+
+### 原因
+
+旧 `uv.lock` (uv 0.8.17 で生成)では，個別パッケージの依存 marker に以下のような条件が含まれていた:
+
+```toml
+{ name = "nvidia-cuda-runtime-cu12", marker = "sys_platform == 'linux' or sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or ..." }
+```
+
+`sys_platform == 'linux'` が `or` で結合されているため，Linux 環境では extra の値に関係なく常に true と評価され，cpu extra でも CUDA パッケージが解決対象に含まれていた．
+
+### 修正方法
+
+uv 0.10.4 で `uv.lock` を再生成(`rm uv.lock && uv lock`)することで解決した．新しい lock ファイルでは marker が正しく生成され，`uv sync --extra cpu` で CUDA パッケージがインストールされなくなった．
+
+### 検証結果
+
+- `uv sync --extra cpu`: torch 2.7.0+cpu のみインストール．nvidia-* パッケージなし
+- `uv sync --extra cuda --dry-run`: nvidia-* パッケージ 16 個が正しくインストール対象に含まれる
+
 ## 調査環境
 
-- uv: 0.8.17
+- uv (修正前): 0.8.17
+- uv (修正後): 0.10.4
 - Python: >=3.11, <3.13
 - torch: 2.7.0 (cpu) / 2.7.0+cu128 (cuda)
-- 調査日: 2025-02-25
+- 初回調査日: 2025-02-25
+- 解決日: 2026-02-25
