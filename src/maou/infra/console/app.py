@@ -176,6 +176,10 @@ class LazyGroup(click.Group):
             ),
             help=help_text,
             short_help=short_help,
+            context_settings={
+                "ignore_unknown_options": True,
+                "allow_extra_args": True,
+            },
         )
         self._fallback_commands[cmd_name] = fallback_command
         super().add_command(fallback_command)
@@ -209,6 +213,10 @@ class LazyGroup(click.Group):
             ),
             help=help_message,
             short_help=help_message,
+            context_settings={
+                "ignore_unknown_options": True,
+                "allow_extra_args": True,
+            },
         )
         self._fallback_commands[cmd_name] = fallback_command
         super().add_command(fallback_command)
