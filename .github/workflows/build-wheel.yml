@@ -16,7 +16,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1.50.0
