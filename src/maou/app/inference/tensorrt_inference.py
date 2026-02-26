@@ -121,9 +121,26 @@ class TensorRTInference:
                 initializer.CopyFrom(new_init)
                 converted = True
 
+        # Expandなどshapeテンソルを受け取るノードの入力を収集
+        # (TensorRTが内部でInt64のshapeテンソルを生成するため，
+        #  Shape出力をInt32に変換すると型不一致エラーになる)
+        _shape_consuming_ops: dict[str, frozenset[int]] = {
+            "Expand": frozenset({1}),
+        }
+        skip_cast_outputs: set[str] = set()
+        for node in model.graph.node:
+            if node.op_type in _shape_consuming_ops:
+                for idx in _shape_consuming_ops[node.op_type]:
+                    if (
+                        idx < len(node.input)
+                        and node.input[idx]
+                    ):
+                        skip_cast_outputs.add(node.input[idx])
+
         # Int64を常に出力するノードの後にCast(Int64→Int32)を挿入
         # (ONNX仕様でShape等は常にInt64を出力するため，
         #  Constantと混在するConcatで型不一致が起きる)
+        # ただし，Expand等のshape入力として直接使われる出力はスキップ
         _int64_output_ops = frozenset(
             {"Shape", "Size", "NonZero"}
         )
@@ -133,6 +150,8 @@ class TensorRTInference:
             if node.op_type in _int64_output_ops:
                 for j, output_name in enumerate(node.output):
                     if not output_name:
+                        continue
+                    if output_name in skip_cast_outputs:
                         continue
                     cast_input = output_name + "_pre_cast"
                     node.output[j] = cast_input
