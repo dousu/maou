@@ -823,6 +823,168 @@ def _create_onnx_model_with_constant_int64(
     return model_path
 
 
+def _create_onnx_model_with_shape_concat(
+    tmp_path: Path,
+) -> Path:
+    """Shape由来Int64テンソルとConstantが混在するConcatを含むダミーONNXモデル．
+
+    Shape→Gather→Unsqueeze(Int64)とConstant(Int64)がConcatされる
+    パターンを再現する．変換前はConcatの入力型が混在してTensorRTでエラーになる．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # Float32入力 [batch, 32, 9, 9]
+    x_input = helper.make_tensor_value_info(
+        "x", TensorProto.FLOAT, [None, 32, 9, 9]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 2592]
+    )
+
+    # Shape: x の形状を取得 → Int64 [4]
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["x"],
+        outputs=["x_shape"],
+    )
+
+    # Gather: batch_size を抽出(index=0) → scalar Int64
+    gather_idx = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="gather_idx"
+    )
+    gather_node = helper.make_node(
+        "Gather",
+        inputs=["x_shape", "gather_idx"],
+        outputs=["batch_size"],
+        axis=0,
+    )
+
+    # Unsqueeze: scalar → [1] (Int64)
+    unsqueeze_axes = numpy_helper.from_array(
+        np.array([0], dtype=np.int64),
+        name="unsqueeze_axes",
+    )
+    unsqueeze_node = helper.make_node(
+        "Unsqueeze",
+        inputs=["batch_size", "unsqueeze_axes"],
+        outputs=["batch_1d"],
+    )
+
+    # Constant: reshape の残り次元 [2592] (Int64)
+    other_dim_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["other_dim"],
+        value=numpy_helper.from_array(
+            np.array([2592], dtype=np.int64),
+            name="other_dim_val",
+        ),
+    )
+
+    # Concat: [batch_size, 2592] → Reshape 用形状テンソル
+    concat_node = helper.make_node(
+        "Concat",
+        inputs=["batch_1d", "other_dim"],
+        outputs=["new_shape"],
+        axis=0,
+    )
+
+    # Reshape: [batch, 32, 9, 9] → [batch, 2592]
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["x", "new_shape"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            shape_node,
+            gather_node,
+            unsqueeze_node,
+            other_dim_node,
+            concat_node,
+            reshape_node,
+        ],
+        "test_shape_concat_graph",
+        [x_input],
+        [output],
+        initializer=[gather_idx, unsqueeze_axes],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_shape_concat.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
+def _create_onnx_model_with_value_int_attr(
+    tmp_path: Path,
+) -> Path:
+    """value_int属性を持つConstantノードを含むダミーONNXモデル．"""
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    x_input = helper.make_tensor_value_info(
+        "x", TensorProto.FLOAT, [None, 81]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 81]
+    )
+
+    # Constant with value_int (ONNX仕様でInt64固定)
+    const_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["const_scalar"],
+        value_int=42,
+    )
+
+    # Cast to float
+    cast_node = helper.make_node(
+        "Cast",
+        inputs=["const_scalar"],
+        outputs=["const_float"],
+        to=TensorProto.FLOAT,
+    )
+
+    # Reshape for broadcast
+    shape_init = numpy_helper.from_array(
+        np.array([1, 1], dtype=np.int64), name="shape"
+    )
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["const_float", "shape"],
+        outputs=["const_2d"],
+    )
+
+    # Add: x + const
+    add_node = helper.make_node(
+        "Add",
+        inputs=["x", "const_2d"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [const_node, cast_node, reshape_node, add_node],
+        "test_value_int_graph",
+        [x_input],
+        [output],
+        initializer=[shape_init],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_value_int.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
 class TestConvertInt64ToInt32:
     """_convert_int64_to_int32 のテスト．"""
 
@@ -1020,3 +1182,106 @@ class TestConvertInt64ToInt32:
                     0
                 ].type.tensor_type.elem_type
             )
+
+    def test_inserts_cast_after_shape_for_concat_compat(
+        self, tmp_path: Path
+    ) -> None:
+        """Shape由来Int64テンソルのConcat型不一致がCast挿入で解消される．"""
+        onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_shape_concat(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # Shape ノードの直後に Cast(to=INT32) が挿入されていること
+            shape_indices = [
+                i
+                for i, n in enumerate(result_model.graph.node)
+                if n.op_type == "Shape"
+            ]
+            assert len(shape_indices) == 1
+            cast_after_shape = result_model.graph.node[
+                shape_indices[0] + 1
+            ]
+            assert cast_after_shape.op_type == "Cast"
+            for attr in cast_after_shape.attribute:
+                if attr.name == "to":
+                    assert attr.i == TensorProto.INT32
+
+            # Constant の値も Int32 に変換されていること
+            for node in result_model.graph.node:
+                if node.op_type == "Constant":
+                    for attr in node.attribute:
+                        if attr.name == "value":
+                            assert (
+                                attr.t.data_type
+                                != TensorProto.INT64
+                            )
+
+    def test_converts_value_int_attr_to_int32(
+        self, tmp_path: Path
+    ) -> None:
+        """Constantノードのvalue_int属性がInt32のvalueテンソルに変換される．"""
+        onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_value_int_attr(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # value_int が value テンソル(Int32)に置換されていること
+            const_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Constant"
+            ]
+            for node in const_nodes:
+                attr_names = [a.name for a in node.attribute]
+                assert "value_int" not in attr_names
+                for attr in node.attribute:
+                    if attr.name == "value":
+                        assert (
+                            attr.t.data_type
+                            == TensorProto.INT32
+                        )
