@@ -113,6 +113,7 @@ module-name = "maou._rust"
 manifest-path = "rust/maou_rust/Cargo.toml"
 binding = "pyo3"
 features = ["pyo3/extension-module"]
+profile = "dev"
 
 [dependency-groups]
 dev = [
