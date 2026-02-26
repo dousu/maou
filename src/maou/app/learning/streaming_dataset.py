@@ -59,14 +59,25 @@ def _resolve_worker_files(
     """
     file_paths = source.file_paths
 
+    # worker分割
+    worker_info = torch.utils.data.get_worker_info()
+
     # エポックごとのファイル順シャッフル
+    # 全workerが同一の並び順を共有する必要があるため，
+    # worker_idに依存しない共通シードを使用する．
+    # PyTorchは worker_info.seed = base_seed + worker_id を設定するので，
+    # worker_idを引いてbase_seedを復元する．
     if shuffle:
-        file_rng = np.random.default_rng(epoch_seed + 1_000_000)
+        if worker_info is not None:
+            common_seed = epoch_seed - worker_info.id
+        else:
+            common_seed = epoch_seed
+        file_rng = np.random.default_rng(
+            common_seed + 1_000_000
+        )
         file_indices = file_rng.permutation(len(file_paths))
         file_paths = [file_paths[i] for i in file_indices]
 
-    # worker分割
-    worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None:
         n_workers = worker_info.num_workers
         worker_id = worker_info.id

@@ -745,6 +745,54 @@ class TestResolveWorkerFiles:
         )
         assert files == source.file_paths
 
+    def test_shuffle_multiworker_disjoint_partition(
+        self,
+    ) -> None:
+        """All workers produce disjoint file sets covering all files.
+
+        PyTorchは worker_info.seed = base_seed + worker_id を設定する．
+        ファイルシャッフルは base_seed のみに依存し，
+        全ワーカーが同一の並び順を共有する必要がある．
+        """
+        source = FakePreprocessingSource(
+            n_files=20, rows_per_file=10
+        )
+        n_workers = 4
+        base_seed = 12345
+        all_files: list[list[Path]] = []
+        for wid in range(n_workers):
+            worker_seed = base_seed + wid
+            info = type(
+                "WorkerInfo",
+                (),
+                {
+                    "id": wid,
+                    "num_workers": n_workers,
+                    "seed": worker_seed,
+                    "dataset": None,
+                },
+            )()
+            with patch(
+                "maou.app.learning.streaming_dataset"
+                ".torch.utils.data.get_worker_info",
+                return_value=info,
+            ):
+                files = _resolve_worker_files(
+                    source,
+                    shuffle=True,
+                    epoch_seed=worker_seed,
+                )
+            all_files.append(files)
+
+        # 各ワーカーのファイルが重複なく全ファイルをカバーする
+        flat = [str(f) for group in all_files for f in group]
+        original = [str(f) for f in source.file_paths]
+        assert sorted(flat) == sorted(original), (
+            f"Files not partitioned correctly: "
+            f"got {len(flat)} files, expected {len(original)}. "
+            f"Duplicates: {len(flat) - len(set(flat))}"
+        )
+
     def test_total_records_across_workers_sum_correctly(
         self,
     ) -> None:
