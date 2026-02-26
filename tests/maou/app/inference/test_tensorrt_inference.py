@@ -921,6 +921,72 @@ def _create_onnx_model_with_shape_concat(
     return model_path
 
 
+def _create_onnx_model_with_shape_expand(
+    tmp_path: Path,
+) -> Path:
+    """Shape出力がExpandのshape入力に直接接続されるダミーONNXモデル．
+
+    Shape→Expandパターンを再現する．
+    TensorRTはExpand内部でInt64のshapeテンソルを生成するため，
+    Shape出力をInt32に変換すると型不一致エラーになる．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # Float32入力: hand projection 出力 [batch, 32]
+    hand_input = helper.make_tensor_value_info(
+        "hand", TensorProto.FLOAT, [None, 32]
+    )
+    # Float32入力: board embedding [batch, 64, 9, 9]
+    board_input = helper.make_tensor_value_info(
+        "board", TensorProto.FLOAT, [None, 64, 9, 9]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 32, 9, 9]
+    )
+
+    # Reshape: hand [batch, 32] → [batch, 32, 1, 1]
+    reshape_shape = numpy_helper.from_array(
+        np.array([0, 32, 1, 1], dtype=np.int64),
+        name="reshape_shape",
+    )
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["hand", "reshape_shape"],
+        outputs=["hand_4d"],
+    )
+
+    # Shape: board の形状を取得 → Int64 [4] (e.g. [batch, 64, 9, 9])
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["board"],
+        outputs=["board_shape"],
+    )
+
+    # Expand: hand_4d を board_shape にブロードキャスト
+    expand_node = helper.make_node(
+        "Expand",
+        inputs=["hand_4d", "board_shape"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [reshape_node, shape_node, expand_node],
+        "test_shape_expand_graph",
+        [hand_input, board_input],
+        [output],
+        initializer=[reshape_shape],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_shape_expand.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
 def _create_onnx_model_with_value_int_attr(
     tmp_path: Path,
 ) -> Path:
@@ -1238,6 +1304,63 @@ class TestConvertInt64ToInt32:
                                 attr.t.data_type
                                 != TensorProto.INT64
                             )
+
+    def test_skips_cast_for_shape_feeding_expand(
+        self, tmp_path: Path
+    ) -> None:
+        """Shape出力がExpandのshape入力に接続される場合はCastを挿入しない．"""
+        onnx = pytest.importorskip("onnx")
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_shape_expand(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # Shape ノードの出力名が変更されていないこと(Cast未挿入)
+            shape_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Shape"
+            ]
+            assert len(shape_nodes) == 1
+            assert shape_nodes[0].output[0] == "board_shape"
+
+            # Shape の直後に Cast が挿入されていないこと
+            shape_idx = next(
+                i
+                for i, n in enumerate(result_model.graph.node)
+                if n.op_type == "Shape"
+            )
+            next_node = result_model.graph.node[shape_idx + 1]
+            assert next_node.op_type != "Cast"
+
+            # Expand の shape 入力が Shape 出力に直結していること
+            expand_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Expand"
+            ]
+            assert len(expand_nodes) == 1
+            assert expand_nodes[0].input[1] == "board_shape"
 
     def test_converts_value_int_attr_to_int32(
         self, tmp_path: Path
