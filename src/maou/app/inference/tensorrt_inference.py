@@ -18,6 +18,7 @@ class TensorRTInference:
 
         TensorRTはInt64演算のサポートが限定的なため，
         ONNXグラフ内のInt64型をInt32型に変換してからパースする．
+        Shapeなど常にInt64を出力するノードにはCast(Int64→Int32)を挿入する．
 
         Args:
             onnx_path: ONNXモデルファイルパス．
@@ -26,7 +27,7 @@ class TensorRTInference:
             変換後のONNXモデルのシリアライズバイト列．
         """
         import onnx
-        from onnx import TensorProto, numpy_helper
+        from onnx import TensorProto, helper, numpy_helper
 
         model = onnx.load(str(onnx_path))
         converted = False
@@ -74,6 +75,42 @@ class TensorRTInference:
                         attr.t.CopyFrom(new_tensor)
                         converted = True
 
+        # Constantノードのvalue_int/value_ints属性変換
+        # (ONNX仕様でInt64固定のため，valueテンソル(Int32)に置換)
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                attrs_to_remove = []
+                attrs_to_add = []
+                for attr in node.attribute:
+                    if attr.name == "value_int":
+                        new_tensor = numpy_helper.from_array(
+                            np.array(attr.i, dtype=np.int32)
+                        )
+                        attrs_to_remove.append(attr)
+                        attrs_to_add.append(
+                            helper.make_attribute(
+                                "value", new_tensor
+                            )
+                        )
+                        converted = True
+                    elif attr.name == "value_ints":
+                        new_tensor = numpy_helper.from_array(
+                            np.array(
+                                list(attr.ints),
+                                dtype=np.int32,
+                            )
+                        )
+                        attrs_to_remove.append(attr)
+                        attrs_to_add.append(
+                            helper.make_attribute(
+                                "value", new_tensor
+                            )
+                        )
+                        converted = True
+                for attr in attrs_to_remove:
+                    node.attribute.remove(attr)
+                node.attribute.extend(attrs_to_add)
+
         # 初期化テンソルの型変換
         for initializer in model.graph.initializer:
             if initializer.data_type == TensorProto.INT64:
@@ -83,6 +120,32 @@ class TensorRTInference:
                 )
                 initializer.CopyFrom(new_init)
                 converted = True
+
+        # Int64を常に出力するノードの後にCast(Int64→Int32)を挿入
+        # (ONNX仕様でShape等は常にInt64を出力するため，
+        #  Constantと混在するConcatで型不一致が起きる)
+        _int64_output_ops = frozenset(
+            {"Shape", "Size", "NonZero"}
+        )
+        new_nodes = []
+        for node in model.graph.node:
+            new_nodes.append(node)
+            if node.op_type in _int64_output_ops:
+                for j, output_name in enumerate(node.output):
+                    if not output_name:
+                        continue
+                    cast_input = output_name + "_pre_cast"
+                    node.output[j] = cast_input
+                    cast_node = helper.make_node(
+                        "Cast",
+                        inputs=[cast_input],
+                        outputs=[output_name],
+                        to=TensorProto.INT32,
+                    )
+                    new_nodes.append(cast_node)
+                    converted = True
+        del model.graph.node[:]
+        model.graph.node.extend(new_nodes)
 
         # value_infoの型変換
         for vi in model.graph.value_info:
