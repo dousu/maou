@@ -33,6 +33,12 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST NOT call multiple Serena MCP tools in parallel (to prevent OOM in memory-constrained DevContainer)
 - MUST call Serena tools sequentially, one at a time
 
+### Versioning
+- MUST bump version in `pyproject.toml` when modifying files under `src/`
+- MUST follow semantic versioning: `fix:` → patch, `feat:` → minor, breaking change → major
+- MUST NOT push changes to `src/` without a corresponding version bump
+- Version is the single source of truth in `pyproject.toml` (`version_provider = "pep621"`)
+
 ### Forbidden Actions
 - MUST NOT use pip directly (use `uv` only)
 - MUST NOT create `__init__.py` unless absolutely necessary

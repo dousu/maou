@@ -32,15 +32,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release delete latest --yes --cleanup-tag || true
 
+      - name: Extract version
+        id: version
+        run: |
+          version=$(python3 -c "
+          import re
+          with open('pyproject.toml') as f:
+              m = re.search(r'^version\s*=\s*\"([^\"]+)\"', f.read(), re.MULTILINE)
+              print(m.group(1))
+          ")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls dist/*.whl 1>/dev/null 2>&1 || { echo "::error::No wheel files found in dist/"; exit 1; }
           gh release create latest \
-            --title "Development Build" \
+            --title "Development Build (v${{ steps.version.outputs.version }})" \
             --notes "Prebuilt wheels for development use (Colab, etc.).
 
+          - **Version**: ${{ steps.version.outputs.version }}
           - **Commit**: ${{ github.sha }}
           - **Built at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           - **Platform**: manylinux_2_28 x86_64
