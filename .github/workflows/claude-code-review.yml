@@ -3,25 +3,19 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    paths:
+      - "src/**/*.py"
+      - "src/**/*.rs"
+      - "tests/**/*.py"
+      - "pyproject.toml"
+      - "Cargo.toml"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
       id-token: write
 
@@ -36,9 +30,18 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
 
+            このプロジェクト固有のルールも確認してください:
+            - Clean Architecture の依存方向を守る: infra → interface → app → domain
+            - 逆方向の import（例: domain が app を import）は違反
+            - 全ての public API に型ヒントと docstring が必要
+            - 日本語 docstring は句点「，」読点「．」を使う（「、」「。」は NG）
+            - 括弧は半角「()」のみ（全角「（）」は NG）
+            - `pip` の使用禁止（`uv` のみ許可）
+            - `__init__.py` は本当に必要な場合以外作成しない
+            - CLI コマンドを変更した場合は `docs/commands/` の更新も確認
