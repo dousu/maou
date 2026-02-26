@@ -121,37 +121,53 @@ class TensorRTInference:
                 initializer.CopyFrom(new_init)
                 converted = True
 
-        # Expandなどshapeテンソルを受け取るノードの入力を収集
+        # Int64を常に出力するノードの後にCast(Int64→Int32)を挿入
+        # (ONNX仕様でShape等は常にInt64を出力するため，
+        #  Constantと混在するConcatで型不一致が起きる)
+        _int64_output_ops = frozenset(
+            {"Shape", "Size", "NonZero"}
+        )
+        # Expandなどshapeテンソルを受け取るノードのshape入力に
+        # Cast(Int32→Int64)を挿入
         # (TensorRTが内部でInt64のshapeテンソルを生成するため，
-        #  Shape出力をInt32に変換すると型不一致エラーになる)
+        #  shape入力もInt64でなければ型不一致エラーになる．
+        #  Shape→Where→Expandのように中間ノードを経由する場合も
+        #  shape入力の直前でInt64に戻す必要がある)
         _shape_consuming_ops: dict[str, frozenset[int]] = {
             "Expand": frozenset({1}),
         }
-        skip_cast_outputs: set[str] = set()
+        _shape_cast_map: dict[str, str] = {}
+        new_nodes = []
         for node in model.graph.node:
+            # shape入力を受け取るノードの前にCast(Int32→Int64)を挿入
             if node.op_type in _shape_consuming_ops:
                 for idx in _shape_consuming_ops[node.op_type]:
                     if (
                         idx < len(node.input)
                         and node.input[idx]
                     ):
-                        skip_cast_outputs.add(node.input[idx])
-
-        # Int64を常に出力するノードの後にCast(Int64→Int32)を挿入
-        # (ONNX仕様でShape等は常にInt64を出力するため，
-        #  Constantと混在するConcatで型不一致が起きる)
-        # ただし，Expand等のshape入力として直接使われる出力はスキップ
-        _int64_output_ops = frozenset(
-            {"Shape", "Size", "NonZero"}
-        )
-        new_nodes = []
-        for node in model.graph.node:
+                        original = node.input[idx]
+                        if original not in _shape_cast_map:
+                            cast_out = (
+                                original + "_expand_shape_i64"
+                            )
+                            cast_node = helper.make_node(
+                                "Cast",
+                                inputs=[original],
+                                outputs=[cast_out],
+                                to=TensorProto.INT64,
+                            )
+                            new_nodes.append(cast_node)
+                            _shape_cast_map[original] = cast_out
+                            converted = True
+                        node.input[idx] = _shape_cast_map[
+                            original
+                        ]
             new_nodes.append(node)
+            # Int64固定出力ノードの後にCast(Int64→Int32)を挿入
             if node.op_type in _int64_output_ops:
                 for j, output_name in enumerate(node.output):
                     if not output_name:
-                        continue
-                    if output_name in skip_cast_outputs:
                         continue
                     cast_input = output_name + "_pre_cast"
                     node.output[j] = cast_input

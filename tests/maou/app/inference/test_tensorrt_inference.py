@@ -987,6 +987,104 @@ def _create_onnx_model_with_shape_expand(
     return model_path
 
 
+def _create_onnx_model_with_where_expand(
+    tmp_path: Path,
+) -> Path:
+    """Shape→Where→Expandパターンを含むダミーONNXモデル．
+
+    PyTorchのexpand(-1, -1, h, w)エクスポートで生成される
+    Shape→Where→Expandパターンを再現する．
+    中間のWhereノードを経由するため，直接のShape→Expand接続よりも
+    複雑なshape計算サブグラフとなる．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # hand: [batch, 32, 1, 1] (ブロードキャスト元)
+    hand_input = helper.make_tensor_value_info(
+        "hand", TensorProto.FLOAT, [None, 32, 1, 1]
+    )
+    # board: [batch, 64, 9, 9] (形状の参照元)
+    board_input = helper.make_tensor_value_info(
+        "board", TensorProto.FLOAT, [None, 64, 9, 9]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 32, 9, 9]
+    )
+
+    # Shape: board の形状を取得 → Int64 [4]
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["board"],
+        outputs=["board_shape"],
+    )
+
+    # Constant: ターゲット形状 [-1, 32, -1, -1] (Int64)
+    target_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["target_shape"],
+        value=numpy_helper.from_array(
+            np.array([-1, 32, -1, -1], dtype=np.int64),
+            name="target_val",
+        ),
+    )
+
+    # Constant: -1 (比較用)
+    neg_one_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["neg_one"],
+        value=numpy_helper.from_array(
+            np.array(-1, dtype=np.int64),
+            name="neg_one_val",
+        ),
+    )
+
+    # Equal: target_shape == -1 → mask
+    equal_node = helper.make_node(
+        "Equal",
+        inputs=["target_shape", "neg_one"],
+        outputs=["mask"],
+    )
+
+    # Where: -1の要素をboard_shapeで置換
+    where_node = helper.make_node(
+        "Where",
+        inputs=["mask", "board_shape", "target_shape"],
+        outputs=["resolved_shape"],
+    )
+
+    # Expand: hand を resolved_shape にブロードキャスト
+    expand_node = helper.make_node(
+        "Expand",
+        inputs=["hand", "resolved_shape"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            shape_node,
+            target_node,
+            neg_one_node,
+            equal_node,
+            where_node,
+            expand_node,
+        ],
+        "test_where_expand_graph",
+        [hand_input, board_input],
+        [output],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_where_expand.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
 def _create_onnx_model_with_value_int_attr(
     tmp_path: Path,
 ) -> Path:
@@ -1305,11 +1403,12 @@ class TestConvertInt64ToInt32:
                                 != TensorProto.INT64
                             )
 
-    def test_skips_cast_for_shape_feeding_expand(
+    def test_casts_expand_shape_input_to_int64(
         self, tmp_path: Path
     ) -> None:
-        """Shape出力がExpandのshape入力に接続される場合はCastを挿入しない．"""
+        """Expand shape入力の直前にCast(Int32→Int64)が挿入されること．"""
         onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
 
         trt_mock = _create_trt_mock()
         cuda_mocks = _create_cuda_mocks()
@@ -1335,32 +1434,90 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # Shape ノードの出力名が変更されていないこと(Cast未挿入)
-            shape_nodes = [
-                n
-                for n in result_model.graph.node
-                if n.op_type == "Shape"
-            ]
-            assert len(shape_nodes) == 1
-            assert shape_nodes[0].output[0] == "board_shape"
-
-            # Shape の直後に Cast が挿入されていないこと
-            shape_idx = next(
-                i
-                for i, n in enumerate(result_model.graph.node)
-                if n.op_type == "Shape"
-            )
-            next_node = result_model.graph.node[shape_idx + 1]
-            assert next_node.op_type != "Cast"
-
-            # Expand の shape 入力が Shape 出力に直結していること
+            # Expand の shape 入力に Cast(to=INT64) が挿入されていること
             expand_nodes = [
                 n
                 for n in result_model.graph.node
                 if n.op_type == "Expand"
             ]
             assert len(expand_nodes) == 1
-            assert expand_nodes[0].input[1] == "board_shape"
+            expand_shape_input = expand_nodes[0].input[1]
+            assert expand_shape_input.endswith(
+                "_expand_shape_i64"
+            )
+
+            # Cast(to=INT64) ノードが存在すること
+            cast_to_i64 = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Cast"
+                and any(
+                    a.name == "to" and a.i == TensorProto.INT64
+                    for a in n.attribute
+                )
+            ]
+            assert any(
+                n.output[0] == expand_shape_input
+                for n in cast_to_i64
+            )
+
+    def test_casts_expand_shape_via_where_to_int64(
+        self, tmp_path: Path
+    ) -> None:
+        """Shape→Where→Expand経路でExpand shape入力がInt64にキャストされること．"""
+        onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_where_expand(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # Expand の shape 入力に Cast(to=INT64) が挿入されていること
+            expand_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Expand"
+            ]
+            assert len(expand_nodes) == 1
+            expand_shape_input = expand_nodes[0].input[1]
+            assert expand_shape_input.endswith(
+                "_expand_shape_i64"
+            )
+
+            # Cast(to=INT64) ノードが存在し，Expand に接続されていること
+            cast_to_i64 = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Cast"
+                and any(
+                    a.name == "to" and a.i == TensorProto.INT64
+                    for a in n.attribute
+                )
+            ]
+            assert any(
+                n.output[0] == expand_shape_input
+                for n in cast_to_i64
+            )
 
     def test_converts_value_int_attr_to_int32(
         self, tmp_path: Path
