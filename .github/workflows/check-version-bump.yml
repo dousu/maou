@@ -1,0 +1,58 @@
+name: Check Version Bump
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-version-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check if src/ was modified
+        id: check_src
+        run: |
+          changed=$(git diff --name-only origin/main...HEAD -- 'src/')
+          if [ -z "$changed" ]; then
+            echo "src_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "src_changed=true" >> "$GITHUB_OUTPUT"
+            echo "Changed files:"
+            echo "$changed"
+          fi
+
+      - name: Check version bump
+        if: steps.check_src.outputs.src_changed == 'true'
+        run: |
+          pr_version=$(python3 -c "
+          import re
+          with open('pyproject.toml') as f:
+              m = re.search(r'^version\s*=\s*\"([^\"]+)\"', f.read(), re.MULTILINE)
+              print(m.group(1))
+          ")
+
+          main_version=$(git show origin/main:pyproject.toml | python3 -c "
+          import sys, re
+          m = re.search(r'^version\s*=\s*\"([^\"]+)\"', sys.stdin.read(), re.MULTILINE)
+          print(m.group(1))
+          ")
+
+          echo "main version: $main_version"
+          echo "PR version:   $pr_version"
+
+          if [ "$pr_version" = "$main_version" ]; then
+            echo "::error::src/ was modified but version in pyproject.toml was not bumped (still $main_version). Please bump the version following semver (fix: → patch, feat: → minor, breaking → major)."
+            exit 1
+          fi
+
+          # Verify the new version is greater than the old one
+          python3 -c "
+          from packaging.version import Version
+          old, new = Version('$main_version'), Version('$pr_version')
+          if new <= old:
+            raise SystemExit(f'::error::New version {new} must be greater than current {old}')
+          print(f'Version bump OK: {old} → {new}')
+          "
