@@ -13,6 +13,206 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class TensorRTInference:
     @staticmethod
+    def _convert_int64_to_int32(onnx_path: Path) -> bytes:
+        """TensorRT互換性のためにONNXモデルのInt64をInt32に変換する．
+
+        TensorRTはInt64演算のサポートが限定的なため，
+        ONNXグラフ内のInt64型をInt32型に変換してからパースする．
+        Shapeなど常にInt64を出力するノードにはCast(Int64→Int32)を挿入する．
+
+        Args:
+            onnx_path: ONNXモデルファイルパス．
+
+        Returns:
+            変換後のONNXモデルのシリアライズバイト列．
+        """
+        import onnx
+        from onnx import TensorProto, helper, numpy_helper
+
+        model = onnx.load(str(onnx_path))
+        converted = False
+
+        # 入力テンソルの型変換
+        for inp in model.graph.input:
+            if (
+                inp.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                inp.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                logger.info(
+                    "Converted input '%s' from INT64 to INT32",
+                    inp.name,
+                )
+                converted = True
+
+        # Castノードのターゲット型変換
+        for node in model.graph.node:
+            if node.op_type == "Cast":
+                for attr in node.attribute:
+                    if (
+                        attr.name == "to"
+                        and attr.i == TensorProto.INT64
+                    ):
+                        attr.i = TensorProto.INT32
+                        converted = True
+
+        # Constantノードの値テンソル型変換
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                for attr in node.attribute:
+                    if (
+                        attr.name == "value"
+                        and attr.t.data_type
+                        == TensorProto.INT64
+                    ):
+                        data = numpy_helper.to_array(attr.t)
+                        new_tensor = numpy_helper.from_array(
+                            data.astype(np.int32),
+                            attr.t.name,
+                        )
+                        attr.t.CopyFrom(new_tensor)
+                        converted = True
+
+        # Constantノードのvalue_int/value_ints属性変換
+        # (ONNX仕様でInt64固定のため，valueテンソル(Int32)に置換)
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                attrs_to_remove = []
+                attrs_to_add = []
+                for attr in node.attribute:
+                    if attr.name == "value_int":
+                        new_tensor = numpy_helper.from_array(
+                            np.array(attr.i, dtype=np.int32)
+                        )
+                        attrs_to_remove.append(attr)
+                        attrs_to_add.append(
+                            helper.make_attribute(
+                                "value", new_tensor
+                            )
+                        )
+                        converted = True
+                    elif attr.name == "value_ints":
+                        new_tensor = numpy_helper.from_array(
+                            np.array(
+                                list(attr.ints),
+                                dtype=np.int32,
+                            )
+                        )
+                        attrs_to_remove.append(attr)
+                        attrs_to_add.append(
+                            helper.make_attribute(
+                                "value", new_tensor
+                            )
+                        )
+                        converted = True
+                for attr in attrs_to_remove:
+                    node.attribute.remove(attr)
+                node.attribute.extend(attrs_to_add)
+
+        # 初期化テンソルの型変換
+        for initializer in model.graph.initializer:
+            if initializer.data_type == TensorProto.INT64:
+                data = numpy_helper.to_array(initializer)
+                new_init = numpy_helper.from_array(
+                    data.astype(np.int32), initializer.name
+                )
+                initializer.CopyFrom(new_init)
+                converted = True
+
+        # Int64を常に出力するノードの後にCast(Int64→Int32)を挿入
+        # (ONNX仕様でShape等は常にInt64を出力するため，
+        #  Constantと混在するConcatで型不一致が起きる)
+        _int64_output_ops = frozenset(
+            {"Shape", "Size", "NonZero"}
+        )
+        # Expandなどshapeテンソルを受け取るノードのshape入力に
+        # Cast(Int32→Int64)を挿入
+        # (TensorRTが内部でInt64のshapeテンソルを生成するため，
+        #  shape入力もInt64でなければ型不一致エラーになる．
+        #  Shape→Where→Expandのように中間ノードを経由する場合も
+        #  shape入力の直前でInt64に戻す必要がある)
+        _shape_consuming_ops: dict[str, frozenset[int]] = {
+            "Expand": frozenset({1}),
+        }
+        _shape_cast_map: dict[str, str] = {}
+        new_nodes = []
+        for node in model.graph.node:
+            # shape入力を受け取るノードの前にCast(Int32→Int64)を挿入
+            if node.op_type in _shape_consuming_ops:
+                for idx in _shape_consuming_ops[node.op_type]:
+                    if (
+                        idx < len(node.input)
+                        and node.input[idx]
+                    ):
+                        original = node.input[idx]
+                        if original not in _shape_cast_map:
+                            cast_out = (
+                                original + "_expand_shape_i64"
+                            )
+                            cast_node = helper.make_node(
+                                "Cast",
+                                inputs=[original],
+                                outputs=[cast_out],
+                                to=TensorProto.INT64,
+                            )
+                            new_nodes.append(cast_node)
+                            _shape_cast_map[original] = cast_out
+                            converted = True
+                        node.input[idx] = _shape_cast_map[
+                            original
+                        ]
+            new_nodes.append(node)
+            # Int64固定出力ノードの後にCast(Int64→Int32)を挿入
+            if node.op_type in _int64_output_ops:
+                for j, output_name in enumerate(node.output):
+                    if not output_name:
+                        continue
+                    cast_input = output_name + "_pre_cast"
+                    node.output[j] = cast_input
+                    cast_node = helper.make_node(
+                        "Cast",
+                        inputs=[cast_input],
+                        outputs=[output_name],
+                        to=TensorProto.INT32,
+                    )
+                    new_nodes.append(cast_node)
+                    converted = True
+        del model.graph.node[:]
+        model.graph.node.extend(new_nodes)
+
+        # value_infoの型変換
+        for vi in model.graph.value_info:
+            if (
+                vi.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                vi.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                converted = True
+
+        # 出力テンソルの型変換
+        for out in model.graph.output:
+            if (
+                out.type.tensor_type.elem_type
+                == TensorProto.INT64
+            ):
+                out.type.tensor_type.elem_type = (
+                    TensorProto.INT32
+                )
+                converted = True
+
+        if converted:
+            logger.info(
+                "ONNX model Int64 -> Int32 conversion applied "
+                "for TensorRT compatibility"
+            )
+
+        return model.SerializeToString()
+
+    @staticmethod
     def save_engine(
         serialized_engine: bytes, path: Path
     ) -> None:
@@ -85,10 +285,12 @@ class TensorRTInference:
         )
         network = builder.create_network(network_flags)
 
-        # TensorRT 10+はInt64をネイティブサポートするため
-        # ONNXモデルをそのままパースする
+        # Int64→Int32変換してからパース(TensorRTはInt64サポートが限定的)
+        onnx_bytes = TensorRTInference._convert_int64_to_int32(
+            onnx_path
+        )
         parser = trt.OnnxParser(network, trt_logger)
-        success = parser.parse(onnx_path.read_bytes())
+        success = parser.parse(onnx_bytes)
         for idx in range(parser.num_errors):
             logger.error(parser.get_error(idx))
         if not success:
