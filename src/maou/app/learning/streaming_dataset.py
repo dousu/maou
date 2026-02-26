@@ -72,7 +72,9 @@ def _resolve_worker_files(
             common_seed = epoch_seed - worker_info.id
         else:
             common_seed = epoch_seed
-        file_rng = np.random.default_rng(common_seed + 1_000_000)
+        file_rng = np.random.default_rng(
+            common_seed + 1_000_000
+        )
         file_indices = file_rng.permutation(len(file_paths))
         file_paths = [file_paths[i] for i in file_indices]
 
