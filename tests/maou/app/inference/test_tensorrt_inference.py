@@ -720,6 +720,109 @@ def _create_onnx_model_with_int32(
     return model_path
 
 
+def _create_onnx_model_with_constant_int64(
+    tmp_path: Path,
+) -> Path:
+    """Int64のConstantノードを含むダミーONNXモデルを生成する．
+
+    Rangeノードのstart/limit/deltaがConstantノード経由で
+    Int64値を持つケースを再現する．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # Float32入力
+    x_input = helper.make_tensor_value_info(
+        "x", TensorProto.FLOAT, [None, 81]
+    )
+    # Float32出力
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 81]
+    )
+
+    # Rangeノードの入力をConstantノードで定義(Int64)
+    start_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["range_start"],
+        value=numpy_helper.from_array(
+            np.array(0, dtype=np.int64), name="start_val"
+        ),
+    )
+    limit_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["range_limit"],
+        value=numpy_helper.from_array(
+            np.array(81, dtype=np.int64), name="limit_val"
+        ),
+    )
+    delta_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["range_delta"],
+        value=numpy_helper.from_array(
+            np.array(1, dtype=np.int64), name="delta_val"
+        ),
+    )
+
+    # Rangeノード: start, limit, deltaすべてInt64
+    range_node = helper.make_node(
+        "Range",
+        inputs=["range_start", "range_limit", "range_delta"],
+        outputs=["range_out"],
+    )
+
+    # Castで Range出力(Int) → Float に変換
+    cast_node = helper.make_node(
+        "Cast",
+        inputs=["range_out"],
+        outputs=["range_float"],
+        to=TensorProto.FLOAT,
+    )
+
+    # Reshape用shape
+    shape_init = numpy_helper.from_array(
+        np.array([1, 81], dtype=np.int64), name="shape"
+    )
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["range_float", "shape"],
+        outputs=["range_reshaped"],
+    )
+
+    # Add: x + range_reshaped
+    add_node = helper.make_node(
+        "Add",
+        inputs=["x", "range_reshaped"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            start_node,
+            limit_node,
+            delta_node,
+            range_node,
+            cast_node,
+            reshape_node,
+            add_node,
+        ],
+        "test_constant_int64_graph",
+        [x_input],
+        [output],
+        initializer=[shape_init],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_constant_int64.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
 class TestConvertInt64ToInt32:
     """_convert_int64_to_int32 のテスト．"""
 
@@ -831,6 +934,51 @@ class TestConvertInt64ToInt32:
             # Int64初期化テンソルがInt32に変換されていること
             for init in result_model.graph.initializer:
                 assert init.data_type != TensorProto.INT64
+
+    def test_converts_constant_node_int64_to_int32(
+        self, tmp_path: Path
+    ) -> None:
+        """ConstantノードのInt64値がInt32に変換されること．"""
+        onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_constant_int64(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # ConstantノードのInt64値がInt32に変換されていること
+            constant_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Constant"
+            ]
+            for node in constant_nodes:
+                for attr in node.attribute:
+                    if attr.name == "value":
+                        assert (
+                            attr.t.data_type
+                            != TensorProto.INT64
+                        )
 
     def test_no_change_for_int32_model(
         self, tmp_path: Path

@@ -57,6 +57,23 @@ class TensorRTInference:
                         attr.i = TensorProto.INT32
                         converted = True
 
+        # Constantノードの値テンソル型変換
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                for attr in node.attribute:
+                    if (
+                        attr.name == "value"
+                        and attr.t.data_type
+                        == TensorProto.INT64
+                    ):
+                        data = numpy_helper.to_array(attr.t)
+                        new_tensor = numpy_helper.from_array(
+                            data.astype(np.int32),
+                            attr.t.name,
+                        )
+                        attr.t.CopyFrom(new_tensor)
+                        converted = True
+
         # 初期化テンソルの型変換
         for initializer in model.graph.initializer:
             if initializer.data_type == TensorProto.INT64:
