@@ -606,7 +606,12 @@ class TestInferWithEnginePath:
 def _create_onnx_model_with_int64(
     tmp_path: Path,
 ) -> Path:
-    """Int64入力とCastノードを含むダミーONNXモデルを生成する．"""
+    """Int64入力とデータパスCast(to=INT64)を含むダミーONNXモデルを生成する．
+
+    - board: INT64入力(→ INT32に変換される)
+    - hand(FLOAT) → Cast(to=INT64): データパスCast(→ INT32に変換される)
+    - shape initializer: INT64(→ 変換されない)
+    """
     import numpy as np
     import onnx
     from onnx import TensorProto, helper, numpy_helper
@@ -624,13 +629,23 @@ def _create_onnx_model_with_int64(
         "output", TensorProto.FLOAT, [1, 1]
     )
 
-    # Cast node: ターゲット型をINT64に設定
+    # データパス Cast: hand(FLOAT) → Cast(to=INT64)
+    # FLOAT入力なのでデータパスとして変換対象
     cast_node = helper.make_node(
+        "Cast",
+        inputs=["hand"],
+        outputs=["hand_int"],
+        to=TensorProto.INT64,
+    )
+
+    # Cast board to float for computation
+    cast_board_node = helper.make_node(
         "Cast",
         inputs=["board"],
         outputs=["board_float"],
-        to=TensorProto.INT64,
+        to=TensorProto.FLOAT,
     )
+
     # Reshape for simplicity
     shape_init = numpy_helper.from_array(
         np.array([1, 81], dtype=np.int64), name="shape"
@@ -651,7 +666,7 @@ def _create_onnx_model_with_int64(
     )
 
     graph = helper.make_graph(
-        [cast_node, reshape_node, matmul_node],
+        [cast_node, cast_board_node, reshape_node, matmul_node],
         "test_graph",
         [board_input, hand_input],
         [output],
@@ -1149,8 +1164,247 @@ def _create_onnx_model_with_value_int_attr(
     return model_path
 
 
+def _create_onnx_model_with_shape_path_cast(
+    tmp_path: Path,
+) -> Path:
+    """シェイプパスにCast(to=INT64)を含むダミーONNXモデル．
+
+    Shape→Gather(int32)→Cast(to=INT64)→Range→Reshape パターンを再現する．
+    PyTorchのONNXエクスポートがdynamic batch reshape時に生成する
+    標準パターン．Cast(to=INT64)はRange operatorのINT64要件を満たすため
+    必要であり，INT32に変換するとRange型エラーが発生する．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # Float32入力 [batch, 81, 512]
+    x_input = helper.make_tensor_value_info(
+        "x", TensorProto.FLOAT, [None, 81, 512]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 81, 512]
+    )
+
+    # Shape: x の形状取得 → INT64 [3]
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["x"],
+        outputs=["x_shape"],
+    )
+
+    # Gather: batch_size 抽出(index=0) → scalar INT64
+    gather_idx = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="gather_idx"
+    )
+    gather_node = helper.make_node(
+        "Gather",
+        inputs=["x_shape", "gather_idx"],
+        outputs=["batch_size_i64"],
+        axis=0,
+    )
+
+    # Cast: batch_size INT64 → INT32
+    # (onnxslim最適化で発生するパターン)
+    cast_to_i32_node = helper.make_node(
+        "Cast",
+        inputs=["batch_size_i64"],
+        outputs=["batch_size_i32"],
+        to=TensorProto.INT32,
+    )
+
+    # Cast: batch_size INT32 → INT64
+    # Range が INT64 を要求するため再変換
+    # ★ このCastを誤ってINT32に変換するとRangeでエラー
+    cast_to_i64_node = helper.make_node(
+        "Cast",
+        inputs=["batch_size_i32"],
+        outputs=["batch_limit"],
+        to=TensorProto.INT64,
+    )
+
+    # Range: 0, batch_size, 1 (すべてINT64)
+    range_start = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="range_start"
+    )
+    range_delta = numpy_helper.from_array(
+        np.array(1, dtype=np.int64), name="range_delta"
+    )
+    range_node = helper.make_node(
+        "Range",
+        inputs=["range_start", "batch_limit", "range_delta"],
+        outputs=["range_out"],
+    )
+
+    # Cast: range INT64 → FLOAT for Add
+    cast_to_float_node = helper.make_node(
+        "Cast",
+        inputs=["range_out"],
+        outputs=["range_float"],
+        to=TensorProto.FLOAT,
+    )
+
+    # Reshape range to [batch, 1, 1]
+    reshape_shape = numpy_helper.from_array(
+        np.array([-1, 1, 1], dtype=np.int64),
+        name="reshape_shape",
+    )
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["range_float", "reshape_shape"],
+        outputs=["range_3d"],
+    )
+
+    # Add: x + range (broadcast)
+    add_node = helper.make_node(
+        "Add",
+        inputs=["x", "range_3d"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            shape_node,
+            gather_node,
+            cast_to_i32_node,
+            cast_to_i64_node,
+            range_node,
+            cast_to_float_node,
+            reshape_node,
+            add_node,
+        ],
+        "test_shape_path_cast_graph",
+        [x_input],
+        [output],
+        initializer=[
+            gather_idx,
+            range_start,
+            range_delta,
+            reshape_shape,
+        ],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_shape_path_cast.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
+def _create_onnx_model_with_squeeze_mul(
+    tmp_path: Path,
+) -> Path:
+    """Squeeze+Mulパターンを含むダミーONNXモデル．
+
+    PyTorchのscaled_dot_product_attentionが生成する
+    Split→Squeeze(unbind) + Shape→Gather→Sqrt(スケール計算) → Mul
+    パターンを再現する．
+    value_ints属性のSqueeze axesがInt32に不正変換されると
+    Mulのブロードキャスト次元が不整合になるバグの回帰テスト．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # 入力: QKV結合テンソル [3, batch, num_heads, seq_len, head_dim]
+    qkv_input = helper.make_tensor_value_info(
+        "qkv", TensorProto.FLOAT, [3, None, 8, 81, 64]
+    )
+    output = helper.make_tensor_value_info(
+        "output",
+        TensorProto.FLOAT,
+        [None, 8, 81, 64],
+    )
+
+    # Split: QKV を Q, K, V に分割 → 3つの [1, batch, 8, 81, 64]
+    split_node = helper.make_node(
+        "Split",
+        inputs=["qkv"],
+        outputs=["q_raw", "k_raw", "v_raw"],
+        axis=0,
+    )
+
+    # Squeeze(axes=[0]): [1, batch, 8, 81, 64] → [batch, 8, 81, 64]
+    # axes は value_ints 属性(ONNX仕様でInt64固定)
+    squeeze_axes_node = helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=["squeeze_axes"],
+        value_ints=[0],
+    )
+    squeeze_node = helper.make_node(
+        "Squeeze",
+        inputs=["q_raw", "squeeze_axes"],
+        outputs=["q"],
+    )
+
+    # スケール計算: Shape(Q)→Gather(last_dim)→Cast→Sqrt
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["q"],
+        outputs=["q_shape"],
+    )
+    gather_idx = numpy_helper.from_array(
+        np.array(-1, dtype=np.int64),
+        name="gather_idx",
+    )
+    gather_node = helper.make_node(
+        "Gather",
+        inputs=["q_shape", "gather_idx"],
+        outputs=["head_dim"],
+        axis=0,
+    )
+    cast_to_float = helper.make_node(
+        "Cast",
+        inputs=["head_dim"],
+        outputs=["head_dim_float"],
+        to=TensorProto.FLOAT,
+    )
+    sqrt_node = helper.make_node(
+        "Sqrt",
+        inputs=["head_dim_float"],
+        outputs=["sqrt_d_k"],
+    )
+
+    # Mul: Q * sqrt(d_k) (ブロードキャスト: [batch,8,81,64] * scalar)
+    mul_node = helper.make_node(
+        "Mul",
+        inputs=["q", "sqrt_d_k"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            split_node,
+            squeeze_axes_node,
+            squeeze_node,
+            shape_node,
+            gather_node,
+            cast_to_float,
+            sqrt_node,
+            mul_node,
+        ],
+        "test_squeeze_mul_graph",
+        [qkv_input],
+        [output],
+        initializer=[gather_idx],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_squeeze_mul.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
 class TestConvertInt64ToInt32:
-    """_convert_int64_to_int32 のテスト．"""
+    """_convert_int64_to_int32 のテスト．
+
+    データ計算パス(入出力/Cast)のみInt32に変換し，
+    シェイプ計算パス(Constant/initializer/Shape出力)はInt64のまま維持する．
+    """
 
     def test_converts_int64_input_to_int32(
         self, tmp_path: Path
@@ -1181,7 +1435,6 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # 入力テンソルがInt32に変換されていること
             board_input = result_model.graph.input[0]
             assert (
                 board_input.type.tensor_type.elem_type
@@ -1217,7 +1470,6 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # CastノードのターゲットがInt32に変換されていること
             cast_nodes = [
                 n
                 for n in result_model.graph.node
@@ -1228,10 +1480,49 @@ class TestConvertInt64ToInt32:
                     if attr.name == "to":
                         assert attr.i != TensorProto.INT64
 
-    def test_converts_int64_initializer_to_int32(
+    def test_no_change_for_int32_model(
         self, tmp_path: Path
     ) -> None:
-        """Int64初期化テンソルがInt32に変換されること．"""
+        """Int64を含まないモデルに変更が加わらないこと．"""
+        onnx = pytest.importorskip("onnx")
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_int32(tmp_path)
+
+        original_model = onnx.load(str(model_path))
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            assert (
+                result_model.graph.input[
+                    0
+                ].type.tensor_type.elem_type
+                == original_model.graph.input[
+                    0
+                ].type.tensor_type.elem_type
+            )
+
+    def test_preserves_int64_initializers(
+        self, tmp_path: Path
+    ) -> None:
+        """Int64初期化テンソルがシェイプパスとして保持されること．"""
         onnx = pytest.importorskip("onnx")
         from onnx import TensorProto
 
@@ -1257,14 +1548,18 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # Int64初期化テンソルがInt32に変換されていること
-            for init in result_model.graph.initializer:
-                assert init.data_type != TensorProto.INT64
+            # Int64初期化テンソルが変換されずに残ること
+            int64_inits = [
+                init
+                for init in result_model.graph.initializer
+                if init.data_type == TensorProto.INT64
+            ]
+            assert len(int64_inits) >= 1
 
-    def test_converts_constant_node_int64_to_int32(
+    def test_preserves_int64_constant_values(
         self, tmp_path: Path
     ) -> None:
-        """ConstantノードのInt64値がInt32に変換されること．"""
+        """ConstantノードのInt64値がシェイプパスとして保持されること．"""
         onnx = pytest.importorskip("onnx")
         from onnx import TensorProto
 
@@ -1292,65 +1587,27 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # ConstantノードのInt64値がInt32に変換されていること
-            constant_nodes = [
+            # ConstantノードのInt64値が変換されずに残ること
+            int64_constants = [
                 n
                 for n in result_model.graph.node
                 if n.op_type == "Constant"
-            ]
-            for node in constant_nodes:
-                for attr in node.attribute:
-                    if attr.name == "value":
-                        assert (
-                            attr.t.data_type
-                            != TensorProto.INT64
-                        )
-
-    def test_no_change_for_int32_model(
-        self, tmp_path: Path
-    ) -> None:
-        """Int64を含まないモデルに変更が加わらないこと．"""
-        onnx = pytest.importorskip("onnx")
-
-        trt_mock = _create_trt_mock()
-        cuda_mocks = _create_cuda_mocks()
-        model_path = _create_onnx_model_with_int32(tmp_path)
-
-        # 変換前のモデルを保存
-        original_model = onnx.load(str(model_path))
-
-        with patch.dict(
-            sys.modules,
-            {"tensorrt": trt_mock, **cuda_mocks},
-        ):
-            sys.modules.pop(
-                "maou.app.inference.tensorrt_inference", None
-            )
-            from maou.app.inference.tensorrt_inference import (
-                TensorRTInference,
-            )
-
-            result_bytes = (
-                TensorRTInference._convert_int64_to_int32(
-                    model_path
+                and any(
+                    a.name == "value"
+                    and a.t.data_type == TensorProto.INT64
+                    for a in n.attribute
                 )
-            )
-            result_model = onnx.load_from_string(result_bytes)
+            ]
+            assert len(int64_constants) >= 1
 
-            # 入力の型が変わっていないこと
-            assert (
-                result_model.graph.input[
-                    0
-                ].type.tensor_type.elem_type
-                == original_model.graph.input[
-                    0
-                ].type.tensor_type.elem_type
-            )
-
-    def test_inserts_cast_after_shape_for_concat_compat(
+    def test_preserves_shape_path_int64(
         self, tmp_path: Path
     ) -> None:
-        """Shape由来Int64テンソルのConcat型不一致がCast挿入で解消される．"""
+        """Shape計算パス全体がInt64のまま維持されること．
+
+        Shape→Gather→Unsqueeze→Concat→Reshape のパスで
+        Cast(Int64→Int32)が挿入されないこと．
+        """
         onnx = pytest.importorskip("onnx")
         from onnx import TensorProto
 
@@ -1378,35 +1635,154 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # Shape ノードの直後に Cast(to=INT32) が挿入されていること
+            # Shape出力後にCast(to=INT32)が挿入されていないこと
             shape_indices = [
                 i
                 for i, n in enumerate(result_model.graph.node)
                 if n.op_type == "Shape"
             ]
             assert len(shape_indices) == 1
-            cast_after_shape = result_model.graph.node[
+            next_node = result_model.graph.node[
                 shape_indices[0] + 1
             ]
-            assert cast_after_shape.op_type == "Cast"
-            for attr in cast_after_shape.attribute:
-                if attr.name == "to":
-                    assert attr.i == TensorProto.INT32
+            # Shape直後がCast(to=INT32)でないこと
+            is_cast_to_i32 = (
+                next_node.op_type == "Cast"
+                and any(
+                    a.name == "to" and a.i == TensorProto.INT32
+                    for a in next_node.attribute
+                )
+            )
+            assert not is_cast_to_i32
 
-            # Constant の値も Int32 に変換されていること
-            for node in result_model.graph.node:
-                if node.op_type == "Constant":
-                    for attr in node.attribute:
-                        if attr.name == "value":
-                            assert (
-                                attr.t.data_type
-                                != TensorProto.INT64
-                            )
+            # ConstantのInt64値も変換されずに残ること
+            int64_constants = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Constant"
+                and any(
+                    a.name == "value"
+                    and a.t.data_type == TensorProto.INT64
+                    for a in n.attribute
+                )
+            ]
+            assert len(int64_constants) >= 1
 
-    def test_casts_expand_shape_input_to_int64(
+    def test_preserves_value_int_attrs(
         self, tmp_path: Path
     ) -> None:
-        """Expand shape入力の直前にCast(Int32→Int64)が挿入されること．"""
+        """Constant(value_int)がInt64属性のまま保持されること．"""
+        onnx = pytest.importorskip("onnx")
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_value_int_attr(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # value_int属性がそのまま残っていること
+            const_with_value_int = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Constant"
+                and any(
+                    a.name == "value_int" for a in n.attribute
+                )
+            ]
+            assert len(const_with_value_int) >= 1
+
+    def test_squeeze_mul_no_shape_modification(
+        self, tmp_path: Path
+    ) -> None:
+        """Squeeze+Mulパターンでシェイプパスが変更されないこと．
+
+        回帰テスト: Squeeze axesやShape出力がInt32に不正変換されると
+        TensorRTでMulノードの shape error が発生する問題の防止．
+        """
+        onnx = pytest.importorskip("onnx")
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_squeeze_mul(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # Squeeze の axes 入力が変更されていないこと
+            # (Cast挿入やリネームが行われていないこと)
+            squeeze_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Squeeze"
+            ]
+            assert len(squeeze_nodes) == 1
+            assert squeeze_nodes[0].input[1] == "squeeze_axes"
+
+            # Constant(value_ints)が属性のまま残っていること
+            const_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Constant"
+                and any(
+                    a.name == "value_ints" for a in n.attribute
+                )
+            ]
+            assert len(const_nodes) >= 1
+
+            # Shape出力にCast(to=INT32)が挿入されていないこと
+            shape_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Shape"
+            ]
+            assert len(shape_nodes) == 1
+            assert shape_nodes[0].output[0] == "q_shape"
+
+            # ノード数が変わっていないこと(Cast挿入なし)
+            original_model = onnx.load(str(model_path))
+            assert len(result_model.graph.node) == len(
+                original_model.graph.node
+            )
+
+    def test_expand_shape_path_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        """ExpandのshapeパスがInt64のまま維持されること．"""
         onnx = pytest.importorskip("onnx")
         from onnx import TensorProto
 
@@ -1434,43 +1810,47 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # Expand の shape 入力に Cast(to=INT64) が挿入されていること
+            # Expand の shape 入力が元のまま(board_shape)であること
             expand_nodes = [
                 n
                 for n in result_model.graph.node
                 if n.op_type == "Expand"
             ]
             assert len(expand_nodes) == 1
-            expand_shape_input = expand_nodes[0].input[1]
-            assert expand_shape_input.endswith(
-                "_expand_shape_i64"
-            )
+            assert expand_nodes[0].input[1] == "board_shape"
 
-            # Cast(to=INT64) ノードが存在すること
-            cast_to_i64 = [
+            # Shape出力にCastが挿入されていないこと
+            shape_nodes = [
                 n
                 for n in result_model.graph.node
-                if n.op_type == "Cast"
-                and any(
-                    a.name == "to" and a.i == TensorProto.INT64
-                    for a in n.attribute
-                )
+                if n.op_type == "Shape"
             ]
-            assert any(
-                n.output[0] == expand_shape_input
-                for n in cast_to_i64
-            )
+            assert len(shape_nodes) == 1
+            assert shape_nodes[0].output[0] == "board_shape"
 
-    def test_casts_expand_shape_via_where_to_int64(
+            # Int64初期化テンソルが保持されること
+            int64_inits = [
+                init
+                for init in result_model.graph.initializer
+                if init.data_type == TensorProto.INT64
+            ]
+            assert len(int64_inits) >= 1
+
+    def test_preserves_shape_path_cast_to_int64(
         self, tmp_path: Path
     ) -> None:
-        """Shape→Where→Expand経路でExpand shape入力がInt64にキャストされること．"""
+        """シェイプパスのCast(to=INT64)がINT64のまま保持されること．
+
+        回帰テスト: Shape→Gather(int32)→Cast(to=INT64)→Range
+        パターンでCastをINT32に変換するとRange型エラーが発生する．
+        Cast入力がINT型のためシェイプパスと判定し変換しない．
+        """
         onnx = pytest.importorskip("onnx")
         from onnx import TensorProto
 
         trt_mock = _create_trt_mock()
         cuda_mocks = _create_cuda_mocks()
-        model_path = _create_onnx_model_with_where_expand(
+        model_path = _create_onnx_model_with_shape_path_cast(
             tmp_path
         )
 
@@ -1492,76 +1872,35 @@ class TestConvertInt64ToInt32:
             )
             result_model = onnx.load_from_string(result_bytes)
 
-            # Expand の shape 入力に Cast(to=INT64) が挿入されていること
-            expand_nodes = [
-                n
-                for n in result_model.graph.node
-                if n.op_type == "Expand"
-            ]
-            assert len(expand_nodes) == 1
-            expand_shape_input = expand_nodes[0].input[1]
-            assert expand_shape_input.endswith(
-                "_expand_shape_i64"
-            )
-
-            # Cast(to=INT64) ノードが存在し，Expand に接続されていること
-            cast_to_i64 = [
+            # シェイプパスのCast(to=INT64)が保持されること
+            cast_nodes = [
                 n
                 for n in result_model.graph.node
                 if n.op_type == "Cast"
-                and any(
+            ]
+
+            # Cast(to=INT64): batch_size_i32→batch_limit
+            # が保持されていることを確認
+            cast_to_i64_nodes = [
+                n
+                for n in cast_nodes
+                if any(
                     a.name == "to" and a.i == TensorProto.INT64
                     for a in n.attribute
                 )
             ]
-            assert any(
-                n.output[0] == expand_shape_input
-                for n in cast_to_i64
+            assert len(cast_to_i64_nodes) >= 1, (
+                "Shape-path Cast(to=INT64) should be preserved"
             )
 
-    def test_converts_value_int_attr_to_int32(
-        self, tmp_path: Path
-    ) -> None:
-        """Constantノードのvalue_int属性がInt32のvalueテンソルに変換される．"""
-        onnx = pytest.importorskip("onnx")
-        from onnx import TensorProto
-
-        trt_mock = _create_trt_mock()
-        cuda_mocks = _create_cuda_mocks()
-        model_path = _create_onnx_model_with_value_int_attr(
-            tmp_path
-        )
-
-        with patch.dict(
-            sys.modules,
-            {"tensorrt": trt_mock, **cuda_mocks},
-        ):
-            sys.modules.pop(
-                "maou.app.inference.tensorrt_inference", None
-            )
-            from maou.app.inference.tensorrt_inference import (
-                TensorRTInference,
-            )
-
-            result_bytes = (
-                TensorRTInference._convert_int64_to_int32(
-                    model_path
-                )
-            )
-            result_model = onnx.load_from_string(result_bytes)
-
-            # value_int が value テンソル(Int32)に置換されていること
-            const_nodes = [
+            # Cast(to=INT64)の出力がRangeに接続されていること
+            range_nodes = [
                 n
                 for n in result_model.graph.node
-                if n.op_type == "Constant"
+                if n.op_type == "Range"
             ]
-            for node in const_nodes:
-                attr_names = [a.name for a in node.attribute]
-                assert "value_int" not in attr_names
-                for attr in node.attribute:
-                    if attr.name == "value":
-                        assert (
-                            attr.t.data_type
-                            == TensorProto.INT32
-                        )
+            assert len(range_nodes) == 1
+            assert (
+                cast_to_i64_nodes[0].output[0]
+                in range_nodes[0].input
+            )
