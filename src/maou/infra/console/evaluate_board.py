@@ -95,6 +95,19 @@ def evaluate_board(
         raise click.UsageError(
             "--model-path or --engine-path is required."
         )
+    if model_type == "TENSORRT" and model_path is not None:
+        raise click.UsageError(
+            "--model-path cannot be used with --model-type TENSORRT. "
+            "Use --engine-path to specify the TensorRT engine file. "
+            "Example: maou evaluate --model-type TENSORRT "
+            "--engine-path <engine-file> --sfen ..."
+        )
+    if model_type == "ONNX" and engine_path is not None:
+        raise click.UsageError(
+            "--engine-path cannot be used with --model-type ONNX. "
+            "Use --model-type TENSORRT with --engine-path, "
+            "or use --model-path with --model-type ONNX."
+        )
     click.echo(
         infer.infer(
             model_type=model_type,

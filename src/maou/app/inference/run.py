@@ -51,11 +51,6 @@ class InferenceRunner:
         engine_path: Optional[Path] = None
 
     def infer(self, config: InferenceOption) -> Dict[str, str]:
-        # engine_path 指定時は自動的に TENSORRT 扱い
-        effective_model_type = config.model_type
-        if config.engine_path is not None:
-            effective_model_type = ModelType.TENSORRT
-
         # model_path と engine_path のどちらかは必須
         if (
             config.model_path is None
@@ -64,6 +59,26 @@ class InferenceRunner:
             raise ValueError(
                 "Either model_path or engine_path must be provided."
             )
+
+        # model_type と指定パスの整合性チェック
+        if (
+            config.model_type == ModelType.TENSORRT
+            and config.model_path is not None
+        ):
+            raise ValueError(
+                "model_path cannot be used with TENSORRT model type. "
+                "Use engine_path to specify the TensorRT engine file."
+            )
+        if (
+            config.model_type == ModelType.ONNX
+            and config.engine_path is not None
+        ):
+            raise ValueError(
+                "engine_path cannot be used with ONNX model type. "
+                "Use model_type=TENSORRT with engine_path."
+            )
+
+        effective_model_type = config.model_type
 
         # 特徴量の作成
         board: Board

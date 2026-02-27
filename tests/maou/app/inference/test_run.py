@@ -313,7 +313,7 @@ class TestInferenceRunner:
             mock_import.side_effect = side_effect_import
 
             config = InferenceRunner.InferenceOption(
-                model_path=mock_model_path,
+                engine_path=mock_model_path,
                 model_type=ModelType.TENSORRT,
                 sfen=sample_sfen,
             )
@@ -367,7 +367,7 @@ class TestInferenceRunner:
             mock_make_usi.side_effect = ["7g7f", "2g2f"]
 
             config = InferenceRunner.InferenceOption(
-                model_path=mock_model_path,
+                engine_path=mock_model_path,
                 model_type=ModelType.TENSORRT,
                 sfen=sample_sfen,
                 num_moves=2,
