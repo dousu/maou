@@ -606,7 +606,12 @@ class TestInferWithEnginePath:
 def _create_onnx_model_with_int64(
     tmp_path: Path,
 ) -> Path:
-    """Int64入力とCastノードを含むダミーONNXモデルを生成する．"""
+    """Int64入力とデータパスCast(to=INT64)を含むダミーONNXモデルを生成する．
+
+    - board: INT64入力(→ INT32に変換される)
+    - hand(FLOAT) → Cast(to=INT64): データパスCast(→ INT32に変換される)
+    - shape initializer: INT64(→ 変換されない)
+    """
     import numpy as np
     import onnx
     from onnx import TensorProto, helper, numpy_helper
@@ -624,13 +629,23 @@ def _create_onnx_model_with_int64(
         "output", TensorProto.FLOAT, [1, 1]
     )
 
-    # Cast node: ターゲット型をINT64に設定
+    # データパス Cast: hand(FLOAT) → Cast(to=INT64)
+    # FLOAT入力なのでデータパスとして変換対象
     cast_node = helper.make_node(
+        "Cast",
+        inputs=["hand"],
+        outputs=["hand_int"],
+        to=TensorProto.INT64,
+    )
+
+    # Cast board to float for computation
+    cast_board_node = helper.make_node(
         "Cast",
         inputs=["board"],
         outputs=["board_float"],
-        to=TensorProto.INT64,
+        to=TensorProto.FLOAT,
     )
+
     # Reshape for simplicity
     shape_init = numpy_helper.from_array(
         np.array([1, 81], dtype=np.int64), name="shape"
@@ -651,7 +666,7 @@ def _create_onnx_model_with_int64(
     )
 
     graph = helper.make_graph(
-        [cast_node, reshape_node, matmul_node],
+        [cast_node, cast_board_node, reshape_node, matmul_node],
         "test_graph",
         [board_input, hand_input],
         [output],
@@ -1145,6 +1160,134 @@ def _create_onnx_model_with_value_int_attr(
     )
 
     model_path = tmp_path / "test_value_int.onnx"
+    onnx.save(model, str(model_path))
+    return model_path
+
+
+def _create_onnx_model_with_shape_path_cast(
+    tmp_path: Path,
+) -> Path:
+    """シェイプパスにCast(to=INT64)を含むダミーONNXモデル．
+
+    Shape→Gather(int32)→Cast(to=INT64)→Range→Reshape パターンを再現する．
+    PyTorchのONNXエクスポートがdynamic batch reshape時に生成する
+    標準パターン．Cast(to=INT64)はRange operatorのINT64要件を満たすため
+    必要であり，INT32に変換するとRange型エラーが発生する．
+    """
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    # Float32入力 [batch, 81, 512]
+    x_input = helper.make_tensor_value_info(
+        "x", TensorProto.FLOAT, [None, 81, 512]
+    )
+    output = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [None, 81, 512]
+    )
+
+    # Shape: x の形状取得 → INT64 [3]
+    shape_node = helper.make_node(
+        "Shape",
+        inputs=["x"],
+        outputs=["x_shape"],
+    )
+
+    # Gather: batch_size 抽出(index=0) → scalar INT64
+    gather_idx = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="gather_idx"
+    )
+    gather_node = helper.make_node(
+        "Gather",
+        inputs=["x_shape", "gather_idx"],
+        outputs=["batch_size_i64"],
+        axis=0,
+    )
+
+    # Cast: batch_size INT64 → INT32
+    # (onnxslim最適化で発生するパターン)
+    cast_to_i32_node = helper.make_node(
+        "Cast",
+        inputs=["batch_size_i64"],
+        outputs=["batch_size_i32"],
+        to=TensorProto.INT32,
+    )
+
+    # Cast: batch_size INT32 → INT64
+    # Range が INT64 を要求するため再変換
+    # ★ このCastを誤ってINT32に変換するとRangeでエラー
+    cast_to_i64_node = helper.make_node(
+        "Cast",
+        inputs=["batch_size_i32"],
+        outputs=["batch_limit"],
+        to=TensorProto.INT64,
+    )
+
+    # Range: 0, batch_size, 1 (すべてINT64)
+    range_start = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="range_start"
+    )
+    range_delta = numpy_helper.from_array(
+        np.array(1, dtype=np.int64), name="range_delta"
+    )
+    range_node = helper.make_node(
+        "Range",
+        inputs=["range_start", "batch_limit", "range_delta"],
+        outputs=["range_out"],
+    )
+
+    # Cast: range INT64 → FLOAT for Add
+    cast_to_float_node = helper.make_node(
+        "Cast",
+        inputs=["range_out"],
+        outputs=["range_float"],
+        to=TensorProto.FLOAT,
+    )
+
+    # Reshape range to [batch, 1, 1]
+    reshape_shape = numpy_helper.from_array(
+        np.array([-1, 1, 1], dtype=np.int64),
+        name="reshape_shape",
+    )
+    reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["range_float", "reshape_shape"],
+        outputs=["range_3d"],
+    )
+
+    # Add: x + range (broadcast)
+    add_node = helper.make_node(
+        "Add",
+        inputs=["x", "range_3d"],
+        outputs=["output"],
+    )
+
+    graph = helper.make_graph(
+        [
+            shape_node,
+            gather_node,
+            cast_to_i32_node,
+            cast_to_i64_node,
+            range_node,
+            cast_to_float_node,
+            reshape_node,
+            add_node,
+        ],
+        "test_shape_path_cast_graph",
+        [x_input],
+        [output],
+        initializer=[
+            gather_idx,
+            range_start,
+            range_delta,
+            reshape_shape,
+        ],
+    )
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 20)]
+    )
+
+    model_path = tmp_path / "test_shape_path_cast.onnx"
     onnx.save(model, str(model_path))
     return model_path
 
@@ -1692,3 +1835,72 @@ class TestConvertInt64ToInt32:
                 if init.data_type == TensorProto.INT64
             ]
             assert len(int64_inits) >= 1
+
+    def test_preserves_shape_path_cast_to_int64(
+        self, tmp_path: Path
+    ) -> None:
+        """シェイプパスのCast(to=INT64)がINT64のまま保持されること．
+
+        回帰テスト: Shape→Gather(int32)→Cast(to=INT64)→Range
+        パターンでCastをINT32に変換するとRange型エラーが発生する．
+        Cast入力がINT型のためシェイプパスと判定し変換しない．
+        """
+        onnx = pytest.importorskip("onnx")
+        from onnx import TensorProto
+
+        trt_mock = _create_trt_mock()
+        cuda_mocks = _create_cuda_mocks()
+        model_path = _create_onnx_model_with_shape_path_cast(
+            tmp_path
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"tensorrt": trt_mock, **cuda_mocks},
+        ):
+            sys.modules.pop(
+                "maou.app.inference.tensorrt_inference", None
+            )
+            from maou.app.inference.tensorrt_inference import (
+                TensorRTInference,
+            )
+
+            result_bytes = (
+                TensorRTInference._convert_int64_to_int32(
+                    model_path
+                )
+            )
+            result_model = onnx.load_from_string(result_bytes)
+
+            # シェイプパスのCast(to=INT64)が保持されること
+            cast_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Cast"
+            ]
+
+            # Cast(to=INT64): batch_size_i32→batch_limit
+            # が保持されていることを確認
+            cast_to_i64_nodes = [
+                n
+                for n in cast_nodes
+                if any(
+                    a.name == "to" and a.i == TensorProto.INT64
+                    for a in n.attribute
+                )
+            ]
+            assert len(cast_to_i64_nodes) >= 1, (
+                "Shape-path Cast(to=INT64) should be preserved"
+            )
+
+            # Cast(to=INT64)の出力がRangeに接続されていること
+            range_nodes = [
+                n
+                for n in result_model.graph.node
+                if n.op_type == "Range"
+            ]
+            assert len(range_nodes) == 1
+            assert (
+                cast_to_i64_nodes[0].output[0]
+                in range_nodes[0].input
+            )

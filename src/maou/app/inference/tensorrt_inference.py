@@ -13,6 +13,66 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class TensorRTInference:
     @staticmethod
+    def _build_tensor_type_map(
+        model: "onnx.ModelProto",  # type: ignore[name-defined]  # noqa: F821
+    ) -> dict[str, int]:
+        """ONNXモデルの中間テンソル型マップを構築する．
+
+        onnx.shape_inference で型情報を補完し，
+        graph input / output / value_info / initializer / Constant から
+        テンソル名 → elem_type の辞書を返す．
+
+        Args:
+            model: ONNXモデル(shape_inference適用前でも可)．
+
+        Returns:
+            テンソル名をキー，TensorProto elem_type を値とする辞書．
+        """
+        import onnx
+
+        try:
+            model = onnx.shape_inference.infer_shapes(model)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "shape_inference failed; "
+                "falling back to explicit type sources"
+            )
+
+        type_map: dict[str, int] = {}
+
+        # graph input / output
+        for io in list(model.graph.input) + list(
+            model.graph.output
+        ):
+            elem = io.type.tensor_type.elem_type
+            if elem:
+                type_map[io.name] = elem
+
+        # value_info (shape_inference で補完される)
+        for vi in model.graph.value_info:
+            elem = vi.type.tensor_type.elem_type
+            if elem:
+                type_map[vi.name] = elem
+
+        # initializer
+        for init in model.graph.initializer:
+            if init.data_type:
+                type_map[init.name] = init.data_type
+
+        # Constant ノードの value 属性
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                for attr in node.attribute:
+                    if (
+                        attr.name == "value"
+                        and attr.t.data_type
+                    ):
+                        for out in node.output:
+                            type_map[out] = attr.t.data_type
+
+        return type_map
+
+    @staticmethod
     def _convert_int64_to_int32(onnx_path: Path) -> bytes:
         """TensorRT互換性のためにONNXモデルのデータパスInt64をInt32に変換する．
 
@@ -20,6 +80,10 @@ class TensorRTInference:
         ONNX仕様通りInt64のまま維持する．
         FP16 fusionが問題になるデータ計算パス(モデル入出力，Cast(to=Int64))のみ
         Int32に変換する．
+
+        Cast(to=Int64)の判定は中間テンソルの型情報に基づく:
+        - 入力がFLOAT系 → データパス(変換する)
+        - 入力がINT系/不明 → シェイプパス(変換しない)
 
         Args:
             onnx_path: ONNXモデルファイルパス．
@@ -31,6 +95,21 @@ class TensorRTInference:
         from onnx import TensorProto
 
         model = onnx.load(str(onnx_path))
+
+        # 型情報マップを構築(Cast フィルタリング用)
+        type_map = TensorRTInference._build_tensor_type_map(
+            model
+        )
+
+        _float_types = frozenset(
+            {
+                TensorProto.FLOAT,
+                TensorProto.FLOAT16,
+                TensorProto.DOUBLE,
+                TensorProto.BFLOAT16,
+            }
+        )
+
         converted = False
 
         # データパス: 入力テンソルの型変換
@@ -49,6 +128,9 @@ class TensorRTInference:
                 converted = True
 
         # データパス: Cast(to=Int64)のターゲット型変換
+        # 入力がFLOAT系のCastのみ変換(データ計算パス)
+        # 入力がINT系のCastは維持(シェイプ計算パス:
+        #   例: Gather(int32)→Cast(to=INT64)→Range)
         for node in model.graph.node:
             if node.op_type == "Cast":
                 for attr in node.attribute:
@@ -56,8 +138,27 @@ class TensorRTInference:
                         attr.name == "to"
                         and attr.i == TensorProto.INT64
                     ):
-                        attr.i = TensorProto.INT32
-                        converted = True
+                        cast_input = (
+                            node.input[0] if node.input else ""
+                        )
+                        input_type = type_map.get(cast_input, 0)
+                        if input_type in _float_types:
+                            attr.i = TensorProto.INT32
+                            logger.debug(
+                                "Converted Cast(to=INT64) → "
+                                "Cast(to=INT32) for data-path "
+                                "tensor '%s'",
+                                cast_input,
+                            )
+                            converted = True
+                        else:
+                            logger.debug(
+                                "Preserved Cast(to=INT64) for "
+                                "shape-path tensor '%s' "
+                                "(input_type=%d)",
+                                cast_input,
+                                input_type,
+                            )
 
         # データパス: 出力テンソルの型変換
         for out in model.graph.output:
@@ -74,8 +175,7 @@ class TensorRTInference:
         # - Shape/Size/NonZero出力: ONNX仕様でInt64固定
         # - Constant値テンソル/initializer: シェイプパラメータ
         # - value_int/value_ints属性: ONNX仕様でInt64固定
-        # これらを変換するとConcat型不一致やSqueeze/Reshape/Expand等の
-        # axes/shape入力で型エラーが連鎖するため，一切変換しない
+        # - Cast(to=Int64)のうちINT入力のもの: Concat/Range型整合
 
         if converted:
             logger.info(
