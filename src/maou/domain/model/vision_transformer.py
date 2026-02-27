@@ -142,7 +142,7 @@ class _FlashSelfAttention(nn.Module):
             self.head_dim,
         )
         qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(dim=0)
+        q, k, v = qkv[0], qkv[1], qkv[2]
 
         use_cuda = x.device.type == "cuda"
         has_new_sdpa = (
