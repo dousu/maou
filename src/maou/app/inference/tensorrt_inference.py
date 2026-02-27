@@ -309,7 +309,7 @@ class TensorRTInference:
                 "Check ONNX model compatibility and available GPU memory."
             )
         logger.info("TensorRT engine built successfully")
-        return serialized_engine
+        return bytes(serialized_engine)
 
     @staticmethod
     def infer(
