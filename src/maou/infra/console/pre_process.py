@@ -222,10 +222,10 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--process-max-workers",
-    help="Number of parallel processing processes (default: 8, optimized for A100 high-memory).",
+    help="Number of parallel processing processes (default: 3).",
     type=int,
     required=False,
-    default=8,
+    default=3,
 )
 @click.option(
     "--intermediate-cache-dir",

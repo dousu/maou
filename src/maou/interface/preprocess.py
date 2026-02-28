@@ -228,9 +228,9 @@ def transform(
     if output_dir is not None:
         output_dir_init(output_dir)
 
-    # 並列処理数 (デフォルトCPU数か8の小さい方)
+    # 並列処理数 (デフォルトCPU数か3の小さい方)
     if max_workers is None:
-        max_workers = min(8, os.cpu_count() or 1)
+        max_workers = min(3, os.cpu_count() or 1)
     elif max_workers < 0:
         raise ValueError(
             f"max_workers must be non-negative, got {max_workers}"
