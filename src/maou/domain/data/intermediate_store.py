@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Dict, Generator, Optional
 
 import duckdb
+import numpy as np
 import polars as pl
+
 from maou._rust.maou_io import (
     add_sparse_arrays_rust,
     compress_sparse_array_rust,
     expand_sparse_array_rust,
 )
-
 from maou.domain.data.schema import (
     get_preprocessing_polars_schema,
 )
@@ -212,11 +213,65 @@ class IntermediateDataStore:
             _merge_sparse_values,
         )
 
+    @staticmethod
+    def _deduplicate_dataframe(
+        df: pl.DataFrame,
+    ) -> pl.DataFrame:
+        """DataFrame内の重複hash_idを事前集約する．
+
+        DuckDBの ``INSERT...ON CONFLICT`` はバッチ内の重複キーを
+        正しく処理できないため，INSERT前にDataFrame内で集約する．
+        チャンキングにより同じ局面が1ファイルに集まった場合に発生する．
+
+        Args:
+            df: hash_id重複を含む可能性のあるDataFrame
+
+        Returns:
+            hash_idがユニークになったDataFrame
+        """
+        if df["hash_id"].n_unique() == len(df):
+            return df
+
+        agg_df = df.group_by("hash_id").agg(
+            [
+                pl.col("count").sum(),
+                pl.col("win_count").sum(),
+                pl.col("board_id_positions").first(),
+                pl.col("pieces_in_hand").first(),
+                pl.col("move_label_count"),
+            ]
+        )
+
+        # move_label_count: List[List[Int32]] → 要素ごとの合計
+        mlc_summed: list[list[int]] = []
+        for mlc_nested in agg_df["move_label_count"].to_list():
+            if len(mlc_nested) == 1:
+                mlc_summed.append(mlc_nested[0])
+            else:
+                arr = np.array(mlc_nested, dtype=np.int32)
+                mlc_summed.append(arr.sum(axis=0).tolist())
+
+        result = agg_df.drop("move_label_count").with_columns(
+            pl.Series(
+                "move_label_count",
+                mlc_summed,
+                dtype=pl.List(pl.Int32),
+            )
+        )
+
+        logger.debug(
+            "Deduplicated %d → %d rows (intra-batch)",
+            len(df),
+            len(result),
+        )
+        return result
+
     def bulk_upsert(self, df: pl.DataFrame) -> None:
         """Bulk upsert batch data from Polars DataFrame using DuckDB SQL.
 
         Replaces the old row-by-row add_dataframe_batch/flush_buffer pattern
         with a single INSERT ... ON CONFLICT DO UPDATE statement．
+        バッチ内に重複hash_idがある場合は事前集約してから挿入する．
 
         Args:
             df: Polars DataFrame with columns:
@@ -235,6 +290,9 @@ class IntermediateDataStore:
 
         if df.is_empty():
             return
+
+        # バッチ内重複hash_idを事前集約（DuckDBのON CONFLICT制約対策）
+        df = self._deduplicate_dataframe(df)
 
         # Compress dense move_label_count to sparse format per row
         indices_list: list[list[int]] = []

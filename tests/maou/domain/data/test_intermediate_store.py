@@ -502,6 +502,91 @@ class TestBatchAccumulation:
         store.close()
         assert store._buffer_rows == 0
 
+    def test_intra_batch_duplicate_hash_ids(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that duplicate hash_ids within a single DataFrame are correctly aggregated.
+
+        This can happen when chunking merges files that contain the same board position.
+        DuckDB's INSERT...ON CONFLICT doesn't handle intra-batch duplicates,
+        so pre-aggregation in _deduplicate_dataframe is required.
+        """
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=1000
+        ) as store:
+            hash_id = 99
+
+            # Create two rows with the same hash_id in a single DataFrame
+            # (simulating chunked file with duplicate positions)
+            row1 = create_test_dataframe([hash_id])
+            row1 = row1.with_columns(
+                [
+                    pl.lit(2).alias("count"),
+                    pl.lit(1.0).alias("win_count"),
+                ]
+            )
+            # Set move_label_count[50] = 3
+            mlc1 = [0] * 1496
+            mlc1[50] = 3
+            row1 = row1.with_columns(
+                pl.Series(
+                    "move_label_count",
+                    [mlc1],
+                    dtype=pl.List(pl.Int32),
+                )
+            )
+
+            row2 = create_test_dataframe([hash_id])
+            row2 = row2.with_columns(
+                [
+                    pl.lit(3).alias("count"),
+                    pl.lit(2.0).alias("win_count"),
+                    pl.Series(
+                        "board_id_positions",
+                        [row1["board_id_positions"][0]],
+                    ),
+                    pl.Series(
+                        "pieces_in_hand",
+                        [row1["pieces_in_hand"][0]],
+                    ),
+                ]
+            )
+            # Set move_label_count[50] = 2
+            mlc2 = [0] * 1496
+            mlc2[50] = 2
+            row2 = row2.with_columns(
+                pl.Series(
+                    "move_label_count",
+                    [mlc2],
+                    dtype=pl.List(pl.Int32),
+                )
+            )
+
+            # Concatenate into a single DataFrame with duplicate hash_id
+            combined_df = pl.concat([row1, row2])
+            assert len(combined_df) == 2
+            assert combined_df["hash_id"].n_unique() == 1
+
+            # This should NOT fail - _deduplicate_dataframe handles it
+            store.bulk_upsert(combined_df)
+
+            # Verify correct aggregation
+            result_df = store.finalize_to_dataframe()
+            assert len(result_df) == 1
+
+            # count: 2 + 3 = 5
+            # resultValue = (1.0 + 2.0) / 5 = 0.6
+            assert result_df["resultValue"][0] == pytest.approx(
+                0.6
+            )
+
+            # moveLabel[50] = (3 + 2) / 5 = 1.0
+            assert result_df["moveLabel"][0][
+                50
+            ] == pytest.approx(1.0)
+
 
 class TestUtilityFunctions:
     """Test utility functions for disk and resource management."""
