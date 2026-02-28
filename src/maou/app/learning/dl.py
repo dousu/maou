@@ -617,6 +617,11 @@ class Learning:
                 )
             )
             current_lr = self.optimizer.param_groups[0]["lr"]
+            self.logger.info(
+                "Stage 3 Epoch %d: LR = %.6f",
+                epoch_number + 1,
+                current_lr,
+            )
             self._log_epoch_metrics(
                 writer=writer,
                 metrics=metrics,
@@ -877,16 +882,25 @@ class Learning:
         Args:
             state_dict: Component state_dict (backbone，policy head，or value head)
         """
-        if hasattr(self.model, "_orig_mod"):
-            needs_prefix = any(
-                not key.startswith("_orig_mod.")
-                for key in state_dict.keys()
+        is_compiled = hasattr(self.model, "_orig_mod")
+        has_prefix = any(
+            key.startswith("_orig_mod.")
+            for key in state_dict.keys()
+        )
+
+        if is_compiled and not has_prefix:
+            # モデルがコンパイル済みだがcheckpointにプレフィックスがない → 追加
+            state_dict = {
+                f"_orig_mod.{key}": value
+                for key, value in state_dict.items()
+            }
+        elif not is_compiled and has_prefix:
+            # モデルが非コンパイルだがcheckpointにプレフィックスがある → 除去
+            from maou.app.learning.model_io import ModelIO
+
+            state_dict = ModelIO._strip_orig_mod_prefix(
+                dict(state_dict)
             )
-            if needs_prefix:
-                state_dict = {
-                    f"_orig_mod.{key}": value
-                    for key, value in state_dict.items()
-                }
 
         try:
             # strict=Falseで部分読み込みを許可

@@ -20,6 +20,35 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class ModelIO:
     @staticmethod
+    def _strip_orig_mod_prefix(
+        state_dict: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Strip ``_orig_mod.`` prefix from state_dict keys.
+
+        ``torch.compile()`` wraps modules and adds an ``_orig_mod.`` prefix
+        to every key in :meth:`state_dict`.  This helper removes the prefix
+        so that the dict is compatible with uncompiled models.
+
+        Args:
+            state_dict: State dict that may contain ``_orig_mod.`` prefixed keys.
+
+        Returns:
+            State dict with clean keys.  Returned as-is when no prefix is found.
+        """
+        if not any(
+            key.startswith("_orig_mod.") for key in state_dict
+        ):
+            return state_dict
+
+        prefix_len = len("_orig_mod.")
+        return {
+            key[prefix_len:]
+            if key.startswith("_orig_mod.")
+            else key: value
+            for key, value in state_dict.items()
+        }
+
+    @staticmethod
     def format_parameter_count(parameter_count: int) -> str:
         """Return a compact，human-friendly parameter count label.
 
@@ -112,28 +141,20 @@ class ModelIO:
         reachable_head_dict: dict[str, torch.Tensor] = {}
         legal_moves_head_dict: dict[str, torch.Tensor] = {}
 
-        # _orig_mod.プレフィックスの除去を検討
-        has_orig_mod_prefix = any(
-            key.startswith("_orig_mod.")
-            for key in state_dict.keys()
+        # _orig_mod.プレフィックスを除去してから分類・保存する
+        clean_state_dict = ModelIO._strip_orig_mod_prefix(
+            state_dict
         )
 
-        for key, value in state_dict.items():
-            # _orig_mod.プレフィックスを除去
-            clean_key = key
-            if has_orig_mod_prefix and key.startswith(
-                "_orig_mod."
-            ):
-                clean_key = key[len("_orig_mod.") :]
-
+        for key, value in clean_state_dict.items():
             # コンポーネントごとに分類
-            if clean_key.startswith("policy_head."):
+            if key.startswith("policy_head."):
                 policy_head_dict[key] = value
-            elif clean_key.startswith("value_head."):
+            elif key.startswith("value_head."):
                 value_head_dict[key] = value
-            elif clean_key.startswith("reachable_head."):
+            elif key.startswith("reachable_head."):
                 reachable_head_dict[key] = value
-            elif clean_key.startswith("legal_moves_head."):
+            elif key.startswith("legal_moves_head."):
                 legal_moves_head_dict[key] = value
             else:
                 # embedding.*, backbone.*, pool.*, _hand_projection.*はすべてbackbone
@@ -163,9 +184,10 @@ class ModelIO:
         logger.info(
             f"Loading backbone parameters from {file_path}"
         )
-        return torch.load(
+        state_dict: dict[str, torch.Tensor] = torch.load(
             file_path, weights_only=True, map_location=device
         )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_policy_head(
@@ -286,20 +308,9 @@ class ModelIO:
 
         # torch.compile()で生成されたモデルのstate_dictは_orig_mod.プレフィックス付き
         # そのプレフィックスを除去して通常のモデルと互換性を保つ
-        state_dict = trained_model.state_dict()
-        if any(
-            key.startswith("_orig_mod.")
-            for key in state_dict.keys()
-        ):
-            # _orig_mod.プレフィックスを削除
-            clean_state_dict = {}
-            for key, value in state_dict.items():
-                if key.startswith("_orig_mod."):
-                    clean_key = key[len("_orig_mod.") :]
-                    clean_state_dict[clean_key] = value
-                else:
-                    clean_state_dict[key] = value
-            state_dict = clean_state_dict
+        state_dict = ModelIO._strip_orig_mod_prefix(
+            trained_model.state_dict()
+        )
 
         model.load_state_dict(state_dict)
 

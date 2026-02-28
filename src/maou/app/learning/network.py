@@ -449,9 +449,16 @@ class HeadlessNetwork(nn.Module):
                 state_dict, strict=strict, assign=assign
             )
 
+        # _orig_mod.プレフィックスを除去してからフィルタリング
+        from maou.app.learning.model_io import ModelIO
+
+        clean_dict = ModelIO._strip_orig_mod_prefix(
+            dict(state_dict)
+        )
+
         backbone_state = {
             key: value
-            for key, value in state_dict.items()
+            for key, value in clean_dict.items()
             if key.startswith("backbone.")
             or key.startswith("embedding.")
             or key.startswith("_hand_projection.")
