@@ -617,6 +617,11 @@ class Learning:
                 )
             )
             current_lr = self.optimizer.param_groups[0]["lr"]
+            self.logger.info(
+                "Stage 3 Epoch %d: LR = %.6f",
+                epoch_number + 1,
+                current_lr,
+            )
             self._log_epoch_metrics(
                 writer=writer,
                 metrics=metrics,
