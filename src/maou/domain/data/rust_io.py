@@ -19,9 +19,15 @@ try:
         load_feather_file,
         load_hcpe_feather,
         load_preprocessing_feather,
+    )
+    from maou._rust.maou_io import (
+        merge_feather_files as _merge_feather_files,
+    )
+    from maou._rust.maou_io import (
         save_feather_file,
         save_hcpe_feather,
         save_preprocessing_feather,
+        split_feather_file,
     )
 
     RUST_BACKEND_AVAILABLE = True
@@ -270,3 +276,106 @@ def load_stage2_df(file_path: Union[Path, str]) -> pl.DataFrame:
 
     arrow_batch = load_feather_file(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
+def split_hcpe_feather(
+    file_path: Union[Path, str],
+    output_dir: Union[Path, str],
+    rows_per_file: int = 500_000,
+) -> list[Path]:
+    """HCPEの.featherファイルを指定行数ごとに分割する（Rustバックエンド使用）．
+
+    大きなHCPEファイルを複数の小さなファイルに分割し，
+    並列処理時のワーカー間負荷分散を改善する．
+    LZ4圧縮を維持したままRust側でArrow RecordBatchのゼロコピー
+    スライスを使用して高速に分割する．
+
+    Google Colab A100 High Memory (83GB RAM, 12 CPU cores) では
+    rows_per_file=500,000を推奨．8ワーカーでの並列処理に適した
+    ファイル粒度を実現する．
+
+    Args:
+        file_path: 入力HCPEファイルパス（.feather拡張子）
+        output_dir: 分割ファイルの出力ディレクトリ
+        rows_per_file: 1ファイルあたりの最大行数（デフォルト: 500,000）
+
+    Returns:
+        分割されたファイルパスのリスト．
+        入力ファイルが rows_per_file 以下の場合は元のパスをそのまま返す．
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイルI/Oエラーの場合
+        ValueError: rows_per_file が0以下の場合
+    """
+    _check_rust_backend()
+
+    if rows_per_file <= 0:
+        raise ValueError(
+            f"rows_per_file must be positive, got {rows_per_file}"
+        )
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result_paths = split_feather_file(
+        str(file_path), str(output_dir), rows_per_file
+    )
+
+    return [Path(p) for p in result_paths]
+
+
+def merge_hcpe_feather_files(
+    file_paths: list[Union[Path, str]],
+    output_dir: Union[Path, str],
+    rows_per_chunk: int = 500_000,
+    output_prefix: str = "merged",
+) -> list[Path]:
+    """複数の小さなHCPE .featherファイルをチャンクにまとめる（Rustバックエンド使用）．
+
+    複数の小さなファイルを指定行数ごとにまとめて，
+    並列処理に適したファイル粒度に統合する．
+    LZ4圧縮を維持したままRust側でArrow RecordBatchの
+    結合を行い高速に処理する．
+
+    Google Colab A100 High Memory (83GB RAM, 12 CPU cores) では
+    rows_per_chunk=500,000を推奨．8ワーカーでの並列処理に適した
+    ファイル粒度を実現する．
+
+    Args:
+        file_paths: 入力HCPEファイルパスのリスト
+        output_dir: 出力ディレクトリ
+        rows_per_chunk: 1チャンクあたりの目標行数（デフォルト: 500,000）
+        output_prefix: 出力ファイル名のプレフィックス
+
+    Returns:
+        チャンクされたファイルパスのリスト
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイルI/Oエラーの場合
+        ValueError: rows_per_chunk が0以下の場合
+    """
+    _check_rust_backend()
+
+    if rows_per_chunk <= 0:
+        raise ValueError(
+            f"rows_per_chunk must be positive, "
+            f"got {rows_per_chunk}"
+        )
+
+    if not file_paths:
+        return []
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    str_paths = [str(p) for p in file_paths]
+    result_paths = _merge_feather_files(
+        str_paths,
+        str(output_dir),
+        rows_per_chunk,
+        output_prefix,
+    )
+
+    return [Path(p) for p in result_paths]

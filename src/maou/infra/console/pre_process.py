@@ -222,10 +222,10 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--process-max-workers",
-    help="Number of parallel processing processes (default: 4).",
+    help="Number of parallel processing processes (default: 8, optimized for A100 high-memory).",
     type=int,
     required=False,
-    default=4,
+    default=8,
 )
 @click.option(
     "--intermediate-cache-dir",
@@ -235,10 +235,19 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--intermediate-batch-size",
-    help="Batch size for disk writes (default: 1000).",
+    help="Records to accumulate before flushing to DuckDB (default: 50000, optimized for A100 high-memory).",
     type=int,
     required=False,
-    default=1000,
+    default=50_000,
+)
+@click.option(
+    "--input-split-rows",
+    help="Resize input files to approximately this many rows for better parallelism. "
+    "Large files are split and small files are merged. "
+    "(default: 500000, optimized for A100 high-memory). Set to 0 to disable.",
+    type=int,
+    required=False,
+    default=500_000,
 )
 @handle_exception
 def pre_process(
@@ -275,6 +284,7 @@ def pre_process(
     process_max_workers: int,
     intermediate_cache_dir: Optional[Path],
     intermediate_batch_size: int,
+    input_split_rows: int,
 ) -> None:
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -392,6 +402,15 @@ def pre_process(
             raise ImportError(error_msg)
     elif input_path is not None:
         input_paths = FileSystem.collect_files(input_path)
+
+        # 入力ファイルのリサイズ（大きなファイルは分割，小さなファイルはチャンク）
+        if input_split_rows > 0:
+            input_paths = preprocess.resize_input_files(
+                file_paths=input_paths,
+                rows_per_file=input_split_rows,
+                work_dir=intermediate_cache_dir,
+            )
+
         datasource = FileDataSource(
             file_paths=input_paths,
             array_type="hcpe",

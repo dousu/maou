@@ -333,6 +333,176 @@ class TestIntermediateDataStore:
         assert not db_path.exists()
 
 
+class TestBatchAccumulation:
+    """Test batch accumulation buffer for DuckDB upserts."""
+
+    def test_buffer_accumulates_before_flush(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that small batches are buffered and not flushed immediately."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=100
+        ) as store:
+            # Add 5 records (below batch_size of 100)
+            batch_df = create_test_dataframe([1, 2, 3, 4, 5])
+            store.add_dataframe_batch(batch_df)
+
+            # Buffer should contain data but DB should not yet
+            assert store._buffer_rows == 5
+            assert len(store._buffer) == 1
+
+            # Explicit flush should persist
+            store.flush()
+            assert store._buffer_rows == 0
+            assert len(store._buffer) == 0
+            assert store.get_total_count() == 5
+
+    def test_auto_flush_at_threshold(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that buffer auto-flushes when reaching batch_size."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=20
+        ) as store:
+            # Add 15 records (below threshold)
+            batch_df1 = create_test_dataframe(list(range(15)))
+            store.add_dataframe_batch(batch_df1)
+            assert store._buffer_rows == 15
+
+            # Add 10 more (total 25 > threshold of 20)
+            batch_df2 = create_test_dataframe(
+                list(range(15, 25))
+            )
+            store.add_dataframe_batch(batch_df2)
+
+            # Should have auto-flushed (buffer is now empty)
+            assert store._buffer_rows == 0
+            assert store.get_total_count() == 25
+
+    def test_multiple_batches_accumulated(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that multiple small DataFrames are accumulated and flushed together."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=50
+        ) as store:
+            # Add 10 batches of 3 records each (30 total, below threshold)
+            for i in range(10):
+                batch_df = create_test_dataframe(
+                    [i * 3, i * 3 + 1, i * 3 + 2]
+                )
+                store.add_dataframe_batch(batch_df)
+
+            assert store._buffer_rows == 30
+            assert len(store._buffer) == 10
+
+            # Finalize should auto-flush remaining buffer
+            result_df = store.finalize_to_dataframe()
+            assert len(result_df) == 30
+
+    def test_flush_before_get_total_count(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that get_total_count auto-flushes buffer."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=1000
+        ) as store:
+            batch_df = create_test_dataframe([1, 2, 3])
+            store.add_dataframe_batch(batch_df)
+
+            # get_total_count should trigger flush
+            assert store.get_total_count() == 3
+            assert store._buffer_rows == 0
+
+    def test_empty_dataframe_not_buffered(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that empty DataFrames are skipped."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=100
+        ) as store:
+            empty_df = create_test_dataframe([])
+            store.add_dataframe_batch(empty_df)
+
+            assert store._buffer_rows == 0
+            assert len(store._buffer) == 0
+
+    def test_upsert_with_accumulated_duplicates(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that duplicates across accumulated batches are correctly aggregated."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=100
+        ) as store:
+            hash_id = 42
+
+            # First batch
+            batch_df1 = create_test_dataframe([hash_id])
+            batch_df1 = batch_df1.with_columns(
+                [
+                    pl.lit(2).alias("count"),
+                    pl.lit(1.0).alias("win_count"),
+                ]
+            )
+
+            # Second batch (same hash_id)
+            batch_df2 = create_test_dataframe([hash_id])
+            batch_df2 = batch_df2.with_columns(
+                [
+                    pl.lit(3).alias("count"),
+                    pl.lit(2.0).alias("win_count"),
+                    pl.Series(
+                        "board_id_positions",
+                        [batch_df1["board_id_positions"][0]],
+                    ),
+                    pl.Series(
+                        "pieces_in_hand",
+                        [batch_df1["pieces_in_hand"][0]],
+                    ),
+                ]
+            )
+
+            # Both go into the buffer
+            store.add_dataframe_batch(batch_df1)
+            store.add_dataframe_batch(batch_df2)
+
+            # Flush and verify aggregation
+            result_df = store.finalize_to_dataframe()
+            assert len(result_df) == 1
+
+            # count: 2 + 3 = 5
+            # resultValue = (1.0 + 2.0) / 5 = 0.6
+            assert result_df["resultValue"][0] == pytest.approx(
+                0.6
+            )
+
+    def test_close_flushes_buffer(self, tmp_path: Path) -> None:
+        """Test that close() flushes remaining buffer data."""
+        db_path = tmp_path / "test.duckdb"
+
+        store = IntermediateDataStore(
+            db_path=db_path, batch_size=1000
+        )
+        batch_df = create_test_dataframe([1, 2, 3])
+        store.add_dataframe_batch(batch_df)
+
+        assert store._buffer_rows == 3
+        store.close()
+        assert store._buffer_rows == 0
+
+
 class TestUtilityFunctions:
     """Test utility functions for disk and resource management."""
 

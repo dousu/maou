@@ -98,6 +98,42 @@ fn add_sparse_arrays_rust(
         .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+#[pyfunction]
+fn split_feather_file(
+    py: Python,
+    file_path: String,
+    output_dir: String,
+    rows_per_file: usize,
+) -> PyResult<Vec<String>> {
+    py.allow_threads(|| {
+        maou_io_core::arrow_io::split_feather(&file_path, &output_dir, rows_per_file)
+    })
+    .map_err(|e: MaouIOError| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+    })
+}
+
+#[pyfunction]
+fn merge_feather_files(
+    py: Python,
+    file_paths: Vec<String>,
+    output_dir: String,
+    rows_per_chunk: usize,
+    output_prefix: String,
+) -> PyResult<Vec<String>> {
+    py.allow_threads(|| {
+        maou_io_core::arrow_io::merge_feather_files(
+            &file_paths,
+            &output_dir,
+            rows_per_chunk,
+            &output_prefix,
+        )
+    })
+    .map_err(|e: MaouIOError| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
+    })
+}
+
 /// Create maou_io submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new_bound(py, "maou_io")?;
@@ -112,6 +148,8 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(compress_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(expand_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(add_sparse_arrays_rust, &m)?)?;
+    m.add_function(wrap_pyfunction!(split_feather_file, &m)?)?;
+    m.add_function(wrap_pyfunction!(merge_feather_files, &m)?)?;
 
     Ok(m)
 }

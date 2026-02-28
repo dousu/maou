@@ -12,12 +12,12 @@ from typing import Dict, Generator, Optional
 
 import duckdb
 import polars as pl
-
 from maou._rust.maou_io import (
     add_sparse_arrays_rust,
     compress_sparse_array_rust,
     expand_sparse_array_rust,
 )
+
 from maou.domain.data.schema import (
     get_preprocessing_polars_schema,
 )
@@ -119,19 +119,24 @@ class IntermediateDataStore:
     Uses DuckDB for efficient Arrow-native storage and retrieval of
     intermediate data during preprocessing，reducing memory footprint
     significantly with zero-copy Arrow operations．
+
+    バッチ蓄積バッファにより，複数の小さなDataFrameを結合してから
+    DuckDBにupsertすることで，トランザクションオーバーヘッドを削減する．
     """
 
     def __init__(
         self,
         db_path: Path,
-        batch_size: int = 1000,
+        batch_size: int = 50_000,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
 
         Args:
             db_path: Path to DuckDB database file
-            batch_size: Number of records to batch before committing
+            batch_size: Number of records to accumulate before flushing to DuckDB.
+                Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
+                小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         self.db_path = db_path
@@ -140,6 +145,8 @@ class IntermediateDataStore:
             enable_vacuum  # Unused but kept for compatibility
         )
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._buffer: list[pl.DataFrame] = []
+        self._buffer_rows: int = 0
         self._init_database()
 
     def _init_database(self) -> None:
@@ -309,21 +316,59 @@ class IntermediateDataStore:
     def add_dataframe_batch(self, df: pl.DataFrame) -> None:
         """Add or update batch data from Polars DataFrame.
 
-        Compatibility wrapper that delegates to bulk_upsert()．
+        バッファに蓄積し，``batch_size`` に達した時点でDuckDBにフラッシュする．
+        バッファリングによりDuckDBトランザクション回数を削減し，
+        大規模データセットでのI/Oオーバーヘッドを低減する．
 
         Args:
             df: Polars DataFrame (see bulk_upsert for column specification)
         """
-        self.bulk_upsert(df)
+        if df.is_empty():
+            return
+
+        self._buffer.append(df)
+        self._buffer_rows += len(df)
+
+        if self._buffer_rows >= self.batch_size:
+            self._flush_buffer()
+
+    def _flush_buffer(self) -> None:
+        """蓄積バッファをDuckDBにフラッシュする．
+
+        バッファ内の各DataFrameを個別にbulk_upsertする．
+        異なるファイルから同じhash_idが含まれる場合があるため，
+        DataFrameを結合せず個別にupsertしてON CONFLICTで正しく集約する．
+        バッファリングにより，I/O処理の頻度を削減し，
+        mergeスレッドのブロッキング時間を短縮する．
+        """
+        if not self._buffer:
+            return
+
+        for df in self._buffer:
+            self.bulk_upsert(df)
+        self._buffer.clear()
+        self._buffer_rows = 0
+
+    def flush(self) -> None:
+        """残留バッファをDuckDBにフラッシュする．
+
+        処理完了時やfinalize前に呼び出して，
+        バッファ内の未フラッシュデータを確実にDuckDBに書き込む．
+        """
+        self._flush_buffer()
 
     def get_total_count(self) -> int:
         """Get total number of unique positions in database.
+
+        バッファに未フラッシュのデータがある場合は先にフラッシュする．
 
         Returns:
             int: Number of unique positions
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
+
+        self._flush_buffer()
 
         result = self._conn.execute(
             "SELECT COUNT(*) FROM intermediate_data"
@@ -495,6 +540,8 @@ class IntermediateDataStore:
     def finalize_to_dataframe(self) -> pl.DataFrame:
         """Convert all stored data to final preprocessing Polars DataFrame.
 
+        バッファに未フラッシュのデータがある場合は先にフラッシュする．
+
         Returns:
             pl.DataFrame: Preprocessing DataFrame with all aggregated data
 
@@ -509,6 +556,8 @@ class IntermediateDataStore:
         assert self._conn is not None, (
             "Database connection not initialized"
         )
+
+        self._flush_buffer()
 
         total_count = self.get_total_count()
 
@@ -537,6 +586,8 @@ class IntermediateDataStore:
     ) -> Generator[pl.DataFrame, None, None]:
         """Iterate over finalized chunks of preprocessing data as Polars DataFrames.
 
+        バッファに未フラッシュのデータがある場合は先にフラッシュする．
+
         This is a memory-efficient way to process large datasets.
         Each chunk is yielded as a separate DataFrame, allowing for
         chunked file output without loading all data into memory.
@@ -556,6 +607,8 @@ class IntermediateDataStore:
         """
         if self._conn is None:
             raise RuntimeError("Database not initialized")
+
+        self._flush_buffer()
 
         total_count = self.get_total_count()
 
@@ -651,6 +704,8 @@ class IntermediateDataStore:
 
     def close(self) -> None:
         """Close database connection and cleanup."""
+        self._flush_buffer()
+
         if self._conn is not None:
             self._conn.close()
             self._conn = None

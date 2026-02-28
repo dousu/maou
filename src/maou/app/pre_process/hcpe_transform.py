@@ -157,7 +157,7 @@ class PreProcess:
         datasource: DataSource,
         feature_store: Optional[FeatureStore] = None,
         intermediate_cache_dir: Optional[Path] = None,
-        intermediate_batch_size: int = 1000,
+        intermediate_batch_size: int = 50_000,
     ):
         """Initialize pre-processor.
 
@@ -165,7 +165,8 @@ class PreProcess:
             datasource: Source of HCPE data to process
             feature_store: Optional storage backend for processed features
             intermediate_cache_dir: Directory for intermediate data cache
-            intermediate_batch_size: Batch size for disk writes
+            intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
+                Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
@@ -505,6 +506,9 @@ class PreProcess:
                     )
                     self.merge_intermediate_data(batch_result)
 
+                # バッファに残留するデータをフラッシュ
+                self.intermediate_store.flush()
+
                 # チェック: ユニーク局面数を取得してリソース要件を確認
                 total_count = (
                     self.intermediate_store.get_total_count()
@@ -723,6 +727,9 @@ class PreProcess:
 
                 if merge_errors:
                     raise merge_errors[0]
+
+                # バッファに残留するデータをフラッシュ
+                self.intermediate_store.flush()
 
                 # チェック: ユニーク局面数を取得してリソース要件を確認
                 total_count = (
