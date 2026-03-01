@@ -31,11 +31,18 @@ if [ -n "${SCCACHE_DIR:-}" ] && [ -d "${SCCACHE_DIR}" ] && [ ! -w "${SCCACHE_DIR
 fi
 
 # Memory-optimized Rust build configuration for 2-core/3GB environments
-# Uses user-level cargo config so it applies even through PEP 517 build isolation
-CARGO_USER_CONFIG="$HOME/.cargo/config.toml"
+# Uses CARGO_HOME-level config so it applies even through PEP 517 build isolation
+# Note: CARGO_HOME is set by DevContainer Rust feature (typically /usr/local/cargo)
+CARGO_USER_CONFIG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
 CARGO_USER_CONFIG_MARKER="# managed by dev-init.sh"
+# Clean up stale config at $HOME/.cargo/ if CARGO_HOME points elsewhere
+if [ "${CARGO_HOME:-$HOME/.cargo}" != "$HOME/.cargo" ] \
+    && grep -qF "$CARGO_USER_CONFIG_MARKER" "$HOME/.cargo/config.toml" 2>/dev/null; then
+    rm -f "$HOME/.cargo/config.toml"
+    echo "Removed stale $HOME/.cargo/config.toml (CARGO_HOME=$CARGO_HOME)"
+fi
 if ! grep -qF "$CARGO_USER_CONFIG_MARKER" "$CARGO_USER_CONFIG" 2>/dev/null; then
-    mkdir -p $(dirname "$CARGO_USER_CONFIG")
+    mkdir -p "$(dirname "$CARGO_USER_CONFIG")"
     cat > "$CARGO_USER_CONFIG" << CARGO_CONF
 $CARGO_USER_CONFIG_MARKER
 
