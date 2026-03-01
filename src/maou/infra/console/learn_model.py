@@ -488,10 +488,10 @@ S3: S3Type | None = getattr(common, "S3", None)
 @click.option(
     "--policy-target-mode",
     type=click.Choice(
-        ["move-label", "win-rate", "weighted"],
+        [m.value for m in PolicyTargetMode],
         case_sensitive=False,
     ),
-    default="move-label",
+    default=PolicyTargetMode.MOVE_LABEL.value,
     show_default=True,
     help="Policy教師信号モード．move-label=棋譜頻度，win-rate=勝率正規化，weighted=頻度×勝率．",
 )

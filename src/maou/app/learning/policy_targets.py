@@ -82,13 +82,7 @@ def build_policy_targets(
             device=target_device, dtype=target_dtype
         )
 
-    target_sum = targets.sum(dim=1, keepdim=True)
-    safe_sum = torch.where(
-        target_sum > 0,
-        target_sum,
-        torch.ones_like(target_sum),
-    )
-    return targets / safe_sum
+    return _safe_normalize(targets)
 
 
 def normalize_policy_targets(
@@ -121,6 +115,11 @@ def normalize_policy_targets(
             device=target_device, dtype=target_dtype
         )
 
+    return _safe_normalize(targets)
+
+
+def _safe_normalize(targets: torch.Tensor) -> torch.Tensor:
+    """行方向に安全な正規化を行う．合計が0の行はそのまま返す．"""
     target_sum = targets.sum(dim=1, keepdim=True)
     safe_sum = torch.where(
         target_sum > 0,

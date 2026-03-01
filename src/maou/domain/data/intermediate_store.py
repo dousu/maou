@@ -28,6 +28,25 @@ from maou.domain.move.label import MOVE_LABELS_NUM
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _sum_nested_lists(
+    nested: list[list[list[int | float]]],
+    dtype: type[np.integer] | type[np.floating],
+) -> list[list[int | float]]:
+    """ネストされたリストを要素ごとに合計する．
+
+    group_byの結果として得られる List[List[T]] を
+    要素ごとに合計して List[T] に変換する．
+    """
+    result: list[list[int | float]] = []
+    for group in nested:
+        if len(group) == 1:
+            result.append(group[0])
+        else:
+            arr = np.array(group, dtype=dtype)
+            result.append(arr.sum(axis=0).tolist())
+    return result
+
+
 def get_disk_usage(path: Path) -> tuple[int, int, int]:
     """Get disk usage statistics for the given path.
 
@@ -267,22 +286,13 @@ class IntermediateDataStore:
             ]
         )
 
-        # move_label_count: List[List[Int32]] → 要素ごとの合計
-        mlc_summed: list[list[int]] = []
-        for mlc_nested in agg_df["move_label_count"].to_list():
-            if len(mlc_nested) == 1:
-                mlc_summed.append(mlc_nested[0])
-            else:
-                arr = np.array(mlc_nested, dtype=np.int32)
-                mlc_summed.append(arr.sum(axis=0).tolist())
-
-        mwc_summed: list[list[float]] = []
-        for mwc_nested in agg_df["move_win_count"].to_list():
-            if len(mwc_nested) == 1:
-                mwc_summed.append(mwc_nested[0])
-            else:
-                arr = np.array(mwc_nested, dtype=np.float32)
-                mwc_summed.append(arr.sum(axis=0).tolist())
+        # move_label_count / move_win_count: List[List[T]] → 要素ごとの合計
+        mlc_summed = _sum_nested_lists(
+            agg_df["move_label_count"].to_list(), np.int32
+        )
+        mwc_summed = _sum_nested_lists(
+            agg_df["move_win_count"].to_list(), np.float32
+        )
 
         result = agg_df.drop(
             "move_label_count", "move_win_count"
@@ -708,20 +718,27 @@ class IntermediateDataStore:
         Returns:
             最終形式のPreprocessing DataFrame
         """
+        # 共通カラムを一度だけPythonリストに変換する
+        indices_list = raw_df["move_label_indices"].to_list()
+        label_values_list = raw_df[
+            "move_label_values"
+        ].to_list()
+        count_list = raw_df["count"].to_list()
+
         # バッチでsparse展開と正規化
         move_labels = self._expand_and_normalize_move_labels(
-            raw_df["move_label_indices"].to_list(),
-            raw_df["move_label_values"].to_list(),
-            raw_df["count"].to_list(),
+            indices_list,
+            label_values_list,
+            count_list,
         )
 
         # 指し手別勝率を計算(フォールバック適用済み)
         move_win_rates, best_move_win_rates = (
             self._compute_move_win_rates(
-                raw_df["move_label_indices"].to_list(),
-                raw_df["move_label_values"].to_list(),
+                indices_list,
+                label_values_list,
                 raw_df["move_win_values"].to_list(),
-                raw_df["count"].to_list(),
+                count_list,
             )
         )
 

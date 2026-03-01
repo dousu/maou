@@ -65,6 +65,7 @@ class KifDataset(Dataset, Sized):
             None
         )
         self._cache_transforms_enabled: bool = False
+        self._has_move_win_rate: Optional[bool] = None
 
         should_cache = (
             cache_transforms and self.transform is not None
@@ -174,10 +175,12 @@ class KifDataset(Dataset, Sized):
             # moveWinRateが存在する場合のみ4要素tupleを返す．
             # Noneを含むtupleはPyTorchのdefault_collateに非対応のため，
             # 3要素tuple（旧形式）を維持して後方互換性を確保する．
-            if (
-                data.dtype.names is not None
-                and "moveWinRate" in data.dtype.names
-            ):
+            if self._has_move_win_rate is None:
+                self._has_move_win_rate = (
+                    data.dtype.names is not None
+                    and "moveWinRate" in data.dtype.names
+                )
+            if self._has_move_win_rate:
                 move_win_rate_tensor = (
                     self._structured_field_to_tensor(
                         data,

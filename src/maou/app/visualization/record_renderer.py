@@ -912,6 +912,13 @@ class PreprocessingRecordRenderer(RecordRenderer):
 
         has_best_wr = len(best_wr_values) > 0
 
+        result_hist = go.Histogram(
+            x=result_values,
+            marker_color="rgba(156,39,176,0.6)",
+            nbinsx=20,
+            name="勝率",
+        )
+
         if has_best_wr:
             fig = make_subplots(
                 rows=1,
@@ -923,16 +930,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
                 horizontal_spacing=0.12,
             )
 
-            fig.add_trace(
-                go.Histogram(
-                    x=result_values,
-                    marker_color="rgba(156,39,176,0.6)",
-                    nbinsx=20,
-                    name="勝率",
-                ),
-                row=1,
-                col=1,
-            )
+            fig.add_trace(result_hist, row=1, col=1)
 
             fig.add_trace(
                 go.Histogram(
@@ -952,16 +950,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
             fig.update_yaxes(title_text="頻度", row=1, col=1)
             fig.update_yaxes(title_text="頻度", row=1, col=2)
         else:
-            fig = go.Figure(
-                data=[
-                    go.Histogram(
-                        x=result_values,
-                        marker_color="rgba(156,39,176,0.6)",
-                        nbinsx=20,
-                        name="勝率",
-                    )
-                ]
-            )
+            fig = go.Figure(data=[result_hist])
             fig.update_layout(
                 xaxis_title="勝率",
                 yaxis_title="頻度",
