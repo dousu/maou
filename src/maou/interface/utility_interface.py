@@ -6,6 +6,7 @@ from typing import Any, Optional
 import torch
 
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
 )
@@ -164,6 +165,7 @@ def benchmark_training(
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
     lr_scheduler: Optional[str] = None,
@@ -471,6 +473,7 @@ def benchmark_training(
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
+        policy_target_mode=policy_target_mode,
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler_name=lr_scheduler_key,

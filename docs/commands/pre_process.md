@@ -44,6 +44,7 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
 | `--process-max-workers INT` | `3` | Caps CPU workers dedicated to preprocessing. Negative values raise `ValueError`; omitting the flag defaults to `min(3, cpu_count)`．【F:src/maou/infra/console/pre_process.py†L540-L575】【F:src/maou/interface/preprocess.py†L47-L71】 |
 | `--intermediate-cache-dir PATH` | optional | Directory where the app layer spills batched numpy arrays before uploading or finalizing outputs.【F:src/maou/infra/console/pre_process.py†L575-L620】【F:src/maou/app/pre_process/hcpe_transform.py†L93-L147】 |
 | `--intermediate-batch-size INT` | `50000` | DuckDBへのフラッシュ前に蓄積するレコード数．バッチ蓄積バッファにより，複数の小さなDataFrameを結合してからDuckDBにupsertすることでトランザクションオーバーヘッドを削減．A100 High Memory (83GB RAM) 向けに最適化．【F:src/maou/infra/console/pre_process.py†L575-L620】【F:src/maou/app/pre_process/hcpe_transform.py†L93-L147】 |
+| `--win-rate-threshold INT` | `2` | 指し手別勝率計算の最小出現回数閾値．局面の出現回数(`count`)がこの値未満の場合，`moveWinRate` を合法手への均等配分(1/N)に置換する．推奨範囲: 2〜4．【F:src/maou/infra/console/pre_process.py†L251-L258】 |
 | `--input-split-rows INT` | `500000` | 入力ファイルをこの行数にリサイズして並列処理を改善する．大きなファイルは分割し，小さなファイル（目標行数の半分未満）はチャンクにまとめる．Rustバックエンドを使用してLZ4圧縮を維持したまま高速に処理．0を指定すると無効化．A100 High Memory 向けに最適化．【F:src/maou/infra/console/pre_process.py†L230-L245】【F:src/maou/interface/preprocess.py†L50-L180】 |
 
 ## Execution flow

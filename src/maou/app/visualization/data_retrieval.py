@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
-from maou.domain.board.shogi import CSHOGI_WHITE_OFFSET
+from maou.domain.board.shogi import DOMAIN_WHITE_OFFSET
 from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
 )
@@ -606,14 +606,14 @@ class DataRetriever:
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
-        # 後手: +CSHOGI_WHITE_OFFSET (16)
+        # 後手: +DOMAIN_WHITE_OFFSET (14)
 
         # 両玉を配置（必須）
         # 後手玉: 上部で横に揺らぐ
         white_king_col = 4 + rng.randint(-2, 2)
         white_king_row = rng.randint(0, 2)
         board[white_king_row][white_king_col] = (
-            8 + CSHOGI_WHITE_OFFSET
+            8 + DOMAIN_WHITE_OFFSET
         )  # 後手玉
 
         # 先手玉: 下部で横に揺らぐ
@@ -639,7 +639,7 @@ class DataRetriever:
             r, c = white_king_row + dr, white_king_col + dc
             if 0 <= r < 9 and 0 <= c < 9 and board[r][c] == 0:
                 board[r][c] = (
-                    rng.choice([4, 5]) + CSHOGI_WHITE_OFFSET
+                    rng.choice([4, 5]) + DOMAIN_WHITE_OFFSET
                 )  # 後手銀or金
 
         # 大駒（角・飛車）をランダムに配置（成り駒含む）
@@ -664,7 +664,7 @@ class DataRetriever:
             if board[r][c] == 0:
                 piece = (
                     13 if (r > 5 and rng.random() < 0.5) else 6
-                ) + CSHOGI_WHITE_OFFSET  # 後手馬(29)or角(22)
+                ) + DOMAIN_WHITE_OFFSET  # 後手馬(27)or角(20)
                 board[r][c] = piece
 
         if rng.random() < 0.6:  # 60%の確率で後手飛車
@@ -672,7 +672,7 @@ class DataRetriever:
             if board[r][c] == 0:
                 piece = (
                     14 if (r > 5 and rng.random() < 0.5) else 7
-                ) + CSHOGI_WHITE_OFFSET  # 後手竜(30)or飛(23)
+                ) + DOMAIN_WHITE_OFFSET  # 後手竜(28)or飛(21)
                 board[r][c] = piece
 
         # 歩をいくつか配置
@@ -684,7 +684,7 @@ class DataRetriever:
             if rng.random() < 0.5:  # 50%の確率で後手歩
                 row = rng.randint(2, 6)
                 if board[row][col] == 0:
-                    board[row][col] = 1 + CSHOGI_WHITE_OFFSET
+                    board[row][col] = 1 + DOMAIN_WHITE_OFFSET
 
         # と金をいくつか配置
         for _ in range(rng.randint(0, 2)):
@@ -696,7 +696,7 @@ class DataRetriever:
             r, c = rng.randint(6, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 board[r][c] = (
-                    9 + CSHOGI_WHITE_OFFSET
+                    9 + DOMAIN_WHITE_OFFSET
                 )  # 後手と金
 
         return board
@@ -815,7 +815,7 @@ class DataRetriever:
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
-        # 後手: +CSHOGI_WHITE_OFFSET (16)
+        # 後手: +DOMAIN_WHITE_OFFSET (14)
 
         # 両玉を配置（必須）
         # 終盤は玉が中央付近に逃げていることが多い
@@ -823,7 +823,7 @@ class DataRetriever:
         white_king_col = rng.randint(2, 6)
         white_king_row = rng.randint(0, 4)
         board[white_king_row][white_king_col] = (
-            8 + CSHOGI_WHITE_OFFSET
+            8 + DOMAIN_WHITE_OFFSET
         )  # 後手玉
 
         # 先手玉: 下部〜中央で横に揺らぐ
@@ -856,7 +856,7 @@ class DataRetriever:
             r, c = white_king_row + dr, white_king_col + dc
             if 0 <= r < 9 and 0 <= c < 9 and board[r][c] == 0:
                 board[r][c] = (
-                    rng.choice([4, 5]) + CSHOGI_WHITE_OFFSET
+                    rng.choice([4, 5]) + DOMAIN_WHITE_OFFSET
                 )  # 後手銀or金
 
         # 終盤は大駒が成っていることが多い
@@ -871,7 +871,7 @@ class DataRetriever:
             r, c = rng.randint(0, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 board[r][c] = (
-                    rng.choice([13, 14]) + CSHOGI_WHITE_OFFSET
+                    rng.choice([13, 14]) + DOMAIN_WHITE_OFFSET
                 )  # 後手馬(29)or竜(30)
 
         # 終盤は歩が少ない
@@ -883,7 +883,7 @@ class DataRetriever:
             if rng.random() < 0.25:  # 25%の確率で後手歩
                 row = rng.randint(3, 7)
                 if board[row][col] == 0:
-                    board[row][col] = 1 + CSHOGI_WHITE_OFFSET
+                    board[row][col] = 1 + DOMAIN_WHITE_OFFSET
 
         # と金を多めに配置（終盤らしさ）
         for _ in range(rng.randint(1, 3)):
@@ -895,7 +895,7 @@ class DataRetriever:
             r, c = rng.randint(4, 8), rng.randint(0, 8)
             if board[r][c] == 0:
                 board[r][c] = (
-                    9 + CSHOGI_WHITE_OFFSET
+                    9 + DOMAIN_WHITE_OFFSET
                 )  # 後手と金
 
         return board
@@ -947,6 +947,7 @@ class DataRetriever:
         """Preprocessingフォーマットのモックレコードデータを生成．
 
         終盤風盤面とrow_numberベースの確率分布でモックデータを生成する．
+        moveWinRate・bestMoveWinRateも生成する．
 
         確率分布のパターン:
         - row_number % 3 == 0: 集中型（1手に80%以上）
@@ -1047,10 +1048,27 @@ class DataRetriever:
         # resultValue: -1.0〜1.0の範囲
         result_value = (row_number % 201 - 100) / 100.0
 
+        # moveWinRate: 指し手別勝率を生成
+        # 選択率のある手に対してランダムな勝率を割り当てる
+        move_win_rate: List[float] = [0.0] * move_labels_num
+        rng_wr = random.Random(row_number + 789012)
+        for i in range(move_labels_num):
+            if move_label[i] > 0.0:
+                # 0.2〜0.8の範囲でランダムな勝率
+                move_win_rate[i] = 0.2 + rng_wr.random() * 0.6
+
+        # bestMoveWinRate: moveWinRateの最大値
+        non_zero_wr = [wr for wr in move_win_rate if wr > 0.0]
+        best_move_win_rate = (
+            max(non_zero_wr) if non_zero_wr else 0.5
+        )
+
         return {
             "id": f"mock_preprocessing_{row_number}",
             "boardIdPositions": board,
             "piecesInHand": hand,
             "moveLabel": move_label,
+            "moveWinRate": move_win_rate,
+            "bestMoveWinRate": best_move_win_rate,
             "resultValue": result_value,
         }

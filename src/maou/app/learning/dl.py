@@ -38,6 +38,7 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     Network,
 )
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.setup import (
     DataLoaderFactory,
     DeviceConfig,
@@ -135,6 +136,9 @@ class Learning:
             tuple[str, ...] | None
         ) = None
         save_split_params: bool = False
+        policy_target_mode: PolicyTargetMode = (
+            PolicyTargetMode.MOVE_LABEL
+        )
 
     def __init__(
         self,
@@ -482,6 +486,7 @@ class Learning:
             value_loss_ratio=self.value_loss_ratio,
             callbacks=callbacks,
             logger=self.logger,
+            policy_target_mode=self.config.policy_target_mode,
         )
 
         # Run training epoch
@@ -582,6 +587,7 @@ class Learning:
                     validation_loss_callback,
                 ],
                 logger=self.logger,
+                policy_target_mode=self.config.policy_target_mode,
             )
 
             # Run validation epoch
@@ -765,6 +771,27 @@ class Learning:
             epoch_number + 1,
         )
 
+        # move_win_rate metrics (only when data has moveWinRate)
+        win_rate_metrics: dict[str, float] = {}
+        if metrics.policy_top1_win_rate is not None:
+            win_rate_metrics["Policy Top-1 Win Rate"] = (
+                metrics.policy_top1_win_rate
+            )
+        if metrics.policy_expected_win_rate is not None:
+            win_rate_metrics["Policy Expected Win Rate"] = (
+                metrics.policy_expected_win_rate
+            )
+        if metrics.policy_move_label_ce is not None:
+            win_rate_metrics["Policy MoveLabel CE"] = (
+                metrics.policy_move_label_ce
+            )
+        if win_rate_metrics:
+            writer.add_scalars(
+                "Win Rate Metrics",
+                win_rate_metrics,
+                epoch_number + 1,
+            )
+
     def _log_hparams(
         self,
         *,
@@ -795,6 +822,7 @@ class Learning:
             "gce_parameter": config.gce_parameter,
             "policy_loss_ratio": config.policy_loss_ratio,
             "value_loss_ratio": config.value_loss_ratio,
+            "policy_target_mode": config.policy_target_mode.value,
         }
 
         # ViT固有パラメータ
