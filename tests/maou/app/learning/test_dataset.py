@@ -113,6 +113,80 @@ def test_dataset_accepts_float16_move_labels() -> None:
     assert policy.dtype == torch.float16
 
 
+def test_dataset_returns_move_win_rate_when_present() -> None:
+    """moveWinRate field in structured array is returned as 4th target element."""
+
+    dtype = np.dtype(
+        [
+            ("boardIdPositions", np.uint8, (2, 2)),
+            ("piecesInHand", np.uint8, (4,)),
+            ("moveLabel", np.float16, (3,)),
+            ("resultValue", np.float32),
+            ("moveWinRate", np.float32, (3,)),
+        ]
+    )
+    data = np.array(
+        [
+            (
+                np.ones((2, 2), dtype=np.uint8),
+                np.zeros(4, dtype=np.uint8),
+                np.array([0.5, 0.25, 0.25], dtype=np.float16),
+                np.float32(0.0),
+                np.array([0.8, 0.6, 0.1], dtype=np.float32),
+            )
+        ],
+        dtype=dtype,
+    )
+
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
+
+    (_, _), (_, _, _, move_win_rate) = dataset[0]
+
+    assert move_win_rate is not None
+    assert move_win_rate.dtype == torch.float32
+    assert move_win_rate.shape == (3,)
+    assert torch.allclose(
+        move_win_rate,
+        torch.tensor([0.8, 0.6, 0.1], dtype=torch.float32),
+    )
+
+
+def test_dataset_returns_3_element_tuple_when_no_win_rate() -> (
+    None
+):
+    """Target tuple has 3 elements when moveWinRate field is absent."""
+
+    dtype = np.dtype(
+        [
+            ("boardIdPositions", np.uint8, (2, 2)),
+            ("piecesInHand", np.uint8, (4,)),
+            ("moveLabel", np.float16, (3,)),
+            ("resultValue", np.float32),
+        ]
+    )
+    data = np.array(
+        [
+            (
+                np.ones((2, 2), dtype=np.uint8),
+                np.zeros(4, dtype=np.uint8),
+                np.array([0.5, 0.25, 0.25], dtype=np.float16),
+                np.float32(0.0),
+            )
+        ],
+        dtype=dtype,
+    )
+
+    dataset = KifDataset(
+        datasource=_ArrayDataSource(data), transform=None
+    )
+
+    (_, _), targets = dataset[0]
+
+    assert len(targets) == 3
+
+
 def test_dataset_requires_board_identifiers() -> None:
     """Datasets missing board ID grids should raise a helpful error."""
 

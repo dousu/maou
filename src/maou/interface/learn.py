@@ -25,6 +25,7 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     HeadlessNetwork,
 )
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.setup import (
     DeviceSetup,
     ModelFactory,
@@ -232,6 +233,7 @@ def learn(
     ] = None,
     streaming_val_source: Optional[StreamingDataSource] = None,
     save_split_params: bool = False,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -497,6 +499,7 @@ def learn(
         streaming_train_source=streaming_train_source,
         streaming_val_source=streaming_val_source,
         save_split_params=save_split_params,
+        policy_target_mode=policy_target_mode,
     )
 
     learning_result = Learning(
@@ -960,6 +963,7 @@ def learn_multi_stage(
         StreamingDataSource
     ] = None,
     save_split_params: bool = False,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -1312,6 +1316,7 @@ def learn_multi_stage(
             streaming_train_source=stage3_streaming_train_source,
             streaming_val_source=stage3_streaming_val_source,
             save_split_params=save_split_params,
+            policy_target_mode=policy_target_mode,
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result

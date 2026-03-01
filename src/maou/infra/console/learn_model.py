@@ -5,6 +5,7 @@ import click
 
 import maou.infra.console.common as common
 import maou.interface.learn as learn
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.interface.learn import StageDataConfig
 
 if TYPE_CHECKING:
@@ -485,6 +486,16 @@ S3: S3Type | None = getattr(common, "S3", None)
     help="Disable streaming mode for file input (use map-style dataset instead).",
 )
 @click.option(
+    "--policy-target-mode",
+    type=click.Choice(
+        ["move-label", "win-rate", "weighted"],
+        case_sensitive=False,
+    ),
+    default="move-label",
+    show_default=True,
+    help="Policy教師信号モード．move-label=棋譜頻度，win-rate=勝率正規化，weighted=頻度×勝率．",
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -596,6 +607,7 @@ def learn_model(
     resume_reachable_head_from: Optional[Path],
     resume_legal_moves_head_from: Optional[Path],
     no_streaming: bool,
+    policy_target_mode: str,
     log_dir: Optional[Path],
     model_dir: Optional[Path],
     output_gcs: Optional[bool],
@@ -853,5 +865,8 @@ def learn_model(
             stage3_streaming_train_source=s3_streaming_train_source,
             stage3_streaming_val_source=s3_streaming_val_source,
             save_split_params=save_split_params,
+            policy_target_mode=PolicyTargetMode(
+                policy_target_mode
+            ),
         )
     )

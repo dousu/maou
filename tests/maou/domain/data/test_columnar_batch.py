@@ -150,6 +150,50 @@ class TestColumnarBatch:
         assert batch.result_value is not None
         assert batch.result_value.dtype == np.float16
 
+    def _make_batch_with_move_win_rate(
+        self, n: int = 5
+    ) -> ColumnarBatch:
+        """Create a preprocessing ColumnarBatch with move_win_rate."""
+        rng = np.random.default_rng(42)
+        return ColumnarBatch(
+            board_positions=np.arange(
+                n * 9 * 9, dtype=np.uint8
+            ).reshape(n, 9, 9),
+            pieces_in_hand=np.arange(
+                n * 14, dtype=np.uint8
+            ).reshape(n, 14),
+            move_label=rng.random((n, MOVE_LABELS_NUM)).astype(
+                np.float16
+            ),
+            result_value=np.linspace(0, 1, n, dtype=np.float16),
+            move_win_rate=rng.random(
+                (n, MOVE_LABELS_NUM)
+            ).astype(np.float32),
+        )
+
+    def test_slice_with_move_win_rate(self) -> None:
+        """slice() preserves move_win_rate when present."""
+        batch = self._make_batch_with_move_win_rate(n=10)
+        indices = np.array([2, 5, 8])
+        sliced = batch.slice(indices)
+
+        assert sliced.move_win_rate is not None
+        assert batch.move_win_rate is not None
+        assert sliced.move_win_rate.shape == (
+            3,
+            MOVE_LABELS_NUM,
+        )
+        np.testing.assert_array_equal(
+            sliced.move_win_rate,
+            batch.move_win_rate[indices],
+        )
+
+    def test_slice_none_move_win_rate(self) -> None:
+        """slice() preserves None for move_win_rate when absent."""
+        batch = self._make_batch(n=5)
+        sliced = batch.slice(np.array([0, 2]))
+        assert sliced.move_win_rate is None
+
     def test_shapes(self) -> None:
         """Fields have expected shapes."""
         batch = self._make_batch(n=3)
@@ -163,6 +207,47 @@ class TestColumnarBatch:
         )
         assert batch.result_value is not None
         assert batch.result_value.shape == (3,)
+
+    def test_move_win_rate_shape_and_dtype(self) -> None:
+        """move_win_rate has expected shape and dtype."""
+        batch = self._make_batch_with_move_win_rate(n=4)
+
+        assert batch.move_win_rate is not None
+        assert batch.move_win_rate.shape == (
+            4,
+            MOVE_LABELS_NUM,
+        )
+        assert batch.move_win_rate.dtype == np.float32
+
+    def test_concatenate_with_move_win_rate(self) -> None:
+        """concatenate() merges move_win_rate across batches."""
+        b1 = self._make_batch_with_move_win_rate(n=3)
+        b2 = self._make_batch_with_move_win_rate(n=4)
+        merged = ColumnarBatch.concatenate([b1, b2])
+
+        assert merged.move_win_rate is not None
+        assert merged.move_win_rate.shape == (
+            7,
+            MOVE_LABELS_NUM,
+        )
+        assert b1.move_win_rate is not None
+        assert b2.move_win_rate is not None
+        np.testing.assert_array_equal(
+            merged.move_win_rate[:3],
+            b1.move_win_rate,
+        )
+        np.testing.assert_array_equal(
+            merged.move_win_rate[3:],
+            b2.move_win_rate,
+        )
+
+    def test_concatenate_without_move_win_rate(self) -> None:
+        """concatenate() keeps move_win_rate=None when absent."""
+        b1 = self._make_batch(n=3)
+        b2 = self._make_batch(n=4)
+        merged = ColumnarBatch.concatenate([b1, b2])
+
+        assert merged.move_win_rate is None
 
 
 def _make_preprocessing_df(n: int) -> pl.DataFrame:
@@ -358,6 +443,41 @@ class TestConvertPreprocessingDfToColumnar:
         np.testing.assert_array_equal(
             batch.pieces_in_hand[0], expected_hand
         )
+
+    def test_move_win_rate_present(self) -> None:
+        """moveWinRate column is converted to move_win_rate field."""
+        rng = np.random.default_rng(999)
+        df = _make_preprocessing_df(5)
+        # Add moveWinRate column
+        df = df.with_columns(
+            pl.Series(
+                "moveWinRate",
+                [
+                    list(
+                        rng.random(MOVE_LABELS_NUM).astype(
+                            np.float32
+                        )
+                    )
+                    for _ in range(5)
+                ],
+                dtype=pl.List(pl.Float32),
+            )
+        )
+        batch = convert_preprocessing_df_to_columnar(df)
+
+        assert batch.move_win_rate is not None
+        assert batch.move_win_rate.shape == (
+            5,
+            MOVE_LABELS_NUM,
+        )
+        assert batch.move_win_rate.dtype == np.float32
+
+    def test_move_win_rate_absent(self) -> None:
+        """move_win_rate is None when moveWinRate column is absent."""
+        df = _make_preprocessing_df(3)
+        batch = convert_preprocessing_df_to_columnar(df)
+
+        assert batch.move_win_rate is None
 
 
 class TestConvertStage1DfToColumnar:

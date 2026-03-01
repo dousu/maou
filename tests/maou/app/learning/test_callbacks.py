@@ -462,3 +462,252 @@ def test_validation_callback_f1_handles_zero_labels() -> None:
     # Precision=0/3=0.0, Recall=0/0=0.0 (undefined, set to 0)
     # F1=0.0
     assert metrics.policy_f1_score == pytest.approx(0.0)
+
+
+class TestValidationCallbackWinRateMetrics:
+    """Tests for move_win_rate-based validation metrics."""
+
+    def _create_context_with_win_rate(
+        self,
+        *,
+        outputs_policy: torch.Tensor,
+        policy_target_distribution: torch.Tensor,
+        labels_value: torch.Tensor,
+        outputs_value: torch.Tensor,
+        move_win_rate: torch.Tensor | None,
+        loss: float = 0.0,
+    ) -> TrainingContext:
+        batch_size = int(policy_target_distribution.size(0))
+        return TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=torch.zeros(
+                (batch_size, 1), dtype=torch.float32
+            ),
+            labels_policy=policy_target_distribution,
+            labels_value=labels_value,
+            legal_move_mask=None,
+            outputs_policy=outputs_policy,
+            outputs_value=outputs_value,
+            loss=torch.tensor(loss, dtype=torch.float32),
+            batch_size=batch_size,
+            policy_target_distribution=policy_target_distribution,
+            move_win_rate=move_win_rate,
+        )
+
+    def test_top1_win_rate(self) -> None:
+        """policy_top1_win_rate returns average win rate of top-1 predicted move."""
+        callback = ValidationCallback()
+
+        # 2 samples, 4 moves each
+        outputs_policy = torch.tensor(
+            [
+                [3.0, 1.0, 0.0, 0.0],  # argmax=0
+                [0.0, 0.0, 5.0, 1.0],  # argmax=2
+            ],
+            dtype=torch.float32,
+        )
+        move_win_rate = torch.tensor(
+            [
+                [
+                    0.8,
+                    0.2,
+                    0.1,
+                    0.0,
+                ],  # win rate of move 0 = 0.8
+                [
+                    0.1,
+                    0.3,
+                    0.9,
+                    0.5,
+                ],  # win rate of move 2 = 0.9
+            ],
+            dtype=torch.float32,
+        )
+        policy_targets = torch.tensor(
+            [[0.5, 0.5, 0.0, 0.0], [0.0, 0.0, 0.5, 0.5]],
+            dtype=torch.float32,
+        )
+
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=outputs_policy,
+            policy_target_distribution=policy_targets,
+            labels_value=torch.zeros(2),
+            outputs_value=torch.zeros(2),
+            move_win_rate=move_win_rate,
+        )
+        callback.on_batch_end(ctx)
+        metrics = callback.get_average_metrics()
+
+        # top-1 win rates: 0.8 and 0.9, average = 0.85
+        assert metrics.policy_top1_win_rate == pytest.approx(
+            0.85
+        )
+
+    def test_expected_win_rate(self) -> None:
+        """policy_expected_win_rate computes softmax-weighted win rate."""
+        callback = ValidationCallback()
+
+        # Single sample for simplicity
+        outputs_policy = torch.tensor(
+            [[0.0, 0.0]],  # equal logits → softmax = [0.5, 0.5]
+            dtype=torch.float32,
+        )
+        move_win_rate = torch.tensor(
+            [[0.6, 0.4]],
+            dtype=torch.float32,
+        )
+        policy_targets = torch.tensor(
+            [[0.5, 0.5]],
+            dtype=torch.float32,
+        )
+
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=outputs_policy,
+            policy_target_distribution=policy_targets,
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=move_win_rate,
+        )
+        callback.on_batch_end(ctx)
+        metrics = callback.get_average_metrics()
+
+        # softmax([0, 0]) = [0.5, 0.5]
+        # expected = 0.5*0.6 + 0.5*0.4 = 0.5
+        assert (
+            metrics.policy_expected_win_rate
+            == pytest.approx(0.5)
+        )
+
+    def test_move_label_ce(self) -> None:
+        """policy_move_label_ce computes CE against moveLabel."""
+        callback = ValidationCallback()
+
+        policy_targets = torch.tensor(
+            [[0.7, 0.3, 0.0]],
+            dtype=torch.float32,
+        )
+        outputs_policy = torch.tensor(
+            [[2.0, 1.0, 0.0]],
+            dtype=torch.float32,
+        )
+        move_win_rate = torch.tensor(
+            [[0.5, 0.5, 0.0]],
+            dtype=torch.float32,
+        )
+
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=outputs_policy,
+            policy_target_distribution=policy_targets,
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=move_win_rate,
+        )
+        callback.on_batch_end(ctx)
+        metrics = callback.get_average_metrics()
+
+        # CE = -sum(normalized_targets * log_softmax(logits))
+        log_probs = torch.nn.functional.log_softmax(
+            outputs_policy, dim=1
+        )
+        target_sum = policy_targets.sum(dim=1, keepdim=True)
+        normalized = policy_targets / target_sum
+        expected_ce = (
+            -torch.sum(normalized * log_probs, dim=1)
+            .mean()
+            .item()
+        )
+        assert metrics.policy_move_label_ce == pytest.approx(
+            expected_ce
+        )
+
+    def test_metrics_none_without_move_win_rate(self) -> None:
+        """Win rate metrics are None when move_win_rate is absent."""
+        callback = ValidationCallback()
+
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            policy_target_distribution=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=None,
+        )
+        callback.on_batch_end(ctx)
+        metrics = callback.get_average_metrics()
+
+        assert metrics.policy_top1_win_rate is None
+        assert metrics.policy_move_label_ce is None
+        assert metrics.policy_expected_win_rate is None
+
+    def test_metrics_accumulate_across_batches(self) -> None:
+        """Win rate metrics accumulate correctly across batches."""
+        callback = ValidationCallback()
+
+        # Batch 1: top-1 win rate = 1.0
+        ctx1 = self._create_context_with_win_rate(
+            outputs_policy=torch.tensor(
+                [[5.0, 0.0]], dtype=torch.float32
+            ),
+            policy_target_distribution=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+        )
+        callback.on_batch_end(ctx1)
+
+        # Batch 2: top-1 win rate = 0.6
+        ctx2 = self._create_context_with_win_rate(
+            outputs_policy=torch.tensor(
+                [[5.0, 0.0]], dtype=torch.float32
+            ),
+            policy_target_distribution=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=torch.tensor(
+                [[0.6, 0.4]], dtype=torch.float32
+            ),
+        )
+        callback.on_batch_end(ctx2)
+
+        metrics = callback.get_average_metrics()
+
+        # Average top-1 win rate: (1.0 + 0.6) / 2 = 0.8
+        assert metrics.policy_top1_win_rate == pytest.approx(
+            0.8
+        )
+
+    def test_reset_clears_win_rate_metrics(self) -> None:
+        """reset() clears accumulated win rate metrics."""
+        callback = ValidationCallback()
+
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=torch.tensor(
+                [[5.0, 0.0]], dtype=torch.float32
+            ),
+            policy_target_distribution=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=torch.tensor(
+                [[0.9, 0.1]], dtype=torch.float32
+            ),
+        )
+        callback.on_batch_end(ctx)
+        callback.reset()
+
+        metrics = callback.get_average_metrics()
+
+        assert metrics.policy_top1_win_rate is None
+        assert metrics.policy_move_label_ce is None
+        assert metrics.policy_expected_win_rate is None

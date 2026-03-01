@@ -32,13 +32,16 @@ class DataSource:
 @dataclass(frozen=True)
 class _CachedSample:
     features: tuple[torch.Tensor, torch.Tensor]
-    targets: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    targets: tuple[torch.Tensor, ...]
 
     @property
     def byte_size(self) -> int:
         total = 0
         for tensor in (*self.features, *self.targets):
-            total += tensor.element_size() * tensor.nelement()
+            if tensor is not None:
+                total += (
+                    tensor.element_size() * tensor.nelement()
+                )
         return total
 
 
@@ -100,7 +103,7 @@ class KifDataset(Dataset, Sized):
         self, idx: int
     ) -> tuple[
         tuple[torch.Tensor, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        tuple[torch.Tensor, ...],
     ]:
         if self._cached_samples is not None:
             cached_sample = self._cached_samples[idx]
@@ -164,6 +167,34 @@ class KifDataset(Dataset, Sized):
 
             # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
             # GPU転送はDataLoaderが自動的に処理する
+            #
+            # moveWinRateが存在する場合のみ4要素tupleを返す．
+            # Noneを含むtupleはPyTorchのdefault_collateに非対応のため，
+            # 3要素tuple（旧形式）を維持して後方互換性を確保する．
+            if (
+                data.dtype.names is not None
+                and "moveWinRate" in data.dtype.names
+            ):
+                move_win_rate_tensor = (
+                    self._structured_field_to_tensor(
+                        data,
+                        field_name="moveWinRate",
+                        expected_dtype=(
+                            np.float16,
+                            np.float32,
+                        ),
+                    )
+                )
+                return (
+                    (board_tensor, pieces_in_hand_tensor),
+                    (
+                        move_label_tensor,
+                        result_value_tensor,
+                        legal_move_mask_tensor,
+                        move_win_rate_tensor,
+                    ),
+                )
+
             return (
                 (board_tensor, pieces_in_hand_tensor),
                 (

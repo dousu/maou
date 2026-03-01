@@ -24,7 +24,8 @@ def create_test_dataframe(hash_ids: list[int]) -> pl.DataFrame:
                 "count": 1,
                 "win_count": 0.5,
                 "move_label_count": [0] * 1496,  # Sparse array
-                "move_win_count": [0.0] * 1496,  # Move win counts
+                "move_win_count": [0.0]
+                * 1496,  # Move win counts
                 "board_id_positions": [
                     [random.randint(0, 255) for _ in range(9)]
                     for _ in range(9)

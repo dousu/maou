@@ -14,7 +14,8 @@ from maou.app.learning.callbacks import (
     TrainingContext,
 )
 from maou.app.learning.policy_targets import (
-    normalize_policy_targets,
+    PolicyTargetMode,
+    build_policy_targets,
 )
 
 
@@ -34,6 +35,7 @@ class TrainingLoop:
         callbacks: Optional[List[TrainingCallback]] = None,
         logger: Optional[logging.Logger] = None,
         gradient_accumulation_steps: int = 1,
+        policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
     ):
         self.model = model
         self.device = device
@@ -45,6 +47,7 @@ class TrainingLoop:
         self.callbacks = callbacks or []
         self.logger = logger or logging.getLogger(__name__)
         self._cuda_sync_enabled = False
+        self.policy_target_mode = policy_target_mode
 
         # Gradient accumulation設定
         self.gradient_accumulation_steps = max(
@@ -232,6 +235,14 @@ class TrainingLoop:
                         non_blocking=True,
                     )
                 )
+            if context.move_win_rate is not None:
+                context.move_win_rate = (
+                    context.move_win_rate.to(
+                        self.device,
+                        dtype=torch.float32,
+                        non_blocking=True,
+                    )
+                )
 
             # GPU同期（正確な転送時間測定のため）
             self._maybe_synchronize("post_data_transfer")
@@ -325,18 +336,22 @@ class TrainingLoop:
         self,
         data: tuple[
             ModelInputs,
-            tuple[
-                torch.Tensor, torch.Tensor, torch.Tensor | None
-            ],
+            tuple[torch.Tensor, ...],
         ],
         batch_idx: int,
         epoch_idx: int,
     ) -> TrainingContext:
         """Unpack raw dataloader output into a TrainingContext."""
-        (
-            inputs,
-            (labels_policy, labels_value, legal_move_mask),
-        ) = data
+        inputs, targets = data
+        labels_policy = targets[0]
+        labels_value = targets[1]
+        legal_move_mask: torch.Tensor | None = (
+            targets[2] if len(targets) > 2 else None
+        )
+        move_win_rate: torch.Tensor | None = None
+        if len(targets) > 3:
+            move_win_rate = targets[3]
+
         batch_size = self._resolve_batch_size(inputs)
         return TrainingContext(
             batch_idx=batch_idx,
@@ -346,6 +361,7 @@ class TrainingLoop:
             labels_value=labels_value,
             legal_move_mask=legal_move_mask,
             batch_size=batch_size,
+            move_win_rate=move_win_rate,
         )
 
     def _train_batch(self, context: TrainingContext) -> None:
@@ -809,9 +825,11 @@ class TrainingLoop:
             masked_logits,
             dim=1,
         )
-        policy_targets = normalize_policy_targets(
+        policy_targets = build_policy_targets(
             context.labels_policy,
             context.legal_move_mask,
+            mode=self.policy_target_mode,
+            move_win_rate=context.move_win_rate,
             dtype=policy_log_probs.dtype,
             device=policy_log_probs.device,
         )

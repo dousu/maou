@@ -6,6 +6,7 @@ import click
 
 import maou.interface.learn as learn
 import maou.interface.utility_interface as utility_interface
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -718,6 +719,19 @@ def benchmark_dataloader(
     default=1.0,
 )
 @click.option(
+    "--policy-target-mode",
+    type=click.Choice(
+        ["move-label", "win-rate", "weighted"],
+        case_sensitive=False,
+    ),
+    default="move-label",
+    help=(
+        "Policy教師信号モード．move-label=棋譜頻度，"
+        "win-rate=勝率正規化，weighted=頻度×勝率．"
+    ),
+    required=False,
+)
+@click.option(
     "--learning-ratio",
     type=float,
     help="Learning rate (default: 0.01).",
@@ -963,6 +977,7 @@ def benchmark_training(
     gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
+    policy_target_mode: str,
     learning_ratio: float,
     momentum: float,
     lr_scheduler: str,
@@ -1314,6 +1329,7 @@ def benchmark_training(
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
+        policy_target_mode=PolicyTargetMode(policy_target_mode),
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler=lr_scheduler,

@@ -175,7 +175,9 @@ class TestPreprocessingDataFrameSerialization:
                 for _ in range(100)
             ],
             "moveWinRate": [
-                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                np.zeros(
+                    MOVE_LABELS_NUM, dtype=np.float32
+                ).tolist()
                 for _ in range(100)
             ],
             "bestMoveWinRate": [0.0] * 100,
@@ -257,7 +259,9 @@ class TestGenericDataFrameSerialization:
                 for _ in range(10)
             ],
             "moveWinRate": [
-                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                np.zeros(
+                    MOVE_LABELS_NUM, dtype=np.float32
+                ).tolist()
                 for _ in range(10)
             ],
             "bestMoveWinRate": [0.0] * 10,
@@ -362,7 +366,9 @@ class TestBackwardCompatibility:
                 for _ in range(10)
             ],
             "moveWinRate": [
-                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                np.zeros(
+                    MOVE_LABELS_NUM, dtype=np.float32
+                ).tolist()
                 for _ in range(10)
             ],
             "bestMoveWinRate": [0.0] * 10,
