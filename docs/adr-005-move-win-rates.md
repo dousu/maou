@@ -279,5 +279,6 @@ Arrow IPC出力 (.feather)
   ├── boardIdPositions, piecesInHand        (既存)
   ├── moveLabel                             (既存)
   ├── moveWinRate                           (★新規)
+  ├── bestMoveWinRate                       (★新規: フォールバック時は0.5)
   └── resultValue                           (既存)
 ```

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Generator, Optional
 
 import duckdb
+import duckdb.typing
 import numpy as np
 import polars as pl
 
@@ -185,37 +186,24 @@ class IntermediateDataStore:
         )
 
     def _register_udfs(self) -> None:
-        """Register Rust-backed UDFs for sparse array merging in DuckDB."""
+        """Register Rust-backed UDFs for sparse array merging in DuckDB.
+
+        単一のUDF ``merge_dual_all`` でインデックス・ラベル値・勝率値を一度に計算する．
+        Rustの ``add_sparse_arrays_dual_rust`` を1回だけ呼び出し，
+        STRUCTとして返すことで3カラム更新の冗長な計算を排除する．
+        """
         assert self._conn is not None
 
-        # Dual-track UDFs for label + win value merging
-        def _merge_dual_indices(
+        def _merge_dual_all(
             ei: list[int],
             ni: list[int],
             elv: list[int],
             nlv: list[int],
             ewv: list[float],
             nwv: list[float],
-        ) -> list[int]:
-            merged_indices, _, _ = add_sparse_arrays_dual_rust(
-                list(ei),
-                list(elv),
-                list(ewv),
-                list(ni),
-                list(nlv),
-                list(nwv),
-            )
-            return list(merged_indices)
-
-        def _merge_dual_label_values(
-            ei: list[int],
-            ni: list[int],
-            elv: list[int],
-            nlv: list[int],
-            ewv: list[float],
-            nwv: list[float],
-        ) -> list[int]:
-            _, merged_label_values, _ = (
+        ) -> dict:
+            """Rust UDFを1回呼び出してindices/label_values/win_valuesを返す．"""
+            merged_i, merged_lv, merged_wv = (
                 add_sparse_arrays_dual_rust(
                     list(ei),
                     list(elv),
@@ -225,39 +213,28 @@ class IntermediateDataStore:
                     list(nwv),
                 )
             )
-            return list(merged_label_values)
-
-        def _merge_dual_win_values(
-            ei: list[int],
-            ni: list[int],
-            elv: list[int],
-            nlv: list[int],
-            ewv: list[float],
-            nwv: list[float],
-        ) -> list[float]:
-            _, _, merged_win_values = (
-                add_sparse_arrays_dual_rust(
-                    list(ei),
-                    list(elv),
-                    list(ewv),
-                    list(ni),
-                    list(nlv),
-                    list(nwv),
-                )
-            )
-            return list(merged_win_values)
+            return {
+                "indices": list(merged_i),
+                "label_values": list(merged_lv),
+                "win_values": list(merged_wv),
+            }
 
         self._conn.create_function(
-            "merge_dual_indices",
-            _merge_dual_indices,
-        )
-        self._conn.create_function(
-            "merge_dual_label_values",
-            _merge_dual_label_values,
-        )
-        self._conn.create_function(
-            "merge_dual_win_values",
-            _merge_dual_win_values,
+            "merge_dual_all",
+            _merge_dual_all,
+            return_type=duckdb.struct_type(
+                {
+                    "indices": duckdb.list_type(
+                        duckdb.type("USMALLINT")
+                    ),
+                    "label_values": duckdb.list_type(
+                        duckdb.type("INTEGER")
+                    ),
+                    "win_values": duckdb.list_type(
+                        duckdb.type("FLOAT")
+                    ),
+                }
+            ),
         )
 
     @staticmethod
@@ -412,39 +389,49 @@ class IntermediateDataStore:
             # Register Polars DataFrame as DuckDB view
             self._conn.register("batch_df", batch_df.to_arrow())
 
-            # Single SQL UPSERT: insert new records or merge with existing
+            # Step 1: 既存レコードとのマージ (merge_dual_allは1行1回だけ呼ばれる)
+            # MATERIALIZED CTEでmerge_dual_allの結果を実体化し，
+            # STRUCTフィールドを参照するだけで3カラムを更新する．
+            self._conn.execute(
+                """
+                WITH merged_updates AS MATERIALIZED (
+                    SELECT
+                        b.hash_id,
+                        e.count + b.count AS new_count,
+                        e.win_count + b.win_count AS new_win_count,
+                        merge_dual_all(
+                            e.move_label_indices, b.move_label_indices,
+                            e.move_label_values,  b.move_label_values,
+                            e.move_win_values,    b.move_win_values
+                        ) AS merged
+                    FROM batch_df b
+                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
+                )
+                UPDATE intermediate_data
+                SET
+                    count              = m.new_count,
+                    win_count          = m.new_win_count,
+                    move_label_indices = m.merged.indices,
+                    move_label_values  = m.merged.label_values,
+                    move_win_values    = m.merged.win_values
+                FROM merged_updates m
+                WHERE intermediate_data.hash_id = m.hash_id
+                """
+            )
+
+            # Step 2: 新規レコードの挿入
             self._conn.execute(
                 """
                 INSERT INTO intermediate_data
-                SELECT hash_id, count, win_count,
-                       move_label_indices, move_label_values,
-                       move_win_values,
-                       board_id_positions, pieces_in_hand
-                FROM batch_df
-                ON CONFLICT (hash_id) DO UPDATE SET
-                    count = intermediate_data.count + excluded.count,
-                    win_count = intermediate_data.win_count + excluded.win_count,
-                    move_label_indices = merge_dual_indices(
-                        intermediate_data.move_label_indices,
-                        excluded.move_label_indices,
-                        intermediate_data.move_label_values,
-                        excluded.move_label_values,
-                        intermediate_data.move_win_values,
-                        excluded.move_win_values),
-                    move_label_values = merge_dual_label_values(
-                        intermediate_data.move_label_indices,
-                        excluded.move_label_indices,
-                        intermediate_data.move_label_values,
-                        excluded.move_label_values,
-                        intermediate_data.move_win_values,
-                        excluded.move_win_values),
-                    move_win_values = merge_dual_win_values(
-                        intermediate_data.move_label_indices,
-                        excluded.move_label_indices,
-                        intermediate_data.move_label_values,
-                        excluded.move_label_values,
-                        intermediate_data.move_win_values,
-                        excluded.move_win_values)
+                SELECT b.hash_id, b.count, b.win_count,
+                       b.move_label_indices, b.move_label_values,
+                       b.move_win_values,
+                       b.board_id_positions, b.pieces_in_hand
+                FROM batch_df b
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM intermediate_data e
+                    WHERE e.hash_id = b.hash_id
+                )
                 """
             )
 

@@ -32,6 +32,9 @@ class DataSource:
 @dataclass(frozen=True)
 class _CachedSample:
     features: tuple[torch.Tensor, torch.Tensor]
+    # 3要素(moveLabel, resultValue, legalMoveMask)または
+    # 4要素(+moveWinRate)のtuple．Noneを含まない設計で
+    # PyTorchのdefault_collateとの互換性を保つ．
     targets: tuple[torch.Tensor, ...]
 
     @property

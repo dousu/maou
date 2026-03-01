@@ -362,18 +362,21 @@ class ValidationCallback(BaseCallback):
                     self.policy_top1_win_rate_count += batch_n
 
                     # policy_move_label_ce: moveLabelとのCE(参考値)
-                    move_label_targets = (
-                        normalize_policy_targets(
-                            context.labels_policy,
-                            context.legal_move_mask,
+                    # legal_move_maskがある場合のみ計算する．
+                    # maskなしで正規化したmoveLabelはマスク付き確率空間と不整合になるため．
+                    if context.legal_move_mask is not None:
+                        move_label_targets = (
+                            normalize_policy_targets(
+                                context.labels_policy,
+                                context.legal_move_mask,
+                            )
                         )
-                    )
-                    self.policy_move_label_ce_sum += (
-                        self._policy_cross_entropy(
-                            logits, move_label_targets
+                        self.policy_move_label_ce_sum += (
+                            self._policy_cross_entropy(
+                                logits, move_label_targets
+                            )
                         )
-                    )
-                    self.policy_move_label_ce_count += batch_n
+                        self.policy_move_label_ce_count += batch_n
 
                     # policy_expected_win_rate: Σ softmax(logits)[i] × moveWinRate[i]
                     probs = torch.softmax(logits, dim=1)

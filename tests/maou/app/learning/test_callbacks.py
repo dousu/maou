@@ -475,6 +475,7 @@ class TestValidationCallbackWinRateMetrics:
         labels_value: torch.Tensor,
         outputs_value: torch.Tensor,
         move_win_rate: torch.Tensor | None,
+        legal_move_mask: torch.Tensor | None = None,
         loss: float = 0.0,
     ) -> TrainingContext:
         batch_size = int(policy_target_distribution.size(0))
@@ -486,7 +487,7 @@ class TestValidationCallbackWinRateMetrics:
             ),
             labels_policy=policy_target_distribution,
             labels_value=labels_value,
-            legal_move_mask=None,
+            legal_move_mask=legal_move_mask,
             outputs_policy=outputs_policy,
             outputs_value=outputs_value,
             loss=torch.tensor(loss, dtype=torch.float32),
@@ -580,7 +581,7 @@ class TestValidationCallbackWinRateMetrics:
         )
 
     def test_move_label_ce(self) -> None:
-        """policy_move_label_ce computes CE against moveLabel."""
+        """policy_move_label_ce computes CE against moveLabel with legal_move_mask."""
         callback = ValidationCallback()
 
         policy_targets = torch.tensor(
@@ -595,6 +596,11 @@ class TestValidationCallbackWinRateMetrics:
             [[0.5, 0.5, 0.0]],
             dtype=torch.float32,
         )
+        # legal_move_mask必須: maskなしではpolicyラベルと確率空間が不整合になる
+        legal_move_mask = torch.tensor(
+            [[1.0, 1.0, 1.0]],
+            dtype=torch.float32,
+        )
 
         ctx = self._create_context_with_win_rate(
             outputs_policy=outputs_policy,
@@ -602,16 +608,18 @@ class TestValidationCallbackWinRateMetrics:
             labels_value=torch.zeros(1),
             outputs_value=torch.zeros(1),
             move_win_rate=move_win_rate,
+            legal_move_mask=legal_move_mask,
         )
         callback.on_batch_end(ctx)
         metrics = callback.get_average_metrics()
 
-        # CE = -sum(normalized_targets * log_softmax(logits))
+        # CE = -sum(normalize(targets * mask) * log_softmax(logits))
         log_probs = torch.nn.functional.log_softmax(
             outputs_policy, dim=1
         )
-        target_sum = policy_targets.sum(dim=1, keepdim=True)
-        normalized = policy_targets / target_sum
+        masked = policy_targets * legal_move_mask
+        target_sum = masked.sum(dim=1, keepdim=True)
+        normalized = masked / target_sum
         expected_ce = (
             -torch.sum(normalized * log_probs, dim=1)
             .mean()
@@ -620,6 +628,33 @@ class TestValidationCallbackWinRateMetrics:
         assert metrics.policy_move_label_ce == pytest.approx(
             expected_ce
         )
+
+    def test_move_label_ce_none_without_legal_move_mask(
+        self,
+    ) -> None:
+        """policy_move_label_ce is None when legal_move_mask is absent."""
+        callback = ValidationCallback()
+
+        move_win_rate = torch.tensor(
+            [[0.5, 0.5]],
+            dtype=torch.float32,
+        )
+        ctx = self._create_context_with_win_rate(
+            outputs_policy=torch.tensor(
+                [[1.0, 0.0]], dtype=torch.float32
+            ),
+            policy_target_distribution=torch.tensor(
+                [[0.8, 0.2]], dtype=torch.float32
+            ),
+            labels_value=torch.zeros(1),
+            outputs_value=torch.zeros(1),
+            move_win_rate=move_win_rate,
+            legal_move_mask=None,  # maskなし → metricsはNone
+        )
+        callback.on_batch_end(ctx)
+        metrics = callback.get_average_metrics()
+
+        assert metrics.policy_move_label_ce is None
 
     def test_metrics_none_without_move_win_rate(self) -> None:
         """Win rate metrics are None when move_win_rate is absent."""
