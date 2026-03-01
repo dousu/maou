@@ -15,6 +15,7 @@ import numpy as np
 import polars as pl
 
 from maou._rust.maou_io import (
+    add_sparse_arrays_dual_rust,
     add_sparse_arrays_rust,
     compress_sparse_array_rust,
     expand_sparse_array_rust,
@@ -22,6 +23,7 @@ from maou._rust.maou_io import (
 from maou.domain.data.schema import (
     get_preprocessing_polars_schema,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -129,6 +131,7 @@ class IntermediateDataStore:
         self,
         db_path: Path,
         batch_size: int = 50_000,
+        win_rate_threshold: int = 2,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -138,6 +141,8 @@ class IntermediateDataStore:
             batch_size: Number of records to accumulate before flushing to DuckDB.
                 Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
+            win_rate_threshold: 指し手別勝率を計算する最小出現回数．
+                出現回数がこの閾値未満の場合，均一分布にフォールバックする．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         self.db_path = db_path
@@ -145,6 +150,7 @@ class IntermediateDataStore:
         self.enable_vacuum = (
             enable_vacuum  # Unused but kept for compatibility
         )
+        self._win_rate_threshold = win_rate_threshold
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
@@ -165,10 +171,11 @@ class IntermediateDataStore:
                 hash_id UBIGINT PRIMARY KEY,
                 count INTEGER NOT NULL,
                 win_count FLOAT NOT NULL,
-                move_label_indices USMALLINT[] NOT NULL,  -- Sparse: non-zero indices
-                move_label_values INTEGER[] NOT NULL,     -- Sparse: corresponding values
-                board_id_positions UTINYINT[][] NOT NULL, -- 9x9 board
-                pieces_in_hand UTINYINT[] NOT NULL        -- 14 pieces
+                move_label_indices USMALLINT[] NOT NULL,
+                move_label_values INTEGER[] NOT NULL,
+                move_win_values FLOAT[] NOT NULL,
+                board_id_positions UTINYINT[][] NOT NULL,
+                pieces_in_hand UTINYINT[] NOT NULL
             )
             """
         )
@@ -213,6 +220,78 @@ class IntermediateDataStore:
             _merge_sparse_values,
         )
 
+        # Dual-track UDFs for label + win value merging
+        def _merge_dual_indices(
+            ei: list[int],
+            ni: list[int],
+            elv: list[int],
+            nlv: list[int],
+            ewv: list[float],
+            nwv: list[float],
+        ) -> list[int]:
+            merged_indices, _, _ = add_sparse_arrays_dual_rust(
+                list(ei),
+                list(elv),
+                list(ewv),
+                list(ni),
+                list(nlv),
+                list(nwv),
+            )
+            return list(merged_indices)
+
+        def _merge_dual_label_values(
+            ei: list[int],
+            ni: list[int],
+            elv: list[int],
+            nlv: list[int],
+            ewv: list[float],
+            nwv: list[float],
+        ) -> list[int]:
+            _, merged_label_values, _ = (
+                add_sparse_arrays_dual_rust(
+                    list(ei),
+                    list(elv),
+                    list(ewv),
+                    list(ni),
+                    list(nlv),
+                    list(nwv),
+                )
+            )
+            return list(merged_label_values)
+
+        def _merge_dual_win_values(
+            ei: list[int],
+            ni: list[int],
+            elv: list[int],
+            nlv: list[int],
+            ewv: list[float],
+            nwv: list[float],
+        ) -> list[float]:
+            _, _, merged_win_values = (
+                add_sparse_arrays_dual_rust(
+                    list(ei),
+                    list(elv),
+                    list(ewv),
+                    list(ni),
+                    list(nlv),
+                    list(nwv),
+                )
+            )
+            return list(merged_win_values)
+
+        self._conn.create_function(
+            "merge_dual_indices",
+            _merge_dual_indices,
+        )
+        self._conn.create_function(
+            "merge_dual_label_values",
+            _merge_dual_label_values,
+        )
+        self._conn.create_function(
+            "merge_dual_win_values",
+            _merge_dual_win_values,
+        )
+
     @staticmethod
     def _deduplicate_dataframe(
         df: pl.DataFrame,
@@ -239,6 +318,7 @@ class IntermediateDataStore:
                 pl.col("board_id_positions").first(),
                 pl.col("pieces_in_hand").first(),
                 pl.col("move_label_count"),
+                pl.col("move_win_count"),
             ]
         )
 
@@ -251,12 +331,29 @@ class IntermediateDataStore:
                 arr = np.array(mlc_nested, dtype=np.int32)
                 mlc_summed.append(arr.sum(axis=0).tolist())
 
-        result = agg_df.drop("move_label_count").with_columns(
-            pl.Series(
-                "move_label_count",
-                mlc_summed,
-                dtype=pl.List(pl.Int32),
-            )
+        mwc_summed: list[list[float]] = []
+        for mwc_nested in agg_df["move_win_count"].to_list():
+            if len(mwc_nested) == 1:
+                mwc_summed.append(mwc_nested[0])
+            else:
+                arr = np.array(mwc_nested, dtype=np.float32)
+                mwc_summed.append(arr.sum(axis=0).tolist())
+
+        result = agg_df.drop(
+            "move_label_count", "move_win_count"
+        ).with_columns(
+            [
+                pl.Series(
+                    "move_label_count",
+                    mlc_summed,
+                    dtype=pl.List(pl.Int32),
+                ),
+                pl.Series(
+                    "move_win_count",
+                    mwc_summed,
+                    dtype=pl.List(pl.Float32),
+                ),
+            ]
         )
 
         logger.debug(
@@ -279,6 +376,7 @@ class IntermediateDataStore:
                 - count: int32
                 - win_count: float64
                 - move_label_count: list[int32]  # 1496 elements (dense)
+                - move_win_count: list[float32]  # 1496 elements (dense)
                 - board_id_positions: list[list[uint8]]  # 9x9 board
                 - pieces_in_hand: list[uint8]  # 14 elements
 
@@ -297,14 +395,21 @@ class IntermediateDataStore:
         # Compress dense move_label_count to sparse format per row
         indices_list: list[list[int]] = []
         values_list: list[list[int]] = []
-        for move_label_count in df[
-            "move_label_count"
-        ].to_list():
+        win_values_list: list[list[float]] = []
+        for move_label_count, move_win_count in zip(
+            df["move_label_count"].to_list(),
+            df["move_win_count"].to_list(),
+        ):
             indices, values = compress_sparse_array_rust(
                 move_label_count
             )
+            # Extract win values at the same indices (shared sparsity)
+            win_values = [
+                float(move_win_count[i]) for i in indices
+            ]
             indices_list.append(list(indices))
             values_list.append(list(values))
+            win_values_list.append(win_values)
 
         # Build DataFrame with sparse columns for DuckDB
         batch_df = df.select(
@@ -327,6 +432,11 @@ class IntermediateDataStore:
                     values_list,
                     dtype=pl.List(pl.Int32),
                 ),
+                pl.Series(
+                    "move_win_values",
+                    win_values_list,
+                    dtype=pl.List(pl.Float32),
+                ),
             ]
         )
 
@@ -340,21 +450,33 @@ class IntermediateDataStore:
                 INSERT INTO intermediate_data
                 SELECT hash_id, count, win_count,
                        move_label_indices, move_label_values,
+                       move_win_values,
                        board_id_positions, pieces_in_hand
                 FROM batch_df
                 ON CONFLICT (hash_id) DO UPDATE SET
                     count = intermediate_data.count + excluded.count,
                     win_count = intermediate_data.win_count + excluded.win_count,
-                    move_label_indices = merge_sparse_indices(
+                    move_label_indices = merge_dual_indices(
                         intermediate_data.move_label_indices,
-                        intermediate_data.move_label_values,
                         excluded.move_label_indices,
-                        excluded.move_label_values),
-                    move_label_values = merge_sparse_values(
+                        intermediate_data.move_label_values,
+                        excluded.move_label_values,
+                        intermediate_data.move_win_values,
+                        excluded.move_win_values),
+                    move_label_values = merge_dual_label_values(
                         intermediate_data.move_label_indices,
-                        intermediate_data.move_label_values,
                         excluded.move_label_indices,
-                        excluded.move_label_values)
+                        intermediate_data.move_label_values,
+                        excluded.move_label_values,
+                        intermediate_data.move_win_values,
+                        excluded.move_win_values),
+                    move_win_values = merge_dual_win_values(
+                        intermediate_data.move_label_indices,
+                        excluded.move_label_indices,
+                        intermediate_data.move_label_values,
+                        excluded.move_label_values,
+                        intermediate_data.move_win_values,
+                        excluded.move_win_values)
                 """
             )
 
@@ -531,6 +653,67 @@ class IntermediateDataStore:
             result.append(normalized)
         return result
 
+    def _compute_move_win_rates(
+        self,
+        indices_col: list[list[int]],
+        label_values_col: list[list[int]],
+        win_values_col: list[list[float]],
+        counts: list[int],
+    ) -> tuple[list[list[float]], list[float]]:
+        """指し手別勝率を計算する(フォールバック適用済み)．
+
+        Args:
+            indices_col: 各局面のスパースインデックス
+            label_values_col: 各局面の指し手出現回数(スパース値)
+            win_values_col: 各局面の指し手別勝ち数(スパース値)
+            counts: 各局面の出現回数
+
+        Returns:
+            (move_win_rates, best_move_win_rates):
+                move_win_rates: 1496要素のfloat配列のリスト
+                best_move_win_rates: 各局面の最大勝率のリスト
+        """
+        move_win_rates: list[list[float]] = []
+        best_move_win_rates: list[float] = []
+
+        for indices, label_values, win_values, count in zip(
+            indices_col,
+            label_values_col,
+            win_values_col,
+            counts,
+        ):
+            dense = np.zeros(MOVE_LABELS_NUM, dtype=np.float32)
+
+            if count < self._win_rate_threshold:
+                # Fallback: 1/N uniform distribution over legal moves
+                n_legal = len(indices)
+                if n_legal > 0:
+                    uniform_rate = 1.0 / n_legal
+                    np_indices = np.array(
+                        indices, dtype=np.intp
+                    )
+                    dense[np_indices] = uniform_rate
+                    best_move_win_rates.append(0.5)
+                else:
+                    best_move_win_rates.append(0.0)
+            else:
+                # Normal: moveWinRate[i] = win_count[i] / label_count[i]
+                np_indices = np.array(indices, dtype=np.intp)
+                np_lv = np.array(label_values, dtype=np.float32)
+                np_wv = np.array(win_values, dtype=np.float32)
+                mask = np_lv > 0
+                rates = np.where(mask, np_wv / np_lv, 0.0)
+                dense[np_indices] = rates
+                best_move_win_rates.append(
+                    float(rates.max())
+                    if len(rates) > 0
+                    else 0.0
+                )
+
+            move_win_rates.append(dense.tolist())
+
+        return move_win_rates, best_move_win_rates
+
     def _read_chunk_as_polars(
         self, limit: int, offset: int
     ) -> pl.DataFrame:
@@ -548,6 +731,7 @@ class IntermediateDataStore:
             """
             SELECT hash_id, count, win_count,
                    move_label_indices, move_label_values,
+                   move_win_values,
                    board_id_positions, pieces_in_hand
             FROM intermediate_data
             ORDER BY hash_id
@@ -576,6 +760,16 @@ class IntermediateDataStore:
             raw_df["count"].to_list(),
         )
 
+        # 指し手別勝率を計算(フォールバック適用済み)
+        move_win_rates, best_move_win_rates = (
+            self._compute_move_win_rates(
+                raw_df["move_label_indices"].to_list(),
+                raw_df["move_label_values"].to_list(),
+                raw_df["move_win_values"].to_list(),
+                raw_df["count"].to_list(),
+            )
+        )
+
         # resultValue = win_count / count
         result_values = raw_df["win_count"] / raw_df["count"]
 
@@ -589,6 +783,14 @@ class IntermediateDataStore:
                 "moveLabel": pl.Series(
                     move_labels,
                     dtype=pl.List(pl.Float32),
+                ),
+                "moveWinRate": pl.Series(
+                    move_win_rates,
+                    dtype=pl.List(pl.Float32),
+                ),
+                "bestMoveWinRate": pl.Series(
+                    best_move_win_rates,
+                    dtype=pl.Float32,
                 ),
                 "resultValue": result_values.cast(pl.Float32),
             },

@@ -249,6 +249,15 @@ from maou.infra.console.common import (
     required=False,
     default=500_000,
 )
+@click.option(
+    "--win-rate-threshold",
+    help="Minimum position occurrence count for per-move win rate calculation. "
+    "Positions with count below this threshold use uniform 1/N fallback. "
+    "(default: 2, recommended range: 2-4)",
+    type=int,
+    required=False,
+    default=2,
+)
 @handle_exception
 def pre_process(
     input_path: Optional[Path],
@@ -285,6 +294,7 @@ def pre_process(
     intermediate_cache_dir: Optional[Path],
     intermediate_batch_size: int,
     input_split_rows: int,
+    win_rate_threshold: int,
 ) -> None:
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -526,5 +536,6 @@ def pre_process(
             max_workers=process_max_workers,
             intermediate_cache_dir=intermediate_cache_dir,
             intermediate_batch_size=intermediate_batch_size,
+            win_rate_threshold=win_rate_threshold,
         )
     )
