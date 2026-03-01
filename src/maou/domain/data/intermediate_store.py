@@ -16,7 +16,6 @@ import polars as pl
 
 from maou._rust.maou_io import (
     add_sparse_arrays_dual_rust,
-    add_sparse_arrays_rust,
     compress_sparse_array_rust,
     expand_sparse_array_rust,
 )
@@ -188,37 +187,6 @@ class IntermediateDataStore:
     def _register_udfs(self) -> None:
         """Register Rust-backed UDFs for sparse array merging in DuckDB."""
         assert self._conn is not None
-
-        def _merge_sparse_indices(
-            ei: list[int],
-            ev: list[int],
-            ni: list[int],
-            nv: list[int],
-        ) -> list[int]:
-            merged_indices, _ = add_sparse_arrays_rust(
-                list(ei), list(ev), list(ni), list(nv)
-            )
-            return list(merged_indices)
-
-        def _merge_sparse_values(
-            ei: list[int],
-            ev: list[int],
-            ni: list[int],
-            nv: list[int],
-        ) -> list[int]:
-            _, merged_values = add_sparse_arrays_rust(
-                list(ei), list(ev), list(ni), list(nv)
-            )
-            return list(merged_values)
-
-        self._conn.create_function(
-            "merge_sparse_indices",
-            _merge_sparse_indices,
-        )
-        self._conn.create_function(
-            "merge_sparse_values",
-            _merge_sparse_values,
-        )
 
         # Dual-track UDFs for label + win value merging
         def _merge_dual_indices(

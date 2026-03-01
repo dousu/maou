@@ -174,6 +174,11 @@ class TestPreprocessingDataFrameSerialization:
                 .tolist()
                 for _ in range(100)
             ],
+            "moveWinRate": [
+                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                for _ in range(100)
+            ],
+            "bestMoveWinRate": [0.0] * 100,
             "resultValue": [float(i % 2) for i in range(100)],
         }
 
@@ -251,6 +256,11 @@ class TestGenericDataFrameSerialization:
                 .tolist()
                 for _ in range(10)
             ],
+            "moveWinRate": [
+                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                for _ in range(10)
+            ],
+            "bestMoveWinRate": [0.0] * 10,
             "resultValue": [0.0] * 10,
         }
 
@@ -351,6 +361,11 @@ class TestBackwardCompatibility:
                 .tolist()
                 for _ in range(10)
             ],
+            "moveWinRate": [
+                np.zeros(MOVE_LABELS_NUM, dtype=np.float32).tolist()
+                for _ in range(10)
+            ],
+            "bestMoveWinRate": [0.0] * 10,
             "resultValue": [0.0] * 10,
         }
         df = pl.DataFrame(data, schema=schema)

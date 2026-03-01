@@ -24,6 +24,7 @@ def create_test_dataframe(hash_ids: list[int]) -> pl.DataFrame:
                 "count": 1,
                 "win_count": 0.5,
                 "move_label_count": [0] * 1496,  # Sparse array
+                "move_win_count": [0.0] * 1496,  # Move win counts
                 "board_id_positions": [
                     [random.randint(0, 255) for _ in range(9)]
                     for _ in range(9)
@@ -230,6 +231,8 @@ class TestIntermediateDataStore:
                 "boardIdPositions",
                 "piecesInHand",
                 "moveLabel",
+                "moveWinRate",
+                "bestMoveWinRate",
                 "resultValue",
             ]
 
@@ -537,6 +540,14 @@ class TestBatchAccumulation:
                     dtype=pl.List(pl.Int32),
                 )
             )
+            mwc1 = [0.0] * 1496
+            row1 = row1.with_columns(
+                pl.Series(
+                    "move_win_count",
+                    [mwc1],
+                    dtype=pl.List(pl.Float32),
+                )
+            )
 
             row2 = create_test_dataframe([hash_id])
             row2 = row2.with_columns(
@@ -561,6 +572,14 @@ class TestBatchAccumulation:
                     "move_label_count",
                     [mlc2],
                     dtype=pl.List(pl.Int32),
+                )
+            )
+            mwc2 = [0.0] * 1496
+            row2 = row2.with_columns(
+                pl.Series(
+                    "move_win_count",
+                    [mwc2],
+                    dtype=pl.List(pl.Float32),
                 )
             )
 
