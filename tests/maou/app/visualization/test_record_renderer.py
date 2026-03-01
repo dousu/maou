@@ -8,6 +8,7 @@ import pytest
 
 from maou.app.visualization.record_renderer import (
     HCPERecordRenderer,
+    PreprocessingRecordRenderer,
     Stage2RecordRenderer,
 )
 from maou.domain.visualization.board_renderer import (
@@ -351,3 +352,196 @@ class TestConvertToSfen:
         assert "<invalid" not in fields0["legal_moves"], (
             f"Record 0 (BLACK turn): {fields0['legal_moves']}"
         )
+
+
+class TestPreprocessingRecordRendererExtractDisplayFields:
+    """PreprocessingRecordRenderer.extract_display_fieldsのテスト．"""
+
+    @pytest.fixture
+    def renderer(self) -> PreprocessingRecordRenderer:
+        """テスト用PreprocessingRecordRendererを作成．"""
+        return PreprocessingRecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
+
+    def _make_initial_record(
+        self,
+    ) -> dict[str, Any]:
+        """初期局面のPreprocessingレコードを生成．"""
+        from maou.app.pre_process.feature import (
+            make_board_id_positions,
+            make_pieces_in_hand,
+        )
+        from maou.domain.board.shogi import Board
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        board = Board()
+        board_pos = make_board_id_positions(board)
+        pieces_in_hand = make_pieces_in_hand(board)
+
+        move_label = [0.0] * MOVE_LABELS_NUM
+        move_label[0] = 0.6
+        move_label[1] = 0.3
+        move_label[2] = 0.1
+
+        return {
+            "id": "test-001",
+            "boardIdPositions": board_pos.tolist(),
+            "piecesInHand": pieces_in_hand.tolist(),
+            "moveLabel": move_label,
+            "resultValue": 0.65,
+        }
+
+    def test_without_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """moveWinRateがない場合，従来通りの出力を返す．"""
+        record = self._make_initial_record()
+
+        fields = renderer.extract_display_fields(record)
+
+        assert fields["id"] == "test-001"
+        assert fields["result_value"] == 0.65
+        assert "top_moves" in fields
+        assert fields["array_type"] == "preprocessing"
+        assert "best_move_win_rate" not in fields
+        assert "top_moves_by_win_rate" not in fields
+
+    def test_with_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """moveWinRateがある場合，勝率情報が追加される．"""
+        from maou.domain.board.shogi import Board
+        from maou.domain.move.label import (
+            MOVE_LABELS_NUM,
+            make_move_label,
+        )
+
+        record = self._make_initial_record()
+
+        # 初期局面の合法手から有効なラベルインデックスを取得
+        board = Board()
+        legal_moves = list(board.get_legal_moves())
+        valid_labels = [
+            make_move_label(board.get_turn(), m)
+            for m in legal_moves[:3]
+        ]
+
+        move_label = [0.0] * MOVE_LABELS_NUM
+        move_label[valid_labels[0]] = 0.6
+        move_label[valid_labels[1]] = 0.3
+        move_label[valid_labels[2]] = 0.1
+        record["moveLabel"] = move_label
+
+        move_win_rate = [0.0] * MOVE_LABELS_NUM
+        move_win_rate[valid_labels[0]] = 0.7
+        move_win_rate[valid_labels[1]] = 0.4
+        move_win_rate[valid_labels[2]] = 0.8
+        record["moveWinRate"] = move_win_rate
+        record["bestMoveWinRate"] = 0.8
+
+        fields = renderer.extract_display_fields(record)
+
+        assert fields["best_move_win_rate"] == 0.8
+        assert "top_moves_by_win_rate" in fields
+        assert len(fields["top_moves_by_win_rate"]) > 0
+
+
+class TestPreprocessingRecordRendererTableColumns:
+    """PreprocessingRecordRenderer.get_table_columns / format_table_rowのテスト．"""
+
+    @pytest.fixture
+    def renderer(self) -> PreprocessingRecordRenderer:
+        """テスト用PreprocessingRecordRendererを作成．"""
+        return PreprocessingRecordRenderer(
+            board_renderer=Mock(),
+            move_converter=Mock(),
+        )
+
+    def test_table_columns_include_best_move_wr(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """テーブルカラムにBest Move WRが含まれる．"""
+        columns = renderer.get_table_columns()
+
+        assert "Best Move WR" in columns
+
+    def test_format_table_row_with_best_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """bestMoveWinRateがある場合，フォーマットされた値が含まれる．"""
+        record = {
+            "id": "test-001",
+            "resultValue": 0.65,
+            "bestMoveWinRate": 0.8,
+        }
+
+        row = renderer.format_table_row(0, record)
+
+        assert row == [0, "test-001", "0.65", "0.80"]
+
+    def test_format_table_row_without_best_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """bestMoveWinRateがない場合，'-'が表示される．"""
+        record = {
+            "id": "test-002",
+            "resultValue": 0.50,
+        }
+
+        row = renderer.format_table_row(0, record)
+
+        assert row == [0, "test-002", "0.50", "-"]
+
+
+class TestPreprocessingRecordRendererAnalytics:
+    """PreprocessingRecordRenderer.generate_analyticsのテスト．"""
+
+    @pytest.fixture
+    def renderer(self) -> PreprocessingRecordRenderer:
+        """テスト用PreprocessingRecordRendererを作成．"""
+        return PreprocessingRecordRenderer(
+            board_renderer=Mock(),
+            move_converter=Mock(),
+        )
+
+    def test_analytics_with_best_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """bestMoveWinRateがある場合，2つのヒストグラムが生成される．"""
+        records = [
+            {"resultValue": 0.6, "bestMoveWinRate": 0.8},
+            {"resultValue": 0.4, "bestMoveWinRate": 0.5},
+            {"resultValue": 0.7, "bestMoveWinRate": 0.9},
+        ]
+
+        fig = renderer.generate_analytics(records)
+
+        assert fig is not None
+        assert len(fig.data) == 2
+        assert fig.data[0].name == "勝率"
+        assert fig.data[1].name == "最善手勝率"
+
+    def test_analytics_without_best_move_win_rate(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """bestMoveWinRateがない場合，従来通り1つのヒストグラムのみ．"""
+        records = [
+            {"resultValue": 0.6},
+            {"resultValue": 0.4},
+        ]
+
+        fig = renderer.generate_analytics(records)
+
+        assert fig is not None
+        assert len(fig.data) == 1
+        assert fig.data[0].name == "勝率"
+
+    def test_analytics_empty_records(
+        self, renderer: PreprocessingRecordRenderer
+    ) -> None:
+        """空のレコードリストの場合，Noneを返す．"""
+        fig = renderer.generate_analytics([])
+
+        assert fig is None

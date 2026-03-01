@@ -365,3 +365,70 @@ class TestDataRetriever:
                     f"White piece at (0, {col}) has ID {piece_id} "
                     f"< DOMAIN_WHITE_MIN ({DOMAIN_WHITE_MIN})"
                 )
+
+
+class TestPreprocessingMockData:
+    """_create_preprocessing_mockのテスト．"""
+
+    @pytest.fixture
+    def data_retriever(self, tmp_path: Path) -> DataRetriever:
+        """Preprocessing用DataRetrieverを作成．"""
+        from maou.infra.visualization.search_index import (
+            SearchIndex,
+        )
+
+        dummy_file = tmp_path / "test.feather"
+        search_index = SearchIndex(
+            file_paths=[dummy_file],
+            array_type="preprocessing",
+            use_mock_data=True,
+        )
+        dummy_file = tmp_path / "test.feather"
+        return DataRetriever(
+            search_index=search_index,
+            file_paths=[dummy_file],
+            array_type="preprocessing",
+        )
+
+    def test_mock_includes_move_win_rate(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """モックデータにmoveWinRateが含まれる．"""
+        record = data_retriever._create_preprocessing_mock(
+            record_id="test", row_number=0
+        )
+
+        assert "moveWinRate" in record
+        assert "bestMoveWinRate" in record
+        assert isinstance(record["moveWinRate"], list)
+        assert isinstance(record["bestMoveWinRate"], float)
+
+    def test_mock_move_win_rate_consistency(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """moveWinRateはmoveLabelが非ゼロの位置のみ非ゼロ．"""
+        record = data_retriever._create_preprocessing_mock(
+            record_id="test", row_number=1
+        )
+
+        move_label = record["moveLabel"]
+        move_win_rate = record["moveWinRate"]
+
+        for i in range(len(move_label)):
+            if move_label[i] == 0.0:
+                assert move_win_rate[i] == 0.0
+            else:
+                assert move_win_rate[i] > 0.0
+
+    def test_mock_best_move_win_rate_is_max(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """bestMoveWinRateはmoveWinRateの最大値．"""
+        record = data_retriever._create_preprocessing_mock(
+            record_id="test", row_number=2
+        )
+
+        non_zero = [
+            wr for wr in record["moveWinRate"] if wr > 0.0
+        ]
+        assert record["bestMoveWinRate"] == max(non_zero)
