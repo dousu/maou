@@ -10,7 +10,6 @@ from typing import (
     Literal,
     MutableMapping,
     Optional,
-    cast,
 )
 
 import torch
@@ -86,6 +85,7 @@ class Learning:
     logger: logging.Logger = logging.getLogger(__name__)
     device: torch.device
     model: Network
+    _train_model: torch.nn.Module
     scaler: Optional[GradScaler]
     model_architecture: BackboneArchitecture
 
@@ -211,6 +211,7 @@ class Learning:
             dataloaders
         )
         self.model = model_components.model
+        self._train_model = self.model
         self.model_architecture = config.model_architecture
         self.loss_fn_policy = model_components.loss_fn_policy
         self.loss_fn_value = model_components.loss_fn_value
@@ -287,14 +288,20 @@ class Learning:
         )
 
         # Compile after freeze + optimizer setup
+        # Stage 3 アダプターパターン: Network 本体ではなくアダプターを
+        # コンパイルすることで，state_dict() に _orig_mod. プレフィックスが
+        # 付かないようにする (Stage 1/2 と同じ戦略)
         if config.compilation:
+            from maou.app.learning.multi_stage_training import (
+                Stage3ModelAdapter,
+            )
+
             self.logger.info(
                 "Compiling model with torch.compile "
                 "(dynamic shapes disabled)"
             )
-            self.model = cast(
-                Network, compile_module(self.model)
-            )
+            adapter = Stage3ModelAdapter(self.model)
+            self._train_model = compile_module(adapter)
             dummy = torch.zeros(
                 config.batch_size,
                 9,
@@ -302,7 +309,7 @@ class Learning:
                 dtype=torch.int32,
                 device=self.device,
             )
-            warmup_compiled_model(self.model, dummy)
+            warmup_compiled_model(self._train_model, dummy)
         self.__train()
 
         train_ds = self.training_loader.dataset
@@ -477,7 +484,7 @@ class Learning:
 
         # Create training loop
         training_loop = TrainingLoop(
-            model=self.model,
+            model=self._train_model,
             device=self.device,
             optimizer=self.optimizer,
             loss_fn_policy=self.loss_fn_policy,
@@ -575,7 +582,7 @@ class Learning:
 
             # Create validation training loop
             validation_loop = TrainingLoop(
-                model=self.model,
+                model=self._train_model,
                 device=self.device,
                 optimizer=self.optimizer,
                 loss_fn_policy=self.loss_fn_policy,
@@ -903,12 +910,17 @@ class Learning:
         self.logger.info("\n".join(lines))
 
     def _load_component_state_dict(
-        self, state_dict: MutableMapping[str, torch.Tensor]
+        self,
+        state_dict: MutableMapping[str, torch.Tensor],
+        *,
+        component: str = "component",
     ) -> None:
         """Load component state_dict with partial loading support.
 
         Args:
             state_dict: Component state_dict (backbone，policy head，or value head)
+            component: コンポーネント名 (ログ出力用)．
+                ``"backbone"``，``"policy_head"``，``"value_head"`` など．
         """
         is_compiled = hasattr(self.model, "_orig_mod")
         has_prefix = any(
@@ -932,20 +944,32 @@ class Learning:
 
         try:
             # strict=Falseで部分読み込みを許可
+            # (backbone のみ / head のみのロードでは他コンポーネントのキーが
+            # missing になるため strict=True は使用できない)
             incompatible_keys = self.model.load_state_dict(
                 state_dict, strict=False
             )
             if incompatible_keys.missing_keys:
                 self.logger.info(
-                    f"Missing keys (expected for partial load): {incompatible_keys.missing_keys}"
+                    "Missing keys when loading %s "
+                    "(expected for partial load): %s",
+                    component,
+                    incompatible_keys.missing_keys,
                 )
             if incompatible_keys.unexpected_keys:
-                self.logger.warning(
-                    f"Unexpected keys in state_dict: {incompatible_keys.unexpected_keys}"
+                # unexpected_keys はモデルに存在しないキーを示す．
+                # アーキテクチャ不一致や誤ったチェックポイントの可能性が高い．
+                msg = (
+                    f"Unexpected keys when loading {component} "
+                    f"state_dict (possible architecture mismatch): "
+                    f"{incompatible_keys.unexpected_keys}"
                 )
+                self.logger.error(msg)
+                raise RuntimeError(msg)
         except RuntimeError as exc:
             self.logger.error(
-                "Failed to load component state_dict into model: %s",
+                "Failed to load %s state_dict into model: %s",
+                component,
                 exc,
             )
             raise
@@ -960,19 +984,25 @@ class Learning:
             backbone_dict = ModelIO.load_backbone(
                 config.resume_backbone_from, self.device
             )
-            self._load_component_state_dict(backbone_dict)
+            self._load_component_state_dict(
+                backbone_dict, component="backbone"
+            )
 
         if config.resume_policy_head_from is not None:
             policy_dict = ModelIO.load_policy_head(
                 config.resume_policy_head_from, self.device
             )
-            self._load_component_state_dict(policy_dict)
+            self._load_component_state_dict(
+                policy_dict, component="policy_head"
+            )
 
         if config.resume_value_head_from is not None:
             value_dict = ModelIO.load_value_head(
                 config.resume_value_head_from, self.device
             )
-            self._load_component_state_dict(value_dict)
+            self._load_component_state_dict(
+                value_dict, component="value_head"
+            )
 
     def _resolve_trainable_layers(self) -> Optional[int]:
         """Resolve effective trainable_layers from config options.

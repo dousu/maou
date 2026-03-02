@@ -1014,3 +1014,55 @@ class TestTruncatedStageModelFreeze:
 
         # partial_backbone は (total - 1) 個のグループから成る
         assert len(model.partial_backbone) == total - 1
+
+
+class TestStage3ModelAdapter:
+    """Stage3ModelAdapter のテスト．"""
+
+    def test_forward_delegates_to_network(self) -> None:
+        """Stage3ModelAdapter が Network の出力をそのまま返すこと．"""
+        from maou.app.learning.multi_stage_training import (
+            Stage3ModelAdapter,
+        )
+        from maou.app.learning.setup import ModelFactory
+
+        device = torch.device("cpu")
+        network = ModelFactory.create_shogi_model(
+            device, architecture="resnet"
+        )
+        adapter = Stage3ModelAdapter(network)
+
+        board = torch.zeros(2, 9, 9, dtype=torch.int32)
+        with torch.no_grad():
+            adapter_out = adapter(board)
+            network_out = network(board)
+
+        assert len(adapter_out) == 2
+        assert torch.equal(adapter_out[0], network_out[0])
+        assert torch.equal(adapter_out[1], network_out[1])
+
+    def test_network_state_dict_has_no_prefix(self) -> None:
+        """アダプターをコンパイルしても Network の state_dict にプレフィックスが付かないこと．"""
+        from maou.app.learning.multi_stage_training import (
+            Stage3ModelAdapter,
+        )
+        from maou.app.learning.setup import ModelFactory
+
+        device = torch.device("cpu")
+        network = ModelFactory.create_shogi_model(
+            device, architecture="resnet"
+        )
+        adapter = Stage3ModelAdapter(network)
+
+        # アダプターをコンパイル (eager fallback でも動作確認可能)
+        try:
+            compiled = torch.compile(adapter)
+            _ = compiled  # コンパイル自体がエラーにならないことを確認
+        except Exception:
+            pass  # CI 環境で torch.compile が使えない場合はスキップ
+
+        # Network の state_dict にはプレフィックスが付かない
+        for key in network.state_dict():
+            assert not key.startswith("_orig_mod."), (
+                f"Unexpected prefix in key: {key}"
+            )

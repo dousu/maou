@@ -1,5 +1,8 @@
 """Tests for model I/O utilities."""
 
+import tempfile
+from pathlib import Path
+
 import torch
 
 from maou.app.learning.model_io import ModelIO
@@ -243,3 +246,60 @@ def test_save_model_with_custom_architecture_config() -> None:
         ]
         assert len(fp32_files) == 1
         assert fp32_files[0].stat().st_size > 0
+
+
+# --- head ロード関数の _strip_orig_mod_prefix テスト ---
+
+
+def _save_state_dict_with_prefix(
+    state_dict: dict[str, torch.Tensor],
+) -> Path:
+    """_orig_mod. プレフィックス付きの state_dict を一時ファイルに保存する．"""
+    prefixed = {
+        f"_orig_mod.{k}": v for k, v in state_dict.items()
+    }
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".pt", delete=False
+    )
+    torch.save(prefixed, tmp.name)
+    return Path(tmp.name)
+
+
+def test_load_policy_head_strips_orig_mod_prefix() -> None:
+    """load_policy_head が _orig_mod. プレフィックスを除去すること．"""
+    original = {"0.weight": torch.randn(2, 3)}
+    path = _save_state_dict_with_prefix(original)
+    result = ModelIO.load_policy_head(path, torch.device("cpu"))
+    assert "0.weight" in result
+    assert not any(k.startswith("_orig_mod.") for k in result)
+
+
+def test_load_value_head_strips_orig_mod_prefix() -> None:
+    """load_value_head が _orig_mod. プレフィックスを除去すること．"""
+    original = {"0.weight": torch.randn(2, 3)}
+    path = _save_state_dict_with_prefix(original)
+    result = ModelIO.load_value_head(path, torch.device("cpu"))
+    assert "0.weight" in result
+    assert not any(k.startswith("_orig_mod.") for k in result)
+
+
+def test_load_reachable_head_strips_orig_mod_prefix() -> None:
+    """load_reachable_head が _orig_mod. プレフィックスを除去すること．"""
+    original = {"0.weight": torch.randn(2, 3)}
+    path = _save_state_dict_with_prefix(original)
+    result = ModelIO.load_reachable_head(
+        path, torch.device("cpu")
+    )
+    assert "0.weight" in result
+    assert not any(k.startswith("_orig_mod.") for k in result)
+
+
+def test_load_legal_moves_head_strips_orig_mod_prefix() -> None:
+    """load_legal_moves_head が _orig_mod. プレフィックスを除去すること．"""
+    original = {"0.weight": torch.randn(2, 3)}
+    path = _save_state_dict_with_prefix(original)
+    result = ModelIO.load_legal_moves_head(
+        path, torch.device("cpu")
+    )
+    assert "0.weight" in result
+    assert not any(k.startswith("_orig_mod.") for k in result)

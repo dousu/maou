@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         Stage1Dataset,
         Stage2Dataset,
     )
+    from maou.app.learning.network import Network
     from maou.app.learning.stage_component_factory import (
         StageComponents,
     )
@@ -71,6 +72,40 @@ class StageResult:
     final_loss: float
     epochs_trained: int
     threshold_met: bool
+
+
+class Stage3ModelAdapter(torch.nn.Module):
+    """Stage 3 用のモデルアダプタ．
+
+    Network 本体をラップし，``torch.compile()`` のターゲットとする．
+    アダプタをコンパイルすることで，Network 自体の ``state_dict()`` には
+    ``_orig_mod.`` プレフィックスが付かず，保存時の除去処理が不要になる．
+
+    Stage 1/2 と同じアダプタパターンにより，全ステージで一貫した
+    コンパイル戦略を実現する．
+
+    Args:
+        network: Stage 3 学習対象の Network モデル
+    """
+
+    def __init__(self, network: "Network") -> None:
+        super().__init__()
+        self.network = network
+
+    def forward(
+        self,
+        inputs: torch.Tensor
+        | tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """フォワードパスを Network に委譲する．
+
+        Args:
+            inputs: Network が受け取る入力 (board テンソルまたは (board, hand) タプル)
+
+        Returns:
+            (policy_logits, value_logit) のタプル
+        """
+        return self.network(inputs)
 
 
 class Stage1ModelAdapter(torch.nn.Module):
