@@ -205,9 +205,10 @@ class ModelIO:
         logger.info(
             f"Loading policy head parameters from {file_path}"
         )
-        return torch.load(
+        state_dict: dict[str, torch.Tensor] = torch.load(
             file_path, weights_only=True, map_location=device
         )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_value_head(
@@ -225,9 +226,10 @@ class ModelIO:
         logger.info(
             f"Loading value head parameters from {file_path}"
         )
-        return torch.load(
+        state_dict: dict[str, torch.Tensor] = torch.load(
             file_path, weights_only=True, map_location=device
         )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_reachable_head(
@@ -247,9 +249,10 @@ class ModelIO:
         logger.info(
             f"Loading reachable squares head parameters from {file_path}"
         )
-        return torch.load(
+        state_dict: dict[str, torch.Tensor] = torch.load(
             file_path, weights_only=True, map_location=device
         )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_legal_moves_head(
@@ -269,9 +272,10 @@ class ModelIO:
         logger.info(
             f"Loading legal moves head parameters from {file_path}"
         )
-        return torch.load(
+        state_dict: dict[str, torch.Tensor] = torch.load(
             file_path, weights_only=True, map_location=device
         )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def save_model(
