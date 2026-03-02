@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { workspace = true }
 arrow = { workspace = true }
+arrow-pyarrow = { workspace = true }
 maou_io = { path = "../maou_io" }
 maou_index = { path = "../maou_index" }
 
