@@ -794,13 +794,16 @@ class PreprocessingRecordRenderer(RecordRenderer):
     ) -> Dict[str, Any]:
         """表示フィールドを抽出する．
 
-        moveLabelから確率上位のUSI手リストを生成する．
+        moveLabelから確率上位のUSI手リストを生成し，
+        moveWinRateが存在する場合は勝率上位の手も表示する．
 
         Args:
             record: Preprocessingレコードデータ
 
         Returns:
-            id, result_value, top_moves, array_typeを含む辞書
+            id, result_value, top_moves, array_typeを含む辞書．
+            moveWinRateが存在する場合はbest_move_win_rate,
+            top_moves_by_win_rateも含む．
         """
         # moveLabel (MOVE_LABELS_NUM probabilities) → Top-K USI moves
         move_labels = record.get("moveLabel", [])
@@ -811,7 +814,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
             board, move_labels, threshold=0.01, top_k=5
         )
 
-        return {
+        result: Dict[str, Any] = {
             "id": record.get("id"),
             "result_value": record.get("resultValue"),
             "top_moves": ", ".join(
@@ -820,13 +823,33 @@ class PreprocessingRecordRenderer(RecordRenderer):
             "array_type": "preprocessing",
         }
 
+        # moveWinRate が存在する場合，勝率情報を追加
+        move_win_rates = record.get("moveWinRate")
+        if move_win_rates is not None:
+            result["best_move_win_rate"] = record.get(
+                "bestMoveWinRate"
+            )
+
+            # 勝率上位の手を表示
+            top_by_wr = self.move_converter.convert_probability_labels_to_usi(
+                board,
+                move_win_rates,
+                threshold=0.01,
+                top_k=5,
+            )
+            result["top_moves_by_win_rate"] = ", ".join(
+                f"{usi}({wr:.1%})" for usi, wr in top_by_wr
+            )
+
+        return result
+
     def get_table_columns(self) -> List[str]:
         """テーブルカラム名を取得する．
 
         Returns:
-            ["Index", "ID", "Result Value"]
+            ["Index", "ID", "Result Value", "Best Move WR"]
         """
-        return ["Index", "ID", "Result Value"]
+        return ["Index", "ID", "Result Value", "Best Move WR"]
 
     def format_table_row(
         self, index: int, record: Dict[str, Any]
@@ -838,18 +861,25 @@ class PreprocessingRecordRenderer(RecordRenderer):
             record: Preprocessingレコードデータ
 
         Returns:
-            [index, id, result_value]のリスト
+            [index, id, result_value, best_move_win_rate]のリスト
         """
+        best_wr = record.get("bestMoveWinRate")
+        best_wr_str = (
+            f"{best_wr:.2f}" if best_wr is not None else "-"
+        )
         return [
             index,
             record.get("id"),
             f"{record.get('resultValue', 0):.2f}",
+            best_wr_str,
         ]
 
     def generate_analytics(
         self, records: List[Dict[str, Any]]
     ) -> Optional["go.Figure"]:
         """Preprocessingデータから勝率分布チャートを生成する．
+
+        resultValueとbestMoveWinRate（存在する場合）の分布を表示する．
 
         Args:
             records: Preprocessingレコードのリスト
@@ -859,6 +889,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
         """
         try:
             import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
         except ImportError:
             return None
 
@@ -872,22 +903,65 @@ class PreprocessingRecordRenderer(RecordRenderer):
             if r.get("resultValue") is not None
         ]
 
-        # ヒストグラム作成
-        fig = go.Figure(
-            data=[
-                go.Histogram(
-                    x=result_values,
-                    marker_color="rgba(156,39,176,0.6)",
-                    nbinsx=20,
-                    name="勝率",
-                )
-            ]
+        # bestMoveWinRateを集計
+        best_wr_values = [
+            r.get("bestMoveWinRate", 0.0)
+            for r in records
+            if r.get("bestMoveWinRate") is not None
+        ]
+
+        has_best_wr = len(best_wr_values) > 0
+
+        result_hist = go.Histogram(
+            x=result_values,
+            marker_color="rgba(156,39,176,0.6)",
+            nbinsx=20,
+            name="勝率",
         )
 
+        if has_best_wr:
+            fig = make_subplots(
+                rows=1,
+                cols=2,
+                subplot_titles=(
+                    "勝率（Result Value）の分布",
+                    "最善手勝率（Best Move WR）の分布",
+                ),
+                horizontal_spacing=0.12,
+            )
+
+            fig.add_trace(result_hist, row=1, col=1)
+
+            fig.add_trace(
+                go.Histogram(
+                    x=best_wr_values,
+                    marker_color="rgba(33,150,243,0.6)",
+                    nbinsx=20,
+                    name="最善手勝率",
+                ),
+                row=1,
+                col=2,
+            )
+
+            fig.update_xaxes(title_text="勝率", row=1, col=1)
+            fig.update_xaxes(
+                title_text="最善手勝率", row=1, col=2
+            )
+            fig.update_yaxes(title_text="頻度", row=1, col=1)
+            fig.update_yaxes(title_text="頻度", row=1, col=2)
+        else:
+            fig = go.Figure(data=[result_hist])
+            fig.update_layout(
+                xaxis_title="勝率",
+                yaxis_title="頻度",
+            )
+
+        title = "勝率分布"
+        if has_best_wr:
+            title = "勝率分布（局面勝率 vs 最善手勝率）"
+
         fig.update_layout(
-            title="勝率（Result Value）の分布",
-            xaxis_title="勝率",
-            yaxis_title="頻度",
+            title=title,
             template="plotly_white",
             font=dict(family="system-ui", size=12),
             height=400,

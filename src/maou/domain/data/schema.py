@@ -462,6 +462,10 @@ def get_preprocessing_polars_schema() -> dict[
         "moveLabel": pl.List(
             pl.Float32
         ),  # MOVE_LABELS_NUM elements (fixed in Arrow)
+        "moveWinRate": pl.List(
+            pl.Float32
+        ),  # 1496 elements per-move win rates
+        "bestMoveWinRate": pl.Float32(),  # scalar best move win rate
         "resultValue": pl.Float32(),
     }
 

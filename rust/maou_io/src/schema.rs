@@ -67,6 +67,15 @@ pub fn preprocessing_schema() -> Schema {
             ),
             false,
         ),
+        Field::new(
+            "moveWinRate",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                1496,
+            ),
+            false,
+        ),
+        Field::new("bestMoveWinRate", DataType::Float32, false),
         Field::new("resultValue", DataType::Float32, false),
     ])
 }
@@ -86,7 +95,7 @@ mod tests {
     #[test]
     fn test_preprocessing_schema() {
         let schema = preprocessing_schema();
-        assert_eq!(schema.fields().len(), 5);
+        assert_eq!(schema.fields().len(), 7);
         assert_eq!(schema.field(0).name(), "id");
         assert_eq!(schema.field(1).name(), "boardIdPositions");
     }

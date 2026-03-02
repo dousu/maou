@@ -158,6 +158,7 @@ class PreProcess:
         feature_store: Optional[FeatureStore] = None,
         intermediate_cache_dir: Optional[Path] = None,
         intermediate_batch_size: int = 50_000,
+        win_rate_threshold: int = 2,
     ):
         """Initialize pre-processor.
 
@@ -167,11 +168,14 @@ class PreProcess:
             intermediate_cache_dir: Directory for intermediate data cache
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
+            win_rate_threshold: 局面の出現回数に対する閾値．
+                この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
         self.__intermediate_cache_dir = intermediate_cache_dir
         self.__intermediate_batch_size = intermediate_batch_size
+        self.__win_rate_threshold = win_rate_threshold
         self.intermediate_store = None
 
     @dataclass(kw_only=True, frozen=True)
@@ -243,6 +247,12 @@ class PreProcess:
                 sorted_move_labels[start_idx:end_idx],
                 minlength=MOVE_LABELS_NUM,
             )
+            # Per-move win counts (weighted by win value)
+            move_win_counts = np.bincount(
+                sorted_move_labels[start_idx:end_idx],
+                weights=sorted_wins[start_idx:end_idx],
+                minlength=MOVE_LABELS_NUM,
+            ).astype(np.float32)
             win_sum = np.sum(sorted_wins[start_idx:end_idx])
             count = end_idx - start_idx
 
@@ -258,6 +268,7 @@ class PreProcess:
                 "count": count,
                 "winCount": win_sum,
                 "moveLabelCount": move_counts,
+                "moveWinCount": move_win_counts,
                 "boardIdPositions": board_id_positions,
                 "piecesInHand": pieces_in_hand,
             }
@@ -298,6 +309,11 @@ class PreProcess:
                     ].tolist()
                     if hasattr(data["moveLabelCount"], "tolist")
                     else data["moveLabelCount"],
+                    "move_win_count": data[
+                        "moveWinCount"
+                    ].tolist()
+                    if hasattr(data["moveWinCount"], "tolist")
+                    else data["moveWinCount"],
                     "board_id_positions": data[
                         "boardIdPositions"
                     ].tolist()
@@ -319,6 +335,7 @@ class PreProcess:
                 "count": pl.Int32,
                 "win_count": pl.Float64,
                 "move_label_count": pl.List(pl.Int32),
+                "move_win_count": pl.List(pl.Float32),
                 "board_id_positions": pl.List(
                     pl.List(pl.UInt8)
                 ),
@@ -487,6 +504,7 @@ class PreProcess:
         self.intermediate_store = IntermediateDataStore(
             db_path=db_path,
             batch_size=self.__intermediate_batch_size,
+            win_rate_threshold=self.__win_rate_threshold,
         )
         self.logger.info(
             f"Initialized disk-based intermediate store at {db_path}"
