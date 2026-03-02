@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <3.13"
 resolution-markers = [
     "python_full_version >= '3.12' and extra != 'extra-4-maou-cpu' and extra != 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu'",
@@ -1388,7 +1388,7 @@ wheels = [
 
 [[package]]
 name = "maou"
-version = "0.5.2"
+version = "0.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
