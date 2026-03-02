@@ -10,7 +10,6 @@ from maou.infra.console.common import (
     HAS_GCS,
     BigQueryDataSource,
     BigQueryFeatureStore,
-    FileDataSource,
     FileSystem,
     GCSDataSource,
     GCSFeatureStore,
@@ -421,10 +420,13 @@ def pre_process(
                 work_dir=intermediate_cache_dir,
             )
 
-        datasource = FileDataSource(
+        # ストリーミングモード: 1ファイルずつ遅延ロードしてメモリ使用量を削減
+        from maou.infra.file_system.streaming_hcpe_source import (
+            StreamingHcpeDataSource,
+        )
+
+        datasource = StreamingHcpeDataSource(
             file_paths=input_paths,
-            array_type="hcpe",
-            bit_pack=input_file_packed,
         )
     else:
         error_msg = (
