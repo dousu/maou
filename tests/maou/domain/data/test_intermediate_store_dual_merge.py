@@ -131,6 +131,11 @@ class TestIntermediateStoreDualMerge:
             assert win_rates[10] == pytest.approx(0.5, rel=1e-5)
             assert win_rates[20] == pytest.approx(0.5, rel=1e-5)
             assert win_rates[30] == pytest.approx(1.0, rel=1e-5)
+
+            # bestMoveWinRate = max(0.5, 0.5, 1.0) = 1.0
+            assert result_df["bestMoveWinRate"][
+                0
+            ] == pytest.approx(1.0, rel=1e-5)
         finally:
             store.close()
 

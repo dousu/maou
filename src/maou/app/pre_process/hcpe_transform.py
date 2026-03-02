@@ -168,8 +168,8 @@ class PreProcess:
             intermediate_cache_dir: Directory for intermediate data cache
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
-            win_rate_threshold: 手の勝率を計算する際の最小出現回数．
-                この回数未満の手は勝率計算から除外される．デフォルトは2．
+            win_rate_threshold: 局面の出現回数に対する閾値．
+                この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource

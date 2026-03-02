@@ -385,8 +385,7 @@ class ValidationCallback(BaseCallback):
                         )
 
                     # policy_expected_win_rate: Σ softmax(logits)[i] × moveWinRate[i]
-                    # log_softmaxはCE計算で既に使われるが，ここではexpが必要なので
-                    # softmaxを直接呼ぶ方がexp(log_softmax)より効率的．
+                    # log_softmax + exp で softmax を得る(数値安定性のため)
                     log_probs = torch.log_softmax(logits, dim=1)
                     probs = log_probs.exp()
                     expected_wr = (probs * win_rate).sum(dim=1)

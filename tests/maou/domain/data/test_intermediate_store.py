@@ -531,7 +531,7 @@ class TestBatchAccumulation:
                     pl.lit(1.0).alias("win_count"),
                 ]
             )
-            # Set move_label_count[50] = 3
+            # Set move_label_count[50] = 3, move_win_count[50] = 1.0
             mlc1 = [0] * 1496
             mlc1[50] = 3
             row1 = row1.with_columns(
@@ -542,6 +542,7 @@ class TestBatchAccumulation:
                 )
             )
             mwc1 = [0.0] * 1496
+            mwc1[50] = 1.0
             row1 = row1.with_columns(
                 pl.Series(
                     "move_win_count",
@@ -565,7 +566,7 @@ class TestBatchAccumulation:
                     ),
                 ]
             )
-            # Set move_label_count[50] = 2
+            # Set move_label_count[50] = 2, move_win_count[50] = 0.5
             mlc2 = [0] * 1496
             mlc2[50] = 2
             row2 = row2.with_columns(
@@ -576,6 +577,7 @@ class TestBatchAccumulation:
                 )
             )
             mwc2 = [0.0] * 1496
+            mwc2[50] = 0.5
             row2 = row2.with_columns(
                 pl.Series(
                     "move_win_count",
@@ -606,6 +608,11 @@ class TestBatchAccumulation:
             assert result_df["moveLabel"][0][
                 50
             ] == pytest.approx(1.0)
+
+            # moveWinRate[50] = (1.0 + 0.5) / (3 + 2) = 0.3
+            assert result_df["moveWinRate"][0][
+                50
+            ] == pytest.approx(0.3, rel=1e-5)
 
 
 class TestUtilityFunctions:
