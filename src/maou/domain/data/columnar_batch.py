@@ -37,6 +37,8 @@ class ColumnarBatch:
             preprocessing用．Stage1/Stage2では ``None``．
         result_value: 対局結果値．shape: ``(N,)``，dtype: ``float16``．
             preprocessing用．Stage1/Stage2では ``None``．
+        move_win_rate: 指し手別勝率配列．shape: ``(N, MOVE_LABELS_NUM)``，dtype: ``float32``．
+            moveWinRateカラムが存在する場合のみ設定される．旧データでは ``None``．
         reachable_squares: 到達可能マス配列．shape: ``(N, 9, 9)``，dtype: ``uint8``．
             Stage1用．それ以外では ``None``．
         legal_moves_label: 合法手ラベル配列．shape: ``(N, MOVE_LABELS_NUM)``，dtype: ``uint8``．
@@ -47,6 +49,7 @@ class ColumnarBatch:
     pieces_in_hand: np.ndarray
     move_label: np.ndarray | None = None
     result_value: np.ndarray | None = None
+    move_win_rate: np.ndarray | None = None
     reachable_squares: np.ndarray | None = None
     legal_moves_label: np.ndarray | None = None
 
@@ -104,6 +107,16 @@ class ColumnarBatch:
                 ]
             )
 
+        move_win_rate: np.ndarray | None = None
+        if batches[0].move_win_rate is not None:
+            move_win_rate = np.concatenate(
+                [
+                    b.move_win_rate
+                    for b in batches
+                    if b.move_win_rate is not None
+                ]
+            )
+
         reachable_squares: np.ndarray | None = None
         if batches[0].reachable_squares is not None:
             reachable_squares = np.concatenate(
@@ -129,6 +142,7 @@ class ColumnarBatch:
             pieces_in_hand=pieces_in_hand,
             move_label=move_label,
             result_value=result_value,
+            move_win_rate=move_win_rate,
             reachable_squares=reachable_squares,
             legal_moves_label=legal_moves_label,
         )
@@ -155,6 +169,11 @@ class ColumnarBatch:
             result_value=(
                 self.result_value[indices]
                 if self.result_value is not None
+                else None
+            ),
+            move_win_rate=(
+                self.move_win_rate[indices]
+                if self.move_win_rate is not None
                 else None
             ),
             reachable_squares=(
@@ -216,11 +235,22 @@ def convert_preprocessing_df_to_columnar(
         df["resultValue"].to_numpy().astype(np.float16)
     )
 
+    move_win_rate: np.ndarray | None = None
+    if "moveWinRate" in df.columns:
+        move_win_rate = _explode_list_column(
+            df["moveWinRate"],
+            n,
+            (MOVE_LABELS_NUM,),
+            np.dtype(np.float32),
+            nest_depth=1,
+        )
+
     return ColumnarBatch(
         board_positions=board_positions,
         pieces_in_hand=pieces_in_hand,
         move_label=move_label,
         result_value=result_value,
+        move_win_rate=move_win_rate,
     )
 
 

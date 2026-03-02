@@ -91,6 +91,7 @@ ViTエンコーダのGPU活性化メモリを約93%削減するオプション�
 | --- | --- | --- |
 | `--gce-parameter FLOAT` | CLI default `0.1`, interface clamps to `(0,1]` with default `0.7` | Sets the generalized cross-entropy loss parameter.【F:src/maou/interface/learn.py†L179-L204】 |
 | `--policy-loss-ratio FLOAT` / `--value-loss-ratio FLOAT` | default `1.0` | Relative head weights; must be positive.【F:src/maou/interface/learn.py†L179-L204】 |
+| `--policy-target-mode {move-label,win-rate,weighted}` | `move-label` | Policy教師信号モード．`move-label`=棋譜中の選択頻度(moveLabel)，`win-rate`=指し手別勝率(moveWinRate)を正規化，`weighted`=moveLabel×moveWinRateを正規化．`win-rate`/`weighted`モードにはpreprocessパイプラインで`moveWinRate`カラムが生成されたデータが必要．旧データでは`move-label`のみ使用可能．|
 | `--learning-ratio FLOAT` | default `0.01` | Base learning rate supplied to the optimizer. Must be positive.【F:src/maou/interface/learn.py†L179-L204】 |
 | `--optimizer {adamw,sgd}` | default `adamw` | Normalized to lowercase and validated against supported names.【F:src/maou/interface/learn.py†L206-L221】 |
 | `--momentum FLOAT` | default `0.9` | Applies to SGD setups and must live inside `[0,1]`.【F:src/maou/interface/learn.py†L206-L221】 |

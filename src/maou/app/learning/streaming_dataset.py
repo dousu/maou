@@ -214,7 +214,12 @@ class StreamingKifDataset(IterableDataset):
     ) -> Iterator[
         tuple[
             tuple[torch.Tensor, torch.Tensor],
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            tuple[
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor | None,
+            ],
         ]
     ]:
         """バッチ単位でTensorをyieldするイテレータ．
@@ -226,7 +231,7 @@ class StreamingKifDataset(IterableDataset):
         担当ファイルのみを読み込む．
 
         Yields:
-            ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor))
+            ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor, move_win_rate_tensor))
         """
         # persistent_workers対応: worker_info.seedはエポックごとに変わる
         worker_info = torch.utils.data.get_worker_info()
@@ -701,7 +706,12 @@ def _yield_kif_batches(
 ) -> Generator[
     tuple[
         tuple[torch.Tensor, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor | None,
+        ],
     ],
     None,
     None,
@@ -715,7 +725,7 @@ def _yield_kif_batches(
         rng: 乱数生成器
 
     Yields:
-        ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor))
+        ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor, move_win_rate_tensor))
     """
     n = len(columnar_batch)
     if n == 0:
@@ -756,12 +766,19 @@ def _yield_kif_batches(
             move_label_tensor
         )
 
+        move_win_rate_tensor: torch.Tensor | None = None
+        if batch.move_win_rate is not None:
+            move_win_rate_tensor = torch.from_numpy(
+                batch.move_win_rate
+            ).clone()
+
         yield (
             (board_tensor, pieces_tensor),
             (
                 move_label_tensor,
                 result_value_tensor,
                 legal_move_mask_tensor,
+                move_win_rate_tensor,
             ),
         )
 

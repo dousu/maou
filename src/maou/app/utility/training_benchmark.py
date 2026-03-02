@@ -17,6 +17,7 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     Network,
 )
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import (
     DataLoaderFactory,
@@ -121,6 +122,7 @@ class SingleEpochBenchmark:
         loss_fn_value: 価値損失関数
         policy_loss_ratio: 方策損失の重み係数
         value_loss_ratio: 価値損失の重み係数
+        policy_target_mode: Policy教師信号モード
         enable_resource_monitoring: リソース監視を有効にするか
         training_loop_class: 使用するTrainingLoopクラス（デフォルト: TrainingLoop）
     """
@@ -137,6 +139,7 @@ class SingleEpochBenchmark:
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
+        policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
     ):
@@ -147,6 +150,7 @@ class SingleEpochBenchmark:
         self.loss_fn_value = loss_fn_value
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
+        self.policy_target_mode = policy_target_mode
         self.enable_resource_monitoring = (
             enable_resource_monitoring
         )
@@ -210,6 +214,7 @@ class SingleEpochBenchmark:
             loss_fn_value=self.loss_fn_value,
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
+            policy_target_mode=self.policy_target_mode,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -344,6 +349,7 @@ class SingleEpochBenchmark:
             loss_fn_value=self.loss_fn_value,
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
+            policy_target_mode=self.policy_target_mode,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -447,6 +453,9 @@ class TrainingBenchmarkConfig:
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
+    policy_target_mode: PolicyTargetMode = (
+        PolicyTargetMode.MOVE_LABEL
+    )
     learning_ratio: float = 0.01
     momentum: float = 0.9
     optimizer_name: str = "adamw"
@@ -1283,6 +1292,7 @@ class TrainingBenchmarkUseCase:
             loss_fn_value=model_components.loss_fn_value,
             policy_loss_ratio=config.policy_loss_ratio,
             value_loss_ratio=actual_value_loss_ratio,
+            policy_target_mode=config.policy_target_mode,
             enable_resource_monitoring=config.enable_resource_monitoring,
             training_loop_class=training_loop_class,
         )

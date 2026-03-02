@@ -99,6 +99,22 @@ fn add_sparse_arrays_rust(
 }
 
 #[pyfunction]
+fn add_sparse_arrays_dual_rust(
+    indices1: Vec<u16>,
+    label_values1: Vec<i32>,
+    win_values1: Vec<f32>,
+    indices2: Vec<u16>,
+    label_values2: Vec<i32>,
+    win_values2: Vec<f32>,
+) -> PyResult<(Vec<u16>, Vec<i32>, Vec<f32>)> {
+    maou_io_core::sparse_array::add_sparse_arrays_dual(
+        &indices1, &label_values1, &win_values1,
+        &indices2, &label_values2, &win_values2,
+    )
+    .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+}
+
+#[pyfunction]
 fn split_feather_file(
     py: Python,
     file_path: String,
@@ -148,6 +164,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(compress_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(expand_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(add_sparse_arrays_rust, &m)?)?;
+    m.add_function(wrap_pyfunction!(add_sparse_arrays_dual_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(split_feather_file, &m)?)?;
     m.add_function(wrap_pyfunction!(merge_feather_files, &m)?)?;
 

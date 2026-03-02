@@ -90,6 +90,71 @@ class FakePreprocessingSource:
                 yield batch
 
 
+class FakePreprocessingSourceWithWinRate:
+    """Fake source for preprocessing data with move_win_rate."""
+
+    def __init__(
+        self, *, n_files: int = 2, rows_per_file: int = 10
+    ) -> None:
+        self._n_files = n_files
+        self._rows_per_file = rows_per_file
+        self._file_paths = [
+            Path(f"/fake/wr_file_{i}.feather")
+            for i in range(n_files)
+        ]
+
+    @property
+    def file_paths(self) -> list[Path]:
+        return list(self._file_paths)
+
+    @property
+    def total_rows(self) -> int:
+        return self._n_files * self._rows_per_file
+
+    @property
+    def row_counts(self) -> list[int]:
+        return [self._rows_per_file] * self._n_files
+
+    def _make_batch(
+        self, rng: np.random.Generator
+    ) -> ColumnarBatch:
+        n = self._rows_per_file
+        return ColumnarBatch(
+            board_positions=rng.integers(
+                0, 30, size=(n, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=rng.integers(
+                0, 5, size=(n, 14), dtype=np.uint8
+            ),
+            move_label=rng.random((n, MOVE_LABELS_NUM)).astype(
+                np.float16
+            ),
+            result_value=rng.random(n).astype(np.float16),
+            move_win_rate=rng.random(
+                (n, MOVE_LABELS_NUM)
+            ).astype(np.float32),
+        )
+
+    def iter_files_columnar(
+        self,
+    ) -> Generator[ColumnarBatch, None, None]:
+        rng = np.random.default_rng(321)
+        for i in range(self._n_files):
+            yield self._make_batch(rng)
+
+    def iter_files_columnar_subset(
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        rng = np.random.default_rng(321)
+        all_paths = self._file_paths
+        target_set = set(str(fp) for fp in file_paths)
+        for fp in all_paths:
+            batch = self._make_batch(rng)
+            if str(fp) in target_set:
+                yield batch
+
+
 class FakeStage1Source:
     """Fake source for stage1 data tests."""
 
@@ -261,7 +326,9 @@ class TestStreamingKifDataset:
 
         features, targets = batches[0]
         board, pieces = features
-        move_label, result_value, legal_mask = targets
+        move_label, result_value, legal_mask, move_win_rate = (
+            targets
+        )
 
         assert board.shape == (4, 9, 9)
         assert board.dtype == torch.uint8
@@ -395,6 +462,65 @@ class TestStreamingKifDataset:
 
         _, targets = list(dataset)[0]
         assert torch.all(targets[2] == 1.0)
+
+
+class TestStreamingKifDatasetMoveWinRate:
+    """Test StreamingKifDataset with move_win_rate."""
+
+    def test_move_win_rate_present(self) -> None:
+        """4th target element is a tensor when move_win_rate exists."""
+        source = FakePreprocessingSourceWithWinRate(
+            n_files=1, rows_per_file=6
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=6,
+            shuffle=False,
+            seed=42,
+        )
+
+        batches = list(dataset)
+        _, targets = batches[0]
+        move_label, result_value, legal_mask, move_win_rate = (
+            targets
+        )
+
+        assert move_win_rate is not None
+        assert move_win_rate.shape == (6, MOVE_LABELS_NUM)
+        assert move_win_rate.dtype == torch.float32
+
+    def test_move_win_rate_absent(self) -> None:
+        """4th target element is None when move_win_rate is absent."""
+        source = FakePreprocessingSource(
+            n_files=1, rows_per_file=5
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+
+        batches = list(dataset)
+        _, targets = batches[0]
+        assert targets[3] is None
+
+    def test_move_win_rate_values_nonzero(self) -> None:
+        """move_win_rate tensor has non-trivial values."""
+        source = FakePreprocessingSourceWithWinRate(
+            n_files=1, rows_per_file=5
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=5,
+            shuffle=False,
+            seed=42,
+        )
+
+        batches = list(dataset)
+        _, targets = batches[0]
+        assert targets[3] is not None
+        assert targets[3].sum() > 0
 
 
 # ============================================================================
@@ -874,7 +1000,7 @@ class TestZeroCopyOptimization:
         batches = list(dataset)
         features, targets = batches[0]
         board, pieces = features
-        move_label, result_value, _ = targets
+        move_label, result_value, *_ = targets
 
         # Values should be non-trivial (not all zeros)
         assert board.sum() > 0
@@ -1120,6 +1246,6 @@ def test_streaming_kif_dataset_normal_operation_with_exception_handling() -> (
     batches = list(dataset)
     # 2 files × 10 rows / 5 batch_size = 4 batches
     assert len(batches) == 4
-    for (board, pieces), (move, value, mask) in batches:
+    for (board, pieces), (move, value, mask, _) in batches:
         assert board.shape[0] == 5
         assert pieces.shape[0] == 5

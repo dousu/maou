@@ -21,6 +21,11 @@ from maou.app.learning.resource_monitor import (
 ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
 
 
+def _safe_average(total: float, count: int) -> Optional[float]:
+    """countが正の場合のみ平均を返す．countが0ならNone．"""
+    return total / count if count > 0 else None
+
+
 @dataclass
 class TrainingContext:
     """Training context passed to callbacks."""
@@ -36,6 +41,7 @@ class TrainingContext:
     loss: Optional[torch.Tensor] = None
     batch_size: Optional[int] = None
     policy_target_distribution: Optional[torch.Tensor] = None
+    move_win_rate: Optional[torch.Tensor] = None
 
 
 class TrainingCallback(Protocol):
@@ -243,6 +249,9 @@ class ValidationMetrics:
     policy_top5_accuracy: float
     policy_f1_score: float
     value_high_confidence_rate: float
+    policy_top1_win_rate: Optional[float] = None
+    policy_move_label_ce: Optional[float] = None
+    policy_expected_win_rate: Optional[float] = None
 
 
 class ValidationCallback(BaseCallback):
@@ -263,6 +272,12 @@ class ValidationCallback(BaseCallback):
         self.policy_f1_true_positives = 0
         self.policy_f1_false_positives = 0
         self.policy_f1_false_negatives = 0
+        # move_win_rate metrics
+        self.policy_top1_win_rate_sum = 0.0
+        self.policy_move_label_ce_sum = 0.0
+        self.policy_move_label_ce_count = 0
+        self.policy_expected_win_rate_sum = 0.0
+        self.move_win_rate_sample_count = 0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -333,6 +348,51 @@ class ValidationCallback(BaseCallback):
                 )
             self.batch_count += 1
 
+            # move_win_rate metrics
+            if context.move_win_rate is not None:
+                with torch.no_grad():
+                    win_rate = context.move_win_rate
+                    logits = context.outputs_policy
+                    batch_n = int(logits.size(0))
+                    self.move_win_rate_sample_count += batch_n
+
+                    # policy_top1_win_rate: top-1予測手の実勝率
+                    top1_indices = logits.argmax(dim=1)
+                    top1_win_rates = win_rate.gather(
+                        1, top1_indices.unsqueeze(1)
+                    ).squeeze(1)
+                    self.policy_top1_win_rate_sum += float(
+                        top1_win_rates.sum().item()
+                    )
+
+                    # policy_move_label_ce: moveLabelとのCE(参考値)
+                    # legal_move_maskがある場合のみ計算する．
+                    # maskなしで正規化したmoveLabelはマスク付き確率空間と不整合になるため．
+                    if context.legal_move_mask is not None:
+                        move_label_targets = (
+                            normalize_policy_targets(
+                                context.labels_policy,
+                                context.legal_move_mask,
+                            )
+                        )
+                        self.policy_move_label_ce_sum += (
+                            self._policy_cross_entropy(
+                                logits, move_label_targets
+                            )
+                        )
+                        self.policy_move_label_ce_count += (
+                            batch_n
+                        )
+
+                    # policy_expected_win_rate: Σ softmax(logits)[i] × moveWinRate[i]
+                    # log_softmax + exp で softmax を得る(数値安定性のため)
+                    log_probs = torch.log_softmax(logits, dim=1)
+                    probs = log_probs.exp()
+                    expected_wr = (probs * win_rate).sum(dim=1)
+                    self.policy_expected_win_rate_sum += float(
+                        expected_wr.sum().item()
+                    )
+
     def get_average_loss(self) -> float:
         """Get average validation loss."""
         return float(self.running_vloss) / float(
@@ -360,12 +420,29 @@ class ValidationCallback(BaseCallback):
         ) / float(
             max(1, self.value_high_confidence_prediction_count)
         )
+        # move_win_rate metrics (None when data lacks moveWinRate)
+        policy_top1_win_rate = _safe_average(
+            self.policy_top1_win_rate_sum,
+            self.move_win_rate_sample_count,
+        )
+        policy_move_label_ce = _safe_average(
+            self.policy_move_label_ce_sum,
+            self.policy_move_label_ce_count,
+        )
+        policy_expected_win_rate = _safe_average(
+            self.policy_expected_win_rate_sum,
+            self.move_win_rate_sample_count,
+        )
+
         return ValidationMetrics(
             policy_cross_entropy=avg_policy_cross_entropy,
             value_brier_score=avg_value_brier,
             policy_top5_accuracy=policy_top5_accuracy,
             policy_f1_score=policy_f1,
             value_high_confidence_rate=value_high_confidence_rate,
+            policy_top1_win_rate=policy_top1_win_rate,
+            policy_move_label_ce=policy_move_label_ce,
+            policy_expected_win_rate=policy_expected_win_rate,
         )
 
     def reset(self) -> None:
@@ -383,6 +460,12 @@ class ValidationCallback(BaseCallback):
         self.policy_f1_true_positives = 0
         self.policy_f1_false_positives = 0
         self.policy_f1_false_negatives = 0
+        # move_win_rate metrics
+        self.policy_top1_win_rate_sum = 0.0
+        self.policy_move_label_ce_sum = 0.0
+        self.policy_move_label_ce_count = 0
+        self.policy_expected_win_rate_sum = 0.0
+        self.move_win_rate_sample_count = 0
 
     def _policy_cross_entropy(
         self,

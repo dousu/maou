@@ -11,19 +11,40 @@ from pathlib import Path
 from typing import Dict, Generator, Optional
 
 import duckdb
+import duckdb.typing
 import numpy as np
 import polars as pl
 
 from maou._rust.maou_io import (
-    add_sparse_arrays_rust,
+    add_sparse_arrays_dual_rust,
     compress_sparse_array_rust,
     expand_sparse_array_rust,
 )
 from maou.domain.data.schema import (
     get_preprocessing_polars_schema,
 )
+from maou.domain.move.label import MOVE_LABELS_NUM
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _sum_nested_lists(
+    nested: list[list[list[int | float]]],
+    dtype: type[np.integer] | type[np.floating],
+) -> list[list[int | float]]:
+    """ネストされたリストを要素ごとに合計する．
+
+    group_byの結果として得られる List[List[T]] を
+    要素ごとに合計して List[T] に変換する．
+    """
+    result: list[list[int | float]] = []
+    for group in nested:
+        if len(group) == 1:
+            result.append(group[0])
+        else:
+            arr = np.array(group, dtype=dtype)
+            result.append(arr.sum(axis=0).tolist())
+    return result
 
 
 def get_disk_usage(path: Path) -> tuple[int, int, int]:
@@ -129,6 +150,7 @@ class IntermediateDataStore:
         self,
         db_path: Path,
         batch_size: int = 50_000,
+        win_rate_threshold: int = 2,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -138,6 +160,8 @@ class IntermediateDataStore:
             batch_size: Number of records to accumulate before flushing to DuckDB.
                 Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
+            win_rate_threshold: 指し手別勝率を計算する最小出現回数．
+                出現回数がこの閾値未満の場合，均一分布にフォールバックする．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         self.db_path = db_path
@@ -145,6 +169,7 @@ class IntermediateDataStore:
         self.enable_vacuum = (
             enable_vacuum  # Unused but kept for compatibility
         )
+        self._win_rate_threshold = win_rate_threshold
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
@@ -165,10 +190,11 @@ class IntermediateDataStore:
                 hash_id UBIGINT PRIMARY KEY,
                 count INTEGER NOT NULL,
                 win_count FLOAT NOT NULL,
-                move_label_indices USMALLINT[] NOT NULL,  -- Sparse: non-zero indices
-                move_label_values INTEGER[] NOT NULL,     -- Sparse: corresponding values
-                board_id_positions UTINYINT[][] NOT NULL, -- 9x9 board
-                pieces_in_hand UTINYINT[] NOT NULL        -- 14 pieces
+                move_label_indices USMALLINT[] NOT NULL,
+                move_label_values INTEGER[] NOT NULL,
+                move_win_values FLOAT[] NOT NULL,
+                board_id_positions UTINYINT[][] NOT NULL,
+                pieces_in_hand UTINYINT[] NOT NULL
             )
             """
         )
@@ -179,38 +205,55 @@ class IntermediateDataStore:
         )
 
     def _register_udfs(self) -> None:
-        """Register Rust-backed UDFs for sparse array merging in DuckDB."""
+        """Register Rust-backed UDFs for sparse array merging in DuckDB.
+
+        単一のUDF ``merge_dual_all`` でインデックス・ラベル値・勝率値を一度に計算する．
+        Rustの ``add_sparse_arrays_dual_rust`` を1回だけ呼び出し，
+        STRUCTとして返すことで3カラム更新の冗長な計算を排除する．
+        """
         assert self._conn is not None
 
-        def _merge_sparse_indices(
+        def _merge_dual_all(
             ei: list[int],
-            ev: list[int],
             ni: list[int],
-            nv: list[int],
-        ) -> list[int]:
-            merged_indices, _ = add_sparse_arrays_rust(
-                list(ei), list(ev), list(ni), list(nv)
+            elv: list[int],
+            nlv: list[int],
+            ewv: list[float],
+            nwv: list[float],
+        ) -> dict:
+            """Rust UDFを1回呼び出してindices/label_values/win_valuesを返す．"""
+            merged_i, merged_lv, merged_wv = (
+                add_sparse_arrays_dual_rust(
+                    list(ei),
+                    list(elv),
+                    list(ewv),
+                    list(ni),
+                    list(nlv),
+                    list(nwv),
+                )
             )
-            return list(merged_indices)
-
-        def _merge_sparse_values(
-            ei: list[int],
-            ev: list[int],
-            ni: list[int],
-            nv: list[int],
-        ) -> list[int]:
-            _, merged_values = add_sparse_arrays_rust(
-                list(ei), list(ev), list(ni), list(nv)
-            )
-            return list(merged_values)
+            return {
+                "indices": list(merged_i),
+                "label_values": list(merged_lv),
+                "win_values": list(merged_wv),
+            }
 
         self._conn.create_function(
-            "merge_sparse_indices",
-            _merge_sparse_indices,
-        )
-        self._conn.create_function(
-            "merge_sparse_values",
-            _merge_sparse_values,
+            "merge_dual_all",
+            _merge_dual_all,
+            return_type=duckdb.struct_type(
+                {
+                    "indices": duckdb.list_type(
+                        duckdb.type("USMALLINT")
+                    ),
+                    "label_values": duckdb.list_type(
+                        duckdb.type("INTEGER")
+                    ),
+                    "win_values": duckdb.list_type(
+                        duckdb.type("FLOAT")
+                    ),
+                }
+            ),
         )
 
     @staticmethod
@@ -239,24 +282,33 @@ class IntermediateDataStore:
                 pl.col("board_id_positions").first(),
                 pl.col("pieces_in_hand").first(),
                 pl.col("move_label_count"),
+                pl.col("move_win_count"),
             ]
         )
 
-        # move_label_count: List[List[Int32]] → 要素ごとの合計
-        mlc_summed: list[list[int]] = []
-        for mlc_nested in agg_df["move_label_count"].to_list():
-            if len(mlc_nested) == 1:
-                mlc_summed.append(mlc_nested[0])
-            else:
-                arr = np.array(mlc_nested, dtype=np.int32)
-                mlc_summed.append(arr.sum(axis=0).tolist())
+        # move_label_count / move_win_count: List[List[T]] → 要素ごとの合計
+        mlc_summed = _sum_nested_lists(
+            agg_df["move_label_count"].to_list(), np.int32
+        )
+        mwc_summed = _sum_nested_lists(
+            agg_df["move_win_count"].to_list(), np.float32
+        )
 
-        result = agg_df.drop("move_label_count").with_columns(
-            pl.Series(
-                "move_label_count",
-                mlc_summed,
-                dtype=pl.List(pl.Int32),
-            )
+        result = agg_df.drop(
+            "move_label_count", "move_win_count"
+        ).with_columns(
+            [
+                pl.Series(
+                    "move_label_count",
+                    mlc_summed,
+                    dtype=pl.List(pl.Int32),
+                ),
+                pl.Series(
+                    "move_win_count",
+                    mwc_summed,
+                    dtype=pl.List(pl.Float32),
+                ),
+            ]
         )
 
         logger.debug(
@@ -279,6 +331,7 @@ class IntermediateDataStore:
                 - count: int32
                 - win_count: float64
                 - move_label_count: list[int32]  # 1496 elements (dense)
+                - move_win_count: list[float32]  # 1496 elements (dense)
                 - board_id_positions: list[list[uint8]]  # 9x9 board
                 - pieces_in_hand: list[uint8]  # 14 elements
 
@@ -297,14 +350,21 @@ class IntermediateDataStore:
         # Compress dense move_label_count to sparse format per row
         indices_list: list[list[int]] = []
         values_list: list[list[int]] = []
-        for move_label_count in df[
-            "move_label_count"
-        ].to_list():
+        win_values_list: list[list[float]] = []
+        for move_label_count, move_win_count in zip(
+            df["move_label_count"].to_list(),
+            df["move_win_count"].to_list(),
+        ):
             indices, values = compress_sparse_array_rust(
                 move_label_count
             )
+            # Extract win values at the same indices (shared sparsity)
+            win_values = [
+                float(move_win_count[i]) for i in indices
+            ]
             indices_list.append(list(indices))
             values_list.append(list(values))
+            win_values_list.append(win_values)
 
         # Build DataFrame with sparse columns for DuckDB
         batch_df = df.select(
@@ -327,6 +387,11 @@ class IntermediateDataStore:
                     values_list,
                     dtype=pl.List(pl.Int32),
                 ),
+                pl.Series(
+                    "move_win_values",
+                    win_values_list,
+                    dtype=pl.List(pl.Float32),
+                ),
             ]
         )
 
@@ -334,27 +399,49 @@ class IntermediateDataStore:
             # Register Polars DataFrame as DuckDB view
             self._conn.register("batch_df", batch_df.to_arrow())
 
-            # Single SQL UPSERT: insert new records or merge with existing
+            # Step 1: 既存レコードとのマージ (merge_dual_allは1行1回だけ呼ばれる)
+            # MATERIALIZED CTEでmerge_dual_allの結果を実体化し，
+            # STRUCTフィールドを参照するだけで3カラムを更新する．
+            self._conn.execute(
+                """
+                WITH merged_updates AS MATERIALIZED (
+                    SELECT
+                        b.hash_id,
+                        e.count + b.count AS new_count,
+                        e.win_count + b.win_count AS new_win_count,
+                        merge_dual_all(
+                            e.move_label_indices, b.move_label_indices,
+                            e.move_label_values,  b.move_label_values,
+                            e.move_win_values,    b.move_win_values
+                        ) AS merged
+                    FROM batch_df b
+                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
+                )
+                UPDATE intermediate_data
+                SET
+                    count              = m.new_count,
+                    win_count          = m.new_win_count,
+                    move_label_indices = m.merged.indices,
+                    move_label_values  = m.merged.label_values,
+                    move_win_values    = m.merged.win_values
+                FROM merged_updates m
+                WHERE intermediate_data.hash_id = m.hash_id
+                """
+            )
+
+            # Step 2: 新規レコードの挿入
             self._conn.execute(
                 """
                 INSERT INTO intermediate_data
-                SELECT hash_id, count, win_count,
-                       move_label_indices, move_label_values,
-                       board_id_positions, pieces_in_hand
-                FROM batch_df
-                ON CONFLICT (hash_id) DO UPDATE SET
-                    count = intermediate_data.count + excluded.count,
-                    win_count = intermediate_data.win_count + excluded.win_count,
-                    move_label_indices = merge_sparse_indices(
-                        intermediate_data.move_label_indices,
-                        intermediate_data.move_label_values,
-                        excluded.move_label_indices,
-                        excluded.move_label_values),
-                    move_label_values = merge_sparse_values(
-                        intermediate_data.move_label_indices,
-                        intermediate_data.move_label_values,
-                        excluded.move_label_indices,
-                        excluded.move_label_values)
+                SELECT b.hash_id, b.count, b.win_count,
+                       b.move_label_indices, b.move_label_values,
+                       b.move_win_values,
+                       b.board_id_positions, b.pieces_in_hand
+                FROM batch_df b
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM intermediate_data e
+                    WHERE e.hash_id = b.hash_id
+                )
                 """
             )
 
@@ -531,6 +618,67 @@ class IntermediateDataStore:
             result.append(normalized)
         return result
 
+    def _compute_move_win_rates(
+        self,
+        indices_col: list[list[int]],
+        label_values_col: list[list[int]],
+        win_values_col: list[list[float]],
+        counts: list[int],
+    ) -> tuple[list[list[float]], list[float]]:
+        """指し手別勝率を計算する(フォールバック適用済み)．
+
+        Args:
+            indices_col: 各局面のスパースインデックス
+            label_values_col: 各局面の指し手出現回数(スパース値)
+            win_values_col: 各局面の指し手別勝ち数(スパース値)
+            counts: 各局面の出現回数
+
+        Returns:
+            (move_win_rates, best_move_win_rates):
+                move_win_rates: 1496要素のfloat配列のリスト
+                best_move_win_rates: 各局面の最大勝率のリスト
+        """
+        move_win_rates: list[list[float]] = []
+        best_move_win_rates: list[float] = []
+
+        for indices, label_values, win_values, count in zip(
+            indices_col,
+            label_values_col,
+            win_values_col,
+            counts,
+        ):
+            dense = np.zeros(MOVE_LABELS_NUM, dtype=np.float32)
+
+            if count < self._win_rate_threshold:
+                # Fallback: 1/N uniform distribution over legal moves
+                n_legal = len(indices)
+                if n_legal > 0:
+                    uniform_rate = 1.0 / n_legal
+                    np_indices = np.array(
+                        indices, dtype=np.intp
+                    )
+                    dense[np_indices] = uniform_rate
+                    best_move_win_rates.append(0.5)
+                else:
+                    best_move_win_rates.append(0.0)
+            else:
+                # Normal: moveWinRate[i] = win_count[i] / label_count[i]
+                np_indices = np.array(indices, dtype=np.intp)
+                np_lv = np.array(label_values, dtype=np.float32)
+                np_wv = np.array(win_values, dtype=np.float32)
+                mask = np_lv > 0
+                rates = np.where(mask, np_wv / np_lv, 0.0)
+                dense[np_indices] = rates
+                best_move_win_rates.append(
+                    float(rates.max())
+                    if len(rates) > 0
+                    else 0.0
+                )
+
+            move_win_rates.append(dense.tolist())
+
+        return move_win_rates, best_move_win_rates
+
     def _read_chunk_as_polars(
         self, limit: int, offset: int
     ) -> pl.DataFrame:
@@ -548,6 +696,7 @@ class IntermediateDataStore:
             """
             SELECT hash_id, count, win_count,
                    move_label_indices, move_label_values,
+                   move_win_values,
                    board_id_positions, pieces_in_hand
             FROM intermediate_data
             ORDER BY hash_id
@@ -569,11 +718,28 @@ class IntermediateDataStore:
         Returns:
             最終形式のPreprocessing DataFrame
         """
+        # 共通カラムを一度だけPythonリストに変換する
+        indices_list = raw_df["move_label_indices"].to_list()
+        label_values_list = raw_df[
+            "move_label_values"
+        ].to_list()
+        count_list = raw_df["count"].to_list()
+
         # バッチでsparse展開と正規化
         move_labels = self._expand_and_normalize_move_labels(
-            raw_df["move_label_indices"].to_list(),
-            raw_df["move_label_values"].to_list(),
-            raw_df["count"].to_list(),
+            indices_list,
+            label_values_list,
+            count_list,
+        )
+
+        # 指し手別勝率を計算(フォールバック適用済み)
+        move_win_rates, best_move_win_rates = (
+            self._compute_move_win_rates(
+                indices_list,
+                label_values_list,
+                raw_df["move_win_values"].to_list(),
+                count_list,
+            )
         )
 
         # resultValue = win_count / count
@@ -589,6 +755,14 @@ class IntermediateDataStore:
                 "moveLabel": pl.Series(
                     move_labels,
                     dtype=pl.List(pl.Float32),
+                ),
+                "moveWinRate": pl.Series(
+                    move_win_rates,
+                    dtype=pl.List(pl.Float32),
+                ),
+                "bestMoveWinRate": pl.Series(
+                    best_move_win_rates,
+                    dtype=pl.Float32,
                 ),
                 "resultValue": result_values.cast(pl.Float32),
             },
