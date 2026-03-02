@@ -2,7 +2,7 @@
 
 use pyo3::prelude::*;
 use arrow::array::RecordBatch;
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use ::maou_io as maou_io_core;
 use maou_io_core::MaouIOError;
 
@@ -14,7 +14,7 @@ fn hello() -> PyResult<String> {
 #[pyfunction]
 fn save_hcpe_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+    py.detach(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -22,9 +22,9 @@ fn save_hcpe_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) ->
 }
 
 #[pyfunction]
-fn load_hcpe_feather(py: Python, file_path: String) -> PyResult<PyObject> {
+fn load_hcpe_feather<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<'py, PyAny>> {
     let batch = py
-        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .detach(|| maou_io_core::arrow_io::load_feather(&file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -34,7 +34,7 @@ fn load_hcpe_feather(py: Python, file_path: String) -> PyResult<PyObject> {
 #[pyfunction]
 fn save_preprocessing_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+    py.detach(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -42,9 +42,9 @@ fn save_preprocessing_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: S
 }
 
 #[pyfunction]
-fn load_preprocessing_feather(py: Python, file_path: String) -> PyResult<PyObject> {
+fn load_preprocessing_feather<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<'py, PyAny>> {
     let batch = py
-        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .detach(|| maou_io_core::arrow_io::load_feather(&file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -56,7 +56,7 @@ fn load_preprocessing_feather(py: Python, file_path: String) -> PyResult<PyObjec
 #[pyfunction]
 fn save_feather_file(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
-    py.allow_threads(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
+    py.detach(|| maou_io_core::arrow_io::save_feather(&batch, &file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -64,9 +64,9 @@ fn save_feather_file(py: Python, batch: &Bound<'_, PyAny>, file_path: String) ->
 }
 
 #[pyfunction]
-fn load_feather_file(py: Python, file_path: String) -> PyResult<PyObject> {
+fn load_feather_file<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<'py, PyAny>> {
     let batch = py
-        .allow_threads(|| maou_io_core::arrow_io::load_feather(&file_path))
+        .detach(|| maou_io_core::arrow_io::load_feather(&file_path))
         .map_err(|e: MaouIOError| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())
         })?;
@@ -121,7 +121,7 @@ fn split_feather_file(
     output_dir: String,
     rows_per_file: usize,
 ) -> PyResult<Vec<String>> {
-    py.allow_threads(|| {
+    py.detach(|| {
         maou_io_core::arrow_io::split_feather(&file_path, &output_dir, rows_per_file)
     })
     .map_err(|e: MaouIOError| {
@@ -137,7 +137,7 @@ fn merge_feather_files(
     rows_per_chunk: usize,
     output_prefix: String,
 ) -> PyResult<Vec<String>> {
-    py.allow_threads(|| {
+    py.detach(|| {
         maou_io_core::arrow_io::merge_feather_files(
             &file_paths,
             &output_dir,
@@ -152,7 +152,7 @@ fn merge_feather_files(
 
 /// Create maou_io submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let m = PyModule::new_bound(py, "maou_io")?;
+    let m = PyModule::new(py, "maou_io")?;
 
     m.add_function(wrap_pyfunction!(hello, &m)?)?;
     m.add_function(wrap_pyfunction!(save_hcpe_feather, &m)?)?;

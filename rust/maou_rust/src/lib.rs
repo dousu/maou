@@ -20,11 +20,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&maou_index::create_module(py)?)?;
 
     // Register submodules in sys.modules for proper importing
-    py.import_bound("sys")?
+    py.import("sys")?
         .getattr("modules")?
         .set_item("maou._rust.maou_io", m.getattr("maou_io")?)?;
 
-    py.import_bound("sys")?
+    py.import("sys")?
         .getattr("modules")?
         .set_item("maou._rust.maou_index", m.getattr("maou_index")?)?;
 

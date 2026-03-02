@@ -3,11 +3,11 @@ members = ["rust/maou_io", "rust/maou_rust", "rust/maou_index"]
 resolver = "2"
 
 [workspace.dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
-pyo3-polars = { version = "0.19" }
-polars = { version = "0.45", features = [
+pyo3 = { version = "0.28", features = ["extension-module"] }
+polars = { version = "0.53", features = [
     "lazy",
     "ipc",
+    "parquet",  # Required by polars-stream 0.53 when ipc is enabled
     # Only include optional dtypes actually used (analyzed from schema.py and index.rs)
     # This replaces dtype-full which compiles 18+ optional dtypes
     # Note: Core types (i32, i64, u32, u64, f32, f64) are always available
@@ -18,7 +18,8 @@ polars = { version = "0.45", features = [
     "dtype-date",  # Used for timestamp fields
     # u64 is a core type, no feature flag needed
 ] }
-arrow = { version = "53.0", features = ["ipc", "ipc_compression", "pyarrow"] }
+arrow = { version = "58.0", features = ["ipc", "ipc_compression"] }
+arrow-pyarrow = { version = "58.0" }
 thiserror = "2.0"
 tempfile = "3.26"
 
