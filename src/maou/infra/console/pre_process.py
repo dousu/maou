@@ -10,7 +10,6 @@ from maou.infra.console.common import (
     HAS_GCS,
     BigQueryDataSource,
     BigQueryFeatureStore,
-    FileDataSource,
     FileSystem,
     GCSDataSource,
     GCSFeatureStore,
@@ -32,7 +31,7 @@ from maou.infra.console.common import (
     "--input-file-packed",
     type=bool,
     is_flag=True,
-    help="Enable unpacking local numpy file.",
+    help="[Deprecated] Enable unpacking local numpy file. This option has no effect.",
     default=False,
     required=False,
 )
@@ -296,6 +295,16 @@ def pre_process(
     input_split_rows: int,
     win_rate_threshold: int,
 ) -> None:
+    import warnings
+
+    if input_file_packed:
+        warnings.warn(
+            "--input-file-packed is deprecated and has no effect. "
+            "It will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [
@@ -421,10 +430,13 @@ def pre_process(
                 work_dir=intermediate_cache_dir,
             )
 
-        datasource = FileDataSource(
+        # ストリーミングモード: 1ファイルずつ遅延ロードしてメモリ使用量を削減
+        from maou.infra.file_system.streaming_hcpe_source import (
+            StreamingHcpeDataSource,
+        )
+
+        datasource = StreamingHcpeDataSource(
             file_paths=input_paths,
-            array_type="hcpe",
-            bit_pack=input_file_packed,
         )
     else:
         error_msg = (

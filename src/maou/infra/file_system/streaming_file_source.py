@@ -128,7 +128,7 @@ class StreamingFileSource:
         self._total_rows = 0
         self._row_counts = []
         for fp in self._file_paths:
-            row_count = _scan_row_count(fp)
+            row_count = scan_row_count(fp)
             self._row_counts.append(row_count)
             self._total_rows += row_count
 
@@ -225,7 +225,7 @@ class StreamingFileSource:
 _ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
 
 
-def _is_arrow_ipc_file_format(file_path: Path) -> bool:
+def is_arrow_ipc_file_format(file_path: Path) -> bool:
     """ファイルがArrow IPC File形式かどうかを判定する．
 
     先頭8バイトのマジックバイトで判定する．
@@ -242,7 +242,7 @@ def _is_arrow_ipc_file_format(file_path: Path) -> bool:
     return header == _ARROW_FILE_MAGIC
 
 
-def _scan_row_count(file_path: Path) -> int:
+def scan_row_count(file_path: Path) -> int:
     """featherファイルの行数のみを取得する．
 
     Arrow IPC File形式の場合はメタデータから高速に取得する．
@@ -254,7 +254,7 @@ def _scan_row_count(file_path: Path) -> int:
     Returns:
         ファイル内の行数
     """
-    if _is_arrow_ipc_file_format(file_path):
+    if is_arrow_ipc_file_format(file_path):
         # File形式: メタデータのみ読み（高速）
         lf = pl.scan_ipc(file_path)
         return lf.select(pl.len()).collect().item()
