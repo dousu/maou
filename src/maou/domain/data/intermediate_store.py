@@ -320,6 +320,90 @@ class IntermediateDataStore:
         )
         return result
 
+    def _execute_upsert_sql(
+        self, batch_df: pl.DataFrame
+    ) -> None:
+        """DuckDBへのupsert SQL実行を行う共通メソッド．
+
+        ``bulk_upsert`` と ``bulk_upsert_sparse`` の共通SQL実行ロジック．
+        register/unregister，トランザクション管理，エラーハンドリングを一箇所に集約する．
+
+        Args:
+            batch_df: DuckDBスキーマに対応するスパース形式のPolars DataFrame
+                (カラム: hash_id, count, win_count,
+                 move_label_indices, move_label_values, move_win_values,
+                 board_id_positions, pieces_in_hand)
+        """
+        assert self._conn is not None
+
+        registered = False
+        try:
+            self._conn.register("batch_df", batch_df.to_arrow())
+            registered = True
+
+            # Step 1: 既存レコードとのマージ (merge_dual_allは1行1回だけ呼ばれる)
+            # MATERIALIZED CTEでmerge_dual_allの結果を実体化し，
+            # STRUCTフィールドを参照するだけで3カラムを更新する．
+            self._conn.execute(
+                """
+                WITH merged_updates AS MATERIALIZED (
+                    SELECT
+                        b.hash_id,
+                        e.count + b.count AS new_count,
+                        e.win_count + b.win_count AS new_win_count,
+                        merge_dual_all(
+                            e.move_label_indices, b.move_label_indices,
+                            e.move_label_values,  b.move_label_values,
+                            e.move_win_values,    b.move_win_values
+                        ) AS merged
+                    FROM batch_df b
+                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
+                )
+                UPDATE intermediate_data
+                SET
+                    count              = m.new_count,
+                    win_count          = m.new_win_count,
+                    move_label_indices = m.merged.indices,
+                    move_label_values  = m.merged.label_values,
+                    move_win_values    = m.merged.win_values
+                FROM merged_updates m
+                WHERE intermediate_data.hash_id = m.hash_id
+                """
+            )
+
+            # Step 2: 新規レコードの挿入
+            self._conn.execute(
+                """
+                INSERT INTO intermediate_data
+                SELECT b.hash_id, b.count, b.win_count,
+                       b.move_label_indices, b.move_label_values,
+                       b.move_win_values,
+                       b.board_id_positions, b.pieces_in_hand
+                FROM batch_df b
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM intermediate_data e
+                    WHERE e.hash_id = b.hash_id
+                )
+                """
+            )
+
+            self._conn.commit()
+
+            logger.debug(
+                f"Upserted {len(batch_df)} records to DuckDB"
+            )
+        except Exception as e:
+            if self._conn is not None:
+                try:
+                    self._conn.rollback()
+                except duckdb.TransactionException:
+                    pass  # DuckDBが自動ロールバック済み
+            logger.error(f"Failed to upsert: {e}")
+            raise
+        finally:
+            if registered:
+                self._conn.unregister("batch_df")
+
     def bulk_upsert(self, df: pl.DataFrame) -> None:
         """Bulk upsert batch data from Polars DataFrame using DuckDB SQL.
 
@@ -397,68 +481,7 @@ class IntermediateDataStore:
             ]
         )
 
-        try:
-            # Register Polars DataFrame as DuckDB view
-            self._conn.register("batch_df", batch_df.to_arrow())
-
-            # Step 1: 既存レコードとのマージ (merge_dual_allは1行1回だけ呼ばれる)
-            # MATERIALIZED CTEでmerge_dual_allの結果を実体化し，
-            # STRUCTフィールドを参照するだけで3カラムを更新する．
-            self._conn.execute(
-                """
-                WITH merged_updates AS MATERIALIZED (
-                    SELECT
-                        b.hash_id,
-                        e.count + b.count AS new_count,
-                        e.win_count + b.win_count AS new_win_count,
-                        merge_dual_all(
-                            e.move_label_indices, b.move_label_indices,
-                            e.move_label_values,  b.move_label_values,
-                            e.move_win_values,    b.move_win_values
-                        ) AS merged
-                    FROM batch_df b
-                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
-                )
-                UPDATE intermediate_data
-                SET
-                    count              = m.new_count,
-                    win_count          = m.new_win_count,
-                    move_label_indices = m.merged.indices,
-                    move_label_values  = m.merged.label_values,
-                    move_win_values    = m.merged.win_values
-                FROM merged_updates m
-                WHERE intermediate_data.hash_id = m.hash_id
-                """
-            )
-
-            # Step 2: 新規レコードの挿入
-            self._conn.execute(
-                """
-                INSERT INTO intermediate_data
-                SELECT b.hash_id, b.count, b.win_count,
-                       b.move_label_indices, b.move_label_values,
-                       b.move_win_values,
-                       b.board_id_positions, b.pieces_in_hand
-                FROM batch_df b
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM intermediate_data e
-                    WHERE e.hash_id = b.hash_id
-                )
-                """
-            )
-
-            self._conn.commit()
-
-            logger.debug(
-                f"Bulk upserted {len(batch_df)} records to DuckDB"
-            )
-        except Exception as e:
-            if self._conn is not None:
-                self._conn.rollback()
-            logger.error(f"Failed to bulk upsert: {e}")
-            raise
-        finally:
-            self._conn.unregister("batch_df")
+        self._execute_upsert_sql(batch_df)
 
     def add_dataframe_batch(self, df: pl.DataFrame) -> None:
         """Add or update batch data from Polars DataFrame.
@@ -557,66 +580,7 @@ class IntermediateDataStore:
         if df.is_empty():
             return
 
-        try:
-            # Register Polars DataFrame as DuckDB view
-            self._conn.register("batch_df", df.to_arrow())
-
-            # Step 1: 既存レコードとのマージ
-            self._conn.execute(
-                """
-                WITH merged_updates AS MATERIALIZED (
-                    SELECT
-                        b.hash_id,
-                        e.count + b.count AS new_count,
-                        e.win_count + b.win_count AS new_win_count,
-                        merge_dual_all(
-                            e.move_label_indices, b.move_label_indices,
-                            e.move_label_values,  b.move_label_values,
-                            e.move_win_values,    b.move_win_values
-                        ) AS merged
-                    FROM batch_df b
-                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
-                )
-                UPDATE intermediate_data
-                SET
-                    count              = m.new_count,
-                    win_count          = m.new_win_count,
-                    move_label_indices = m.merged.indices,
-                    move_label_values  = m.merged.label_values,
-                    move_win_values    = m.merged.win_values
-                FROM merged_updates m
-                WHERE intermediate_data.hash_id = m.hash_id
-                """
-            )
-
-            # Step 2: 新規レコードの挿入
-            self._conn.execute(
-                """
-                INSERT INTO intermediate_data
-                SELECT b.hash_id, b.count, b.win_count,
-                       b.move_label_indices, b.move_label_values,
-                       b.move_win_values,
-                       b.board_id_positions, b.pieces_in_hand
-                FROM batch_df b
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM intermediate_data e
-                    WHERE e.hash_id = b.hash_id
-                )
-                """
-            )
-
-            self._conn.commit()
-
-            logger.debug(
-                f"Sparse upserted {len(df)} records to DuckDB"
-            )
-        except Exception as e:
-            if self._conn is not None:
-                self._conn.rollback()
-            logger.error(f"Failed to sparse upsert: {e}")
-            raise
-        finally:
-            self._conn.unregister("batch_df")
+        self._execute_upsert_sql(df)
 
     def flush(self) -> None:
         """残留バッファをDuckDBにフラッシュする．

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     ContextManager,
     Dict,
     Generator,
@@ -30,6 +31,15 @@ if TYPE_CHECKING:
 from maou.domain.data.intermediate_store import (
     IntermediateDataStore,
 )
+
+
+def _to_list(v: Any) -> Any:
+    """numpy配列等をPythonリストに変換する．
+
+    ``tolist()`` メソッドを持つオブジェクト(numpy配列等)はリストに変換し，
+    それ以外はそのまま返す．
+    """
+    return v.tolist() if hasattr(v, "tolist") else v
 
 
 class FeatureStore(metaclass=abc.ABCMeta):
@@ -325,30 +335,18 @@ class PreProcess:
             counts.append(data["count"])
             win_counts.append(float(data["winCount"]))
             indices_list.append(
-                data["moveLabelIndices"].tolist()
-                if hasattr(data["moveLabelIndices"], "tolist")
-                else data["moveLabelIndices"]
+                _to_list(data["moveLabelIndices"])
             )
             values_list.append(
-                data["moveLabelValues"].tolist()
-                if hasattr(data["moveLabelValues"], "tolist")
-                else data["moveLabelValues"]
+                _to_list(data["moveLabelValues"])
             )
             win_values_list.append(
-                data["moveWinValues"].tolist()
-                if hasattr(data["moveWinValues"], "tolist")
-                else data["moveWinValues"]
+                _to_list(data["moveWinValues"])
             )
             board_positions_list.append(
-                data["boardIdPositions"].tolist()
-                if hasattr(data["boardIdPositions"], "tolist")
-                else data["boardIdPositions"]
+                _to_list(data["boardIdPositions"])
             )
-            pieces_list.append(
-                data["piecesInHand"].tolist()
-                if hasattr(data["piecesInHand"], "tolist")
-                else data["piecesInHand"]
-            )
+            pieces_list.append(_to_list(data["piecesInHand"]))
 
         batch_df = pl.DataFrame(
             {
