@@ -31,7 +31,7 @@ from maou.infra.console.common import (
     "--input-file-packed",
     type=bool,
     is_flag=True,
-    help="Enable unpacking local numpy file.",
+    help="[Deprecated] Enable unpacking local numpy file. This option has no effect.",
     default=False,
     required=False,
 )
@@ -295,6 +295,16 @@ def pre_process(
     input_split_rows: int,
     win_rate_threshold: int,
 ) -> None:
+    import warnings
+
+    if input_file_packed:
+        warnings.warn(
+            "--input-file-packed is deprecated and has no effect. "
+            "It will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
         [

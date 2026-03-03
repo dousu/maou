@@ -69,14 +69,14 @@ class StreamingHcpeDataSource(DataSource):
             return
 
         from maou.infra.file_system.streaming_file_source import (
-            _scan_row_count,
+            scan_row_count,
         )
 
         t0 = time.perf_counter()
         total = 0
         n = len(self._file_paths)
         for fp in self._file_paths:
-            total += _scan_row_count(fp)
+            total += scan_row_count(fp)
 
         self._total_rows = total
         elapsed = time.perf_counter() - t0
