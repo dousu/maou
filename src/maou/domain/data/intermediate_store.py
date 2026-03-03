@@ -338,7 +338,7 @@ class IntermediateDataStore:
 
         registered = False
         try:
-            self._conn.register("batch_df", batch_df.to_arrow())
+            self._conn.register("batch_df", batch_df)
             registered = True
 
             # Step 1: 既存レコードとのマージ (merge_dual_allは1行1回だけ呼ばれる)
