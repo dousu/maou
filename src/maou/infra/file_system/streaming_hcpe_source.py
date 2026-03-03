@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 
 from maou.app.pre_process.hcpe_transform import DataSource
+from maou.domain.data.rust_io import load_hcpe_df
+from maou.domain.data.schema import convert_hcpe_df_to_numpy
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +109,6 @@ class StreamingHcpeDataSource(DataSource):
         Yields:
             tuple[str, np.ndarray]: (ファイル名, numpy structured array)
         """
-        from maou.domain.data.rust_io import load_hcpe_df
-        from maou.domain.data.schema import (
-            convert_hcpe_df_to_numpy,
-        )
-
         n = len(self._file_paths)
         for i, fp in enumerate(self._file_paths):
             t0 = time.perf_counter()
