@@ -23,7 +23,6 @@ from tqdm.auto import tqdm
 
 from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_df
-from maou.domain.move.label import MOVE_LABELS_NUM
 
 if TYPE_CHECKING:
     import polars as pl
@@ -188,13 +187,18 @@ class PreProcess:
     def _process_single_array(
         data: np.ndarray,
     ) -> Dict[int, dict]:
-        """Process a chunk of records (optimized: 1-pass for hash/move/result).
+        """Process a chunk of records (optimized: sparse + 1-pass).
 
         統合ループでhash + move_label + game_resultを1パスで計算し，
         set_hcpの呼び出しを4N+U回からN+U回に削減する．
 
+        メモリ最適化: 指し手ラベルをスパース形式(非ゼロ要素のみ)で保持する．
+        将棋では1局面あたり合法手が約20-30手(全1496手中)であるため，
+        密配列(1496要素)からスパース配列(~25要素)への変更で
+        1局面あたりのメモリ使用量が約12KBから約300Bに削減される．
+
         Returns:
-            Dictionary mapping board hash to aggregated data
+            Dictionary mapping board hash to aggregated sparse data
         """
         from maou.domain.board import shogi
 
@@ -242,18 +246,24 @@ class PreProcess:
             ):
                 end_idx += 1
 
-            # この範囲のデータを集計
-            move_counts = np.bincount(
-                sorted_move_labels[start_idx:end_idx],
-                minlength=MOVE_LABELS_NUM,
+            # この範囲のデータをスパース形式で集計
+            moves_in_range = sorted_move_labels[
+                start_idx:end_idx
+            ]
+            wins_in_range = sorted_wins[start_idx:end_idx]
+
+            # unique movesとそのインデックスを取得
+            unique_moves, inverse = np.unique(
+                moves_in_range, return_inverse=True
             )
-            # Per-move win counts (weighted by win value)
+            # 各unique moveの出現回数
+            move_counts = np.bincount(inverse).astype(np.int32)
+            # 各unique moveの勝ち数(重み付き)
             move_win_counts = np.bincount(
-                sorted_move_labels[start_idx:end_idx],
-                weights=sorted_wins[start_idx:end_idx],
-                minlength=MOVE_LABELS_NUM,
+                inverse, weights=wins_in_range
             ).astype(np.float32)
-            win_sum = np.sum(sorted_wins[start_idx:end_idx])
+
+            win_sum = np.sum(wins_in_range)
             count = end_idx - start_idx
 
             # 最初の出現位置のHCPを使って特徴量を計算 (set_hcp 1回)
@@ -267,8 +277,11 @@ class PreProcess:
             result[int(hash_val)] = {
                 "count": count,
                 "winCount": win_sum,
-                "moveLabelCount": move_counts,
-                "moveWinCount": move_win_counts,
+                "moveLabelIndices": unique_moves.astype(
+                    np.uint16
+                ),
+                "moveLabelValues": move_counts,
+                "moveWinValues": move_win_counts,
                 "boardIdPositions": board_id_positions,
                 "piecesInHand": pieces_in_hand,
             }
@@ -281,68 +294,103 @@ class PreProcess:
         self,
         batch_result: Dict[int, dict],
     ) -> None:
-        """中間データをマージする（ディスクベース版）．
+        """中間データをマージする（ディスクベース版，スパース形式）．
+
+        _process_single_arrayからのスパース形式の結果を受け取り，
+        DuckDBスキーマに直接対応するDataFrameを構築する．
+        密配列(1496要素)を経由しないため，メモリ使用量が大幅に削減される．
 
         Args:
-            batch_result: バッチ処理結果の辞書
+            batch_result: バッチ処理結果の辞書(スパース形式)
         """
         if self.intermediate_store is None:
             raise RuntimeError(
                 "Intermediate store not initialized"
             )
 
-        # ディスクストアに追加/更新
-        # Convert batch_result (dict) to Polars DataFrame
-        # Note: This is a temporary conversion - ideally batch_result
-        # should already be a DataFrame
         import polars as pl
 
-        records = []
+        # カラム方向にデータを構築(行方向のrecordsリストより効率的)
+        hash_ids: list[int] = []
+        counts: list[int] = []
+        win_counts: list[float] = []
+        indices_list: list[list[int]] = []
+        values_list: list[list[int]] = []
+        win_values_list: list[list[float]] = []
+        board_positions_list: list[list[list[int]]] = []
+        pieces_list: list[list[int]] = []
+
         for hash_id, data in batch_result.items():
-            records.append(
-                {
-                    "hash_id": hash_id,
-                    "count": data["count"],
-                    "win_count": data["winCount"],
-                    "move_label_count": data[
-                        "moveLabelCount"
-                    ].tolist()
-                    if hasattr(data["moveLabelCount"], "tolist")
-                    else data["moveLabelCount"],
-                    "move_win_count": data[
-                        "moveWinCount"
-                    ].tolist()
-                    if hasattr(data["moveWinCount"], "tolist")
-                    else data["moveWinCount"],
-                    "board_id_positions": data[
-                        "boardIdPositions"
-                    ].tolist()
-                    if hasattr(
-                        data["boardIdPositions"], "tolist"
-                    )
-                    else data["boardIdPositions"],
-                    "pieces_in_hand": data[
-                        "piecesInHand"
-                    ].tolist()
-                    if hasattr(data["piecesInHand"], "tolist")
-                    else data["piecesInHand"],
-                }
+            hash_ids.append(hash_id)
+            counts.append(data["count"])
+            win_counts.append(float(data["winCount"]))
+            indices_list.append(
+                data["moveLabelIndices"].tolist()
+                if hasattr(data["moveLabelIndices"], "tolist")
+                else data["moveLabelIndices"]
             )
+            values_list.append(
+                data["moveLabelValues"].tolist()
+                if hasattr(data["moveLabelValues"], "tolist")
+                else data["moveLabelValues"]
+            )
+            win_values_list.append(
+                data["moveWinValues"].tolist()
+                if hasattr(data["moveWinValues"], "tolist")
+                else data["moveWinValues"]
+            )
+            board_positions_list.append(
+                data["boardIdPositions"].tolist()
+                if hasattr(data["boardIdPositions"], "tolist")
+                else data["boardIdPositions"]
+            )
+            pieces_list.append(
+                data["piecesInHand"].tolist()
+                if hasattr(data["piecesInHand"], "tolist")
+                else data["piecesInHand"]
+            )
+
         batch_df = pl.DataFrame(
-            records,
-            schema={
-                "hash_id": pl.UInt64,
-                "count": pl.Int32,
-                "win_count": pl.Float64,
-                "move_label_count": pl.List(pl.Int32),
-                "move_win_count": pl.List(pl.Float32),
-                "board_id_positions": pl.List(
-                    pl.List(pl.UInt8)
+            {
+                "hash_id": pl.Series(
+                    "hash_id", hash_ids, dtype=pl.UInt64
                 ),
-                "pieces_in_hand": pl.List(pl.UInt8),
-            },
+                "count": pl.Series(
+                    "count", counts, dtype=pl.Int32
+                ),
+                "win_count": pl.Series(
+                    "win_count",
+                    win_counts,
+                    dtype=pl.Float64,
+                ),
+                "move_label_indices": pl.Series(
+                    "move_label_indices",
+                    indices_list,
+                    dtype=pl.List(pl.UInt16),
+                ),
+                "move_label_values": pl.Series(
+                    "move_label_values",
+                    values_list,
+                    dtype=pl.List(pl.Int32),
+                ),
+                "move_win_values": pl.Series(
+                    "move_win_values",
+                    win_values_list,
+                    dtype=pl.List(pl.Float32),
+                ),
+                "board_id_positions": pl.Series(
+                    "board_id_positions",
+                    board_positions_list,
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "pieces_in_hand": pl.Series(
+                    "pieces_in_hand",
+                    pieces_list,
+                    dtype=pl.List(pl.UInt8),
+                ),
+            }
         )
-        self.intermediate_store.add_dataframe_batch(batch_df)
+        self.intermediate_store.add_sparse_batch(batch_df)
 
     def aggregate_intermediate_data(self) -> "pl.DataFrame":
         """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．

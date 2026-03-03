@@ -615,6 +615,378 @@ class TestBatchAccumulation:
             ] == pytest.approx(0.3, rel=1e-5)
 
 
+def create_sparse_test_dataframe(
+    hash_ids: list[int],
+    indices_per_position: list[list[int]] | None = None,
+    values_per_position: list[list[int]] | None = None,
+    win_values_per_position: list[list[float]] | None = None,
+) -> pl.DataFrame:
+    """Create test Polars DataFrame with sparse format matching DuckDB schema."""
+    import random
+
+    hash_id_list: list[int] = []
+    count_list: list[int] = []
+    win_count_list: list[float] = []
+    indices_list: list[list[int]] = []
+    values_list: list[list[int]] = []
+    win_values_list: list[list[float]] = []
+    board_positions_list: list[list[list[int]]] = []
+    pieces_list: list[list[int]] = []
+
+    for i, hash_id in enumerate(hash_ids):
+        hash_id_list.append(hash_id)
+        count_list.append(1)
+        win_count_list.append(0.5)
+
+        if indices_per_position and i < len(
+            indices_per_position
+        ):
+            indices_list.append(indices_per_position[i])
+        else:
+            indices_list.append([])
+
+        if values_per_position and i < len(values_per_position):
+            values_list.append(values_per_position[i])
+        else:
+            values_list.append([])
+
+        if win_values_per_position and i < len(
+            win_values_per_position
+        ):
+            win_values_list.append(win_values_per_position[i])
+        else:
+            win_values_list.append([])
+
+        board_positions_list.append(
+            [
+                [random.randint(0, 255) for _ in range(9)]
+                for _ in range(9)
+            ]
+        )
+        pieces_list.append(
+            [random.randint(0, 255) for _ in range(14)]
+        )
+
+    return pl.DataFrame(
+        {
+            "hash_id": pl.Series(hash_id_list, dtype=pl.UInt64),
+            "count": pl.Series(count_list, dtype=pl.Int32),
+            "win_count": pl.Series(
+                win_count_list, dtype=pl.Float64
+            ),
+            "move_label_indices": pl.Series(
+                indices_list, dtype=pl.List(pl.UInt16)
+            ),
+            "move_label_values": pl.Series(
+                values_list, dtype=pl.List(pl.Int32)
+            ),
+            "move_win_values": pl.Series(
+                win_values_list, dtype=pl.List(pl.Float32)
+            ),
+            "board_id_positions": pl.Series(
+                board_positions_list,
+                dtype=pl.List(pl.List(pl.UInt8)),
+            ),
+            "pieces_in_hand": pl.Series(
+                pieces_list, dtype=pl.List(pl.UInt8)
+            ),
+        }
+    )
+
+
+class TestSparseBatch:
+    """Test sparse batch operations for memory-efficient preprocessing."""
+
+    def test_add_sparse_batch_single_record(
+        self, tmp_path: Path
+    ) -> None:
+        """Test adding a single sparse record."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(db_path=db_path) as store:
+            batch_df = create_sparse_test_dataframe(
+                [12345],
+                indices_per_position=[[100]],
+                values_per_position=[[5]],
+                win_values_per_position=[[3.0]],
+            )
+
+            store.add_sparse_batch(batch_df)
+            assert store.get_total_count() == 1
+
+    def test_add_sparse_batch_multiple_records(
+        self, tmp_path: Path
+    ) -> None:
+        """Test adding multiple sparse records."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=10
+        ) as store:
+            for i in range(5):
+                hash_ids = list(range(i * 10, (i + 1) * 10))
+                batch_df = create_sparse_test_dataframe(
+                    hash_ids
+                )
+                store.add_sparse_batch(batch_df)
+
+            assert store.get_total_count() == 50
+
+    def test_sparse_upsert_aggregation(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that duplicate hash_ids are aggregated correctly with sparse batches."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(db_path=db_path) as store:
+            hash_id = 12345
+
+            # First insert: indices [50, 100], values [3, 5]
+            batch_df1 = create_sparse_test_dataframe(
+                [hash_id],
+                indices_per_position=[[50, 100]],
+                values_per_position=[[3, 5]],
+                win_values_per_position=[[1.0, 2.0]],
+            )
+            batch_df1 = batch_df1.with_columns(
+                [
+                    pl.lit(2).alias("count"),
+                    pl.lit(1.0).alias("win_count"),
+                ]
+            )
+
+            # Get board positions for reuse
+            board_positions = batch_df1["board_id_positions"][0]
+            pieces_in_hand = batch_df1["pieces_in_hand"][0]
+
+            # Second insert: indices [50, 200], values [2, 4]
+            batch_df2 = create_sparse_test_dataframe(
+                [hash_id],
+                indices_per_position=[[50, 200]],
+                values_per_position=[[2, 4]],
+                win_values_per_position=[[0.5, 1.5]],
+            )
+            batch_df2 = batch_df2.with_columns(
+                [
+                    pl.lit(3).alias("count"),
+                    pl.lit(1.5).alias("win_count"),
+                    pl.Series(
+                        "board_id_positions",
+                        [board_positions],
+                    ),
+                    pl.Series(
+                        "pieces_in_hand",
+                        [pieces_in_hand],
+                    ),
+                ]
+            )
+
+            store.add_sparse_batch(batch_df1)
+            store.add_sparse_batch(batch_df2)
+
+            # Should only have 1 unique position
+            assert store.get_total_count() == 1
+
+            # Verify aggregation by reading back
+            result_df = store.finalize_to_dataframe()
+            assert len(result_df) == 1
+            assert result_df["id"][0] == hash_id
+
+            # count: 2 + 3 = 5
+            # resultValue = (1.0 + 1.5) / 5 = 0.5
+            assert result_df["resultValue"][0] == pytest.approx(
+                0.5
+            )
+
+            # moveLabelCount[50]: (3 + 2) / 5 = 1.0
+            assert result_df["moveLabel"][0][
+                50
+            ] == pytest.approx(1.0, rel=1e-5)
+            # moveLabelCount[100]: 5 / 5 = 1.0
+            assert result_df["moveLabel"][0][
+                100
+            ] == pytest.approx(1.0, rel=1e-5)
+            # moveLabelCount[200]: 4 / 5 = 0.8
+            assert result_df["moveLabel"][0][
+                200
+            ] == pytest.approx(0.8, rel=1e-3)
+
+    def test_sparse_buffer_accumulates_before_flush(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that sparse batches are buffered before reaching threshold."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=100
+        ) as store:
+            batch_df = create_sparse_test_dataframe(
+                [1, 2, 3, 4, 5]
+            )
+            store.add_sparse_batch(batch_df)
+
+            assert store._sparse_buffer_rows == 5
+            assert len(store._sparse_buffer) == 1
+
+            store.flush()
+            assert store._sparse_buffer_rows == 0
+            assert len(store._sparse_buffer) == 0
+            assert store.get_total_count() == 5
+
+    def test_sparse_auto_flush_at_threshold(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that sparse buffer auto-flushes when reaching batch_size."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=20
+        ) as store:
+            batch_df1 = create_sparse_test_dataframe(
+                list(range(15))
+            )
+            store.add_sparse_batch(batch_df1)
+            assert store._sparse_buffer_rows == 15
+
+            batch_df2 = create_sparse_test_dataframe(
+                list(range(15, 25))
+            )
+            store.add_sparse_batch(batch_df2)
+
+            assert store._sparse_buffer_rows == 0
+            assert store.get_total_count() == 25
+
+    def test_sparse_empty_dataframe_not_buffered(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that empty sparse DataFrames are skipped."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(
+            db_path=db_path, batch_size=100
+        ) as store:
+            empty_df = create_sparse_test_dataframe([])
+            store.add_sparse_batch(empty_df)
+
+            assert store._sparse_buffer_rows == 0
+            assert len(store._sparse_buffer) == 0
+
+    def test_sparse_finalize_to_dataframe(
+        self, tmp_path: Path
+    ) -> None:
+        """Test finalizing sparse data to a Polars DataFrame."""
+        db_path = tmp_path / "test.duckdb"
+
+        with IntermediateDataStore(db_path=db_path) as store:
+            for i in range(10):
+                batch_df = create_sparse_test_dataframe([i])
+                store.add_sparse_batch(batch_df)
+
+            result_df = store.finalize_to_dataframe()
+
+            assert len(result_df) == 10
+            assert result_df.schema.names() == [
+                "id",
+                "boardIdPositions",
+                "piecesInHand",
+                "moveLabel",
+                "moveWinRate",
+                "bestMoveWinRate",
+                "resultValue",
+            ]
+
+    def test_sparse_win_rate_calculation(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that move win rates are correctly computed from sparse data."""
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path, win_rate_threshold=2
+        )
+        try:
+            batch_df = create_sparse_test_dataframe(
+                [100],
+                indices_per_position=[[10, 20]],
+                values_per_position=[[2, 1]],
+                win_values_per_position=[[1.5, 0.5]],
+            )
+            batch_df = batch_df.with_columns(
+                [
+                    pl.lit(3).alias("count"),
+                    pl.lit(2.0).alias("win_count"),
+                ]
+            )
+
+            store.bulk_upsert_sparse(batch_df)
+
+            assert store.get_total_count() == 1
+
+            result_df = store.finalize_to_dataframe()
+            win_rates = result_df["moveWinRate"].to_list()[0]
+
+            # rate[10] = 1.5/2 = 0.75, rate[20] = 0.5/1 = 0.5
+            assert win_rates[10] == pytest.approx(
+                0.75, rel=1e-5
+            )
+            assert win_rates[20] == pytest.approx(0.5, rel=1e-5)
+        finally:
+            store.close()
+
+    def test_sparse_conflict_merge(
+        self, tmp_path: Path
+    ) -> None:
+        """Test conflicting sparse rows merge correctly."""
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path, win_rate_threshold=2
+        )
+        try:
+            # First upsert
+            df1 = create_sparse_test_dataframe(
+                [200],
+                indices_per_position=[[10, 20]],
+                values_per_position=[[2, 1]],
+                win_values_per_position=[[1.0, 0.5]],
+            )
+            df1 = df1.with_columns(
+                [
+                    pl.lit(3).alias("count"),
+                    pl.lit(2.0).alias("win_count"),
+                ]
+            )
+            store.bulk_upsert_sparse(df1)
+
+            # Second upsert with same hash_id
+            df2 = create_sparse_test_dataframe(
+                [200],
+                indices_per_position=[[10, 30]],
+                values_per_position=[[1, 1]],
+                win_values_per_position=[[0.5, 1.0]],
+            )
+            df2 = df2.with_columns(
+                [
+                    pl.lit(2).alias("count"),
+                    pl.lit(1.0).alias("win_count"),
+                ]
+            )
+            store.bulk_upsert_sparse(df2)
+
+            assert store.get_total_count() == 1
+
+            result_df = store.finalize_to_dataframe()
+            win_rates = result_df["moveWinRate"].to_list()[0]
+
+            # After merge:
+            # idx 10: label=2+1=3, win=1.0+0.5=1.5, rate=0.5
+            # idx 20: label=1, win=0.5, rate=0.5
+            # idx 30: label=1, win=1.0, rate=1.0
+            assert win_rates[10] == pytest.approx(0.5, rel=1e-5)
+            assert win_rates[20] == pytest.approx(0.5, rel=1e-5)
+            assert win_rates[30] == pytest.approx(1.0, rel=1e-5)
+        finally:
+            store.close()
+
+
 class TestUtilityFunctions:
     """Test utility functions for disk and resource management."""
 

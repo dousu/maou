@@ -173,6 +173,8 @@ class IntermediateDataStore:
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
+        self._sparse_buffer: list[pl.DataFrame] = []
+        self._sparse_buffer_rows: int = 0
         self._init_database()
 
     def _init_database(self) -> None:
@@ -494,13 +496,137 @@ class IntermediateDataStore:
         self._buffer.clear()
         self._buffer_rows = 0
 
+    def add_sparse_batch(self, df: pl.DataFrame) -> None:
+        """スパース形式のバッチデータをバッファに追加する．
+
+        ``merge_intermediate_data`` からの事前スパース圧縮済みDataFrameを受け取る．
+        DuckDBスキーマに直接対応するカラム構造を持つため，
+        ``bulk_upsert`` のような密→スパース変換が不要．
+
+        密形式のDataFrameと比較して，メモリ使用量が大幅に削減される:
+        - 密形式: 1496要素/局面 × 28バイト(Python int) ≒ 42KB/局面
+        - スパース形式: ~25要素/局面 × 28バイト ≒ 700B/局面 (約60倍の削減)
+
+        Args:
+            df: スパース形式のPolars DataFrame with columns:
+                - hash_id: uint64
+                - count: int32
+                - win_count: float64
+                - move_label_indices: list[uint16] (非ゼロ要素のインデックス)
+                - move_label_values: list[int32] (非ゼロ要素の値)
+                - move_win_values: list[float32] (非ゼロ要素の勝ち数)
+                - board_id_positions: list[list[uint8]]
+                - pieces_in_hand: list[uint8]
+        """
+        if df.is_empty():
+            return
+
+        self._sparse_buffer.append(df)
+        self._sparse_buffer_rows += len(df)
+
+        if self._sparse_buffer_rows >= self.batch_size:
+            self._flush_sparse_buffer()
+
+    def _flush_sparse_buffer(self) -> None:
+        """スパースバッファをDuckDBにフラッシュする．"""
+        if not self._sparse_buffer:
+            return
+
+        for df in self._sparse_buffer:
+            self.bulk_upsert_sparse(df)
+        self._sparse_buffer.clear()
+        self._sparse_buffer_rows = 0
+
+    def bulk_upsert_sparse(self, df: pl.DataFrame) -> None:
+        """事前スパース圧縮済みDataFrameをDuckDBにupsertする．
+
+        ``bulk_upsert`` と同じDuckDB操作を行うが，
+        密→スパース変換ループをスキップする．
+        入力DataFrameが既にDuckDBスキーマと同じカラム構造を持つため，
+        そのまま挿入できる．
+
+        Args:
+            df: スパース形式のPolars DataFrame
+                (カラム: hash_id, count, win_count,
+                 move_label_indices, move_label_values, move_win_values,
+                 board_id_positions, pieces_in_hand)
+        """
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
+
+        if df.is_empty():
+            return
+
+        try:
+            # Register Polars DataFrame as DuckDB view
+            self._conn.register("batch_df", df.to_arrow())
+
+            # Step 1: 既存レコードとのマージ
+            self._conn.execute(
+                """
+                WITH merged_updates AS MATERIALIZED (
+                    SELECT
+                        b.hash_id,
+                        e.count + b.count AS new_count,
+                        e.win_count + b.win_count AS new_win_count,
+                        merge_dual_all(
+                            e.move_label_indices, b.move_label_indices,
+                            e.move_label_values,  b.move_label_values,
+                            e.move_win_values,    b.move_win_values
+                        ) AS merged
+                    FROM batch_df b
+                    INNER JOIN intermediate_data e ON e.hash_id = b.hash_id
+                )
+                UPDATE intermediate_data
+                SET
+                    count              = m.new_count,
+                    win_count          = m.new_win_count,
+                    move_label_indices = m.merged.indices,
+                    move_label_values  = m.merged.label_values,
+                    move_win_values    = m.merged.win_values
+                FROM merged_updates m
+                WHERE intermediate_data.hash_id = m.hash_id
+                """
+            )
+
+            # Step 2: 新規レコードの挿入
+            self._conn.execute(
+                """
+                INSERT INTO intermediate_data
+                SELECT b.hash_id, b.count, b.win_count,
+                       b.move_label_indices, b.move_label_values,
+                       b.move_win_values,
+                       b.board_id_positions, b.pieces_in_hand
+                FROM batch_df b
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM intermediate_data e
+                    WHERE e.hash_id = b.hash_id
+                )
+                """
+            )
+
+            self._conn.commit()
+
+            logger.debug(
+                f"Sparse upserted {len(df)} records to DuckDB"
+            )
+        except Exception as e:
+            if self._conn is not None:
+                self._conn.rollback()
+            logger.error(f"Failed to sparse upsert: {e}")
+            raise
+        finally:
+            self._conn.unregister("batch_df")
+
     def flush(self) -> None:
         """残留バッファをDuckDBにフラッシュする．
 
         処理完了時やfinalize前に呼び出して，
         バッファ内の未フラッシュデータを確実にDuckDBに書き込む．
+        密形式バッファとスパース形式バッファの両方をフラッシュする．
         """
         self._flush_buffer()
+        self._flush_sparse_buffer()
 
     def get_total_count(self) -> int:
         """Get total number of unique positions in database.
@@ -514,6 +640,7 @@ class IntermediateDataStore:
             raise RuntimeError("Database not initialized")
 
         self._flush_buffer()
+        self._flush_sparse_buffer()
 
         result = self._conn.execute(
             "SELECT COUNT(*) FROM intermediate_data"
@@ -937,6 +1064,7 @@ class IntermediateDataStore:
     def close(self) -> None:
         """Close database connection and cleanup."""
         self._flush_buffer()
+        self._flush_sparse_buffer()
 
         if self._conn is not None:
             self._conn.close()
