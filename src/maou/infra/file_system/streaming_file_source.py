@@ -262,7 +262,7 @@ def scan_row_count(file_path: Path) -> int:
         # Stream形式: DataFrameの高さを取得
         # Note: Stream形式ではメタデータのみの読み出しが不可能なため，
         # 全データを読む必要がある．大規模ファイルではメモリ使用量に注意．
-        logger.warning(
+        logger.info(
             "File %s is Arrow IPC Stream format. "
             "Reading full data for row count "
             "(consider converting to File format).",
