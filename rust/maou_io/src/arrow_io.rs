@@ -1,4 +1,5 @@
 use arrow::array::RecordBatch;
+use arrow::compute::concat_batches;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::ipc::CompressionType;
@@ -7,6 +8,26 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use crate::error::MaouIOError;
+
+/// 複数のRecordBatchを単一のRecordBatchに統合する．
+///
+/// 空の場合はエラー，単一バッチの場合はゼロコピーで返し，
+/// 複数バッチの場合は `concat_batches` で結合する．
+fn consolidate_batches(batches: Vec<RecordBatch>) -> Result<RecordBatch, MaouIOError> {
+    if batches.is_empty() {
+        return Err(MaouIOError::IOError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "Empty file: no record batches found",
+        )));
+    }
+
+    if batches.len() == 1 {
+        return Ok(batches.into_iter().next().unwrap());
+    }
+
+    let schema = batches[0].schema();
+    concat_batches(&schema, &batches).map_err(MaouIOError::ArrowError)
+}
 
 /// Save Arrow RecordBatch to .feather file with LZ4 compression．
 ///
@@ -58,60 +79,18 @@ pub fn load_feather(file_path: &str) -> Result<RecordBatch, MaouIOError> {
     reader.seek(SeekFrom::Start(0))?;
 
     // Check if it's Stream format (starts with 0xFFFFFFFF = -1)
-    if magic == [0xFF, 0xFF, 0xFF, 0xFF] {
-        // Stream format
-        let mut stream_reader = StreamReader::try_new(reader, None)?;
-
-        // Read all batches and concatenate them
-        let mut batches = Vec::new();
-        while let Some(batch_result) = stream_reader.next() {
-            batches.push(batch_result?);
-        }
-
-        if batches.is_empty() {
-            return Err(MaouIOError::IOError(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Empty file: no record batches found",
-            )));
-        }
-
-        // If there's only one batch, return it directly
-        if batches.len() == 1 {
-            return Ok(batches.into_iter().next().unwrap());
-        }
-
-        // Concatenate multiple batches into one
-        use arrow::compute::concat_batches;
-        let schema = batches[0].schema();
-        concat_batches(&schema, &batches)
-            .map_err(|e| MaouIOError::ArrowError(e))
+    let batches: Vec<RecordBatch> = if magic == [0xFF, 0xFF, 0xFF, 0xFF] {
+        StreamReader::try_new(reader, None)?
+            .collect::<Result<_, _>>()
+            .map_err(MaouIOError::ArrowError)?
     } else {
         // File format (starts with "ARROW1")
-        let mut file_reader = FileReader::try_new(reader, None)?;
+        FileReader::try_new(reader, None)?
+            .collect::<Result<_, _>>()
+            .map_err(MaouIOError::ArrowError)?
+    };
 
-        // Read all batches and concatenate them
-        let mut batches = Vec::new();
-        while let Some(batch_result) = file_reader.next() {
-            batches.push(batch_result?);
-        }
-
-        if batches.is_empty() {
-            return Err(MaouIOError::IOError(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Empty file: no record batches found",
-            )));
-        }
-
-        // If there's only one batch, return it directly
-        if batches.len() == 1 {
-            return Ok(batches.into_iter().next().unwrap());
-        }
-
-        // Concatenate multiple batches into one
-        use arrow::compute::concat_batches;
-        let schema = batches[0].schema();
-        concat_batches(&schema, &batches).map_err(MaouIOError::ArrowError)
-    }
+    consolidate_batches(batches)
 }
 
 /// Save multiple record batches to a single .feather file with LZ4 compression．
@@ -217,9 +196,7 @@ pub fn merge_feather_files(
 
     // If total is small enough for a single file, merge all
     if total_rows <= rows_per_chunk {
-        let schema = all_batches[0].schema();
-        let merged = arrow::compute::concat_batches(&schema, &all_batches)
-            .map_err(MaouIOError::ArrowError)?;
+        let merged = consolidate_batches(all_batches)?;
 
         let chunk_path = out_path.join(format!("{}_chunk0000.feather", output_prefix));
         let chunk_path_str = chunk_path.to_str().ok_or_else(|| {
@@ -243,9 +220,7 @@ pub fn merge_feather_files(
 
         // If adding this batch exceeds the target, flush current chunk first
         if current_rows > 0 && current_rows + batch_rows > rows_per_chunk {
-            let schema = current_batches[0].schema();
-            let merged = arrow::compute::concat_batches(&schema, &current_batches)
-                .map_err(MaouIOError::ArrowError)?;
+            let merged = consolidate_batches(std::mem::take(&mut current_batches))?;
 
             let chunk_path = out_path.join(format!("{}_chunk{:04}.feather", output_prefix, chunk_idx));
             let chunk_path_str = chunk_path.to_str().ok_or_else(|| {
@@ -257,7 +232,6 @@ pub fn merge_feather_files(
             save_feather(&merged, chunk_path_str)?;
             output_paths.push(chunk_path_str.to_string());
 
-            current_batches.clear();
             current_rows = 0;
             chunk_idx += 1;
         }
@@ -268,9 +242,7 @@ pub fn merge_feather_files(
 
     // Flush remaining
     if !current_batches.is_empty() {
-        let schema = current_batches[0].schema();
-        let merged = arrow::compute::concat_batches(&schema, &current_batches)
-            .map_err(MaouIOError::ArrowError)?;
+        let merged = consolidate_batches(current_batches)?;
 
         let chunk_path = out_path.join(format!("{}_chunk{:04}.feather", output_prefix, chunk_idx));
         let chunk_path_str = chunk_path.to_str().ok_or_else(|| {

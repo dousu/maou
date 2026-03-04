@@ -58,6 +58,10 @@ def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
     Returns:
         単一のArrow RecordBatch
     """
+    if len(df) == 0:
+        raise ValueError(
+            "Cannot convert empty DataFrame to RecordBatch"
+        )
     arrow_table = df.to_arrow().combine_chunks()
     return arrow_table.to_batches()[0]
 

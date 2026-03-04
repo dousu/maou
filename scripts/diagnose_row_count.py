@@ -42,7 +42,7 @@ def diagnose_files(directory: Path) -> None:
     total_scan = 0
     total_load = 0
     total_pyarrow = 0
-    mismatch_count = 0
+    misstatus_count = 0
     multi_batch_count = 0
 
     for fp in feather_files:
@@ -90,9 +90,9 @@ def diagnose_files(directory: Path) -> None:
             batch_sizes = []
             print(f"  ERROR pyarrow read {fp.name}: {e}")
 
-        match = "OK" if scan_rows == load_rows == pyarrow_rows else "DIFF"
-        if match == "DIFF":
-            mismatch_count += 1
+        status = "OK" if scan_rows == load_rows == pyarrow_rows else "DIFF"
+        if status == "DIFF":
+            misstatus_count += 1
         if num_batches > 1:
             multi_batch_count += 1
 
@@ -102,7 +102,7 @@ def diagnose_files(directory: Path) -> None:
 
         print(
             f"{fp.name:<40} {fmt:<8} {num_batches:>8} "
-            f"{scan_rows:>10,} {load_rows:>10,} {pyarrow_rows:>12,} {match:>6}"
+            f"{scan_rows:>10,} {load_rows:>10,} {pyarrow_rows:>12,} {status:>6}"
         )
 
         # Show batch size details for multi-batch files
@@ -114,7 +114,7 @@ def diagnose_files(directory: Path) -> None:
         f"{'TOTAL':<40} {'':8} {'':>8} "
         f"{total_scan:>10,} {total_load:>10,} {total_pyarrow:>12,}"
     )
-    print(f"\nFiles with mismatches: {mismatch_count}")
+    print(f"\nFiles with misstatuses: {misstatus_count}")
     print(f"Files with multiple batches: {multi_batch_count}")
 
     # Also check to_batches behavior
