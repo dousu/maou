@@ -721,7 +721,7 @@ class IntermediateDataStore:
         for i, (indices, values, count) in enumerate(
             zip(indices_col, values_col, counts)
         ):
-            if not indices:
+            if not indices or count == 0:
                 continue
             np_indices = np.array(indices, dtype=np.intp)
             np_values = np.array(values, dtype=np.float32)
@@ -866,7 +866,7 @@ class IntermediateDataStore:
         n, m = arr.shape
         flat = pa.array(arr.ravel(), type=pa.float32())
         offsets = pa.array(
-            np.arange(0, (n + 1) * m, m, dtype=np.int32)
+            np.arange(0, (n + 1) * m, m, dtype=np.int64)
         )
         list_array = pa.ListArray.from_arrays(offsets, flat)
         return pl.Series(name, list_array)
