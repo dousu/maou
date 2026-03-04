@@ -607,12 +607,23 @@ class PreProcess:
                 self.logger.info(
                     f"Total unique positions: {disk_info['unique_positions']:,}"
                 )
-                self.logger.info(
-                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
-                    f"(per chunk)"
-                    if use_chunked
-                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
-                )
+                if use_chunked:
+                    chunk_memory_gb = disk_info[
+                        "estimated_memory_gb"
+                    ] / max(
+                        (total_count + 999_999) // 1_000_000,
+                        1,
+                    )
+                    self.logger.info(
+                        f"Estimated memory for aggregation: "
+                        f"{disk_info['estimated_memory_gb']:.2f} GB total, "
+                        f"~{chunk_memory_gb:.2f} GB per chunk"
+                    )
+                else:
+                    self.logger.info(
+                        f"Estimated memory for aggregation: "
+                        f"{disk_info['estimated_memory_gb']:.2f} GB"
+                    )
                 self.logger.info(
                     f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
                 )
@@ -839,12 +850,22 @@ class PreProcess:
                 self.logger.info(
                     f"Total unique positions: {disk_info['unique_positions']:,}"
                 )
-                self.logger.info(
-                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
-                    f"(per chunk)"
-                    if use_chunked
-                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
-                )
+                if use_chunked:
+                    chunk_memory_gb = disk_info[
+                        "estimated_memory_gb"
+                    ] / max(
+                        (total_count + 999_999) // 1_000_000,
+                        1,
+                    )
+                    self.logger.info(
+                        f"Estimated memory for aggregation: "
+                        f"{disk_info['estimated_memory_gb']:.2f} GB total, "
+                        f"~{chunk_memory_gb:.2f} GB per chunk"
+                    )
+                else:
+                    self.logger.info(
+                        f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
+                    )
                 self.logger.info(
                     f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
                 )
