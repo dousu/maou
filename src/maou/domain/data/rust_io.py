@@ -57,6 +57,9 @@ def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
 
     Returns:
         単一のArrow RecordBatch
+
+    Raises:
+        ValueError: DataFrameが空(0行)の場合
     """
     if len(df) == 0:
         raise ValueError(
