@@ -399,9 +399,14 @@ class HCPEConverter:
             for fp, result in conversion_result.items()
             if result.startswith("success")
         ]
-        existing_feather_files = [
-            f for f in successful_feather_files if f.exists()
-        ]
+        existing_feather_files: list[Path] = []
+        for f in successful_feather_files:
+            if f.exists():
+                existing_feather_files.append(f)
+            else:
+                self.logger.warning(
+                    f"Expected feather file missing: {f}"
+                )
 
         if not existing_feather_files:
             return
@@ -418,19 +423,11 @@ class HCPEConverter:
                 output_prefix="hcpe",
             )
 
-            # feature_store へチャンクをアップロード
-            if self.__feature_store is not None:
-                for chunk_path in chunked_paths:
-                    df = load_hcpe_df(chunk_path)
-                    self.__feature_store.store_features(
-                        name=chunk_path.name,
-                        key_columns=["id"],
-                        dataframe=df,
-                        clustering_key=None,
-                        partitioning_key_date="partitioningKey",
-                    )
+            self._upload_to_feature_store(chunked_paths)
 
             # 個別ファイルを削除(チャンクファイルのみ残す)
+            # merge_hcpe_feather_files は常に新規ファイルを作成するため
+            # chunked_paths と existing_feather_files は重複しない
             chunked_set = {p.resolve() for p in chunked_paths}
             for f in existing_feather_files:
                 if f.resolve() not in chunked_set:
@@ -440,16 +437,29 @@ class HCPEConverter:
                 f"Created {len(chunked_paths)} chunked files"
             )
         elif self.__feature_store is not None:
-            # チャンキングなし・feature_store ありの場合は個別アップロード
-            for f in existing_feather_files:
-                df = load_hcpe_df(f)
-                self.__feature_store.store_features(
-                    name=f.name,
-                    key_columns=["id"],
-                    dataframe=df,
-                    clustering_key=None,
-                    partitioning_key_date="partitioningKey",
-                )
+            self._upload_to_feature_store(
+                existing_feather_files
+            )
+
+    def _upload_to_feature_store(
+        self, paths: list[Path]
+    ) -> None:
+        """feather ファイルを feature_store にアップロードする．
+
+        Args:
+            paths: アップロード対象の .feather ファイルパスリスト
+        """
+        if self.__feature_store is None:
+            return
+        for p in paths:
+            df = load_hcpe_df(p)
+            self.__feature_store.store_features(
+                name=p.name,
+                key_columns=["id"],
+                dataframe=df,
+                clustering_key=None,
+                partitioning_key_date="partitioningKey",
+            )
 
     @contextlib.contextmanager
     def __context(self) -> Generator[None, None, None]:
