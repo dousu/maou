@@ -31,6 +31,15 @@ incremental = false  # Disabled for sccache compatibility
 # Reduce debuginfo to save disk space and build time
 debug = 1  # Line tables only
 
+# twox-hash 2.1.2 has a bug: xxhash32.rs:298 uses `acc += len as u32`
+# instead of `acc = acc.wrapping_add(len as u32)`.
+# xxHash32 algorithm relies on wrapping arithmetic by design,
+# but this line panics in debug builds due to Rust's overflow checks.
+# Disable overflow checks for this crate only.
+# Ref: https://github.com/shepmaster/twox-hash (upstream bug)
+[profile.dev.package.twox-hash]
+overflow-checks = false
+
 [profile.release]
 opt-level = 3
 codegen-units = 1  # Sequential even for release (memory over speed)
