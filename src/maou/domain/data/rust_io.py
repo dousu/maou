@@ -13,21 +13,20 @@ from pathlib import Path
 from typing import Union, cast
 
 import polars as pl
+import pyarrow as pa
 
 try:
     from maou._rust.maou_io import (
         load_feather_file,
         load_hcpe_feather,
         load_preprocessing_feather,
-    )
-    from maou._rust.maou_io import (
-        merge_feather_files as _merge_feather_files,
-    )
-    from maou._rust.maou_io import (
         save_feather_file,
         save_hcpe_feather,
         save_preprocessing_feather,
         split_feather_file,
+    )
+    from maou._rust.maou_io import (
+        merge_feather_files as _merge_feather_files,
     )
 
     RUST_BACKEND_AVAILABLE = True
@@ -43,6 +42,24 @@ def _check_rust_backend() -> None:
             f"Rust backend not available. Build with: uv run maturin develop\n"
             f"Original error: {_import_error}"
         )
+
+
+def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
+    """Polars DataFrameを単一のArrow RecordBatchに変換する．
+
+    ``pl.concat()`` 等の操作後にDataFrameが複数チャンクを持つ場合，
+    ``to_batches()`` が複数バッチを返し ``[0]`` で先頭以外が失われる
+    データ欠落バグを防ぐため，事前に ``combine_chunks()`` で
+    単一チャンクに統合する．
+
+    Args:
+        df: 変換するPolars DataFrame
+
+    Returns:
+        単一のArrow RecordBatch
+    """
+    arrow_table = df.to_arrow().combine_chunks()
+    return arrow_table.to_batches()[0]
 
 
 def save_hcpe_df(
@@ -67,14 +84,8 @@ def save_hcpe_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow Table → RecordBatch（ゼロコピー）
-    arrow_table = df.to_arrow()
-    # Convert Table to RecordBatch (combine all batches)
-    arrow_batch = (
-        arrow_table.to_batches()[0]
-        if len(arrow_table) > 0
-        else arrow_table.to_batches(max_chunksize=None)[0]
-    )
+    # Polars → Arrow RecordBatch（単一チャンクに統合）
+    arrow_batch = _df_to_single_batch(df)
 
     # Rust関数を呼び出し
     save_hcpe_feather(arrow_batch, str(file_path))
@@ -124,13 +135,8 @@ def save_preprocessing_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow Table → RecordBatch
-    arrow_table = df.to_arrow()
-    arrow_batch = (
-        arrow_table.to_batches()[0]
-        if len(arrow_table) > 0
-        else arrow_table.to_batches(max_chunksize=None)[0]
-    )
+    # Polars → Arrow RecordBatch（単一チャンクに統合）
+    arrow_batch = _df_to_single_batch(df)
     save_preprocessing_feather(arrow_batch, str(file_path))
 
 
@@ -182,13 +188,8 @@ def save_stage1_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow Table → RecordBatch（ゼロコピー）
-    arrow_table = df.to_arrow()
-    arrow_batch = (
-        arrow_table.to_batches()[0]
-        if len(arrow_table) > 0
-        else arrow_table.to_batches(max_chunksize=None)[0]
-    )
+    # Polars → Arrow RecordBatch（単一チャンクに統合）
+    arrow_batch = _df_to_single_batch(df)
 
     save_feather_file(arrow_batch, str(file_path))
 
@@ -242,13 +243,8 @@ def save_stage2_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow Table → RecordBatch（ゼロコピー）
-    arrow_table = df.to_arrow()
-    arrow_batch = (
-        arrow_table.to_batches()[0]
-        if len(arrow_table) > 0
-        else arrow_table.to_batches(max_chunksize=None)[0]
-    )
+    # Polars → Arrow RecordBatch（単一チャンクに統合）
+    arrow_batch = _df_to_single_batch(df)
 
     save_feather_file(arrow_batch, str(file_path))
 
