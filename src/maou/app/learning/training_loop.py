@@ -35,7 +35,7 @@ class TrainingLoop:
         callbacks: Optional[List[TrainingCallback]] = None,
         logger: Optional[logging.Logger] = None,
         gradient_accumulation_steps: int = 1,
-        policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
+        policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     ):
         self.model = model
         self.device = device

@@ -150,7 +150,8 @@ class IntermediateDataStore:
         self,
         db_path: Path,
         batch_size: int = 50_000,
-        win_rate_threshold: int = 2,
+        position_count_threshold: int = 2,
+        prior_strength: float = 5.0,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -160,16 +161,27 @@ class IntermediateDataStore:
             batch_size: Number of records to accumulate before flushing to DuckDB.
                 Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
-            win_rate_threshold: 指し手別勝率を計算する最小出現回数．
+            position_count_threshold: 指し手別勝率を計算する最小出現回数．
                 出現回数がこの閾値未満の場合，均一分布にフォールバックする．
+            prior_strength: Beta事前分布の強度パラメータ．
+                各手の勝率を ``(wins + prior_strength) / (total + 2 *
+                prior_strength)`` で平滑化し，出現回数が少ない手の勝率を
+                50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
+        if prior_strength < 0.0:
+            raise ValueError(
+                f"prior_strength must be >= 0.0, got {prior_strength}"
+            )
         self.db_path = db_path
         self.batch_size = batch_size
         self.enable_vacuum = (
             enable_vacuum  # Unused but kept for compatibility
         )
-        self._win_rate_threshold = win_rate_threshold
+        self._position_count_threshold = (
+            position_count_threshold
+        )
+        self._prior_strength = prior_strength
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
@@ -715,8 +727,14 @@ class IntermediateDataStore:
         label_values_col: list[list[int]],
         win_values_col: list[list[float]],
         counts: list[int],
-    ) -> tuple[list[list[float]], list[float]]:
-        """指し手別勝率を計算する(フォールバック適用済み)．
+    ) -> tuple[list[list[float]], list[float], int]:
+        """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
+
+        局面の出現回数が ``position_count_threshold`` 未満の場合は合法手への均一分布に
+        フォールバックする．それ以外の場合は Beta事前分布による平滑化を適用し，
+        出現回数が少ない手の勝率ノイズを抑制する．
+
+        平滑化勝率 = (wins + prior) / (total + 2 * prior)
 
         Args:
             indices_col: 各局面のスパースインデックス
@@ -725,12 +743,16 @@ class IntermediateDataStore:
             counts: 各局面の出現回数
 
         Returns:
-            (move_win_rates, best_move_win_rates):
+            (move_win_rates, best_move_win_rates, fallback_count):
                 move_win_rates: 1496要素のfloat配列のリスト
                 best_move_win_rates: 各局面の最大勝率のリスト
+                fallback_count: フォールバックが適用された局面数
         """
         move_win_rates: list[list[float]] = []
         best_move_win_rates: list[float] = []
+        fallback_count = 0
+        prior = self._prior_strength
+        prior_doubled = 2.0 * prior
 
         for indices, label_values, win_values, count in zip(
             indices_col,
@@ -740,7 +762,8 @@ class IntermediateDataStore:
         ):
             dense = np.zeros(MOVE_LABELS_NUM, dtype=np.float32)
 
-            if count < self._win_rate_threshold:
+            if count < self._position_count_threshold:
+                fallback_count += 1
                 # Fallback: 1/N uniform distribution over legal moves
                 n_legal = len(indices)
                 if n_legal > 0:
@@ -753,12 +776,18 @@ class IntermediateDataStore:
                 else:
                     best_move_win_rates.append(0.0)
             else:
-                # Normal: moveWinRate[i] = win_count[i] / label_count[i]
                 np_indices = np.array(indices, dtype=np.intp)
                 np_lv = np.array(label_values, dtype=np.float32)
                 np_wv = np.array(win_values, dtype=np.float32)
                 mask = np_lv > 0
-                rates = np.where(mask, np_wv / np_lv, 0.0)
+                # Beta prior smoothing:
+                # rate = (wins + prior) / (total + 2 * prior)
+                rates = np.where(
+                    mask,
+                    (np_wv + prior) / (np_lv + prior_doubled),
+                    0.0,
+                )
+                np.clip(rates, 0.0, 1.0, out=rates)
                 dense[np_indices] = rates
                 best_move_win_rates.append(
                     float(rates.max())
@@ -768,7 +797,11 @@ class IntermediateDataStore:
 
             move_win_rates.append(dense.tolist())
 
-        return move_win_rates, best_move_win_rates
+        return (
+            move_win_rates,
+            best_move_win_rates,
+            fallback_count,
+        )
 
     def _read_chunk_as_polars(
         self, limit: int, offset: int
@@ -798,7 +831,7 @@ class IntermediateDataStore:
 
     def _finalize_chunk(
         self, raw_df: pl.DataFrame
-    ) -> pl.DataFrame:
+    ) -> tuple[pl.DataFrame, int]:
         """生のDuckDBチャンクを最終形式のDataFrameに変換する．
 
         sparse展開・正規化・カラムリネームを行う．
@@ -807,7 +840,9 @@ class IntermediateDataStore:
             raw_df: DuckDBから読み出した生のDataFrame
 
         Returns:
-            最終形式のPreprocessing DataFrame
+            (DataFrame, fallback_count):
+                最終形式のPreprocessing DataFrameと
+                position_count_thresholdによるフォールバック局面数
         """
         # 共通カラムを一度だけPythonリストに変換する
         indices_list = raw_df["move_label_indices"].to_list()
@@ -824,7 +859,7 @@ class IntermediateDataStore:
         )
 
         # 指し手別勝率を計算(フォールバック適用済み)
-        move_win_rates, best_move_win_rates = (
+        move_win_rates, best_move_win_rates, fallback_count = (
             self._compute_move_win_rates(
                 indices_list,
                 label_values_list,
@@ -836,37 +871,46 @@ class IntermediateDataStore:
         # resultValue = win_count / count
         result_values = raw_df["win_count"] / raw_df["count"]
 
-        return pl.DataFrame(
-            {
-                "id": raw_df["hash_id"],
-                "boardIdPositions": raw_df[
-                    "board_id_positions"
-                ],
-                "piecesInHand": raw_df["pieces_in_hand"],
-                "moveLabel": pl.Series(
-                    move_labels,
-                    dtype=pl.List(pl.Float32),
-                ),
-                "moveWinRate": pl.Series(
-                    move_win_rates,
-                    dtype=pl.List(pl.Float32),
-                ),
-                "bestMoveWinRate": pl.Series(
-                    best_move_win_rates,
-                    dtype=pl.Float32,
-                ),
-                "resultValue": result_values.cast(pl.Float32),
-            },
-            schema=get_preprocessing_polars_schema(),
+        return (
+            pl.DataFrame(
+                {
+                    "id": raw_df["hash_id"],
+                    "boardIdPositions": raw_df[
+                        "board_id_positions"
+                    ],
+                    "piecesInHand": raw_df["pieces_in_hand"],
+                    "moveLabel": pl.Series(
+                        move_labels,
+                        dtype=pl.List(pl.Float32),
+                    ),
+                    "moveWinRate": pl.Series(
+                        move_win_rates,
+                        dtype=pl.List(pl.Float32),
+                    ),
+                    "bestMoveWinRate": pl.Series(
+                        best_move_win_rates,
+                        dtype=pl.Float32,
+                    ),
+                    "resultValue": result_values.cast(
+                        pl.Float32
+                    ),
+                },
+                schema=get_preprocessing_polars_schema(),
+            ),
+            fallback_count,
         )
 
-    def finalize_to_dataframe(self) -> pl.DataFrame:
+    def finalize_to_dataframe(
+        self,
+    ) -> tuple[pl.DataFrame, int]:
         """Convert all stored data to final preprocessing Polars DataFrame.
 
         バッファに未フラッシュのデータがある場合は先にフラッシュする．
 
         Returns:
-            pl.DataFrame: Preprocessing DataFrame with all aggregated data
+            (DataFrame, fallback_count):
+                Preprocessing DataFrame with all aggregated data と
+                position_count_thresholdによるフォールバック局面数
 
         Note:
             This method loads all data into memory at once.
@@ -889,24 +933,28 @@ class IntermediateDataStore:
         )
 
         if total_count == 0:
-            return pl.DataFrame(
-                schema=get_preprocessing_polars_schema()
+            return (
+                pl.DataFrame(
+                    schema=get_preprocessing_polars_schema()
+                ),
+                0,
             )
 
         # DuckDB → Polars直接変換 + バッチsparse展開
         raw_df = self._read_chunk_as_polars(total_count, 0)
-        df = self._finalize_chunk(raw_df)
+        df, fallback_count = self._finalize_chunk(raw_df)
 
         logger.info(
-            f"Finalized {total_count} records to DataFrame"
+            f"Finalized {total_count} records to DataFrame "
+            f"(fallback: {fallback_count})"
         )
-        return df
+        return df, fallback_count
 
     def iter_finalize_chunks_df(
         self,
         chunk_size: int = 1_000_000,
         delete_after_yield: bool = True,
-    ) -> Generator[pl.DataFrame, None, None]:
+    ) -> Generator[tuple[pl.DataFrame, int], None, None]:
         """Iterate over finalized chunks of preprocessing data as Polars DataFrames.
 
         バッファに未フラッシュのデータがある場合は先にフラッシュする．
@@ -921,7 +969,8 @@ class IntermediateDataStore:
                               after yielding to save disk space (default: True)
 
         Yields:
-            pl.DataFrame: Chunks of preprocessing DataFrame
+            (DataFrame, fallback_count): チャンクのDataFrameと
+                position_count_thresholdによるフォールバック局面数
 
         Note:
             When delete_after_yield=True, processed records are deleted from
@@ -969,11 +1018,13 @@ class IntermediateDataStore:
                 hash_ids_to_delete = raw_df["hash_id"].to_list()
 
             # バッチsparse展開 + 正規化
-            chunk_df = self._finalize_chunk(raw_df)
+            chunk_df, fallback_count = self._finalize_chunk(
+                raw_df
+            )
 
             processed_count += current_chunk_size
 
-            yield chunk_df
+            yield chunk_df, fallback_count
 
             # Delete processed records to free disk space
             if delete_after_yield and hash_ids_to_delete:

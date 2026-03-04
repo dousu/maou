@@ -47,7 +47,7 @@ class TestIntermediateDataStore:
         """Test that initialization creates DuckDB database file."""
         db_path = tmp_path / "test.duckdb"
 
-        store = IntermediateDataStore(db_path=db_path)
+        store = IntermediateDataStore(db_path=db_path, prior_strength=0.0)
 
         assert db_path.exists()
         assert store.get_total_count() == 0
@@ -57,7 +57,7 @@ class TestIntermediateDataStore:
         """Test adding a single record to the store."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Create test DataFrame
             batch_df = create_test_dataframe([12345])
 
@@ -77,7 +77,7 @@ class TestIntermediateDataStore:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=10
+            db_path=db_path, batch_size=10, prior_strength=0.0
         ) as store:
             # Add 50 records in 5 batches
             for i in range(5):
@@ -91,7 +91,7 @@ class TestIntermediateDataStore:
         """Test that duplicate hash_ids are aggregated correctly."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             hash_id = 12345
 
             # First insert
@@ -143,7 +143,7 @@ class TestIntermediateDataStore:
             assert store.get_total_count() == 1
 
             # Verify aggregation by reading back
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 1
             assert result_df["id"][0] == hash_id
 
@@ -171,7 +171,7 @@ class TestIntermediateDataStore:
         """Test that sparse arrays are compressed correctly."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Create sparse array (only 3 non-zero out of 1496)
             move_counts = [0] * 1496
             move_counts[10] = 100
@@ -192,7 +192,7 @@ class TestIntermediateDataStore:
             store.add_dataframe_batch(batch_df)
 
             # Read back and verify decompression
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 1
 
             # Verify normalized move labels (allow float32 precision tolerance)
@@ -218,13 +218,13 @@ class TestIntermediateDataStore:
         """Test finalizing all data to a Polars DataFrame."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Add 10 records
             for i in range(10):
                 batch_df = create_test_dataframe([i])
                 store.add_dataframe_batch(batch_df)
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
 
             assert len(result_df) == 10
             assert result_df.schema.names() == [
@@ -243,18 +243,19 @@ class TestIntermediateDataStore:
         """Test chunked finalization as Polars DataFrames."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Add 25 records
             hash_ids = list(range(25))
             batch_df = create_test_dataframe(hash_ids)
             store.add_dataframe_batch(batch_df)
 
             # Finalize in chunks of 10
-            chunks = list(
-                store.iter_finalize_chunks_df(
+            chunks = [
+                df
+                for df, _ in store.iter_finalize_chunks_df(
                     chunk_size=10, delete_after_yield=False
                 )
-            )
+            ]
 
             assert len(chunks) == 3  # 10 + 10 + 5
             assert len(chunks[0]) == 10
@@ -267,18 +268,19 @@ class TestIntermediateDataStore:
         """Test that delete_after_yield reduces database size."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Add 20 records
             hash_ids = list(range(20))
             batch_df = create_test_dataframe(hash_ids)
             store.add_dataframe_batch(batch_df)
 
             # Finalize with deletion
-            chunks = list(
-                store.iter_finalize_chunks_df(
+            chunks = [
+                df
+                for df, _ in store.iter_finalize_chunks_df(
                     chunk_size=10, delete_after_yield=True
                 )
-            )
+            ]
 
             assert len(chunks) == 2
 
@@ -289,7 +291,7 @@ class TestIntermediateDataStore:
         """Test getting database file size."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             initial_size = store.get_database_size()
             assert (
                 initial_size > 0
@@ -309,7 +311,7 @@ class TestIntermediateDataStore:
         """Test disk space checking functionality."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             # Add some data
             hash_ids = list(range(10))
             batch_df = create_test_dataframe(hash_ids)
@@ -329,7 +331,7 @@ class TestIntermediateDataStore:
         """Test context manager properly cleans up."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             batch_df = create_test_dataframe([1])
             store.add_dataframe_batch(batch_df)
 
@@ -347,7 +349,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=100
+            db_path=db_path, batch_size=100, prior_strength=0.0
         ) as store:
             # Add 5 records (below batch_size of 100)
             batch_df = create_test_dataframe([1, 2, 3, 4, 5])
@@ -370,7 +372,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=20
+            db_path=db_path, batch_size=20, prior_strength=0.0
         ) as store:
             # Add 15 records (below threshold)
             batch_df1 = create_test_dataframe(list(range(15)))
@@ -394,7 +396,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=50
+            db_path=db_path, batch_size=50, prior_strength=0.0
         ) as store:
             # Add 10 batches of 3 records each (30 total, below threshold)
             for i in range(10):
@@ -407,7 +409,7 @@ class TestBatchAccumulation:
             assert len(store._buffer) == 10
 
             # Finalize should auto-flush remaining buffer
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 30
 
     def test_flush_before_get_total_count(
@@ -417,7 +419,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=1000
+            db_path=db_path, batch_size=1000, prior_strength=0.0
         ) as store:
             batch_df = create_test_dataframe([1, 2, 3])
             store.add_dataframe_batch(batch_df)
@@ -433,7 +435,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=100
+            db_path=db_path, batch_size=100, prior_strength=0.0
         ) as store:
             empty_df = create_test_dataframe([])
             store.add_dataframe_batch(empty_df)
@@ -448,7 +450,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=100
+            db_path=db_path, batch_size=100, prior_strength=0.0
         ) as store:
             hash_id = 42
 
@@ -483,7 +485,7 @@ class TestBatchAccumulation:
             store.add_dataframe_batch(batch_df2)
 
             # Flush and verify aggregation
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 1
 
             # count: 2 + 3 = 5
@@ -497,7 +499,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         store = IntermediateDataStore(
-            db_path=db_path, batch_size=1000
+            db_path=db_path, batch_size=1000, prior_strength=0.0
         )
         batch_df = create_test_dataframe([1, 2, 3])
         store.add_dataframe_batch(batch_df)
@@ -518,7 +520,7 @@ class TestBatchAccumulation:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=1000
+            db_path=db_path, batch_size=1000, prior_strength=0.0
         ) as store:
             hash_id = 99
 
@@ -595,7 +597,7 @@ class TestBatchAccumulation:
             store.bulk_upsert(combined_df)
 
             # Verify correct aggregation
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 1
 
             # count: 2 + 3 = 5
@@ -703,7 +705,7 @@ class TestSparseBatch:
         """Test adding a single sparse record."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             batch_df = create_sparse_test_dataframe(
                 [12345],
                 indices_per_position=[[100]],
@@ -721,7 +723,7 @@ class TestSparseBatch:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=10
+            db_path=db_path, batch_size=10, prior_strength=0.0
         ) as store:
             for i in range(5):
                 hash_ids = list(range(i * 10, (i + 1) * 10))
@@ -738,7 +740,7 @@ class TestSparseBatch:
         """Test that duplicate hash_ids are aggregated correctly with sparse batches."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             hash_id = 12345
 
             # First insert: indices [50, 100], values [3, 5]
@@ -788,7 +790,7 @@ class TestSparseBatch:
             assert store.get_total_count() == 1
 
             # Verify aggregation by reading back
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             assert len(result_df) == 1
             assert result_df["id"][0] == hash_id
 
@@ -818,7 +820,7 @@ class TestSparseBatch:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=100
+            db_path=db_path, batch_size=100, prior_strength=0.0
         ) as store:
             batch_df = create_sparse_test_dataframe(
                 [1, 2, 3, 4, 5]
@@ -840,7 +842,7 @@ class TestSparseBatch:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=20
+            db_path=db_path, batch_size=20, prior_strength=0.0
         ) as store:
             batch_df1 = create_sparse_test_dataframe(
                 list(range(15))
@@ -863,7 +865,7 @@ class TestSparseBatch:
         db_path = tmp_path / "test.duckdb"
 
         with IntermediateDataStore(
-            db_path=db_path, batch_size=100
+            db_path=db_path, batch_size=100, prior_strength=0.0
         ) as store:
             empty_df = create_sparse_test_dataframe([])
             store.add_sparse_batch(empty_df)
@@ -877,12 +879,12 @@ class TestSparseBatch:
         """Test finalizing sparse data to a Polars DataFrame."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path) as store:
+        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
             for i in range(10):
                 batch_df = create_sparse_test_dataframe([i])
                 store.add_sparse_batch(batch_df)
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
 
             assert len(result_df) == 10
             assert result_df.schema.names() == [
@@ -901,7 +903,7 @@ class TestSparseBatch:
         """Test that move win rates are correctly computed from sparse data."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, win_rate_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             batch_df = create_sparse_test_dataframe(
@@ -921,7 +923,7 @@ class TestSparseBatch:
 
             assert store.get_total_count() == 1
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             win_rates = result_df["moveWinRate"].to_list()[0]
 
             # rate[10] = 1.5/2 = 0.75, rate[20] = 0.5/1 = 0.5
@@ -938,7 +940,7 @@ class TestSparseBatch:
         """Test conflicting sparse rows merge correctly."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, win_rate_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             # First upsert
@@ -973,7 +975,7 @@ class TestSparseBatch:
 
             assert store.get_total_count() == 1
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             win_rates = result_df["moveWinRate"].to_list()[0]
 
             # After merge:

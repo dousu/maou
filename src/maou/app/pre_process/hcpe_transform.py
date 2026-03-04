@@ -167,7 +167,8 @@ class PreProcess:
         feature_store: Optional[FeatureStore] = None,
         intermediate_cache_dir: Optional[Path] = None,
         intermediate_batch_size: int = 50_000,
-        win_rate_threshold: int = 2,
+        position_count_threshold: int = 2,
+        prior_strength: float = 5.0,
     ):
         """Initialize pre-processor.
 
@@ -177,14 +178,20 @@ class PreProcess:
             intermediate_cache_dir: Directory for intermediate data cache
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
-            win_rate_threshold: 局面の出現回数に対する閾値．
+            position_count_threshold: 局面の出現回数に対する閾値．
                 この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
+            prior_strength: Beta事前分布の強度パラメータ．
+                各手の勝率を ``(wins + prior_strength) / (total + 2 *
+                prior_strength)`` で平滑化する．0.0で平滑化なし．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
         self.__intermediate_cache_dir = intermediate_cache_dir
         self.__intermediate_batch_size = intermediate_batch_size
-        self.__win_rate_threshold = win_rate_threshold
+        self.__position_count_threshold = (
+            position_count_threshold
+        )
+        self.__prior_strength = prior_strength
         self.intermediate_store = None
 
     @dataclass(kw_only=True, frozen=True)
@@ -390,11 +397,15 @@ class PreProcess:
         )
         self.intermediate_store.add_sparse_batch(batch_df)
 
-    def aggregate_intermediate_data(self) -> "pl.DataFrame":
+    def aggregate_intermediate_data(
+        self,
+    ) -> tuple["pl.DataFrame", int]:
         """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．
 
         Returns:
-            前処理済みデータのPolars DataFrame
+            (DataFrame, fallback_count):
+                前処理済みデータのPolars DataFrameと
+                position_count_thresholdによるフォールバック局面数
 
         Note:
             This method loads all data into memory at once.
@@ -415,7 +426,7 @@ class PreProcess:
         output_dir: Optional[Path],
         output_filename: str,
         chunk_size: int = 1_000_000,
-    ) -> int:
+    ) -> tuple[int, int]:
         """中間データをチャンクごとに集計して出力する（メモリ効率版）．
 
         Args:
@@ -424,7 +435,8 @@ class PreProcess:
             chunk_size: チャンクあたりの局面数（デフォルト: 100万）
 
         Returns:
-            処理した総局面数
+            (total_processed, total_fallback):
+                処理した総局面数とフォールバック局面数
         """
         if self.intermediate_store is None:
             raise RuntimeError(
@@ -443,6 +455,7 @@ class PreProcess:
 
         chunk_idx = 0
         total_processed = 0
+        total_fallback = 0
 
         # プログレスバー: チャンク単位で進捗を表示
         with tqdm(
@@ -450,7 +463,10 @@ class PreProcess:
             desc="Aggregating chunks",
             unit="chunk",
         ) as pbar:
-            for chunk_df in (
+            for (
+                chunk_df,
+                fallback_count,
+            ) in (
                 self.intermediate_store.iter_finalize_chunks_df(
                     chunk_size=chunk_size,
                     delete_after_yield=False,
@@ -482,6 +498,7 @@ class PreProcess:
                     )
 
                 total_processed += len(chunk_df)
+                total_fallback += fallback_count
                 chunk_idx += 1
 
                 # プログレスバーを更新（チャンクごと）
@@ -498,9 +515,9 @@ class PreProcess:
 
         self.logger.info(
             f"Aggregation complete: {total_processed} positions "
-            f"in {chunk_idx} chunks"
+            f"in {chunk_idx} chunks (fallback: {total_fallback})"
         )
-        return total_processed
+        return total_processed, total_fallback
 
     def transform(
         self, option: PreProcessOption
@@ -550,7 +567,8 @@ class PreProcess:
         self.intermediate_store = IntermediateDataStore(
             db_path=db_path,
             batch_size=self.__intermediate_batch_size,
-            win_rate_threshold=self.__win_rate_threshold,
+            position_count_threshold=self.__position_count_threshold,
+            prior_strength=self.__prior_strength,
         )
         self.logger.info(
             f"Initialized disk-based intermediate store at {db_path}"
@@ -655,19 +673,29 @@ class PreProcess:
                             "output_dir or feature_store is required for large datasets"
                         )
 
-                    total_processed = self.aggregate_intermediate_data_chunked(
-                        output_dir=option.output_dir,
-                        output_filename=option.output_filename,
-                        chunk_size=1_000_000,
+                    total_processed, total_fallback = (
+                        self.aggregate_intermediate_data_chunked(
+                            output_dir=option.output_dir,
+                            output_filename=option.output_filename,
+                            chunk_size=1_000_000,
+                        )
                     )
                     pre_process_result["aggregated"] = (
                         f"success {total_processed} rows (chunked)"
                     )
+                    pre_process_result["fallback_positions"] = (
+                        str(total_fallback)
+                    )
                 else:
                     # 小規模データ: 従来の一括処理
-                    df = self.aggregate_intermediate_data()
+                    df, fallback_count = (
+                        self.aggregate_intermediate_data()
+                    )
                     pre_process_result["aggregated"] = (
                         f"success {len(df)} rows"
+                    )
+                    pre_process_result["fallback_positions"] = (
+                        str(fallback_count)
                     )
 
                     # Store results
@@ -877,19 +905,29 @@ class PreProcess:
                             "output_dir or feature_store is required for large datasets"
                         )
 
-                    total_processed = self.aggregate_intermediate_data_chunked(
-                        output_dir=option.output_dir,
-                        output_filename=option.output_filename,
-                        chunk_size=1_000_000,
+                    total_processed, total_fallback = (
+                        self.aggregate_intermediate_data_chunked(
+                            output_dir=option.output_dir,
+                            output_filename=option.output_filename,
+                            chunk_size=1_000_000,
+                        )
                     )
                     pre_process_result["aggregated"] = (
                         f"success {total_processed} rows (chunked)"
                     )
+                    pre_process_result["fallback_positions"] = (
+                        str(total_fallback)
+                    )
                 else:
                     # 小規模データ: 従来の一括処理
-                    df = self.aggregate_intermediate_data()
+                    df, fallback_count = (
+                        self.aggregate_intermediate_data()
+                    )
                     pre_process_result["aggregated"] = (
                         f"success {len(df)} rows"
+                    )
+                    pre_process_result["fallback_positions"] = (
+                        str(fallback_count)
                     )
                     # Store results
                     if self.__feature_store is not None:

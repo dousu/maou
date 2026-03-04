@@ -491,7 +491,7 @@ S3: S3Type | None = getattr(common, "S3", None)
         [m.value for m in PolicyTargetMode],
         case_sensitive=False,
     ),
-    default=PolicyTargetMode.MOVE_LABEL.value,
+    default=PolicyTargetMode.WIN_RATE.value,
     show_default=True,
     help="Policy教師信号モード．move-label=棋譜頻度，win-rate=勝率正規化，weighted=頻度×勝率．",
 )

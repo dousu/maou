@@ -233,7 +233,7 @@ moveWinRateの導入により，モデルは「勝ちにつながる手」を直
 
 ### CLI変更
 
-- `maou pre-process`: `--win-rate-threshold` パラメータ追加
+- `maou pre-process`: `--position-count-threshold` パラメータ追加
 - `maou learn-model`: `--policy-target-mode {move-label, win-rate, weighted}` パラメータ追加
 
 ---
