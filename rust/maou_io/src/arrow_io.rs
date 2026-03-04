@@ -89,15 +89,28 @@ pub fn load_feather(file_path: &str) -> Result<RecordBatch, MaouIOError> {
         // File format (starts with "ARROW1")
         let mut file_reader = FileReader::try_new(reader, None)?;
 
-        // Read first batch
-        match file_reader.next() {
-            Some(Ok(batch)) => Ok(batch),
-            Some(Err(e)) => Err(MaouIOError::ArrowError(e)),
-            None => Err(MaouIOError::IOError(std::io::Error::new(
+        // Read all batches and concatenate them
+        let mut batches = Vec::new();
+        while let Some(batch_result) = file_reader.next() {
+            batches.push(batch_result?);
+        }
+
+        if batches.is_empty() {
+            return Err(MaouIOError::IOError(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "Empty file: no record batches found",
-            ))),
+            )));
         }
+
+        // If there's only one batch, return it directly
+        if batches.len() == 1 {
+            return Ok(batches.into_iter().next().unwrap());
+        }
+
+        // Concatenate multiple batches into one
+        use arrow::compute::concat_batches;
+        let schema = batches[0].schema();
+        concat_batches(&schema, &batches).map_err(MaouIOError::ArrowError)
     }
 }
 
@@ -407,6 +420,31 @@ mod tests {
         assert_eq!(loaded_batches.len(), 2);
         assert_eq!(loaded_batches[0].num_rows(), 5);
         assert_eq!(loaded_batches[1].num_rows(), 5);
+    }
+
+    #[test]
+    fn test_load_feather_reads_all_batches_from_file_format() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_multi_load.feather");
+
+        let batch1 = create_test_batch(); // 5 rows
+        let batch2 = create_test_batch(); // 5 rows
+        let batch3 = create_test_batch(); // 5 rows
+
+        // Save 3 batches using File format (save_feather_batches uses FileWriter)
+        save_feather_batches(
+            &[batch1, batch2, batch3],
+            file_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        // load_feather must return ALL rows, not just the first batch
+        let loaded = load_feather(file_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            loaded.num_rows(),
+            15,
+            "load_feather should concatenate all batches (5+5+5=15 rows)"
+        );
     }
 
     #[test]
