@@ -38,7 +38,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[2.0, 1.0, 0.5]]
             counts = [5]
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -75,7 +75,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[1.0, 0.0, 0.0]]
             counts = [2]  # < threshold=3
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -112,14 +112,18 @@ class TestComputeMoveWinRates:
             win_values_col = [[1.5, 1.0], [1.0, 0.0]]
             counts = [5, 1]  # first: normal, second: fallback
 
-            move_win_rates, best_move_win_rates = (
-                store._compute_move_win_rates(
-                    indices_col,
-                    label_values_col,
-                    win_values_col,
-                    counts,
-                )
+            (
+                move_win_rates,
+                best_move_win_rates,
+                fallback_count,
+            ) = store._compute_move_win_rates(
+                indices_col,
+                label_values_col,
+                win_values_col,
+                counts,
             )
+
+            assert fallback_count == 1
 
             # First position: normal
             assert move_win_rates[0][10] == pytest.approx(
@@ -156,7 +160,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[1.0, 2.0, 0.0]]
             counts = [5]
 
-            _, best_move_win_rates = (
+            _, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -183,7 +187,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[2.0]]
             counts = [3]
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -212,7 +216,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[0.0, 0.0]]
             counts = [5]
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -238,7 +242,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[1.0, 0.5]]
             counts = [3]  # == threshold
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -276,7 +280,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[50.0, 1.0]]
             counts = [100]
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -316,7 +320,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[2.0, 1.0]]
             counts = [5]
 
-            move_win_rates, _ = store._compute_move_win_rates(
+            move_win_rates, *_ = store._compute_move_win_rates(
                 indices_col,
                 label_values_col,
                 win_values_col,
@@ -346,7 +350,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[1.0, 0.0, 0.0]]
             counts = [2]  # < threshold=3 -> fallback
 
-            move_win_rates, best_move_win_rates = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -385,7 +389,7 @@ class TestComputeMoveWinRates:
             win_values_col = [[600.0]]
             counts = [1000]
 
-            move_win_rates, _ = store._compute_move_win_rates(
+            move_win_rates, *_ = store._compute_move_win_rates(
                 indices_col,
                 label_values_col,
                 win_values_col,
