@@ -257,6 +257,16 @@ from maou.infra.console.common import (
     required=False,
     default=2,
 )
+@click.option(
+    "--prior-strength",
+    help="Beta prior strength for win rate smoothing. "
+    "Applies (wins + prior) / (total + 2 * prior) to shrink "
+    "low-count move win rates toward 50%%. "
+    "0.0 disables smoothing. (default: 0.0)",
+    type=float,
+    required=False,
+    default=0.0,
+)
 @handle_exception
 def pre_process(
     input_path: Optional[Path],
@@ -294,6 +304,7 @@ def pre_process(
     intermediate_batch_size: int,
     input_split_rows: int,
     win_rate_threshold: int,
+    prior_strength: float,
 ) -> None:
     import warnings
 
@@ -549,5 +560,6 @@ def pre_process(
             intermediate_cache_dir=intermediate_cache_dir,
             intermediate_batch_size=intermediate_batch_size,
             win_rate_threshold=win_rate_threshold,
+            prior_strength=prior_strength,
         )
     )

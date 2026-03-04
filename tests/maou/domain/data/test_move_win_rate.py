@@ -14,13 +14,17 @@ class TestComputeMoveWinRates:
     """Test _compute_move_win_rates domain logic."""
 
     def _create_store(
-        self, tmp_path: Path, threshold: int = 2
+        self,
+        tmp_path: Path,
+        threshold: int = 2,
+        prior_strength: float = 0.0,
     ) -> IntermediateDataStore:
         """Create IntermediateDataStore with given threshold."""
         db_path = tmp_path / "test.duckdb"
         return IntermediateDataStore(
             db_path=db_path,
             win_rate_threshold=threshold,
+            prior_strength=prior_strength,
         )
 
     def test_compute_move_win_rates_normal(
@@ -253,5 +257,145 @@ class TestComputeMoveWinRates:
             assert best_move_win_rates[0] == pytest.approx(
                 0.5, rel=1e-5
             )
+        finally:
+            store.close()
+
+    def test_beta_prior_shrinks_low_count_rate(
+        self, tmp_path: Path
+    ) -> None:
+        """Beta prior shrinks a 1-win/1-play move toward 50%."""
+        prior = 5.0
+        store = self._create_store(
+            tmp_path, threshold=2, prior_strength=prior
+        )
+        try:
+            # Move A: 80 plays, 50 wins -> high-count
+            # Move B: 1 play, 1 win -> low-count noise
+            indices_col = [[10, 20]]
+            label_values_col = [[80, 1]]
+            win_values_col = [[50.0, 1.0]]
+            counts = [100]
+
+            move_win_rates, best_move_win_rates = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            # Move A: (50+5)/(80+10) = 55/90 ≈ 0.6111
+            expected_a = (50.0 + prior) / (80.0 + 2 * prior)
+            assert move_win_rates[0][10] == pytest.approx(
+                expected_a, rel=1e-5
+            )
+
+            # Move B: (1+5)/(1+10) = 6/11 ≈ 0.5455
+            expected_b = (1.0 + prior) / (1.0 + 2 * prior)
+            assert move_win_rates[0][20] == pytest.approx(
+                expected_b, rel=1e-5
+            )
+
+            # Without prior, Move B would be 100% and dominate.
+            # With prior, Move A has higher rate than Move B.
+            assert move_win_rates[0][10] > move_win_rates[0][20]
+        finally:
+            store.close()
+
+    def test_beta_prior_zero_disables_smoothing(
+        self, tmp_path: Path
+    ) -> None:
+        """prior_strength=0.0 gives raw win rates (backward compat)."""
+        store = self._create_store(
+            tmp_path, threshold=2, prior_strength=0.0
+        )
+        try:
+            indices_col = [[10, 20]]
+            label_values_col = [[4, 1]]
+            win_values_col = [[2.0, 1.0]]
+            counts = [5]
+
+            move_win_rates, _ = store._compute_move_win_rates(
+                indices_col,
+                label_values_col,
+                win_values_col,
+                counts,
+            )
+
+            assert move_win_rates[0][10] == pytest.approx(
+                0.5, rel=1e-5
+            )  # 2/4
+            assert move_win_rates[0][20] == pytest.approx(
+                1.0, rel=1e-5
+            )  # 1/1
+        finally:
+            store.close()
+
+    def test_beta_prior_does_not_affect_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback positions still use uniform 1/N regardless of prior."""
+        prior = 5.0
+        store = self._create_store(
+            tmp_path, threshold=3, prior_strength=prior
+        )
+        try:
+            indices_col = [[5, 15, 25]]
+            label_values_col = [[1, 1, 1]]
+            win_values_col = [[1.0, 0.0, 0.0]]
+            counts = [2]  # < threshold=3 -> fallback
+
+            move_win_rates, best_move_win_rates = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            expected_rate = 1.0 / 3
+            assert move_win_rates[0][5] == pytest.approx(
+                expected_rate, rel=1e-5
+            )
+            assert move_win_rates[0][15] == pytest.approx(
+                expected_rate, rel=1e-5
+            )
+            assert move_win_rates[0][25] == pytest.approx(
+                expected_rate, rel=1e-5
+            )
+            assert best_move_win_rates[0] == pytest.approx(
+                0.5, rel=1e-5
+            )
+        finally:
+            store.close()
+
+    def test_beta_prior_high_count_minimal_impact(
+        self, tmp_path: Path
+    ) -> None:
+        """High-count moves are barely affected by prior."""
+        prior = 5.0
+        store = self._create_store(
+            tmp_path, threshold=2, prior_strength=prior
+        )
+        try:
+            indices_col = [[10]]
+            label_values_col = [[1000]]
+            win_values_col = [[600.0]]
+            counts = [1000]
+
+            move_win_rates, _ = store._compute_move_win_rates(
+                indices_col,
+                label_values_col,
+                win_values_col,
+                counts,
+            )
+
+            # (600+5)/(1000+10) = 605/1010 ≈ 0.5990
+            # Raw rate: 600/1000 = 0.6
+            raw_rate = 600.0 / 1000.0
+            smoothed = move_win_rates[0][10]
+            assert abs(smoothed - raw_rate) < 0.002
         finally:
             store.close()

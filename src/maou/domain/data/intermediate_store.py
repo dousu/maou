@@ -151,6 +151,7 @@ class IntermediateDataStore:
         db_path: Path,
         batch_size: int = 50_000,
         win_rate_threshold: int = 2,
+        prior_strength: float = 0.0,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -162,6 +163,10 @@ class IntermediateDataStore:
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
             win_rate_threshold: 指し手別勝率を計算する最小出現回数．
                 出現回数がこの閾値未満の場合，均一分布にフォールバックする．
+            prior_strength: Beta事前分布の強度パラメータ．
+                各手の勝率を ``(wins + prior_strength) / (total + 2 *
+                prior_strength)`` で平滑化し，出現回数が少ない手の勝率を
+                50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         self.db_path = db_path
@@ -170,6 +175,7 @@ class IntermediateDataStore:
             enable_vacuum  # Unused but kept for compatibility
         )
         self._win_rate_threshold = win_rate_threshold
+        self._prior_strength = prior_strength
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
@@ -716,7 +722,13 @@ class IntermediateDataStore:
         win_values_col: list[list[float]],
         counts: list[int],
     ) -> tuple[list[list[float]], list[float]]:
-        """指し手別勝率を計算する(フォールバック適用済み)．
+        """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
+
+        局面の出現回数が ``win_rate_threshold`` 未満の場合は合法手への均一分布に
+        フォールバックする．それ以外の場合は Beta事前分布による平滑化を適用し，
+        出現回数が少ない手の勝率ノイズを抑制する．
+
+        平滑化勝率 = (wins + prior) / (total + 2 * prior)
 
         Args:
             indices_col: 各局面のスパースインデックス
@@ -731,6 +743,7 @@ class IntermediateDataStore:
         """
         move_win_rates: list[list[float]] = []
         best_move_win_rates: list[float] = []
+        prior = self._prior_strength
 
         for indices, label_values, win_values, count in zip(
             indices_col,
@@ -753,12 +766,17 @@ class IntermediateDataStore:
                 else:
                     best_move_win_rates.append(0.0)
             else:
-                # Normal: moveWinRate[i] = win_count[i] / label_count[i]
                 np_indices = np.array(indices, dtype=np.intp)
                 np_lv = np.array(label_values, dtype=np.float32)
                 np_wv = np.array(win_values, dtype=np.float32)
                 mask = np_lv > 0
-                rates = np.where(mask, np_wv / np_lv, 0.0)
+                # Beta prior smoothing:
+                # rate = (wins + prior) / (total + 2 * prior)
+                rates = np.where(
+                    mask,
+                    (np_wv + prior) / (np_lv + 2.0 * prior),
+                    0.0,
+                )
                 dense[np_indices] = rates
                 best_move_win_rates.append(
                     float(rates.max())

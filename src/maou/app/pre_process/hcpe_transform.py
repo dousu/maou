@@ -168,6 +168,7 @@ class PreProcess:
         intermediate_cache_dir: Optional[Path] = None,
         intermediate_batch_size: int = 50_000,
         win_rate_threshold: int = 2,
+        prior_strength: float = 0.0,
     ):
         """Initialize pre-processor.
 
@@ -179,12 +180,16 @@ class PreProcess:
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
             win_rate_threshold: 局面の出現回数に対する閾値．
                 この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
+            prior_strength: Beta事前分布の強度パラメータ．
+                各手の勝率を ``(wins + prior_strength) / (total + 2 *
+                prior_strength)`` で平滑化する．0.0で平滑化なし．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
         self.__intermediate_cache_dir = intermediate_cache_dir
         self.__intermediate_batch_size = intermediate_batch_size
         self.__win_rate_threshold = win_rate_threshold
+        self.__prior_strength = prior_strength
         self.intermediate_store = None
 
     @dataclass(kw_only=True, frozen=True)
@@ -551,6 +556,7 @@ class PreProcess:
             db_path=db_path,
             batch_size=self.__intermediate_batch_size,
             win_rate_threshold=self.__win_rate_threshold,
+            prior_strength=self.__prior_strength,
         )
         self.logger.info(
             f"Initialized disk-based intermediate store at {db_path}"

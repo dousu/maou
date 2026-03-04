@@ -211,6 +211,7 @@ def transform(
     intermediate_cache_dir: Optional[Path] = None,
     intermediate_batch_size: int = 50_000,
     win_rate_threshold: int = 2,
+    prior_strength: float = 0.0,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -225,6 +226,9 @@ def transform(
         win_rate_threshold: Minimum position occurrence count for per-move
             win rate calculation. Positions with count below this threshold
             use uniform 1/N fallback. (default: 2)
+        prior_strength: Beta prior strength for win rate smoothing.
+            Applies ``(wins + prior) / (total + 2 * prior)`` to shrink
+            low-count move win rates toward 50%. 0.0 disables smoothing.
 
     Returns:
         JSON string with processing results
@@ -250,6 +254,7 @@ def transform(
         intermediate_cache_dir=intermediate_cache_dir,
         intermediate_batch_size=intermediate_batch_size,
         win_rate_threshold=win_rate_threshold,
+        prior_strength=prior_strength,
     ).transform(option)
 
     return json.dumps(pre_process_result)
