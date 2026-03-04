@@ -14,11 +14,11 @@ import duckdb
 import duckdb.typing
 import numpy as np
 import polars as pl
+import pyarrow as pa
 
 from maou._rust.maou_io import (
     add_sparse_arrays_dual_rust,
     compress_sparse_array_rust,
-    expand_sparse_array_rust,
 )
 from maou.domain.data.schema import (
     get_preprocessing_polars_schema,
@@ -699,8 +699,12 @@ class IntermediateDataStore:
         indices_col: list[list[int]],
         values_col: list[list[int]],
         counts: list[int],
-    ) -> list[list[float]]:
+    ) -> np.ndarray:
         """sparse展開と正規化をバッチで処理する．
+
+        メモリ効率のためnumpy 2D配列(float32)を返す．
+        Python list[list[float]]を使用した場合と比べて約7倍のメモリ削減
+        (Python floatオブジェクトが1個28バイトのため)．
 
         Args:
             indices_col: sparse indicesのリスト
@@ -708,17 +712,20 @@ class IntermediateDataStore:
             counts: 各レコードのcount値
 
         Returns:
-            正規化されたmove label確率のリスト(各要素は1496長のfloatリスト)
+            shape (N, 1496) のnumpy float32配列
         """
-        result = []
-        for indices, values, count in zip(
-            indices_col, values_col, counts
+        n = len(indices_col)
+        result = np.zeros(
+            (n, MOVE_LABELS_NUM), dtype=np.float32
+        )
+        for i, (indices, values, count) in enumerate(
+            zip(indices_col, values_col, counts)
         ):
-            dense = expand_sparse_array_rust(
-                list(indices), list(values), 1496
-            )
-            normalized = [val / count for val in dense]
-            result.append(normalized)
+            if not indices or count == 0:
+                continue
+            np_indices = np.array(indices, dtype=np.intp)
+            np_values = np.array(values, dtype=np.float32)
+            result[i, np_indices] = np_values / count
         return result
 
     def _compute_move_win_rates(
@@ -727,12 +734,15 @@ class IntermediateDataStore:
         label_values_col: list[list[int]],
         win_values_col: list[list[float]],
         counts: list[int],
-    ) -> tuple[list[list[float]], list[float], int]:
+    ) -> tuple[np.ndarray, list[float], int]:
         """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
 
         局面の出現回数が ``position_count_threshold`` 未満の場合は合法手への均一分布に
         フォールバックする．それ以外の場合は Beta事前分布による平滑化を適用し，
         出現回数が少ない手の勝率ノイズを抑制する．
+
+        メモリ効率のためnumpy 2D配列(float32)を返す．
+        Python list[list[float]]を使用した場合と比べて約7倍のメモリ削減．
 
         平滑化勝率 = (wins + prior) / (total + 2 * prior)
 
@@ -744,24 +754,32 @@ class IntermediateDataStore:
 
         Returns:
             (move_win_rates, best_move_win_rates, fallback_count):
-                move_win_rates: 1496要素のfloat配列のリスト
+                move_win_rates: shape (N, 1496) のnumpy float32配列
                 best_move_win_rates: 各局面の最大勝率のリスト
                 fallback_count: フォールバックが適用された局面数
         """
-        move_win_rates: list[list[float]] = []
+        n = len(indices_col)
+        move_win_rates = np.zeros(
+            (n, MOVE_LABELS_NUM), dtype=np.float32
+        )
         best_move_win_rates: list[float] = []
         fallback_count = 0
         prior = self._prior_strength
         prior_doubled = 2.0 * prior
 
-        for indices, label_values, win_values, count in zip(
-            indices_col,
-            label_values_col,
-            win_values_col,
-            counts,
+        for i, (
+            indices,
+            label_values,
+            win_values,
+            count,
+        ) in enumerate(
+            zip(
+                indices_col,
+                label_values_col,
+                win_values_col,
+                counts,
+            )
         ):
-            dense = np.zeros(MOVE_LABELS_NUM, dtype=np.float32)
-
             if count < self._position_count_threshold:
                 fallback_count += 1
                 # Fallback: 1/N uniform distribution over legal moves
@@ -771,7 +789,7 @@ class IntermediateDataStore:
                     np_indices = np.array(
                         indices, dtype=np.intp
                     )
-                    dense[np_indices] = uniform_rate
+                    move_win_rates[i, np_indices] = uniform_rate
                     best_move_win_rates.append(0.5)
                 else:
                     best_move_win_rates.append(0.0)
@@ -788,14 +806,12 @@ class IntermediateDataStore:
                     0.0,
                 )
                 np.clip(rates, 0.0, 1.0, out=rates)
-                dense[np_indices] = rates
+                move_win_rates[i, np_indices] = rates
                 best_move_win_rates.append(
                     float(rates.max())
                     if len(rates) > 0
                     else 0.0
                 )
-
-            move_win_rates.append(dense.tolist())
 
         return (
             move_win_rates,
@@ -829,12 +845,39 @@ class IntermediateDataStore:
             (limit, offset),
         ).pl()
 
+    @staticmethod
+    def _numpy_2d_to_list_series(
+        name: str,
+        arr: np.ndarray,
+    ) -> pl.Series:
+        """numpy 2D配列をPolars List(Float32) Seriesに変換する．
+
+        PyArrow ListArrayを経由してゼロコピーに近い変換を行う．
+        Python list[list[float]] を経由する場合と比べてメモリ使用量を
+        約7倍削減する(Python floatオブジェクトのオーバーヘッド回避)．
+
+        Args:
+            name: Series名
+            arr: shape (N, M) のnumpy float32配列
+
+        Returns:
+            dtype=List(Float32)のPolars Series
+        """
+        n, m = arr.shape
+        flat = pa.array(arr.ravel(), type=pa.float32())
+        offsets = pa.array(
+            np.arange(0, (n + 1) * m, m, dtype=np.int64)
+        )
+        list_array = pa.ListArray.from_arrays(offsets, flat)
+        return pl.Series(name, list_array)
+
     def _finalize_chunk(
         self, raw_df: pl.DataFrame
     ) -> tuple[pl.DataFrame, int]:
         """生のDuckDBチャンクを最終形式のDataFrameに変換する．
 
         sparse展開・正規化・カラムリネームを行う．
+        numpy 2D配列とArrow経由のゼロコピー変換でメモリ効率を最適化．
 
         Args:
             raw_df: DuckDBから読み出した生のDataFrame
@@ -851,14 +894,14 @@ class IntermediateDataStore:
         ].to_list()
         count_list = raw_df["count"].to_list()
 
-        # バッチでsparse展開と正規化
+        # バッチでsparse展開と正規化 (numpy 2D配列で返却)
         move_labels = self._expand_and_normalize_move_labels(
             indices_list,
             label_values_list,
             count_list,
         )
 
-        # 指し手別勝率を計算(フォールバック適用済み)
+        # 指し手別勝率を計算 (numpy 2D配列で返却)
         move_win_rates, best_move_win_rates, fallback_count = (
             self._compute_move_win_rates(
                 indices_list,
@@ -879,13 +922,11 @@ class IntermediateDataStore:
                         "board_id_positions"
                     ],
                     "piecesInHand": raw_df["pieces_in_hand"],
-                    "moveLabel": pl.Series(
-                        move_labels,
-                        dtype=pl.List(pl.Float32),
+                    "moveLabel": self._numpy_2d_to_list_series(
+                        "moveLabel", move_labels
                     ),
-                    "moveWinRate": pl.Series(
-                        move_win_rates,
-                        dtype=pl.List(pl.Float32),
+                    "moveWinRate": self._numpy_2d_to_list_series(
+                        "moveWinRate", move_win_rates
                     ),
                     "bestMoveWinRate": pl.Series(
                         best_move_win_rates,

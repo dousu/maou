@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -573,3 +574,70 @@ class TestPriorStrengthIntegration:
             assert win_rates[20] < 1.0
         finally:
             store.close()
+
+
+class TestNumpyReturnTypes:
+    """Regression tests: dense array methods must return numpy arrays.
+
+    Python list[list[float]] causes ~7× more memory than numpy float32
+    due to per-object overhead (28 bytes/float). Reverting to list would
+    re-introduce OOM during chunked aggregation of large datasets.
+    """
+
+    def _create_store(
+        self, tmp_path: Path
+    ) -> IntermediateDataStore:
+        db_path = tmp_path / "test.duckdb"
+        return IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
+        )
+
+    def test_expand_and_normalize_returns_numpy(
+        self, tmp_path: Path
+    ) -> None:
+        """_expand_and_normalize_move_labels must return np.ndarray."""
+        result = IntermediateDataStore._expand_and_normalize_move_labels(
+            indices_col=[[0, 1], [2]],
+            values_col=[[10, 20], [5]],
+            counts=[10, 5],
+        )
+        assert isinstance(result, np.ndarray)
+        assert result.dtype == np.float32
+        assert result.shape == (2, MOVE_LABELS_NUM)
+
+    def test_compute_move_win_rates_returns_numpy(
+        self, tmp_path: Path
+    ) -> None:
+        """_compute_move_win_rates must return np.ndarray."""
+        store = self._create_store(tmp_path)
+        try:
+            move_win_rates, _, _ = (
+                store._compute_move_win_rates(
+                    indices_col=[[0, 1]],
+                    label_values_col=[[4, 2]],
+                    win_values_col=[[2.0, 1.0]],
+                    counts=[5],
+                )
+            )
+            assert isinstance(move_win_rates, np.ndarray)
+            assert move_win_rates.dtype == np.float32
+            assert move_win_rates.shape == (
+                1,
+                MOVE_LABELS_NUM,
+            )
+        finally:
+            store.close()
+
+    def test_expand_normalize_zero_count_no_error(
+        self, tmp_path: Path
+    ) -> None:
+        """count=0 must not raise division-by-zero."""
+        result = IntermediateDataStore._expand_and_normalize_move_labels(
+            indices_col=[[0, 1]],
+            values_col=[[10, 20]],
+            counts=[0],
+        )
+        # count=0 row is skipped, all zeros
+        assert result[0].sum() == 0.0
