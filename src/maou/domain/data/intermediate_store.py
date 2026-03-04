@@ -151,7 +151,7 @@ class IntermediateDataStore:
         db_path: Path,
         batch_size: int = 50_000,
         win_rate_threshold: int = 2,
-        prior_strength: float = 0.0,
+        prior_strength: float = 5.0,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -744,6 +744,7 @@ class IntermediateDataStore:
         move_win_rates: list[list[float]] = []
         best_move_win_rates: list[float] = []
         prior = self._prior_strength
+        prior_doubled = 2.0 * prior
 
         for indices, label_values, win_values, count in zip(
             indices_col,
@@ -774,7 +775,7 @@ class IntermediateDataStore:
                 # rate = (wins + prior) / (total + 2 * prior)
                 rates = np.where(
                     mask,
-                    (np_wv + prior) / (np_lv + 2.0 * prior),
+                    (np_wv + prior) / (np_lv + prior_doubled),
                     0.0,
                 )
                 dense[np_indices] = rates

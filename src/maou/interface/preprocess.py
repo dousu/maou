@@ -211,7 +211,7 @@ def transform(
     intermediate_cache_dir: Optional[Path] = None,
     intermediate_batch_size: int = 50_000,
     win_rate_threshold: int = 2,
-    prior_strength: float = 0.0,
+    prior_strength: float = 5.0,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
