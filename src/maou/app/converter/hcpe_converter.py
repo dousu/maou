@@ -394,6 +394,9 @@ class HCPEConverter:
             chunk_size: 1チャンクあたりの行数(0の場合チャンキングしない)
         """
         # 成功した .feather ファイルを収集
+        # NOTE: _process_single_file が
+        # output_dir / file.with_suffix(".feather").name で保存するため，
+        # ここでも同じ変換で出力パスを再構築している
         successful_feather_files = [
             output_dir / Path(fp).with_suffix(".feather").name
             for fp, result in conversion_result.items()
@@ -428,6 +431,8 @@ class HCPEConverter:
             # 個別ファイルを削除(チャンクファイルのみ残す)
             # merge_hcpe_feather_files は常に新規ファイルを作成するため
             # chunked_paths と existing_feather_files は重複しない
+            # NOTE: symlink を含むパスでは absolute() の方が安全だが，
+            # 本プロジェクトでは output_dir 配下に symlink は想定しない
             chunked_set = {p.resolve() for p in chunked_paths}
             for f in existing_feather_files:
                 if f.resolve() not in chunked_set:
