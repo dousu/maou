@@ -54,6 +54,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -88,6 +89,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -116,6 +118,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -151,6 +154,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -189,6 +193,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -229,6 +234,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -269,6 +275,7 @@ class TestHCPEConverter:
                 max_moves=120,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -312,6 +319,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=["%TORYO"],
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -359,6 +367,7 @@ class TestHCPEConverter:
                 max_moves=120,
                 allowed_endgame_status=["%TORYO"],
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -404,6 +413,7 @@ class TestHCPEConverter:
                 max_moves=None,
                 allowed_endgame_status=None,
                 max_workers=1,
+                chunk_size=0,
             )
         )
 
@@ -420,3 +430,56 @@ class TestHCPEConverter:
             .with_suffix(".feather")
             .name
         ).exists()
+
+    def test_conversion_with_chunking(
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
+    ) -> None:
+        """チャンキング有効時に個別ファイルがチャンクにまとめられることを確認."""
+        input_paths = [
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_2.csa"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_3.csa"
+            ),
+        ]
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
+        option: hcpe_converter.HCPEConverter.ConvertOption = (
+            hcpe_converter.HCPEConverter.ConvertOption(
+                input_paths=input_paths,
+                input_format="csa",
+                output_dir=output_dir,
+                min_rating=None,
+                min_moves=None,
+                max_moves=None,
+                allowed_endgame_status=None,
+                max_workers=1,
+                chunk_size=500_000,
+            )
+        )
+
+        self.test_class.convert(option)
+        assert output_dir.exists()
+
+        # 個別ファイルは削除されている
+        for p in input_paths:
+            individual_file = (
+                output_dir / p.with_suffix(".feather").name
+            )
+            assert not individual_file.exists(), (
+                f"Individual file should be removed after chunking: {individual_file}"
+            )
+
+        # チャンクファイルが生成されている
+        chunk_files = list(
+            output_dir.glob("hcpe_chunk*.feather")
+        )
+        assert len(chunk_files) >= 1, (
+            "At least one chunk file should be created"
+        )
