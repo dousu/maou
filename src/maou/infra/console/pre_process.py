@@ -263,7 +263,7 @@ from maou.infra.console.common import (
     "Applies (wins + prior) / (total + 2 * prior) to shrink "
     "low-count move win rates toward 50%%. "
     "0.0 disables smoothing. (default: 5.0)",
-    type=float,
+    type=click.FloatRange(min=0.0),
     required=False,
     default=5.0,
 )

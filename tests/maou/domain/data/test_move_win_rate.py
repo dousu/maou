@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from maou.domain.data.intermediate_store import (
@@ -19,7 +20,12 @@ class TestComputeMoveWinRates:
         threshold: int = 2,
         prior_strength: float = 0.0,
     ) -> IntermediateDataStore:
-        """Create IntermediateDataStore with given threshold."""
+        """Create IntermediateDataStore with given threshold.
+
+        prior_strength defaults to 0.0 (no smoothing) so that existing
+        tests can assert raw win rates without Beta prior adjustment.
+        Production default is 5.0.
+        """
         db_path = tmp_path / "test.duckdb"
         return IntermediateDataStore(
             db_path=db_path,
@@ -401,5 +407,169 @@ class TestComputeMoveWinRates:
             raw_rate = 600.0 / 1000.0
             smoothed = move_win_rates[0][10]
             assert abs(smoothed - raw_rate) < 0.002
+        finally:
+            store.close()
+
+    def test_negative_prior_strength_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative prior_strength raises ValueError."""
+        db_path = tmp_path / "test.duckdb"
+        with pytest.raises(
+            ValueError, match="prior_strength must be >= 0.0"
+        ):
+            IntermediateDataStore(
+                db_path=db_path,
+                prior_strength=-1.0,
+            )
+
+    def test_win_rates_clipped_to_unit_interval(
+        self, tmp_path: Path
+    ) -> None:
+        """Win rates are clipped to [0.0, 1.0] even with noisy data."""
+        store = self._create_store(
+            tmp_path, threshold=2, prior_strength=0.0
+        )
+        try:
+            # win_values > label_values -> raw rate > 1.0
+            indices_col = [[10]]
+            label_values_col = [[2]]
+            win_values_col = [[3.0]]  # 3.0/2 = 1.5 without clip
+            counts = [5]
+
+            move_win_rates, best_move_win_rates, _ = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            assert move_win_rates[0][10] <= 1.0
+            assert best_move_win_rates[0] <= 1.0
+        finally:
+            store.close()
+
+
+class TestFallbackCountSummation:
+    """Test fallback count summation across chunks (#8)."""
+
+    def test_fallback_count_summed_across_chunks(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback counts from multiple chunks are correctly summed."""
+        db_path = tmp_path / "test.duckdb"
+
+        store = IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=3,
+            prior_strength=0.0,
+        )
+        try:
+            # Add 6 positions: 3 with count >= threshold, 3 with count < threshold
+            for i in range(6):
+                move_label_count = [0] * 1496
+                move_label_count[10] = 1
+                move_win_count = [0.0] * 1496
+                move_win_count[10] = 0.5
+
+                df = pl.DataFrame(
+                    [
+                        {
+                            "hash_id": i,
+                            "count": 5
+                            if i < 3
+                            else 1,  # first 3 normal, last 3 fallback
+                            "win_count": 2.5 if i < 3 else 0.5,
+                            "move_label_count": move_label_count,
+                            "move_win_count": move_win_count,
+                            "board_id_positions": [
+                                [0] * 9 for _ in range(9)
+                            ],
+                            "pieces_in_hand": [0] * 14,
+                        }
+                    ]
+                )
+                store.add_dataframe_batch(df)
+
+            # Finalize in chunks of 2 (3 chunks total)
+            total_fallback = 0
+            chunk_count = 0
+            for (
+                _,
+                fallback_count,
+            ) in store.iter_finalize_chunks_df(
+                chunk_size=2, delete_after_yield=False
+            ):
+                total_fallback += fallback_count
+                chunk_count += 1
+
+            assert chunk_count == 3
+            assert (
+                total_fallback == 3
+            )  # 3 positions had count < threshold
+
+        finally:
+            store.close()
+
+
+class TestPriorStrengthIntegration:
+    """Integration test: prior_strength flows through store to finalized output (#7)."""
+
+    def test_prior_strength_affects_finalized_output(
+        self, tmp_path: Path
+    ) -> None:
+        """prior_strength set at store creation affects finalize_to_dataframe output."""
+        prior = 5.0
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=prior,
+        )
+        try:
+            move_label_count = [0] * 1496
+            move_label_count[10] = 4
+            move_label_count[20] = 1
+            move_win_count = [0.0] * 1496
+            move_win_count[10] = 2.0
+            move_win_count[20] = 1.0
+
+            df = pl.DataFrame(
+                [
+                    {
+                        "hash_id": 42,
+                        "count": 5,
+                        "win_count": 3.0,
+                        "move_label_count": move_label_count,
+                        "move_win_count": move_win_count,
+                        "board_id_positions": [
+                            [0] * 9 for _ in range(9)
+                        ],
+                        "pieces_in_hand": [0] * 14,
+                    }
+                ]
+            )
+            store.add_dataframe_batch(df)
+
+            result_df, _ = store.finalize_to_dataframe()
+            win_rates = result_df["moveWinRate"].to_list()[0]
+
+            # With prior=5.0:
+            # idx 10: (2.0+5)/(4+10) = 7/14 = 0.5
+            # idx 20: (1.0+5)/(1+10) = 6/11 ≈ 0.5455
+            # Without prior (raw): idx 10 = 0.5, idx 20 = 1.0
+            expected_10 = (2.0 + prior) / (4 + 2 * prior)
+            expected_20 = (1.0 + prior) / (1 + 2 * prior)
+            assert win_rates[10] == pytest.approx(
+                expected_10, rel=1e-5
+            )
+            assert win_rates[20] == pytest.approx(
+                expected_20, rel=1e-5
+            )
+            # Confirm smoothing had an effect on idx 20
+            # (raw rate would be 1.0, smoothed is ~0.5455)
+            assert win_rates[20] < 1.0
         finally:
             store.close()

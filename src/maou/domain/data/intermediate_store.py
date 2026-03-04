@@ -169,6 +169,10 @@ class IntermediateDataStore:
                 50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
+        if prior_strength < 0.0:
+            raise ValueError(
+                f"prior_strength must be >= 0.0, got {prior_strength}"
+            )
         self.db_path = db_path
         self.batch_size = batch_size
         self.enable_vacuum = (
@@ -783,6 +787,7 @@ class IntermediateDataStore:
                     (np_wv + prior) / (np_lv + prior_doubled),
                     0.0,
                 )
+                np.clip(rates, 0.0, 1.0, out=rates)
                 dense[np_indices] = rates
                 best_move_win_rates.append(
                     float(rates.max())
