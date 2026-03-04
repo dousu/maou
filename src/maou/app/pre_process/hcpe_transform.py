@@ -421,6 +421,50 @@ class PreProcess:
         # ディスクストアから最終DataFrameを生成
         return self.intermediate_store.finalize_to_dataframe()
 
+    def _log_resource_estimates(
+        self,
+        disk_info: Dict[str, Any],
+        use_chunked: bool,
+        total_count: int,
+    ) -> None:
+        """リソース推定結果をログ出力する．
+
+        Args:
+            disk_info: check_disk_spaceの戻り値
+            use_chunked: チャンクモードかどうか
+            total_count: ユニーク局面数
+        """
+        self.logger.info(
+            f"Total unique positions: {disk_info['unique_positions']:,}"
+        )
+        if use_chunked:
+            num_chunks = max(
+                (total_count + 999_999) // 1_000_000, 1
+            )
+            chunk_memory_gb = (
+                disk_info["estimated_memory_gb"] / num_chunks
+            )
+            self.logger.info(
+                f"Estimated memory for aggregation: "
+                f"{disk_info['estimated_memory_gb']:.2f} GB total, "
+                f"~{chunk_memory_gb:.2f} GB per chunk"
+            )
+        else:
+            self.logger.info(
+                f"Estimated memory for aggregation: "
+                f"{disk_info['estimated_memory_gb']:.2f} GB"
+            )
+        self.logger.info(
+            f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
+        )
+        self.logger.info(
+            f"Peak disk usage: {disk_info['peak_disk_gb']:.2f} GB "
+            f"({'chunked mode with incremental deletion' if use_chunked else 'bulk mode'})"
+        )
+        self.logger.info(
+            f"Available disk space (DB location): {disk_info['db_disk_free_gb']:.2f} GB"
+        )
+
     def aggregate_intermediate_data_chunked(
         self,
         output_dir: Optional[Path],
@@ -604,24 +648,8 @@ class PreProcess:
                     )
                 )
 
-                self.logger.info(
-                    f"Total unique positions: {disk_info['unique_positions']:,}"
-                )
-                self.logger.info(
-                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
-                    f"(per chunk)"
-                    if use_chunked
-                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
-                )
-                self.logger.info(
-                    f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
-                )
-                self.logger.info(
-                    f"Peak disk usage: {disk_info['peak_disk_gb']:.2f} GB "
-                    f"({'chunked mode with incremental deletion' if use_chunked else 'bulk mode'})"
-                )
-                self.logger.info(
-                    f"Available disk space (DB location): {disk_info['db_disk_free_gb']:.2f} GB"
+                self._log_resource_estimates(
+                    disk_info, use_chunked, total_count
                 )
 
                 # ディスク容量チェック
@@ -836,24 +864,8 @@ class PreProcess:
                     )
                 )
 
-                self.logger.info(
-                    f"Total unique positions: {disk_info['unique_positions']:,}"
-                )
-                self.logger.info(
-                    f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB "
-                    f"(per chunk)"
-                    if use_chunked
-                    else f"Estimated memory for aggregation: {disk_info['estimated_memory_gb']:.2f} GB"
-                )
-                self.logger.info(
-                    f"Estimated output size: {disk_info['estimated_output_gb']:.2f} GB"
-                )
-                self.logger.info(
-                    f"Peak disk usage: {disk_info['peak_disk_gb']:.2f} GB "
-                    f"({'chunked mode with incremental deletion' if use_chunked else 'bulk mode'})"
-                )
-                self.logger.info(
-                    f"Available disk space (DB location): {disk_info['db_disk_free_gb']:.2f} GB"
+                self._log_resource_estimates(
+                    disk_info, use_chunked, total_count
                 )
 
                 # ディスク容量チェック
