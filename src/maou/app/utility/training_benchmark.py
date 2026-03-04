@@ -139,7 +139,7 @@ class SingleEpochBenchmark:
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
-        policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
+        policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
     ):
@@ -454,7 +454,7 @@ class TrainingBenchmarkConfig:
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
     policy_target_mode: PolicyTargetMode = (
-        PolicyTargetMode.MOVE_LABEL
+        PolicyTargetMode.WIN_RATE
     )
     learning_ratio: float = 0.01
     momentum: float = 0.9

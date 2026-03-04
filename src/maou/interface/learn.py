@@ -233,7 +233,7 @@ def learn(
     ] = None,
     streaming_val_source: Optional[StreamingDataSource] = None,
     save_split_params: bool = False,
-    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -963,7 +963,7 @@ def learn_multi_stage(
         StreamingDataSource
     ] = None,
     save_split_params: bool = False,
-    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
 ) -> str:
     """Execute multi-stage training workflow.
 

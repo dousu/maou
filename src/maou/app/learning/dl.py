@@ -137,7 +137,7 @@ class Learning:
         ) = None
         save_split_params: bool = False
         policy_target_mode: PolicyTargetMode = (
-            PolicyTargetMode.MOVE_LABEL
+            PolicyTargetMode.WIN_RATE
         )
 
     def __init__(

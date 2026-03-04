@@ -165,7 +165,7 @@ def benchmark_training(
     gce_parameter: Optional[float] = None,
     policy_loss_ratio: Optional[float] = None,
     value_loss_ratio: Optional[float] = None,
-    policy_target_mode: PolicyTargetMode = PolicyTargetMode.MOVE_LABEL,
+    policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     learning_ratio: Optional[float] = None,
     momentum: Optional[float] = None,
     lr_scheduler: Optional[str] = None,
