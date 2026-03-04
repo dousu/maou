@@ -62,7 +62,7 @@ class TestIntermediateStoreDualMerge:
         """New rows inserted with correct win values."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             df = _create_test_df(
@@ -77,7 +77,7 @@ class TestIntermediateStoreDualMerge:
 
             assert store.get_total_count() == 1
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             win_rates = result_df["moveWinRate"].to_list()[0]
 
             # rate[10] = 1.5/2 = 0.75, rate[20] = 0.5/1 = 0.5
@@ -94,7 +94,7 @@ class TestIntermediateStoreDualMerge:
         """Conflicting rows merge both tracks correctly."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             # First upsert
@@ -121,7 +121,7 @@ class TestIntermediateStoreDualMerge:
 
             assert store.get_total_count() == 1
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
             win_rates = result_df["moveWinRate"].to_list()[0]
 
             # After merge:
@@ -145,7 +145,7 @@ class TestIntermediateStoreDualMerge:
         """Output DataFrame has moveWinRate column."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             df = _create_test_df(
@@ -158,7 +158,7 @@ class TestIntermediateStoreDualMerge:
             )
             store.bulk_upsert(df)
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
 
             assert "moveWinRate" in result_df.columns
             assert result_df["moveWinRate"].dtype == pl.List(
@@ -177,7 +177,7 @@ class TestIntermediateStoreDualMerge:
         """Output DataFrame has bestMoveWinRate column."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2
+            db_path=db_path, position_count_threshold=2, prior_strength=0.0
         )
         try:
             df = _create_test_df(
@@ -190,7 +190,7 @@ class TestIntermediateStoreDualMerge:
             )
             store.bulk_upsert(df)
 
-            result_df = store.finalize_to_dataframe()
+            result_df, _ = store.finalize_to_dataframe()
 
             assert "bestMoveWinRate" in result_df.columns
             assert (
