@@ -13,7 +13,10 @@ from tqdm.auto import tqdm
 
 from maou.domain.board import shogi
 from maou.domain.data.array_io import save_hcpe_df
-from maou.domain.data.rust_io import load_hcpe_df
+from maou.domain.data.rust_io import (
+    load_hcpe_df,
+    merge_hcpe_feather_files,
+)
 from maou.domain.data.schema import (
     get_hcpe_polars_schema,
 )
@@ -85,6 +88,7 @@ class HCPEConverter:
         allowed_endgame_status: Optional[list[str]] = None
         exclude_moves: Optional[list[int]] = None
         max_workers: int
+        chunk_size: int = 500_000
 
     @staticmethod
     def _process_single_file(
@@ -270,7 +274,13 @@ class HCPEConverter:
             return (str(file), f"error: {str(e)}")
 
     def convert(self, option: ConvertOption) -> Dict[str, str]:
-        """HCPEファイルを作成する (並列処理版)."""
+        """HCPEファイルを作成する (並列処理版)．
+
+        処理フロー:
+        1. 各入力ファイルを個別の .feather に変換
+        2. chunk_size > 0 の場合，個別ファイルをチャンクにマージ
+        3. feature_store が設定されている場合，チャンクをアップロード
+        """
         conversion_result: Dict[str, str] = {}
         self.logger.debug(
             f"変換対象のファイル {option.input_paths}"
@@ -284,6 +294,7 @@ class HCPEConverter:
         )
 
         with self.__context():
+            # Phase 1: 各入力ファイルを個別の .feather に変換
             if max_workers == 1 or len(option.input_paths) == 1:
                 # Sequential processing for single worker or single file
                 for file in tqdm(
@@ -318,26 +329,6 @@ class HCPEConverter:
                             raise Exception(error_msg)
 
                     conversion_result[file_path] = result
-
-                    # Handle feature store for sequential processing
-                    if (
-                        self.__feature_store is not None
-                        and result.startswith("success")
-                    ):
-                        # Load the saved .feather file and convert to numpy array for feature store
-                        feather_file = (
-                            option.output_dir
-                            / file.with_suffix(".feather").name
-                        )
-                        if feather_file.exists():
-                            df = load_hcpe_df(feather_file)
-                            self.__feature_store.store_features(
-                                name=file.name,
-                                key_columns=["id"],
-                                dataframe=df,
-                                clustering_key=None,
-                                partitioning_key_date="partitioningKey",
-                            )
             else:
                 # Parallel processing
                 with ProcessPoolExecutor(
@@ -371,32 +362,6 @@ class HCPEConverter:
                             conversion_result[file_path] = (
                                 result
                             )
-
-                            # Handle feature store for parallel processing
-                            if (
-                                self.__feature_store is not None
-                                and result.startswith("success")
-                            ):
-                                # Load the saved .feather file and convert to numpy array for feature store
-                                feather_file = (
-                                    option.output_dir
-                                    / file.with_suffix(
-                                        ".feather"
-                                    ).name
-                                )
-                                if feather_file.exists():
-                                    df = load_hcpe_df(
-                                        feather_file
-                                    )
-                                    self.__feature_store.store_features(
-                                        name=file.with_suffix(
-                                            ".hcpe"
-                                        ).name,
-                                        key_columns=["id"],
-                                        dataframe=df,
-                                        clustering_key=None,
-                                        partitioning_key_date="partitioningKey",
-                                    )
                         except Exception as exc:
                             self.logger.error(
                                 f"File {file} generated an exception: {exc}"
@@ -405,7 +370,86 @@ class HCPEConverter:
                                 f"error: {str(exc)}"
                             )
 
+            # Phase 2: チャンキングとアップロード
+            self._chunk_and_upload(
+                conversion_result=conversion_result,
+                output_dir=option.output_dir,
+                chunk_size=option.chunk_size,
+            )
+
         return conversion_result
+
+    def _chunk_and_upload(
+        self,
+        *,
+        conversion_result: Dict[str, str],
+        output_dir: Path,
+        chunk_size: int,
+    ) -> None:
+        """個別 .feather ファイルをチャンクにまとめ，feature_store にアップロードする．
+
+        Args:
+            conversion_result: 変換結果のマッピング(ファイルパス→ステータス)
+            output_dir: .feather ファイルの出力ディレクトリ
+            chunk_size: 1チャンクあたりの行数(0の場合チャンキングしない)
+        """
+        # 成功した .feather ファイルを収集
+        successful_feather_files = [
+            output_dir / Path(fp).with_suffix(".feather").name
+            for fp, result in conversion_result.items()
+            if result.startswith("success")
+        ]
+        existing_feather_files = [
+            f for f in successful_feather_files if f.exists()
+        ]
+
+        if not existing_feather_files:
+            return
+
+        if chunk_size > 0:
+            self.logger.info(
+                f"Merging {len(existing_feather_files)} files "
+                f"into chunks (chunk_size={chunk_size})"
+            )
+            chunked_paths = merge_hcpe_feather_files(
+                existing_feather_files,
+                output_dir,
+                rows_per_chunk=chunk_size,
+                output_prefix="hcpe",
+            )
+
+            # feature_store へチャンクをアップロード
+            if self.__feature_store is not None:
+                for chunk_path in chunked_paths:
+                    df = load_hcpe_df(chunk_path)
+                    self.__feature_store.store_features(
+                        name=chunk_path.name,
+                        key_columns=["id"],
+                        dataframe=df,
+                        clustering_key=None,
+                        partitioning_key_date="partitioningKey",
+                    )
+
+            # 個別ファイルを削除(チャンクファイルのみ残す)
+            chunked_set = {p.resolve() for p in chunked_paths}
+            for f in existing_feather_files:
+                if f.resolve() not in chunked_set:
+                    f.unlink()
+
+            self.logger.info(
+                f"Created {len(chunked_paths)} chunked files"
+            )
+        elif self.__feature_store is not None:
+            # チャンキングなし・feature_store ありの場合は個別アップロード
+            for f in existing_feather_files:
+                df = load_hcpe_df(f)
+                self.__feature_store.store_features(
+                    name=f.name,
+                    key_columns=["id"],
+                    dataframe=df,
+                    clustering_key=None,
+                    partitioning_key_date="partitioningKey",
+                )
 
     @contextlib.contextmanager
     def __context(self) -> Generator[None, None, None]:

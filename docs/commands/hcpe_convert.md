@@ -24,7 +24,8 @@
 | `--min-rating/--min-moves/--max-moves` | optional | Filter out games below rating thresholds or outside the move-count window before conversion.【F:src/maou/infra/console/hcpe_convert.py†L46-L90】【F:src/maou/app/converter/hcpe_converter.py†L90-L179】 |
 | `--allowed-endgame-status` | repeatable | Restrict CSA/KIF terminal markers (e.g., `%TORYO`). An empty list means "any".【F:src/maou/infra/console/hcpe_convert.py†L72-L90】【F:src/maou/app/converter/hcpe_converter.py†L90-L158】 |
 | `--exclude-moves` | repeatable | Skip specific move IDs even inside accepted games.【F:src/maou/infra/console/hcpe_convert.py†L90-L102】【F:src/maou/app/converter/hcpe_converter.py†L158-L214】 |
-| `--process-max-workers INT` | default `4` | Caps the CPU workers used for parsing/conversion. Negative values raise before work starts; omitting the flag defaults to `min(4, cpu_count)`.【F:src/maou/infra/console/hcpe_convert.py†L132-L150】【F:src/maou/interface/converter.py†L75-L110】 |
+| `--chunk-size INT` | default `500000` | Number of rows per chunked output file. After individual files are converted, they are merged into chunked files of this size. Set to `0` to disable chunking and keep one file per game.【F:src/maou/infra/console/hcpe_convert.py†L143-L150】 |
+| `--process-max-workers INT` | default `4` | Caps the CPU workers used for parsing/conversion. Negative values raise before work starts; omitting the flag defaults to `min(4, cpu_count)`.【F:src/maou/infra/console/hcpe_convert.py†L150-L158】【F:src/maou/interface/converter.py†L75-L110】 |
 
 ### Cloud outputs and batching
 
@@ -51,10 +52,14 @@
    provider is active, then builds the appropriate feature store. Missing
    optional extras trigger warnings instead of crashes so local-only runs keep
    going.【F:src/maou/infra/console/hcpe_convert.py†L150-L232】
-5. **Conversion and uploads** – `HCPEConverter.convert` iterates through every
-   path, generates `.npy` shards, aggregates per-file status strings, and, when a
-   feature store is present, reloads the shard and pushes it to the cloud with
-   consistent schema metadata.【F:src/maou/app/converter/hcpe_converter.py†L58-L236】
+5. **Conversion** – `HCPEConverter.convert` iterates through every
+   path and generates individual `.feather` files, aggregating per-file status
+   strings.【F:src/maou/app/converter/hcpe_converter.py†L58-L370】
+6. **Chunking and uploads** – After all files are converted, individual `.feather`
+   files are merged into chunked files via `merge_hcpe_feather_files` (controlled
+   by `--chunk-size`). When a feature store is configured, each chunk is loaded
+   and pushed to the cloud. Individual pre-merge files are cleaned
+   up.【F:src/maou/app/converter/hcpe_converter.py†L370-L440】
 
 ## Validation and guardrails
 
@@ -76,21 +81,24 @@
 - Each processed file yields a status string such as `"success 128 rows"`,
   `"skipped"`, or `"error: ..."`. The CLI prints the aggregated JSON blob, making
   it easy to audit which source files produced data.【F:src/maou/interface/converter.py†L96-L117】【F:src/maou/app/converter/hcpe_converter.py†L180-L236】
-- `.npy` filenames mirror the source file with the `.hcpe` suffix swapped for
-  `.npy`, so local datasets stay aligned with their originals.【F:src/maou/app/converter/hcpe_converter.py†L200-L214】
-- When a feature store is configured the converter immediately reloads the saved
-  shard and calls `store_features` with `key_columns=["id"]` and
+- When `--chunk-size` is set (default `500000`), individual `.feather` files are
+  merged into chunked outputs named `hcpe_chunk0000.feather`,
+  `hcpe_chunk0001.feather`, etc. The original per-game files are removed after
+  merging.【F:src/maou/app/converter/hcpe_converter.py†L370-L440】
+- When a feature store is configured, each chunk is loaded and uploaded via
+  `store_features` with `key_columns=["id"]` and
   `partitioning_key_date="partitioningKey"`, ensuring downstream tables retain
-  consistent keys.【F:src/maou/app/converter/hcpe_converter.py†L214-L236】
+  consistent keys.【F:src/maou/app/converter/hcpe_converter.py†L370-L440】
 
 ### Example invocation
 
 ```bash
-poetry run maou hcpe-convert \
+uv run maou hcpe-convert \
   --input-path data/csa_games \
   --input-format csa \
   --output-dir artifacts/hcpe \
   --min-rating 2400 \
+  --chunk-size 500000 \
   --process-max-workers 8 \
   --output-gcs --bucket-name my-bucket --prefix hcpe --data-name training
 ```

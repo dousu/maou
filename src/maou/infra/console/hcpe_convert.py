@@ -141,6 +141,13 @@ from maou.infra.console.common import (
     default=4,
 )
 @click.option(
+    "--chunk-size",
+    help="Number of rows per chunked output file (default: 500000, 0 to disable).",
+    type=int,
+    required=False,
+    default=500_000,
+)
+@click.option(
     "--process-max-workers",
     help="Number of parallel processing processes (default: 4).",
     type=int,
@@ -166,6 +173,7 @@ def hcpe_convert(
     prefix: Optional[str],
     data_name: Optional[str],
     max_cached_bytes: int,
+    chunk_size: int,
     output_max_workers: int,
     output_max_queue_size: int,
     process_max_workers: int,
@@ -281,5 +289,6 @@ def hcpe_convert(
             exclude_moves=exclude_moves,
             feature_store=feature_store,
             max_workers=process_max_workers,
+            chunk_size=chunk_size,
         )
     )
