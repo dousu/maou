@@ -901,7 +901,7 @@ class TestSparseBatch:
         """Test that move win rates are correctly computed from sparse data."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, win_rate_threshold=2
+            db_path=db_path, position_count_threshold=2
         )
         try:
             batch_df = create_sparse_test_dataframe(
@@ -938,7 +938,7 @@ class TestSparseBatch:
         """Test conflicting sparse rows merge correctly."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, win_rate_threshold=2
+            db_path=db_path, position_count_threshold=2
         )
         try:
             # First upsert

@@ -150,7 +150,7 @@ class IntermediateDataStore:
         self,
         db_path: Path,
         batch_size: int = 50_000,
-        win_rate_threshold: int = 2,
+        position_count_threshold: int = 2,
         prior_strength: float = 5.0,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
@@ -161,7 +161,7 @@ class IntermediateDataStore:
             batch_size: Number of records to accumulate before flushing to DuckDB.
                 Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
-            win_rate_threshold: 指し手別勝率を計算する最小出現回数．
+            position_count_threshold: 指し手別勝率を計算する最小出現回数．
                 出現回数がこの閾値未満の場合，均一分布にフォールバックする．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
@@ -174,7 +174,9 @@ class IntermediateDataStore:
         self.enable_vacuum = (
             enable_vacuum  # Unused but kept for compatibility
         )
-        self._win_rate_threshold = win_rate_threshold
+        self._position_count_threshold = (
+            position_count_threshold
+        )
         self._prior_strength = prior_strength
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._buffer: list[pl.DataFrame] = []
@@ -724,7 +726,7 @@ class IntermediateDataStore:
     ) -> tuple[list[list[float]], list[float]]:
         """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
 
-        局面の出現回数が ``win_rate_threshold`` 未満の場合は合法手への均一分布に
+        局面の出現回数が ``position_count_threshold`` 未満の場合は合法手への均一分布に
         フォールバックする．それ以外の場合は Beta事前分布による平滑化を適用し，
         出現回数が少ない手の勝率ノイズを抑制する．
 
@@ -754,7 +756,7 @@ class IntermediateDataStore:
         ):
             dense = np.zeros(MOVE_LABELS_NUM, dtype=np.float32)
 
-            if count < self._win_rate_threshold:
+            if count < self._position_count_threshold:
                 # Fallback: 1/N uniform distribution over legal moves
                 n_legal = len(indices)
                 if n_legal > 0:

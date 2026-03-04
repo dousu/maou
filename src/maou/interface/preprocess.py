@@ -210,7 +210,7 @@ def transform(
     max_workers: Optional[int] = None,
     intermediate_cache_dir: Optional[Path] = None,
     intermediate_batch_size: int = 50_000,
-    win_rate_threshold: int = 2,
+    position_count_threshold: int = 2,
     prior_strength: float = 5.0,
 ) -> str:
     """Transform HCPE data into neural network training features.
@@ -223,7 +223,7 @@ def transform(
         intermediate_cache_dir: Directory for intermediate data cache
         intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
             Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
-        win_rate_threshold: Minimum position occurrence count for per-move
+        position_count_threshold: Minimum position occurrence count for per-move
             win rate calculation. Positions with count below this threshold
             use uniform 1/N fallback. (default: 2)
         prior_strength: Beta prior strength for win rate smoothing.
@@ -253,7 +253,7 @@ def transform(
         feature_store=feature_store,
         intermediate_cache_dir=intermediate_cache_dir,
         intermediate_batch_size=intermediate_batch_size,
-        win_rate_threshold=win_rate_threshold,
+        position_count_threshold=position_count_threshold,
         prior_strength=prior_strength,
     ).transform(option)
 

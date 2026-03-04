@@ -23,7 +23,7 @@ class TestComputeMoveWinRates:
         db_path = tmp_path / "test.duckdb"
         return IntermediateDataStore(
             db_path=db_path,
-            win_rate_threshold=threshold,
+            position_count_threshold=threshold,
             prior_strength=prior_strength,
         )
 

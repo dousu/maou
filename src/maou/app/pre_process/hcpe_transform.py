@@ -167,7 +167,7 @@ class PreProcess:
         feature_store: Optional[FeatureStore] = None,
         intermediate_cache_dir: Optional[Path] = None,
         intermediate_batch_size: int = 50_000,
-        win_rate_threshold: int = 2,
+        position_count_threshold: int = 2,
         prior_strength: float = 5.0,
     ):
         """Initialize pre-processor.
@@ -178,7 +178,7 @@ class PreProcess:
             intermediate_cache_dir: Directory for intermediate data cache
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
-            win_rate_threshold: 局面の出現回数に対する閾値．
+            position_count_threshold: 局面の出現回数に対する閾値．
                 この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
@@ -188,7 +188,9 @@ class PreProcess:
         self.__datasource = datasource
         self.__intermediate_cache_dir = intermediate_cache_dir
         self.__intermediate_batch_size = intermediate_batch_size
-        self.__win_rate_threshold = win_rate_threshold
+        self.__position_count_threshold = (
+            position_count_threshold
+        )
         self.__prior_strength = prior_strength
         self.intermediate_store = None
 
@@ -555,7 +557,7 @@ class PreProcess:
         self.intermediate_store = IntermediateDataStore(
             db_path=db_path,
             batch_size=self.__intermediate_batch_size,
-            win_rate_threshold=self.__win_rate_threshold,
+            position_count_threshold=self.__position_count_threshold,
             prior_strength=self.__prior_strength,
         )
         self.logger.info(

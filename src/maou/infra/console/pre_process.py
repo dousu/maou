@@ -249,7 +249,7 @@ from maou.infra.console.common import (
     default=500_000,
 )
 @click.option(
-    "--win-rate-threshold",
+    "--position-count-threshold",
     help="Minimum position occurrence count for per-move win rate calculation. "
     "Positions with count below this threshold use uniform 1/N fallback. "
     "(default: 2, recommended range: 2-4)",
@@ -303,7 +303,7 @@ def pre_process(
     intermediate_cache_dir: Optional[Path],
     intermediate_batch_size: int,
     input_split_rows: int,
-    win_rate_threshold: int,
+    position_count_threshold: int,
     prior_strength: float,
 ) -> None:
     import warnings
@@ -559,7 +559,7 @@ def pre_process(
             max_workers=process_max_workers,
             intermediate_cache_dir=intermediate_cache_dir,
             intermediate_batch_size=intermediate_batch_size,
-            win_rate_threshold=win_rate_threshold,
+            position_count_threshold=position_count_threshold,
             prior_strength=prior_strength,
         )
     )
