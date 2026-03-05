@@ -474,9 +474,7 @@ class SingleEpochBenchmark:
             optimizer_step_time=timing_stats[
                 "optimizer_step_time"
             ],
-            final_loss=loss_metrics[
-                "total_loss"
-            ],  # Use total as final for now
+            final_loss=loss_metrics["last_batch_loss"],
             average_loss=loss_metrics["average_loss"],
             samples_per_second=performance_metrics[
                 "samples_per_second"
@@ -608,9 +606,7 @@ class SingleEpochBenchmark:
             ],
             backward_pass_time=0.0,  # バリデーションでは逆伝播なし
             optimizer_step_time=0.0,  # バリデーションではオプティマイザステップなし
-            final_loss=loss_metrics[
-                "total_loss"
-            ],  # Use total as final for now
+            final_loss=loss_metrics["last_batch_loss"],
             average_loss=loss_metrics["average_loss"],
             samples_per_second=performance_metrics[
                 "samples_per_second"
@@ -1841,6 +1837,13 @@ class TrainingBenchmarkUseCase:
             self.logger.info(
                 "Running benchmark with learning_rate=%g", lr
             )
+            if torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                except Exception:
+                    pass
             sweep_config = replace(
                 config,
                 learning_ratio=lr,
@@ -2007,6 +2010,13 @@ class TrainingBenchmarkUseCase:
         Gradient Noise Scale (B_noise) を推定する．
 
         B_noise ≈ CBS の近似として使用．
+
+        前提条件:
+            - スループットモデル: sps(B) = sps_max * B * CBS / (CBS + B)
+            - このモデルはGNSの理論的近似であり，実際のCBS
+              (McCandlish et al. 2018)とは概念的に異なる
+            - GPUの熱スロットリングや計測ノイズの影響を受ける
+            - 推定精度は計測バッチ数とハードウェアの安定性に依存
         """
         points: list[tuple[int, float]] = []
         for r in results:

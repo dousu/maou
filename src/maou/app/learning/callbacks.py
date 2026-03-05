@@ -770,6 +770,7 @@ class TimingCallback(BaseCallback):
         self.total_samples = 0
         self.running_loss = 0.0
         self.total_loss = 0.0
+        self.last_batch_loss = 0.0
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time: Optional[float] = None
@@ -884,6 +885,7 @@ class TimingCallback(BaseCallback):
             loss_value = context.loss.item()
             self.running_loss += loss_value
             self.total_loss += loss_value
+            self.last_batch_loss = loss_value
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:
@@ -1096,6 +1098,7 @@ class TimingCallback(BaseCallback):
         """Get loss metrics."""
         return {
             "total_loss": self.total_loss,
+            "last_batch_loss": self.last_batch_loss,
             "average_loss": (
                 float(self.total_loss) / float(total_batches)
                 if total_batches > 0
