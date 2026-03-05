@@ -1956,14 +1956,15 @@ class TrainingBenchmarkUseCase:
         base_efficiency = base_sps / base_bs
 
         # Find B_noise using pairwise CBS estimates from all
-        # adjacent pairs to reduce baseline bias.
-        # For each pair (B_i, B_j) where eff_i > eff_j:
-        #   throughput(B) = B * eff_max * CBS / (CBS + B)
-        #   CBS = (B_j * sps_j * B_i - B_i * sps_i * B_j)
-        #       / (B_i * sps_i - B_j * sps_j)
-        # Simplified: CBS = (sps_j - sps_i) * B_i * B_j
-        #                  / (B_i * sps_i - B_j * sps_j)
-        # when eff_i > eff_j (i.e. sps_i/B_i > sps_j/B_j)
+        # pairs to reduce baseline bias.
+        # From sps(B) = sps_max * B * CBS / (CBS + B):
+        #   eff(B) = sps(B)/B = sps_max * CBS / (CBS + B)
+        # For pair (B_i, B_j) where eff_i > eff_j:
+        #   eff_i * (CBS + B_i) = eff_j * (CBS + B_j)
+        #   CBS = (eff_j * B_j - eff_i * B_i) / (eff_i - eff_j)
+        # Equivalently:
+        #   CBS = (sps_j - sps_i) * B_i * B_j
+        #       / (sps_i * B_j - sps_j * B_i)
         cbs_estimates: list[float] = []
         for i in range(len(points)):
             for j in range(i + 1, len(points)):
@@ -1973,7 +1974,9 @@ class TrainingBenchmarkUseCase:
                 eff_j = sps_j / bs_j
                 if eff_i > eff_j > 0:
                     # CBS from this pair
-                    cbs_est = bs_j * eff_j / (eff_i - eff_j)
+                    cbs_est = (bs_j * eff_j - bs_i * eff_i) / (
+                        eff_i - eff_j
+                    )
                     if cbs_est > 0:
                         cbs_estimates.append(cbs_est)
 
