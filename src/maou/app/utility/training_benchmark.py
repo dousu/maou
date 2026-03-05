@@ -139,6 +139,19 @@ class BenchmarkResult:
     # GPUメモリ内訳
     gpu_memory_breakdown: Optional[GPUMemoryBreakdown] = None
 
+    @property
+    def unaccounted_time(self) -> float:
+        """計上されていない時間を算出する．"""
+        accounted = (
+            self.data_loading_time
+            + self.gpu_transfer_time
+            + self.forward_pass_time
+            + self.loss_computation_time
+            + self.backward_pass_time
+            + self.optimizer_step_time
+        )
+        return self.actual_average_batch_time - accounted
+
     def to_dict(self) -> dict[str, object]:
         """ベンチマーク結果を辞書形式で返す．"""
         result: dict[str, object] = {
@@ -163,18 +176,7 @@ class BenchmarkResult:
             "data_load_method": self.data_load_method,
         }
 
-        # 未計上時間
-        accounted = (
-            self.data_loading_time
-            + self.gpu_transfer_time
-            + self.forward_pass_time
-            + self.loss_computation_time
-            + self.backward_pass_time
-            + self.optimizer_step_time
-        )
-        result["unaccounted_time"] = (
-            self.actual_average_batch_time - accounted
-        )
+        result["unaccounted_time"] = self.unaccounted_time
 
         # リソース使用率情報があれば追加
         if self.resource_usage is not None:
@@ -1923,21 +1925,27 @@ class TrainingBenchmarkUseCase:
         base_bs, base_sps = points[0]
         base_efficiency = base_sps / base_bs
 
-        # Find B_noise using the noise scale model:
-        # throughput(B) = B * base_eff * CBS / (CBS + B)
-        # Rearranging: CBS = B * throughput / (B * base_eff - throughput)
+        # Find B_noise using pairwise CBS estimates from all
+        # adjacent pairs to reduce baseline bias.
+        # For each pair (B_i, B_j) where eff_i > eff_j:
+        #   throughput(B) = B * eff_max * CBS / (CBS + B)
+        #   CBS = (B_j * sps_j * B_i - B_i * sps_i * B_j)
+        #       / (B_i * sps_i - B_j * sps_j)
+        # Simplified: CBS = (sps_j - sps_i) * B_i * B_j
+        #                  / (B_i * sps_i - B_j * sps_j)
+        # when eff_i > eff_j (i.e. sps_i/B_i > sps_j/B_j)
         cbs_estimates: list[float] = []
-        for bs, sps in points[1:]:
-            efficiency = sps / bs
-            if efficiency < base_efficiency and efficiency > 0:
-                # CBS = B * eff / (base_eff - eff)
-                cbs_est = (
-                    bs
-                    * efficiency
-                    / (base_efficiency - efficiency)
-                )
-                if cbs_est > 0:
-                    cbs_estimates.append(cbs_est)
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                bs_i, sps_i = points[i]
+                bs_j, sps_j = points[j]
+                eff_i = sps_i / bs_i
+                eff_j = sps_j / bs_j
+                if eff_i > eff_j > 0:
+                    # CBS from this pair
+                    cbs_est = bs_j * eff_j / (eff_i - eff_j)
+                    if cbs_est > 0:
+                        cbs_estimates.append(cbs_est)
 
         if not cbs_estimates:
             # All batch sizes show linear scaling - CBS is larger
@@ -1959,9 +1967,17 @@ class TrainingBenchmarkUseCase:
                 },
             }
 
-        avg_cbs = sum(cbs_estimates) / len(cbs_estimates)
+        sorted_estimates = sorted(cbs_estimates)
+        mid = len(sorted_estimates) // 2
+        if len(sorted_estimates) % 2 == 0:
+            median_cbs = (
+                sorted_estimates[mid - 1]
+                + sorted_estimates[mid]
+            ) / 2
+        else:
+            median_cbs = sorted_estimates[mid]
         cbs_rounded = int(
-            2 ** round(math.log2(max(1, avg_cbs)))
+            2 ** round(math.log2(max(1, median_cbs)))
         )
 
         # Generate recommendation
@@ -1988,7 +2004,7 @@ class TrainingBenchmarkUseCase:
 
         return {
             "estimated_cbs": cbs_rounded,
-            "gradient_noise_scale": round(avg_cbs, 1),
+            "gradient_noise_scale": round(median_cbs, 1),
             "recommendation": rec,
             "scaling_efficiency": {
                 str(bs): round((sps / bs) / base_efficiency, 3)
@@ -2025,15 +2041,7 @@ def _format_timing_summary(
     opt_pct = result.optimizer_step_time / avg_batch * 100
 
     # Unaccounted time
-    accounted = (
-        result.data_loading_time
-        + result.gpu_transfer_time
-        + result.forward_pass_time
-        + result.loss_computation_time
-        + result.backward_pass_time
-        + result.optimizer_step_time
-    )
-    unaccounted = result.actual_average_batch_time - accounted
+    unaccounted = result.unaccounted_time
     unaccounted_pct = unaccounted / avg_batch * 100
 
     lines = [

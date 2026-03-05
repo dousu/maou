@@ -196,7 +196,8 @@ class GPUResourceMonitor:
 
         # 統計情報
         self._gpu_max_percent = 0.0
-        self._gpu_percent_samples: list[float] = []
+        self._gpu_percent_sum = 0.0
+        self._gpu_percent_count = 0
         self._gpu_memory_max_bytes = 0
         self._gpu_memory_max_percent = 0.0
 
@@ -255,10 +256,10 @@ class GPUResourceMonitor:
             )
 
         gpu_avg_percent = None
-        if self._gpu_percent_samples:
-            gpu_avg_percent = sum(
-                self._gpu_percent_samples
-            ) / len(self._gpu_percent_samples)
+        if self._gpu_percent_count > 0:
+            gpu_avg_percent = (
+                self._gpu_percent_sum / self._gpu_percent_count
+            )
 
         return ResourceUsage(
             cpu_max_percent=0.0,  # SystemResourceMonitorで設定
@@ -288,7 +289,8 @@ class GPUResourceMonitor:
                     self._gpu_max_percent,
                     gpu_util,
                 )
-                self._gpu_percent_samples.append(gpu_util)
+                self._gpu_percent_sum += gpu_util
+                self._gpu_percent_count += 1
 
                 # GPUメモリ使用量を取得
                 memory_info = pynvml.nvmlDeviceGetMemoryInfo(
@@ -317,7 +319,8 @@ class GPUResourceMonitor:
     def _reset_statistics(self) -> None:
         """GPU統計情報をリセットする．"""
         self._gpu_max_percent = 0.0
-        self._gpu_percent_samples = []
+        self._gpu_percent_sum = 0.0
+        self._gpu_percent_count = 0
         self._gpu_memory_max_bytes = 0
         self._gpu_memory_max_percent = 0.0
 
