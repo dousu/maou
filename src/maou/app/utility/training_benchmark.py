@@ -162,7 +162,11 @@ class BenchmarkResult:
 
     @property
     def unaccounted_time(self) -> float:
-        """計上されていない時間を算出する．"""
+        """計上されていない時間を算出する．
+
+        測定オーバーヘッドにより個別タイミングの合計が
+        actual_average_batch_time を超える場合は 0 を返す．
+        """
         accounted = (
             self.data_loading_time
             + self.gpu_transfer_time
@@ -171,7 +175,9 @@ class BenchmarkResult:
             + self.backward_pass_time
             + self.optimizer_step_time
         )
-        return self.actual_average_batch_time - accounted
+        return max(
+            0.0, self.actual_average_batch_time - accounted
+        )
 
     def to_dict(self) -> dict[str, object]:
         """ベンチマーク結果を辞書形式で返す．"""

@@ -89,3 +89,7 @@ class TestParseFloatList:
     def test_negative_raises_bad_parameter(self) -> None:
         with pytest.raises(BadParameter, match="positive"):
             _parse_float_list("-0.01,0.01")
+
+    def test_empty_string_raises_bad_parameter(self) -> None:
+        with pytest.raises(BadParameter):
+            _parse_float_list("")

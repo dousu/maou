@@ -527,7 +527,7 @@ def benchmark_training(
 
     if config.batch_sizes and config.learning_rates:
         raise ValueError(
-            "--batch-sizes and --learning-rates are mutually exclusive"
+            "batch_sizes and learning_rates are mutually exclusive"
         )
 
     if config.estimate_cbs and not config.batch_sizes:
