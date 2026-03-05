@@ -92,7 +92,7 @@ class GPUMemoryBreakdown:
 
     @property
     def activation_estimate_bytes(self) -> int:
-        """活性化メモリの推定値（バイト）．"""
+        """活性化メモリの推定値(バイト)．"""
         return max(
             0,
             self.peak_allocated_bytes
@@ -497,11 +497,11 @@ class SingleEpochBenchmark:
         max_batches: Optional[int] = None,
     ) -> BenchmarkResult:
         """
-        バリデーション（推論のみ）のベンチマークを実行する．
+        バリデーション(推論のみ)のベンチマークを実行する．
 
         Note:
             timing_distribution, model_info, gpu_memory_breakdown は
-            バリデーション実行では収集しない（訓練ループ専用の情報のため）．
+            バリデーション実行では収集しない(訓練ループ専用の情報のため)．
 
         Args:
             dataloader: バリデーション用データローダー
@@ -1642,13 +1642,9 @@ class TrainingBenchmarkUseCase:
                 "Running benchmark with batch_size=%d", bs
             )
             # Reset CUDA memory stats before each run.
-            # Only reset when explicitly using a CUDA device;
-            # config.gpu=None may fall back to CPU via DeviceSetup.
-            if (
-                config.gpu is not None
-                and config.gpu != "cpu"
-                and torch.cuda.is_available()
-            ):
+            # Always reset when CUDA is available, regardless of
+            # config.gpu setting, since DeviceSetup may auto-select CUDA.
+            if torch.cuda.is_available():
                 # Free memory from previous iteration to avoid
                 # peak_allocated_bytes being inflated by residual tensors.
                 gc.collect()
@@ -1850,6 +1846,12 @@ class TrainingBenchmarkUseCase:
                 )
                 gc.collect()
                 torch.cuda.empty_cache()
+                results.append(
+                    {
+                        "sweep_learning_rate": lr,
+                        "oom": True,
+                    }
+                )
                 continue
             result_dict: dict[str, Any] = json.loads(
                 result_json
@@ -1857,14 +1859,17 @@ class TrainingBenchmarkUseCase:
             result_dict["sweep_learning_rate"] = lr
             results.append(result_dict)
 
-        if not results:
+        successful_results = [
+            r for r in results if not r.get("oom")
+        ]
+        if not successful_results:
             raise RuntimeError(
                 "All learning rates resulted in OOM"
             )
 
         # Build comparison table
         comparison: list[dict[str, Any]] = []
-        for r in results:
+        for r in successful_results:
             lr = r["sweep_learning_rate"]
             tm = r["training_metrics"]
             comparison.append(
