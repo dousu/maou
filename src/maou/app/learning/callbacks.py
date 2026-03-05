@@ -257,22 +257,23 @@ class ValidationMetrics:
         """Format metrics as multi-line log output for console."""
         lines = [
             "METRICS",
-            f"  policy_cross_entropy       = {self.policy_cross_entropy}",
-            f"  value_brier_score          = {self.value_brier_score}",
-            f"  policy_top5_accuracy       = {self.policy_top5_accuracy}",
-            f"  value_high_confidence_rate = {self.value_high_confidence_rate}",
+            f"  policy_cross_entropy         = {self.policy_cross_entropy}",
+            f"  policy_f1_score              = {self.policy_f1_score}",
+            f"  policy_top5_accuracy         = {self.policy_top5_accuracy}",
+            f"  value_brier_score            = {self.value_brier_score}",
+            f"  value_high_confidence_rate   = {self.value_high_confidence_rate}",
         ]
         if self.policy_move_label_ce is not None:
             lines.append(
-                f"  policy_move_label_ce       = {self.policy_move_label_ce}"
+                f"  policy_move_label_ce         = {self.policy_move_label_ce}"
             )
         if self.policy_top1_win_rate is not None:
             lines.append(
-                f"  policy_top1_win_rate       = {self.policy_top1_win_rate}"
+                f"  policy_top1_win_rate         = {self.policy_top1_win_rate}"
             )
         if self.policy_expected_win_rate is not None:
             lines.append(
-                f"  policy_expected_win_rate   = {self.policy_expected_win_rate}"
+                f"  policy_expected_win_rate     = {self.policy_expected_win_rate}"
             )
         return "\n".join(lines)
 

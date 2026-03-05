@@ -129,9 +129,10 @@ def test_metrics_log_includes_move_win_rate_fields() -> None:
     )
     log_output = metrics.format_log_lines()
 
-    assert "policy_move_label_ce       = 5.2" in log_output
-    assert "policy_top1_win_rate       = 0.55" in log_output
-    assert "policy_expected_win_rate   = 0.62" in log_output
+    assert "policy_f1_score              = 0.7" in log_output
+    assert "policy_move_label_ce         = 5.2" in log_output
+    assert "policy_top1_win_rate         = 0.55" in log_output
+    assert "policy_expected_win_rate     = 0.62" in log_output
 
 
 def test_metrics_log_omits_move_win_rate_fields_when_none() -> (
