@@ -988,6 +988,7 @@ class TimingCallback(BaseCallback):
                 }
             n = len(values)
             mean = sum(values) / n
+            # Population std dev (divided by n, not n-1)
             variance = (
                 sum((v - mean) ** 2 for v in values) / n
                 if n > 1
@@ -1000,7 +1001,7 @@ class TimingCallback(BaseCallback):
                 "std": std,
                 "min": sorted_vals[0],
                 "max": sorted_vals[-1],
-                "p50": sorted_vals[int(n * 0.50)],
+                "p50": sorted_vals[min(int(n * 0.50), n - 1)],
                 "p95": sorted_vals[min(int(n * 0.95), n - 1)],
                 "p99": sorted_vals[min(int(n * 0.99), n - 1)],
             }

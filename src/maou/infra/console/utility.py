@@ -28,11 +28,16 @@ def _parse_int_list(
     if value is None:
         return None
     try:
-        return [int(x.strip()) for x in value.split(",")]
+        parsed = [int(x.strip()) for x in value.split(",")]
     except ValueError as e:
         raise click.BadParameter(
             f"Invalid integer list '{value}': {e}"
         ) from e
+    if any(v <= 0 for v in parsed):
+        raise click.BadParameter(
+            f"All values must be positive integers, got: {value}"
+        )
+    return parsed
 
 
 def _parse_float_list(

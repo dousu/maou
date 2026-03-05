@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import math
@@ -1651,6 +1652,7 @@ class TrainingBenchmarkUseCase:
                     "CUDA OOM at batch_size=%d, skipping",
                     bs,
                 )
+                gc.collect()
                 torch.cuda.empty_cache()
                 results.append(
                     {
@@ -1703,11 +1705,18 @@ class TrainingBenchmarkUseCase:
 
         # CBS estimation if requested
         cbs_estimation = None
-        if config.estimate_cbs and len(successful_results) >= 2:
-            cbs_estimation = self._estimate_cbs_from_sweep(
-                successful_results,
-                config_batch_size=config.batch_size,
-            )
+        if config.estimate_cbs:
+            if len(successful_results) >= 2:
+                cbs_estimation = self._estimate_cbs_from_sweep(
+                    successful_results,
+                    config_batch_size=config.batch_size,
+                )
+            else:
+                self.logger.warning(
+                    "CBS estimation requires at least 2 successful results, "
+                    "got %d. Skipping CBS estimation.",
+                    len(successful_results),
+                )
 
         # Format comparison summary
         summary_lines = ["=== Batch Size Sweep Results ==="]
