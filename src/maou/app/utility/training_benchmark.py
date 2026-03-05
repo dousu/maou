@@ -284,10 +284,15 @@ class SingleEpochBenchmark:
             for p in self.model.parameters()
             if p.requires_grad
         )
-        model_memory = sum(
+        param_memory = sum(
             p.numel() * p.element_size()
             for p in self.model.parameters()
         )
+        buffer_memory = sum(
+            b.numel() * b.element_size()
+            for b in self.model.buffers()
+        )
+        model_memory = param_memory + buffer_memory
         return ModelInfo(
             total_parameters=total_params,
             trainable_parameters=trainable_params,
@@ -1643,6 +1648,10 @@ class TrainingBenchmarkUseCase:
                 and config.gpu != "cpu"
                 and torch.cuda.is_available()
             ):
+                # Free memory from previous iteration to avoid
+                # peak_allocated_bytes being inflated by residual tensors.
+                gc.collect()
+                torch.cuda.empty_cache()
                 try:
                     torch.cuda.reset_peak_memory_stats()
                 except Exception as e:
@@ -1721,7 +1730,6 @@ class TrainingBenchmarkUseCase:
             if len(successful_results) >= 2:
                 cbs_estimation = self._estimate_cbs_from_sweep(
                     successful_results,
-                    config_batch_size=config.batch_size,
                 )
             else:
                 self.logger.warning(
@@ -1958,7 +1966,6 @@ class TrainingBenchmarkUseCase:
     @staticmethod
     def _estimate_cbs_from_sweep(
         results: list[dict[str, Any]],
-        config_batch_size: int = 256,
     ) -> Optional[dict[str, Any]]:
         """複数バッチサイズの結果からCBSを推定する．
 
@@ -2050,25 +2057,29 @@ class TrainingBenchmarkUseCase:
             2 ** round(math.log2(max(1, median_cbs)))
         )
 
-        # Generate recommendation
-        config_bs = config_batch_size
+        # Generate recommendation based on tested range
+        tested_sizes = sorted(bs for bs, _ in points)
+        min_tested = tested_sizes[0]
+        max_tested = tested_sizes[-1]
         rec: str
-        if config_bs < cbs_rounded:
+        if max_tested < cbs_rounded:
             rec = (
-                f"Current batch size ({config_bs}) is below CBS ({cbs_rounded}). "
-                f"Increasing batch size up to {cbs_rounded} will improve "
-                f"training efficiency with proportional speedup."
+                f"Tested range ({min_tested}-{max_tested}) is below "
+                f"CBS ({cbs_rounded}). Batch sizes up to {cbs_rounded} "
+                f"will improve training efficiency with proportional speedup."
             )
-        elif config_bs > cbs_rounded * 2:
+        elif min_tested > cbs_rounded * 2:
             rec = (
-                f"Current batch size ({config_bs}) is well above CBS ({cbs_rounded}). "
-                f"Diminishing returns on larger batches. "
+                f"Tested range ({min_tested}-{max_tested}) is well above "
+                f"CBS ({cbs_rounded}). Diminishing returns on larger batches. "
                 f"Consider reducing to ~{cbs_rounded} for better resource efficiency."
             )
         else:
             rec = (
-                f"Current batch size ({config_bs}) is near CBS ({cbs_rounded}). "
-                f"Good balance between speed and efficiency."
+                f"CBS ({cbs_rounded}) falls within tested range "
+                f"({min_tested}-{max_tested}). "
+                f"Batch sizes near {cbs_rounded} offer the best balance "
+                f"between speed and efficiency."
             )
 
         return {
@@ -2240,22 +2251,23 @@ def _generate_recommendations(
     """タイミング分析に基づく推奨事項を生成する．"""
     recommendations: list[str] = []
 
-    # Batch time analysis
-    if result.average_batch_time > 0.1:
+    # Batch time analysis (use actual_average_batch_time which includes
+    # all phases including data loading)
+    if result.actual_average_batch_time > 0.1:
         recommendations.append(
             "Consider increasing batch size for better GPU utilization"
         )
-    elif result.average_batch_time < 0.01:
+    elif result.actual_average_batch_time < 0.01:
         recommendations.append(
             "Batch size might be too large, consider reducing "
             "for memory efficiency"
         )
 
     # Data loading analysis
-    if result.average_batch_time > 0:
+    if result.actual_average_batch_time > 0:
         data_loading_pct = (
             result.data_loading_time
-            / result.average_batch_time
+            / result.actual_average_batch_time
             * 100
         )
         if data_loading_pct > 20:
@@ -2267,10 +2279,13 @@ def _generate_recommendations(
             )
 
     # GPU transfer analysis
-    if device.type == "cuda" and result.average_batch_time > 0:
+    if (
+        device.type == "cuda"
+        and result.actual_average_batch_time > 0
+    ):
         gpu_transfer_pct = (
             result.gpu_transfer_time
-            / result.average_batch_time
+            / result.actual_average_batch_time
             * 100
         )
         if gpu_transfer_pct > 10:

@@ -963,18 +963,16 @@ class TimingCallback(BaseCallback):
 
     def get_timing_distribution(
         self,
-    ) -> dict[str, dict[str, float]]:
+    ) -> Optional[dict[str, dict[str, float]]]:
         """Get timing distribution statistics (std dev, min, max, percentiles).
 
         Returns:
             各タイミングカテゴリごとの分布統計量を含む辞書．
             キーはタイミングカテゴリ名，値は統計量の辞書．
+            計測バッチがない場合は None を返す．
         """
         if not self.timing_stats["total_batch"]:
-            raise RuntimeError(
-                "No batches were processed "
-                "for timing measurement"
-            )
+            return None
 
         def compute_stats(
             values: list[float],
