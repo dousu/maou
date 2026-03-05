@@ -224,108 +224,113 @@ class Stage2DataGenerationUseCase:
         total_chunks = (
             total_count + chunk_size - 1
         ) // chunk_size
-        pbar = tqdm(
+
+        with tqdm(
             total=total_chunks,
             desc="Phase 2: Generating labels",
-        )
+        ) as pbar:
+            while offset < total_count:
+                # Read chunk from DuckDB
+                rows = conn.execute(
+                    f"""
+                    SELECT hash_id, hcp FROM unique_hcps
+                    ORDER BY hash_id
+                    LIMIT {chunk_size} OFFSET {offset}
+                    """
+                ).fetchall()
 
-        while offset < total_count:
-            # Read chunk from DuckDB
-            rows = conn.execute(
-                f"""
-                SELECT hash_id, hcp FROM unique_hcps
-                ORDER BY hash_id
-                LIMIT {chunk_size} OFFSET {offset}
-                """
-            ).fetchall()
+                if not rows:
+                    break
 
-            if not rows:
-                break
+                ids: list[int] = []
+                board_id_positions_list: list[
+                    list[list[int]]
+                ] = []
+                pieces_in_hand_list: list[list[int]] = []
+                legal_moves_labels_list: list[list[int]] = []
 
-            ids: list[int] = []
-            board_id_positions_list: list[list[list[int]]] = []
-            pieces_in_hand_list: list[list[int]] = []
-            legal_moves_labels_list: list[list[int]] = []
-
-            for hash_id, hcp_bytes in rows:
-                hcp_array = np.frombuffer(
-                    hcp_bytes, dtype=np.uint8
-                )
-                board.set_hcp(hcp_array)
-
-                # Generate features
-                board_positions = make_board_id_positions(board)
-                pieces_in_hand = make_pieces_in_hand(board)
-
-                # Generate legal move labels
-                # 盤面は先手視点に正規化済みなので，
-                # 正規化後の盤面の合法手からラベルを生成する
-                legal_labels = np.zeros(
-                    MOVE_LABELS_NUM, dtype=np.uint8
-                )
-                if board.get_turn() == shogi.Turn.BLACK:
-                    # 先手番: 正規化なし，元のboardの合法手をそのまま使用
-                    for move in board.get_legal_moves():
-                        label = make_move_label(
-                            shogi.Turn.BLACK, move
-                        )
-                        legal_labels[label] = 1
-                else:
-                    # 後手番: 盤面が180度回転されているため，
-                    # 正規化後の盤面を再構築して合法手を取得
-                    normalized_board = (
-                        self._reconstruct_normalized_board(
-                            board_positions,
-                            pieces_in_hand,
-                        )
+                for hash_id, hcp_bytes in rows:
+                    hcp_array = np.frombuffer(
+                        hcp_bytes, dtype=np.uint8
                     )
-                    for (
-                        move
-                    ) in normalized_board.get_legal_moves():
-                        label = make_move_label(
-                            shogi.Turn.BLACK, move
+                    board.set_hcp(hcp_array)
+
+                    # Generate features
+                    board_positions = make_board_id_positions(
+                        board
+                    )
+                    pieces_in_hand = make_pieces_in_hand(board)
+
+                    # Generate legal move labels
+                    # 盤面は先手視点に正規化済みなので，
+                    # 正規化後の盤面の合法手からラベルを生成する
+                    legal_labels = np.zeros(
+                        MOVE_LABELS_NUM, dtype=np.uint8
+                    )
+                    if board.get_turn() == shogi.Turn.BLACK:
+                        # 先手番: 正規化なし，元のboardの合法手をそのまま使用
+                        for move in board.get_legal_moves():
+                            label = make_move_label(
+                                shogi.Turn.BLACK, move
+                            )
+                            legal_labels[label] = 1
+                    else:
+                        # 後手番: 盤面が180度回転されているため，
+                        # 正規化後の盤面を再構築して合法手を取得
+                        normalized_board = (
+                            self._reconstruct_normalized_board(
+                                board_positions,
+                                pieces_in_hand,
+                            )
                         )
-                        legal_labels[label] = 1
+                        for (
+                            move
+                        ) in normalized_board.get_legal_moves():
+                            label = make_move_label(
+                                shogi.Turn.BLACK, move
+                            )
+                            legal_labels[label] = 1
 
-                ids.append(hash_id)
-                board_id_positions_list.append(
-                    board_positions.tolist()
+                    ids.append(hash_id)
+                    board_id_positions_list.append(
+                        board_positions.tolist()
+                    )
+                    pieces_in_hand_list.append(
+                        pieces_in_hand.tolist()
+                    )
+                    legal_moves_labels_list.append(
+                        legal_labels.tolist()
+                    )
+
+                # Create Polars DataFrame with correct schema
+                schema = get_stage2_polars_schema()
+                chunk_df = pl.DataFrame(
+                    {
+                        "id": pl.Series(
+                            "id", ids, dtype=pl.UInt64
+                        ),
+                        "boardIdPositions": board_id_positions_list,
+                        "piecesInHand": pieces_in_hand_list,
+                        "legalMovesLabel": legal_moves_labels_list,
+                    },
+                    schema=schema,
                 )
-                pieces_in_hand_list.append(
-                    pieces_in_hand.tolist()
-                )
-                legal_moves_labels_list.append(
-                    legal_labels.tolist()
-                )
 
-            # Create Polars DataFrame with correct schema
-            schema = get_stage2_polars_schema()
-            chunk_df = pl.DataFrame(
-                {
-                    "id": pl.Series("id", ids, dtype=pl.UInt64),
-                    "boardIdPositions": board_id_positions_list,
-                    "piecesInHand": pieces_in_hand_list,
-                    "legalMovesLabel": legal_moves_labels_list,
-                },
-                schema=schema,
-            )
+                # Determine filename
+                if total_count <= chunk_size:
+                    filename = f"{output_data_name}.feather"
+                else:
+                    filename = f"{output_data_name}_chunk{chunk_idx:04d}.feather"
 
-            # Determine filename
-            if total_count <= chunk_size:
-                filename = f"{output_data_name}.feather"
-            else:
-                filename = f"{output_data_name}_chunk{chunk_idx:04d}.feather"
+                output_path = output_dir / filename
+                save_stage2_df(chunk_df, output_path)
+                output_files.append(output_path)
 
-            output_path = output_dir / filename
-            save_stage2_df(chunk_df, output_path)
-            output_files.append(output_path)
+                pbar.update(1)
 
-            pbar.update(1)
+                offset += chunk_size
+                chunk_idx += 1
 
-            offset += chunk_size
-            chunk_idx += 1
-
-        pbar.close()
         conn.close()
 
         logger.info(
