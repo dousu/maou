@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 from dataclasses import dataclass, replace
 from typing import Any, Optional, cast
 
@@ -39,6 +40,13 @@ from maou.app.learning.streaming_dataset import (
 from maou.app.learning.training_loop import TrainingLoop
 
 
+class _EmptyIterableDataset(torch.utils.data.IterableDataset):
+    """空のIterableDataset．ベンチマーク時のダミーバリデーション用．"""
+
+    def __iter__(self) -> Any:
+        return iter([])
+
+
 @dataclass(frozen=True)
 class ModelInfo:
     """モデルの基本情報を格納するデータクラス．"""
@@ -74,10 +82,11 @@ class GPUMemoryBreakdown:
             "peak_allocated_bytes": self.peak_allocated_bytes,
             "peak_reserved_bytes": self.peak_reserved_bytes,
             "total_gpu_memory_bytes": self.total_gpu_memory_bytes,
-            "activation_estimate_bytes": (
+            "activation_estimate_bytes": max(
+                0,
                 self.peak_allocated_bytes
                 - self.model_parameters_bytes
-                - self.optimizer_state_bytes
+                - self.optimizer_state_bytes,
             ),
         }
 
@@ -269,15 +278,11 @@ class SingleEpochBenchmark:
 
     def _collect_gpu_memory_breakdown(
         self,
+        model_param_bytes: int,
     ) -> Optional[GPUMemoryBreakdown]:
         """GPUメモリ内訳を収集する．"""
         if self.device.type != "cuda":
             return None
-
-        model_param_bytes = sum(
-            p.numel() * p.element_size()
-            for p in self.model.parameters()
-        )
         optimizer_state_bytes = 0
         for state in self.optimizer.state.values():
             for v in state.values():
@@ -397,7 +402,9 @@ class SingleEpochBenchmark:
         # Collect model info and GPU memory breakdown
         model_info = self._collect_model_info()
         gpu_memory_breakdown = (
-            self._collect_gpu_memory_breakdown()
+            self._collect_gpu_memory_breakdown(
+                model_info.model_memory_bytes
+            )
         )
 
         # Log summary
@@ -731,12 +738,7 @@ class TrainingBenchmarkUseCase:
                 config.streaming_val_source.file_paths
             )
         else:
-            _EmptyDataset = type(
-                "_EmptyDataset",
-                (torch.utils.data.IterableDataset,),
-                {"__iter__": lambda self: iter([])},
-            )
-            val_dataset = _EmptyDataset()
+            val_dataset = _EmptyIterableDataset()
             n_val_files = 0
 
         # Create streaming dataloaders
@@ -883,13 +885,8 @@ class TrainingBenchmarkUseCase:
 
         # Stage 1 has no validation - provide empty loader
         # for benchmark interface compatibility
-        _EmptyDataset = type(
-            "_EmptyDataset",
-            (torch.utils.data.IterableDataset,),
-            {"__iter__": lambda self: iter([])},
-        )
         empty_loader: DataLoader = DataLoader(
-            _EmptyDataset(), batch_size=1
+            _EmptyIterableDataset(), batch_size=1
         )
 
         self.logger.info(
@@ -987,15 +984,9 @@ class TrainingBenchmarkUseCase:
 
         validation_loader = components.val_dataloader
         if validation_loader is None:
-            _EmptyDataset = type(
-                "_EmptyDataset",
-                (torch.utils.data.IterableDataset,),
-                {"__iter__": lambda self: iter([])},
+            validation_loader = DataLoader(
+                _EmptyIterableDataset(), batch_size=1
             )
-            empty_loader: DataLoader = DataLoader(
-                _EmptyDataset(), batch_size=1
-            )
-            validation_loader = empty_loader
 
         self.logger.info(
             "Stage 2 benchmark components setup completed"
@@ -1151,13 +1142,8 @@ class TrainingBenchmarkUseCase:
                 )
             )
         else:
-            _EmptyDataset = type(
-                "_EmptyDataset",
-                (torch.utils.data.IterableDataset,),
-                {"__iter__": lambda self: iter([])},
-            )
             validation_loader = DataLoader(
-                _EmptyDataset(), batch_size=1
+                _EmptyIterableDataset(), batch_size=1
             )
 
         self.logger.info(
@@ -1866,20 +1852,24 @@ class TrainingBenchmarkUseCase:
         if len(points) < 2:
             return None
 
-        # Estimate per-sample activation memory using linear regression
+        # Estimate per-sample activation memory using least-squares
         # peak_memory = fixed_cost + per_sample * batch_size
-        bs1, peak1, model1, total1 = points[0]
-        bs2, peak2, _, total2 = points[-1]
+        n = len(points)
+        sum_x = sum(p[0] for p in points)
+        sum_y = sum(p[1] for p in points)
+        sum_xy = sum(p[0] * p[1] for p in points)
+        sum_xx = sum(p[0] * p[0] for p in points)
 
-        if bs2 == bs1:
+        denom = n * sum_xx - sum_x * sum_x
+        if denom == 0:
             return None
 
-        per_sample_bytes = (peak2 - peak1) / (bs2 - bs1)
+        per_sample_bytes = (n * sum_xy - sum_x * sum_y) / denom
         if per_sample_bytes <= 0:
             return None
 
-        fixed_cost = peak1 - per_sample_bytes * bs1
-        total_memory = total1
+        fixed_cost = (sum_y - per_sample_bytes * sum_x) / n
+        total_memory = points[0][3]
 
         # Use 85% safety margin
         usable_memory = total_memory * 0.85
@@ -1971,7 +1961,7 @@ class TrainingBenchmarkUseCase:
 
         avg_cbs = sum(cbs_estimates) / len(cbs_estimates)
         cbs_rounded = int(
-            2 ** round(__import__("math").log2(max(1, avg_cbs)))
+            2 ** round(math.log2(max(1, avg_cbs)))
         )
 
         # Generate recommendation
@@ -2104,10 +2094,11 @@ def _format_timing_summary(
     # GPU memory breakdown
     if result.gpu_memory_breakdown is not None:
         gm = result.gpu_memory_breakdown
-        activation_est = (
+        activation_est = max(
+            0,
             gm.peak_allocated_bytes
             - gm.model_parameters_bytes
-            - gm.optimizer_state_bytes
+            - gm.optimizer_state_bytes,
         )
         lines.append("")
         lines.append("  GPU Memory Breakdown:")
