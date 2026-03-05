@@ -957,6 +957,60 @@ class TimingCallback(BaseCallback):
             ),
         }
 
+    def get_timing_distribution(
+        self,
+    ) -> Dict[str, Dict[str, float]]:
+        """Get timing distribution statistics (std dev, min, max, percentiles).
+
+        Returns:
+            各タイミングカテゴリごとの分布統計量を含む辞書．
+            キーはタイミングカテゴリ名，値は統計量の辞書．
+        """
+        import math
+
+        if not self.timing_stats["total_batch"]:
+            raise RuntimeError(
+                "No batches were processed "
+                "for timing measurement"
+            )
+
+        def compute_stats(
+            values: List[float],
+        ) -> Dict[str, float]:
+            if not values:
+                return {
+                    "mean": 0.0,
+                    "std": 0.0,
+                    "min": 0.0,
+                    "max": 0.0,
+                    "p50": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                }
+            n = len(values)
+            mean = sum(values) / n
+            variance = (
+                sum((v - mean) ** 2 for v in values) / n
+                if n > 1
+                else 0.0
+            )
+            std = math.sqrt(variance)
+            sorted_vals = sorted(values)
+            return {
+                "mean": mean,
+                "std": std,
+                "min": sorted_vals[0],
+                "max": sorted_vals[-1],
+                "p50": sorted_vals[int(n * 0.50)],
+                "p95": sorted_vals[min(int(n * 0.95), n - 1)],
+                "p99": sorted_vals[min(int(n * 0.99), n - 1)],
+            }
+
+        return {
+            key: compute_stats(values)
+            for key, values in self.timing_stats.items()
+        }
+
     def get_performance_metrics(
         self, total_batches: int
     ) -> Dict[str, float]:
@@ -1095,6 +1149,9 @@ class ResourceMonitoringCallback(BaseCallback):
             memory_max_percent=system_usage.memory_max_percent,
             gpu_max_percent=(
                 gpu_usage.gpu_max_percent if gpu_usage else None
+            ),
+            gpu_avg_percent=(
+                gpu_usage.gpu_avg_percent if gpu_usage else None
             ),
             gpu_memory_max_bytes=(
                 gpu_usage.gpu_memory_max_bytes

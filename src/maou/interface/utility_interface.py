@@ -212,6 +212,9 @@ def benchmark_training(
     trainable_layers: Optional[int] = None,
     stage1_batch_size: Optional[int] = None,
     stage2_batch_size: Optional[int] = None,
+    batch_sizes: Optional[list[int]] = None,
+    learning_rates: Optional[list[float]] = None,
+    estimate_cbs: bool = False,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -512,9 +515,19 @@ def benchmark_training(
         trainable_layers=trainable_layers,
         stage1_batch_size=stage1_batch_size,
         stage2_batch_size=stage2_batch_size,
+        batch_sizes=batch_sizes,
+        learning_rates=learning_rates,
+        estimate_cbs=estimate_cbs,
     )
 
     use_case = TrainingBenchmarkUseCase()
+
+    # Sweep modes take precedence over single benchmark
+    if config.batch_sizes:
+        return use_case.execute_batch_size_sweep(config)
+    if config.learning_rates:
+        return use_case.execute_learning_rate_sweep(config)
+
     return use_case.execute(config)
 
 

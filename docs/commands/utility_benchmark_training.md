@@ -60,7 +60,15 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 | `--enable-profiling` | PyTorch profiler toggle | Enables the profiler inside `TrainingLoop.run_epoch` for deeper diagnostics.【F:src/maou/infra/console/utility.py†L698-L704】【F:src/maou/app/utility/training_benchmark.py†L176-L185】 |
 | `--run-validation` | Optional validation pass | Adds an inference-only benchmark with its own timing summary and metrics.【F:src/maou/infra/console/utility.py†L705-L711】【F:src/maou/app/utility/training_benchmark.py†L492-L699】 |
 | `--sample-ratio FLOAT` | Remote sampling | Enforced to `[0.01, 1.0]`. When set, the benchmark scales time/batch metrics to estimate a full epoch (printed under “Data Sampling Estimation”).【F:src/maou/infra/console/utility.py†L713-L868】【F:src/maou/app/utility/training_benchmark.py†L501-L545】 |
-| `--enable-resource-monitoring` | System telemetry | Attaches a `ResourceMonitoringCallback` so CPU/RAM/GPU stats appear in the summaries and JSON output.【F:src/maou/infra/console/utility.py†L718-L724】【F:src/maou/app/utility/training_benchmark.py†L152-L207】 |
+| `--enable-resource-monitoring` | System telemetry | Attaches a `ResourceMonitoringCallback` so CPU/RAM/GPU stats (max and average utilization) appear in the summaries and JSON output. |
+
+### Sweep & analysis options
+
+| Flag(s) | Purpose | Behavior |
+| --- | --- | --- |
+| `--batch-sizes STR` | Batch size sweep | Comma-separated list of batch sizes (e.g., `256,512,1024,2048`). Runs benchmark for each size and outputs a comparison table with throughput, timing, GPU memory, and loss. Also provides GPU memory-based max batch size recommendation. |
+| `--learning-rates STR` | Learning rate sweep | Comma-separated list of learning rates (e.g., `0.001,0.01,0.1`). Runs benchmark for each rate and compares loss trajectories. Identifies the best learning rate by average loss. |
+| `--estimate-cbs` | CBS estimation | Estimates Critical Batch Size from batch size sweep results using efficiency scaling analysis. Requires `--batch-sizes` with 2+ values. Reports estimated CBS, gradient noise scale, and a recommendation on optimal batch size. |
 
 ## Execution flow
 
@@ -105,17 +113,27 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 ## Outputs and usage
 
 - Console output begins with the training summary (total time, average batch time,
-  throughput, per-stage breakdowns, losses, and optional resource stats) followed
-  by the validation summary when enabled.【F:src/maou/app/utility/training_benchmark.py†L532-L699】
+  throughput, per-stage breakdowns, losses) followed by the validation summary when
+  enabled.
+- **Timing distribution** (p50, p95, p99, min, max, std) is shown for batch times,
+  enabling detection of I/O stalls and GC interference.
+- **Unaccounted time** shows the gap between measured component times and actual
+  batch time, revealing hidden pipeline overhead.
+- **Model information** (total parameters, trainable parameters, model memory)
+  provides context for interpreting performance results.
+- **GPU memory breakdown** (model parameters, optimizer state, activations estimate,
+  peak allocated, peak reserved, total) enables informed batch size decisions.
+- **Resource usage** now includes average GPU utilization in addition to max values.
 - If `--sample-ratio` is set, the CLI prints the “Data Sampling Estimation” block
-  showing actual vs. estimated batches and full-epoch durations.【F:src/maou/app/utility/training_benchmark.py†L501-L545】【F:src/maou/infra/console/utility.py†L1000-L1017】
-- Recommendations list actionable CLI flags (e.g., increase workers, enable
-  pin-memory) so you can immediately adjust `maou learn-model`. Additional fields
-  in the JSON payload (`training_metrics`, `validation_metrics`, `estimation`,
-  `recommendations`) make it easy to archive benchmark results.【F:src/maou/app/utility/training_benchmark.py†L614-L699】【F:src/maou/infra/console/utility.py†L991-L1020】
-- The JSON payload includes a `data_load_method` field (`"streaming"` or
-  `"map-style"`) in both `training_metrics` and `validation_metrics`, indicating
-  which data loading strategy was used for the benchmark run.
+  showing actual vs. estimated batches and full-epoch durations.
+- Recommendations include timing variability analysis (coefficient of variation),
+  GPU memory utilization analysis, and average GPU utilization analysis.
+- The JSON payload includes complete configuration (stage, architecture, streaming
+  mode, optimizer, learning rate, etc.) for reproducibility.
+- **Sweep mode**: When `--batch-sizes` or `--learning-rates` is used, the output
+  switches to a comparison table format showing metrics across all tested values.
+  Batch size sweeps include GPU memory-based max batch size recommendation.
+  With `--estimate-cbs`, CBS estimation is included in the sweep output.
 
 ### Example invocations
 
@@ -145,6 +163,19 @@ uv run maou utility benchmark-training \
   --pin-memory \
   --run-validation \
   --enable-resource-monitoring
+# Batch size sweep with CBS estimation
+uv run maou utility benchmark-training \
+  --stage3-data-path /data/stage3 \
+  --gpu cuda:0 --max-batches 50 \
+  --batch-sizes 256,512,1024,2048 \
+  --estimate-cbs \
+  --enable-resource-monitoring
+
+# Learning rate sweep
+uv run maou utility benchmark-training \
+  --stage3-data-path /data/stage3 \
+  --gpu cuda:0 --max-batches 50 \
+  --learning-rates 0.001,0.003,0.01,0.03,0.1
 ```
 
 ## Implementation references
