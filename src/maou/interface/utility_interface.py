@@ -522,6 +522,16 @@ def benchmark_training(
 
     use_case = TrainingBenchmarkUseCase()
 
+    if config.batch_sizes and config.learning_rates:
+        raise ValueError(
+            "--batch-sizes and --learning-rates are mutually exclusive"
+        )
+
+    if config.estimate_cbs and not config.batch_sizes:
+        logging.getLogger(__name__).warning(
+            "--estimate-cbs is ignored without --batch-sizes"
+        )
+
     # Sweep modes take precedence over single benchmark
     if config.batch_sizes:
         return use_case.execute_batch_size_sweep(config)

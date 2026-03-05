@@ -1640,15 +1640,33 @@ class TrainingBenchmarkUseCase:
                     pass
 
             sweep_config = replace(config, batch_size=bs)
-            result_json = self.execute(sweep_config)
+            try:
+                result_json = self.execute(sweep_config)
+            except torch.cuda.OutOfMemoryError:
+                self.logger.warning(
+                    "CUDA OOM at batch_size=%d, skipping",
+                    bs,
+                )
+                torch.cuda.empty_cache()
+                results.append(
+                    {
+                        "sweep_batch_size": bs,
+                        "oom": True,
+                    }
+                )
+                continue
             result: dict[str, Any] = json.loads(result_json)
             result["sweep_batch_size"] = bs
             results.append(result)
 
-        # Build comparison table
+        # Build comparison table (skip OOM results)
         comparison: list[dict[str, Any]] = []
+        oom_batch_sizes: list[int] = []
         for r in results:
             bs = r["sweep_batch_size"]
+            if r.get("oom"):
+                oom_batch_sizes.append(bs)
+                continue
             tm = r["training_metrics"]
             entry: dict[str, Any] = {
                 "batch_size": bs,
@@ -1669,16 +1687,21 @@ class TrainingBenchmarkUseCase:
                 )
             comparison.append(entry)
 
+        # Filter out OOM results for analysis
+        successful_results = [
+            r for r in results if not r.get("oom")
+        ]
+
         # GPU memory-based batch size recommendation
         gpu_recommendation = self._recommend_max_batch_size(
-            results
+            successful_results
         )
 
         # CBS estimation if requested
         cbs_estimation = None
-        if config.estimate_cbs and len(results) >= 2:
+        if config.estimate_cbs and len(successful_results) >= 2:
             cbs_estimation = self._estimate_cbs_from_sweep(
-                results
+                successful_results
             )
 
         # Format comparison summary
@@ -1703,6 +1726,12 @@ class TrainingBenchmarkUseCase:
                 f"{c['backward_pass_time']:>8.4f} | "
                 f"{gpu_str} | "
                 f"{c['average_loss']:>10.6f}"
+            )
+
+        if oom_batch_sizes:
+            summary_lines.append("")
+            summary_lines.append(
+                f"CUDA OOM at batch sizes: {oom_batch_sizes}"
             )
 
         if gpu_recommendation:
@@ -1735,6 +1764,7 @@ class TrainingBenchmarkUseCase:
             "comparison": comparison,
             "summary": "\n".join(summary_lines),
             "detailed_results": results,
+            "oom_batch_sizes": oom_batch_sizes,
         }
         if gpu_recommendation:
             output["gpu_batch_size_recommendation"] = (
