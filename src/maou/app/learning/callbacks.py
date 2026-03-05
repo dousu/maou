@@ -988,7 +988,9 @@ class TimingCallback(BaseCallback):
                 }
             n = len(values)
             mean = sum(values) / n
-            # Population std dev (divided by n, not n-1)
+            # Population std dev (divided by n, not n-1).
+            # Returns 0 for single measurement (n=1).
+            # For small n, p95/p99 will coincide with max.
             variance = (
                 sum((v - mean) ** 2 for v in values) / n
                 if n > 1

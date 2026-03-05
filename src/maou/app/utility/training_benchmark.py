@@ -1635,9 +1635,13 @@ class TrainingBenchmarkUseCase:
             self.logger.info(
                 "Running benchmark with batch_size=%d", bs
             )
-            # Reset CUDA memory stats before each run
-            if torch.cuda.is_available() and (
-                config.gpu is None or config.gpu != "cpu"
+            # Reset CUDA memory stats before each run.
+            # Only reset when explicitly using a CUDA device;
+            # config.gpu=None may fall back to CPU via DeviceSetup.
+            if (
+                config.gpu is not None
+                and config.gpu != "cpu"
+                and torch.cuda.is_available()
             ):
                 try:
                     torch.cuda.reset_peak_memory_stats()
@@ -1658,6 +1662,10 @@ class TrainingBenchmarkUseCase:
                 )
                 gc.collect()
                 torch.cuda.empty_cache()
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                except Exception:
+                    pass
                 results.append(
                     {
                         "sweep_batch_size": bs,
