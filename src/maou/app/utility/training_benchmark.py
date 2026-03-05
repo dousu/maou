@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from maou.app.learning.callbacks import (
     ResourceMonitoringCallback,
     TimingCallback,
+    TrainingCallback,
 )
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
@@ -77,7 +78,11 @@ class ModelInfo:
 
 @dataclass(frozen=True)
 class GPUMemoryBreakdown:
-    """GPUメモリ内訳を格納するデータクラス．"""
+    """GPUメモリ内訳を格納するデータクラス．
+
+    Attributes:
+        model_parameters_bytes: モデルパラメータとバッファ(BatchNorm等)の合計メモリ．
+    """
 
     model_parameters_bytes: int
     optimizer_state_bytes: int
@@ -360,7 +365,7 @@ class SingleEpochBenchmark:
         )
 
         # Create callbacks list
-        callbacks = [timing_callback]
+        callbacks: list[TrainingCallback] = [timing_callback]
 
         # Add resource monitoring callback if enabled
         resource_callback = None
@@ -369,9 +374,7 @@ class SingleEpochBenchmark:
                 device=self.device,
                 logger=self.logger,
             )
-            callbacks.append(
-                cast("TimingCallback", resource_callback)
-            )
+            callbacks.append(resource_callback)
 
         # Create training loop
         training_loop = self.training_loop_class(
@@ -513,7 +516,7 @@ class SingleEpochBenchmark:
         timing_callback = TimingCallback(warmup_batches=0)
 
         # Create callbacks list
-        callbacks = [timing_callback]
+        callbacks: list[TrainingCallback] = [timing_callback]
 
         # Add resource monitoring callback if enabled
         resource_callback = None
@@ -522,9 +525,7 @@ class SingleEpochBenchmark:
                 device=self.device,
                 logger=self.logger,
             )
-            callbacks.append(
-                cast("TimingCallback", resource_callback)
-            )
+            callbacks.append(resource_callback)
 
         # Create training loop in evaluation mode
         training_loop = self.training_loop_class(
@@ -1831,21 +1832,35 @@ class TrainingBenchmarkUseCase:
             config.learning_rates,
         )
 
-        # Note: Unlike batch size sweep, OOM is not caught here because
-        # learning rate changes do not affect memory usage. OOM during
-        # LR sweep indicates a config/batch_size issue, not an LR issue.
+        # OOM during LR sweep is rare (LR doesn't affect memory), but
+        # can occur with certain optimizers. Catch to preserve partial results.
         results: list[dict[str, Any]] = []
         for lr in config.learning_rates:
             self.logger.info(
                 "Running benchmark with learning_rate=%g", lr
             )
             sweep_config = replace(config, learning_ratio=lr)
-            result_json = self.execute(sweep_config)
+            try:
+                result_json = self.execute(sweep_config)
+            except torch.cuda.OutOfMemoryError as e:
+                self.logger.warning(
+                    "CUDA OOM at learning_rate=%g, skipping: %s",
+                    lr,
+                    e,
+                )
+                gc.collect()
+                torch.cuda.empty_cache()
+                continue
             result_dict: dict[str, Any] = json.loads(
                 result_json
             )
             result_dict["sweep_learning_rate"] = lr
             results.append(result_dict)
+
+        if not results:
+            raise RuntimeError(
+                "All learning rates resulted in OOM"
+            )
 
         # Build comparison table
         comparison: list[dict[str, Any]] = []
@@ -2186,7 +2201,7 @@ def _format_timing_summary(
         lines.append("")
         lines.append("  GPU Memory Breakdown:")
         lines.append(
-            f"  - Model Parameters: {gm.model_parameters_bytes / 1024**2:.1f}MB"
+            f"  - Model (params+buffers): {gm.model_parameters_bytes / 1024**2:.1f}MB"
         )
         lines.append(
             f"  - Optimizer State: {gm.optimizer_state_bytes / 1024**2:.1f}MB"

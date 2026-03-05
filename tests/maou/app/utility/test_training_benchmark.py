@@ -106,9 +106,9 @@ class TestBenchmarkResult:
         assert "measured_time" in d
         assert "measured_batches" in d
         assert d["warmup_time"] == 34.0
-        assert d["warmup_batches"] == 5.0
+        assert d["warmup_batches"] == 5
         assert d["measured_time"] == 4.75
-        assert d["measured_batches"] == 95.0
+        assert d["measured_batches"] == 95
 
     def test_zero_warmup(self) -> None:
         """warmup_batches=0 の場合のフィールド値."""

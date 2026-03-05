@@ -1000,12 +1000,20 @@ class TimingCallback(BaseCallback):
             )
             std = math.sqrt(variance)
             sorted_vals = sorted(values)
+            # Median: average of two middle values for even n
+            mid = n // 2
+            if n % 2 == 0:
+                p50 = (
+                    sorted_vals[mid - 1] + sorted_vals[mid]
+                ) / 2
+            else:
+                p50 = sorted_vals[mid]
             return {
                 "mean": mean,
                 "std": std,
                 "min": sorted_vals[0],
                 "max": sorted_vals[-1],
-                "p50": sorted_vals[min(int(n * 0.50), n - 1)],
+                "p50": p50,
                 "p95": sorted_vals[min(int(n * 0.95), n - 1)],
                 "p99": sorted_vals[min(int(n * 0.99), n - 1)],
             }
