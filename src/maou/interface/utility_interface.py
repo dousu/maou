@@ -255,6 +255,9 @@ def benchmark_training(
         trainable_layers: Number of trailing backbone groups to keep trainable
         stage1_batch_size: Batch size override for Stage 1
         stage2_batch_size: Batch size override for Stage 2
+        batch_sizes: List of batch sizes for sweep mode
+        learning_rates: List of learning rates for sweep mode
+        estimate_cbs: Estimate Critical Batch Size during batch size sweep
 
     Returns:
         JSON string with benchmark results and recommendations

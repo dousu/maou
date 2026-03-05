@@ -1636,8 +1636,11 @@ class TrainingBenchmarkUseCase:
             ):
                 try:
                     torch.cuda.reset_peak_memory_stats()
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.debug(
+                        "Failed to reset CUDA memory stats: %s",
+                        e,
+                    )
 
             sweep_config = replace(config, batch_size=bs)
             try:
@@ -1701,7 +1704,8 @@ class TrainingBenchmarkUseCase:
         cbs_estimation = None
         if config.estimate_cbs and len(successful_results) >= 2:
             cbs_estimation = self._estimate_cbs_from_sweep(
-                successful_results
+                successful_results,
+                config_batch_size=config.batch_size,
             )
 
         # Format comparison summary
@@ -1901,6 +1905,9 @@ class TrainingBenchmarkUseCase:
             return None
 
         fixed_cost = (sum_y - per_sample_bytes * sum_x) / n
+        # Clamp negative intercept to 0 (regression artifact from
+        # outliers/few data points) to avoid overestimating capacity.
+        fixed_cost = max(0, fixed_cost)
         total_memory = points[0][3]
 
         # Use 85% safety margin
@@ -1908,6 +1915,9 @@ class TrainingBenchmarkUseCase:
         max_batch_size = int(
             (usable_memory - fixed_cost) / per_sample_bytes
         )
+        # Cap at 4x the largest tested batch size to bound extrapolation
+        max_tested_bs = max(p[0] for p in points)
+        max_batch_size = min(max_batch_size, max_tested_bs * 4)
         max_batch_size = max(1, max_batch_size)
 
         return {
@@ -1923,6 +1933,7 @@ class TrainingBenchmarkUseCase:
     @staticmethod
     def _estimate_cbs_from_sweep(
         results: list[dict[str, Any]],
+        config_batch_size: int = 256,
     ) -> Optional[dict[str, Any]]:
         """複数バッチサイズの結果からCBSを推定する．
 
@@ -2014,8 +2025,7 @@ class TrainingBenchmarkUseCase:
         )
 
         # Generate recommendation
-        tested_sizes = [bs for bs, _ in points]
-        config_bs = tested_sizes[0] if tested_sizes else 256
+        config_bs = config_batch_size
         rec: str
         if config_bs < cbs_rounded:
             rec = (
