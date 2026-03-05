@@ -17,6 +17,9 @@ from typing import Optional
 #         return json.dumps(log_record)
 
 
+_TZ_JST = timezone(timedelta(hours=+9), "JST")
+
+
 class CustomLogFormatter(logging.Formatter):
     # 時刻はJSTを使用する
     def formatTime(
@@ -24,8 +27,7 @@ class CustomLogFormatter(logging.Formatter):
         record: logging.LogRecord,
         datefmt: Optional[str] = None,
     ) -> str:
-        tz_jst = timezone(timedelta(hours=+9), "JST")
-        ct = datetime.fromtimestamp(record.created, tz=tz_jst)
+        ct = datetime.fromtimestamp(record.created, tz=_TZ_JST)
         s = ct.isoformat(timespec="seconds")
 
         return s

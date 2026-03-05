@@ -115,30 +115,6 @@ def test_scalar_metrics_still_logged_when_histograms_disabled() -> (
     )
 
 
-def _build_metrics_log(metrics: ValidationMetrics) -> str:
-    """Replicate the METRICS log formatting logic from Learning.__train."""
-    lines = [
-        "METRICS",
-        f"  policy_cross_entropy      = {metrics.policy_cross_entropy}",
-        f"  value_brier_score         = {metrics.value_brier_score}",
-        f"  policy_top5_accuracy      = {metrics.policy_top5_accuracy}",
-        f"  value_high_confidence_rate = {metrics.value_high_confidence_rate}",
-    ]
-    if metrics.policy_move_label_ce is not None:
-        lines.append(
-            f"  policy_move_label_ce      = {metrics.policy_move_label_ce}"
-        )
-    if metrics.policy_top1_win_rate is not None:
-        lines.append(
-            f"  policy_top1_win_rate      = {metrics.policy_top1_win_rate}"
-        )
-    if metrics.policy_expected_win_rate is not None:
-        lines.append(
-            f"  policy_expected_win_rate   = {metrics.policy_expected_win_rate}"
-        )
-    return "\n".join(lines)
-
-
 def test_metrics_log_includes_move_win_rate_fields() -> None:
     """METRICS console output should include moveWinRate metrics when present."""
     metrics = ValidationMetrics(
@@ -151,11 +127,11 @@ def test_metrics_log_includes_move_win_rate_fields() -> None:
         policy_top1_win_rate=0.55,
         policy_expected_win_rate=0.62,
     )
-    log_line = _build_metrics_log(metrics)
+    log_output = metrics.format_log_lines()
 
-    assert "policy_move_label_ce      = 5.2" in log_line
-    assert "policy_top1_win_rate      = 0.55" in log_line
-    assert "policy_expected_win_rate   = 0.62" in log_line
+    assert "policy_move_label_ce       = 5.2" in log_output
+    assert "policy_top1_win_rate       = 0.55" in log_output
+    assert "policy_expected_win_rate   = 0.62" in log_output
 
 
 def test_metrics_log_omits_move_win_rate_fields_when_none() -> (
@@ -169,8 +145,8 @@ def test_metrics_log_omits_move_win_rate_fields_when_none() -> (
         policy_f1_score=0.7,
         value_high_confidence_rate=0.84,
     )
-    log_line = _build_metrics_log(metrics)
+    log_output = metrics.format_log_lines()
 
-    assert "policy_move_label_ce" not in log_line
-    assert "policy_top1_win_rate" not in log_line
-    assert "policy_expected_win_rate" not in log_line
+    assert "policy_move_label_ce" not in log_output
+    assert "policy_top1_win_rate" not in log_output
+    assert "policy_expected_win_rate" not in log_output

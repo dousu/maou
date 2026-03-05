@@ -618,26 +618,7 @@ class Learning:
                     avg_loss, avg_vloss
                 )
             )
-            metrics_lines = [
-                "METRICS",
-                f"  policy_cross_entropy      = {metrics.policy_cross_entropy}",
-                f"  value_brier_score         = {metrics.value_brier_score}",
-                f"  policy_top5_accuracy      = {metrics.policy_top5_accuracy}",
-                f"  value_high_confidence_rate = {metrics.value_high_confidence_rate}",
-            ]
-            if metrics.policy_move_label_ce is not None:
-                metrics_lines.append(
-                    f"  policy_move_label_ce      = {metrics.policy_move_label_ce}"
-                )
-            if metrics.policy_top1_win_rate is not None:
-                metrics_lines.append(
-                    f"  policy_top1_win_rate      = {metrics.policy_top1_win_rate}"
-                )
-            if metrics.policy_expected_win_rate is not None:
-                metrics_lines.append(
-                    f"  policy_expected_win_rate   = {metrics.policy_expected_win_rate}"
-                )
-            self.logger.info("\n".join(metrics_lines))
+            self.logger.info(metrics.format_log_lines())
             current_lr = self.optimizer.param_groups[0]["lr"]
             self.logger.info(
                 "Stage 3 Epoch %d: LR = %.6f",
