@@ -618,17 +618,7 @@ class Learning:
                     avg_loss, avg_vloss
                 )
             )
-            self.logger.info(
-                (
-                    "METRICS policy_cross_entropy {} value_brier_score {} "
-                    "policy_top5_accuracy {} value_high_confidence_rate {}"
-                ).format(
-                    metrics.policy_cross_entropy,
-                    metrics.value_brier_score,
-                    metrics.policy_top5_accuracy,
-                    metrics.value_high_confidence_rate,
-                )
-            )
+            self.logger.info(metrics.format_log_lines())
             current_lr = self.optimizer.param_groups[0]["lr"]
             self.logger.info(
                 "Stage 3 Epoch %d: LR = %.6f",

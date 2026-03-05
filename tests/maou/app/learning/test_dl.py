@@ -113,3 +113,41 @@ def test_scalar_metrics_still_logged_when_histograms_disabled() -> (
     assert any(
         tag == "Learning Rate" for tag, _, _ in writer.scalars
     )
+
+
+def test_metrics_log_includes_move_win_rate_fields() -> None:
+    """METRICS console output should include moveWinRate metrics when present."""
+    metrics = ValidationMetrics(
+        policy_cross_entropy=4.5,
+        value_brier_score=0.19,
+        policy_top5_accuracy=0.15,
+        policy_f1_score=0.7,
+        value_high_confidence_rate=0.84,
+        policy_move_label_ce=5.2,
+        policy_top1_win_rate=0.55,
+        policy_expected_win_rate=0.62,
+    )
+    log_output = metrics.format_log_lines()
+
+    assert "policy_f1_score              = 0.7" in log_output
+    assert "policy_move_label_ce         = 5.2" in log_output
+    assert "policy_top1_win_rate         = 0.55" in log_output
+    assert "policy_expected_win_rate     = 0.62" in log_output
+
+
+def test_metrics_log_omits_move_win_rate_fields_when_none() -> (
+    None
+):
+    """METRICS output should not include moveWinRate fields when absent."""
+    metrics = ValidationMetrics(
+        policy_cross_entropy=4.5,
+        value_brier_score=0.19,
+        policy_top5_accuracy=0.15,
+        policy_f1_score=0.7,
+        value_high_confidence_rate=0.84,
+    )
+    log_output = metrics.format_log_lines()
+
+    assert "policy_move_label_ce" not in log_output
+    assert "policy_top1_win_rate" not in log_output
+    assert "policy_expected_win_rate" not in log_output
