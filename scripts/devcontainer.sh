@@ -2,6 +2,10 @@
 
 set -eux
 
+# Cargo registryボリュームの権限修正(rootで作成されるため)
+sudo chown -R vscode:rustlang /usr/local/cargo/registry
+sudo chmod -R g+ws /usr/local/cargo/registry
+
 # 必要ならインストールするが少しでも軽くしたいので基本しない
 # build-essentialとか
 sudo apt update
