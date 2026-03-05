@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import polars as pl
+from tqdm.auto import tqdm
 
 from maou.domain.data.rust_io import load_hcpe_df
 
@@ -30,7 +31,7 @@ class Stage2DataGenerationConfig:
     input_dir: Path
     output_dir: Path
     output_data_name: str = "stage2"
-    chunk_size: int = 100_000
+    chunk_size: int = 1_000_000
     cache_dir: Optional[Path] = None
 
 
@@ -91,10 +92,6 @@ class Stage2DataGenerationUseCase:
 
         from maou.domain.board import shogi
 
-        logger.info(
-            f"Phase 1: Collecting HCPs from {input_dir}"
-        )
-
         # Collect feather files
         feather_files = sorted(input_dir.rglob("*.feather"))
         if not feather_files:
@@ -117,8 +114,9 @@ class Stage2DataGenerationUseCase:
         board = shogi.Board()
         total_input = 0
 
-        for file_path in feather_files:
-            logger.info(f"Processing: {file_path.name}")
+        for file_path in tqdm(
+            feather_files, desc="Phase 1: Collecting HCPs"
+        ):
             df = load_hcpe_df(file_path)
 
             if "hcp" not in df.columns:
@@ -161,10 +159,6 @@ class Stage2DataGenerationUseCase:
                 INSERT OR IGNORE INTO unique_hcps
                 SELECT * FROM batch_df
                 """
-            )
-
-            logger.info(
-                f"  Processed {batch_size} positions from {file_path.name}"
             )
 
         row = conn.execute(
@@ -215,8 +209,6 @@ class Stage2DataGenerationUseCase:
             make_move_label,
         )
 
-        logger.info("Phase 2: Generating legal move labels")
-
         conn = duckdb.connect(str(db_path))
         count_row = conn.execute(
             "SELECT COUNT(*) FROM unique_hcps"
@@ -229,6 +221,13 @@ class Stage2DataGenerationUseCase:
         output_files: list[Path] = []
         chunk_idx = 0
         offset = 0
+        total_chunks = (
+            total_count + chunk_size - 1
+        ) // chunk_size
+        pbar = tqdm(
+            total=total_chunks,
+            desc="Phase 2: Generating labels",
+        )
 
         while offset < total_count:
             # Read chunk from DuckDB
@@ -321,13 +320,12 @@ class Stage2DataGenerationUseCase:
             save_stage2_df(chunk_df, output_path)
             output_files.append(output_path)
 
-            logger.info(
-                f"  Wrote chunk {chunk_idx}: {len(rows)} positions -> {output_path}"
-            )
+            pbar.update(1)
 
             offset += chunk_size
             chunk_idx += 1
 
+        pbar.close()
         conn.close()
 
         logger.info(

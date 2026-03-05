@@ -28,7 +28,7 @@ Arrow IPC（.feather）形式，LZ4圧縮．
 | `--output-bucket-name TEXT` | No | 出力先のGCSバケット名． |
 | `--output-prefix TEXT` | No | 出力先のGCSプレフィックスパス． |
 | `--output-data-name TEXT` | No | GCS上でデータを識別する名前（デフォルト: `stage2`）． |
-| `--chunk-size INT` | No | 1チャンクあたりの局面数（デフォルト: `100000`）． |
+| `--chunk-size INT` | No | 1チャンクあたりの局面数（デフォルト: `1000000`）． |
 | `--intermediate-cache-dir PATH` | No | 中間データキャッシュ用ディレクトリ（デフォルト: 一時ディレクトリ）． |
 
 ## 実行フロー

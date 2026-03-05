@@ -544,7 +544,7 @@ def generate_stage2_data(
     input_dir: Path,
     output_dir: Path,
     output_data_name: str = "stage2",
-    chunk_size: int = 100_000,
+    chunk_size: int = 1_000_000,
     cache_dir: Optional[Path] = None,
 ) -> str:
     """Generate Stage 2 training data for legal moves prediction.
