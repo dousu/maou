@@ -905,12 +905,15 @@ class TimingCallback(BaseCallback):
             self.timing_stats["loss_computation"].append(
                 self._temp_timings["loss_computation"]
             )
-            self.timing_stats["backward_pass"].append(
-                self._temp_timings["backward_pass"]
-            )
-            self.timing_stats["optimizer_step"].append(
-                self._temp_timings["optimizer_step"]
-            )
+            # backward_pass / optimizer_step are absent in validation mode
+            if "backward_pass" in self._temp_timings:
+                self.timing_stats["backward_pass"].append(
+                    self._temp_timings["backward_pass"]
+                )
+            if "optimizer_step" in self._temp_timings:
+                self.timing_stats["optimizer_step"].append(
+                    self._temp_timings["optimizer_step"]
+                )
             self.timing_stats["total_batch"].append(
                 batch_total_time
             )
@@ -990,7 +993,8 @@ class TimingCallback(BaseCallback):
             mean = sum(values) / n
             # Population std dev (divided by n, not n-1).
             # Returns 0 for single measurement (n=1).
-            # For small n, p95/p99 will coincide with max.
+            # For small n, percentiles use nearest-rank: p50 rounds up
+            # (e.g. n=2 → index 1 = max), p95/p99 coincide with max.
             variance = (
                 sum((v - mean) ** 2 for v in values) / n
                 if n > 1

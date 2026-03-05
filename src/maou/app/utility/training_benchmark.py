@@ -16,8 +16,12 @@ from maou.app.learning.callbacks import (
 )
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
+from maou.app.learning.multi_stage_training import (
+    Stage2ModelAdapter,
+)
 from maou.app.learning.network import (
     BackboneArchitecture,
+    LegalMovesHead,
     Network,
 )
 from maou.app.learning.policy_targets import PolicyTargetMode
@@ -36,10 +40,15 @@ from maou.app.learning.stage_component_factory import (
     StageComponentFactory,
 )
 from maou.app.learning.streaming_dataset import (
+    Stage2StreamingAdapter,
     StreamingDataSource,
     StreamingKifDataset,
+    StreamingStage2Dataset,
 )
-from maou.app.learning.training_loop import TrainingLoop
+from maou.app.learning.training_loop import (
+    RawLogitsTrainingLoop,
+    TrainingLoop,
+)
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -76,6 +85,16 @@ class GPUMemoryBreakdown:
     peak_reserved_bytes: int
     total_gpu_memory_bytes: int
 
+    @property
+    def activation_estimate_bytes(self) -> int:
+        """活性化メモリの推定値（バイト）．"""
+        return max(
+            0,
+            self.peak_allocated_bytes
+            - self.model_parameters_bytes
+            - self.optimizer_state_bytes,
+        )
+
     def to_dict(self) -> dict[str, object]:
         """辞書形式で返す．"""
         return {
@@ -84,12 +103,7 @@ class GPUMemoryBreakdown:
             "peak_allocated_bytes": self.peak_allocated_bytes,
             "peak_reserved_bytes": self.peak_reserved_bytes,
             "total_gpu_memory_bytes": self.total_gpu_memory_bytes,
-            "activation_estimate_bytes": max(
-                0,
-                self.peak_allocated_bytes
-                - self.model_parameters_bytes
-                - self.optimizer_state_bytes,
-            ),
+            "activation_estimate_bytes": self.activation_estimate_bytes,
         }
 
 
@@ -160,11 +174,11 @@ class BenchmarkResult:
             "total_epoch_time": self.total_epoch_time,
             "average_batch_time": self.average_batch_time,
             "actual_average_batch_time": self.actual_average_batch_time,
-            "total_batches": float(self.total_batches),
+            "total_batches": self.total_batches,
             "warmup_time": self.warmup_time,
-            "warmup_batches": float(self.warmup_batches),
+            "warmup_batches": self.warmup_batches,
             "measured_time": self.measured_time,
-            "measured_batches": float(self.measured_batches),
+            "measured_batches": self.measured_batches,
             "data_loading_time": self.data_loading_time,
             "gpu_transfer_time": self.gpu_transfer_time,
             "forward_pass_time": self.forward_pass_time,
@@ -1066,11 +1080,6 @@ class TrainingBenchmarkUseCase:
         )
 
         # Model (keep existing model creation - not in streaming data pipeline)
-        from maou.app.learning.multi_stage_training import (
-            Stage2ModelAdapter,
-        )
-        from maou.app.learning.network import LegalMovesHead
-
         legal_moves_head = LegalMovesHead(
             input_dim=backbone.embedding_dim,
             hidden_dim=config.stage2_hidden_dim
@@ -1116,11 +1125,6 @@ class TrainingBenchmarkUseCase:
 
         # Streaming validation loader
         if config.stage2_streaming_val_source is not None:
-            from maou.app.learning.streaming_dataset import (
-                Stage2StreamingAdapter,
-                StreamingStage2Dataset,
-            )
-
             val_batch_size = (
                 config.stage2_batch_size
                 if config.stage2_batch_size is not None
@@ -1261,10 +1265,6 @@ class TrainingBenchmarkUseCase:
         )
 
         # Stage 別コンポーネントセットアップ
-        from maou.app.learning.training_loop import (
-            RawLogitsTrainingLoop,
-        )
-
         training_loop_class: type[TrainingLoop] = TrainingLoop
 
         if config.stage == 1:
@@ -2172,10 +2172,6 @@ def _format_timing_summary(
     # GPU memory breakdown
     if result.gpu_memory_breakdown is not None:
         gm = result.gpu_memory_breakdown
-        gm_dict = gm.to_dict()
-        activation_est = cast(
-            int, gm_dict["activation_estimate_bytes"]
-        )
         lines.append("")
         lines.append("  GPU Memory Breakdown:")
         lines.append(
@@ -2185,7 +2181,7 @@ def _format_timing_summary(
             f"  - Optimizer State: {gm.optimizer_state_bytes / 1024**2:.1f}MB"
         )
         lines.append(
-            f"  - Activations (est.): {activation_est / 1024**2:.1f}MB"
+            f"  - Activations (est.): {gm.activation_estimate_bytes / 1024**2:.1f}MB"
         )
         lines.append(
             f"  - Peak Allocated: {gm.peak_allocated_bytes / 1024**2:.1f}MB"
