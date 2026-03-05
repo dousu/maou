@@ -47,11 +47,16 @@ def _parse_float_list(
     if value is None:
         return None
     try:
-        return [float(x.strip()) for x in value.split(",")]
+        parsed = [float(x.strip()) for x in value.split(",")]
     except ValueError as e:
         raise click.BadParameter(
             f"Invalid float list '{value}': {e}"
         ) from e
+    if any(v <= 0 for v in parsed):
+        raise click.BadParameter(
+            f"All values must be positive, got: {value}"
+        )
+    return parsed
 
 
 @click.command("benchmark-dataloader")

@@ -477,6 +477,10 @@ class SingleEpochBenchmark:
         """
         バリデーション（推論のみ）のベンチマークを実行する．
 
+        Note:
+            timing_distribution, model_info, gpu_memory_breakdown は
+            バリデーション実行では収集しない（訓練ループ専用の情報のため）．
+
         Args:
             dataloader: バリデーション用データローダー
             max_batches: 最大処理バッチ数（Noneの場合は全バッチ）
@@ -1632,9 +1636,8 @@ class TrainingBenchmarkUseCase:
                 "Running benchmark with batch_size=%d", bs
             )
             # Reset CUDA memory stats before each run
-            if (
-                config.gpu is not None
-                or torch.cuda.is_available()
+            if torch.cuda.is_available() and (
+                config.gpu is None or config.gpu != "cpu"
             ):
                 try:
                     torch.cuda.reset_peak_memory_stats()
@@ -1647,10 +1650,11 @@ class TrainingBenchmarkUseCase:
             sweep_config = replace(config, batch_size=bs)
             try:
                 result_json = self.execute(sweep_config)
-            except torch.cuda.OutOfMemoryError:
+            except torch.cuda.OutOfMemoryError as e:
                 self.logger.warning(
-                    "CUDA OOM at batch_size=%d, skipping",
+                    "CUDA OOM at batch_size=%d, skipping: %s",
                     bs,
+                    e,
                 )
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -1921,7 +1925,7 @@ class TrainingBenchmarkUseCase:
         # Clamp negative intercept to 0 (regression artifact from
         # outliers/few data points) to avoid overestimating capacity.
         fixed_cost = max(0, fixed_cost)
-        total_memory = points[0][3]
+        total_memory = max(p[3] for p in points)
 
         # Use 85% safety margin
         usable_memory = total_memory * 0.85
@@ -2160,11 +2164,9 @@ def _format_timing_summary(
     # GPU memory breakdown
     if result.gpu_memory_breakdown is not None:
         gm = result.gpu_memory_breakdown
-        activation_est = max(
-            0,
-            gm.peak_allocated_bytes
-            - gm.model_parameters_bytes
-            - gm.optimizer_state_bytes,
+        gm_dict = gm.to_dict()
+        activation_est = cast(
+            int, gm_dict["activation_estimate_bytes"]
         )
         lines.append("")
         lines.append("  GPU Memory Breakdown:")

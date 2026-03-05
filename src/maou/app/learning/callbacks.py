@@ -960,7 +960,7 @@ class TimingCallback(BaseCallback):
 
     def get_timing_distribution(
         self,
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> dict[str, dict[str, float]]:
         """Get timing distribution statistics (std dev, min, max, percentiles).
 
         Returns:
@@ -974,8 +974,8 @@ class TimingCallback(BaseCallback):
             )
 
         def compute_stats(
-            values: List[float],
-        ) -> Dict[str, float]:
+            values: list[float],
+        ) -> dict[str, float]:
             if not values:
                 return {
                     "mean": 0.0,
