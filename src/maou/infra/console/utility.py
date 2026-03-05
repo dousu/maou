@@ -27,7 +27,12 @@ def _parse_int_list(
     """カンマ区切りの整数リストをパースする．"""
     if value is None:
         return None
-    return [int(x.strip()) for x in value.split(",")]
+    try:
+        return [int(x.strip()) for x in value.split(",")]
+    except ValueError as e:
+        raise click.BadParameter(
+            f"Invalid integer list '{value}': {e}"
+        ) from e
 
 
 def _parse_float_list(
@@ -36,7 +41,12 @@ def _parse_float_list(
     """カンマ区切りの浮動小数点数リストをパースする．"""
     if value is None:
         return None
-    return [float(x.strip()) for x in value.split(",")]
+    try:
+        return [float(x.strip()) for x in value.split(",")]
+    except ValueError as e:
+        raise click.BadParameter(
+            f"Invalid float list '{value}': {e}"
+        ) from e
 
 
 @click.command("benchmark-dataloader")

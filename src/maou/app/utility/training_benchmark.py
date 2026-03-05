@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Any, Optional, cast
 
@@ -43,7 +44,7 @@ from maou.app.learning.training_loop import TrainingLoop
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
     """空のIterableDataset．ベンチマーク時のダミーバリデーション用．"""
 
-    def __iter__(self) -> Any:
+    def __iter__(self) -> Iterator[object]:
         return iter([])
 
 
@@ -1801,6 +1802,9 @@ class TrainingBenchmarkUseCase:
             config.learning_rates,
         )
 
+        # Note: Unlike batch size sweep, OOM is not caught here because
+        # learning rate changes do not affect memory usage. OOM during
+        # LR sweep indicates a config/batch_size issue, not an LR issue.
         results: list[dict[str, Any]] = []
         for lr in config.learning_rates:
             self.logger.info(
@@ -1996,8 +2000,9 @@ class TrainingBenchmarkUseCase:
             # than all tested batch sizes
             max_tested = max(bs for bs, _ in points)
             return {
-                "estimated_cbs": f"> {max_tested}",
-                "gradient_noise_scale": float("inf"),
+                "estimated_cbs": max_tested,
+                "cbs_exceeds_tested": True,
+                "gradient_noise_scale": None,
                 "recommendation": (
                     f"CBS exceeds all tested batch sizes (max: {max_tested}). "
                     f"All tested sizes are in the linear scaling regime. "
@@ -2047,6 +2052,7 @@ class TrainingBenchmarkUseCase:
 
         return {
             "estimated_cbs": cbs_rounded,
+            "cbs_exceeds_tested": False,
             "gradient_noise_scale": round(median_cbs, 1),
             "recommendation": rec,
             "scaling_efficiency": {

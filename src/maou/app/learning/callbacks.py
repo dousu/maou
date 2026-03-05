@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -966,8 +967,6 @@ class TimingCallback(BaseCallback):
             各タイミングカテゴリごとの分布統計量を含む辞書．
             キーはタイミングカテゴリ名，値は統計量の辞書．
         """
-        import math
-
         if not self.timing_stats["total_batch"]:
             raise RuntimeError(
                 "No batches were processed "
