@@ -1657,7 +1657,13 @@ class TrainingBenchmarkUseCase:
                         e,
                     )
 
-            sweep_config = replace(config, batch_size=bs)
+            sweep_config = replace(
+                config,
+                batch_size=bs,
+                batch_sizes=None,
+                learning_rates=None,
+                estimate_cbs=False,
+            )
             try:
                 result_json = self.execute(sweep_config)
             except torch.cuda.OutOfMemoryError as e:
@@ -1835,7 +1841,13 @@ class TrainingBenchmarkUseCase:
             self.logger.info(
                 "Running benchmark with learning_rate=%g", lr
             )
-            sweep_config = replace(config, learning_ratio=lr)
+            sweep_config = replace(
+                config,
+                learning_ratio=lr,
+                batch_sizes=None,
+                learning_rates=None,
+                estimate_cbs=False,
+            )
             try:
                 result_json = self.execute(sweep_config)
             except torch.cuda.OutOfMemoryError as e:
@@ -1958,8 +1970,9 @@ class TrainingBenchmarkUseCase:
             return None
 
         fixed_cost = (sum_y - per_sample_bytes * sum_x) / n
-        # Clamp negative intercept to 0 (regression artifact from
-        # outliers/few data points) to avoid overestimating capacity.
+        # Clamp negative intercept to 0: a negative fixed_cost would
+        # inflate usable_memory (usable - negative = larger), yielding an
+        # overestimated max_batch_size. Clamping to 0 is conservative.
         fixed_cost = max(0, fixed_cost)
         total_memory = max(p[3] for p in points)
 
