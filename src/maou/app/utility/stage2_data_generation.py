@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import polars as pl
+from tqdm.auto import tqdm
 
 from maou.domain.data.rust_io import load_hcpe_df
 
@@ -30,7 +31,7 @@ class Stage2DataGenerationConfig:
     input_dir: Path
     output_dir: Path
     output_data_name: str = "stage2"
-    chunk_size: int = 100_000
+    chunk_size: int = 1_000_000
     cache_dir: Optional[Path] = None
 
 
@@ -91,10 +92,6 @@ class Stage2DataGenerationUseCase:
 
         from maou.domain.board import shogi
 
-        logger.info(
-            f"Phase 1: Collecting HCPs from {input_dir}"
-        )
-
         # Collect feather files
         feather_files = sorted(input_dir.rglob("*.feather"))
         if not feather_files:
@@ -102,79 +99,80 @@ class Stage2DataGenerationUseCase:
                 f"No .feather files found in {input_dir}"
             )
 
-        logger.info(f"Found {len(feather_files)} feather files")
-
         conn = duckdb.connect(str(db_path))
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS unique_hcps (
-                hash_id UBIGINT PRIMARY KEY,
-                hcp BLOB NOT NULL
-            )
-            """
-        )
-
-        board = shogi.Board()
-        total_input = 0
-
-        for file_path in feather_files:
-            logger.info(f"Processing: {file_path.name}")
-            df = load_hcpe_df(file_path)
-
-            if "hcp" not in df.columns:
-                logger.warning(
-                    f"Skipping {file_path.name}: no 'hcp' column"
-                )
-                continue
-
-            hcp_series = df["hcp"]
-            batch_size = len(hcp_series)
-            total_input += batch_size
-
-            # Compute hash for each HCP
-            hash_ids = np.empty(batch_size, dtype=np.uint64)
-            hcp_bytes_list = []
-
-            for i in range(batch_size):
-                hcp_bytes = hcp_series[i]
-                hcp_array = np.frombuffer(
-                    hcp_bytes, dtype=np.uint8
-                )
-                board.set_hcp(hcp_array)
-                hash_ids[i] = board.hash()
-                hcp_bytes_list.append(hcp_bytes)
-
-            # Insert into DuckDB with dedup (INSERT OR IGNORE)
-            batch_df = pl.DataFrame(  # noqa: F841 (used by DuckDB)
-                {
-                    "hash_id": pl.Series(
-                        "hash_id", hash_ids, dtype=pl.UInt64
-                    ),
-                    "hcp": pl.Series(
-                        "hcp", hcp_bytes_list, dtype=pl.Binary
-                    ),
-                }
-            )
-
+        try:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO unique_hcps
-                SELECT * FROM batch_df
+                CREATE TABLE IF NOT EXISTS unique_hcps (
+                    hash_id UBIGINT PRIMARY KEY,
+                    hcp BLOB NOT NULL
+                )
                 """
             )
 
-            logger.info(
-                f"  Processed {batch_size} positions from {file_path.name}"
-            )
+            board = shogi.Board()
+            total_input = 0
 
-        row = conn.execute(
-            "SELECT COUNT(*) FROM unique_hcps"
-        ).fetchone()
-        total_unique: int = row[0] if row is not None else 0
+            for file_path in tqdm(
+                feather_files,
+                desc=f"Phase 1: Collecting HCPs ({len(feather_files)} files)",
+            ):
+                df = load_hcpe_df(file_path)
 
-        conn.close()
+                if "hcp" not in df.columns:
+                    logger.warning(
+                        f"Skipping {file_path.name}: no 'hcp' column"
+                    )
+                    continue
 
-        logger.info(
+                hcp_series = df["hcp"]
+                batch_size = len(hcp_series)
+                total_input += batch_size
+
+                # Compute hash for each HCP
+                hash_ids = np.empty(batch_size, dtype=np.uint64)
+                hcp_bytes_list = []
+
+                for i in range(batch_size):
+                    hcp_bytes = hcp_series[i]
+                    hcp_array = np.frombuffer(
+                        hcp_bytes, dtype=np.uint8
+                    )
+                    board.set_hcp(hcp_array)
+                    hash_ids[i] = board.hash()
+                    hcp_bytes_list.append(hcp_bytes)
+
+                # Insert into DuckDB with dedup (INSERT OR IGNORE)
+                batch_df = pl.DataFrame(  # noqa: F841 (used by DuckDB)
+                    {
+                        "hash_id": pl.Series(
+                            "hash_id",
+                            hash_ids,
+                            dtype=pl.UInt64,
+                        ),
+                        "hcp": pl.Series(
+                            "hcp",
+                            hcp_bytes_list,
+                            dtype=pl.Binary,
+                        ),
+                    }
+                )
+
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO unique_hcps
+                    SELECT * FROM batch_df
+                    """
+                )
+
+            row = conn.execute(
+                "SELECT COUNT(*) FROM unique_hcps"
+            ).fetchone()
+            total_unique: int = row[0] if row is not None else 0
+        finally:
+            conn.close()
+
+        tqdm.write(
             f"Phase 1 complete: {total_input} input -> {total_unique} unique positions"
         )
 
@@ -215,122 +213,137 @@ class Stage2DataGenerationUseCase:
             make_move_label,
         )
 
-        logger.info("Phase 2: Generating legal move labels")
+        schema = get_stage2_polars_schema()
 
         conn = duckdb.connect(str(db_path))
-        count_row = conn.execute(
-            "SELECT COUNT(*) FROM unique_hcps"
-        ).fetchone()
-        total_count: int = (
-            count_row[0] if count_row is not None else 0
-        )
+        try:
+            count_row = conn.execute(
+                "SELECT COUNT(*) FROM unique_hcps"
+            ).fetchone()
+            total_count: int = (
+                count_row[0] if count_row is not None else 0
+            )
 
-        board = shogi.Board()
-        output_files: list[Path] = []
-        chunk_idx = 0
-        offset = 0
+            board = shogi.Board()
+            output_files: list[Path] = []
+            chunk_idx = 0
+            offset = 0
+            total_chunks = (
+                total_count + chunk_size - 1
+            ) // chunk_size
 
-        while offset < total_count:
-            # Read chunk from DuckDB
-            rows = conn.execute(
-                f"""
-                SELECT hash_id, hcp FROM unique_hcps
-                ORDER BY hash_id
-                LIMIT {chunk_size} OFFSET {offset}
-                """
-            ).fetchall()
+            with tqdm(
+                total=total_chunks,
+                desc="Phase 2: Generating labels",
+            ) as pbar:
+                while offset < total_count:
+                    # Read chunk from DuckDB
+                    rows = conn.execute(
+                        f"""
+                        SELECT hash_id, hcp FROM unique_hcps
+                        ORDER BY hash_id
+                        LIMIT {chunk_size} OFFSET {offset}
+                        """
+                    ).fetchall()
 
-            if not rows:
-                break
+                    if not rows:
+                        break
 
-            ids: list[int] = []
-            board_id_positions_list: list[list[list[int]]] = []
-            pieces_in_hand_list: list[list[int]] = []
-            legal_moves_labels_list: list[list[int]] = []
+                    ids: list[int] = []
+                    board_id_positions_list: list[
+                        list[list[int]]
+                    ] = []
+                    pieces_in_hand_list: list[list[int]] = []
+                    legal_moves_labels_list: list[
+                        list[int]
+                    ] = []
 
-            for hash_id, hcp_bytes in rows:
-                hcp_array = np.frombuffer(
-                    hcp_bytes, dtype=np.uint8
-                )
-                board.set_hcp(hcp_array)
-
-                # Generate features
-                board_positions = make_board_id_positions(board)
-                pieces_in_hand = make_pieces_in_hand(board)
-
-                # Generate legal move labels
-                # 盤面は先手視点に正規化済みなので，
-                # 正規化後の盤面の合法手からラベルを生成する
-                legal_labels = np.zeros(
-                    MOVE_LABELS_NUM, dtype=np.uint8
-                )
-                if board.get_turn() == shogi.Turn.BLACK:
-                    # 先手番: 正規化なし，元のboardの合法手をそのまま使用
-                    for move in board.get_legal_moves():
-                        label = make_move_label(
-                            shogi.Turn.BLACK, move
+                    for hash_id, hcp_bytes in rows:
+                        hcp_array = np.frombuffer(
+                            hcp_bytes, dtype=np.uint8
                         )
-                        legal_labels[label] = 1
-                else:
-                    # 後手番: 盤面が180度回転されているため，
-                    # 正規化後の盤面を再構築して合法手を取得
-                    normalized_board = (
-                        self._reconstruct_normalized_board(
-                            board_positions,
-                            pieces_in_hand,
+                        board.set_hcp(hcp_array)
+
+                        # Generate features
+                        board_positions = (
+                            make_board_id_positions(board)
                         )
+                        pieces_in_hand = make_pieces_in_hand(
+                            board
+                        )
+
+                        # Generate legal move labels
+                        # 盤面は先手視点に正規化済みなので，
+                        # 正規化後の盤面の合法手からラベルを生成する
+                        legal_labels = np.zeros(
+                            MOVE_LABELS_NUM,
+                            dtype=np.uint8,
+                        )
+                        if board.get_turn() == shogi.Turn.BLACK:
+                            # 先手番: 正規化なし，元のboardの合法手をそのまま使用
+                            for move in board.get_legal_moves():
+                                label = make_move_label(
+                                    shogi.Turn.BLACK,
+                                    move,
+                                )
+                                legal_labels[label] = 1
+                        else:
+                            # 後手番: 盤面が180度回転されているため，
+                            # 正規化後の盤面を再構築して合法手を取得
+                            normalized_board = self._reconstruct_normalized_board(
+                                board_positions,
+                                pieces_in_hand,
+                            )
+                            for move in normalized_board.get_legal_moves():
+                                label = make_move_label(
+                                    shogi.Turn.BLACK,
+                                    move,
+                                )
+                                legal_labels[label] = 1
+
+                        ids.append(hash_id)
+                        board_id_positions_list.append(
+                            board_positions.tolist()
+                        )
+                        pieces_in_hand_list.append(
+                            pieces_in_hand.tolist()
+                        )
+                        legal_moves_labels_list.append(
+                            legal_labels.tolist()
+                        )
+
+                    chunk_df = pl.DataFrame(
+                        {
+                            "id": pl.Series(
+                                "id",
+                                ids,
+                                dtype=pl.UInt64,
+                            ),
+                            "boardIdPositions": board_id_positions_list,
+                            "piecesInHand": pieces_in_hand_list,
+                            "legalMovesLabel": legal_moves_labels_list,
+                        },
+                        schema=schema,
                     )
-                    for (
-                        move
-                    ) in normalized_board.get_legal_moves():
-                        label = make_move_label(
-                            shogi.Turn.BLACK, move
-                        )
-                        legal_labels[label] = 1
 
-                ids.append(hash_id)
-                board_id_positions_list.append(
-                    board_positions.tolist()
-                )
-                pieces_in_hand_list.append(
-                    pieces_in_hand.tolist()
-                )
-                legal_moves_labels_list.append(
-                    legal_labels.tolist()
-                )
+                    # Determine filename
+                    if total_count <= chunk_size:
+                        filename = f"{output_data_name}.feather"
+                    else:
+                        filename = f"{output_data_name}_chunk{chunk_idx:04d}.feather"
 
-            # Create Polars DataFrame with correct schema
-            schema = get_stage2_polars_schema()
-            chunk_df = pl.DataFrame(
-                {
-                    "id": pl.Series("id", ids, dtype=pl.UInt64),
-                    "boardIdPositions": board_id_positions_list,
-                    "piecesInHand": pieces_in_hand_list,
-                    "legalMovesLabel": legal_moves_labels_list,
-                },
-                schema=schema,
-            )
+                    output_path = output_dir / filename
+                    save_stage2_df(chunk_df, output_path)
+                    output_files.append(output_path)
 
-            # Determine filename
-            if total_count <= chunk_size:
-                filename = f"{output_data_name}.feather"
-            else:
-                filename = f"{output_data_name}_chunk{chunk_idx:04d}.feather"
+                    pbar.update(1)
 
-            output_path = output_dir / filename
-            save_stage2_df(chunk_df, output_path)
-            output_files.append(output_path)
+                    offset += chunk_size
+                    chunk_idx += 1
+        finally:
+            conn.close()
 
-            logger.info(
-                f"  Wrote chunk {chunk_idx}: {len(rows)} positions -> {output_path}"
-            )
-
-            offset += chunk_size
-            chunk_idx += 1
-
-        conn.close()
-
-        logger.info(
+        tqdm.write(
             f"Phase 2 complete: {len(output_files)} files written"
         )
 

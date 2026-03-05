@@ -1490,9 +1490,9 @@ def generate_stage1_data(output_dir: Path) -> None:
 )
 @click.option(
     "--chunk-size",
-    help="Positions per output chunk (default: 100000).",
+    help="Positions per output chunk (default: 1000000).",
     type=int,
-    default=100_000,
+    default=1_000_000,
     required=False,
 )
 @click.option(
