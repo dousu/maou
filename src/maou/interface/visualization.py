@@ -3,9 +3,11 @@
 アプリケーション層とインフラ層を接続し，型変換とバリデーションを行う．
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from maou.app.visualization.data_retrieval import DataRetriever
 from maou.app.visualization.record_renderer import (
@@ -18,7 +20,11 @@ from maou.domain.visualization.board_renderer import (
 from maou.domain.visualization.move_label_converter import (
     MoveLabelConverter,
 )
-from maou.infra.visualization.search_index import SearchIndex
+
+if TYPE_CHECKING:
+    from maou.infra.visualization.search_index import (
+        SearchIndex,
+    )
 
 logger = logging.getLogger(__name__)
 
