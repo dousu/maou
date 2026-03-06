@@ -418,6 +418,7 @@ def run_stage1_with_training_loop(
     config: StageConfig,
     device: torch.device,
     logger: logging.Logger | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> tuple[StageResult, ReachableSquaresHead]:
     """TrainingLoop を使用して Stage 1 (Reachable Squares) を学習する．
 
@@ -472,6 +473,7 @@ def run_stage1_with_training_loop(
         value_loss_ratio=0.0,
         callbacks=callbacks,
         logger=_logger,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     # Epoch loop
@@ -564,6 +566,7 @@ def run_stage2_with_training_loop(
     config: StageConfig,
     device: torch.device,
     logger: logging.Logger | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> tuple[StageResult, LegalMovesHead]:
     """TrainingLoop を使用して Stage 2 (Legal Moves) を学習する．
 
@@ -618,6 +621,7 @@ def run_stage2_with_training_loop(
         value_loss_ratio=0.0,
         callbacks=callbacks,
         logger=_logger,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     # Epoch loop
@@ -766,6 +770,7 @@ class MultiStageTrainingOrchestrator:
         stage2_config: Optional[StageConfig] = None,
         stage3_config: Optional[StageConfig] = None,
         save_checkpoints: bool = True,
+        gradient_accumulation_steps: int = 1,
     ) -> dict[TrainingStage, StageResult]:
         """Run all configured stages sequentially.
 
@@ -802,6 +807,7 @@ class MultiStageTrainingOrchestrator:
                     config=stage1_config,
                     device=self.device,
                     logger=self.logger,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                 )
             )
             results[TrainingStage.REACHABLE_SQUARES] = result
@@ -849,6 +855,7 @@ class MultiStageTrainingOrchestrator:
                     config=stage2_config,
                     device=self.device,
                     logger=self.logger,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                 )
             )
             results[TrainingStage.LEGAL_MOVES] = result

@@ -139,6 +139,7 @@ class Learning:
         policy_target_mode: PolicyTargetMode = (
             PolicyTargetMode.WIN_RATE
         )
+        gradient_accumulation_steps: int = 1
 
     def __init__(
         self,
@@ -494,6 +495,7 @@ class Learning:
             callbacks=callbacks,
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
         )
 
         # Run training epoch
