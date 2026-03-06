@@ -93,6 +93,15 @@ class TrainingLoop:
                 )
                 raise ValueError(msg)
 
+            if gradient_accumulation_steps > 1:
+                self.logger.warning(
+                    "gradient_accumulation_steps=%d は "
+                    "adaptive batch 有効時は無視されます "
+                    "(min_accumulation_steps=%d を使用)",
+                    gradient_accumulation_steps,
+                    adaptive_batch_config.min_accumulation_steps,
+                )
+
             # 外部から渡された controller/estimator を使う場合は
             # EMA 状態と current_steps を引き継ぐ(エポック間の継続)
             if (

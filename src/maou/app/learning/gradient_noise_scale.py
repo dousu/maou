@@ -174,6 +174,8 @@ class GradientNoiseScaleEstimator:
             self._sum_micro_norm_sq += micro_norm_sq
             self._prev_grads = new_prev
 
+        # accumulation_step は 0-indexed なので +1 で処理済み micro-batch 数になる．
+        # インクリメントではなく代入: skip された step があっても正しい値を保持する．
         self._micro_batch_count = accumulation_step + 1
 
     def compute(

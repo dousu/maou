@@ -5,7 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-from maou.app.learning.adaptive_batch import AdaptiveBatchConfig
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+    AdaptiveBatchController,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
+)
 from maou.app.learning.callbacks import (
     AdaptiveBatchCallback,
     ModelInputs,
@@ -85,7 +91,9 @@ def test_nan_loss_does_not_call_scaler_update() -> None:
         ),
     ):
         loop._train_batch_mixed_precision(
-            context, is_accumulation_step=False, accumulation_step=0
+            context,
+            is_accumulation_step=False,
+            accumulation_step=0,
         )
 
     # scaler.update()はNaN検出時に呼ばれてはいけない
@@ -397,7 +405,6 @@ class TestAdaptiveBatchIntegration:
             adaptive_batch_config=adaptive_config,
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
-            callbacks=[adaptive_cb],
         )
 
         # adaptive batch が有効化され初期値が min_accumulation_steps
@@ -456,7 +463,6 @@ class TestAdaptiveBatchIntegration:
             adaptive_batch_config=adaptive_config,
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
-            callbacks=[adaptive_cb],
         )
 
         dataset = _SimpleBatchDatasetForAdaptive(
@@ -481,3 +487,72 @@ class TestAdaptiveBatchIntegration:
         assert "accum" in postfix
         # accum 表示が数値文字列であること
         assert postfix["accum"].isdigit()
+
+    def test_adaptive_batch_steps_actually_change(
+        self,
+    ) -> None:
+        """controller を mock して accumulation_steps が実際に変化することを検証する．"""
+        input_dim = 32
+        output_dim = 2
+        batch_size = 4
+        model = torch.nn.Linear(input_dim, output_dim)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+        adaptive_config = AdaptiveBatchConfig(
+            min_accumulation_steps=2,
+            max_accumulation_steps=8,
+            adjustment_interval=1,
+            smoothing_factor=1.0,
+            measurement_interval=1,
+        )
+
+        # controller を事前作成し update() を mock
+        controller = AdaptiveBatchController(
+            config=adaptive_config,
+            physical_batch_size=batch_size,
+        )
+        # 最初の update で 4 を返す(min=2 から変化)
+        controller.update = MagicMock(return_value=4)  # type: ignore[assignment]
+        controller._current_steps = 2
+
+        estimator = GradientNoiseScaleEstimator(
+            physical_batch_size=batch_size,
+            measurement_interval=1,
+        )
+
+        loop = TrainingLoop(
+            model=model,
+            device=torch.device("cpu"),
+            optimizer=optimizer,
+            loss_fn_policy=torch.nn.CrossEntropyLoss(),
+            loss_fn_value=torch.nn.MSELoss(),
+            policy_loss_ratio=1.0,
+            value_loss_ratio=1.0,
+            adaptive_batch_config=adaptive_config,
+            physical_batch_size=batch_size,
+            adaptive_controller=controller,
+            gns_estimator=estimator,
+        )
+
+        assert loop.gradient_accumulation_steps == 2
+
+        # 4 バッチ実行 → accumulation=2 なので 2 optimizer steps
+        dataset = _SimpleBatchDatasetForAdaptive(
+            num_batches=4,
+            input_dim=input_dim,
+            batch_size=batch_size,
+            output_dim=output_dim,
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        loop.run_epoch(
+            dataloader,
+            epoch_idx=0,
+            progress_bar=False,
+        )
+
+        # controller.update() が呼ばれ，steps が 4 に変化していること
+        assert loop.gradient_accumulation_steps == 4
+        assert controller.update.call_count >= 1
