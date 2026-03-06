@@ -882,6 +882,16 @@ class Learning:
             "policy_target_mode": config.policy_target_mode.value,
         }
 
+        # Adaptive batch パラメータ
+        if config.adaptive_batch_config is not None:
+            abc = config.adaptive_batch_config
+            hparam_dict["adaptive_batch_min_steps"] = (
+                abc.min_accumulation_steps
+            )
+            hparam_dict["adaptive_batch_max_steps"] = (
+                abc.max_accumulation_steps
+            )
+
         # ViT固有パラメータ
         if (
             self.architecture_config

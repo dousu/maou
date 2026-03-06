@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.10.15"
+version = "0.10.16"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}

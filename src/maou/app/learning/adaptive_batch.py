@@ -109,6 +109,15 @@ class AdaptiveBatchConfig:
                 self.measurement_interval,
                 self.adjustment_interval,
             )
+        if (
+            self.min_accumulation_steps
+            == self.max_accumulation_steps
+        ):
+            logger.warning(
+                "min_accumulation_steps == max_accumulation_steps (%d): "
+                "GNS は計測されますが accumulation_steps は変化しません",
+                self.min_accumulation_steps,
+            )
 
 
 class AdaptiveBatchController:
