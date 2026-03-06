@@ -29,6 +29,10 @@ def round_to_power_of_two(
         2の冪乗に丸められた整数．
     """
     clamped = max(minimum, value)
+    # 外側の max(minimum, ...) は防御的ガード: minimum が2の冪乗でない場合
+    # (例: minimum=3)に 2**round(log2(3)) = 4 >= 3 だが，
+    # minimum=3, value=2 → clamped=3, 2**round(log2(3))=4 ≠ 3 のケースで
+    # minimum 自体は保証されるため実用上は冗長だが安全側に残す
     return max(minimum, int(2 ** round(math.log2(clamped))))
 
 
@@ -117,6 +121,17 @@ class AdaptiveBatchController:
 
         # optimizer step カウンタ
         self._step_count: int = 0
+
+        if (
+            config.measurement_interval
+            > config.adjustment_interval
+        ):
+            logger.warning(
+                "measurement_interval (%d) > adjustment_interval (%d): "
+                "調整ウィンドウ内で GNS 計測が不足する可能性があります",
+                config.measurement_interval,
+                config.adjustment_interval,
+            )
 
     @property
     def current_accumulation_steps(self) -> int:

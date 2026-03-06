@@ -147,6 +147,16 @@ class GradientNoiseScaleEstimator:
             # インクリメントする
             micro_norm_sq = 0.0
             new_prev: list[torch.Tensor | None] = []
+            num_params = sum(1 for _ in model.parameters())
+            if len(self._prev_grads) != num_params:
+                logger.warning(
+                    "prev_grads length (%d) != model parameters (%d), "
+                    "resetting GNS state",
+                    len(self._prev_grads),
+                    num_params,
+                )
+                self._reset()
+                return
             for idx, param in enumerate(model.parameters()):
                 if param.grad is not None:
                     g = param.grad.detach()

@@ -280,14 +280,20 @@ adaptive batch オプション推奨値が出力される:
     "min_accumulation_steps": 2,
     "max_accumulation_steps": 4,
     "target_effective_batch_size": 4096,
+    "measurement_interval": 5,
     "rationale": "CBS=4096, physical BS=2048 → accum 2-4 で CBS 到達",
-    "cli_example": "--batch-size 2048 --adaptive-batch --adaptive-batch-min-steps 2 --adaptive-batch-max-steps 4"
+    "cli_example": "--batch-size 2048 --adaptive-batch --adaptive-batch-min-steps 2 --adaptive-batch-max-steps 4 --adaptive-batch-measurement-interval 5"
   }
 }
 ```
 
 この推奨設定をそのまま `learn-model` に渡すことで，GNS-Based adaptive
 batch size を利用できる．
+
+`measurement_interval` は benchmark 実行時の GPU メモリ使用量と
+モデルパラメータ数から自動推奨される．GNS 計測中は勾配スナップショット
+(trainable params × 4 bytes) の追加メモリが必要なため，大規模モデルでは
+間隔を広げることでメモリ圧迫を回避する．
 
 ## Implementation references
 

@@ -9,7 +9,9 @@ import torch
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
-from maou.app.learning.adaptive_batch import round_to_power_of_two
+from maou.app.learning.adaptive_batch import (
+    round_to_power_of_two,
+)
 from maou.app.learning.callbacks import (
     ResourceMonitoringCallback,
     TimingCallback,
@@ -1808,6 +1810,12 @@ class TrainingBenchmarkUseCase:
                 summary_lines.append(
                     f"  {adaptive_rec['rationale']}"
                 )
+                mi = adaptive_rec.get("measurement_interval", 1)
+                if mi > 1:
+                    summary_lines.append(
+                        f"  measurement_interval={mi}"
+                        f" (GPUメモリ使用量に基づく推奨)"
+                    )
                 summary_lines.append(
                     f"  CLI: {adaptive_rec['cli_example']}"
                 )
@@ -2086,13 +2094,37 @@ class TrainingBenchmarkUseCase:
                     if cbs_est > 0:
                         cbs_estimates.append(cbs_est)
 
+        # model_info と gpu_memory_breakdown を結果から抽出
+        # (measurement_interval 推奨に使用)
+        trainable_params: int | None = None
+        gpu_mem_breakdown: dict[str, Any] | None = None
+        for r in results:
+            tm = r.get("training_metrics", {})
+            if isinstance(tm, dict):
+                mi = tm.get("model_info")
+                if (
+                    isinstance(mi, dict)
+                    and "trainable_parameters" in mi
+                ):
+                    trainable_params = int(
+                        mi["trainable_parameters"]
+                    )
+                gm = tm.get("gpu_memory_breakdown")
+                if isinstance(gm, dict):
+                    gpu_mem_breakdown = gm
+                if trainable_params is not None:
+                    break
+
         if not cbs_estimates:
             # All batch sizes show linear scaling - CBS is larger
             # than all tested batch sizes
             max_tested = max(bs for bs, _ in points)
             tested_sizes_sorted = sorted(bs for bs, _ in points)
             adaptive_rec = _build_adaptive_batch_recommendation(
-                max_tested, tested_sizes_sorted
+                max_tested,
+                tested_sizes_sorted,
+                trainable_parameters=trainable_params,
+                gpu_memory_breakdown=gpu_mem_breakdown,
             )
             result_dict: dict[str, Any] = {
                 "estimated_cbs": max_tested,
@@ -2154,10 +2186,13 @@ class TrainingBenchmarkUseCase:
 
         # Adaptive batch 推奨設定を生成
         adaptive_rec = _build_adaptive_batch_recommendation(
-            cbs_rounded, tested_sizes
+            cbs_rounded,
+            tested_sizes,
+            trainable_parameters=trainable_params,
+            gpu_memory_breakdown=gpu_mem_breakdown,
         )
 
-        result_dict: dict[str, Any] = {
+        result_dict = {
             "estimated_cbs": cbs_rounded,
             "cbs_exceeds_tested": False,
             "gradient_noise_scale": round(median_cbs, 1),
@@ -2177,12 +2212,17 @@ class TrainingBenchmarkUseCase:
 def _build_adaptive_batch_recommendation(
     cbs: int,
     tested_sizes: list[int],
+    *,
+    trainable_parameters: int | None = None,
+    gpu_memory_breakdown: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """CBS推定結果から adaptive batch の推奨設定を生成する．
 
     Args:
         cbs: 推定された Critical Batch Size (2の冪乗)．
         tested_sizes: テストされたバッチサイズのソート済みリスト．
+        trainable_parameters: 学習可能パラメータ数(measurement_interval 推奨用)．
+        gpu_memory_breakdown: GPUメモリ内訳(measurement_interval 推奨用)．
 
     Returns:
         推奨設定の辞書．テスト範囲が不十分な場合は None．
@@ -2202,25 +2242,88 @@ def _build_adaptive_batch_recommendation(
 
     # 2の冪乗に丸める
     min_steps = round_to_power_of_two(min_steps, minimum=2)
-    max_steps = round_to_power_of_two(max_steps, minimum=min_steps)
+    max_steps = round_to_power_of_two(
+        max_steps, minimum=min_steps
+    )
 
     target_effective_bs = physical_bs * min_steps
 
-    return {
+    # measurement_interval の推奨値を計算
+    measurement_interval = _recommend_measurement_interval(
+        trainable_parameters=trainable_parameters,
+        gpu_memory_breakdown=gpu_memory_breakdown,
+    )
+
+    cli_parts = [
+        f"--batch-size {physical_bs} --adaptive-batch",
+        f"--adaptive-batch-min-steps {min_steps}",
+        f"--adaptive-batch-max-steps {max_steps}",
+    ]
+    if measurement_interval > 1:
+        cli_parts.append(
+            f"--adaptive-batch-measurement-interval {measurement_interval}"
+        )
+
+    result: dict[str, Any] = {
         "physical_batch_size": physical_bs,
         "min_accumulation_steps": min_steps,
         "max_accumulation_steps": max_steps,
         "target_effective_batch_size": target_effective_bs,
+        "measurement_interval": measurement_interval,
         "rationale": (
             f"CBS={cbs}, physical BS={physical_bs} → "
             f"accum {min_steps}-{max_steps} で CBS 到達"
         ),
-        "cli_example": (
-            f"--batch-size {physical_bs} --adaptive-batch "
-            f"--adaptive-batch-min-steps {min_steps} "
-            f"--adaptive-batch-max-steps {max_steps}"
-        ),
+        "cli_example": " ".join(cli_parts),
     }
+    return result
+
+
+def _recommend_measurement_interval(
+    *,
+    trainable_parameters: int | None,
+    gpu_memory_breakdown: dict[str, Any] | None,
+) -> int:
+    """GPUメモリ使用量から measurement_interval の推奨値を計算する．
+
+    GNS 計測中は勾配スナップショット(trainable params × 4 bytes)の
+    追加メモリが必要．GPU の空きメモリとの比率から推奨値を決定する．
+
+    Returns:
+        推奨 measurement_interval (1, 5, or 10)．
+    """
+    if trainable_parameters is None:
+        return 1
+
+    # 勾配スナップショットのメモリサイズ(float32 = 4 bytes)
+    snapshot_bytes = trainable_parameters * 4
+
+    # GPU メモリ情報がある場合はメモリ余裕に基づいて推奨
+    if gpu_memory_breakdown is not None:
+        total = gpu_memory_breakdown.get(
+            "total_gpu_memory_bytes", 0
+        )
+        peak = gpu_memory_breakdown.get(
+            "peak_allocated_bytes", 0
+        )
+        if total > 0 and peak > 0:
+            available = total - peak
+            if available > 0:
+                # スナップショットが空きメモリの 20% 以上を占める場合
+                # → 頻繁な計測を避ける
+                ratio = snapshot_bytes / available
+                if ratio > 0.5:
+                    return 10
+                if ratio > 0.2:
+                    return 5
+
+    # GPU 情報がない場合はパラメータ数で判断
+    if trainable_parameters >= 500_000_000:  # 500M+
+        return 10
+    if trainable_parameters >= 100_000_000:  # 100M+
+        return 5
+
+    return 1
 
 
 def _format_timing_summary(
