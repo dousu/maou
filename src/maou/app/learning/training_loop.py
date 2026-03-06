@@ -955,6 +955,7 @@ class TrainingLoop:
             self._adaptive_callback.update_display(
                 self._adaptive_controller.smoothed_gns,
                 self.gradient_accumulation_steps,
+                low_noise=self._gns_estimator.last_compute_was_low_noise,
             )
 
     def _maybe_synchronize(self, reason: str) -> None:

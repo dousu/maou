@@ -103,6 +103,13 @@ class AdaptiveBatchConfig:
                 f"got {self.measurement_interval}"
             )
             raise ValueError(msg)
+        if self.measurement_interval > self.adjustment_interval:
+            logger.warning(
+                "measurement_interval (%d) > adjustment_interval (%d): "
+                "調整ウィンドウ内で GNS 計測が不足する可能性があります",
+                self.measurement_interval,
+                self.adjustment_interval,
+            )
 
 
 class AdaptiveBatchController:

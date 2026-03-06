@@ -97,10 +97,18 @@ class GradientNoiseScaleEstimator:
         # optimizer step カウンタ
         self._optimizer_step_count: int = 0
 
+        # 直近の compute() が ratio<=1.0 で None を返したかどうか
+        self._last_compute_was_low_noise: bool = False
+
     @property
     def optimizer_step_count(self) -> int:
         """累積 optimizer step 数．"""
         return self._optimizer_step_count
+
+    @property
+    def last_compute_was_low_noise(self) -> bool:
+        """直近の compute() が低ノイズ(ratio<=1.0)で None を返したか．"""
+        return self._last_compute_was_low_noise
 
     @property
     def should_measure(self) -> bool:
@@ -213,6 +221,7 @@ class GradientNoiseScaleEstimator:
         # compute 内では同じ step_count で判定してからインクリメントする．
         should_compute = self.should_measure
         self._optimizer_step_count += 1
+        self._last_compute_was_low_noise = False
 
         if not should_compute:
             self._reset()
@@ -282,6 +291,7 @@ class GradientNoiseScaleEstimator:
                 "GNS ratio <= 1.0 (%.4f), gradient noise is negligible",
                 ratio,
             )
+            self._last_compute_was_low_noise = True
             self._reset()
             return None
 

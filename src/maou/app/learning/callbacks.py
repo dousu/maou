@@ -1575,15 +1575,21 @@ class AdaptiveBatchCallback(BaseCallback):
         self,
         gns: float | None,
         accumulation_steps: int,
+        *,
+        low_noise: bool = False,
     ) -> None:
         """TrainingLoop から呼び出され，表示値を更新する．
 
         Args:
             gns: 最新の GNS 推定値(EMA平滑化済み)．None は未計測．
             accumulation_steps: 現在の gradient accumulation steps．
+            low_noise: True の場合，勾配ノイズが極小(ratio<=1.0)で
+                GNS 推定が返されなかったことを示す．
         """
         if gns is not None:
             self._gns_display = f"{gns:.0f}"
+        elif low_noise:
+            self._gns_display = "low"
         self._accum_display = str(accumulation_steps)
 
     def get_postfix(self) -> dict[str, str] | None:

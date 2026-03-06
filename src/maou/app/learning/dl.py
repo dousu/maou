@@ -578,6 +578,15 @@ class Learning:
                 physical_batch_size=self.config.batch_size,
                 measurement_interval=adaptive_batch_config.measurement_interval,
             )
+            if self.start_epoch > 0:
+                self.logger.warning(
+                    "Adaptive batch state (EMA, accumulation_steps) は "
+                    "チェックポイント再開時にリセットされます "
+                    "(start_epoch=%d)．min_accumulation_steps=%d "
+                    "から再開します",
+                    self.start_epoch,
+                    adaptive_batch_config.min_accumulation_steps,
+                )
 
         # 学習率スケジューラをstart_epochのステップ分だけ進める
         if (
