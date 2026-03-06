@@ -134,10 +134,12 @@ S3: S3Type | None = getattr(common, "S3", None)
     help=(
         "Number of gradient accumulation steps."
         " Effective batch size = batch_size × gradient_accumulation_steps."
-        " Default: 1 (no accumulation)."
+        " Consider scaling learning rate proportionally"
+        " (linear scaling rule) when using large accumulation steps."
     ),
     required=False,
     default=1,
+    show_default=True,
 )
 @click.option(
     "--dataloader-workers",

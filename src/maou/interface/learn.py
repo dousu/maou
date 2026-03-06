@@ -1062,6 +1062,13 @@ def learn_multi_stage(
         ValueError: If stage parameter is invalid or required datasources missing
         RuntimeError: If Stage 1 or 2 fails to meet accuracy threshold
     """
+    # 勾配蓄積ステップ数バリデーション
+    if gradient_accumulation_steps < 1:
+        raise ValueError(
+            f"gradient_accumulation_steps must be >= 1, "
+            f"got {gradient_accumulation_steps}"
+        )
+
     # Validate stage parameter
     if stage not in ("1", "2", "3", "all"):
         raise ValueError(
