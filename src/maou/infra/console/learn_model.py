@@ -5,9 +5,11 @@ import click
 
 import maou.infra.console.common as common
 import maou.interface.learn as learn
-from maou.app.learning.adaptive_batch import AdaptiveBatchConfig
-from maou.app.learning.policy_targets import PolicyTargetMode
-from maou.interface.learn import StageDataConfig
+from maou.interface.learn import (
+    AdaptiveBatchConfig,
+    PolicyTargetMode,
+    StageDataConfig,
+)
 
 if TYPE_CHECKING:
     from maou.infra.console.common import GCS as GCSType

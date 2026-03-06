@@ -6,7 +6,7 @@ import click
 
 import maou.interface.learn as learn
 import maou.interface.utility_interface as utility_interface
-from maou.app.learning.policy_targets import PolicyTargetMode
+from maou.interface.learn import PolicyTargetMode
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
