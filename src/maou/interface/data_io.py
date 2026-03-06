@@ -29,46 +29,46 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 def load_hcpe_df(path: Path) -> "pl.DataFrame":
     """Load HCPE DataFrame from Arrow IPC file."""
-    from maou.domain.data.rust_io import load_hcpe_df
+    import maou.domain.data.rust_io as _rust_io
 
-    return load_hcpe_df(path)
+    return _rust_io.load_hcpe_df(path)
 
 
 def load_preprocessing_df(path: Path) -> "pl.DataFrame":
     """Load preprocessing DataFrame from Arrow IPC file."""
-    from maou.domain.data.rust_io import load_preprocessing_df
+    import maou.domain.data.rust_io as _rust_io
 
-    return load_preprocessing_df(path)
+    return _rust_io.load_preprocessing_df(path)
 
 
 def load_stage1_df(path: Path) -> "pl.DataFrame":
     """Load stage1 DataFrame from Arrow IPC file."""
-    from maou.domain.data.rust_io import load_stage1_df
+    import maou.domain.data.rust_io as _rust_io
 
-    return load_stage1_df(path)
+    return _rust_io.load_stage1_df(path)
 
 
 def load_stage2_df(path: Path) -> "pl.DataFrame":
     """Load stage2 DataFrame from Arrow IPC file."""
-    from maou.domain.data.rust_io import load_stage2_df
+    import maou.domain.data.rust_io as _rust_io
 
-    return load_stage2_df(path)
+    return _rust_io.load_stage2_df(path)
 
 
 def save_hcpe_df(df: "pl.DataFrame", path: Path) -> None:
     """Save HCPE DataFrame to Arrow IPC file."""
-    from maou.domain.data.rust_io import save_hcpe_df
+    import maou.domain.data.rust_io as _rust_io
 
-    save_hcpe_df(df, path)
+    _rust_io.save_hcpe_df(df, path)
 
 
 def save_preprocessing_df(
     df: "pl.DataFrame", path: Path
 ) -> None:
     """Save preprocessing DataFrame to Arrow IPC file."""
-    from maou.domain.data.rust_io import save_preprocessing_df
+    import maou.domain.data.rust_io as _rust_io
 
-    save_preprocessing_df(df, path)
+    _rust_io.save_preprocessing_df(df, path)
 
 
 # --- dataframe_io re-exports ---
@@ -76,20 +76,16 @@ def save_preprocessing_df(
 
 def save_hcpe_df_to_bytes(df: "pl.DataFrame") -> bytes:
     """Save HCPE DataFrame to bytes (Arrow IPC format)."""
-    from maou.domain.data.dataframe_io import (
-        save_hcpe_df_to_bytes,
-    )
+    import maou.domain.data.dataframe_io as _dataframe_io
 
-    return save_hcpe_df_to_bytes(df)
+    return _dataframe_io.save_hcpe_df_to_bytes(df)
 
 
 def save_preprocessing_df_to_bytes(df: "pl.DataFrame") -> bytes:
     """Save preprocessing DataFrame to bytes (Arrow IPC format)."""
-    from maou.domain.data.dataframe_io import (
-        save_preprocessing_df_to_bytes,
-    )
+    import maou.domain.data.dataframe_io as _dataframe_io
 
-    return save_preprocessing_df_to_bytes(df)
+    return _dataframe_io.save_preprocessing_df_to_bytes(df)
 
 
 def load_df_from_bytes(
@@ -115,9 +111,11 @@ def load_df_from_bytes(
         >>> # Download bytes_data from S3/GCS
         >>> df = load_df_from_bytes(bytes_data, array_type="hcpe")
     """
-    from maou.domain.data.dataframe_io import load_df_from_bytes
+    import maou.domain.data.dataframe_io as _dataframe_io
 
-    return load_df_from_bytes(data, array_type=array_type)
+    return _dataframe_io.load_df_from_bytes(
+        data, array_type=array_type
+    )
 
 
 def save_df_to_bytes(
@@ -144,6 +142,8 @@ def save_df_to_bytes(
         >>> bytes_data = save_df_to_bytes(df, array_type="hcpe")
         >>> # Upload bytes_data to S3/GCS
     """
-    from maou.domain.data.dataframe_io import save_df_to_bytes
+    import maou.domain.data.dataframe_io as _dataframe_io
 
-    return save_df_to_bytes(df, array_type=array_type)
+    return _dataframe_io.save_df_to_bytes(
+        df, array_type=array_type
+    )
