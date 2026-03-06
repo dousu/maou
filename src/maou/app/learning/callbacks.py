@@ -3,7 +3,7 @@ import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Tuple, Union
+from typing import Dict, List, Optional, Protocol, Union
 
 import torch
 from torch.utils.tensorboard import (
@@ -631,7 +631,7 @@ class ValidationCallback(BaseCallback):
 
     def _compute_policy_top5_accuracy_stats_gpu(
         self, *, logits: torch.Tensor, targets: torch.Tensor
-    ) -> Tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, int]:
         """Return cumulative ratio sum as GPU tensor and sample count."""
         if logits.ndim != 2 or targets.ndim != 2:
             raise ValueError(
@@ -780,71 +780,6 @@ class ValidationCallback(BaseCallback):
 
         return total_tp, total_fp, total_fn
 
-    def _policy_cross_entropy(
-        self,
-        logits: torch.Tensor,
-        target_distribution: torch.Tensor,
-    ) -> float:
-        """Calculate total cross entropy between logits and target distribution."""
-        return float(
-            self._policy_cross_entropy_gpu(
-                logits, target_distribution
-            ).item()
-        )
-
-    def _policy_accuracy(
-        self, logits: torch.Tensor, targets: torch.Tensor
-    ) -> float:
-        """Calculate average policy Top-5 accuracy for the provided batch."""
-        ratio_sum_t, sample_count = (
-            self._compute_policy_top5_accuracy_stats_gpu(
-                logits=logits, targets=targets
-            )
-        )
-        if sample_count == 0:
-            return 0.0
-        return float(ratio_sum_t.item()) / float(sample_count)
-
-    def _compute_policy_top5_accuracy_stats(
-        self, *, logits: torch.Tensor, targets: torch.Tensor
-    ) -> Tuple[float, int]:
-        """Return cumulative ratio sum and sample count for Top-5 accuracy."""
-        ratio_sum_t, sample_count = (
-            self._compute_policy_top5_accuracy_stats_gpu(
-                logits=logits, targets=targets
-            )
-        )
-        return float(ratio_sum_t.item()), sample_count
-
-    def _value_brier_score(
-        self, y: torch.Tensor, t: torch.Tensor
-    ) -> float:
-        """Calculate sum of Brier Score components for a batch."""
-        return float(self._value_brier_score_gpu(y, t).item())
-
-    def _compute_policy_f1_components(
-        self, *, logits: torch.Tensor, targets: torch.Tensor
-    ) -> tuple[int, int, int]:
-        """Compute F1 score components (TP, FP, FN) for Top-5 predictions.
-
-        Args:
-            logits: Policy network output logits (batch_size, num_classes).
-            targets: Normalized policy target distribution (batch_size, num_classes).
-
-        Returns:
-            Tuple of (true_positives, false_positives, false_negatives).
-        """
-        tp_t, fp_t, fn_t = (
-            self._compute_policy_f1_components_gpu(
-                logits=logits, targets=targets
-            )
-        )
-        return (
-            int(tp_t.item()),
-            int(fp_t.item()),
-            int(fn_t.item()),
-        )
-
     def _calculate_f1_from_components(
         self, *, tp: int, fp: int, fn: int
     ) -> float:
@@ -905,7 +840,6 @@ class TimingCallback(BaseCallback):
         }
         self.measured_batches = 0
         self.total_samples = 0
-        self._running_loss: torch.Tensor = torch.tensor(0.0)
         self._total_loss: torch.Tensor = torch.tensor(0.0)
         self._last_batch_loss: torch.Tensor = torch.tensor(0.0)
         self.epoch_start_time = 0.0
@@ -1016,7 +950,6 @@ class TimingCallback(BaseCallback):
     def _ensure_device(self, device: torch.device) -> None:
         """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
         if not self._device_initialized:
-            self._running_loss = self._running_loss.to(device)
             self._total_loss = self._total_loss.to(device)
             self._last_batch_loss = self._last_batch_loss.to(
                 device
@@ -1032,7 +965,6 @@ class TimingCallback(BaseCallback):
         if context.loss is not None:
             self._ensure_device(context.loss.device)
             loss_detached = context.loss.detach()
-            self._running_loss += loss_detached
             self._total_loss += loss_detached
             self._last_batch_loss = loss_detached
 
@@ -1410,6 +1342,10 @@ class Stage2F1Callback(BaseCallback):
         if context.outputs_policy is None:
             return
 
+        # loss が None でも outputs_policy がある場合にデバイスを初期化
+        if not self._device_initialized:
+            self._ensure_device(context.outputs_policy.device)
+
         with torch.no_grad():
             predictions = (
                 torch.sigmoid(context.outputs_policy) > 0.5
@@ -1524,6 +1460,10 @@ class Stage1AccuracyCallback(BaseCallback):
 
         if context.outputs_policy is None:
             return
+
+        # loss が None でも outputs_policy がある場合にデバイスを初期化
+        if not self._device_initialized:
+            self._ensure_device(context.outputs_policy.device)
 
         with torch.no_grad():
             predictions = (
