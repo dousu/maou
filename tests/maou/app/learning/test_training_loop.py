@@ -85,7 +85,7 @@ def test_nan_loss_does_not_call_scaler_update() -> None:
         ),
     ):
         loop._train_batch_mixed_precision(
-            context, is_accumulation_step=False
+            context, is_accumulation_step=False, accumulation_step=0
         )
 
     # scaler.update()はNaN検出時に呼ばれてはいけない
