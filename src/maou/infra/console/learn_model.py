@@ -130,7 +130,7 @@ S3: S3Type | None = getattr(common, "S3", None)
 )
 @click.option(
     "--gradient-accumulation-steps",
-    type=int,
+    type=click.IntRange(min=1),
     help=(
         "Number of gradient accumulation steps."
         " Effective batch size = batch_size × gradient_accumulation_steps."
