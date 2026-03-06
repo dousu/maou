@@ -3,7 +3,7 @@ import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Tuple, Union
+from typing import Dict, List, Optional, Protocol, Union
 
 import torch
 from torch.utils.tensorboard import (
@@ -137,6 +137,9 @@ class TrainingCallback(Protocol):
 class BaseCallback:
     """Base callback implementation with no-op methods."""
 
+    _postfix_sync_interval: int = 50
+    """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
+
     def on_epoch_start(self, epoch_idx: int) -> None:
         pass
 
@@ -205,7 +208,11 @@ class BaseCallback:
 
 
 class LoggingCallback(BaseCallback):
-    """Callback for logging training progress."""
+    """Callback for logging training progress.
+
+    GPU同期を抑制するため，lossをGPUテンソル上で蓄積し，
+    TensorBoard書き込み時(Nバッチごと)にのみ ``.item()`` を呼ぶ．
+    """
 
     def __init__(
         self,
@@ -216,19 +223,27 @@ class LoggingCallback(BaseCallback):
         self.writer = writer
         self.dataloader_length = dataloader_length
         self.logger = logger or logging.getLogger(__name__)
-        self.running_loss = 0.0
+        self._running_loss: torch.Tensor = torch.tensor(0.0)
         self.record_num = max(1, dataloader_length // 10)
         self.last_loss = 0.0
+        self._device_initialized: bool = False
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if not self._device_initialized:
+            self._running_loss = self._running_loss.to(device)
+            self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if context.loss is not None:
-            self.running_loss += context.loss.item()
+            self._ensure_device(context.loss.device)
+            self._running_loss += context.loss.detach()
             if (
                 context.batch_idx % self.record_num
                 == self.record_num - 1
             ):
                 self.last_loss = float(
-                    self.running_loss
+                    self._running_loss.item()
                 ) / float(self.record_num)
                 tb_x = (
                     context.epoch_idx * self.dataloader_length
@@ -238,7 +253,7 @@ class LoggingCallback(BaseCallback):
                 self.writer.add_scalar(
                     "Loss/train", self.last_loss, tb_x
                 )
-                self.running_loss = 0.0
+                self._running_loss.zero_()
 
 
 @dataclass(frozen=True)
@@ -280,29 +295,90 @@ class ValidationMetrics:
 
 
 class ValidationCallback(BaseCallback):
-    """Callback for validation with policy and value quality metrics."""
+    """Callback for validation with policy and value quality metrics.
+
+    GPU同期を抑制するため，全メトリクスをGPUテンソル上で蓄積し，
+    エポック終了時の ``get_average_metrics()`` でのみ ``.item()`` を呼ぶ．
+    """
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
-        self.running_vloss = 0.0
-        self.policy_cross_entropy_sum = 0.0
-        self.value_brier_score_sum = 0.0
+        self._running_vloss: torch.Tensor = torch.tensor(0.0)
+        self._policy_cross_entropy_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
+        self._value_brier_score_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
-        self.policy_top5_ratio_sum = 0.0
+        self._policy_top5_ratio_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
         self.policy_top5_sample_count = 0
-        self.value_high_confidence_prediction_count = 0
-        self.value_high_confidence_correct = 0
-        self.policy_f1_true_positives = 0
-        self.policy_f1_false_positives = 0
-        self.policy_f1_false_negatives = 0
+        self._value_high_conf_pred_count: torch.Tensor = (
+            torch.tensor(0, dtype=torch.long)
+        )
+        self._value_high_conf_correct: torch.Tensor = (
+            torch.tensor(0, dtype=torch.long)
+        )
+        self._policy_f1_tp: torch.Tensor = torch.tensor(
+            0, dtype=torch.long
+        )
+        self._policy_f1_fp: torch.Tensor = torch.tensor(
+            0, dtype=torch.long
+        )
+        self._policy_f1_fn: torch.Tensor = torch.tensor(
+            0, dtype=torch.long
+        )
         # move_win_rate metrics
-        self.policy_top1_win_rate_sum = 0.0
-        self.policy_move_label_ce_sum = 0.0
+        self._policy_top1_win_rate_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
+        self._policy_move_label_ce_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
         self.policy_move_label_ce_count = 0
-        self.policy_expected_win_rate_sum = 0.0
+        self._policy_expected_win_rate_sum: torch.Tensor = (
+            torch.tensor(0.0)
+        )
         self.move_win_rate_sample_count = 0
+        self._device_initialized: bool = False
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if self._device_initialized:
+            return
+        self._running_vloss = self._running_vloss.to(device)
+        self._policy_cross_entropy_sum = (
+            self._policy_cross_entropy_sum.to(device)
+        )
+        self._value_brier_score_sum = (
+            self._value_brier_score_sum.to(device)
+        )
+        self._policy_top5_ratio_sum = (
+            self._policy_top5_ratio_sum.to(device)
+        )
+        self._value_high_conf_pred_count = (
+            self._value_high_conf_pred_count.to(device)
+        )
+        self._value_high_conf_correct = (
+            self._value_high_conf_correct.to(device)
+        )
+        self._policy_f1_tp = self._policy_f1_tp.to(device)
+        self._policy_f1_fp = self._policy_f1_fp.to(device)
+        self._policy_f1_fn = self._policy_f1_fn.to(device)
+        self._policy_top1_win_rate_sum = (
+            self._policy_top1_win_rate_sum.to(device)
+        )
+        self._policy_move_label_ce_sum = (
+            self._policy_move_label_ce_sum.to(device)
+        )
+        self._policy_expected_win_rate_sum = (
+            self._policy_expected_win_rate_sum.to(device)
+        )
+        self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -310,7 +386,8 @@ class ValidationCallback(BaseCallback):
             and context.outputs_policy is not None
             and context.outputs_value is not None
         ):
-            self.running_vloss += context.loss.item()
+            self._ensure_device(context.loss.device)
+            self._running_vloss += context.loss.detach()
             policy_targets = (
                 context.policy_target_distribution
                 if context.policy_target_distribution
@@ -320,36 +397,38 @@ class ValidationCallback(BaseCallback):
                     context.legal_move_mask,
                 )
             )
-            self.policy_cross_entropy_sum += (
-                self._policy_cross_entropy(
+            self._policy_cross_entropy_sum += (
+                self._policy_cross_entropy_gpu(
                     context.outputs_policy, policy_targets
                 )
             )
             policy_batch_size = int(policy_targets.size(0))
             value_batch_size = int(context.labels_value.numel())
-            self.value_brier_score_sum += (
-                self._value_brier_score(
+            self._value_brier_score_sum += (
+                self._value_brier_score_gpu(
                     context.outputs_value, context.labels_value
                 )
             )
             self.policy_sample_count += policy_batch_size
             self.value_sample_count += value_batch_size
-            ratio_sum, sample_count = (
-                self._compute_policy_top5_accuracy_stats(
+            ratio_sum_t, sample_count = (
+                self._compute_policy_top5_accuracy_stats_gpu(
                     logits=context.outputs_policy,
                     targets=policy_targets,
                 )
             )
-            self.policy_top5_ratio_sum += ratio_sum
+            self._policy_top5_ratio_sum += ratio_sum_t
             self.policy_top5_sample_count += sample_count
-            # Accumulate F1 score components
-            tp, fp, fn = self._compute_policy_f1_components(
-                logits=context.outputs_policy,
-                targets=policy_targets,
+            # Accumulate F1 score components on GPU
+            tp_t, fp_t, fn_t = (
+                self._compute_policy_f1_components_gpu(
+                    logits=context.outputs_policy,
+                    targets=policy_targets,
+                )
             )
-            self.policy_f1_true_positives += tp
-            self.policy_f1_false_positives += fp
-            self.policy_f1_false_negatives += fn
+            self._policy_f1_tp += tp_t
+            self._policy_f1_fp += fp_t
+            self._policy_f1_fn += fn_t
             labels_value = context.labels_value.view(-1)
             predicted_value = torch.sigmoid(
                 context.outputs_value
@@ -357,20 +436,19 @@ class ValidationCallback(BaseCallback):
             prediction_high_confidence_mask = (
                 predicted_value >= 0.8
             )
-            self.value_high_confidence_prediction_count += int(
-                torch.sum(
-                    prediction_high_confidence_mask
-                ).item()
+            self._value_high_conf_pred_count += (
+                prediction_high_confidence_mask.sum().long()
             )
-            if torch.any(prediction_high_confidence_mask):
-                self.value_high_confidence_correct += int(
-                    torch.sum(
-                        labels_value[
-                            prediction_high_confidence_mask
-                        ]
-                        >= 0.8
-                    ).item()
+            self._value_high_conf_correct += (
+                (
+                    labels_value[
+                        prediction_high_confidence_mask
+                    ]
+                    >= 0.8
                 )
+                .sum()
+                .long()
+            )
             self.batch_count += 1
 
             # move_win_rate metrics
@@ -386,8 +464,8 @@ class ValidationCallback(BaseCallback):
                     top1_win_rates = win_rate.gather(
                         1, top1_indices.unsqueeze(1)
                     ).squeeze(1)
-                    self.policy_top1_win_rate_sum += float(
-                        top1_win_rates.sum().item()
+                    self._policy_top1_win_rate_sum += (
+                        top1_win_rates.sum()
                     )
 
                     # policy_move_label_ce: moveLabelとのCE(参考値)
@@ -400,8 +478,8 @@ class ValidationCallback(BaseCallback):
                                 context.legal_move_mask,
                             )
                         )
-                        self.policy_move_label_ce_sum += (
-                            self._policy_cross_entropy(
+                        self._policy_move_label_ce_sum += (
+                            self._policy_cross_entropy_gpu(
                                 logits, move_label_targets
                             )
                         )
@@ -414,48 +492,58 @@ class ValidationCallback(BaseCallback):
                     log_probs = torch.log_softmax(logits, dim=1)
                     probs = log_probs.exp()
                     expected_wr = (probs * win_rate).sum(dim=1)
-                    self.policy_expected_win_rate_sum += float(
-                        expected_wr.sum().item()
+                    self._policy_expected_win_rate_sum += (
+                        expected_wr.sum()
                     )
 
     def get_average_loss(self) -> float:
         """Get average validation loss."""
-        return float(self.running_vloss) / float(
-            max(1, self.batch_count)
+        if self.batch_count == 0:
+            return 0.0
+        return float(self._running_vloss.item()) / float(
+            self.batch_count
         )
 
     def get_average_metrics(self) -> ValidationMetrics:
-        """Get aggregated policy and value metrics for the epoch."""
+        """Get aggregated policy and value metrics for the epoch.
+
+        エポック終了時にのみ呼ばれる前提のため，
+        ここでの ``.item()`` によるGPU同期は許容範囲．
+        """
         avg_policy_cross_entropy = float(
-            self.policy_cross_entropy_sum
+            self._policy_cross_entropy_sum.item()
         ) / float(max(1, self.policy_sample_count))
         avg_value_brier = float(
-            self.value_brier_score_sum
+            self._value_brier_score_sum.item()
         ) / float(max(1, self.value_sample_count))
         policy_top5_accuracy = float(
-            self.policy_top5_ratio_sum
+            self._policy_top5_ratio_sum.item()
         ) / float(max(1, self.policy_top5_sample_count))
         policy_f1 = self._calculate_f1_from_components(
-            tp=self.policy_f1_true_positives,
-            fp=self.policy_f1_false_positives,
-            fn=self.policy_f1_false_negatives,
+            tp=int(self._policy_f1_tp.item()),
+            fp=int(self._policy_f1_fp.item()),
+            fn=int(self._policy_f1_fn.item()),
+        )
+        high_conf_pred = int(
+            self._value_high_conf_pred_count.item()
+        )
+        high_conf_correct = int(
+            self._value_high_conf_correct.item()
         )
         value_high_confidence_rate = float(
-            self.value_high_confidence_correct
-        ) / float(
-            max(1, self.value_high_confidence_prediction_count)
-        )
+            high_conf_correct
+        ) / float(max(1, high_conf_pred))
         # move_win_rate metrics (None when data lacks moveWinRate)
         policy_top1_win_rate = _safe_average(
-            self.policy_top1_win_rate_sum,
+            float(self._policy_top1_win_rate_sum.item()),
             self.move_win_rate_sample_count,
         )
         policy_move_label_ce = _safe_average(
-            self.policy_move_label_ce_sum,
+            float(self._policy_move_label_ce_sum.item()),
             self.policy_move_label_ce_count,
         )
         policy_expected_win_rate = _safe_average(
-            self.policy_expected_win_rate_sum,
+            float(self._policy_expected_win_rate_sum.item()),
             self.move_win_rate_sample_count,
         )
 
@@ -472,62 +560,83 @@ class ValidationCallback(BaseCallback):
 
     def reset(self) -> None:
         """Reset all counters for next epoch."""
-        self.running_vloss = 0.0
-        self.policy_cross_entropy_sum = 0.0
-        self.value_brier_score_sum = 0.0
+        if self._device_initialized:
+            self._running_vloss.zero_()
+            self._policy_cross_entropy_sum.zero_()
+            self._value_brier_score_sum.zero_()
+            self._policy_top5_ratio_sum.zero_()
+            self._value_high_conf_pred_count.zero_()
+            self._value_high_conf_correct.zero_()
+            self._policy_f1_tp.zero_()
+            self._policy_f1_fp.zero_()
+            self._policy_f1_fn.zero_()
+            self._policy_top1_win_rate_sum.zero_()
+            self._policy_move_label_ce_sum.zero_()
+            self._policy_expected_win_rate_sum.zero_()
+        else:
+            self._running_vloss = torch.tensor(0.0)
+            self._policy_cross_entropy_sum = torch.tensor(0.0)
+            self._value_brier_score_sum = torch.tensor(0.0)
+            self._policy_top5_ratio_sum = torch.tensor(0.0)
+            self._value_high_conf_pred_count = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._value_high_conf_correct = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._policy_f1_tp = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._policy_f1_fp = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._policy_f1_fn = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._policy_top1_win_rate_sum = torch.tensor(0.0)
+            self._policy_move_label_ce_sum = torch.tensor(0.0)
+            self._policy_expected_win_rate_sum = torch.tensor(
+                0.0
+            )
         self.batch_count = 0
         self.policy_sample_count = 0
         self.value_sample_count = 0
-        self.policy_top5_ratio_sum = 0.0
         self.policy_top5_sample_count = 0
-        self.value_high_confidence_prediction_count = 0
-        self.value_high_confidence_correct = 0
-        self.policy_f1_true_positives = 0
-        self.policy_f1_false_positives = 0
-        self.policy_f1_false_negatives = 0
-        # move_win_rate metrics
-        self.policy_top1_win_rate_sum = 0.0
-        self.policy_move_label_ce_sum = 0.0
         self.policy_move_label_ce_count = 0
-        self.policy_expected_win_rate_sum = 0.0
         self.move_win_rate_sample_count = 0
 
-    def _policy_cross_entropy(
+    def _policy_cross_entropy_gpu(
         self,
         logits: torch.Tensor,
         target_distribution: torch.Tensor,
-    ) -> float:
-        """Calculate total cross entropy between logits and target distribution."""
+    ) -> torch.Tensor:
+        """Calculate total cross entropy as a GPU tensor (no sync)."""
         if logits.ndim != 2 or target_distribution.ndim != 2:
             raise ValueError(
                 "Tensors y and t must be 2-dimensional."
             )
-
-        log_probs = torch.log_softmax(logits, dim=1)
+        logits_detached = logits.detach()
+        targets_detached = target_distribution.detach()
+        log_probs = torch.log_softmax(logits_detached, dim=1)
         cross_entropy = -torch.sum(
-            target_distribution * log_probs, dim=1
+            targets_detached * log_probs, dim=1
         )
-        return float(torch.sum(cross_entropy).item())
+        return torch.sum(cross_entropy)
 
-    def _policy_accuracy(
-        self, logits: torch.Tensor, targets: torch.Tensor
-    ) -> float:
-        """Calculate average policy Top-5 accuracy for the provided batch."""
+    def _value_brier_score_gpu(
+        self, y: torch.Tensor, t: torch.Tensor
+    ) -> torch.Tensor:
+        """Calculate sum of Brier Score as a GPU tensor (no sync)."""
+        y_detached = y.detach()
+        t_detached = t.detach()
+        probabilities = torch.sigmoid(y_detached)
+        squared_error = torch.square(probabilities - t_detached)
+        return torch.sum(squared_error)
 
-        ratio_sum, sample_count = (
-            self._compute_policy_top5_accuracy_stats(
-                logits=logits, targets=targets
-            )
-        )
-        if sample_count == 0:
-            return 0.0
-        return ratio_sum / float(sample_count)
-
-    def _compute_policy_top5_accuracy_stats(
+    def _compute_policy_top5_accuracy_stats_gpu(
         self, *, logits: torch.Tensor, targets: torch.Tensor
-    ) -> Tuple[float, int]:
-        """Return cumulative ratio sum and sample count for Top-5 accuracy."""
-
+    ) -> tuple[torch.Tensor, int]:
+        """Return cumulative ratio sum as GPU tensor and sample count."""
         if logits.ndim != 2 or targets.ndim != 2:
             raise ValueError(
                 "Tensors logits and targets must be 2-dimensional."
@@ -535,15 +644,15 @@ class ValidationCallback(BaseCallback):
 
         batch_size = int(targets.size(0))
         if batch_size == 0:
-            return 0.0, 0
+            return torch.tensor(0.0, device=logits.device), 0
 
         topk_pred = min(5, int(logits.size(1)))
         if topk_pred == 0:
-            return 0.0, 0
+            return torch.tensor(0.0, device=logits.device), 0
 
         max_label_topk = min(5, int(targets.size(1)))
         if max_label_topk == 0:
-            return 0.0, 0
+            return torch.tensor(0.0, device=logits.device), 0
 
         logits_detached = logits.detach()
         targets_detached = targets.detach()
@@ -622,30 +731,15 @@ class ValidationCallback(BaseCallback):
             positive_samples
         ].to(targets_detached.dtype)
 
-        ratio_sum = float(torch.sum(ratios).item())
-        sample_count = batch_size
+        return torch.sum(ratios), batch_size
 
-        return ratio_sum, sample_count
-
-    def _value_brier_score(
-        self, y: torch.Tensor, t: torch.Tensor
-    ) -> float:
-        """Calculate sum of Brier Score components for a batch."""
-        probabilities = torch.sigmoid(y)
-        squared_error = torch.square(probabilities - t)
-        return torch.sum(squared_error).item()
-
-    def _compute_policy_f1_components(
+    def _compute_policy_f1_components_gpu(
         self, *, logits: torch.Tensor, targets: torch.Tensor
-    ) -> tuple[int, int, int]:
-        """Compute F1 score components (TP, FP, FN) for Top-5 predictions.
-
-        Args:
-            logits: Policy network output logits (batch_size, num_classes).
-            targets: Normalized policy target distribution (batch_size, num_classes).
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute F1 score components as GPU tensors (no sync).
 
         Returns:
-            Tuple of (true_positives, false_positives, false_negatives).
+            Tuple of (total_tp, total_fp, total_fn) as long tensors on GPU.
         """
         if logits.ndim != 2 or targets.ndim != 2:
             raise ValueError(
@@ -653,58 +747,40 @@ class ValidationCallback(BaseCallback):
             )
 
         batch_size = int(targets.size(0))
+        zero = torch.tensor(
+            0, dtype=torch.long, device=logits.device
+        )
         if batch_size == 0:
-            return 0, 0, 0
+            return zero, zero.clone(), zero.clone()
 
-        # Get top-5 predictions
         topk_pred = min(5, int(logits.size(1)))
         if topk_pred == 0:
-            return 0, 0, 0
+            return zero, zero.clone(), zero.clone()
 
         logits_detached = logits.detach()
         targets_detached = targets.detach()
 
-        # Extract positive labels (targets > 0)
         positive_mask = targets_detached > 0
-        positive_counts = torch.sum(
-            positive_mask, dim=1
-        )  # (batch_size,)
+        positive_counts = torch.sum(positive_mask, dim=1)
 
-        # Get top-5 prediction indices
         prediction_top_indices = torch.topk(
             logits_detached,
             k=topk_pred,
             dim=1,
-        ).indices  # (batch_size, topk_pred)
+        ).indices
 
-        # Create one-hot encoding of predictions
-        pred_one_hot = torch.zeros_like(
-            targets_detached
-        )  # (batch_size, num_classes)
+        pred_one_hot = torch.zeros_like(targets_detached)
         pred_one_hot.scatter_(1, prediction_top_indices, 1.0)
 
-        # True Positives: predictions that are also positive labels
-        tp_mask = (
-            pred_one_hot * positive_mask.float()
-        )  # Element-wise AND
-        tp_per_sample = torch.sum(
-            tp_mask, dim=1
-        )  # (batch_size,)
+        tp_mask = pred_one_hot * positive_mask.float()
+        tp_per_sample = torch.sum(tp_mask, dim=1)
 
-        # False Positives: predictions that are NOT positive labels
-        fp_per_sample = (
-            topk_pred - tp_per_sample
-        )  # Total predictions - TP
+        fp_per_sample = topk_pred - tp_per_sample
+        fn_per_sample = positive_counts - tp_per_sample
 
-        # False Negatives: positive labels that were NOT predicted
-        fn_per_sample = (
-            positive_counts - tp_per_sample
-        )  # Total labels - TP
-
-        # Sum across batch
-        total_tp = int(torch.sum(tp_per_sample).item())
-        total_fp = int(torch.sum(fp_per_sample).item())
-        total_fn = int(torch.sum(fn_per_sample).item())
+        total_tp = torch.sum(tp_per_sample).long()
+        total_fp = torch.sum(fp_per_sample).long()
+        total_fn = torch.sum(fn_per_sample).long()
 
         return total_tp, total_fp, total_fn
 
@@ -768,14 +844,14 @@ class TimingCallback(BaseCallback):
         }
         self.measured_batches = 0
         self.total_samples = 0
-        self.running_loss = 0.0
-        self.total_loss = 0.0
-        self.last_batch_loss = 0.0
+        self._total_loss: torch.Tensor = torch.tensor(0.0)
+        self._last_batch_loss: torch.Tensor = torch.tensor(0.0)
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time: Optional[float] = None
         self._measurement_start_time: Optional[float] = None
         self._temp_timings: Dict[str, float] = {}
+        self._device_initialized: bool = False
 
     def on_epoch_start(self, epoch_idx: int) -> None:
         self.epoch_start_time = time.perf_counter()
@@ -875,6 +951,15 @@ class TimingCallback(BaseCallback):
             - self._temp_timings["optimizer_start"]
         )
 
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if not self._device_initialized:
+            self._total_loss = self._total_loss.to(device)
+            self._last_batch_loss = self._last_batch_loss.to(
+                device
+            )
+            self._device_initialized = True
+
     def on_batch_end(self, context: TrainingContext) -> None:
         batch_total_time = (
             time.perf_counter() - self.batch_start_time
@@ -882,10 +967,10 @@ class TimingCallback(BaseCallback):
         batch_end_time = time.perf_counter()
 
         if context.loss is not None:
-            loss_value = context.loss.item()
-            self.running_loss += loss_value
-            self.total_loss += loss_value
-            self.last_batch_loss = loss_value
+            self._ensure_device(context.loss.device)
+            loss_detached = context.loss.detach()
+            self._total_loss += loss_detached
+            self._last_batch_loss = loss_detached
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:
@@ -1095,12 +1180,19 @@ class TimingCallback(BaseCallback):
     def get_loss_metrics(
         self, total_batches: int
     ) -> Dict[str, float]:
-        """Get loss metrics."""
+        """Get loss metrics.
+
+        エポック終了時にのみ呼ばれる前提のため，
+        ここでの ``.item()`` によるGPU同期は許容範囲．
+        """
+        total_loss_val = float(self._total_loss.item())
         return {
-            "total_loss": self.total_loss,
-            "last_batch_loss": self.last_batch_loss,
+            "total_loss": total_loss_val,
+            "last_batch_loss": float(
+                self._last_batch_loss.item()
+            ),
             "average_loss": (
-                float(self.total_loss) / float(total_batches)
+                total_loss_val / float(total_batches)
                 if total_batches > 0
                 else 0.0
             ),
@@ -1234,6 +1326,8 @@ class Stage2F1Callback(BaseCallback):
         self._total_loss: torch.Tensor = torch.tensor(0.0)
         self._num_batches: int = 0
         self._device_initialized: bool = False
+        self._cached_f1: float = 0.0
+        self._cached_loss: float = 0.0
 
     def _ensure_device(self, device: torch.device) -> None:
         """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
@@ -1251,6 +1345,10 @@ class Stage2F1Callback(BaseCallback):
 
         if context.outputs_policy is None:
             return
+
+        # loss が None でも outputs_policy がある場合にデバイスを初期化
+        if not self._device_initialized:
+            self._ensure_device(context.outputs_policy.device)
 
         with torch.no_grad():
             predictions = (
@@ -1306,16 +1404,31 @@ class Stage2F1Callback(BaseCallback):
         self._num_batches = 0
 
     def get_postfix(self) -> dict[str, str] | None:
-        """Running F1 スコアと loss を tqdm 用に返す．"""
+        """Running F1 スコアと loss を tqdm 用に返す．
+
+        GPU同期を抑制するため，Nバッチごとにのみ ``.item()`` で
+        スカラー値を取得し，それ以外はキャッシュ値を返す．
+        """
         if self._total_samples == 0:
             return None
-        f1 = (self._total_f1 / self._total_samples).item()
-        loss = (
-            (self._total_loss / self._num_batches).item()
-            if self._num_batches > 0
-            else 0.0
-        )
-        return {"f1": f"{f1:.4f}", "loss": f"{loss:.4f}"}
+        if self._num_batches == 1 or (
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval == 0
+        ):
+            self._cached_f1 = (
+                self._total_f1 / self._total_samples
+            ).item()
+            self._cached_loss = (
+                self._total_loss / self._num_batches
+            ).item()
+        elif self._num_batches == 0 and self._total_samples > 0:
+            self._cached_f1 = (
+                self._total_f1 / self._total_samples
+            ).item()
+        return {
+            "f1": f"{self._cached_f1:.4f}",
+            "loss": f"{self._cached_loss:.4f}",
+        }
 
 
 class Stage1AccuracyCallback(BaseCallback):
@@ -1337,6 +1450,8 @@ class Stage1AccuracyCallback(BaseCallback):
         self._total_loss: torch.Tensor = torch.tensor(0.0)
         self._num_batches: int = 0
         self._device_initialized: bool = False
+        self._cached_acc: float = 0.0
+        self._cached_loss: float = 0.0
 
     def _ensure_device(self, device: torch.device) -> None:
         """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
@@ -1354,6 +1469,10 @@ class Stage1AccuracyCallback(BaseCallback):
 
         if context.outputs_policy is None:
             return
+
+        # loss が None でも outputs_policy がある場合にデバイスを初期化
+        if not self._device_initialized:
+            self._ensure_device(context.outputs_policy.device)
 
         with torch.no_grad():
             predictions = (
@@ -1392,18 +1511,31 @@ class Stage1AccuracyCallback(BaseCallback):
         self._num_batches = 0
 
     def get_postfix(self) -> dict[str, str] | None:
-        """Running accuracy と loss を tqdm 用に返す．"""
+        """Running accuracy と loss を tqdm 用に返す．
+
+        GPU同期を抑制するため，Nバッチごとにのみ ``.item()`` で
+        スカラー値を取得し，それ以外はキャッシュ値を返す．
+        """
         if self._total_elements == 0:
             return None
-        acc = (
-            self._total_correct / self._total_elements
-        ).item()
-        loss = (
-            (self._total_loss / self._num_batches).item()
-            if self._num_batches > 0
-            else 0.0
-        )
-        return {"acc": f"{acc:.1%}", "loss": f"{loss:.4f}"}
+        if self._num_batches == 1 or (
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval == 0
+        ):
+            self._cached_acc = (
+                self._total_correct / self._total_elements
+            ).item()
+            self._cached_loss = (
+                self._total_loss / self._num_batches
+            ).item()
+        elif self._num_batches == 0 and self._total_elements > 0:
+            self._cached_acc = (
+                self._total_correct / self._total_elements
+            ).item()
+        return {
+            "acc": f"{self._cached_acc:.1%}",
+            "loss": f"{self._cached_loss:.4f}",
+        }
 
 
 class Stage3LossCallback(BaseCallback):
@@ -1420,6 +1552,7 @@ class Stage3LossCallback(BaseCallback):
         self._total_loss: torch.Tensor = torch.tensor(0.0)
         self._num_batches: int = 0
         self._device_initialized: bool = False
+        self._cached_loss: float = 0.0
 
     def _ensure_device(self, device: torch.device) -> None:
         """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
@@ -1450,8 +1583,17 @@ class Stage3LossCallback(BaseCallback):
         self._num_batches = 0
 
     def get_postfix(self) -> dict[str, str] | None:
-        """Running loss を tqdm 用に返す．"""
+        """Running loss を tqdm 用に返す．
+
+        GPU同期を抑制するため，Nバッチごとにのみ ``.item()`` で
+        スカラー値を取得し，それ以外はキャッシュ値を返す．
+        """
         if self._num_batches == 0:
             return None
-        loss = (self._total_loss / self._num_batches).item()
-        return {"loss": f"{loss:.4f}"}
+        if self._num_batches == 1 or (
+            self._num_batches % self._postfix_sync_interval == 0
+        ):
+            self._cached_loss = (
+                self._total_loss / self._num_batches
+            ).item()
+        return {"loss": f"{self._cached_loss:.4f}"}
