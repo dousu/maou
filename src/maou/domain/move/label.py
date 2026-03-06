@@ -1,7 +1,6 @@
 import logging
 import re
 from enum import IntEnum, auto
-from typing import Dict, Tuple
 
 from maou.domain.board import shogi
 
@@ -153,11 +152,10 @@ class IllegalMove(Exception):
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-
 # Pre-computed lookup tables for performance optimization
-_COORDINATE_CACHE: Dict[int, Tuple[int, int]] = {}
-_MOVE_DIRECTION_CACHE: Dict[
-    Tuple[int, int], Tuple[int, int]
+_COORDINATE_CACHE: dict[int, tuple[int, int]] = {}
+_MOVE_DIRECTION_CACHE: dict[
+    tuple[int, int], tuple[int, int]
 ] = {}
 
 # Initialize coordinate cache for all 81 squares

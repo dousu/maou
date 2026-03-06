@@ -7,8 +7,6 @@ Note:
     domain形式の定数については shogi.py の DOMAIN_* 定数を参照．
 """
 
-from typing import Tuple
-
 from maou.domain.board.shogi import (
     DOMAIN_WHITE_MIN,
     DOMAIN_WHITE_OFFSET,
@@ -50,7 +48,7 @@ def get_actual_piece_id(piece_id: int) -> int:
     return piece_id
 
 
-def split_piece_id(piece_id: int) -> Tuple[int, bool]:
+def split_piece_id(piece_id: int) -> tuple[int, bool]:
     """駒IDを実際の駒種と先手/後手フラグに分解．
 
     Args:
@@ -96,7 +94,7 @@ def get_piece_name_ja(piece_id: int) -> str:
     return piece_names.get(actual_id, "?")
 
 
-def square_index_to_coords(square_idx: int) -> Tuple[int, int]:
+def square_index_to_coords(square_idx: int) -> tuple[int, int]:
     """マスインデックス（0-80）を行列座標に変換．
 
     cshogiの座標系に従う: square = col * 9 + row

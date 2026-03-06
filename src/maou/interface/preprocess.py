@@ -4,7 +4,6 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from maou.app.pre_process.hcpe_transform import (
     DataSource,
@@ -25,7 +24,7 @@ class FileSystem(metaclass=abc.ABCMeta):
     @staticmethod
     @abc.abstractmethod
     def collect_files(
-        p: Path, ext: Optional[str] = None
+        p: Path, ext: str | None = None
     ) -> list[Path]:
         pass
 
@@ -50,7 +49,7 @@ def output_dir_init(output_dir: Path) -> None:
 def split_input_files(
     file_paths: list[Path],
     rows_per_file: int,
-    split_dir: Optional[Path] = None,
+    split_dir: Path | None = None,
 ) -> list[Path]:
     """入力HCPEファイルを指定行数ごとに事前分割する．
 
@@ -93,7 +92,7 @@ def split_input_files(
 def chunk_input_files(
     file_paths: list[Path],
     rows_per_chunk: int,
-    chunk_dir: Optional[Path] = None,
+    chunk_dir: Path | None = None,
 ) -> list[Path]:
     """複数の小さな入力HCPEファイルをチャンクにまとめる．
 
@@ -141,7 +140,7 @@ def chunk_input_files(
 def resize_input_files(
     file_paths: list[Path],
     rows_per_file: int,
-    work_dir: Optional[Path] = None,
+    work_dir: Path | None = None,
 ) -> list[Path]:
     """入力HCPEファイルのサイズを最適化する．
 
@@ -205,10 +204,10 @@ def resize_input_files(
 def transform(
     *,
     datasource: DataSource,
-    output_dir: Optional[Path],
-    feature_store: Optional[FeatureStore] = None,
-    max_workers: Optional[int] = None,
-    intermediate_cache_dir: Optional[Path] = None,
+    output_dir: Path | None,
+    feature_store: FeatureStore | None = None,
+    max_workers: int | None = None,
+    intermediate_cache_dir: Path | None = None,
     intermediate_batch_size: int = 50_000,
     position_count_threshold: int = 2,
     prior_strength: float = 5.0,

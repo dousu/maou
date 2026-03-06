@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import click
 
@@ -22,8 +22,8 @@ from maou.infra.console.common import (
 
 
 def _parse_int_list(
-    value: Optional[str],
-) -> Optional[list[int]]:
+    value: str | None,
+) -> list[int] | None:
     """カンマ区切りの整数リストをパースする．"""
     if value is None:
         return None
@@ -41,8 +41,8 @@ def _parse_int_list(
 
 
 def _parse_float_list(
-    value: Optional[str],
-) -> Optional[list[float]]:
+    value: str | None,
+) -> list[float] | None:
     """カンマ区切りの浮動小数点数リストをパースする．"""
     if value is None:
         return None
@@ -225,30 +225,30 @@ def _parse_float_list(
 )
 @handle_exception
 def benchmark_dataloader(
-    stage3_data_path: Optional[Path],
+    stage3_data_path: Path | None,
     input_file_packed: bool,
-    input_dataset_id: Optional[str],
-    input_table_name: Optional[str],
+    input_dataset_id: str | None,
+    input_table_name: str | None,
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_cache_mode: str,
-    input_clustering_key: Optional[str],
-    input_partitioning_key_date: Optional[str],
+    input_clustering_key: str | None,
+    input_partitioning_key_date: str | None,
     input_local_cache: bool,
-    input_local_cache_dir: Optional[str],
+    input_local_cache_dir: str | None,
     input_enable_bundling: bool,
     input_bundle_size_gb: float,
-    input_gcs: Optional[bool],
-    input_s3: Optional[bool],
-    input_bucket_name: Optional[str],
-    input_prefix: Optional[str],
-    input_data_name: Optional[str],
+    input_gcs: bool | None,
+    input_s3: bool | None,
+    input_bucket_name: str | None,
+    input_prefix: str | None,
+    input_data_name: str | None,
     input_max_workers: int,
-    gpu: Optional[str],
+    gpu: str | None,
     batch_size: int,
-    pin_memory: Optional[bool],
+    pin_memory: bool | None,
     num_batches: int,
-    sample_ratio: Optional[float],
+    sample_ratio: float | None,
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
     # Normalize cache_mode: "mmap" is deprecated, convert to "file"
@@ -1002,46 +1002,46 @@ def benchmark_dataloader(
 )
 @handle_exception
 def benchmark_training(
-    stage3_data_path: Optional[Path],
+    stage3_data_path: Path | None,
     stage: int,
-    stage1_data_path: Optional[Path],
-    stage2_data_path: Optional[Path],
-    stage12_lr_scheduler: Optional[str],
+    stage1_data_path: Path | None,
+    stage2_data_path: Path | None,
+    stage12_lr_scheduler: str | None,
     stage12_compilation: bool,
     input_file_packed: bool,
-    input_dataset_id: Optional[str],
-    input_table_name: Optional[str],
+    input_dataset_id: str | None,
+    input_table_name: str | None,
     input_batch_size: int,
     input_max_cached_bytes: int,
     input_cache_mode: str,
-    input_clustering_key: Optional[str],
-    input_partitioning_key_date: Optional[str],
+    input_clustering_key: str | None,
+    input_partitioning_key_date: str | None,
     input_local_cache: bool,
-    input_local_cache_dir: Optional[str],
+    input_local_cache_dir: str | None,
     input_enable_bundling: bool,
     input_bundle_size_gb: float,
-    input_gcs: Optional[bool],
-    input_s3: Optional[bool],
-    input_bucket_name: Optional[str],
-    input_prefix: Optional[str],
-    input_data_name: Optional[str],
+    input_gcs: bool | None,
+    input_s3: bool | None,
+    input_bucket_name: str | None,
+    input_prefix: str | None,
+    input_data_name: str | None,
     input_max_workers: int,
-    gpu: Optional[str],
+    gpu: str | None,
     model_architecture: utility_interface.BackboneArchitecture,
-    vit_embed_dim: Optional[int],
-    vit_num_layers: Optional[int],
-    vit_num_heads: Optional[int],
-    vit_mlp_ratio: Optional[float],
-    vit_dropout: Optional[float],
+    vit_embed_dim: int | None,
+    vit_num_layers: int | None,
+    vit_num_heads: int | None,
+    vit_mlp_ratio: float | None,
+    vit_dropout: float | None,
     gradient_checkpointing: bool,
     compilation: bool,
     detect_anomaly: bool,
     test_ratio: float,
     batch_size: int,
     dataloader_workers: int,
-    pin_memory: Optional[bool],
+    pin_memory: bool | None,
     prefetch_factor: int,
-    cache_transforms: Optional[bool],
+    cache_transforms: bool | None,
     gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
@@ -1058,22 +1058,22 @@ def benchmark_training(
     stage2_gamma_pos: float,
     stage2_gamma_neg: float,
     stage2_clip: float,
-    stage2_hidden_dim: Optional[int],
+    stage2_hidden_dim: int | None,
     stage2_head_dropout: float,
     stage2_test_ratio: float,
     freeze_backbone: bool,
-    trainable_layers: Optional[int],
-    stage1_batch_size: Optional[int],
-    stage2_batch_size: Optional[int],
+    trainable_layers: int | None,
+    stage1_batch_size: int | None,
+    stage2_batch_size: int | None,
     no_streaming: bool,
     warmup_batches: int,
     max_batches: int,
-    enable_profiling: Optional[bool],
-    run_validation: Optional[bool],
-    sample_ratio: Optional[float],
-    enable_resource_monitoring: Optional[bool],
-    batch_sizes: Optional[str],
-    learning_rates: Optional[str],
+    enable_profiling: bool | None,
+    run_validation: bool | None,
+    sample_ratio: float | None,
+    enable_resource_monitoring: bool | None,
+    batch_sizes: str | None,
+    learning_rates: str | None,
     estimate_cbs: bool,
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
@@ -1585,11 +1585,11 @@ def generate_stage2_data(
     input_path: Path,
     output_dir: Path,
     output_gcs: bool,
-    output_bucket_name: Optional[str],
-    output_prefix: Optional[str],
+    output_bucket_name: str | None,
+    output_prefix: str | None,
     output_data_name: str,
     chunk_size: int,
-    intermediate_cache_dir: Optional[Path],
+    intermediate_cache_dir: Path | None,
 ) -> None:
     """Generate Stage 2 training data for legal moves prediction.
 

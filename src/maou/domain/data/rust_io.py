@@ -10,7 +10,7 @@ Polars DataFrameとして扱うためのPythonラッパーを提供する．
 """
 
 from pathlib import Path
-from typing import Union, cast
+from typing import cast
 
 import polars as pl
 import pyarrow as pa
@@ -70,7 +70,7 @@ def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
 
 
 def save_hcpe_df(
-    df: pl.DataFrame, file_path: Union[Path, str]
+    df: pl.DataFrame, file_path: Path | str
 ) -> None:
     """HCPE DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
@@ -98,7 +98,7 @@ def save_hcpe_df(
     save_hcpe_feather(arrow_batch, str(file_path))
 
 
-def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
+def load_hcpe_df(file_path: Path | str) -> pl.DataFrame:
     """HCPE DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
     Rustで実装された高速I/O関数でFeather形式ファイルを読み込み，
@@ -124,7 +124,7 @@ def load_hcpe_df(file_path: Union[Path, str]) -> pl.DataFrame:
 
 
 def save_preprocessing_df(
-    df: pl.DataFrame, file_path: Union[Path, str]
+    df: pl.DataFrame, file_path: Path | str
 ) -> None:
     """前処理済みDataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
@@ -148,7 +148,7 @@ def save_preprocessing_df(
 
 
 def load_preprocessing_df(
-    file_path: Union[Path, str],
+    file_path: Path | str,
 ) -> pl.DataFrame:
     """前処理済みDataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
@@ -172,7 +172,7 @@ def load_preprocessing_df(
 
 
 def save_stage1_df(
-    df: pl.DataFrame, file_path: Union[Path, str]
+    df: pl.DataFrame, file_path: Path | str
 ) -> None:
     """Stage 1 DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
@@ -201,7 +201,7 @@ def save_stage1_df(
     save_feather_file(arrow_batch, str(file_path))
 
 
-def load_stage1_df(file_path: Union[Path, str]) -> pl.DataFrame:
+def load_stage1_df(file_path: Path | str) -> pl.DataFrame:
     """Stage 1 DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
     Stream形式とFile形式の両方に自動対応．
@@ -227,7 +227,7 @@ def load_stage1_df(file_path: Union[Path, str]) -> pl.DataFrame:
 
 
 def save_stage2_df(
-    df: pl.DataFrame, file_path: Union[Path, str]
+    df: pl.DataFrame, file_path: Path | str
 ) -> None:
     """Stage 2 DataFrameを.featherファイルに保存する（Rustバックエンド使用）．
 
@@ -256,7 +256,7 @@ def save_stage2_df(
     save_feather_file(arrow_batch, str(file_path))
 
 
-def load_stage2_df(file_path: Union[Path, str]) -> pl.DataFrame:
+def load_stage2_df(file_path: Path | str) -> pl.DataFrame:
     """Stage 2 DataFrameを.featherファイルから読み込む（Rustバックエンド使用）．
 
     Stream形式とFile形式の両方に自動対応．
@@ -282,8 +282,8 @@ def load_stage2_df(file_path: Union[Path, str]) -> pl.DataFrame:
 
 
 def split_hcpe_feather(
-    file_path: Union[Path, str],
-    output_dir: Union[Path, str],
+    file_path: Path | str,
+    output_dir: Path | str,
     rows_per_file: int = 500_000,
 ) -> list[Path]:
     """HCPEの.featherファイルを指定行数ごとに分割する（Rustバックエンド使用）．
@@ -329,8 +329,8 @@ def split_hcpe_feather(
 
 
 def merge_hcpe_feather_files(
-    file_paths: list[Union[Path, str]],
-    output_dir: Union[Path, str],
+    file_paths: list[Path | str],
+    output_dir: Path | str,
     rows_per_chunk: int = 500_000,
     output_prefix: str = "merged",
 ) -> list[Path]:

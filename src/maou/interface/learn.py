@@ -5,7 +5,8 @@ import logging
 import resource
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Literal, Optional
+from collections.abc import Callable
+from typing import Any, Literal
 
 import torch
 
@@ -56,13 +57,13 @@ class StageDataConfig:
 
 
 # Mapping from canonical scheduler keys to CLI display names.
-SUPPORTED_LR_SCHEDULERS: Dict[str, str] = {
+SUPPORTED_LR_SCHEDULERS: dict[str, str] = {
     "warmup_cosine_decay": "Warmup+CosineDecay",
     "cosine_annealing_lr": "CosineAnnealingLR",
 }
 
 # Cache for normalized lookup values to canonical scheduler keys.
-_LR_SCHEDULER_ALIASES: Dict[str, str] = {}
+_LR_SCHEDULER_ALIASES: dict[str, str] = {}
 for _canonical, _label in SUPPORTED_LR_SCHEDULERS.items():
     sanitized_canonical = "".join(
         filter(str.isalnum, _canonical.lower())
@@ -78,8 +79,8 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def normalize_lr_scheduler_name(
-    scheduler_name: Optional[str],
-) -> Optional[str]:
+    scheduler_name: str | None,
+) -> str | None:
     """Normalize scheduler display names to canonical identifiers.
 
     Args:
@@ -116,10 +117,10 @@ def normalize_lr_scheduler_name(
 
 
 def _resolve_stage12_scheduler(
-    scheduler_value: Optional[str],
+    scheduler_value: str | None,
     actual_batch_size: int,
     base_batch_size: int = 256,
-) -> Optional[str]:
+) -> str | None:
     """Stage 1/2 LRスケジューラの'auto'を解決する．
 
     Args:
@@ -152,7 +153,7 @@ class FileSystem(metaclass=abc.ABCMeta):
     @staticmethod
     @abc.abstractmethod
     def collect_files(
-        p: Path, ext: Optional[str] = None
+        p: Path, ext: str | None = None
     ) -> list[Path]:
         pass
 
@@ -189,49 +190,46 @@ def dir_init(d: Path) -> None:
 
 
 def learn(
-    datasource: Optional[LearningDataSource.DataSourceSpliter],
+    datasource: LearningDataSource.DataSourceSpliter | None,
     *,
-    gpu: Optional[str] = None,
+    gpu: str | None = None,
     model_architecture: BackboneArchitecture = "resnet",
     compilation: bool = False,
     detect_anomaly: bool = False,
-    test_ratio: Optional[float] = None,
-    epoch: Optional[int] = None,
-    batch_size: Optional[int] = None,
-    dataloader_workers: Optional[int] = None,
-    pin_memory: Optional[bool] = None,
-    prefetch_factor: Optional[int] = None,
-    cache_transforms: Optional[bool] = None,
-    gce_parameter: Optional[float] = None,
-    policy_loss_ratio: Optional[float] = None,
-    value_loss_ratio: Optional[float] = None,
-    learning_ratio: Optional[float] = None,
-    lr_scheduler: Optional[str] = None,
-    momentum: Optional[float] = None,
-    optimizer_name: Optional[str] = None,
-    optimizer_beta1: Optional[float] = None,
-    optimizer_beta2: Optional[float] = None,
-    optimizer_eps: Optional[float] = None,
-    start_epoch: Optional[int] = None,
-    resume_backbone_from: Optional[Path] = None,
-    resume_policy_head_from: Optional[Path] = None,
-    resume_value_head_from: Optional[Path] = None,
+    test_ratio: float | None = None,
+    epoch: int | None = None,
+    batch_size: int | None = None,
+    dataloader_workers: int | None = None,
+    pin_memory: bool | None = None,
+    prefetch_factor: int | None = None,
+    cache_transforms: bool | None = None,
+    gce_parameter: float | None = None,
+    policy_loss_ratio: float | None = None,
+    value_loss_ratio: float | None = None,
+    learning_ratio: float | None = None,
+    lr_scheduler: str | None = None,
+    momentum: float | None = None,
+    optimizer_name: str | None = None,
+    optimizer_beta1: float | None = None,
+    optimizer_beta2: float | None = None,
+    optimizer_eps: float | None = None,
+    start_epoch: int | None = None,
+    resume_backbone_from: Path | None = None,
+    resume_policy_head_from: Path | None = None,
+    resume_value_head_from: Path | None = None,
     freeze_backbone: bool = False,
-    trainable_layers: Optional[int] = None,
-    log_dir: Optional[Path] = None,
-    model_dir: Optional[Path] = None,
-    cloud_storage: Optional[CloudStorage] = None,
+    trainable_layers: int | None = None,
+    log_dir: Path | None = None,
+    model_dir: Path | None = None,
+    cloud_storage: CloudStorage | None = None,
     input_cache_mode: Literal["file", "memory"] = "file",
     tensorboard_histogram_frequency: int = 0,
-    tensorboard_histogram_modules: Optional[
-        tuple[str, ...]
-    ] = None,
-    architecture_config: Optional[dict[str, Any]] = None,
+    tensorboard_histogram_modules: tuple[str, ...]
+    | None = None,
+    architecture_config: dict[str, Any] | None = None,
     streaming: bool = False,
-    streaming_train_source: Optional[
-        StreamingDataSource
-    ] = None,
-    streaming_val_source: Optional[StreamingDataSource] = None,
+    streaming_train_source: StreamingDataSource | None = None,
+    streaming_val_source: StreamingDataSource | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     gradient_accumulation_steps: int = 1,
@@ -522,7 +520,7 @@ def learn(
 
 def _find_latest_backbone_checkpoint(
     model_dir: Path,
-) -> Optional[Path]:
+) -> Path | None:
     """Find the latest backbone checkpoint in model_dir.
 
     Looks for stage2_backbone_*.pt first, then stage1_backbone_*.pt.
@@ -552,10 +550,10 @@ def _run_stage1(
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    lr_scheduler_name: Optional[str] = None,
+    lr_scheduler_name: str | None = None,
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
-    trainable_layers: Optional[int] = None,
+    trainable_layers: int | None = None,
     gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) を実行し結果を返す．
@@ -624,7 +622,7 @@ def _run_stage2(
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    lr_scheduler_name: Optional[str] = None,
+    lr_scheduler_name: str | None = None,
     compilation: bool = False,
     stage2_pos_weight: float = 1.0,
     stage2_gamma_pos: float = 0.0,
@@ -633,7 +631,7 @@ def _run_stage2(
     stage2_head_hidden_dim: int | None = None,
     stage2_head_dropout: float = 0.0,
     stage2_test_ratio: float = 0.0,
-    trainable_layers: Optional[int] = None,
+    trainable_layers: int | None = None,
     gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
@@ -714,10 +712,10 @@ def _run_stage1_streaming(
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    lr_scheduler_name: Optional[str] = None,
+    lr_scheduler_name: str | None = None,
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
-    trainable_layers: Optional[int] = None,
+    trainable_layers: int | None = None,
     gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
@@ -781,7 +779,7 @@ def _run_stage2_streaming(
     learning_rate: float,
     max_epochs: int,
     threshold: float,
-    lr_scheduler_name: Optional[str] = None,
+    lr_scheduler_name: str | None = None,
     compilation: bool = False,
     stage2_pos_weight: float = 1.0,
     stage2_gamma_pos: float = 0.0,
@@ -793,7 +791,7 @@ def _run_stage2_streaming(
     dataloader_workers: int = 0,
     pin_memory: bool = False,
     prefetch_factor: int = 2,
-    trainable_layers: Optional[int] = None,
+    trainable_layers: int | None = None,
     gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
@@ -919,50 +917,50 @@ def _release_stage_memory(stage_name: str) -> None:
 def learn_multi_stage(
     stage: str,
     *,
-    stage1_data_config: Optional[StageDataConfig] = None,
-    stage2_data_config: Optional[StageDataConfig] = None,
-    stage3_data_config: Optional[StageDataConfig] = None,
+    stage1_data_config: StageDataConfig | None = None,
+    stage2_data_config: StageDataConfig | None = None,
+    stage3_data_config: StageDataConfig | None = None,
     stage1_threshold: float = 0.99,
     stage2_threshold: float = 0.85,
     stage1_max_epochs: int = 10,
     stage2_max_epochs: int = 10,
-    gpu: Optional[str] = None,
+    gpu: str | None = None,
     model_architecture: BackboneArchitecture = "resnet",
     batch_size: int = 256,
-    stage1_batch_size: Optional[int] = None,
-    stage2_batch_size: Optional[int] = None,
-    stage1_learning_rate: Optional[float] = None,
-    stage2_learning_rate: Optional[float] = None,
+    stage1_batch_size: int | None = None,
+    stage2_batch_size: int | None = None,
+    stage1_learning_rate: float | None = None,
+    stage2_learning_rate: float | None = None,
     learning_rate: float = 0.001,
-    model_dir: Optional[Path] = None,
-    resume_backbone_from: Optional[Path] = None,
-    resume_reachable_head_from: Optional[Path] = None,
-    resume_legal_moves_head_from: Optional[Path] = None,
+    model_dir: Path | None = None,
+    resume_backbone_from: Path | None = None,
+    resume_reachable_head_from: Path | None = None,
+    resume_legal_moves_head_from: Path | None = None,
     # Stage 3 parameters
     compilation: bool = False,
     detect_anomaly: bool = False,
-    test_ratio: Optional[float] = None,
-    epoch: Optional[int] = None,
-    dataloader_workers: Optional[int] = None,
-    pin_memory: Optional[bool] = None,
-    prefetch_factor: Optional[int] = None,
-    cache_transforms: Optional[bool] = None,
-    gce_parameter: Optional[float] = None,
-    policy_loss_ratio: Optional[float] = None,
-    value_loss_ratio: Optional[float] = None,
-    lr_scheduler: Optional[str] = None,
-    momentum: Optional[float] = None,
-    optimizer_name: Optional[str] = None,
-    optimizer_beta1: Optional[float] = None,
-    optimizer_beta2: Optional[float] = None,
-    optimizer_eps: Optional[float] = None,
+    test_ratio: float | None = None,
+    epoch: int | None = None,
+    dataloader_workers: int | None = None,
+    pin_memory: bool | None = None,
+    prefetch_factor: int | None = None,
+    cache_transforms: bool | None = None,
+    gce_parameter: float | None = None,
+    policy_loss_ratio: float | None = None,
+    value_loss_ratio: float | None = None,
+    lr_scheduler: str | None = None,
+    momentum: float | None = None,
+    optimizer_name: str | None = None,
+    optimizer_beta1: float | None = None,
+    optimizer_beta2: float | None = None,
+    optimizer_eps: float | None = None,
     freeze_backbone: bool = False,
-    trainable_layers: Optional[int] = None,
-    log_dir: Optional[Path] = None,
-    cloud_storage: Optional[CloudStorage] = None,
+    trainable_layers: int | None = None,
+    log_dir: Path | None = None,
+    cloud_storage: CloudStorage | None = None,
     input_cache_mode: Literal["file", "memory"] = "file",
-    architecture_config: Optional[dict[str, Any]] = None,
-    stage12_lr_scheduler: Optional[str] = "auto",
+    architecture_config: dict[str, Any] | None = None,
+    stage12_lr_scheduler: str | None = "auto",
     stage12_compilation: bool = False,
     stage1_pos_weight: float = 1.0,
     stage2_pos_weight: float = 1.0,
@@ -973,18 +971,12 @@ def learn_multi_stage(
     stage2_head_dropout: float = 0.0,
     stage2_test_ratio: float = 0.0,
     streaming: bool = False,
-    stage1_streaming_source: Optional[
-        StreamingDataSource
-    ] = None,
-    stage2_streaming_source: Optional[
-        StreamingDataSource
-    ] = None,
-    stage3_streaming_train_source: Optional[
-        StreamingDataSource
-    ] = None,
-    stage3_streaming_val_source: Optional[
-        StreamingDataSource
-    ] = None,
+    stage1_streaming_source: StreamingDataSource | None = None,
+    stage2_streaming_source: StreamingDataSource | None = None,
+    stage3_streaming_train_source: StreamingDataSource
+    | None = None,
+    stage3_streaming_val_source: StreamingDataSource
+    | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     gradient_accumulation_steps: int = 1,

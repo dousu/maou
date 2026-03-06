@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TypeAlias
+from typing import TypeAlias
 
 import torch
 from torch.utils.data import DataLoader
@@ -17,7 +17,7 @@ class BenchmarkResult:
     """DataLoader benchmark result for a specific configuration."""
 
     num_workers: int
-    prefetch_factor: Optional[int]
+    prefetch_factor: int | None
     pin_memory: bool
     time_taken: float
     batches_processed: int
@@ -33,8 +33,8 @@ class BenchmarkConfig:
     device: torch.device
     pin_memory: bool
     num_batches: int = 100
-    num_workers_to_test: Optional[List[int]] = None
-    prefetch_factors_to_test: Optional[List[int]] = None
+    num_workers_to_test: list[int] | None = None
+    prefetch_factors_to_test: list[int] | None = None
 
     def __post_init__(self) -> None:
         if self.num_workers_to_test is None:
@@ -80,7 +80,7 @@ class DataLoaderBenchmark:
         )
 
     def benchmark_configuration(
-        self, num_workers: int, prefetch_factor: Optional[int]
+        self, num_workers: int, prefetch_factor: int | None
     ) -> BenchmarkResult:
         """Benchmark a specific DataLoader configuration."""
         self.logger.info(
@@ -265,11 +265,11 @@ class DataLoaderBenchmark:
 
     def run_benchmark(
         self,
-    ) -> Tuple[List[BenchmarkResult], BenchmarkResult]:
+    ) -> tuple[list[BenchmarkResult], BenchmarkResult]:
         """Run comprehensive DataLoader benchmark.
 
         Returns:
-            Tuple of (all results, optimal result)
+            tuple of (all results, optimal result)
         """
         self.logger.info("Starting DataLoader benchmark")
 
@@ -292,7 +292,7 @@ class DataLoaderBenchmark:
             f"Processing {self.config.num_batches} batches per configuration"
         )
 
-        results: List[BenchmarkResult] = []
+        results: list[BenchmarkResult] = []
 
         # Test different num_workers configurations
         for num_workers in num_workers_list:
@@ -328,9 +328,9 @@ class DataLoaderBenchmark:
 
     def format_results(
         self,
-        results: List[BenchmarkResult],
+        results: list[BenchmarkResult],
         optimal: BenchmarkResult,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Format benchmark results for display.
 
         Returns:

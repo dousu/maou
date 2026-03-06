@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 from maou.app.inference.run import InferenceRunner, ModelType
 
@@ -10,12 +9,12 @@ logger: logging.Logger = logging.getLogger(__name__)
 def infer(
     *,
     model_type: str,
-    model_path: Optional[Path] = None,
+    model_path: Path | None = None,
     cuda: bool,
     num_moves: int,
     sfen: str,
     trt_workspace_size: int = 256,
-    engine_path: Optional[Path] = None,
+    engine_path: Path | None = None,
 ) -> str:
     """局面を推論して結果を文字列で返す．
 

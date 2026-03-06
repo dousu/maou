@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -159,19 +158,19 @@ def hcpe_convert(
     input_path: Path,
     input_format: str,
     output_dir: Path,
-    min_rating: Optional[int],
-    min_moves: Optional[int],
-    max_moves: Optional[int],
-    allowed_endgame_status: Optional[list[str]],
-    exclude_moves: Optional[list[int]],
-    output_bigquery: Optional[bool],
-    dataset_id: Optional[str],
-    table_name: Optional[str],
-    output_gcs: Optional[bool],
-    output_s3: Optional[bool],
-    bucket_name: Optional[str],
-    prefix: Optional[str],
-    data_name: Optional[str],
+    min_rating: int | None,
+    min_moves: int | None,
+    max_moves: int | None,
+    allowed_endgame_status: list[str] | None,
+    exclude_moves: list[int] | None,
+    output_bigquery: bool | None,
+    dataset_id: str | None,
+    table_name: str | None,
+    output_gcs: bool | None,
+    output_s3: bool | None,
+    bucket_name: str | None,
+    prefix: str | None,
+    data_name: str | None,
     max_cached_bytes: int,
     chunk_size: int,
     output_max_workers: int,

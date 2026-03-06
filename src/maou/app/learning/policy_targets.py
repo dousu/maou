@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 import torch
 
@@ -24,12 +23,12 @@ class PolicyTargetMode(str, Enum):
 
 def build_policy_targets(
     labels_policy: torch.Tensor,
-    legal_move_mask: Optional[torch.Tensor],
+    legal_move_mask: torch.Tensor | None,
     *,
     mode: PolicyTargetMode,
-    move_win_rate: Optional[torch.Tensor] = None,
-    dtype: Optional[torch.dtype] = None,
-    device: Optional[torch.device] = None,
+    move_win_rate: torch.Tensor | None = None,
+    dtype: torch.dtype | None = None,
+    device: torch.device | None = None,
 ) -> torch.Tensor:
     """Policy教師信号のモードに応じた分布を構築する．
 
@@ -87,10 +86,10 @@ def build_policy_targets(
 
 def normalize_policy_targets(
     labels_policy: torch.Tensor,
-    legal_move_mask: Optional[torch.Tensor],
+    legal_move_mask: torch.Tensor | None,
     *,
-    dtype: Optional[torch.dtype] = None,
-    device: Optional[torch.device] = None,
+    dtype: torch.dtype | None = None,
+    device: torch.device | None = None,
 ) -> torch.Tensor:
     """Return a normalized policy target distribution.
 

@@ -4,13 +4,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import (
-    Any,
-    Dict,
-    Literal,
-    MutableMapping,
-    Optional,
-)
+from collections.abc import MutableMapping
+from typing import Any, Literal
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -86,15 +81,13 @@ class Learning:
     device: torch.device
     model: Network
     _train_model: torch.nn.Module
-    scaler: Optional[GradScaler]
+    scaler: GradScaler | None
     model_architecture: BackboneArchitecture
 
     @dataclass(kw_only=True, frozen=True)
     class LearningOption:
-        datasource: Optional[
-            LearningDataSource.DataSourceSpliter
-        ]
-        gpu: Optional[str] = None
+        datasource: LearningDataSource.DataSourceSpliter | None
+        gpu: str | None = None
         model_architecture: BackboneArchitecture = "resnet"
         compilation: bool
         test_ratio: float
@@ -114,23 +107,21 @@ class Learning:
         optimizer_beta2: float
         optimizer_eps: float
         detect_anomaly: bool = False
-        resume_backbone_from: Optional[Path] = None
-        resume_policy_head_from: Optional[Path] = None
-        resume_value_head_from: Optional[Path] = None
+        resume_backbone_from: Path | None = None
+        resume_policy_head_from: Path | None = None
+        resume_value_head_from: Path | None = None
         freeze_backbone: bool = False
-        trainable_layers: Optional[int] = None
+        trainable_layers: int | None = None
         start_epoch: int = 0
         log_dir: Path
         model_dir: Path
-        lr_scheduler_name: Optional[str] = None
+        lr_scheduler_name: str | None = None
         input_cache_mode: Literal["file", "memory"] = "file"
         streaming: bool = False
-        streaming_train_source: Optional[
-            StreamingDataSource
-        ] = None
-        streaming_val_source: Optional[StreamingDataSource] = (
+        streaming_train_source: StreamingDataSource | None = (
             None
         )
+        streaming_val_source: StreamingDataSource | None = None
         tensorboard_histogram_frequency: int = 0
         tensorboard_histogram_modules: (
             tuple[str, ...] | None
@@ -144,7 +135,7 @@ class Learning:
     def __init__(
         self,
         *,
-        cloud_storage: Optional[CloudStorage] = None,
+        cloud_storage: CloudStorage | None = None,
     ):
         self.__cloud_storage = cloud_storage
 
@@ -153,7 +144,7 @@ class Learning:
         config: LearningOption,
         *,
         architecture_config: dict[str, Any] | None = None,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """機械学習を行う.
 
         Args:
@@ -162,7 +153,7 @@ class Learning:
                 ModelFactoryに渡される．
         """
         self.logger.info("start learning")
-        learning_result: Dict[str, str] = {}
+        learning_result: dict[str, str] = {}
 
         if config.streaming:
             device_config, dataloaders, model_components = (
@@ -254,7 +245,7 @@ class Learning:
                     eps=config.optimizer_eps,
                 )
             )
-            self.lr_scheduler: Optional[LRScheduler] = (
+            self.lr_scheduler: LRScheduler | None = (
                 SchedulerFactory.create_scheduler(
                     self.optimizer,
                     lr_scheduler_name=config.lr_scheduler_name,
@@ -526,7 +517,7 @@ class Learning:
         EPOCHS = self.epoch
 
         best_vloss = 1_000_000.0
-        last_metrics: Optional[ValidationMetrics] = None
+        last_metrics: ValidationMetrics | None = None
 
         # Checkpoint loading and freeze are handled in learn()
         # before optimizer creation.
@@ -998,7 +989,7 @@ class Learning:
                 value_dict, component="value_head"
             )
 
-    def _resolve_trainable_layers(self) -> Optional[int]:
+    def _resolve_trainable_layers(self) -> int | None:
         """Resolve effective trainable_layers from config options.
 
         Returns:

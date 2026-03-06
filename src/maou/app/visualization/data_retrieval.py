@@ -7,7 +7,7 @@ import logging
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import polars as pl
 
@@ -28,12 +28,12 @@ class DataRetriever:
     """
 
     # Stage1パターンのクラスレベルキャッシュ
-    _stage1_patterns: Optional[List[Dict[str, Any]]] = None
+    _stage1_patterns: list[dict[str, Any]] | None = None
 
     def __init__(
         self,
         search_index: SearchIndex,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
     ) -> None:
         """データ取得サービスを初期化．
@@ -116,7 +116,7 @@ class DataRetriever:
 
     def get_by_id(
         self, record_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """IDでレコードを取得．
 
         Args:
@@ -166,11 +166,11 @@ class DataRetriever:
 
     def get_by_eval_range(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         offset: int,
         limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """評価値範囲でレコードを取得．
 
         Args:
@@ -220,8 +220,8 @@ class DataRetriever:
         return self._load_records_grouped(locations)
 
     def _load_records_grouped(
-        self, locations: List[Tuple[int, int]]
-    ) -> List[Dict[str, Any]]:
+        self, locations: list[tuple[int, int]]
+    ) -> list[dict[str, Any]]:
         """ロケーションをファイル単位でグルーピングして効率的にロード．
 
         Args:
@@ -233,7 +233,7 @@ class DataRetriever:
         from collections import defaultdict
 
         # ファイルごとにグルーピング(元の順序を保持するためインデックスも記録)
-        file_groups: Dict[int, List[Tuple[int, int]]] = (
+        file_groups: dict[int, list[tuple[int, int]]] = (
             defaultdict(list)
         )
         for original_idx, (file_index, row_number) in enumerate(
@@ -244,7 +244,7 @@ class DataRetriever:
             )
 
         # 結果配列を事前確保
-        results: List[Optional[Dict[str, Any]]] = [None] * len(
+        results: list[dict[str, Any] | None] = [None] * len(
             locations
         )
 
@@ -273,7 +273,7 @@ class DataRetriever:
 
     def _load_record_at_location(
         self, file_index: int, row_number: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """指定位置から実際のレコードをロード．
 
         Args:
@@ -291,7 +291,7 @@ class DataRetriever:
 
     def _extract_record_from_df(
         self, df: pl.DataFrame, row_number: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """DataFrameの指定行をレコード辞書に変換．
 
         Args:
@@ -302,7 +302,7 @@ class DataRetriever:
             レコードデータの辞書
         """
         row = df[row_number]
-        record: Dict[str, Any] = {}
+        record: dict[str, Any] = {}
         for col in df.columns:
             value = row[col]
             # Polars Seriesの場合，最初の要素を取得
@@ -329,8 +329,8 @@ class DataRetriever:
         return record
 
     def _decode_hcp_to_board_info(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """HCPフィールドから盤面情報をデコードする．
 
         Args:
@@ -384,8 +384,8 @@ class DataRetriever:
         self,
         record_id: str,
         row_number: int,
-        indexed_eval: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        indexed_eval: int | None = None,
+    ) -> dict[str, Any]:
         """モックレコードデータを生成するディスパッチャ．
 
         array_typeに応じて適切なモック生成メソッドを呼び出す．
@@ -426,8 +426,8 @@ class DataRetriever:
         self,
         record_id: str,
         row_number: int,
-        indexed_eval: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        indexed_eval: int | None = None,
+    ) -> dict[str, Any]:
         """HCPEフォーマットのモックレコードデータを生成．
 
         Args:
@@ -487,7 +487,7 @@ class DataRetriever:
         }
 
     @classmethod
-    def _get_stage1_patterns(cls) -> List[Dict[str, Any]]:
+    def _get_stage1_patterns(cls) -> list[dict[str, Any]]:
         """Stage1パターンを取得（キャッシュ付き）．
 
         Stage1DataGeneratorから全パターンを生成し，クラス変数としてキャッシュする．
@@ -506,7 +506,7 @@ class DataRetriever:
             "Generating Stage1 patterns from Stage1DataGenerator..."
         )
 
-        patterns: List[Dict[str, Any]] = []
+        patterns: list[dict[str, Any]] = []
 
         # 盤上の駒パターンを生成
         for (
@@ -549,8 +549,8 @@ class DataRetriever:
         self,
         record_id: str,
         row_number: int,
-        indexed_eval: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        indexed_eval: int | None = None,
+    ) -> dict[str, Any]:
         """Stage1フォーマットのモックレコードデータを生成．
 
         Stage1DataGeneratorから生成したパターンを使用して，
@@ -583,7 +583,7 @@ class DataRetriever:
 
     def _create_midgame_board(
         self, row_number: int
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """中盤風の盤面を生成．
 
         駒が適度に交換された状態の盤面を生成する．
@@ -601,7 +601,7 @@ class DataRetriever:
         rng = random.Random(row_number)
 
         # 空の盤面を初期化
-        board: List[List[int]] = [[0] * 9 for _ in range(9)]
+        board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
@@ -703,7 +703,7 @@ class DataRetriever:
 
     def _create_midgame_hand(
         self, row_number: int
-    ) -> List[int]:
+    ) -> list[int]:
         """中盤風の持ち駒を生成．
 
         row_numberに応じて持ち駒が変化する．
@@ -725,7 +725,7 @@ class DataRetriever:
         # 持ち駒の最大枚数: 歩18, 香4, 桂4, 銀4, 金4, 角2, 飛2
         max_counts = [18, 4, 4, 4, 4, 2, 2]
 
-        hand: List[int] = []
+        hand: list[int] = []
 
         # 先手持ち駒
         for max_count in max_counts:
@@ -744,8 +744,8 @@ class DataRetriever:
         self,
         record_id: str,
         row_number: int,
-        indexed_eval: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        indexed_eval: int | None = None,
+    ) -> dict[str, Any]:
         """Stage2フォーマットのモックレコードデータを生成．
 
         中盤風盤面とrow_numberベースの合法手を生成する．
@@ -774,7 +774,7 @@ class DataRetriever:
         rng = random.Random(row_number + 99999)
 
         # 合法手ラベル（MOVE_LABELS_NUM要素のbinary配列）
-        legal_moves_label: List[int] = [0] * move_labels_num
+        legal_moves_label: list[int] = [0] * move_labels_num
 
         # ランダムな位置にnum_legal_moves個の1を立てる
         legal_positions = rng.sample(
@@ -792,7 +792,7 @@ class DataRetriever:
 
     def _create_endgame_board(
         self, row_number: int
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """終盤風の盤面を生成．
 
         駒が大幅に減った終盤の盤面を生成する．
@@ -810,7 +810,7 @@ class DataRetriever:
         rng = random.Random(row_number + 77777)
 
         # 空の盤面を初期化
-        board: List[List[int]] = [[0] * 9 for _ in range(9)]
+        board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
         # 駒ID定義（cshogi互換）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
@@ -902,7 +902,7 @@ class DataRetriever:
 
     def _create_endgame_hand(
         self, row_number: int
-    ) -> List[int]:
+    ) -> list[int]:
         """終盤風の持ち駒を生成．
 
         終盤は駒が多く取られているため，持ち駒が多い状態を生成する．
@@ -923,7 +923,7 @@ class DataRetriever:
         # 持ち駒の最大枚数: 歩18, 香4, 桂4, 銀4, 金4, 角2, 飛2
         max_counts = [18, 4, 4, 4, 4, 2, 2]
 
-        hand: List[int] = []
+        hand: list[int] = []
 
         # 先手持ち駒（終盤なので多め）
         for max_count in max_counts:
@@ -942,8 +942,8 @@ class DataRetriever:
         self,
         record_id: str,
         row_number: int,
-        indexed_eval: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        indexed_eval: int | None = None,
+    ) -> dict[str, Any]:
         """Preprocessingフォーマットのモックレコードデータを生成．
 
         終盤風盤面とrow_numberベースの確率分布でモックデータを生成する．
@@ -975,7 +975,7 @@ class DataRetriever:
         rng = random.Random(row_number + 123456)
 
         # 確率分布を生成（MOVE_LABELS_NUM要素，合計1.0）
-        move_label: List[float] = [0.0] * move_labels_num
+        move_label: list[float] = [0.0] * move_labels_num
 
         pattern = row_number % 3
 
@@ -1050,7 +1050,7 @@ class DataRetriever:
 
         # moveWinRate: 指し手別勝率を生成
         # 選択率のある手に対してランダムな勝率を割り当てる
-        move_win_rate: List[float] = [0.0] * move_labels_num
+        move_win_rate: list[float] = [0.0] * move_labels_num
         rng_wr = random.Random(row_number + 789012)
         for i in range(move_labels_num):
             if move_label[i] > 0.0:

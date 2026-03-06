@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -70,12 +69,12 @@ from maou.infra.console.common import (
 @handle_exception
 def evaluate_board(
     model_type: str,
-    model_path: Optional[Path],
+    model_path: Path | None,
     cuda: bool,
     num_moves: int,
     sfen: str,
     trt_workspace_size: int,
-    engine_path: Optional[Path],
+    engine_path: Path | None,
 ) -> None:
     """Evaluate a Shogi board position using a specified model.
 

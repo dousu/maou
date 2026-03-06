@@ -2,7 +2,6 @@
 
 import abc
 from pathlib import Path
-from typing import Optional
 
 
 class CloudStorage(metaclass=abc.ABCMeta):
@@ -18,6 +17,6 @@ class CloudStorage(metaclass=abc.ABCMeta):
         *,
         local_folder: Path,
         cloud_folder: str,
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
     ) -> None:
         pass

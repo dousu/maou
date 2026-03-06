@@ -4,7 +4,7 @@ import random
 from collections import OrderedDict
 from collections.abc import Generator
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import polars as pl
 from google.cloud import bigquery
@@ -35,11 +35,11 @@ class BigQueryDataSource(
             table_name: str,
             batch_size: int = 10_000,
             max_cached_bytes: int = 100 * 1024 * 1024,
-            clustering_key: Optional[str] = None,
-            partitioning_key_date: Optional[str] = None,
+            clustering_key: str | None = None,
+            partitioning_key_date: str | None = None,
             use_local_cache: bool = False,
-            local_cache_dir: Optional[str] = None,
-            sample_ratio: Optional[float] = None,
+            local_cache_dir: str | None = None,
+            sample_ratio: float | None = None,
         ) -> None:
             self.__page_manager = (
                 BigQueryDataSource.PageManager(
@@ -83,9 +83,12 @@ class BigQueryDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: Optional[
-                Union[int, float, str, bytes, bytearray]
-            ] = None,
+            seed: int
+            | float
+            | str
+            | bytes
+            | bytearray
+            | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -105,11 +108,11 @@ class BigQueryDataSource(
             table_name: str,
             batch_size: int,
             max_cached_bytes: int,
-            clustering_key: Optional[str],
-            partitioning_key_date: Optional[str] = None,
+            clustering_key: str | None,
+            partitioning_key_date: str | None = None,
             use_local_cache: bool = False,
-            local_cache_dir: Optional[str] = None,
-            sample_ratio: Optional[float] = None,
+            local_cache_dir: str | None = None,
+            sample_ratio: float | None = None,
         ) -> None:
             self.client = bigquery.Client()
             self.dataset_fqn = (
@@ -146,9 +149,9 @@ class BigQueryDataSource(
 
             # ページ番号をキーにしたLRUキャッシュ (OrderedDict)
             # ローカルキャッシュを使用する場合は不要
-            self.__page_cache: Optional[
-                OrderedDict[int, pl.DataFrame]
-            ] = None
+            self.__page_cache: (
+                OrderedDict[int, pl.DataFrame] | None
+            ) = None
             if not self.use_local_cache:
                 self.__page_cache = OrderedDict()
 
@@ -597,35 +600,34 @@ class BigQueryDataSource(
     def __init__(
         self,
         *,
-        array_type: Optional[
-            Literal["hcpe", "preprocessing"]
-        ] = None,
-        dataset_id: Optional[str] = None,
-        table_name: Optional[str] = None,
+        array_type: Literal["hcpe", "preprocessing"]
+        | None = None,
+        dataset_id: str | None = None,
+        table_name: str | None = None,
         batch_size: int = 10_000,
         max_cached_bytes: int = 100 * 1024 * 1024,
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
-        page_manager: Optional[PageManager] = None,
-        indicies: Optional[list[int]] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
+        page_manager: PageManager | None = None,
+        indicies: list[int] | None = None,
         use_local_cache: bool = False,
-        local_cache_dir: Optional[str] = None,
-        sample_ratio: Optional[float] = None,
+        local_cache_dir: str | None = None,
+        sample_ratio: float | None = None,
     ) -> None:
         """
         Args:
-            array_type (Optional[Literal["hcpe", "preprocessing"]]): 配列のタイプ ("hcpe" または "preprocessing")
-            dataset_id (Optional[str]): BigQuery データセット名
-            table_name (Optional[str]): BigQuery テーブル名
+            array_type (Literal["hcpe", "preprocessing"] | None): 配列のタイプ ("hcpe" または "preprocessing")
+            dataset_id (str | None): BigQuery データセット名
+            table_name (str | None): BigQuery テーブル名
             batch_size (int): 一度に取得するレコード数
             max_cached_bytes (int):
               キャッシュの上限サイズ (バイト単位，デフォルト100MB)
-            clustering_key (Optional[str]): クラスタリングキーの列名 (指定されると各クラスタ単位で取得)
-            page_manager (Optional[PageManager]): PageManager
-            indicies (Optional[list[int]]): 選択可能なインデックスのリスト
+            clustering_key (str | None): クラスタリングキーの列名 (指定されると各クラスタ単位で取得)
+            page_manager (PageManager | None): PageManager
+            indicies (list[int] | None): 選択可能なインデックスのリスト
             use_local_cache (bool): ローカルキャッシュを使用するかどうか
-            local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
-            sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
+            local_cache_dir (str | None): ローカルキャッシュディレクトリのパス
+            sample_ratio (float | None): サンプリング割合 (0.01-1.0, None=全データ)
         """
         if page_manager is None:
             if (

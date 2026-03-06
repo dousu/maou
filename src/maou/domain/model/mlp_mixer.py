@@ -7,7 +7,6 @@ The :class:`ShogiMLPMixer` expects input tensors of shape
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -163,7 +162,7 @@ class ShogiMLPMixer(nn.Module):
         token_mask: torch.Tensor | None = None,
         *,
         return_tokens: bool = False,
-    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Return pooled token features prior to the classifier head."""
 
         tokens = self._flatten_tokens(x)

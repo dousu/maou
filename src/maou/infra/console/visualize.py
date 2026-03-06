@@ -5,7 +5,6 @@
 
 import logging
 from pathlib import Path
-from typing import List, Optional
 
 import click
 
@@ -89,10 +88,10 @@ def _is_google_colab() -> bool:
 def visualize(
     input_path: tuple[Path, ...],
     array_type: str,
-    port: Optional[int],
+    port: int | None,
     share: bool,
     server_name: str,
-    model_path: Optional[Path],
+    model_path: Path | None,
     debug_mode: bool,
     use_mock_data: bool,
 ) -> None:
@@ -185,7 +184,7 @@ def visualize(
 
 def _resolve_file_paths(
     input_paths: tuple[Path, ...],
-) -> List[Path]:
+) -> list[Path]:
     """入力パス(ファイル・ディレクトリ混在可)からファイルパスを解決．
 
     Args:
@@ -197,7 +196,7 @@ def _resolve_file_paths(
     Raises:
         click.ClickException: 入力が不正な場合
     """
-    result: List[Path] = []
+    result: list[Path] = []
     for p in input_paths:
         result.extend(
             FileSystem.collect_files(p, ext=".feather")

@@ -8,7 +8,8 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -114,10 +115,10 @@ class ModelComponents:
     loss_fn_policy: torch.nn.Module
     loss_fn_value: torch.nn.Module
     optimizer: torch.optim.Optimizer
-    lr_scheduler: Optional[LRScheduler] = None
+    lr_scheduler: LRScheduler | None = None
 
 
-LR_SCHEDULER_DISPLAY_NAMES: Dict[str, str] = {
+LR_SCHEDULER_DISPLAY_NAMES: dict[str, str] = {
     "warmup_cosine_decay": "Warmup+CosineDecay",
     "cosine_annealing_lr": "CosineAnnealingLR",
 }
@@ -131,8 +132,8 @@ class DeviceSetup:
     @classmethod
     def setup_device(
         cls,
-        gpu: Optional[str] = None,
-        pin_memory: Optional[bool] = None,
+        gpu: str | None = None,
+        pin_memory: bool | None = None,
     ) -> DeviceConfig:
         """GPU/CPUデバイスの設定."""
         if gpu is not None and gpu != "cpu":
@@ -165,7 +166,7 @@ class DatasetFactory:
         training_datasource: DataSource,
         validation_datasource: DataSource,
         cache_transforms: bool = False,
-    ) -> Tuple[KifDataset, KifDataset]:
+    ) -> tuple[KifDataset, KifDataset]:
         """学習・検証用データセットの作成."""
 
         transform = None
@@ -448,7 +449,7 @@ class DataLoaderFactory:
         prefetch_factor: int = 2,
         drop_last_train: bool = True,
         collate_fn: Callable | None = None,
-    ) -> Tuple[DataLoader, DataLoader]:
+    ) -> tuple[DataLoader, DataLoader]:
         """学習・検証用DataLoaderの作成.
 
         ワーカー数はデータセットサイズで自動的に制限される．
@@ -544,7 +545,7 @@ class DataLoaderFactory:
         n_train_files: int = 0,
         n_val_files: int = 0,
         file_paths: list[Path] | None = None,
-    ) -> Tuple[DataLoader, DataLoader]:
+    ) -> tuple[DataLoader, DataLoader]:
         """Streaming用DataLoader作成．
 
         StreamingDatasetがバッチ単位でTensorをyieldするため，
@@ -766,7 +767,7 @@ class LossOptimizerFactory:
     def create_loss_functions(
         cls,
         gce_parameter: float = 0.1,
-    ) -> Tuple[torch.nn.Module, torch.nn.Module]:
+    ) -> tuple[torch.nn.Module, torch.nn.Module]:
         """方策・価値用の損失関数ペアを作成．
 
         Value loss関数としてBCEWithLogitsLossを使用．
@@ -796,12 +797,12 @@ class LossOptimizerFactory:
         momentum: float = 0.9,
         weight_decay: float = 0.01,
         optimizer_name: str = "adamw",
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
     ) -> torch.optim.Optimizer:
         """オプティマイザを作成."""
-        decay_params: List[torch.nn.Parameter] = []
-        no_decay_params: List[torch.nn.Parameter] = []
+        decay_params: list[torch.nn.Parameter] = []
+        no_decay_params: list[torch.nn.Parameter] = []
         modules_by_name = dict(model.named_modules())
         normalization_modules = (
             torch.nn.BatchNorm1d,
@@ -952,7 +953,7 @@ class WarmupCosineDecayScheduler(LRScheduler):
             param_group["lr"] = lr
         self._last_lr = initial_lrs
 
-    def get_lr(self) -> List[float]:
+    def get_lr(self) -> list[float]:
         """Return the learning rate for the current step."""
 
         step = self.last_epoch  # PyTorch convention
@@ -992,10 +993,10 @@ class SchedulerFactory:
         cls,
         optimizer: torch.optim.Optimizer,
         *,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         max_epochs: int = 1,
         steps_per_epoch: int = 1,
-    ) -> Optional[LRScheduler]:
+    ) -> LRScheduler | None:
         """Create a per-step scheduler for the given optimizer.
 
         Args:
@@ -1067,12 +1068,12 @@ class TrainingSetup:
         cls,
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        cache_transforms: Optional[bool] = None,
-        gpu: Optional[str] = None,
+        cache_transforms: bool | None = None,
+        gpu: str | None = None,
         model_architecture: BackboneArchitecture = "resnet",
         batch_size: int = 256,
         dataloader_workers: int = 4,
-        pin_memory: Optional[bool] = None,
+        pin_memory: bool | None = None,
         prefetch_factor: int = 2,
         gce_parameter: float = 0.1,
         learning_ratio: float = 0.01,
@@ -1081,13 +1082,13 @@ class TrainingSetup:
         optimizer_beta1: float = 0.9,
         optimizer_beta2: float = 0.999,
         optimizer_eps: float = 1e-8,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         max_epochs: int = 1,
         detect_anomaly: bool = False,
         architecture_config: dict[str, Any] | None = None,
-    ) -> Tuple[
+    ) -> tuple[
         DeviceConfig,
-        Tuple[DataLoader, DataLoader],
+        tuple[DataLoader, DataLoader],
         ModelComponents,
     ]:
         """学習に必要な全コンポーネントをセットアップ."""

@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
@@ -731,7 +731,7 @@ class MultiStageTrainingOrchestrator:
         backbone: HeadlessNetwork,
         device: torch.device,
         model_dir: Path,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
     ):
         """Initialize multi-stage training orchestrator.
 
@@ -766,11 +766,11 @@ class MultiStageTrainingOrchestrator:
     def run_all_stages(
         self,
         *,
-        stage1_components: Optional[StageComponents] = None,
-        stage1_config: Optional[StageConfig] = None,
-        stage2_components: Optional[StageComponents] = None,
-        stage2_config: Optional[StageConfig] = None,
-        stage3_config: Optional[StageConfig] = None,
+        stage1_components: StageComponents | None = None,
+        stage1_config: StageConfig | None = None,
+        stage2_components: StageComponents | None = None,
+        stage2_config: StageConfig | None = None,
+        stage3_config: StageConfig | None = None,
         save_checkpoints: bool = True,
         gradient_accumulation_steps: int = 1,
     ) -> dict[TrainingStage, StageResult]:

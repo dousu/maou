@@ -5,7 +5,6 @@ Data Source Management UIのためのパス候補サービス．
 
 import logging
 from pathlib import Path
-from typing import List, Optional
 
 try:
     from maou._rust.maou_index import PathScanner
@@ -44,9 +43,9 @@ class PathSuggestionService:
     def get_directory_suggestions(
         self,
         prefix: str,
-        base_path: Optional[Path] = None,
+        base_path: Path | None = None,
         limit: int = 50,
-    ) -> List[str]:
+    ) -> list[str]:
         """Get directory path suggestions．
 
         Args:
@@ -96,9 +95,9 @@ class PathSuggestionService:
     def get_file_suggestions(
         self,
         prefix: str,
-        base_path: Optional[Path] = None,
+        base_path: Path | None = None,
         limit: int = 100,
-    ) -> List[str]:
+    ) -> list[str]:
         """Get .feather file path suggestions．
 
         Args:
@@ -145,10 +144,10 @@ class PathSuggestionService:
 
     def preload_directories(
         self,
-        base_path: Optional[Path] = None,
+        base_path: Path | None = None,
         max_depth: int = 2,
         limit: int = 100,
-    ) -> List[str]:
+    ) -> list[str]:
         """初期表示用のディレクトリ候補をプリロード．
 
         既存の get_directory_suggestions とは異なり，prefix入力なしで
@@ -212,7 +211,7 @@ class PathSuggestionService:
 
     def _python_directory_search(
         self, base_path: Path, prefix: str, limit: int
-    ) -> List[str]:
+    ) -> list[str]:
         """Python fallback for directory search (temporary)．
 
         This will be replaced by Rust implementation．
@@ -223,7 +222,7 @@ class PathSuggestionService:
             limit: Maximum results to return
 
         Returns:
-            List of matching directory paths
+            list of matching directory paths
         """
         try:
             # Use rglob for recursive search (limited depth for performance)
@@ -254,7 +253,7 @@ class PathSuggestionService:
 
     def _python_file_search(
         self, base_path: Path, prefix: str, limit: int
-    ) -> List[str]:
+    ) -> list[str]:
         """Python fallback for .feather file search (temporary)．
 
         This will be replaced by Rust implementation．
@@ -265,7 +264,7 @@ class PathSuggestionService:
             limit: Maximum results to return
 
         Returns:
-            List of matching .feather file paths
+            list of matching .feather file paths
         """
         try:
             # Search for .feather files only

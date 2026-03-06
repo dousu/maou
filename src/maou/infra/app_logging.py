@@ -1,7 +1,6 @@
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 # class JsonLogFormatter(logging.Formatter):
 #     def format(self, record):
@@ -16,7 +15,6 @@ from typing import Optional
 #         }
 #         return json.dumps(log_record)
 
-
 _TZ_JST = timezone(timedelta(hours=+9), "JST")
 
 
@@ -25,7 +23,7 @@ class CustomLogFormatter(logging.Formatter):
     def formatTime(
         self,
         record: logging.LogRecord,
-        datefmt: Optional[str] = None,
+        datefmt: str | None = None,
     ) -> str:
         ct = datetime.fromtimestamp(record.created, tz=_TZ_JST)
         s = ct.isoformat(timespec="seconds")

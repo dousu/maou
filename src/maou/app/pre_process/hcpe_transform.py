@@ -10,14 +10,9 @@ import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ContextManager,
-    Dict,
-    Generator,
-    Optional,
-)
+from collections.abc import Generator
+from contextlib import AbstractContextManager
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -50,7 +45,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
     """
 
     @abc.abstractmethod
-    def feature_store(self) -> ContextManager[None]:
+    def feature_store(self) -> AbstractContextManager[None]:
         pass
 
     @abc.abstractmethod
@@ -60,8 +55,8 @@ class FeatureStore(metaclass=abc.ABCMeta):
         name: str,
         key_columns: list[str],
         dataframe: pl.DataFrame,
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         pass
 
@@ -158,14 +153,14 @@ class PreProcess:
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
-    intermediate_store: Optional[IntermediateDataStore]
+    intermediate_store: IntermediateDataStore | None
 
     def __init__(
         self,
         *,
         datasource: DataSource,
-        feature_store: Optional[FeatureStore] = None,
-        intermediate_cache_dir: Optional[Path] = None,
+        feature_store: FeatureStore | None = None,
+        intermediate_cache_dir: Path | None = None,
         intermediate_batch_size: int = 50_000,
         position_count_threshold: int = 2,
         prior_strength: float = 5.0,
@@ -196,14 +191,14 @@ class PreProcess:
 
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
-        output_dir: Optional[Path] = None
+        output_dir: Path | None = None
         output_filename: str = "transformed"
         max_workers: int
 
     @staticmethod
     def _process_single_array(
         data: np.ndarray,
-    ) -> Dict[int, dict]:
+    ) -> dict[int, dict]:
         """Process a chunk of records (optimized: sparse + 1-pass).
 
         統合ループでhash + move_label + game_resultを1パスで計算し，
@@ -309,7 +304,7 @@ class PreProcess:
 
     def merge_intermediate_data(
         self,
-        batch_result: Dict[int, dict],
+        batch_result: dict[int, dict],
     ) -> None:
         """中間データをマージする（ディスクベース版，スパース形式）．
 
@@ -423,7 +418,7 @@ class PreProcess:
 
     def _log_resource_estimates(
         self,
-        disk_info: Dict[str, Any],
+        disk_info: dict[str, Any],
         use_chunked: bool,
         total_count: int,
     ) -> None:
@@ -467,7 +462,7 @@ class PreProcess:
 
     def aggregate_intermediate_data_chunked(
         self,
-        output_dir: Optional[Path],
+        output_dir: Path | None,
         output_filename: str,
         chunk_size: int = 1_000_000,
     ) -> tuple[int, int]:
@@ -565,7 +560,7 @@ class PreProcess:
 
     def transform(
         self, option: PreProcessOption
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """機械学習の前処理を行う（ディスクベース版）．
 
         Args:
@@ -574,7 +569,7 @@ class PreProcess:
         Returns:
             処理結果の辞書
         """
-        pre_process_result: Dict[str, str] = {}
+        pre_process_result: dict[str, str] = {}
         self.logger.info(
             f"前処理対象のデータ数 {len(self.__datasource)}"
         )
@@ -746,12 +741,12 @@ class PreProcess:
                 # 並列処理（非同期merge版）
                 # merge専用スレッドでワーカー遊休時間を排除
                 merge_queue: queue.Queue[
-                    Optional[Dict[int, dict]]
+                    dict[int, dict] | None
                 ] = queue.Queue(maxsize=max_workers)
                 merge_errors: list[Exception] = []
 
                 def _merge_worker(
-                    q: queue.Queue[Optional[Dict[int, dict]]],
+                    q: queue.Queue[dict[int, dict] | None],
                 ) -> None:
                     while True:
                         item = q.get()

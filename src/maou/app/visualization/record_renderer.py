@@ -6,14 +6,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Optional,
-    Type,
-)
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -64,7 +57,7 @@ class RecordRenderer(ABC):
         self.move_converter = move_converter
 
     @abstractmethod
-    def render_board(self, record: Dict[str, Any]) -> str:
+    def render_board(self, record: dict[str, Any]) -> str:
         """盤面SVGを型固有の拡張込みで描画する．
 
         Args:
@@ -77,8 +70,8 @@ class RecordRenderer(ABC):
 
     @abstractmethod
     def extract_display_fields(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """UIに表示するフィールドを抽出する．
 
         Args:
@@ -90,7 +83,7 @@ class RecordRenderer(ABC):
         pass
 
     @abstractmethod
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """検索結果テーブルのカラム名を取得する．
 
         Returns:
@@ -100,8 +93,8 @@ class RecordRenderer(ABC):
 
     @abstractmethod
     def format_table_row(
-        self, index: int, record: Dict[str, Any]
-    ) -> List[Any]:
+        self, index: int, record: dict[str, Any]
+    ) -> list[Any]:
         """テーブル行データをフォーマットする．
 
         Args:
@@ -115,8 +108,8 @@ class RecordRenderer(ABC):
 
     @abstractmethod
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional["go.Figure"]:
+        self, records: list[dict[str, Any]]
+    ) -> "go.Figure" | None:
         """レコード群からデータ分析用のPlotly Figureを生成する．
 
         Args:
@@ -128,7 +121,7 @@ class RecordRenderer(ABC):
         pass
 
     def _create_board_position(
-        self, record: Dict[str, Any]
+        self, record: dict[str, Any]
     ) -> BoardPosition:
         """レコードからBoardPositionを作成する共通ヘルパー．
 
@@ -146,7 +139,7 @@ class RecordRenderer(ABC):
         )
 
     def _create_board_from_record(
-        self, record: Dict[str, Any]
+        self, record: dict[str, Any]
     ) -> Board:
         """レコードからBoardインスタンスを再構築する．
 
@@ -187,8 +180,8 @@ class RecordRenderer(ABC):
 
     def _convert_to_sfen(
         self,
-        board_id_positions: List[List[int]],
-        pieces_in_hand: List[int],
+        board_id_positions: list[list[int]],
+        pieces_in_hand: list[int],
     ) -> str:
         """boardIdPositionsとpiecesInHandからSFEN形式に変換する．
 
@@ -311,7 +304,7 @@ class HCPERecordRenderer(RecordRenderer):
     評価値（eval）と手数（moves）を表示する．
     """
 
-    def render_board(self, record: Dict[str, Any]) -> str:
+    def render_board(self, record: dict[str, Any]) -> str:
         """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
@@ -342,8 +335,8 @@ class HCPERecordRenderer(RecordRenderer):
         )
 
     def _create_move_arrow(
-        self, record: Dict[str, Any]
-    ) -> Optional[MoveArrow]:
+        self, record: dict[str, Any]
+    ) -> MoveArrow | None:
         """レコードからMoveArrowを生成する．
 
         Args:
@@ -380,8 +373,8 @@ class HCPERecordRenderer(RecordRenderer):
             return None
 
     def extract_display_fields(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """表示フィールドを抽出する．
 
         Args:
@@ -396,7 +389,7 @@ class HCPERecordRenderer(RecordRenderer):
             "moves": record.get("moves"),
         }
 
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """テーブルカラム名を取得する．
 
         Returns:
@@ -405,8 +398,8 @@ class HCPERecordRenderer(RecordRenderer):
         return ["Index", "ID", "Eval", "Moves"]
 
     def format_table_row(
-        self, index: int, record: Dict[str, Any]
-    ) -> List[Any]:
+        self, index: int, record: dict[str, Any]
+    ) -> list[Any]:
         """テーブル行をフォーマットする．
 
         Args:
@@ -424,8 +417,8 @@ class HCPERecordRenderer(RecordRenderer):
         ]
 
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional["go.Figure"]:
+        self, records: list[dict[str, Any]]
+    ) -> "go.Figure" | None:
         """HCPEデータから評価値の分布チャートを生成する．
 
         Args:
@@ -485,7 +478,7 @@ class Stage1RecordRenderer(RecordRenderer):
     reachableSquares（9x9 binary）をハイライト表示する．
     """
 
-    def render_board(self, record: Dict[str, Any]) -> str:
+    def render_board(self, record: dict[str, Any]) -> str:
         """盤面SVGを描画する（到達可能マスをハイライト，手番とレコードID表示込み）．
 
         Args:
@@ -514,8 +507,8 @@ class Stage1RecordRenderer(RecordRenderer):
         )
 
     def _extract_reachable_squares(
-        self, reachable: List[List[int]]
-    ) -> List[int]:
+        self, reachable: list[list[int]]
+    ) -> list[int]:
         """9x9 binary matrix → square indices (0-80)に変換する．
 
         Args:
@@ -532,8 +525,8 @@ class Stage1RecordRenderer(RecordRenderer):
         return squares
 
     def extract_display_fields(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """表示フィールドを抽出する．
 
         Args:
@@ -551,7 +544,7 @@ class Stage1RecordRenderer(RecordRenderer):
             "array_type": "stage1",
         }
 
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """テーブルカラム名を取得する．
 
         Returns:
@@ -560,8 +553,8 @@ class Stage1RecordRenderer(RecordRenderer):
         return ["Index", "ID", "Reachable Squares"]
 
     def format_table_row(
-        self, index: int, record: Dict[str, Any]
-    ) -> List[Any]:
+        self, index: int, record: dict[str, Any]
+    ) -> list[Any]:
         """テーブル行をフォーマットする．
 
         Args:
@@ -576,8 +569,8 @@ class Stage1RecordRenderer(RecordRenderer):
         return [index, record.get("id"), num_reachable]
 
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional["go.Figure"]:
+        self, records: list[dict[str, Any]]
+    ) -> "go.Figure" | None:
         """Stage1データから到達可能マス数の分布チャートを生成する．
 
         Args:
@@ -633,7 +626,7 @@ class Stage2RecordRenderer(RecordRenderer):
     legalMovesLabel（MOVE_LABELS_NUM binary）をUSI表記で表示する．
     """
 
-    def render_board(self, record: Dict[str, Any]) -> str:
+    def render_board(self, record: dict[str, Any]) -> str:
         """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
@@ -653,8 +646,8 @@ class Stage2RecordRenderer(RecordRenderer):
         )
 
     def extract_display_fields(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """表示フィールドを抽出する．
 
         legalMovesLabelからUSI表記の合法手リストを生成する．
@@ -688,7 +681,7 @@ class Stage2RecordRenderer(RecordRenderer):
             "array_type": "stage2",
         }
 
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """テーブルカラム名を取得する．
 
         Returns:
@@ -697,8 +690,8 @@ class Stage2RecordRenderer(RecordRenderer):
         return ["Index", "ID", "Legal Moves Count"]
 
     def format_table_row(
-        self, index: int, record: Dict[str, Any]
-    ) -> List[Any]:
+        self, index: int, record: dict[str, Any]
+    ) -> list[Any]:
         """テーブル行をフォーマットする．
 
         Args:
@@ -713,8 +706,8 @@ class Stage2RecordRenderer(RecordRenderer):
         return [index, record.get("id"), num_legal]
 
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional["go.Figure"]:
+        self, records: list[dict[str, Any]]
+    ) -> "go.Figure" | None:
         """Stage2データから合法手数の分布チャートを生成する．
 
         Args:
@@ -770,7 +763,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
     moveLabel（MOVE_LABELS_NUM probabilities）を上位USI手として表示する．
     """
 
-    def render_board(self, record: Dict[str, Any]) -> str:
+    def render_board(self, record: dict[str, Any]) -> str:
         """盤面SVGを描画する（手番とレコードID表示込み）．
 
         Args:
@@ -790,8 +783,8 @@ class PreprocessingRecordRenderer(RecordRenderer):
         )
 
     def extract_display_fields(
-        self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any]
+    ) -> dict[str, Any]:
         """表示フィールドを抽出する．
 
         moveLabelから確率上位のUSI手リストを生成し，
@@ -814,7 +807,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
             board, move_labels, threshold=0.01, top_k=5
         )
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "id": record.get("id"),
             "result_value": record.get("resultValue"),
             "top_moves": ", ".join(
@@ -843,7 +836,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
 
         return result
 
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """テーブルカラム名を取得する．
 
         Returns:
@@ -852,8 +845,8 @@ class PreprocessingRecordRenderer(RecordRenderer):
         return ["Index", "ID", "Result Value", "Best Move WR"]
 
     def format_table_row(
-        self, index: int, record: Dict[str, Any]
-    ) -> List[Any]:
+        self, index: int, record: dict[str, Any]
+    ) -> list[Any]:
         """テーブル行をフォーマットする．
 
         Args:
@@ -875,8 +868,8 @@ class PreprocessingRecordRenderer(RecordRenderer):
         ]
 
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional["go.Figure"]:
+        self, records: list[dict[str, Any]]
+    ) -> "go.Figure" | None:
         """Preprocessingデータから勝率分布チャートを生成する．
 
         resultValueとbestMoveWinRate（存在する場合）の分布を表示する．
@@ -1007,7 +1000,7 @@ class RecordRendererFactory:
             >>> isinstance(renderer, Stage1RecordRenderer)
             True
         """
-        renderers: Dict[str, Type[RecordRenderer]] = {
+        renderers: dict[str, type[RecordRenderer]] = {
             "hcpe": HCPERecordRenderer,
             "stage1": Stage1RecordRenderer,
             "stage2": Stage2RecordRenderer,

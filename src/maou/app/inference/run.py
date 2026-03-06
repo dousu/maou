@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -40,17 +40,17 @@ class InferenceRunner:
 
     @dataclass(kw_only=True, frozen=True)
     class InferenceOption:
-        model_path: Optional[Path] = None
+        model_path: Path | None = None
         model_type: ModelType = ModelType.ONNX
         cuda: bool = False
         num_moves: int = 5
         board_view: bool = True
-        sfen: Optional[str] = None
-        board: Optional[Board] = None
+        sfen: str | None = None
+        board: Board | None = None
         trt_workspace_size_mb: int = 256
-        engine_path: Optional[Path] = None
+        engine_path: Path | None = None
 
-    def infer(self, config: InferenceOption) -> Dict[str, str]:
+    def infer(self, config: InferenceOption) -> dict[str, str]:
         # model_path と engine_path のどちらかは必須
         if (
             config.model_path is None
@@ -137,7 +137,7 @@ class InferenceRunner:
             )
 
         # 推論結果を評価
-        result: Dict[str, str] = {}
+        result: dict[str, str] = {}
         winrate = Evaluation.get_winrate_from_eval(value)
         eval = Evaluation.get_eval_from_winrate(winrate)
         usis: list[str] = []

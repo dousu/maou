@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Iterator, Sequence
-from typing import List, Optional, cast
+from typing import cast
 
 import torch
 from torch.amp.autocast_mode import autocast
@@ -32,8 +32,8 @@ class TrainingLoop:
         loss_fn_value: torch.nn.Module,
         policy_loss_ratio: float,
         value_loss_ratio: float,
-        callbacks: Optional[List[TrainingCallback]] = None,
-        logger: Optional[logging.Logger] = None,
+        callbacks: list[TrainingCallback] | None = None,
+        logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     ):
@@ -64,9 +64,7 @@ class TrainingLoop:
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
-            self.scaler: Optional[GradScaler] = GradScaler(
-                "cuda"
-            )
+            self.scaler: GradScaler | None = GradScaler("cuda")
         else:
             self.scaler = None
 
@@ -75,11 +73,11 @@ class TrainingLoop:
         dataloader: DataLoader,
         epoch_idx: int,
         *,
-        max_batches: Optional[int] = None,
+        max_batches: int | None = None,
         enable_profiling: bool = False,
         progress_bar: bool = True,
         train_mode: bool = True,
-        force_cuda_sync: Optional[bool] = None,
+        force_cuda_sync: bool | None = None,
     ) -> None:
         """Run a single epoch of training or validation."""
         previous_sync_state = self._cuda_sync_enabled
