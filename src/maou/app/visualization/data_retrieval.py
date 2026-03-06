@@ -86,18 +86,13 @@ class DataRetriever:
                 return self._df_cache[file_index]
 
         # ロック外でI/Oを実行 (ブロッキング時間の最小化)
-        from maou.domain.data.rust_io import (
-            load_hcpe_df,
-            load_preprocessing_df,
-            load_stage1_df,
-            load_stage2_df,
-        )
+        import maou.interface.data_io as _data_io
 
         loader_map = {
-            "hcpe": load_hcpe_df,
-            "preprocessing": load_preprocessing_df,
-            "stage1": load_stage1_df,
-            "stage2": load_stage2_df,
+            "hcpe": _data_io.load_hcpe_df,
+            "preprocessing": _data_io.load_preprocessing_df,
+            "stage1": _data_io.load_stage1_df,
+            "stage2": _data_io.load_stage2_df,
         }
         load_df = loader_map[self.array_type]
         file_path = self.file_paths[file_index]
