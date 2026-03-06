@@ -503,6 +503,9 @@ class TrainingLoop:
             ただし cycle 完了判定は現在の steps に基づくため，
             steps が前 cycle より減少した場合，カウンタが新しい steps を
             超えていると即座に cycle が完了する(勾配は正しく蓄積済み)．
+            この遷移 cycle では _micro_batch_count が新しい steps を
+            超えるが，GNS 算出は実際に蓄積された K を使うため
+            推定値に小さな誤差が生じる．次 cycle からは正しい K で計測される．
         """
         # カウンタベースの accumulation step 管理
         accumulation_step = self._accumulation_counter

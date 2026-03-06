@@ -139,17 +139,6 @@ class AdaptiveBatchController:
         # optimizer step カウンタ
         self._step_count: int = 0
 
-        if (
-            config.measurement_interval
-            > config.adjustment_interval
-        ):
-            logger.warning(
-                "measurement_interval (%d) > adjustment_interval (%d): "
-                "調整ウィンドウ内で GNS 計測が不足する可能性があります",
-                config.measurement_interval,
-                config.adjustment_interval,
-            )
-
     @property
     def current_accumulation_steps(self) -> int:
         """現在の gradient accumulation steps．"""

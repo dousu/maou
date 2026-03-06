@@ -18,6 +18,8 @@ B_noise は Critical Batch Size (CBS) の近似であり，
         b = 物理バッチサイズ
         K = gradient_accumulation_steps
         S = Σ_k |micro_grad_k|² (micro-batch 勾配の二乗ノルム和)
+            loss/K 正規化後の勾配を使用するため 1/K² スケール済み．
+            G も同じスケールなので K*S/G の比率計算では 1/K² が約分される．
         G = |mean_grad|² (蓄積済み勾配の二乗ノルム)
 
     G の前提:
@@ -266,11 +268,15 @@ class GradientNoiseScaleEstimator:
         b = self._physical_batch_size
 
         # B_noise = b * K/(K-1) * (K * S / G - 1)
-        # オーバーフロー防止: S が極大の場合は計算をスキップ
+        # オーバーフロー防止 / NaN 勾配の吸収:
+        # _finitude_check_interval の間に未検出の NaN/Inf 損失で
+        # backward() が実行されると，NaN 勾配が S に混入する．
+        # この場合は cycle 全体の GNS 推定を安全に破棄する．
+        # controller の EMA は更新されず，次 cycle から正常に再開する．
         if s > 1e30 or math.isnan(s):
             logger.debug(
                 "sum_micro_norm_sq overflow or NaN (%.2e), "
-                "skipping GNS estimation",
+                "skipping GNS estimation for this cycle",
                 s,
             )
             self._reset()
