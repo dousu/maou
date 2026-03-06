@@ -104,10 +104,15 @@ class TrainingLoop:
 
             # 外部から渡された controller/estimator を使う場合は
             # EMA 状態と current_steps を引き継ぐ(エポック間の継続)
-            if (
-                adaptive_controller is not None
-                and gns_estimator is not None
-            ):
+            _has_controller = adaptive_controller is not None
+            _has_estimator = gns_estimator is not None
+            if _has_controller != _has_estimator:
+                self.logger.warning(
+                    "gns_estimator と adaptive_controller は"
+                    "両方同時に渡す必要があります．"
+                    "片方のみ渡された場合は両方とも新規作成します"
+                )
+            if _has_controller and _has_estimator:
                 self._adaptive_controller = adaptive_controller
                 self._gns_estimator = gns_estimator
                 self.gradient_accumulation_steps = adaptive_controller.current_accumulation_steps
@@ -568,6 +573,12 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
+                # GNS estimator の状態をリセット:
+                # backward() がスキップされるため on_backward_end() と
+                # compute() が呼ばれず，_sum_micro_norm_sq に stale データが
+                # 残り次サイクルの推定値を汚染する
+                if self._gns_estimator is not None:
+                    self._gns_estimator._reset()
                 return
 
         for callback in self.callbacks:
@@ -777,6 +788,9 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
+                # GNS estimator の状態をリセット(mixed precision パスと同様)
+                if self._gns_estimator is not None:
+                    self._gns_estimator._reset()
                 return
 
         # 逆伝播

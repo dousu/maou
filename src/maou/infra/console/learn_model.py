@@ -187,7 +187,7 @@ def _build_adaptive_batch_config(
     type=click.IntRange(min=2),
     default=8,
     show_default=True,
-    help="Maximum gradient accumulation steps for adaptive batch.",
+    help="Maximum gradient accumulation steps for adaptive batch. Power of 2 recommended.",
 )
 @click.option(
     "--adaptive-batch-interval",

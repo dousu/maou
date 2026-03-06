@@ -49,6 +49,9 @@ class AdaptiveBatchConfig:
         min_accumulation_steps: 最小 gradient accumulation steps．
             GNS 推定に最低2サンプル必要なため 2 以上．
         max_accumulation_steps: 最大 gradient accumulation steps．
+            2の冪乗を推奨(GPU tensor core 効率のため)．
+            非冪乗値の場合，round_to_power_of_two 後のクリップで
+            最終値が2の冪乗にならない可能性がある．
         adjustment_interval: accumulation steps を調整する
             optimizer step 間隔．
         smoothing_factor: GNS の EMA (Exponential Moving Average) 係数．
