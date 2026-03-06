@@ -489,16 +489,20 @@ class TrainingLoop:
 
         # Mixed precision training with autocast
         if self.scaler is not None:
-            self._train_batch_mixed_precision(
+            skipped = self._train_batch_mixed_precision(
                 context, is_accumulation_step, accumulation_step
             )
         else:
-            self._train_batch_full_precision(
+            skipped = self._train_batch_full_precision(
                 context, is_accumulation_step, accumulation_step
             )
 
         # accumulation カウンタ更新
-        if not is_accumulation_step:
+        # 非有限損失で backward がスキップされた場合は
+        # 勾配がクリアされているためサイクルを最初からやり直す
+        if skipped:
+            self._accumulation_counter = 0
+        elif not is_accumulation_step:
             self._accumulation_counter = 0
         else:
             self._accumulation_counter += 1
@@ -508,8 +512,12 @@ class TrainingLoop:
         context: TrainingContext,
         is_accumulation_step: bool,
         accumulation_step: int,
-    ) -> None:
-        """Train batch with mixed precision."""
+    ) -> bool:
+        """Train batch with mixed precision.
+
+        Returns:
+            True if the batch was skipped (e.g. non-finite loss).
+        """
         if self.scaler is None:
             raise RuntimeError(
                 "GradScaler is None but mixed precision training was requested"
@@ -573,13 +581,11 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                # GNS estimator の状態をリセット:
-                # backward() がスキップされるため on_backward_end() と
-                # compute() が呼ばれず，_sum_micro_norm_sq に stale データが
-                # 残り次サイクルの推定値を汚染する
+                # GNS estimator をリセット: backward() がスキップされるため
+                # on_backward_end() と compute() が呼ばれず stale データが残る
                 if self._gns_estimator is not None:
-                    self._gns_estimator._reset()
-                return
+                    self._gns_estimator.reset_cycle()
+                return True
 
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
@@ -641,6 +647,8 @@ class TrainingLoop:
 
             for callback in self.callbacks:
                 callback.on_optimizer_step_end(context)
+
+        return False
 
     def _move_inputs_to_device(
         self,
@@ -729,8 +737,12 @@ class TrainingLoop:
         context: TrainingContext,
         is_accumulation_step: bool,
         accumulation_step: int,
-    ) -> None:
-        """Train batch with full precision."""
+    ) -> bool:
+        """Train batch with full precision.
+
+        Returns:
+            True if the batch was skipped (e.g. non-finite loss).
+        """
         # 順伝播
         for callback in self.callbacks:
             callback.on_forward_pass_start(context)
@@ -788,10 +800,10 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                # GNS estimator の状態をリセット(mixed precision パスと同様)
+                # GNS estimator をリセット(mixed precision パスと同様)
                 if self._gns_estimator is not None:
-                    self._gns_estimator._reset()
-                return
+                    self._gns_estimator.reset_cycle()
+                return True
 
         # 逆伝播
         for callback in self.callbacks:
@@ -837,6 +849,8 @@ class TrainingLoop:
 
             for callback in self.callbacks:
                 callback.on_optimizer_step_end(context)
+
+        return False
 
     def _eval_batch(self, context: TrainingContext) -> None:
         """Evaluate a single batch without gradient computation."""

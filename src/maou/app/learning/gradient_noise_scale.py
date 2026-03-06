@@ -91,6 +91,11 @@ class GradientNoiseScaleEstimator:
         self._optimizer_step_count: int = 0
 
     @property
+    def optimizer_step_count(self) -> int:
+        """累積 optimizer step 数．"""
+        return self._optimizer_step_count
+
+    @property
     def should_measure(self) -> bool:
         """現在の optimizer step で GNS を計測すべきかどうか．"""
         return (
@@ -279,8 +284,16 @@ class GradientNoiseScaleEstimator:
         self._reset()
         return estimate
 
+    def reset_cycle(self) -> None:
+        """accumulation cycle の状態をリセットする．
+
+        非有限損失等で backward がスキップされた場合に外部から呼び出し，
+        _sum_micro_norm_sq の stale データが次サイクルに混入するのを防ぐ．
+        """
+        self._reset()
+
     def _reset(self) -> None:
-        """accumulation cycle の状態をリセットする．"""
+        """accumulation cycle の状態をリセットする(内部用)．"""
         self._sum_micro_norm_sq = 0.0
         self._prev_grads = None
         self._micro_batch_count = 0

@@ -433,7 +433,7 @@ class TestAdaptiveBatchIntegration:
         )
 
         # GNS 推定器の step_count が増加していることを確認
-        assert loop._gns_estimator._optimizer_step_count > 0
+        assert loop._gns_estimator.optimizer_step_count > 0
 
     def test_adaptive_batch_callback_updated(self) -> None:
         """AdaptiveBatchCallback の表示値が更新されることを確認する．"""

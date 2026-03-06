@@ -58,6 +58,8 @@ class AdaptiveBatchConfig:
             0 に近いほど平滑化が強い．
         measurement_interval: GNS を計測する optimizer step 間隔．
             adjustment_interval の約数であることが望ましい．
+            adjustment_interval より大きい場合，調整ウィンドウ内で
+            GNS 計測が行われず調整がスキップされる．
     """
 
     min_accumulation_steps: int = 2
