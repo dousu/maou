@@ -23,7 +23,12 @@
 | `--detect-anomaly` | `false` | Wraps the loop with `torch.autograd.set_detect_anomaly` for debugging gradients.【F:src/maou/infra/console/learn_model.py†L400-L470】 |
 | `--epoch INT` | interface default `10` | Number of passes over the training loader; must be positive.【F:src/maou/interface/learn.py†L132-L147】 |
 | `--batch-size INT` | interface default `1000` | Minibatch size shared by train/test loaders; must be positive. Training batch size. Recommended by GPU memory: 512 (8GB), 1024 (16GB), 2048 (24GB), 4096 (40-80GB). Use `--gradient-accumulation-steps` to simulate larger batches.【F:src/maou/interface/learn.py†L142-L156】 |
-| `--gradient-accumulation-steps INT` | `1` | Number of gradient accumulation steps. Effective batch size = batch_size × gradient_accumulation_steps. Use when GPU memory is insufficient for the desired effective batch size. Consider scaling learning rate proportionally (linear scaling rule) when using large accumulation steps. |
+| `--gradient-accumulation-steps INT` | `1` | Number of gradient accumulation steps. Effective batch size = batch_size × gradient_accumulation_steps. Use when GPU memory is insufficient for the desired effective batch size. Consider scaling learning rate proportionally (linear scaling rule) when using large accumulation steps. Ignored when `--adaptive-batch` is enabled. |
+| `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). |
+| `--adaptive-batch-min-steps INT` | `2` | Minimum gradient accumulation steps for adaptive batch. Must be >= 2 for GNS estimation. |
+| `--adaptive-batch-max-steps INT` | `8` | Maximum gradient accumulation steps for adaptive batch. |
+| `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. |
+| `--adaptive-batch-smoothing FLOAT` | `0.1` | EMA smoothing factor for GNS estimates. 0 に近いほど安定，1 に近いほど追従性が高い． |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
@@ -192,3 +197,10 @@ poetry run maou learn-model \
   - `--save-split-params`: backbone/head パラメータを個別 `.pt` ファイルとして保存するオプション
 - **2026-03-06**: `--gradient-accumulation-steps` を追加
   - GPU メモリ不足時に有効バッチサイズを擬似的に拡大するオプション
+- **2026-03-06**: Adaptive Batch Size (GNS-Based) を追加
+  - `--adaptive-batch`: GNS に基づく adaptive batch size の有効化
+  - `--adaptive-batch-min-steps`，`--adaptive-batch-max-steps`: accumulation steps 範囲
+  - `--adaptive-batch-interval`: 調整間隔
+  - `--adaptive-batch-smoothing`: EMA 平滑化係数
+  - 訓練中に Gradient Noise Scale をオンライン計測し，gradient accumulation steps を動的に調整
+  - `benchmark-training --estimate-cbs` の出力に adaptive batch 推奨設定を追加

@@ -15,7 +15,11 @@ from torch.utils.tensorboard import (
 )
 from torchinfo import summary
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+)
 from maou.app.learning.callbacks import (
+    AdaptiveBatchCallback,
     LoggingCallback,
     LRSchedulerStepCallback,
     Stage3LossCallback,
@@ -131,6 +135,7 @@ class Learning:
             PolicyTargetMode.WIN_RATE
         )
         gradient_accumulation_steps: int = 1
+        adaptive_batch_config: AdaptiveBatchConfig | None = None
 
     def __init__(
         self,
@@ -468,11 +473,19 @@ class Learning:
             LoggingCallback
             | LRSchedulerStepCallback
             | Stage3LossCallback
+            | AdaptiveBatchCallback
         ] = [logging_callback, loss_callback]
         if self.lr_scheduler is not None:
             callbacks.append(
                 LRSchedulerStepCallback(self.lr_scheduler)
             )
+
+        # Adaptive batch config
+        adaptive_batch_config = self.config.adaptive_batch_config
+        physical_batch_size: int | None = None
+        if adaptive_batch_config is not None:
+            physical_batch_size = self.config.batch_size
+            callbacks.append(AdaptiveBatchCallback())
 
         # Create training loop
         training_loop = TrainingLoop(
@@ -487,6 +500,8 @@ class Learning:
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            adaptive_batch_config=adaptive_batch_config,
+            physical_batch_size=physical_batch_size,
         )
 
         # Run training epoch

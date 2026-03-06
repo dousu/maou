@@ -8,10 +8,18 @@ from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+    AdaptiveBatchController,
+)
 from maou.app.learning.callbacks import (
+    AdaptiveBatchCallback,
     ModelInputs,
     TrainingCallback,
     TrainingContext,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
 )
 from maou.app.learning.policy_targets import (
     PolicyTargetMode,
@@ -36,6 +44,8 @@ class TrainingLoop:
         logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+        adaptive_batch_config: AdaptiveBatchConfig | None = None,
+        physical_batch_size: int | None = None,
     ):
         self.model = model
         self.device = device
@@ -53,7 +63,48 @@ class TrainingLoop:
         self.gradient_accumulation_steps = max(
             1, gradient_accumulation_steps
         )
-        if self.gradient_accumulation_steps > 1:
+
+        # Accumulation cycle カウンタ (動的 steps 変更に対応)
+        self._accumulation_counter: int = 0
+
+        # Adaptive batch size 設定
+        self._adaptive_batch_config = adaptive_batch_config
+        self._gns_estimator: GradientNoiseScaleEstimator | None = (
+            None
+        )
+        self._adaptive_controller: AdaptiveBatchController | None = (
+            None
+        )
+
+        if adaptive_batch_config is not None:
+            if physical_batch_size is None:
+                msg = (
+                    "physical_batch_size is required "
+                    "when adaptive_batch_config is set"
+                )
+                raise ValueError(msg)
+
+            self.gradient_accumulation_steps = (
+                adaptive_batch_config.min_accumulation_steps
+            )
+            self._gns_estimator = GradientNoiseScaleEstimator(
+                physical_batch_size=physical_batch_size,
+                measurement_interval=adaptive_batch_config.measurement_interval,
+                device=device,
+            )
+            self._adaptive_controller = AdaptiveBatchController(
+                config=adaptive_batch_config,
+                physical_batch_size=physical_batch_size,
+            )
+            self.logger.info(
+                "Adaptive batch enabled: accum_steps %d-%d, "
+                "adjustment_interval=%d, physical_bs=%d",
+                adaptive_batch_config.min_accumulation_steps,
+                adaptive_batch_config.max_accumulation_steps,
+                adaptive_batch_config.adjustment_interval,
+                physical_batch_size,
+            )
+        elif self.gradient_accumulation_steps > 1:
             self.logger.info(
                 f"Gradient accumulation enabled: {gradient_accumulation_steps} steps "
                 f"(effective batch size multiplied by {gradient_accumulation_steps})"
@@ -364,10 +415,8 @@ class TrainingLoop:
 
     def _train_batch(self, context: TrainingContext) -> None:
         """Train a single batch with gradient computation."""
-        # Gradient accumulationのステップを計算
-        accumulation_step = (
-            context.batch_idx % self.gradient_accumulation_steps
-        )
+        # カウンタベースの accumulation step 管理
+        accumulation_step = self._accumulation_counter
         is_accumulation_step = accumulation_step < (
             self.gradient_accumulation_steps - 1
         )
@@ -379,17 +428,24 @@ class TrainingLoop:
         # Mixed precision training with autocast
         if self.scaler is not None:
             self._train_batch_mixed_precision(
-                context, is_accumulation_step
+                context, is_accumulation_step, accumulation_step
             )
         else:
             self._train_batch_full_precision(
-                context, is_accumulation_step
+                context, is_accumulation_step, accumulation_step
             )
+
+        # accumulation カウンタ更新
+        if not is_accumulation_step:
+            self._accumulation_counter = 0
+        else:
+            self._accumulation_counter += 1
 
     def _train_batch_mixed_precision(
         self,
         context: TrainingContext,
         is_accumulation_step: bool,
+        accumulation_step: int,
     ) -> None:
         """Train batch with mixed precision."""
         if self.scaler is None:
@@ -470,6 +526,14 @@ class TrainingLoop:
 
         self._maybe_synchronize("post_backward_mixed_precision")
 
+        # GNS 計測: backward 後に micro-batch 勾配統計を収集
+        if self._gns_estimator is not None:
+            # mixed precision では unscale 前の勾配を使用
+            # (scale factor は全パラメータ共通のためノルム比に影響しない)
+            self._gns_estimator.on_backward_end(
+                self.model, accumulation_step
+            )
+
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
@@ -480,6 +544,9 @@ class TrainingLoop:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
             )
+
+            # GNS 推定と adaptive batch 調整
+            self._maybe_update_adaptive_batch()
 
             # オプティマイザステップ
             for callback in self.callbacks:
@@ -581,6 +648,7 @@ class TrainingLoop:
         self,
         context: TrainingContext,
         is_accumulation_step: bool,
+        accumulation_step: int,
     ) -> None:
         """Train batch with full precision."""
         # 順伝播
@@ -652,6 +720,12 @@ class TrainingLoop:
 
         self._maybe_synchronize("post_backward_full_precision")
 
+        # GNS 計測: backward 後に micro-batch 勾配統計を収集
+        if self._gns_estimator is not None:
+            self._gns_estimator.on_backward_end(
+                self.model, accumulation_step
+            )
+
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
@@ -661,6 +735,9 @@ class TrainingLoop:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
             )
+
+            # GNS 推定と adaptive batch 調整
+            self._maybe_update_adaptive_batch()
 
             # オプティマイザステップ
             for callback in self.callbacks:
@@ -726,6 +803,35 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _maybe_update_adaptive_batch(self) -> None:
+        """GNS 推定値に基づいて gradient_accumulation_steps を調整する．"""
+        if (
+            self._gns_estimator is None
+            or self._adaptive_controller is None
+        ):
+            return
+
+        estimate = self._gns_estimator.compute(
+            self.model, self.gradient_accumulation_steps
+        )
+        if estimate is None:
+            return
+
+        new_steps = self._adaptive_controller.update(
+            estimate.b_noise
+        )
+        if new_steps != self.gradient_accumulation_steps:
+            self.gradient_accumulation_steps = new_steps
+
+        # AdaptiveBatchCallback の表示を更新
+        for callback in self.callbacks:
+            if isinstance(callback, AdaptiveBatchCallback):
+                callback.update_display(
+                    self._adaptive_controller.smoothed_gns,
+                    self.gradient_accumulation_steps,
+                )
+                break
 
     def _maybe_synchronize(self, reason: str) -> None:
         if self.device.type != "cuda":

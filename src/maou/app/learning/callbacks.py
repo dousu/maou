@@ -1559,6 +1559,46 @@ class Stage1AccuracyCallback(BaseCallback):
         }
 
 
+class AdaptiveBatchCallback(BaseCallback):
+    """Adaptive batch size の状態を tqdm に表示するコールバック．
+
+    TrainingLoop の ``_adaptive_controller`` から GNS と
+    accumulation steps の現在値を取得し，プログレスバーに表示する．
+    このコールバック自体は表示専用であり，制御ロジックは持たない．
+    """
+
+    def __init__(self) -> None:
+        self._gns_display: str = "---"
+        self._accum_display: str = "---"
+        self._batch_count: int = 0
+
+    def on_batch_end(self, context: TrainingContext) -> None:
+        """バッチカウントを更新する．"""
+        self._batch_count += 1
+
+    def update_display(
+        self,
+        gns: float | None,
+        accumulation_steps: int,
+    ) -> None:
+        """TrainingLoop から呼び出され，表示値を更新する．
+
+        Args:
+            gns: 最新の GNS 推定値(EMA平滑化済み)．None は未計測．
+            accumulation_steps: 現在の gradient accumulation steps．
+        """
+        if gns is not None:
+            self._gns_display = f"{gns:.0f}"
+        self._accum_display = str(accumulation_steps)
+
+    def get_postfix(self) -> dict[str, str] | None:
+        """GNS と accum steps を tqdm 用に返す．"""
+        return {
+            "GNS": self._gns_display,
+            "accum": self._accum_display,
+        }
+
+
 class Stage3LossCallback(BaseCallback):
     """Stage 3 (Policy+Value) 用の損失表示コールバック．
 

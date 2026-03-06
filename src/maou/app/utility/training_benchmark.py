@@ -1788,13 +1788,29 @@ class TrainingBenchmarkUseCase:
                 f"Estimated Critical Batch Size (CBS): "
                 f"{cbs_estimation['estimated_cbs']}"
             )
-            summary_lines.append(
-                f"  Gradient Noise Scale (B_noise): "
-                f"{cbs_estimation['gradient_noise_scale']:.1f}"
-            )
+            gns_val = cbs_estimation.get("gradient_noise_scale")
+            if gns_val is not None:
+                summary_lines.append(
+                    f"  Gradient Noise Scale (B_noise): "
+                    f"{gns_val:.1f}"
+                )
             summary_lines.append(
                 f"  Recommendation: {cbs_estimation['recommendation']}"
             )
+            adaptive_rec = cbs_estimation.get(
+                "adaptive_batch_recommendation"
+            )
+            if adaptive_rec is not None:
+                summary_lines.append("")
+                summary_lines.append(
+                    "Adaptive Batch Recommendation:"
+                )
+                summary_lines.append(
+                    f"  {adaptive_rec['rationale']}"
+                )
+                summary_lines.append(
+                    f"  CLI: {adaptive_rec['cli_example']}"
+                )
 
         output: dict[str, Any] = {
             "sweep_type": "batch_size",
@@ -2074,7 +2090,11 @@ class TrainingBenchmarkUseCase:
             # All batch sizes show linear scaling - CBS is larger
             # than all tested batch sizes
             max_tested = max(bs for bs, _ in points)
-            return {
+            tested_sizes_sorted = sorted(bs for bs, _ in points)
+            adaptive_rec = _build_adaptive_batch_recommendation(
+                max_tested, tested_sizes_sorted
+            )
+            result_dict: dict[str, Any] = {
                 "estimated_cbs": max_tested,
                 "cbs_exceeds_tested": True,
                 "gradient_noise_scale": None,
@@ -2090,6 +2110,11 @@ class TrainingBenchmarkUseCase:
                     for bs, sps in points
                 },
             }
+            if adaptive_rec is not None:
+                result_dict["adaptive_batch_recommendation"] = (
+                    adaptive_rec
+                )
+            return result_dict
 
         sorted_estimates = sorted(cbs_estimates)
         mid = len(sorted_estimates) // 2
@@ -2129,7 +2154,12 @@ class TrainingBenchmarkUseCase:
                 f"between speed and efficiency."
             )
 
-        return {
+        # Adaptive batch 推奨設定を生成
+        adaptive_rec = _build_adaptive_batch_recommendation(
+            cbs_rounded, tested_sizes
+        )
+
+        result_dict: dict[str, Any] = {
             "estimated_cbs": cbs_rounded,
             "cbs_exceeds_tested": False,
             "gradient_noise_scale": round(median_cbs, 1),
@@ -2139,6 +2169,60 @@ class TrainingBenchmarkUseCase:
                 for bs, sps in points
             },
         }
+        if adaptive_rec is not None:
+            result_dict["adaptive_batch_recommendation"] = (
+                adaptive_rec
+            )
+        return result_dict
+
+
+def _build_adaptive_batch_recommendation(
+    cbs: int,
+    tested_sizes: list[int],
+) -> dict[str, Any] | None:
+    """CBS推定結果から adaptive batch の推奨設定を生成する．
+
+    Args:
+        cbs: 推定された Critical Batch Size (2の冪乗)．
+        tested_sizes: テストされたバッチサイズのソート済みリスト．
+
+    Returns:
+        推奨設定の辞書．テスト範囲が不十分な場合は None．
+    """
+    if not tested_sizes or cbs <= 0:
+        return None
+
+    # 最大テスト済みバッチサイズを物理バッチサイズの候補とする
+    max_tested = tested_sizes[-1]
+
+    # 物理バッチサイズ: テスト済みの最大値(GPUに収まることが確認済み)
+    physical_bs = max_tested
+
+    # min/max accumulation steps の推定
+    min_steps = max(2, cbs // physical_bs)
+    max_steps = max(min_steps, (cbs * 2) // physical_bs)
+
+    # 2の冪乗に丸める
+    min_steps = int(2 ** round(math.log2(max(2, min_steps))))
+    max_steps = int(2 ** round(math.log2(max(min_steps, max_steps))))
+
+    target_effective_bs = physical_bs * min_steps
+
+    return {
+        "physical_batch_size": physical_bs,
+        "min_accumulation_steps": min_steps,
+        "max_accumulation_steps": max_steps,
+        "target_effective_batch_size": target_effective_bs,
+        "rationale": (
+            f"CBS={cbs}, physical BS={physical_bs} → "
+            f"accum {min_steps}-{max_steps} で CBS 到達"
+        ),
+        "cli_example": (
+            f"--batch-size {physical_bs} --adaptive-batch "
+            f"--adaptive-batch-min-steps {min_steps} "
+            f"--adaptive-batch-max-steps {max_steps}"
+        ),
+    }
 
 
 def _format_timing_summary(

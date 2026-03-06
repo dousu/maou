@@ -268,6 +268,27 @@ uv run maou utility benchmark-training \
 - 推定されたCBS付近のバッチサイズが最も効率的な学習設定となる
 - CBSを大幅に超えるバッチサイズは計算効率が低下し，学習率の調整も必要になる
 
+### Adaptive Batch 推奨設定
+
+`--estimate-cbs` を指定すると，CBS推定結果に基づいて `learn-model` の
+adaptive batch オプション推奨値が出力される:
+
+```json
+{
+  "adaptive_batch_recommendation": {
+    "physical_batch_size": 2048,
+    "min_accumulation_steps": 2,
+    "max_accumulation_steps": 4,
+    "target_effective_batch_size": 4096,
+    "rationale": "CBS=4096, physical BS=2048 → accum 2-4 で CBS 到達",
+    "cli_example": "--batch-size 2048 --adaptive-batch --adaptive-batch-min-steps 2 --adaptive-batch-max-steps 4"
+  }
+}
+```
+
+この推奨設定をそのまま `learn-model` に渡すことで，GNS-Based adaptive
+batch size を利用できる．
+
 ## Implementation references
 
 - CLI definition, datasource wiring, and console rendering –
