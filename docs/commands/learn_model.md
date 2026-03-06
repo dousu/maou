@@ -203,5 +203,6 @@ poetry run maou learn-model \
   - `--adaptive-batch-min-steps`，`--adaptive-batch-max-steps`: accumulation steps 範囲
   - `--adaptive-batch-interval`: 調整間隔
   - `--adaptive-batch-smoothing`: EMA 平滑化係数
+  - `--adaptive-batch-measurement-interval`: GNS 計測間隔(勾配スナップショット頻度)
   - 訓練中に Gradient Noise Scale をオンライン計測し，gradient accumulation steps を動的に調整
   - `benchmark-training --estimate-cbs` の出力に adaptive batch 推奨設定を追加
