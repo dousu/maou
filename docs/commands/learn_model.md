@@ -24,11 +24,12 @@
 | `--epoch INT` | interface default `10` | Number of passes over the training loader; must be positive.【F:src/maou/interface/learn.py†L132-L147】 |
 | `--batch-size INT` | interface default `1000` | Minibatch size shared by train/test loaders; must be positive. Training batch size. Recommended by GPU memory: 512 (8GB), 1024 (16GB), 2048 (24GB), 4096 (40-80GB). Use `--gradient-accumulation-steps` to simulate larger batches.【F:src/maou/interface/learn.py†L142-L156】 |
 | `--gradient-accumulation-steps INT` | `1` | Number of gradient accumulation steps. Effective batch size = batch_size × gradient_accumulation_steps. Use when GPU memory is insufficient for the desired effective batch size. Consider scaling learning rate proportionally (linear scaling rule) when using large accumulation steps. Ignored when `--adaptive-batch` is enabled. |
-| `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). |
+| `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). Stage 3 のみに適用(Stage 1/2 は固定 accumulation steps)． |
 | `--adaptive-batch-min-steps INT` | `2` | Minimum gradient accumulation steps for adaptive batch. Must be >= 2 for GNS estimation. |
 | `--adaptive-batch-max-steps INT` | `8` | Maximum gradient accumulation steps for adaptive batch. |
 | `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. |
 | `--adaptive-batch-smoothing FLOAT` | `0.1` | EMA smoothing factor for GNS estimates. 0 に近いほど安定，1 に近いほど追従性が高い． |
+| `--adaptive-batch-measurement-interval INT` | `1` | GNS 計測の optimizer step 間隔．計測中は勾配スナップショット分の追加メモリを使用するため，大規模モデル(100M+ params)では 5-10 を推奨． |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |

@@ -133,31 +133,43 @@ class AdaptiveBatchController:
         """EMA 平滑化された GNS．"""
         return self._smoothed_gns
 
-    def update(self, gns: float) -> int:
-        """GNS 推定値を受け取り，必要に応じて accumulation steps を調整する．
+    def update(self, gns: float | None) -> int:
+        """Optimizer step ごとに呼び出し，GNS に基づいて調整する．
+
+        毎 optimizer step で呼び出すこと．GNS 推定値がない場合
+        (measurement_interval によるスキップ等)は gns=None を渡す．
+        adjustment_interval は全 optimizer step に対する間隔として
+        機能する．
 
         Args:
             gns: Gradient Noise Scale の推定値 (B_noise)．
+                計測されなかった step では None．
 
         Returns:
             更新後の gradient_accumulation_steps．
         """
         self._step_count += 1
 
-        # EMA 更新
-        alpha = self._config.smoothing_factor
-        if self._smoothed_gns is None:
-            self._smoothed_gns = gns
-        else:
-            self._smoothed_gns = (
-                alpha * gns + (1 - alpha) * self._smoothed_gns
-            )
+        # EMA 更新(GNS 推定値がある場合のみ)
+        if gns is not None:
+            alpha = self._config.smoothing_factor
+            if self._smoothed_gns is None:
+                self._smoothed_gns = gns
+            else:
+                self._smoothed_gns = (
+                    alpha * gns
+                    + (1 - alpha) * self._smoothed_gns
+                )
 
         # 調整間隔でない場合はスキップ
         if (
             self._step_count % self._config.adjustment_interval
             != 0
         ):
+            return self._current_steps
+
+        # EMA が未初期化(まだ一度も GNS を受け取っていない)場合はスキップ
+        if self._smoothed_gns is None:
             return self._current_steps
 
         # 目標 accumulation steps を計算

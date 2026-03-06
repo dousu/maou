@@ -40,6 +40,7 @@ def _build_adaptive_batch_config(
     max_steps: int,
     interval: int,
     smoothing: float,
+    measurement_interval: int,
 ) -> AdaptiveBatchConfig | None:
     """CLI引数から AdaptiveBatchConfig を構築する．"""
     if not adaptive_batch:
@@ -49,6 +50,7 @@ def _build_adaptive_batch_config(
         max_accumulation_steps=max_steps,
         adjustment_interval=interval,
         smoothing_factor=smoothing,
+        measurement_interval=measurement_interval,
     )
 
 
@@ -169,6 +171,8 @@ def _build_adaptive_batch_config(
         "Enable adaptive batch size based on Gradient Noise Scale (GNS)."
         " Dynamically adjusts gradient accumulation steps during training."
         " Requires accumulation_steps >= 2 for GNS estimation."
+        " Only applies to Stage 3 (policy+value) training;"
+        " Stage 1/2 use fixed accumulation steps."
     ),
 )
 @click.option(
@@ -198,6 +202,17 @@ def _build_adaptive_batch_config(
     default=0.1,
     show_default=True,
     help="EMA smoothing factor for GNS estimates (0=smooth, 1=reactive).",
+)
+@click.option(
+    "--adaptive-batch-measurement-interval",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help=(
+        "Optimizer steps between GNS measurements."
+        " Higher values reduce memory overhead (gradient snapshot)."
+        " Recommended: 5-10 for large models (100M+ params)."
+    ),
 )
 @click.option(
     "--dataloader-workers",
@@ -637,6 +652,7 @@ def learn_model(
     adaptive_batch_max_steps: int,
     adaptive_batch_interval: int,
     adaptive_batch_smoothing: float,
+    adaptive_batch_measurement_interval: int,
     dataloader_workers: int | None,
     pin_memory: bool | None,
     prefetch_factor: int | None,
@@ -952,6 +968,7 @@ def learn_model(
                 max_steps=adaptive_batch_max_steps,
                 interval=adaptive_batch_interval,
                 smoothing=adaptive_batch_smoothing,
+                measurement_interval=adaptive_batch_measurement_interval,
             ),
         )
     )

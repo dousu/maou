@@ -25,6 +25,7 @@ B_noise は Critical Batch Size (CBS) の近似であり，
 """
 
 import logging
+import math
 from dataclasses import dataclass
 
 import torch
@@ -232,7 +233,7 @@ class GradientNoiseScaleEstimator:
 
         # B_noise = b * K/(K-1) * (K * S / G - 1)
         # オーバーフロー防止: S が極大の場合は計算をスキップ
-        if s > 1e30 or s != s:  # NaN check
+        if s > 1e30 or math.isnan(s):
             logger.debug(
                 "sum_micro_norm_sq overflow or NaN (%.2e), "
                 "skipping GNS estimation",

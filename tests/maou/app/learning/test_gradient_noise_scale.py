@@ -81,8 +81,12 @@ class TestGradientNoiseScaleEstimator:
                 y = model(x)
                 loss = y.sum() / 2
                 loss.backward()
-                estimator.on_backward_end(model, accumulation_step=step)
-            return estimator.compute(model, accumulation_steps=2)
+                estimator.on_backward_end(
+                    model, accumulation_step=step
+                )
+            return estimator.compute(
+                model, accumulation_steps=2
+            )
 
         # Cycle 1: step_count=0, 0%2==0 → measured
         result1 = _run_cycle()
@@ -110,7 +114,9 @@ class TestGradientNoiseScaleEstimator:
             y = model(x)
             loss = y.sum() / 3
             loss.backward()
-            estimator.on_backward_end(model, accumulation_step=step)
+            estimator.on_backward_end(
+                model, accumulation_step=step
+            )
         result1 = estimator.compute(model, accumulation_steps=3)
         assert result1 is not None
 
@@ -121,7 +127,9 @@ class TestGradientNoiseScaleEstimator:
             y = model(x)
             loss = y.sum() / 3
             loss.backward()
-            estimator.on_backward_end(model, accumulation_step=step)
+            estimator.on_backward_end(
+                model, accumulation_step=step
+            )
         result2 = estimator.compute(model, accumulation_steps=3)
         assert result2 is not None
 
@@ -134,4 +142,30 @@ class TestGradientNoiseScaleEstimator:
 
         # No backward call - no gradients
         result = estimator.compute(model, accumulation_steps=2)
+        assert result is None
+
+    def test_identical_gradients_returns_none(self) -> None:
+        """全 micro-batch の勾配が同一(ratio <= 1.0)のとき None が返ることを確認する．"""
+        model = _make_simple_model()
+        estimator = GradientNoiseScaleEstimator(
+            physical_batch_size=32,
+        )
+
+        # 同一入力で同一勾配を生成
+        x = torch.randn(32, 10)
+
+        model.zero_grad()
+        y0 = model(x)
+        loss0 = y0.sum() / 2
+        loss0.backward()
+        estimator.on_backward_end(model, accumulation_step=0)
+
+        y1 = model(x)
+        loss1 = y1.sum() / 2
+        loss1.backward()
+        estimator.on_backward_end(model, accumulation_step=1)
+
+        result = estimator.compute(model, accumulation_steps=2)
+        # ratio = K * S / G ≈ 1.0 (同一勾配 → ノイズなし)
+        # ratio <= 1.0 のため None が返る
         assert result is None

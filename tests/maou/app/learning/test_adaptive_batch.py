@@ -1,10 +1,11 @@
-"""AdaptiveBatchConfig / AdaptiveBatchController のテスト．"""
+"""AdaptiveBatchConfig / AdaptiveBatchController / round_to_power_of_two のテスト．"""
 
 import pytest
 
 from maou.app.learning.adaptive_batch import (
     AdaptiveBatchConfig,
     AdaptiveBatchController,
+    round_to_power_of_two,
 )
 
 
@@ -21,12 +22,16 @@ class TestAdaptiveBatchConfig:
 
     def test_min_steps_validation(self) -> None:
         """min_accumulation_steps < 2 でエラーになることを確認する．"""
-        with pytest.raises(ValueError, match="min_accumulation_steps"):
+        with pytest.raises(
+            ValueError, match="min_accumulation_steps"
+        ):
             AdaptiveBatchConfig(min_accumulation_steps=1)
 
     def test_max_less_than_min_validation(self) -> None:
         """max < min でエラーになることを確認する．"""
-        with pytest.raises(ValueError, match="max_accumulation_steps"):
+        with pytest.raises(
+            ValueError, match="max_accumulation_steps"
+        ):
             AdaptiveBatchConfig(
                 min_accumulation_steps=4,
                 max_accumulation_steps=2,
@@ -34,9 +39,13 @@ class TestAdaptiveBatchConfig:
 
     def test_smoothing_factor_validation(self) -> None:
         """smoothing_factor が (0, 1] 外でエラーになることを確認する．"""
-        with pytest.raises(ValueError, match="smoothing_factor"):
+        with pytest.raises(
+            ValueError, match="smoothing_factor"
+        ):
             AdaptiveBatchConfig(smoothing_factor=0.0)
-        with pytest.raises(ValueError, match="smoothing_factor"):
+        with pytest.raises(
+            ValueError, match="smoothing_factor"
+        ):
             AdaptiveBatchConfig(smoothing_factor=1.5)
 
 
@@ -179,4 +188,89 @@ class TestAdaptiveBatchController:
 
         # GNS = 768 → 768/256 = 3 → rounded to 4 (nearest power of 2)
         new_steps = ctrl.update(768.0)
-        assert new_steps == 4  # 2^round(log2(3)) = 2^1.58 ≈ 2^2 = 4
+        assert (
+            new_steps == 4
+        )  # 2^round(log2(3)) = 2^1.58 ≈ 2^2 = 4
+
+    def test_none_gns_skips_ema_update(self) -> None:
+        """gns=None のとき EMA が更新されないことを確認する．"""
+        ctrl = self._make_controller(
+            physical_batch_size=256,
+            min_steps=2,
+            max_steps=8,
+            interval=1,
+            smoothing=1.0,
+        )
+
+        # None → EMA 未初期化のまま
+        result = ctrl.update(None)
+        assert result == 2  # min_steps のまま
+        assert ctrl.smoothed_gns is None
+
+        # 有効な GNS → EMA 初期化
+        ctrl.update(1024.0)
+        assert ctrl.smoothed_gns == 1024.0
+
+        # None → EMA は前の値を維持
+        ctrl.update(None)
+        assert ctrl.smoothed_gns == 1024.0
+
+    def test_adjustment_interval_counts_all_steps(self) -> None:
+        """adjustment_interval が None を含む全 step をカウントすることを確認する．"""
+        ctrl = self._make_controller(
+            physical_batch_size=256,
+            min_steps=2,
+            max_steps=8,
+            interval=3,
+            smoothing=1.0,
+        )
+
+        # Step 1: GNS=2048, not at interval
+        ctrl.update(2048.0)
+        assert ctrl.current_accumulation_steps == 2
+
+        # Step 2: None (measurement skipped), not at interval
+        ctrl.update(None)
+        assert ctrl.current_accumulation_steps == 2
+
+        # Step 3: None, but at interval → adjusts using smoothed_gns=2048
+        ctrl.update(None)
+        assert (
+            ctrl.current_accumulation_steps == 8
+        )  # 2048/256 = 8
+
+
+class TestRoundToPowerOfTwo:
+    """round_to_power_of_two のテスト．"""
+
+    def test_exact_power_of_two(self) -> None:
+        """2の冪乗はそのまま返ることを確認する．"""
+        assert round_to_power_of_two(4.0) == 4
+        assert round_to_power_of_two(8.0) == 8
+
+    def test_rounds_to_nearest(self) -> None:
+        """最も近い2の冪乗に丸められることを確認する．"""
+        assert (
+            round_to_power_of_two(3.0) == 4
+        )  # log2(3) ≈ 1.58 → 2
+        assert (
+            round_to_power_of_two(5.0) == 4
+        )  # log2(5) ≈ 2.32 → 2
+        assert (
+            round_to_power_of_two(6.0) == 8
+        )  # log2(6) ≈ 2.58 → 3
+
+    def test_minimum_clamp(self) -> None:
+        """minimum 以下にならないことを確認する．"""
+        assert round_to_power_of_two(0.5, minimum=2) == 2
+        assert round_to_power_of_two(1.0, minimum=4) == 4
+
+    def test_very_small_value(self) -> None:
+        """非常に小さい値でも minimum が適用されることを確認する．"""
+        assert round_to_power_of_two(0.001) == 1
+        assert round_to_power_of_two(0.001, minimum=2) == 2
+
+    def test_large_value(self) -> None:
+        """大きい値が正しく丸められることを確認する．"""
+        assert round_to_power_of_two(1000.0) == 1024
+        assert round_to_power_of_two(100.0) == 128
