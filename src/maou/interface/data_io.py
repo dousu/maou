@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-# --- rust_io re-exports ---
+# --- rust_io re-exports (lazy: Rust backend may not be built) ---
 
 
 def load_hcpe_df(path: Path) -> "pl.DataFrame":
@@ -71,7 +71,7 @@ def save_preprocessing_df(
     _rust_io.save_preprocessing_df(df, path)
 
 
-# --- dataframe_io re-exports ---
+# --- dataframe_io re-exports (lazy: depends on optional polars) ---
 
 
 def save_hcpe_df_to_bytes(df: "pl.DataFrame") -> bytes:

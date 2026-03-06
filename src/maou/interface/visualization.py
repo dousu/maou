@@ -18,7 +18,7 @@ from maou.app.visualization.search_index_protocol import (
 )
 from maou.domain.visualization.board_renderer import (
     BoardPosition as BoardPosition,  # noqa: F401
-    SVGBoardRenderer,
+    SVGBoardRenderer as SVGBoardRenderer,  # noqa: F401
 )
 from maou.domain.visualization.move_label_converter import (
     MoveLabelConverter,
