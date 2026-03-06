@@ -13,19 +13,19 @@ import numpy as np
 import polars as pl
 import psutil
 
-from maou.domain.data.rust_io import (
+from maou.interface.data_io import (
     load_hcpe_df,
     load_preprocessing_df,
     save_hcpe_df,
     save_preprocessing_df,
 )
-from maou.domain.data.schema import (
+from maou.interface.data_schema import (
+    MOVE_LABELS_NUM,
     get_hcpe_dtype,
     get_hcpe_polars_schema,
     get_preprocessing_dtype,
     get_preprocessing_polars_schema,
 )
-from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.file_system.file_data_source import (
     FileDataSource,
 )

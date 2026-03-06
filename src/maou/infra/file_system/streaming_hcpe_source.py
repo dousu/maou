@@ -15,9 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
+from maou.interface.data_io import load_hcpe_df
+from maou.interface.data_schema import convert_hcpe_df_to_numpy
 from maou.interface.preprocess import DataSource
-from maou.domain.data.rust_io import load_hcpe_df
-from maou.domain.data.schema import convert_hcpe_df_to_numpy
 
 logger = logging.getLogger(__name__)
 

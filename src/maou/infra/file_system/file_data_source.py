@@ -17,13 +17,13 @@ import numpy as np
 
 import maou.interface.learn as learn
 import maou.interface.preprocess as preprocess
-from maou.domain.data.columnar_batch import (
+from maou.interface.data_io import (
     ColumnarBatch,
     convert_preprocessing_df_to_columnar,
     convert_stage1_df_to_columnar,
     convert_stage2_df_to_columnar,
 )
-from maou.domain.data.schema import (
+from maou.interface.data_schema import (
     convert_hcpe_df_to_numpy,
     convert_preprocessing_df_to_numpy,
     convert_stage1_df_to_numpy,
@@ -550,7 +550,7 @@ class FileDataSource(
             Returns:
                 Polars DataFrame
             """
-            from maou.domain.data.rust_io import (
+            from maou.interface.data_io import (
                 load_hcpe_df,
                 load_preprocessing_df,
                 load_stage1_df,
@@ -896,7 +896,7 @@ class FileDataSource(
                 yield entry.name, entry.cached_array
             else:
                 # Load DataFrame if not cached
-                from maou.domain.data.rust_io import (
+                from maou.interface.data_io import (
                     load_hcpe_df,
                     load_preprocessing_df,
                     load_stage1_df,

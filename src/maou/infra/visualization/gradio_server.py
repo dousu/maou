@@ -30,7 +30,7 @@ elif "MPLBACKEND" in os.environ:
 
 import gradio as gr  # noqa: E402
 
-from maou.domain.visualization.board_renderer import (  # noqa: E402
+from maou.interface.visualization import (  # noqa: E402
     BoardPosition,
     SVGBoardRenderer,
 )

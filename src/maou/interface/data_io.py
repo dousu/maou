@@ -8,12 +8,91 @@ Clean Architecture dependency rules.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     import polars as pl
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+# --- rust_io re-exports ---
+
+
+def load_hcpe_df(path: Path) -> "pl.DataFrame":
+    """Load HCPE DataFrame from Arrow IPC file."""
+    from maou.domain.data.rust_io import load_hcpe_df
+
+    return load_hcpe_df(path)
+
+
+def load_preprocessing_df(path: Path) -> "pl.DataFrame":
+    """Load preprocessing DataFrame from Arrow IPC file."""
+    from maou.domain.data.rust_io import load_preprocessing_df
+
+    return load_preprocessing_df(path)
+
+
+def load_stage1_df(path: Path) -> "pl.DataFrame":
+    """Load stage1 DataFrame from Arrow IPC file."""
+    from maou.domain.data.rust_io import load_stage1_df
+
+    return load_stage1_df(path)
+
+
+def load_stage2_df(path: Path) -> "pl.DataFrame":
+    """Load stage2 DataFrame from Arrow IPC file."""
+    from maou.domain.data.rust_io import load_stage2_df
+
+    return load_stage2_df(path)
+
+
+def save_hcpe_df(df: "pl.DataFrame", path: Path) -> None:
+    """Save HCPE DataFrame to Arrow IPC file."""
+    from maou.domain.data.rust_io import save_hcpe_df
+
+    save_hcpe_df(df, path)
+
+
+def save_preprocessing_df(
+    df: "pl.DataFrame", path: Path
+) -> None:
+    """Save preprocessing DataFrame to Arrow IPC file."""
+    from maou.domain.data.rust_io import save_preprocessing_df
+
+    save_preprocessing_df(df, path)
+
+
+# --- dataframe_io re-exports ---
+
+
+def save_hcpe_df_to_bytes(df: "pl.DataFrame") -> bytes:
+    """Save HCPE DataFrame to bytes (Arrow IPC format)."""
+    from maou.domain.data.dataframe_io import (
+        save_hcpe_df_to_bytes,
+    )
+
+    return save_hcpe_df_to_bytes(df)
+
+
+def save_preprocessing_df_to_bytes(df: "pl.DataFrame") -> bytes:
+    """Save preprocessing DataFrame to bytes (Arrow IPC format)."""
+    from maou.domain.data.dataframe_io import (
+        save_preprocessing_df_to_bytes,
+    )
+
+    return save_preprocessing_df_to_bytes(df)
+
+
+# --- columnar_batch re-exports ---
+
+from maou.domain.data.columnar_batch import (  # noqa: E402
+    ColumnarBatch as ColumnarBatch,  # noqa: F401
+    convert_preprocessing_df_to_columnar as convert_preprocessing_df_to_columnar,  # noqa: F401
+    convert_stage1_df_to_columnar as convert_stage1_df_to_columnar,  # noqa: F401
+    convert_stage2_df_to_columnar as convert_stage2_df_to_columnar,  # noqa: F401
+)
 
 
 def load_df_from_bytes(

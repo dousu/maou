@@ -17,13 +17,11 @@ from typing import Literal
 
 import polars as pl
 
-from maou.domain.data.columnar_batch import (
+from maou.interface.data_io import (
     ColumnarBatch,
     convert_preprocessing_df_to_columnar,
     convert_stage1_df_to_columnar,
     convert_stage2_df_to_columnar,
-)
-from maou.domain.data.rust_io import (
     load_hcpe_df,
     load_preprocessing_df,
     load_stage1_df,

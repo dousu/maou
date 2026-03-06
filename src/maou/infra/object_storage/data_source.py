@@ -167,7 +167,7 @@ class ObjectStorageDataSource(
                             f"Only .feather files are supported. Got: {file_path.suffix}"
                         )
 
-                    from maou.domain.data.rust_io import (
+                    from maou.interface.data_io import (
                         load_hcpe_df,
                         load_preprocessing_df,
                     )
@@ -511,7 +511,7 @@ class ObjectStorageDataSource(
                 "Install with: uv add polars"
             )
 
-        from maou.domain.data.schema import (
+        from maou.interface.data_schema import (
             get_hcpe_polars_schema,
             get_preprocessing_polars_schema,
         )

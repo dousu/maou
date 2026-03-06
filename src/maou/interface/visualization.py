@@ -12,6 +12,7 @@ from maou.app.visualization.record_renderer import (
     RecordRendererFactory,
 )
 from maou.domain.visualization.board_renderer import (
+    BoardPosition as BoardPosition,  # noqa: F401
     SVGBoardRenderer,
 )
 from maou.domain.visualization.move_label_converter import (
