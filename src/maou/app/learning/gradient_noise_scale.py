@@ -21,11 +21,11 @@ B_noise は Critical Batch Size (CBS) の近似であり，
         G = |mean_grad|² (蓄積済み勾配の二乗ノルム)
 
 メモリオーバーヘッド:
-    モデルパラメータ1コピー分(prev_grad snapshot) + スカラー数個
+    モデルパラメータ1コピー分(prev_grads snapshot) + スカラー数個
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
@@ -57,11 +57,13 @@ class GradientNoiseScaleEstimator:
     gradient accumulation の各 micro-batch から勾配統計を収集し，
     accumulation cycle 完了時に B_noise を算出する．
 
+    勾配ノルムはパラメータごとに計算し，torch.cat による
+    全パラメータ結合を避けることでメモリ割り当てを最小化する．
+
     Args:
         physical_batch_size: DataLoader の物理バッチサイズ．
         measurement_interval: GNS を計測する optimizer step 間隔．
             1 なら毎ステップ計測する．
-        device: 計算デバイス．
     """
 
     def __init__(
@@ -69,15 +71,13 @@ class GradientNoiseScaleEstimator:
         *,
         physical_batch_size: int,
         measurement_interval: int = 1,
-        device: torch.device | None = None,
     ) -> None:
         self._physical_batch_size = physical_batch_size
         self._measurement_interval = max(1, measurement_interval)
-        self._device = device
 
         # accumulation cycle 内の状態
         self._sum_micro_norm_sq: float = 0.0
-        self._prev_grad: torch.Tensor | None = None
+        self._prev_grads: list[torch.Tensor | None] | None = None
         self._micro_batch_count: int = 0
 
         # optimizer step カウンタ
@@ -108,28 +108,51 @@ class GradientNoiseScaleEstimator:
         if not self.should_measure:
             return
 
-        curr_grad = self._flatten_grads(model)
-        if curr_grad is None:
-            return
-
         if accumulation_step == 0:
             # cycle の最初: param.grad がこの micro-batch の勾配そのもの
-            micro_grad = curr_grad
+            micro_norm_sq = 0.0
+            prev_grads: list[torch.Tensor | None] = []
+            has_grad = False
+            for param in model.parameters():
+                if param.grad is not None:
+                    has_grad = True
+                    g = param.grad.detach()
+                    micro_norm_sq += g.pow(2).sum().item()
+                    prev_grads.append(g.clone())
+                else:
+                    prev_grads.append(None)
+            if not has_grad:
+                return
+            self._sum_micro_norm_sq += micro_norm_sq
+            self._prev_grads = prev_grads
         else:
-            if self._prev_grad is None:
+            if self._prev_grads is None:
                 logger.warning(
-                    "prev_grad is None at accumulation_step=%d, "
+                    "prev_grads is None at accumulation_step=%d, "
                     "skipping GNS measurement for this cycle",
                     accumulation_step,
                 )
                 return
-            # 差分で micro-batch 勾配を抽出
-            micro_grad = curr_grad - self._prev_grad
+            # 差分で micro-batch 勾配のノルムを計算
+            micro_norm_sq = 0.0
+            new_prev: list[torch.Tensor | None] = []
+            idx = 0
+            for param in model.parameters():
+                if param.grad is not None:
+                    g = param.grad.detach()
+                    prev = self._prev_grads[idx]
+                    if prev is not None:
+                        diff = g - prev
+                        micro_norm_sq += diff.pow(2).sum().item()
+                    else:
+                        micro_norm_sq += g.pow(2).sum().item()
+                    new_prev.append(g.clone())
+                else:
+                    new_prev.append(None)
+                idx += 1
+            self._sum_micro_norm_sq += micro_norm_sq
+            self._prev_grads = new_prev
 
-        self._sum_micro_norm_sq += (
-            micro_grad.dot(micro_grad).item()
-        )
-        self._prev_grad = curr_grad.clone()
         self._micro_batch_count = accumulation_step + 1
 
     def compute(
@@ -139,7 +162,8 @@ class GradientNoiseScaleEstimator:
     ) -> GNSEstimate | None:
         """accumulation cycle 完了時に GNS を算出する．
 
-        optimizer step の直前(勾配クリッピング後，step() 前)に呼び出す．
+        勾配クリッピング前に呼び出すこと．S と G を同じ基準で
+        計測するため，クリッピング後では G が変化してしまう．
 
         Args:
             model: 勾配が蓄積されたモデル．
@@ -169,13 +193,19 @@ class GradientNoiseScaleEstimator:
             self._reset()
             return None
 
-        # 蓄積済み勾配の二乗ノルム
-        mean_grad = self._flatten_grads(model)
-        if mean_grad is None:
+        # 蓄積済み勾配の二乗ノルムをパラメータごとに計算
+        mean_grad_norm_sq = 0.0
+        has_grad = False
+        for param in model.parameters():
+            if param.grad is not None:
+                has_grad = True
+                mean_grad_norm_sq += (
+                    param.grad.detach().pow(2).sum().item()
+                )
+
+        if not has_grad:
             self._reset()
             return None
-
-        mean_grad_norm_sq = mean_grad.dot(mean_grad).item()
 
         if mean_grad_norm_sq < 1e-30:
             logger.debug(
@@ -218,18 +248,5 @@ class GradientNoiseScaleEstimator:
     def _reset(self) -> None:
         """accumulation cycle の状態をリセットする．"""
         self._sum_micro_norm_sq = 0.0
-        self._prev_grad = None
+        self._prev_grads = None
         self._micro_batch_count = 0
-
-    @staticmethod
-    def _flatten_grads(
-        model: torch.nn.Module,
-    ) -> torch.Tensor | None:
-        """モデルの全パラメータの勾配を1次元テンソルに結合する．"""
-        grads: list[torch.Tensor] = []
-        for param in model.parameters():
-            if param.grad is not None:
-                grads.append(param.grad.reshape(-1))
-        if not grads:
-            return None
-        return torch.cat(grads)

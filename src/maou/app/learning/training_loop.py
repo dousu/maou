@@ -68,13 +68,13 @@ class TrainingLoop:
         self._accumulation_counter: int = 0
 
         # Adaptive batch size 設定
-        self._adaptive_batch_config = adaptive_batch_config
         self._gns_estimator: GradientNoiseScaleEstimator | None = (
             None
         )
         self._adaptive_controller: AdaptiveBatchController | None = (
             None
         )
+        self._adaptive_callback: AdaptiveBatchCallback | None = None
 
         if adaptive_batch_config is not None:
             if physical_batch_size is None:
@@ -90,12 +90,17 @@ class TrainingLoop:
             self._gns_estimator = GradientNoiseScaleEstimator(
                 physical_batch_size=physical_batch_size,
                 measurement_interval=adaptive_batch_config.measurement_interval,
-                device=device,
             )
             self._adaptive_controller = AdaptiveBatchController(
                 config=adaptive_batch_config,
                 physical_batch_size=physical_batch_size,
             )
+            # コールバックリストから AdaptiveBatchCallback への参照を取得
+            for cb in self.callbacks:
+                if isinstance(cb, AdaptiveBatchCallback):
+                    self._adaptive_callback = cb
+                    break
+
             self.logger.info(
                 "Adaptive batch enabled: accum_steps %d-%d, "
                 "adjustment_interval=%d, physical_bs=%d",
@@ -539,14 +544,16 @@ class TrainingLoop:
 
         # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
         if not is_accumulation_step:
-            # 勾配クリッピング (scaled gradients)
+            # unscale → GNS推定(クリッピング前) → クリッピング → step
             self.scaler.unscale_(self.optimizer)
+
+            # GNS 推定と adaptive batch 調整(クリッピング前に計算し S と G を同じ基準で比較)
+            self._maybe_update_adaptive_batch()
+
+            # 勾配クリッピング
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
             )
-
-            # GNS 推定と adaptive batch 調整
-            self._maybe_update_adaptive_batch()
 
             # オプティマイザステップ
             for callback in self.callbacks:
@@ -731,13 +738,13 @@ class TrainingLoop:
 
         # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
         if not is_accumulation_step:
+            # GNS 推定と adaptive batch 調整(クリッピング前に計算し S と G を同じ基準で比較)
+            self._maybe_update_adaptive_batch()
+
             # 勾配クリッピング
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
             )
-
-            # GNS 推定と adaptive batch 調整
-            self._maybe_update_adaptive_batch()
 
             # オプティマイザステップ
             for callback in self.callbacks:
@@ -825,13 +832,11 @@ class TrainingLoop:
             self.gradient_accumulation_steps = new_steps
 
         # AdaptiveBatchCallback の表示を更新
-        for callback in self.callbacks:
-            if isinstance(callback, AdaptiveBatchCallback):
-                callback.update_display(
-                    self._adaptive_controller.smoothed_gns,
-                    self.gradient_accumulation_steps,
-                )
-                break
+        if self._adaptive_callback is not None:
+            self._adaptive_callback.update_display(
+                self._adaptive_controller.smoothed_gns,
+                self.gradient_accumulation_steps,
+            )
 
     def _maybe_synchronize(self, reason: str) -> None:
         if self.device.type != "cuda":

@@ -1570,11 +1570,6 @@ class AdaptiveBatchCallback(BaseCallback):
     def __init__(self) -> None:
         self._gns_display: str = "---"
         self._accum_display: str = "---"
-        self._batch_count: int = 0
-
-    def on_batch_end(self, context: TrainingContext) -> None:
-        """バッチカウントを更新する．"""
-        self._batch_count += 1
 
     def update_display(
         self,

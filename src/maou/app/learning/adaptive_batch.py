@@ -99,9 +99,6 @@ class AdaptiveBatchController:
         # optimizer step カウンタ
         self._step_count: int = 0
 
-        # 最後の調整結果ログ用
-        self._last_raw_gns: float | None = None
-
     @property
     def current_accumulation_steps(self) -> int:
         """現在の gradient accumulation steps．"""
@@ -127,7 +124,6 @@ class AdaptiveBatchController:
             更新後の gradient_accumulation_steps．
         """
         self._step_count += 1
-        self._last_raw_gns = gns
 
         # EMA 更新
         alpha = self._config.smoothing_factor
