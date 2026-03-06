@@ -268,6 +268,48 @@ uv run maou utility benchmark-training \
 - 推定されたCBS付近のバッチサイズが最も効率的な学習設定となる
 - CBSを大幅に超えるバッチサイズは計算効率が低下し，学習率の調整も必要になる
 
+### Adaptive Batch 推奨設定
+
+`--estimate-cbs` を指定すると，CBS推定結果に基づいて `learn-model` の
+adaptive batch オプション推奨値が出力される:
+
+```json
+{
+  "adaptive_batch_recommendation": {
+    "physical_batch_size": 2048,
+    "min_accumulation_steps": 2,
+    "max_accumulation_steps": 4,
+    "target_effective_batch_size": 4096,
+    "measurement_interval": 5,
+    "rationale": "CBS=4096, physical BS=2048 → accum 2-4 で CBS 到達",
+    "cli_example": "--batch-size 2048 --adaptive-batch --adaptive-batch-min-steps 2 --adaptive-batch-max-steps 4 --adaptive-batch-measurement-interval 5"
+  }
+}
+```
+
+この推奨設定をそのまま `learn-model` に渡すことで，GNS-Based adaptive
+batch size を利用できる．
+
+### Strategy Guide: Adaptive Batch vs LR Scheduler
+
+`--estimate-cbs` 実行時，CBS と physical batch size の比率に基づいて
+以下の戦略ガイドが出力される:
+
+| CBS / physical BS | 推奨戦略 | 理由 |
+|---|---|---|
+| ≥ 4x | Adaptive batch (scheduler なし) | ノイズが大きく動的 BS 調整の効果が高い |
+| 2x–4x | どちらも有効 | 両方の CLI 例を併記 |
+| < 2x | LR scheduler (固定 BS) | accumulation の効果が限定的 |
+
+**⚠ 制約:** 現在 adaptive batch と LR scheduler は併用不可．
+accumulation_steps の動的変更により scheduler の step 進行速度が変化し，
+warmup/decay カーブとの不整合が発生するため．
+
+`measurement_interval` は benchmark 実行時の GPU メモリ使用量と
+モデルパラメータ数から自動推奨される．GNS 計測中は勾配スナップショット
+(trainable params × 4 bytes) の追加メモリが必要なため，大規模モデルでは
+間隔を広げることでメモリ圧迫を回避する．
+
 ## Implementation references
 
 - CLI definition, datasource wiring, and console rendering –

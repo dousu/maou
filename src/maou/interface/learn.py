@@ -10,6 +10,9 @@ from typing import Any, Literal
 
 import torch
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+)
 from maou.app.learning.dl import (
     CloudStorage,
     Learning,
@@ -233,6 +236,7 @@ def learn(
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     gradient_accumulation_steps: int = 1,
+    adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -280,6 +284,8 @@ def learn(
         streaming_val_source: StreamingDataSource for validation data
         gradient_accumulation_steps: Number of gradient accumulation steps.
             Effective batch size = batch_size × gradient_accumulation_steps.
+        adaptive_batch_config: Adaptive batch size の設定．
+            GNS に基づいて gradient_accumulation_steps を動的に調整する．
 
     Returns:
         JSON string with training results
@@ -509,6 +515,7 @@ def learn(
         save_split_params=save_split_params,
         policy_target_mode=policy_target_mode,
         gradient_accumulation_steps=gradient_accumulation_steps,
+        adaptive_batch_config=adaptive_batch_config,
     )
 
     learning_result = Learning(
@@ -980,6 +987,7 @@ def learn_multi_stage(
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
     gradient_accumulation_steps: int = 1,
+    adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -1046,6 +1054,8 @@ def learn_multi_stage(
         stage3_streaming_val_source: StreamingDataSource for Stage 3 validation
         gradient_accumulation_steps: Number of gradient accumulation steps.
             Effective batch size = batch_size × gradient_accumulation_steps.
+        adaptive_batch_config: Adaptive batch size の設定(Stage 3のみ)．
+            GNS に基づいて gradient_accumulation_steps を動的に調整する．
 
     Returns:
         JSON string with training results
@@ -1347,6 +1357,7 @@ def learn_multi_stage(
             save_split_params=save_split_params,
             policy_target_mode=policy_target_mode,
             gradient_accumulation_steps=gradient_accumulation_steps,
+            adaptive_batch_config=adaptive_batch_config,
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result

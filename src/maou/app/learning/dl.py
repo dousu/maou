@@ -15,7 +15,15 @@ from torch.utils.tensorboard import (
 )
 from torchinfo import summary
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+    AdaptiveBatchController,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
+)
 from maou.app.learning.callbacks import (
+    AdaptiveBatchCallback,
     LoggingCallback,
     LRSchedulerStepCallback,
     Stage3LossCallback,
@@ -131,6 +139,7 @@ class Learning:
             PolicyTargetMode.WIN_RATE
         )
         gradient_accumulation_steps: int = 1
+        adaptive_batch_config: AdaptiveBatchConfig | None = None
 
     def __init__(
         self,
@@ -453,7 +462,14 @@ class Learning:
         )
 
     def __train_one_epoch(
-        self, epoch_index: int, tb_writer: SummaryWriter
+        self,
+        epoch_index: int,
+        tb_writer: SummaryWriter,
+        *,
+        adaptive_controller: AdaptiveBatchController
+        | None = None,
+        gns_estimator: GradientNoiseScaleEstimator
+        | None = None,
     ) -> float:
         # Create logging callback
         logging_callback = LoggingCallback(
@@ -468,13 +484,27 @@ class Learning:
             LoggingCallback
             | LRSchedulerStepCallback
             | Stage3LossCallback
+            | AdaptiveBatchCallback
         ] = [logging_callback, loss_callback]
         if self.lr_scheduler is not None:
             callbacks.append(
                 LRSchedulerStepCallback(self.lr_scheduler)
             )
 
+        # Adaptive batch config
+        adaptive_batch_config = (
+            self.config.adaptive_batch_config
+        )
+        physical_batch_size: int | None = None
+        adaptive_cb: AdaptiveBatchCallback | None = None
+        if adaptive_batch_config is not None:
+            physical_batch_size = self.config.batch_size
+            adaptive_cb = AdaptiveBatchCallback()
+            # callbacks への追加は TrainingLoop が自動で行う
+
         # Create training loop
+        # adaptive_controller/gns_estimator が渡された場合は
+        # エポック間の EMA 状態と accumulation_steps を引き継ぐ
         training_loop = TrainingLoop(
             model=self._train_model,
             device=self.device,
@@ -487,6 +517,11 @@ class Learning:
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            adaptive_batch_config=adaptive_batch_config,
+            physical_batch_size=physical_batch_size,
+            adaptive_batch_callback=adaptive_cb,
+            adaptive_controller=adaptive_controller,
+            gns_estimator=gns_estimator,
         )
 
         # Run training epoch
@@ -525,6 +560,34 @@ class Learning:
         # start epoch設定
         epoch_number = self.start_epoch
 
+        # Adaptive batch: controller/estimator はエポック間で
+        # EMA 状態と current_steps を維持するためここで生成する
+        adaptive_batch_config = (
+            self.config.adaptive_batch_config
+        )
+        adaptive_controller: AdaptiveBatchController | None = (
+            None
+        )
+        gns_estimator: GradientNoiseScaleEstimator | None = None
+        if adaptive_batch_config is not None:
+            adaptive_controller = AdaptiveBatchController(
+                config=adaptive_batch_config,
+                physical_batch_size=self.config.batch_size,
+            )
+            gns_estimator = GradientNoiseScaleEstimator(
+                physical_batch_size=self.config.batch_size,
+                measurement_interval=adaptive_batch_config.measurement_interval,
+            )
+            if self.start_epoch > 0:
+                self.logger.warning(
+                    "Adaptive batch state (EMA, accumulation_steps) は "
+                    "チェックポイント再開時にリセットされます "
+                    "(start_epoch=%d)．min_accumulation_steps=%d "
+                    "から再開します",
+                    self.start_epoch,
+                    adaptive_batch_config.min_accumulation_steps,
+                )
+
         # 学習率スケジューラをstart_epochのステップ分だけ進める
         if (
             self.lr_scheduler is not None
@@ -560,7 +623,10 @@ class Learning:
                     ds.set_epoch(epoch_number)
 
             avg_loss = self.__train_one_epoch(
-                epoch_number, writer
+                epoch_number,
+                writer,
+                adaptive_controller=adaptive_controller,
+                gns_estimator=gns_estimator,
             )
 
             self._log_parameter_histograms(
@@ -816,6 +882,16 @@ class Learning:
             "policy_target_mode": config.policy_target_mode.value,
         }
 
+        # Adaptive batch パラメータ
+        if config.adaptive_batch_config is not None:
+            abc = config.adaptive_batch_config
+            hparam_dict["adaptive_batch_min_steps"] = (
+                abc.min_accumulation_steps
+            )
+            hparam_dict["adaptive_batch_max_steps"] = (
+                abc.max_accumulation_steps
+            )
+
         # ViT固有パラメータ
         if (
             self.architecture_config
@@ -872,6 +948,24 @@ class Learning:
         # Scheduler description
         scheduler_desc = config.lr_scheduler_name or "none"
 
+        # Batch description
+        if config.adaptive_batch_config is not None:
+            abc = config.adaptive_batch_config
+            batch_desc = (
+                f"Batch: {config.batch_size} × "
+                f"adaptive({abc.min_accumulation_steps}-"
+                f"{abc.max_accumulation_steps}) "
+                f"(effective: {config.batch_size * abc.min_accumulation_steps}"
+                f"-{config.batch_size * abc.max_accumulation_steps})"
+            )
+        else:
+            batch_desc = (
+                f"Batch: {config.batch_size} × "
+                f"{config.gradient_accumulation_steps} "
+                f"= {config.batch_size * config.gradient_accumulation_steps} "
+                f"(effective)"
+            )
+
         lines = [
             "=== Training Configuration ===",
             f"Model: {model_desc}",
@@ -881,8 +975,7 @@ class Learning:
             f"beta1={config.optimizer_beta1}, "
             f"beta2={config.optimizer_beta2})",
             f"Scheduler: {scheduler_desc}",
-            f"Batch: {config.batch_size} × {config.gradient_accumulation_steps} "
-            f"= {config.batch_size * config.gradient_accumulation_steps} (effective), "
+            f"{batch_desc}, "
             f"Epoch: {config.epoch}, "
             f"Workers: {config.dataloader_workers}",
             f"Loss: GCE(q={config.gce_parameter}), "

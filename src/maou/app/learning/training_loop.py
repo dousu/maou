@@ -8,10 +8,18 @@ from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+    AdaptiveBatchController,
+)
 from maou.app.learning.callbacks import (
+    AdaptiveBatchCallback,
     ModelInputs,
     TrainingCallback,
     TrainingContext,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
 )
 from maou.app.learning.policy_targets import (
     PolicyTargetMode,
@@ -20,7 +28,34 @@ from maou.app.learning.policy_targets import (
 
 
 class TrainingLoop:
-    """Generic training loop with callback support."""
+    """Generic training loop with callback support.
+
+    Args:
+        model: 学習対象のモデル．
+        device: 計算デバイス(cpu / cuda)．
+        optimizer: オプティマイザ．
+        loss_fn_policy: 方策損失関数．
+        loss_fn_value: 価値損失関数．
+        policy_loss_ratio: 方策損失の重み係数．
+        value_loss_ratio: 価値損失の重み係数．
+        callbacks: 学習コールバックのリスト．
+        logger: ロガー．None の場合はモジュールデフォルトを使用．
+        gradient_accumulation_steps: 勾配蓄積ステップ数．
+            adaptive_batch_config が設定されている場合は無視される．
+        policy_target_mode: 方策ターゲットの計算方式．
+        adaptive_batch_config: GNS ベース adaptive batch の設定．
+            指定時は physical_batch_size も必須．
+        physical_batch_size: DataLoader の物理バッチサイズ．
+            adaptive_batch_config と合わせて使用する．
+        adaptive_batch_callback: Adaptive batch 表示用コールバック．
+            callbacks に含まれていなければ自動追加される．
+        gns_estimator: 外部で生成済みの GNS 推定器．
+            adaptive_controller と共に渡すとエポック間で
+            EMA 状態と accumulation_steps を引き継ぐ．
+            片方だけ渡した場合は警告付きで両方新規作成される．
+        adaptive_controller: 外部で生成済みの adaptive batch コントローラ．
+            gns_estimator と共に渡す必要がある．
+    """
 
     def __init__(
         self,
@@ -36,6 +71,15 @@ class TrainingLoop:
         logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+        adaptive_batch_config: AdaptiveBatchConfig
+        | None = None,
+        physical_batch_size: int | None = None,
+        adaptive_batch_callback: AdaptiveBatchCallback
+        | None = None,
+        gns_estimator: GradientNoiseScaleEstimator
+        | None = None,
+        adaptive_controller: AdaptiveBatchController
+        | None = None,
     ):
         self.model = model
         self.device = device
@@ -53,10 +97,97 @@ class TrainingLoop:
         self.gradient_accumulation_steps = max(
             1, gradient_accumulation_steps
         )
-        if self.gradient_accumulation_steps > 1:
+
+        # Accumulation cycle カウンタ (動的 steps 変更に対応)
+        self._accumulation_counter: int = 0
+
+        # Adaptive batch size 設定
+        self._gns_estimator: (
+            GradientNoiseScaleEstimator | None
+        ) = None
+        self._adaptive_controller: (
+            AdaptiveBatchController | None
+        ) = None
+        self._adaptive_callback: (
+            AdaptiveBatchCallback | None
+        ) = None
+
+        if adaptive_batch_config is not None:
+            if physical_batch_size is None:
+                msg = (
+                    "physical_batch_size is required "
+                    "when adaptive_batch_config is set"
+                )
+                raise ValueError(msg)
+
+            if gradient_accumulation_steps > 1:
+                self.logger.warning(
+                    "gradient_accumulation_steps=%d は "
+                    "adaptive batch 有効時は無視されます "
+                    "(min_accumulation_steps=%d を使用)",
+                    gradient_accumulation_steps,
+                    adaptive_batch_config.min_accumulation_steps,
+                )
+
+            # 外部から渡された controller/estimator を使う場合は
+            # EMA 状態と current_steps を引き継ぐ(エポック間の継続)
+            _has_controller = adaptive_controller is not None
+            _has_estimator = gns_estimator is not None
+            if _has_controller != _has_estimator:
+                self.logger.warning(
+                    "gns_estimator と adaptive_controller は"
+                    "両方同時に渡す必要があります．"
+                    "片方のみ渡された場合は両方とも新規作成します"
+                )
+            if _has_controller and _has_estimator:
+                self._adaptive_controller = adaptive_controller
+                self._gns_estimator = gns_estimator
+                self.gradient_accumulation_steps = adaptive_controller.current_accumulation_steps
+            else:
+                self.gradient_accumulation_steps = (
+                    adaptive_batch_config.min_accumulation_steps
+                )
+                self._gns_estimator = GradientNoiseScaleEstimator(
+                    physical_batch_size=physical_batch_size,
+                    measurement_interval=adaptive_batch_config.measurement_interval,
+                )
+                self._adaptive_controller = (
+                    AdaptiveBatchController(
+                        config=adaptive_batch_config,
+                        physical_batch_size=physical_batch_size,
+                    )
+                )
+
+            self._adaptive_callback = adaptive_batch_callback
+            if self._adaptive_callback is not None:
+                # callbacks に含まれていなければ自動追加
+                # (get_postfix() による tqdm 表示のため callbacks にも必要)
+                if (
+                    self._adaptive_callback
+                    not in self.callbacks
+                ):
+                    self.callbacks.append(
+                        self._adaptive_callback
+                    )
+                self._adaptive_callback.update_display(
+                    self._adaptive_controller.smoothed_gns,
+                    self.gradient_accumulation_steps,
+                )
+
             self.logger.info(
-                f"Gradient accumulation enabled: {gradient_accumulation_steps} steps "
-                f"(effective batch size multiplied by {gradient_accumulation_steps})"
+                "Adaptive batch enabled: accum_steps %d-%d, "
+                "adjustment_interval=%d, physical_bs=%d",
+                adaptive_batch_config.min_accumulation_steps,
+                adaptive_batch_config.max_accumulation_steps,
+                adaptive_batch_config.adjustment_interval,
+                physical_batch_size,
+            )
+        elif self.gradient_accumulation_steps > 1:
+            self.logger.info(
+                "Gradient accumulation enabled: %d steps "
+                "(effective batch size multiplied by %d)",
+                gradient_accumulation_steps,
+                gradient_accumulation_steps,
             )
 
         # Loss finitude check interval (reduces GPU sync points)
@@ -104,6 +235,12 @@ class TrainingLoop:
 
         # モデルのモード設定
         self.model.train(train_mode)
+
+        # エポック境界で accumulation カウンタをリセット
+        # バッチ数が gradient_accumulation_steps の倍数でない場合，
+        # 前エポック末尾の不完全な cycle の stale 勾配が混入するのを防ぐ
+        if train_mode:
+            self._accumulation_counter = 0
 
         # エポック開始のコールバック
         for callback in self.callbacks:
@@ -363,11 +500,21 @@ class TrainingLoop:
         )
 
     def _train_batch(self, context: TrainingContext) -> None:
-        """Train a single batch with gradient computation."""
-        # Gradient accumulationのステップを計算
-        accumulation_step = (
-            context.batch_idx % self.gradient_accumulation_steps
-        )
+        """Train a single batch with gradient computation.
+
+        Adaptive batch 不変条件:
+            gradient_accumulation_steps の変更は _maybe_update_adaptive_batch
+            (accumulation cycle 完了時のみ呼ばれる)で行われるため，
+            同一 cycle 内で steps が変わることはない．
+            ただし cycle 完了判定は現在の steps に基づくため，
+            steps が前 cycle より減少した場合，カウンタが新しい steps を
+            超えていると即座に cycle が完了する(勾配は正しく蓄積済み)．
+            この遷移 cycle では _micro_batch_count が新しい steps を
+            超えるが，GNS 算出は実際に蓄積された K を使うため
+            推定値に小さな誤差が生じる．次 cycle からは正しい K で計測される．
+        """
+        # カウンタベースの accumulation step 管理
+        accumulation_step = self._accumulation_counter
         is_accumulation_step = accumulation_step < (
             self.gradient_accumulation_steps - 1
         )
@@ -378,20 +525,35 @@ class TrainingLoop:
 
         # Mixed precision training with autocast
         if self.scaler is not None:
-            self._train_batch_mixed_precision(
-                context, is_accumulation_step
+            skipped = self._train_batch_mixed_precision(
+                context, is_accumulation_step, accumulation_step
             )
         else:
-            self._train_batch_full_precision(
-                context, is_accumulation_step
+            skipped = self._train_batch_full_precision(
+                context, is_accumulation_step, accumulation_step
             )
+
+        # accumulation カウンタ更新
+        # 非有限損失で backward がスキップされた場合は
+        # 勾配がクリアされているためサイクルを最初からやり直す
+        if skipped:
+            self._accumulation_counter = 0
+        elif not is_accumulation_step:
+            self._accumulation_counter = 0
+        else:
+            self._accumulation_counter += 1
 
     def _train_batch_mixed_precision(
         self,
         context: TrainingContext,
         is_accumulation_step: bool,
-    ) -> None:
-        """Train batch with mixed precision."""
+        accumulation_step: int,
+    ) -> bool:
+        """Train batch with mixed precision.
+
+        Returns:
+            True if the batch was skipped (e.g. non-finite loss).
+        """
         if self.scaler is None:
             raise RuntimeError(
                 "GradScaler is None but mixed precision training was requested"
@@ -415,6 +577,9 @@ class TrainingLoop:
                 context.outputs_value, context.labels_value
             )
             # Gradient accumulation: 損失を蓄積ステップ数で正規化
+            # adaptive batch では steps が動的に変わるが，変更は
+            # cycle 完了時のみ行われるため，同一 cycle 内では一貫した
+            # 正規化係数が使用される
             context.loss = (
                 self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio * value_loss
@@ -423,6 +588,9 @@ class TrainingLoop:
                 callback.on_loss_computation_end(context)
 
         self._maybe_synchronize("post_forward_mixed_precision")
+
+        for callback in self.callbacks:
+            callback.on_forward_pass_end(context)
 
         # Check loss finitude periodically to reduce GPU sync points
         if (
@@ -437,9 +605,6 @@ class TrainingLoop:
                 value_loss_is_finite = torch.isfinite(
                     value_loss
                 )
-                for callback in self.callbacks:
-                    callback.on_forward_pass_end(context)
-
                 self.logger.warning(
                     "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
                     "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
@@ -452,10 +617,11 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                return
-
-        for callback in self.callbacks:
-            callback.on_forward_pass_end(context)
+                # GNS estimator をリセット: backward() がスキップされるため
+                # on_backward_end() と compute() が呼ばれず stale データが残る
+                if self._gns_estimator is not None:
+                    self._gns_estimator.reset_cycle()
+                return True
 
         # 逆伝播
         for callback in self.callbacks:
@@ -470,13 +636,33 @@ class TrainingLoop:
 
         self._maybe_synchronize("post_backward_mixed_precision")
 
+        # GNS 計測: backward 後に micro-batch 勾配統計を収集
+        # mixed precision ではスケール済み勾配を使用する．
+        # compute() も unscale_ 前に呼ぶため S と G が同じスケールになり，
+        # 比率計算で scale² が約分される．
+        if self._gns_estimator is not None:
+            self._gns_estimator.on_backward_end(
+                self.model, accumulation_step
+            )
+
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
         # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
         if not is_accumulation_step:
-            # 勾配クリッピング (scaled gradients)
+            # GNS 推定: unscale_ 前に計算する．
+            # on_backward_end で収集した S(micro-batch 勾配ノルム和)と
+            # compute() で計算する G(蓄積済み勾配ノルム)が共にスケール済み
+            # の状態であるため，B_noise = b*K/(K-1)*(K*S/G - 1) の比率計算で
+            # scale² が約分され正しい推定値が得られる．
+            # unscale_ 後に compute すると S(スケール済み) vs G(スケール解除済み)
+            # で scale² の誤差が混入するため不可．
+            self._maybe_update_adaptive_batch()
+
+            # unscale → クリッピング → step
             self.scaler.unscale_(self.optimizer)
+
+            # 勾配クリッピング
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
             )
@@ -494,6 +680,8 @@ class TrainingLoop:
 
             for callback in self.callbacks:
                 callback.on_optimizer_step_end(context)
+
+        return False
 
     def _move_inputs_to_device(
         self,
@@ -581,8 +769,13 @@ class TrainingLoop:
         self,
         context: TrainingContext,
         is_accumulation_step: bool,
-    ) -> None:
-        """Train batch with full precision."""
+        accumulation_step: int,
+    ) -> bool:
+        """Train batch with full precision.
+
+        Returns:
+            True if the batch was skipped (e.g. non-finite loss).
+        """
         # 順伝播
         for callback in self.callbacks:
             callback.on_forward_pass_start(context)
@@ -605,6 +798,9 @@ class TrainingLoop:
             context.outputs_value, context.labels_value
         )
         # Gradient accumulation: 損失を蓄積ステップ数で正規化
+        # adaptive batch では steps が動的に変わるが，変更は
+        # cycle 完了時のみ行われるため，同一 cycle 内では一貫した
+        # 正規化係数が使用される
         context.loss = (
             self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio * value_loss
@@ -637,7 +833,10 @@ class TrainingLoop:
                     bool(value_loss_is_finite.item()),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                return
+                # GNS estimator をリセット(mixed precision パスと同様)
+                if self._gns_estimator is not None:
+                    self._gns_estimator.reset_cycle()
+                return True
 
         # 逆伝播
         for callback in self.callbacks:
@@ -652,11 +851,20 @@ class TrainingLoop:
 
         self._maybe_synchronize("post_backward_full_precision")
 
+        # GNS 計測: backward 後に micro-batch 勾配統計を収集
+        if self._gns_estimator is not None:
+            self._gns_estimator.on_backward_end(
+                self.model, accumulation_step
+            )
+
         for callback in self.callbacks:
             callback.on_backward_pass_end(context)
 
         # Gradient accumulation: 蓄積ステップの最後でのみオプティマイザを実行
         if not is_accumulation_step:
+            # GNS 推定と adaptive batch 調整(クリッピング前に計算し S と G を同じ基準で比較)
+            self._maybe_update_adaptive_batch()
+
             # 勾配クリッピング
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=1.0
@@ -674,6 +882,8 @@ class TrainingLoop:
 
             for callback in self.callbacks:
                 callback.on_optimizer_step_end(context)
+
+        return False
 
     def _eval_batch(self, context: TrainingContext) -> None:
         """Evaluate a single batch without gradient computation."""
@@ -726,6 +936,36 @@ class TrainingLoop:
             callback.on_backward_pass_end(context)
             callback.on_optimizer_step_start(context)
             callback.on_optimizer_step_end(context)
+
+    def _maybe_update_adaptive_batch(self) -> None:
+        """GNS 推定値に基づいて gradient_accumulation_steps を調整する．
+
+        毎 optimizer step で呼ばれる．GNS 推定値が得られなかった場合も
+        controller.update(None) を呼び出し，adjustment_interval が
+        全 optimizer step に対する間隔として正しく機能するようにする．
+        """
+        if (
+            self._gns_estimator is None
+            or self._adaptive_controller is None
+        ):
+            return
+
+        estimate = self._gns_estimator.compute(self.model)
+        b_noise = (
+            estimate.b_noise if estimate is not None else None
+        )
+
+        new_steps = self._adaptive_controller.update(b_noise)
+        if new_steps != self.gradient_accumulation_steps:
+            self.gradient_accumulation_steps = new_steps
+
+        # AdaptiveBatchCallback の表示を更新
+        if self._adaptive_callback is not None:
+            self._adaptive_callback.update_display(
+                self._adaptive_controller.smoothed_gns,
+                self.gradient_accumulation_steps,
+                low_noise=self._gns_estimator.last_compute_was_low_noise,
+            )
 
     def _maybe_synchronize(self, reason: str) -> None:
         if self.device.type != "cuda":

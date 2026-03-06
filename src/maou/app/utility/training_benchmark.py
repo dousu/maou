@@ -1,7 +1,6 @@
 import gc
 import json
 import logging
-import math
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Any, cast
@@ -10,6 +9,9 @@ import torch
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
+from maou.app.learning.adaptive_batch import (
+    round_to_power_of_two,
+)
 from maou.app.learning.callbacks import (
     ResourceMonitoringCallback,
     TimingCallback,
@@ -1788,13 +1790,51 @@ class TrainingBenchmarkUseCase:
                 f"Estimated Critical Batch Size (CBS): "
                 f"{cbs_estimation['estimated_cbs']}"
             )
-            summary_lines.append(
-                f"  Gradient Noise Scale (B_noise): "
-                f"{cbs_estimation['gradient_noise_scale']:.1f}"
-            )
+            gns_val = cbs_estimation.get("gradient_noise_scale")
+            if gns_val is not None:
+                summary_lines.append(
+                    f"  Gradient Noise Scale (B_noise): "
+                    f"{gns_val:.1f}"
+                )
             summary_lines.append(
                 f"  Recommendation: {cbs_estimation['recommendation']}"
             )
+            adaptive_rec = cbs_estimation.get(
+                "adaptive_batch_recommendation"
+            )
+            if adaptive_rec is not None:
+                summary_lines.append("")
+                summary_lines.append(
+                    "Adaptive Batch Recommendation:"
+                )
+                summary_lines.append(
+                    f"  {adaptive_rec['rationale']}"
+                )
+                mi = adaptive_rec.get("measurement_interval", 1)
+                if mi > 1:
+                    summary_lines.append(
+                        f"  measurement_interval={mi}"
+                        f" (GPUメモリ使用量に基づく推奨)"
+                    )
+                summary_lines.append(
+                    f"  CLI: {adaptive_rec['cli_example']}"
+                )
+
+            # 戦略選択ガイド
+            strategy = _build_strategy_recommendation(
+                cbs_estimation, adaptive_rec
+            )
+            if strategy is not None:
+                summary_lines.append("")
+                summary_lines.append(
+                    "=== Strategy Guide: "
+                    "Adaptive Batch vs LR Scheduler ==="
+                )
+                for line in strategy["summary_lines"]:
+                    summary_lines.append(f"  {line}")
+                cbs_estimation["strategy_recommendation"] = (
+                    strategy
+                )
 
         output: dict[str, Any] = {
             "sweep_type": "batch_size",
@@ -2070,11 +2110,39 @@ class TrainingBenchmarkUseCase:
                     if cbs_est > 0:
                         cbs_estimates.append(cbs_est)
 
+        # model_info と gpu_memory_breakdown を結果から抽出
+        # (measurement_interval 推奨に使用)
+        trainable_params: int | None = None
+        gpu_mem_breakdown: dict[str, Any] | None = None
+        for r in results:
+            tm = r.get("training_metrics", {})
+            if isinstance(tm, dict):
+                mi = tm.get("model_info")
+                if (
+                    isinstance(mi, dict)
+                    and "trainable_parameters" in mi
+                ):
+                    trainable_params = int(
+                        mi["trainable_parameters"]
+                    )
+                gm = tm.get("gpu_memory_breakdown")
+                if isinstance(gm, dict):
+                    gpu_mem_breakdown = gm
+                if trainable_params is not None:
+                    break
+
         if not cbs_estimates:
             # All batch sizes show linear scaling - CBS is larger
             # than all tested batch sizes
             max_tested = max(bs for bs, _ in points)
-            return {
+            tested_sizes_sorted = sorted(bs for bs, _ in points)
+            adaptive_rec = _build_adaptive_batch_recommendation(
+                max_tested,
+                tested_sizes_sorted,
+                trainable_parameters=trainable_params,
+                gpu_memory_breakdown=gpu_mem_breakdown,
+            )
+            result_dict: dict[str, Any] = {
                 "estimated_cbs": max_tested,
                 "cbs_exceeds_tested": True,
                 "gradient_noise_scale": None,
@@ -2090,6 +2158,11 @@ class TrainingBenchmarkUseCase:
                     for bs, sps in points
                 },
             }
+            if adaptive_rec is not None:
+                result_dict["adaptive_batch_recommendation"] = (
+                    adaptive_rec
+                )
+            return result_dict
 
         sorted_estimates = sorted(cbs_estimates)
         mid = len(sorted_estimates) // 2
@@ -2100,9 +2173,7 @@ class TrainingBenchmarkUseCase:
             ) / 2
         else:
             median_cbs = sorted_estimates[mid]
-        cbs_rounded = int(
-            2 ** round(math.log2(max(1, median_cbs)))
-        )
+        cbs_rounded = round_to_power_of_two(median_cbs)
 
         # Generate recommendation based on tested range
         tested_sizes = sorted(bs for bs, _ in points)
@@ -2129,7 +2200,15 @@ class TrainingBenchmarkUseCase:
                 f"between speed and efficiency."
             )
 
-        return {
+        # Adaptive batch 推奨設定を生成
+        adaptive_rec = _build_adaptive_batch_recommendation(
+            cbs_rounded,
+            tested_sizes,
+            trainable_parameters=trainable_params,
+            gpu_memory_breakdown=gpu_mem_breakdown,
+        )
+
+        result_dict = {
             "estimated_cbs": cbs_rounded,
             "cbs_exceeds_tested": False,
             "gradient_noise_scale": round(median_cbs, 1),
@@ -2139,6 +2218,251 @@ class TrainingBenchmarkUseCase:
                 for bs, sps in points
             },
         }
+        if adaptive_rec is not None:
+            result_dict["adaptive_batch_recommendation"] = (
+                adaptive_rec
+            )
+        return result_dict
+
+
+def _build_adaptive_batch_recommendation(
+    cbs: int,
+    tested_sizes: list[int],
+    *,
+    trainable_parameters: int | None = None,
+    gpu_memory_breakdown: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """CBS推定結果から adaptive batch の推奨設定を生成する．
+
+    Args:
+        cbs: 推定された Critical Batch Size (2の冪乗)．
+        tested_sizes: テストされたバッチサイズのソート済みリスト．
+        trainable_parameters: 学習可能パラメータ数(measurement_interval 推奨用)．
+        gpu_memory_breakdown: GPUメモリ内訳(measurement_interval 推奨用)．
+
+    Returns:
+        推奨設定の辞書．テスト範囲が不十分な場合は None．
+    """
+    if not tested_sizes or cbs <= 0:
+        return None
+
+    # 最大テスト済みバッチサイズを物理バッチサイズの候補とする
+    max_tested = tested_sizes[-1]
+
+    # 物理バッチサイズ: テスト済みの最大値(GPUに収まることが確認済み)
+    physical_bs = max_tested
+
+    # min/max accumulation steps の推定
+    min_steps = max(2, cbs // physical_bs)
+    max_steps = max(min_steps, (cbs * 2) // physical_bs)
+
+    # 2の冪乗に丸める
+    min_steps = round_to_power_of_two(min_steps, minimum=2)
+    max_steps = round_to_power_of_two(
+        max_steps, minimum=min_steps
+    )
+
+    target_effective_bs = physical_bs * min_steps
+
+    # measurement_interval の推奨値を計算
+    measurement_interval = _recommend_measurement_interval(
+        trainable_parameters=trainable_parameters,
+        gpu_memory_breakdown=gpu_memory_breakdown,
+    )
+
+    cli_parts = [
+        f"--batch-size {physical_bs} --adaptive-batch",
+        f"--adaptive-batch-min-steps {min_steps}",
+        f"--adaptive-batch-max-steps {max_steps}",
+    ]
+    if measurement_interval > 1:
+        cli_parts.append(
+            f"--adaptive-batch-measurement-interval {measurement_interval}"
+        )
+
+    result: dict[str, Any] = {
+        "physical_batch_size": physical_bs,
+        "min_accumulation_steps": min_steps,
+        "max_accumulation_steps": max_steps,
+        "target_effective_batch_size": target_effective_bs,
+        "measurement_interval": measurement_interval,
+        "rationale": (
+            f"CBS={cbs}, physical BS={physical_bs} → "
+            f"accum {min_steps}-{max_steps} で CBS 到達"
+        ),
+        "cli_example": " ".join(cli_parts),
+    }
+    return result
+
+
+def _recommend_measurement_interval(
+    *,
+    trainable_parameters: int | None,
+    gpu_memory_breakdown: dict[str, Any] | None,
+) -> int:
+    """GPUメモリ使用量から measurement_interval の推奨値を計算する．
+
+    GNS 計測中は勾配スナップショット(trainable params × 4 bytes)の
+    追加メモリが必要．GPU の空きメモリとの比率から推奨値を決定する．
+
+    Returns:
+        推奨 measurement_interval (1, 5, or 10)．
+    """
+    if trainable_parameters is None:
+        return 1
+
+    # 勾配スナップショットのメモリサイズ(float32 = 4 bytes)
+    snapshot_bytes = trainable_parameters * 4
+
+    # GPU メモリ情報がある場合はメモリ余裕に基づいて推奨
+    if gpu_memory_breakdown is not None:
+        total = gpu_memory_breakdown.get(
+            "total_gpu_memory_bytes", 0
+        )
+        peak = gpu_memory_breakdown.get(
+            "peak_allocated_bytes", 0
+        )
+        if total > 0 and peak > 0:
+            available = total - peak
+            if available > 0:
+                # スナップショットが空きメモリの 20% 以上を占める場合
+                # → 頻繁な計測を避ける
+                ratio = snapshot_bytes / available
+                if ratio > 0.5:
+                    return 10
+                if ratio > 0.2:
+                    return 5
+
+    # GPU 情報がない場合はパラメータ数で判断
+    if trainable_parameters >= 500_000_000:  # 500M+
+        return 10
+    if trainable_parameters >= 100_000_000:  # 100M+
+        return 5
+
+    return 1
+
+
+def _build_strategy_recommendation(
+    cbs_estimation: dict[str, Any],
+    adaptive_rec: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """CBS 推定結果から adaptive batch vs LR scheduler の戦略ガイドを生成する．
+
+    Args:
+        cbs_estimation: CBS 推定結果の辞書．
+        adaptive_rec: adaptive batch 推奨設定(None の場合はガイド生成をスキップ)．
+
+    Returns:
+        戦略ガイドの辞書．adaptive_rec が None の場合は None．
+    """
+    if adaptive_rec is None:
+        return None
+
+    cbs = cbs_estimation.get("estimated_cbs", 0)
+    cbs_exceeds = cbs_estimation.get(
+        "cbs_exceeds_tested", False
+    )
+    physical_bs = adaptive_rec.get("physical_batch_size", 0)
+
+    lines: list[str] = []
+
+    # CBS と physical batch size の比率で判断
+    if physical_bs > 0:
+        ratio = cbs / physical_bs
+    else:
+        ratio = 1.0
+
+    # 判定ロジック
+    if cbs_exceeds or ratio >= 4:
+        # CBS が大きい: adaptive batch のメリットが大きい
+        recommendation = "adaptive_batch"
+        lines.append(
+            "推奨: --adaptive-batch (LR scheduler なし)"
+        )
+        lines.append("")
+        lines.append(
+            f"理由: CBS ({cbs}) が physical BS ({physical_bs}) "
+            f"の {ratio:.0f} 倍以上あり，"
+        )
+        lines.append(
+            "勾配ノイズが大きい学習初期では小さい effective BS で"
+        )
+        lines.append(
+            "安定化し，ノイズ減少後に自動で BS を増加できます．"
+        )
+        lines.append("")
+        lines.append(
+            "⚠ 現在 adaptive batch と LR scheduler は併用不可:"
+        )
+        lines.append(
+            "  - accumulation_steps 変更時に scheduler の"
+            " step 進行速度が変わる"
+        )
+        lines.append(
+            "  - effective BS 変化に対する LR の自動スケーリングが未実装"
+        )
+        lines.append("")
+        lines.append(
+            "固定 LR での運用を推奨します．warmup が必要な場合は"
+        )
+        lines.append(
+            "手動で数エポック低 LR → 本番 LR に切り替えてください．"
+        )
+    elif ratio >= 2:
+        # CBS が中程度: どちらも有効
+        recommendation = "either"
+        fixed_accum = max(2, cbs // physical_bs)
+        fixed_accum_p2 = 2 ** round(
+            __import__("math").log2(max(2, fixed_accum))
+        )
+        fixed_effective = physical_bs * fixed_accum_p2
+        lines.append("推奨: どちらの戦略も有効")
+        lines.append("")
+        lines.append(
+            "[A] Adaptive batch (動的調整，scheduler なし):"
+        )
+        lines.append(
+            f"    {adaptive_rec.get('cli_example', '')}"
+        )
+        lines.append("    長所: 学習段階に応じて BS を自動調整")
+        lines.append("    短所: LR scheduler と併用不可")
+        lines.append("")
+        lines.append("[B] 固定 accumulation + LR scheduler:")
+        lines.append(
+            f"    --gradient-accumulation-steps"
+            f" {fixed_accum_p2}"
+            f" --lr-scheduler warmup_cosine_decay"
+        )
+        lines.append(f"    effective BS = {fixed_effective}")
+        lines.append(
+            "    長所: warmup + cosine decay で安定した学習"
+        )
+        lines.append("    短所: CBS 変化に追従しない固定 BS")
+    else:
+        # CBS が小さい: scheduler の方が有効
+        recommendation = "lr_scheduler"
+        lines.append(
+            "推奨: --lr-scheduler warmup_cosine_decay"
+            " (固定 batch size)"
+        )
+        lines.append("")
+        lines.append(
+            f"理由: CBS ({cbs}) が physical BS ({physical_bs}) に近く，"
+        )
+        lines.append(
+            "gradient accumulation の効果が限定的です．"
+        )
+        lines.append("現在の batch size で十分効率的なため，")
+        lines.append(
+            "LR scheduler による warmup + decay が"
+            " 学習品質に貢献します．"
+        )
+
+    return {
+        "recommendation": recommendation,
+        "cbs_to_physical_ratio": round(ratio, 1),
+        "summary_lines": lines,
+    }
 
 
 def _format_timing_summary(

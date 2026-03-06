@@ -47,7 +47,9 @@ class TestIntermediateDataStore:
         """Test that initialization creates DuckDB database file."""
         db_path = tmp_path / "test.duckdb"
 
-        store = IntermediateDataStore(db_path=db_path, prior_strength=0.0)
+        store = IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        )
 
         assert db_path.exists()
         assert store.get_total_count() == 0
@@ -57,7 +59,9 @@ class TestIntermediateDataStore:
         """Test adding a single record to the store."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Create test DataFrame
             batch_df = create_test_dataframe([12345])
 
@@ -91,7 +95,9 @@ class TestIntermediateDataStore:
         """Test that duplicate hash_ids are aggregated correctly."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             hash_id = 12345
 
             # First insert
@@ -171,7 +177,9 @@ class TestIntermediateDataStore:
         """Test that sparse arrays are compressed correctly."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Create sparse array (only 3 non-zero out of 1496)
             move_counts = [0] * 1496
             move_counts[10] = 100
@@ -218,7 +226,9 @@ class TestIntermediateDataStore:
         """Test finalizing all data to a Polars DataFrame."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Add 10 records
             for i in range(10):
                 batch_df = create_test_dataframe([i])
@@ -243,7 +253,9 @@ class TestIntermediateDataStore:
         """Test chunked finalization as Polars DataFrames."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Add 25 records
             hash_ids = list(range(25))
             batch_df = create_test_dataframe(hash_ids)
@@ -268,7 +280,9 @@ class TestIntermediateDataStore:
         """Test that delete_after_yield reduces database size."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Add 20 records
             hash_ids = list(range(20))
             batch_df = create_test_dataframe(hash_ids)
@@ -291,7 +305,9 @@ class TestIntermediateDataStore:
         """Test getting database file size."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             initial_size = store.get_database_size()
             assert (
                 initial_size > 0
@@ -311,7 +327,9 @@ class TestIntermediateDataStore:
         """Test disk space checking functionality."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             # Add some data
             hash_ids = list(range(10))
             batch_df = create_test_dataframe(hash_ids)
@@ -331,7 +349,9 @@ class TestIntermediateDataStore:
         """Test context manager properly cleans up."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             batch_df = create_test_dataframe([1])
             store.add_dataframe_batch(batch_df)
 
@@ -705,7 +725,9 @@ class TestSparseBatch:
         """Test adding a single sparse record."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             batch_df = create_sparse_test_dataframe(
                 [12345],
                 indices_per_position=[[100]],
@@ -740,7 +762,9 @@ class TestSparseBatch:
         """Test that duplicate hash_ids are aggregated correctly with sparse batches."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             hash_id = 12345
 
             # First insert: indices [50, 100], values [3, 5]
@@ -879,7 +903,9 @@ class TestSparseBatch:
         """Test finalizing sparse data to a Polars DataFrame."""
         db_path = tmp_path / "test.duckdb"
 
-        with IntermediateDataStore(db_path=db_path, prior_strength=0.0) as store:
+        with IntermediateDataStore(
+            db_path=db_path, prior_strength=0.0
+        ) as store:
             for i in range(10):
                 batch_df = create_sparse_test_dataframe([i])
                 store.add_sparse_batch(batch_df)
@@ -903,7 +929,9 @@ class TestSparseBatch:
         """Test that move win rates are correctly computed from sparse data."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             batch_df = create_sparse_test_dataframe(
@@ -940,7 +968,9 @@ class TestSparseBatch:
         """Test conflicting sparse rows merge correctly."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             # First upsert

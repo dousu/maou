@@ -5,6 +5,7 @@ import click
 
 import maou.infra.console.common as common
 import maou.interface.learn as learn
+from maou.app.learning.adaptive_batch import AdaptiveBatchConfig
 from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.interface.learn import StageDataConfig
 
@@ -30,6 +31,32 @@ HAS_GCS = common.HAS_GCS
 HAS_AWS = common.HAS_AWS
 GCS: GCSType | None = getattr(common, "GCS", None)
 S3: S3Type | None = getattr(common, "S3", None)
+
+
+def _build_adaptive_batch_config(
+    *,
+    adaptive_batch: bool,
+    min_steps: int,
+    max_steps: int,
+    interval: int,
+    smoothing: float,
+    measurement_interval: int,
+) -> AdaptiveBatchConfig | None:
+    """CLI引数から AdaptiveBatchConfig を構築する．"""
+    if not adaptive_batch:
+        return None
+    if min_steps > max_steps:
+        raise click.BadParameter(
+            f"--adaptive-batch-min-steps ({min_steps}) must be "
+            f"<= --adaptive-batch-max-steps ({max_steps})"
+        )
+    return AdaptiveBatchConfig(
+        min_accumulation_steps=min_steps,
+        max_accumulation_steps=max_steps,
+        adjustment_interval=interval,
+        smoothing_factor=smoothing,
+        measurement_interval=measurement_interval,
+    )
 
 
 @click.command("learn-model")
@@ -135,10 +162,62 @@ S3: S3Type | None = getattr(common, "S3", None)
         " Effective batch size = batch_size × gradient_accumulation_steps."
         " Consider scaling learning rate proportionally"
         " (linear scaling rule) when using large accumulation steps."
+        " Ignored when --adaptive-batch is enabled."
     ),
     required=False,
     default=1,
     show_default=True,
+)
+@click.option(
+    "--adaptive-batch",
+    is_flag=True,
+    default=False,
+    help=(
+        "Enable adaptive batch size based on Gradient Noise Scale (GNS)."
+        " Dynamically adjusts gradient accumulation steps during training."
+        " Requires accumulation_steps >= 2 for GNS estimation."
+        " Only applies to Stage 3 (policy+value) training;"
+        " Stage 1/2 use fixed accumulation steps."
+    ),
+)
+@click.option(
+    "--adaptive-batch-min-steps",
+    type=click.IntRange(min=2),
+    default=2,
+    show_default=True,
+    help="Minimum gradient accumulation steps for adaptive batch.",
+)
+@click.option(
+    "--adaptive-batch-max-steps",
+    type=click.IntRange(min=2),
+    default=8,
+    show_default=True,
+    help="Maximum gradient accumulation steps for adaptive batch. Power of 2 recommended.",
+)
+@click.option(
+    "--adaptive-batch-interval",
+    type=click.IntRange(min=1),
+    default=50,
+    show_default=True,
+    help="Optimizer steps between adaptive batch adjustments.",
+)
+@click.option(
+    "--adaptive-batch-smoothing",
+    type=click.FloatRange(min=0.01, max=1.0),
+    default=0.1,
+    show_default=True,
+    help="EMA smoothing factor for GNS estimates (0=smooth, 1=reactive).",
+)
+@click.option(
+    "--adaptive-batch-measurement-interval",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help=(
+        "Optimizer steps between GNS measurements."
+        " Higher values reduce memory overhead (gradient snapshot)."
+        " Recommended: 5-10 for large models (100M+ params)."
+    ),
 )
 @click.option(
     "--dataloader-workers",
@@ -573,6 +652,12 @@ def learn_model(
     epoch: int | None,
     batch_size: int | None,
     gradient_accumulation_steps: int,
+    adaptive_batch: bool,
+    adaptive_batch_min_steps: int,
+    adaptive_batch_max_steps: int,
+    adaptive_batch_interval: int,
+    adaptive_batch_smoothing: float,
+    adaptive_batch_measurement_interval: int,
     dataloader_workers: int | None,
     pin_memory: bool | None,
     prefetch_factor: int | None,
@@ -882,5 +967,13 @@ def learn_model(
                 policy_target_mode
             ),
             gradient_accumulation_steps=gradient_accumulation_steps,
+            adaptive_batch_config=_build_adaptive_batch_config(
+                adaptive_batch=adaptive_batch,
+                min_steps=adaptive_batch_min_steps,
+                max_steps=adaptive_batch_max_steps,
+                interval=adaptive_batch_interval,
+                smoothing=adaptive_batch_smoothing,
+                measurement_interval=adaptive_batch_measurement_interval,
+            ),
         )
     )
