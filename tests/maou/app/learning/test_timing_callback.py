@@ -212,3 +212,116 @@ class TestTimingCallbackWarmupExclusion:
         # actual_average_batch_time = 3.0 / 2 = 1.5秒/batch
         assert metrics["actual_average_batch_time"] == 1.5
         assert metrics["measured_batches"] == 2.0
+
+
+class TestTimingCallbackReset:
+    """TimingCallback.reset() のテスト."""
+
+    @staticmethod
+    def _run_batch(
+        callback: TimingCallback, batch_idx: int
+    ) -> None:
+        """1バッチ分の on_batch_start → _temp_timings設定 → on_batch_end を実行する."""
+        ctx = _make_dummy_context(batch_idx=batch_idx)
+        callback.on_batch_start(ctx)
+        callback._temp_timings = {
+            "data_loading": 0.001,
+            "gpu_transfer": 0.001,
+            "forward_pass": 0.005,
+            "loss_computation": 0.001,
+            "backward_pass": 0.003,
+            "optimizer_step": 0.002,
+        }
+        callback.on_batch_end(ctx)
+
+    def test_reset_clears_loss_accumulation(self) -> None:
+        """reset() が _total_loss をゼロにリセットする."""
+        callback = TimingCallback(warmup_batches=0)
+
+        # エポック1: loss を蓄積
+        callback.on_epoch_start(epoch_idx=0)
+        for i in range(3):
+            self._run_batch(callback, batch_idx=i)
+
+        assert callback._total_loss.item() == 1.5  # 0.5 * 3
+
+        # リセット
+        callback.reset()
+
+        assert callback._total_loss.item() == 0.0
+        assert callback._last_batch_loss.item() == 0.0
+
+    def test_reset_clears_counters(self) -> None:
+        """reset() がバッチカウンタとサンプル数をリセットする."""
+        callback = TimingCallback(warmup_batches=0)
+
+        callback.on_epoch_start(epoch_idx=0)
+        ctx = _make_dummy_context(batch_idx=0)
+        callback.on_batch_start(ctx)
+        callback._temp_timings = {
+            "data_loading": 0.001,
+            "gpu_transfer": 0.001,
+            "forward_pass": 0.005,
+            "loss_computation": 0.001,
+            "backward_pass": 0.003,
+            "optimizer_step": 0.002,
+        }
+        callback.on_batch_end(ctx)
+
+        assert callback.measured_batches == 1
+        assert callback.total_samples == 32
+
+        callback.reset()
+
+        assert callback.measured_batches == 0
+        assert callback.total_samples == 0
+        assert callback._measurement_start_time is None
+        assert callback.previous_batch_end_time is None
+
+    def test_reset_clears_timing_stats(self) -> None:
+        """reset() がタイミング統計をクリアする."""
+        callback = TimingCallback(warmup_batches=0)
+
+        callback.on_epoch_start(epoch_idx=0)
+        ctx = _make_dummy_context(batch_idx=0)
+        callback.on_batch_start(ctx)
+        callback._temp_timings = {
+            "data_loading": 0.001,
+            "gpu_transfer": 0.001,
+            "forward_pass": 0.005,
+            "loss_computation": 0.001,
+            "backward_pass": 0.003,
+            "optimizer_step": 0.002,
+        }
+        callback.on_batch_end(ctx)
+
+        assert len(callback.timing_stats["forward_pass"]) == 1
+
+        callback.reset()
+
+        for key in callback.timing_stats:
+            assert len(callback.timing_stats[key]) == 0
+
+    def test_average_loss_correct_after_reset(self) -> None:
+        """reset() 後の2エポック目で average_loss が正確に計算される."""
+        callback = TimingCallback(warmup_batches=0)
+
+        # エポック1: 3バッチ x loss=0.5
+        callback.on_epoch_start(epoch_idx=0)
+        for i in range(3):
+            self._run_batch(callback, batch_idx=i)
+
+        metrics_epoch1 = callback.get_loss_metrics(total_batches=3)
+        assert abs(metrics_epoch1["average_loss"] - 0.5) < 1e-6
+
+        # リセットしてエポック2
+        callback.reset()
+
+        callback.on_epoch_start(epoch_idx=1)
+        for i in range(2):
+            self._run_batch(callback, batch_idx=i)
+
+        metrics_epoch2 = callback.get_loss_metrics(total_batches=2)
+        # リセットなしだと (0.5*5)/2 = 1.25 になるが，
+        # リセット後は (0.5*2)/2 = 0.5 が正しい
+        assert abs(metrics_epoch2["average_loss"] - 0.5) < 1e-6
