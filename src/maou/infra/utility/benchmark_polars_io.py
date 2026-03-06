@@ -245,11 +245,11 @@ class PerformanceBenchmark:
 
         mem_before = self._get_memory_mb()
         start = time.perf_counter()
-        save_hcpe_df(polars_data, str(polars_path))
+        save_hcpe_df(polars_data, polars_path)
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        _ = load_hcpe_df(str(polars_path))
+        _ = load_hcpe_df(polars_path)
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -343,11 +343,11 @@ class PerformanceBenchmark:
 
         mem_before = self._get_memory_mb()
         start = time.perf_counter()
-        save_preprocessing_df(polars_data, str(polars_path))
+        save_preprocessing_df(polars_data, polars_path)
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        _ = load_preprocessing_df(str(polars_path))
+        _ = load_preprocessing_df(polars_path)
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 

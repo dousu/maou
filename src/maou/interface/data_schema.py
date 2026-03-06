@@ -45,6 +45,15 @@ def get_dtype(
     ],
     bit_pack: bool = False,
 ) -> np.dtype:
+    """Get numpy structured dtype for the specified array type.
+
+    Args:
+        array_type: Type of data ("hcpe", "preprocessing", "stage1", "stage2")
+        bit_pack: If True, return bit-packed dtype variant
+
+    Returns:
+        np.dtype: Structured numpy dtype for the array type
+    """
     return DataSchemaService.get_dtype(
         array_type=array_type,
         bit_pack=bit_pack,

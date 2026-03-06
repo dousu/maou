@@ -11,6 +11,13 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from maou.domain.data.columnar_batch import (
+    ColumnarBatch as ColumnarBatch,  # noqa: F401
+    convert_preprocessing_df_to_columnar as convert_preprocessing_df_to_columnar,  # noqa: F401
+    convert_stage1_df_to_columnar as convert_stage1_df_to_columnar,  # noqa: F401
+    convert_stage2_df_to_columnar as convert_stage2_df_to_columnar,  # noqa: F401
+)
+
 if TYPE_CHECKING:
     import polars as pl
 
@@ -83,16 +90,6 @@ def save_preprocessing_df_to_bytes(df: "pl.DataFrame") -> bytes:
     )
 
     return save_preprocessing_df_to_bytes(df)
-
-
-# --- columnar_batch re-exports ---
-
-from maou.domain.data.columnar_batch import (  # noqa: E402
-    ColumnarBatch as ColumnarBatch,  # noqa: F401
-    convert_preprocessing_df_to_columnar as convert_preprocessing_df_to_columnar,  # noqa: F401
-    convert_stage1_df_to_columnar as convert_stage1_df_to_columnar,  # noqa: F401
-    convert_stage2_df_to_columnar as convert_stage2_df_to_columnar,  # noqa: F401
-)
 
 
 def load_df_from_bytes(
