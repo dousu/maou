@@ -500,7 +500,7 @@ class Learning:
         if adaptive_batch_config is not None:
             physical_batch_size = self.config.batch_size
             adaptive_cb = AdaptiveBatchCallback()
-            callbacks.append(adaptive_cb)
+            # callbacks への追加は TrainingLoop が自動で行う
 
         # Create training loop
         # adaptive_controller/gns_estimator が渡された場合は
@@ -929,6 +929,24 @@ class Learning:
         # Scheduler description
         scheduler_desc = config.lr_scheduler_name or "none"
 
+        # Batch description
+        if config.adaptive_batch_config is not None:
+            abc = config.adaptive_batch_config
+            batch_desc = (
+                f"Batch: {config.batch_size} × "
+                f"adaptive({abc.min_accumulation_steps}-"
+                f"{abc.max_accumulation_steps}) "
+                f"(effective: {config.batch_size * abc.min_accumulation_steps}"
+                f"-{config.batch_size * abc.max_accumulation_steps})"
+            )
+        else:
+            batch_desc = (
+                f"Batch: {config.batch_size} × "
+                f"{config.gradient_accumulation_steps} "
+                f"= {config.batch_size * config.gradient_accumulation_steps} "
+                f"(effective)"
+            )
+
         lines = [
             "=== Training Configuration ===",
             f"Model: {model_desc}",
@@ -938,8 +956,7 @@ class Learning:
             f"beta1={config.optimizer_beta1}, "
             f"beta2={config.optimizer_beta2})",
             f"Scheduler: {scheduler_desc}",
-            f"Batch: {config.batch_size} × {config.gradient_accumulation_steps} "
-            f"= {config.batch_size * config.gradient_accumulation_steps} (effective), "
+            f"{batch_desc}, "
             f"Epoch: {config.epoch}, "
             f"Workers: {config.dataloader_workers}",
             f"Loss: GCE(q={config.gce_parameter}), "

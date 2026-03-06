@@ -200,7 +200,7 @@ class AdaptiveBatchController:
         if target_steps != self._current_steps:
             old_steps = self._current_steps
             self._current_steps = target_steps
-            logger.warning(
+            logger.info(
                 "Adaptive batch: accumulation_steps %d → %d "
                 "(effective_bs: %d → %d, smoothed_GNS: %.1f). "
                 "学習率は自動調整されません．"

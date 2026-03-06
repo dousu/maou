@@ -119,6 +119,15 @@ class TrainingLoop:
 
             self._adaptive_callback = adaptive_batch_callback
             if self._adaptive_callback is not None:
+                # callbacks に含まれていなければ自動追加
+                # (get_postfix() による tqdm 表示のため callbacks にも必要)
+                if (
+                    self._adaptive_callback
+                    not in self.callbacks
+                ):
+                    self.callbacks.append(
+                        self._adaptive_callback
+                    )
                 self._adaptive_callback.update_display(
                     self._adaptive_controller.smoothed_gns,
                     self.gradient_accumulation_steps,
