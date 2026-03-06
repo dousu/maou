@@ -45,6 +45,11 @@ def _build_adaptive_batch_config(
     """CLI引数から AdaptiveBatchConfig を構築する．"""
     if not adaptive_batch:
         return None
+    if min_steps > max_steps:
+        raise click.BadParameter(
+            f"--adaptive-batch-min-steps ({min_steps}) must be "
+            f"<= --adaptive-batch-max-steps ({max_steps})"
+        )
     return AdaptiveBatchConfig(
         min_accumulation_steps=min_steps,
         max_accumulation_steps=max_steps,

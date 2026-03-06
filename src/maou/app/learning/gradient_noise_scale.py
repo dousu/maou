@@ -252,7 +252,7 @@ class GradientNoiseScaleEstimator:
             return None
 
         if (
-            math.isnan(mean_grad_norm_sq)
+            not math.isfinite(mean_grad_norm_sq)
             or mean_grad_norm_sq < 1e-30
         ):
             logger.debug(

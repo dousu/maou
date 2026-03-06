@@ -1590,6 +1590,8 @@ class AdaptiveBatchCallback(BaseCallback):
             self._gns_display = f"{gns:.0f}"
         elif low_noise:
             self._gns_display = "low"
+        # gns=None かつ low_noise=False の場合(計測スキップ等)は
+        # _gns_display を前回値のまま保持し，直近の有効な表示を維持する
         self._accum_display = str(accumulation_steps)
 
     def get_postfix(self) -> dict[str, str] | None:

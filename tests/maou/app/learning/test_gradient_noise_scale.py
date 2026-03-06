@@ -167,3 +167,81 @@ class TestGradientNoiseScaleEstimator:
         # ratio = K * S / G ≈ 1.0 (同一勾配 → ノイズなし)
         # ratio <= 1.0 のため None が返る
         assert result is None
+
+    def test_prev_grads_none_at_nonzero_step(self) -> None:
+        """accumulation_step > 0 で _prev_grads が None の場合にスキップされることを確認する．"""
+        model = _make_simple_model()
+        estimator = GradientNoiseScaleEstimator(
+            physical_batch_size=32,
+        )
+
+        # step=0 をスキップして step=1 から呼ぶ
+        # (非有限損失で step=0 の backward がスキップされた場合に相当)
+        model.zero_grad()
+        x = torch.randn(32, 10)
+        y = model(x)
+        loss = y.sum() / 2
+        loss.backward()
+        estimator.on_backward_end(model, accumulation_step=1)
+
+        # _prev_grads が None のため on_backward_end は何も蓄積しない
+        # compute は micro_batch_count < 2 で None を返す
+        result = estimator.compute(model)
+        assert result is None
+
+    def test_param_count_mismatch_resets(self) -> None:
+        """on_backward_end 中にモデルパラメータ数が変わった場合にリセットされることを確認する．"""
+        model = _make_simple_model()
+        estimator = GradientNoiseScaleEstimator(
+            physical_batch_size=32,
+        )
+
+        # step=0: 正常に勾配を記録
+        model.zero_grad()
+        x = torch.randn(32, 10)
+        y = model(x)
+        loss = y.sum() / 2
+        loss.backward()
+        estimator.on_backward_end(model, accumulation_step=0)
+
+        # step=1: パラメータ数が異なるモデルで呼ぶ
+        model2 = nn.Sequential(
+            nn.Linear(10, 5, bias=False),
+            nn.Linear(5, 2, bias=False),
+        )
+        model2.zero_grad()
+        x2 = torch.randn(32, 10)
+        y2 = model2(x2)
+        loss2 = y2.sum() / 2
+        loss2.backward()
+        estimator.on_backward_end(model2, accumulation_step=1)
+
+        # パラメータ数不一致でリセットされ，compute は None を返す
+        result = estimator.compute(model2)
+        assert result is None
+
+    def test_inf_mean_grad_norm_returns_none(self) -> None:
+        """mean_grad_norm_sq が inf の場合に None が返ることを確認する．"""
+        model = _make_simple_model()
+        estimator = GradientNoiseScaleEstimator(
+            physical_batch_size=32,
+        )
+
+        # 2 micro-batch で勾配を蓄積
+        model.zero_grad()
+        for step in range(2):
+            x = torch.randn(32, 10)
+            y = model(x)
+            loss = y.sum() / 2
+            loss.backward()
+            estimator.on_backward_end(
+                model, accumulation_step=step
+            )
+
+        # param.grad を inf に設定して mean_grad_norm_sq = inf を引き起こす
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad.fill_(float("inf"))
+
+        result = estimator.compute(model)
+        assert result is None
