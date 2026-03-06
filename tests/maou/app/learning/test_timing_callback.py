@@ -256,17 +256,7 @@ class TestTimingCallbackReset:
         callback = TimingCallback(warmup_batches=0)
 
         callback.on_epoch_start(epoch_idx=0)
-        ctx = _make_dummy_context(batch_idx=0)
-        callback.on_batch_start(ctx)
-        callback._temp_timings = {
-            "data_loading": 0.001,
-            "gpu_transfer": 0.001,
-            "forward_pass": 0.005,
-            "loss_computation": 0.001,
-            "backward_pass": 0.003,
-            "optimizer_step": 0.002,
-        }
-        callback.on_batch_end(ctx)
+        self._run_batch(callback, batch_idx=0)
 
         assert callback.measured_batches == 1
         assert callback.total_samples == 32
@@ -283,17 +273,7 @@ class TestTimingCallbackReset:
         callback = TimingCallback(warmup_batches=0)
 
         callback.on_epoch_start(epoch_idx=0)
-        ctx = _make_dummy_context(batch_idx=0)
-        callback.on_batch_start(ctx)
-        callback._temp_timings = {
-            "data_loading": 0.001,
-            "gpu_transfer": 0.001,
-            "forward_pass": 0.005,
-            "loss_computation": 0.001,
-            "backward_pass": 0.003,
-            "optimizer_step": 0.002,
-        }
-        callback.on_batch_end(ctx)
+        self._run_batch(callback, batch_idx=0)
 
         assert len(callback.timing_stats["forward_pass"]) == 1
 
