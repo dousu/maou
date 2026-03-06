@@ -849,16 +849,23 @@ class TrainingLoop:
         ):
             return
 
-        estimate = self._gns_estimator.compute(
-            self.model, self.gradient_accumulation_steps
-        )
+        estimate = self._gns_estimator.compute(self.model)
         b_noise = (
             estimate.b_noise if estimate is not None else None
         )
 
         new_steps = self._adaptive_controller.update(b_noise)
         if new_steps != self.gradient_accumulation_steps:
+            old_steps = self.gradient_accumulation_steps
             self.gradient_accumulation_steps = new_steps
+            self.logger.warning(
+                "gradient_accumulation_steps changed %d → %d: "
+                "学習率は自動調整されません．"
+                "線形スケーリング則に従い lr を手動で調整することを"
+                "検討してください(lr ∝ effective_batch_size)",
+                old_steps,
+                new_steps,
+            )
 
         # AdaptiveBatchCallback の表示を更新
         if self._adaptive_callback is not None:

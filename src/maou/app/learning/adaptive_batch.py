@@ -24,9 +24,14 @@ def round_to_power_of_two(
     Args:
         value: 丸める対象の値．
         minimum: 下限値(デフォルト 1)．結果はこの値以上になる．
+            minimum 自体が2の冪乗でない場合，戻り値は2の冪乗にならない
+            可能性がある(例: minimum=3, value=0.5 → 3)．
+            呼び出し側で2の冪乗を保証したい場合は minimum を
+            2の冪乗に設定すること．
 
     Returns:
-        2の冪乗に丸められた整数．
+        2の冪乗に丸められた整数．ただし minimum が2の冪乗でない場合は
+        minimum がそのまま返ることがある．
     """
     clamped = max(minimum, value)
     # 外側の max(minimum, ...) は防御的ガード: minimum が2の冪乗でない場合

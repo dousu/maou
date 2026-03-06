@@ -12,7 +12,6 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-import pytest
 
 from maou.app.pre_process.hcpe_transform import PreProcess
 from maou.domain.board.shogi import Board, move16
@@ -73,12 +72,8 @@ def _create_hcpe_feather(
 
     df = pl.DataFrame(
         {
-            "hcp": pl.Series(
-                "hcp", hcp_list, dtype=pl.Binary
-            ),
-            "eval": pl.Series(
-                "eval", [0] * n, dtype=pl.Int16
-            ),
+            "hcp": pl.Series("hcp", hcp_list, dtype=pl.Binary),
+            "eval": pl.Series("eval", [0] * n, dtype=pl.Int16),
             "bestMove16": pl.Series(
                 "bestMove16", move16_list, dtype=pl.Int16
             ),
@@ -430,7 +425,7 @@ class TestZobristHashCorrectness:
         # 返されたhash_idがexpected_hashesと一致するか
         result_hashes = set(result.keys())
         assert result_hashes == expected_hashes, (
-            f"_process_single_arrayが返したhash_idセットが期待と異なる"
+            "_process_single_arrayが返したhash_idセットが期待と異なる"
         )
 
         # 各ユニーク局面のcountが3であることを確認

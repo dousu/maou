@@ -62,7 +62,9 @@ class TestIntermediateStoreDualMerge:
         """New rows inserted with correct win values."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             df = _create_test_df(
@@ -94,7 +96,9 @@ class TestIntermediateStoreDualMerge:
         """Conflicting rows merge both tracks correctly."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             # First upsert
@@ -145,7 +149,9 @@ class TestIntermediateStoreDualMerge:
         """Output DataFrame has moveWinRate column."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             df = _create_test_df(
@@ -177,7 +183,9 @@ class TestIntermediateStoreDualMerge:
         """Output DataFrame has bestMoveWinRate column."""
         db_path = tmp_path / "test.duckdb"
         store = IntermediateDataStore(
-            db_path=db_path, position_count_threshold=2, prior_strength=0.0
+            db_path=db_path,
+            position_count_threshold=2,
+            prior_strength=0.0,
         )
         try:
             df = _create_test_df(

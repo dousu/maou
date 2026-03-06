@@ -41,14 +41,14 @@ class GNSEstimate:
         b_noise: Gradient Noise Scale の推定値．
         sum_micro_norm_sq: micro-batch 勾配の二乗ノルム和．
         mean_grad_norm_sq: 蓄積済み勾配の二乗ノルム．
-        accumulation_steps: 使用した gradient accumulation steps 数．
+        micro_batch_count: 実際に計測された micro-batch 数．
         physical_batch_size: 物理バッチサイズ．
     """
 
     b_noise: float
     sum_micro_norm_sq: float
     mean_grad_norm_sq: float
-    accumulation_steps: int
+    micro_batch_count: int
     physical_batch_size: int
 
 
@@ -179,16 +179,18 @@ class GradientNoiseScaleEstimator:
     def compute(
         self,
         model: torch.nn.Module,
-        accumulation_steps: int,
     ) -> GNSEstimate | None:
         """accumulation cycle 完了時に GNS を算出する．
 
         勾配クリッピング前に呼び出すこと．S と G を同じ基準で
         計測するため，クリッピング後では G が変化してしまう．
 
+        数式の K には引数ではなく実際に on_backward_end が呼ばれた
+        micro-batch 数(_micro_batch_count)を使用する．非有限損失で
+        一部の backward がスキップされた場合でも S と K が整合する．
+
         Args:
             model: 勾配が蓄積されたモデル．
-            accumulation_steps: 現在の gradient_accumulation_steps 値．
 
         Returns:
             GNS推定結果．計測対象外または計算不能な場合は None．
@@ -199,10 +201,6 @@ class GradientNoiseScaleEstimator:
         self._optimizer_step_count += 1
 
         if not should_compute:
-            self._reset()
-            return None
-
-        if accumulation_steps < 2:
             self._reset()
             return None
 
@@ -236,7 +234,7 @@ class GradientNoiseScaleEstimator:
             self._reset()
             return None
 
-        k = accumulation_steps
+        k = self._micro_batch_count
         s = self._sum_micro_norm_sq
         g = mean_grad_norm_sq
         b = self._physical_batch_size
@@ -269,7 +267,7 @@ class GradientNoiseScaleEstimator:
             b_noise=b_noise,
             sum_micro_norm_sq=s,
             mean_grad_norm_sq=g,
-            accumulation_steps=k,
+            micro_batch_count=k,
             physical_batch_size=b,
         )
 

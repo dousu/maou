@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
+from maou.app.learning.adaptive_batch import AdaptiveBatchConfig
 from maou.app.learning.callbacks import (
+    AdaptiveBatchCallback,
     ModelInputs,
     TrainingContext,
 )
@@ -314,3 +316,168 @@ class TestUnpackBatch:
         )
 
         assert ctx.move_win_rate is None
+
+
+class _SimpleBatchDatasetForAdaptive(
+    torch.utils.data.IterableDataset,
+):
+    """Adaptive batch テスト用のデータセット．"""
+
+    def __init__(
+        self,
+        num_batches: int,
+        input_dim: int,
+        batch_size: int,
+        output_dim: int,
+    ) -> None:
+        self.num_batches = num_batches
+        self.input_dim = input_dim
+        self.batch_size = batch_size
+        self.output_dim = output_dim
+
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            torch.Tensor,
+            tuple[torch.Tensor, torch.Tensor, None],
+        ]
+    ]:  # type: ignore[override]
+        for _ in range(self.num_batches):
+            features = torch.randn(
+                self.batch_size, self.input_dim
+            )
+            targets = (
+                torch.randint(
+                    0,
+                    self.output_dim,
+                    (self.batch_size,),
+                ).float(),
+                torch.randn(self.batch_size),
+                None,
+            )
+            yield features, targets
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+
+class TestAdaptiveBatchIntegration:
+    """TrainingLoop と adaptive batch の統合テスト．"""
+
+    def test_adaptive_batch_adjusts_accumulation_steps(
+        self,
+    ) -> None:
+        """run_epoch で GNS 推定 → accumulation_steps 調整が動作することを確認する．"""
+        # 入力次元を大きくしてランダム入力間の勾配に十分な分散を持たせる
+        input_dim = 64
+        output_dim = 2
+        batch_size = 8
+        model = torch.nn.Linear(input_dim, output_dim)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+        adaptive_config = AdaptiveBatchConfig(
+            min_accumulation_steps=2,
+            max_accumulation_steps=8,
+            adjustment_interval=1,  # 毎ステップ調整
+            smoothing_factor=1.0,  # EMA なし(即時反映)
+            measurement_interval=1,
+        )
+        adaptive_cb = AdaptiveBatchCallback()
+
+        loop = TrainingLoop(
+            model=model,
+            device=torch.device("cpu"),
+            optimizer=optimizer,
+            loss_fn_policy=torch.nn.CrossEntropyLoss(),
+            loss_fn_value=torch.nn.MSELoss(),
+            policy_loss_ratio=1.0,
+            value_loss_ratio=1.0,
+            gradient_accumulation_steps=2,
+            adaptive_batch_config=adaptive_config,
+            physical_batch_size=batch_size,
+            adaptive_batch_callback=adaptive_cb,
+            callbacks=[adaptive_cb],
+        )
+
+        # adaptive batch が有効化され初期値が min_accumulation_steps
+        assert loop.gradient_accumulation_steps == 2
+        assert loop._gns_estimator is not None
+        assert loop._adaptive_controller is not None
+
+        # 十分なバッチ数で run_epoch を実行
+        # min_accumulation_steps=2 なので 2 バッチで 1 optimizer step
+        # 最低 4 バッチ必要(2 optimizer steps)
+        dataset = _SimpleBatchDatasetForAdaptive(
+            num_batches=6,
+            input_dim=input_dim,
+            batch_size=batch_size,
+            output_dim=output_dim,
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        # エラーなく完走することを確認
+        loop.run_epoch(
+            dataloader,
+            epoch_idx=0,
+            progress_bar=False,
+        )
+
+        # GNS 推定器の step_count が増加していることを確認
+        assert loop._gns_estimator._optimizer_step_count > 0
+
+    def test_adaptive_batch_callback_updated(self) -> None:
+        """AdaptiveBatchCallback の表示値が更新されることを確認する．"""
+        input_dim = 32
+        output_dim = 2
+        batch_size = 4
+        model = torch.nn.Linear(input_dim, output_dim)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+        adaptive_config = AdaptiveBatchConfig(
+            min_accumulation_steps=2,
+            max_accumulation_steps=8,
+            adjustment_interval=1,
+            smoothing_factor=1.0,
+            measurement_interval=1,
+        )
+        adaptive_cb = AdaptiveBatchCallback()
+
+        loop = TrainingLoop(
+            model=model,
+            device=torch.device("cpu"),
+            optimizer=optimizer,
+            loss_fn_policy=torch.nn.CrossEntropyLoss(),
+            loss_fn_value=torch.nn.MSELoss(),
+            policy_loss_ratio=1.0,
+            value_loss_ratio=1.0,
+            adaptive_batch_config=adaptive_config,
+            physical_batch_size=batch_size,
+            adaptive_batch_callback=adaptive_cb,
+            callbacks=[adaptive_cb],
+        )
+
+        dataset = _SimpleBatchDatasetForAdaptive(
+            num_batches=4,
+            input_dim=input_dim,
+            batch_size=batch_size,
+            output_dim=output_dim,
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+
+        loop.run_epoch(
+            dataloader,
+            epoch_idx=0,
+            progress_bar=False,
+        )
+
+        # コールバックの postfix が更新されていることを確認
+        postfix = adaptive_cb.get_postfix()
+        assert postfix is not None
+        assert "accum" in postfix
+        # accum 表示が数値文字列であること
+        assert postfix["accum"].isdigit()

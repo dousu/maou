@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 
 from maou.app.learning.gradient_noise_scale import (
-    GradientNoiseScaleEstimator,
     GNSEstimate,
+    GradientNoiseScaleEstimator,
 )
 
 
@@ -41,16 +41,16 @@ class TestGradientNoiseScaleEstimator:
         estimator.on_backward_end(model, accumulation_step=1)
 
         # Compute GNS
-        result = estimator.compute(model, accumulation_steps=2)
+        result = estimator.compute(model)
 
         assert result is not None
         assert isinstance(result, GNSEstimate)
         assert result.b_noise > 0
         assert result.physical_batch_size == 32
-        assert result.accumulation_steps == 2
+        assert result.micro_batch_count == 2
 
     def test_single_step_returns_none(self) -> None:
-        """accumulation_steps=1 では GNS が計算できないことを確認する．"""
+        """micro-batch が 1 つしかない場合は None が返ることを確認する．"""
         model = _make_simple_model()
         estimator = GradientNoiseScaleEstimator(
             physical_batch_size=32,
@@ -63,7 +63,7 @@ class TestGradientNoiseScaleEstimator:
         loss.backward()
         estimator.on_backward_end(model, accumulation_step=0)
 
-        result = estimator.compute(model, accumulation_steps=1)
+        result = estimator.compute(model)
         assert result is None
 
     def test_measurement_interval(self) -> None:
@@ -84,9 +84,7 @@ class TestGradientNoiseScaleEstimator:
                 estimator.on_backward_end(
                     model, accumulation_step=step
                 )
-            return estimator.compute(
-                model, accumulation_steps=2
-            )
+            return estimator.compute(model)
 
         # Cycle 1: step_count=0, 0%2==0 → measured
         result1 = _run_cycle()
@@ -117,7 +115,7 @@ class TestGradientNoiseScaleEstimator:
             estimator.on_backward_end(
                 model, accumulation_step=step
             )
-        result1 = estimator.compute(model, accumulation_steps=3)
+        result1 = estimator.compute(model)
         assert result1 is not None
 
         # Run second cycle - should work independently
@@ -130,7 +128,7 @@ class TestGradientNoiseScaleEstimator:
             estimator.on_backward_end(
                 model, accumulation_step=step
             )
-        result2 = estimator.compute(model, accumulation_steps=3)
+        result2 = estimator.compute(model)
         assert result2 is not None
 
     def test_no_grad_returns_none(self) -> None:
@@ -141,7 +139,7 @@ class TestGradientNoiseScaleEstimator:
         )
 
         # No backward call - no gradients
-        result = estimator.compute(model, accumulation_steps=2)
+        result = estimator.compute(model)
         assert result is None
 
     def test_identical_gradients_returns_none(self) -> None:
@@ -165,7 +163,7 @@ class TestGradientNoiseScaleEstimator:
         loss1.backward()
         estimator.on_backward_end(model, accumulation_step=1)
 
-        result = estimator.compute(model, accumulation_steps=2)
+        result = estimator.compute(model)
         # ratio = K * S / G ≈ 1.0 (同一勾配 → ノイズなし)
         # ratio <= 1.0 のため None が返る
         assert result is None

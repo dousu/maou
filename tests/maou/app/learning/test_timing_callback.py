@@ -298,7 +298,9 @@ class TestTimingCallbackReset:
         for i in range(2, 4):
             self._run_batch(callback, batch_idx=i)
 
-        assert callback.total_samples == 64  # 32 * 2 measured batches
+        assert (
+            callback.total_samples == 64
+        )  # 32 * 2 measured batches
         assert callback.measured_batches == 2
 
     def test_reset_before_any_batch(self) -> None:
@@ -324,7 +326,9 @@ class TestTimingCallbackReset:
         for i in range(3):
             self._run_batch(callback, batch_idx=i)
 
-        metrics_epoch1 = callback.get_loss_metrics(total_batches=3)
+        metrics_epoch1 = callback.get_loss_metrics(
+            total_batches=3
+        )
         assert abs(metrics_epoch1["average_loss"] - 0.5) < 1e-6
 
         # リセットしてエポック2
@@ -334,7 +338,9 @@ class TestTimingCallbackReset:
         for i in range(2):
             self._run_batch(callback, batch_idx=i)
 
-        metrics_epoch2 = callback.get_loss_metrics(total_batches=2)
+        metrics_epoch2 = callback.get_loss_metrics(
+            total_batches=2
+        )
         # リセットなしだと (0.5*5)/2 = 1.25 になるが，
         # リセット後は (0.5*2)/2 = 0.5 が正しい
         assert abs(metrics_epoch2["average_loss"] - 0.5) < 1e-6
