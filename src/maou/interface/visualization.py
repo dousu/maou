@@ -3,6 +3,8 @@
 アプリケーション層とインフラ層を接続し，型変換とバリデーションを行う．
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -11,13 +13,22 @@ from maou.app.visualization.data_retrieval import DataRetriever
 from maou.app.visualization.record_renderer import (
     RecordRendererFactory,
 )
+from maou.app.visualization.search_index_protocol import (
+    SearchIndexProtocol,
+)
 from maou.domain.visualization.board_renderer import (
-    SVGBoardRenderer,
+    BoardPosition as BoardPosition,  # noqa: F401
+    SVGBoardRenderer as SVGBoardRenderer,  # noqa: F401
 )
 from maou.domain.visualization.move_label_converter import (
     MoveLabelConverter,
 )
-from maou.infra.visualization.search_index import SearchIndex
+from maou.interface.data_io import (
+    load_hcpe_df,
+    load_preprocessing_df,
+    load_stage1_df,
+    load_stage2_df,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +41,7 @@ class VisualizationInterface:
 
     def __init__(
         self,
-        search_index: SearchIndex,
+        search_index: SearchIndexProtocol,
         file_paths: list[Path],
         array_type: str,
     ) -> None:
@@ -45,11 +56,21 @@ class VisualizationInterface:
         self.file_paths = file_paths
         self.array_type = array_type
 
+        # array_typeに応じたDataFrameローダーを選択
+        loader_map = {
+            "hcpe": load_hcpe_df,
+            "preprocessing": load_preprocessing_df,
+            "stage1": load_stage1_df,
+            "stage2": load_stage2_df,
+        }
+        load_df = loader_map[array_type]
+
         # アプリケーション層のサービスを初期化
         self.data_retriever = DataRetriever(
             search_index=search_index,
             file_paths=file_paths,
             array_type=array_type,
+            load_df=load_df,
         )
 
         # RecordRendererをファクトリで生成

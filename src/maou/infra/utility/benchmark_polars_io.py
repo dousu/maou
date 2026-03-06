@@ -13,19 +13,19 @@ import numpy as np
 import polars as pl
 import psutil
 
-from maou.domain.data.rust_io import (
+from maou.interface.data_io import (
     load_hcpe_df,
     load_preprocessing_df,
     save_hcpe_df,
     save_preprocessing_df,
 )
-from maou.domain.data.schema import (
+from maou.interface.data_schema import (
+    MOVE_LABELS_NUM,
     get_hcpe_dtype,
     get_hcpe_polars_schema,
     get_preprocessing_dtype,
     get_preprocessing_polars_schema,
 )
-from maou.domain.move.label import MOVE_LABELS_NUM
 from maou.infra.file_system.file_data_source import (
     FileDataSource,
 )
@@ -245,11 +245,11 @@ class PerformanceBenchmark:
 
         mem_before = self._get_memory_mb()
         start = time.perf_counter()
-        save_hcpe_df(polars_data, str(polars_path))
+        save_hcpe_df(polars_data, polars_path)
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        _ = load_hcpe_df(str(polars_path))
+        _ = load_hcpe_df(polars_path)
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 
@@ -343,11 +343,11 @@ class PerformanceBenchmark:
 
         mem_before = self._get_memory_mb()
         start = time.perf_counter()
-        save_preprocessing_df(polars_data, str(polars_path))
+        save_preprocessing_df(polars_data, polars_path)
         polars_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
-        _ = load_preprocessing_df(str(polars_path))
+        _ = load_preprocessing_df(polars_path)
         polars_load_time = time.perf_counter() - start
         mem_after = self._get_memory_mb()
 

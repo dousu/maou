@@ -374,7 +374,7 @@ class SearchIndex:
                 self.file_paths
             ):
                 # Rustバックエンドで読み込み（Stream/File形式自動判定）
-                from maou.domain.data.rust_io import (
+                from maou.interface.data_io import (
                     load_hcpe_df,
                     load_preprocessing_df,
                     load_stage1_df,

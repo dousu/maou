@@ -6,6 +6,7 @@
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,9 @@ from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
 )
 from maou.domain.move.label import MOVE_LABELS_NUM
-from maou.infra.visualization.search_index import SearchIndex
+from maou.app.visualization.search_index_protocol import (
+    SearchIndexProtocol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +35,10 @@ class DataRetriever:
 
     def __init__(
         self,
-        search_index: SearchIndex,
+        search_index: SearchIndexProtocol,
         file_paths: list[Path],
         array_type: str,
+        load_df: Callable[[Path], pl.DataFrame],
     ) -> None:
         """データ取得サービスを初期化．
 
@@ -42,10 +46,12 @@ class DataRetriever:
             search_index: 検索インデックス
             file_paths: データファイルパスリスト
             array_type: データ型（hcpe, preprocessing, stage1, stage2）
+            load_df: DataFrameローダー関数
         """
         self.search_index = search_index
         self.file_paths = file_paths
         self.array_type = array_type
+        self._load_df = load_df
 
         # スレッドセーフなDataFrameキャッシュ
         self._df_cache: OrderedDict[int, pl.DataFrame] = (
@@ -84,22 +90,8 @@ class DataRetriever:
                 return self._df_cache[file_index]
 
         # ロック外でI/Oを実行 (ブロッキング時間の最小化)
-        from maou.domain.data.rust_io import (
-            load_hcpe_df,
-            load_preprocessing_df,
-            load_stage1_df,
-            load_stage2_df,
-        )
-
-        loader_map = {
-            "hcpe": load_hcpe_df,
-            "preprocessing": load_preprocessing_df,
-            "stage1": load_stage1_df,
-            "stage2": load_stage2_df,
-        }
-        load_df = loader_map[self.array_type]
         file_path = self.file_paths[file_index]
-        df = load_df(file_path)
+        df = self._load_df(file_path)
 
         with self._df_cache_lock:
             self._df_cache[file_index] = df

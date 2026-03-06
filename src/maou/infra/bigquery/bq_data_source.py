@@ -320,7 +320,7 @@ class BigQueryDataSource(
                     f"Only .feather files are supported. Got: {cache_path.suffix}"
                 )
 
-            from maou.domain.data.rust_io import (
+            from maou.interface.data_io import (
                 load_hcpe_df,
                 load_preprocessing_df,
             )
@@ -343,7 +343,7 @@ class BigQueryDataSource(
                 f"Saving data to local cache: {cache_path}"
             )
 
-            from maou.domain.data.rust_io import (
+            from maou.interface.data_io import (
                 save_hcpe_df,
                 save_preprocessing_df,
             )

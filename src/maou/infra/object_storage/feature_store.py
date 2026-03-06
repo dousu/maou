@@ -136,7 +136,7 @@ class ObjectStorageFeatureStore(
             return
 
         try:
-            from maou.domain.data.dataframe_io import (
+            from maou.interface.data_io import (
                 save_hcpe_df_to_bytes,
                 save_preprocessing_df_to_bytes,
             )
