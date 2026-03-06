@@ -139,6 +139,7 @@ class Learning:
         policy_target_mode: PolicyTargetMode = (
             PolicyTargetMode.WIN_RATE
         )
+        gradient_accumulation_steps: int = 1
 
     def __init__(
         self,
@@ -494,6 +495,7 @@ class Learning:
             callbacks=callbacks,
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
         )
 
         # Run training epoch
@@ -814,6 +816,7 @@ class Learning:
             "lr_scheduler_name": config.lr_scheduler_name
             or "none",
             "batch_size": config.batch_size,
+            "gradient_accumulation_steps": config.gradient_accumulation_steps,
             "epoch": config.epoch,
             # Loss
             "gce_parameter": config.gce_parameter,
@@ -887,7 +890,8 @@ class Learning:
             f"beta1={config.optimizer_beta1}, "
             f"beta2={config.optimizer_beta2})",
             f"Scheduler: {scheduler_desc}",
-            f"Batch: {config.batch_size}, "
+            f"Batch: {config.batch_size} × {config.gradient_accumulation_steps} "
+            f"= {config.batch_size * config.gradient_accumulation_steps} (effective), "
             f"Epoch: {config.epoch}, "
             f"Workers: {config.dataloader_workers}",
             f"Loss: GCE(q={config.gce_parameter}), "

@@ -129,6 +129,19 @@ S3: S3Type | None = getattr(common, "S3", None)
     required=False,
 )
 @click.option(
+    "--gradient-accumulation-steps",
+    type=click.IntRange(min=1),
+    help=(
+        "Number of gradient accumulation steps."
+        " Effective batch size = batch_size × gradient_accumulation_steps."
+        " Consider scaling learning rate proportionally"
+        " (linear scaling rule) when using large accumulation steps."
+    ),
+    required=False,
+    default=1,
+    show_default=True,
+)
+@click.option(
     "--dataloader-workers",
     type=int,
     help="Number of DataLoader workers.",
@@ -560,6 +573,7 @@ def learn_model(
     test_ratio: Optional[float],
     epoch: Optional[int],
     batch_size: Optional[int],
+    gradient_accumulation_steps: int,
     dataloader_workers: Optional[int],
     pin_memory: Optional[bool],
     prefetch_factor: Optional[int],
@@ -868,5 +882,6 @@ def learn_model(
             policy_target_mode=PolicyTargetMode(
                 policy_target_mode
             ),
+            gradient_accumulation_steps=gradient_accumulation_steps,
         )
     )

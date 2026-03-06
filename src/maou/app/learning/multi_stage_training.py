@@ -418,6 +418,7 @@ def run_stage1_with_training_loop(
     config: StageConfig,
     device: torch.device,
     logger: logging.Logger | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> tuple[StageResult, ReachableSquaresHead]:
     """TrainingLoop を使用して Stage 1 (Reachable Squares) を学習する．
 
@@ -429,6 +430,7 @@ def run_stage1_with_training_loop(
         config: Stage 1 の学習制御パラメータ．
         device: 学習デバイス (CPU or CUDA)．
         logger: ロガー．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         (StageResult, ReachableSquaresHead) のタプル．
@@ -472,6 +474,7 @@ def run_stage1_with_training_loop(
         value_loss_ratio=0.0,
         callbacks=callbacks,
         logger=_logger,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     # Epoch loop
@@ -564,6 +567,7 @@ def run_stage2_with_training_loop(
     config: StageConfig,
     device: torch.device,
     logger: logging.Logger | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> tuple[StageResult, LegalMovesHead]:
     """TrainingLoop を使用して Stage 2 (Legal Moves) を学習する．
 
@@ -575,6 +579,7 @@ def run_stage2_with_training_loop(
         config: Stage 2 の学習制御パラメータ．
         device: 学習デバイス (CPU or CUDA)．
         logger: ロガー．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         (StageResult, LegalMovesHead) のタプル．
@@ -618,6 +623,7 @@ def run_stage2_with_training_loop(
         value_loss_ratio=0.0,
         callbacks=callbacks,
         logger=_logger,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     # Epoch loop
@@ -766,6 +772,7 @@ class MultiStageTrainingOrchestrator:
         stage2_config: Optional[StageConfig] = None,
         stage3_config: Optional[StageConfig] = None,
         save_checkpoints: bool = True,
+        gradient_accumulation_steps: int = 1,
     ) -> dict[TrainingStage, StageResult]:
         """Run all configured stages sequentially.
 
@@ -776,6 +783,8 @@ class MultiStageTrainingOrchestrator:
             stage2_config: Stage 2 の学習制御パラメータ．
             stage3_config: Configuration for Stage 3 (policy + value)
             save_checkpoints: Whether to save checkpoints after each stage
+            gradient_accumulation_steps: Number of gradient accumulation
+                steps. Effective batch size = batch_size × steps.
 
         Returns:
             Dictionary mapping TrainingStage to StageResult
@@ -802,6 +811,7 @@ class MultiStageTrainingOrchestrator:
                     config=stage1_config,
                     device=self.device,
                     logger=self.logger,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                 )
             )
             results[TrainingStage.REACHABLE_SQUARES] = result
@@ -849,6 +859,7 @@ class MultiStageTrainingOrchestrator:
                     config=stage2_config,
                     device=self.device,
                     logger=self.logger,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                 )
             )
             results[TrainingStage.LEGAL_MOVES] = result

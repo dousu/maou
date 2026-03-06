@@ -3,6 +3,8 @@ import pytest
 from maou.interface.learn import (
     SUPPORTED_LR_SCHEDULERS,
     _resolve_stage12_scheduler,
+    learn,
+    learn_multi_stage,
     normalize_lr_scheduler_name,
 )
 
@@ -44,6 +46,54 @@ def test_supported_lr_scheduler_labels_match_defaults() -> None:
         SUPPORTED_LR_SCHEDULERS["cosine_annealing_lr"]
         == "CosineAnnealingLR"
     )
+
+
+class TestGradientAccumulationStepsValidation:
+    """gradient_accumulation_steps バリデーションのテスト．"""
+
+    def test_learn_rejects_zero(self) -> None:
+        """learn() で gradient_accumulation_steps=0 は ValueError．"""
+        with pytest.raises(
+            ValueError,
+            match="gradient_accumulation_steps must be >= 1",
+        ):
+            learn(
+                datasource=None,  # type: ignore[arg-type]
+                gradient_accumulation_steps=0,
+            )
+
+    def test_learn_rejects_negative(self) -> None:
+        """learn() で gradient_accumulation_steps=-1 は ValueError．"""
+        with pytest.raises(
+            ValueError,
+            match="gradient_accumulation_steps must be >= 1",
+        ):
+            learn(
+                datasource=None,  # type: ignore[arg-type]
+                gradient_accumulation_steps=-1,
+            )
+
+    def test_learn_multi_stage_rejects_zero(self) -> None:
+        """learn_multi_stage() で gradient_accumulation_steps=0 は ValueError．"""
+        with pytest.raises(
+            ValueError,
+            match="gradient_accumulation_steps must be >= 1",
+        ):
+            learn_multi_stage(
+                stage="1",
+                gradient_accumulation_steps=0,
+            )
+
+    def test_learn_multi_stage_rejects_negative(self) -> None:
+        """learn_multi_stage() で gradient_accumulation_steps=-1 は ValueError．"""
+        with pytest.raises(
+            ValueError,
+            match="gradient_accumulation_steps must be >= 1",
+        ):
+            learn_multi_stage(
+                stage="1",
+                gradient_accumulation_steps=-1,
+            )
 
 
 class TestResolveStage12Scheduler:

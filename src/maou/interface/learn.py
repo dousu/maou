@@ -234,6 +234,7 @@ def learn(
     streaming_val_source: Optional[StreamingDataSource] = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+    gradient_accumulation_steps: int = 1,
 ) -> str:
     """Train neural network model on Shogi data.
 
@@ -279,6 +280,8 @@ def learn(
         streaming: Use streaming IterableDataset instead of Map-style Dataset
         streaming_train_source: StreamingDataSource for training data
         streaming_val_source: StreamingDataSource for validation data
+        gradient_accumulation_steps: Number of gradient accumulation steps.
+            Effective batch size = batch_size × gradient_accumulation_steps.
 
     Returns:
         JSON string with training results
@@ -310,6 +313,13 @@ def learn(
     elif batch_size <= 0:
         raise ValueError(
             f"batch_size must be positive, got {batch_size}"
+        )
+
+    # 勾配蓄積ステップ数バリデーション
+    if gradient_accumulation_steps < 1:
+        raise ValueError(
+            f"gradient_accumulation_steps must be >= 1, "
+            f"got {gradient_accumulation_steps}"
         )
 
     # DataLoaderのワーカー数設定 (デフォルト0)
@@ -500,6 +510,7 @@ def learn(
         streaming_val_source=streaming_val_source,
         save_split_params=save_split_params,
         policy_target_mode=policy_target_mode,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     learning_result = Learning(
@@ -545,6 +556,7 @@ def _run_stage1(
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
     trainable_layers: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) を実行し結果を返す．
 
@@ -564,6 +576,7 @@ def _run_stage1(
         compilation: torch.compileを有効化するか．
         stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 1 の訓練結果．
@@ -595,6 +608,7 @@ def _run_stage1(
         stage1_components=components,
         stage1_config=stage_config,
         save_checkpoints=True,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     return results[TrainingStage.REACHABLE_SQUARES]
@@ -620,6 +634,7 @@ def _run_stage2(
     stage2_head_dropout: float = 0.0,
     stage2_test_ratio: float = 0.0,
     trainable_layers: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 2 (Legal Moves) を実行し結果を返す．
 
@@ -645,6 +660,7 @@ def _run_stage2(
         stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)．
         stage2_test_ratio: 検証データ分割比率(デフォルト: 0.0で分割なし)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 2 の訓練結果．
@@ -682,6 +698,7 @@ def _run_stage2(
         stage2_components=components,
         stage2_config=stage_config,
         save_checkpoints=True,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     return results[TrainingStage.LEGAL_MOVES]
@@ -701,6 +718,7 @@ def _run_stage1_streaming(
     compilation: bool = False,
     stage1_pos_weight: float = 1.0,
     trainable_layers: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 1 (Reachable Squares) をストリーミングモードで実行する．
 
@@ -717,6 +735,7 @@ def _run_stage1_streaming(
         compilation: torch.compileを有効化するか．
         stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 1 の訓練結果．
@@ -746,6 +765,7 @@ def _run_stage1_streaming(
         stage1_components=components,
         stage1_config=stage_config,
         save_checkpoints=True,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     return results[TrainingStage.REACHABLE_SQUARES]
@@ -774,6 +794,7 @@ def _run_stage2_streaming(
     pin_memory: bool = False,
     prefetch_factor: int = 2,
     trainable_layers: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
 ) -> StageResult:
     """Stage 2 (Legal Moves) をストリーミングモードで実行する．
 
@@ -799,6 +820,7 @@ def _run_stage2_streaming(
         pin_memory: pinned memoryを有効にするか(デフォルト: False)．
         prefetch_factor: 各workerの先読みバッチ数(デフォルト: 2)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 2 の訓練結果．
@@ -844,6 +866,7 @@ def _run_stage2_streaming(
         stage2_components=components,
         stage2_config=stage_config,
         save_checkpoints=True,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     return results[TrainingStage.LEGAL_MOVES]
@@ -964,6 +987,7 @@ def learn_multi_stage(
     ] = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+    gradient_accumulation_steps: int = 1,
 ) -> str:
     """Execute multi-stage training workflow.
 
@@ -1028,6 +1052,8 @@ def learn_multi_stage(
         stage2_streaming_source: StreamingDataSource for Stage 2
         stage3_streaming_train_source: StreamingDataSource for Stage 3 training
         stage3_streaming_val_source: StreamingDataSource for Stage 3 validation
+        gradient_accumulation_steps: Number of gradient accumulation steps.
+            Effective batch size = batch_size × gradient_accumulation_steps.
 
     Returns:
         JSON string with training results
@@ -1036,6 +1062,13 @@ def learn_multi_stage(
         ValueError: If stage parameter is invalid or required datasources missing
         RuntimeError: If Stage 1 or 2 fails to meet accuracy threshold
     """
+    # 勾配蓄積ステップ数バリデーション
+    if gradient_accumulation_steps < 1:
+        raise ValueError(
+            f"gradient_accumulation_steps must be >= 1, "
+            f"got {gradient_accumulation_steps}"
+        )
+
     # Validate stage parameter
     if stage not in ("1", "2", "3", "all"):
         raise ValueError(
@@ -1150,6 +1183,7 @@ def learn_multi_stage(
                 compilation=stage12_compilation,
                 stage1_pos_weight=stage1_pos_weight,
                 trainable_layers=trainable_layers,
+                gradient_accumulation_steps=gradient_accumulation_steps,
             )
         else:
             stage1_result = _run_stage1(
@@ -1165,6 +1199,7 @@ def learn_multi_stage(
                 compilation=stage12_compilation,
                 stage1_pos_weight=stage1_pos_weight,
                 trainable_layers=trainable_layers,
+                gradient_accumulation_steps=gradient_accumulation_steps,
             )
         results_dict["stages_completed"].append(
             {
@@ -1204,6 +1239,7 @@ def learn_multi_stage(
                 pin_memory=pin_memory or False,
                 prefetch_factor=prefetch_factor or 2,
                 trainable_layers=trainable_layers,
+                gradient_accumulation_steps=gradient_accumulation_steps,
             )
         else:
             stage2_result = _run_stage2(
@@ -1225,6 +1261,7 @@ def learn_multi_stage(
                 stage2_head_dropout=stage2_head_dropout,
                 stage2_test_ratio=stage2_test_ratio,
                 trainable_layers=trainable_layers,
+                gradient_accumulation_steps=gradient_accumulation_steps,
             )
         results_dict["stages_completed"].append(
             {
@@ -1317,6 +1354,7 @@ def learn_multi_stage(
             streaming_val_source=stage3_streaming_val_source,
             save_split_params=save_split_params,
             policy_target_mode=policy_target_mode,
+            gradient_accumulation_steps=gradient_accumulation_steps,
         )
         results_dict["stages_completed"].append("stage3")
         results_dict["stage3_result"] = stage3_result

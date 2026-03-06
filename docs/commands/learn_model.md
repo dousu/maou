@@ -23,6 +23,7 @@
 | `--detect-anomaly` | `false` | Wraps the loop with `torch.autograd.set_detect_anomaly` for debugging gradients.【F:src/maou/infra/console/learn_model.py†L400-L470】 |
 | `--epoch INT` | interface default `10` | Number of passes over the training loader; must be positive.【F:src/maou/interface/learn.py†L132-L147】 |
 | `--batch-size INT` | interface default `1000` | Minibatch size shared by train/test loaders; must be positive. Training batch size. Recommended by GPU memory: 512 (8GB), 1024 (16GB), 2048 (24GB), 4096 (40-80GB). Use `--gradient-accumulation-steps` to simulate larger batches.【F:src/maou/interface/learn.py†L142-L156】 |
+| `--gradient-accumulation-steps INT` | `1` | Number of gradient accumulation steps. Effective batch size = batch_size × gradient_accumulation_steps. Use when GPU memory is insufficient for the desired effective batch size. Consider scaling learning rate proportionally (linear scaling rule) when using large accumulation steps. |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
@@ -189,3 +190,5 @@ poetry run maou learn-model \
 - **2026-02-23**: `--resume-from` を削除，`--save-split-params` を追加
   - `--resume-from`: 未使用のレガシーオプション．分割パラメータファイルによる再開は `--resume-backbone-from` 等で対応
   - `--save-split-params`: backbone/head パラメータを個別 `.pt` ファイルとして保存するオプション
+- **2026-03-06**: `--gradient-accumulation-steps` を追加
+  - GPU メモリ不足時に有効バッチサイズを擬似的に拡大するオプション
