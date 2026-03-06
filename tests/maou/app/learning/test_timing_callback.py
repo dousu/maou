@@ -282,6 +282,20 @@ class TestTimingCallbackReset:
         for key in callback.timing_stats:
             assert len(callback.timing_stats[key]) == 0
 
+    def test_reset_before_any_batch(self) -> None:
+        """バッチ未実行状態で reset() を呼んでもエラーにならない."""
+        callback = TimingCallback(warmup_batches=0)
+        callback.reset()
+
+        assert callback._total_loss.item() == 0.0
+        assert callback._last_batch_loss.item() == 0.0
+        assert callback.measured_batches == 0
+        assert callback.total_samples == 0
+        assert callback._measurement_start_time is None
+        assert callback.previous_batch_end_time is None
+        for key in callback.timing_stats:
+            assert len(callback.timing_stats[key]) == 0
+
     def test_average_loss_correct_after_reset(self) -> None:
         """reset() 後の2エポック目で average_loss が正確に計算される."""
         callback = TimingCallback(warmup_batches=0)
