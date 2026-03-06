@@ -200,9 +200,11 @@ class AdaptiveBatchController:
         if target_steps != self._current_steps:
             old_steps = self._current_steps
             self._current_steps = target_steps
-            logger.info(
+            logger.warning(
                 "Adaptive batch: accumulation_steps %d → %d "
-                "(effective_bs: %d → %d, smoothed_GNS: %.1f)",
+                "(effective_bs: %d → %d, smoothed_GNS: %.1f). "
+                "学習率は自動調整されません．"
+                "線形スケーリング則に従い lr の調整を検討してください",
                 old_steps,
                 target_steps,
                 self._physical_batch_size * old_steps,

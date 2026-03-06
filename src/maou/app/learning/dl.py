@@ -17,6 +17,10 @@ from torchinfo import summary
 
 from maou.app.learning.adaptive_batch import (
     AdaptiveBatchConfig,
+    AdaptiveBatchController,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
 )
 from maou.app.learning.callbacks import (
     AdaptiveBatchCallback,
@@ -458,7 +462,14 @@ class Learning:
         )
 
     def __train_one_epoch(
-        self, epoch_index: int, tb_writer: SummaryWriter
+        self,
+        epoch_index: int,
+        tb_writer: SummaryWriter,
+        *,
+        adaptive_controller: AdaptiveBatchController
+        | None = None,
+        gns_estimator: GradientNoiseScaleEstimator
+        | None = None,
     ) -> float:
         # Create logging callback
         logging_callback = LoggingCallback(
@@ -492,6 +503,8 @@ class Learning:
             callbacks.append(adaptive_cb)
 
         # Create training loop
+        # adaptive_controller/gns_estimator が渡された場合は
+        # エポック間の EMA 状態と accumulation_steps を引き継ぐ
         training_loop = TrainingLoop(
             model=self._train_model,
             device=self.device,
@@ -507,6 +520,8 @@ class Learning:
             adaptive_batch_config=adaptive_batch_config,
             physical_batch_size=physical_batch_size,
             adaptive_batch_callback=adaptive_cb,
+            adaptive_controller=adaptive_controller,
+            gns_estimator=gns_estimator,
         )
 
         # Run training epoch
@@ -545,6 +560,25 @@ class Learning:
         # start epoch設定
         epoch_number = self.start_epoch
 
+        # Adaptive batch: controller/estimator はエポック間で
+        # EMA 状態と current_steps を維持するためここで生成する
+        adaptive_batch_config = (
+            self.config.adaptive_batch_config
+        )
+        adaptive_controller: AdaptiveBatchController | None = (
+            None
+        )
+        gns_estimator: GradientNoiseScaleEstimator | None = None
+        if adaptive_batch_config is not None:
+            adaptive_controller = AdaptiveBatchController(
+                config=adaptive_batch_config,
+                physical_batch_size=self.config.batch_size,
+            )
+            gns_estimator = GradientNoiseScaleEstimator(
+                physical_batch_size=self.config.batch_size,
+                measurement_interval=adaptive_batch_config.measurement_interval,
+            )
+
         # 学習率スケジューラをstart_epochのステップ分だけ進める
         if (
             self.lr_scheduler is not None
@@ -580,7 +614,10 @@ class Learning:
                     ds.set_epoch(epoch_number)
 
             avg_loss = self.__train_one_epoch(
-                epoch_number, writer
+                epoch_number,
+                writer,
+                adaptive_controller=adaptive_controller,
+                gns_estimator=gns_estimator,
             )
 
             self._log_parameter_histograms(

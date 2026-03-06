@@ -49,6 +49,10 @@ class TrainingLoop:
         physical_batch_size: int | None = None,
         adaptive_batch_callback: AdaptiveBatchCallback
         | None = None,
+        gns_estimator: GradientNoiseScaleEstimator
+        | None = None,
+        adaptive_controller: AdaptiveBatchController
+        | None = None,
     ):
         self.model = model
         self.device = device
@@ -89,21 +93,35 @@ class TrainingLoop:
                 )
                 raise ValueError(msg)
 
-            self.gradient_accumulation_steps = (
-                adaptive_batch_config.min_accumulation_steps
-            )
-            self._gns_estimator = GradientNoiseScaleEstimator(
-                physical_batch_size=physical_batch_size,
-                measurement_interval=adaptive_batch_config.measurement_interval,
-            )
-            self._adaptive_controller = AdaptiveBatchController(
-                config=adaptive_batch_config,
-                physical_batch_size=physical_batch_size,
-            )
+            # 外部から渡された controller/estimator を使う場合は
+            # EMA 状態と current_steps を引き継ぐ(エポック間の継続)
+            if (
+                adaptive_controller is not None
+                and gns_estimator is not None
+            ):
+                self._adaptive_controller = adaptive_controller
+                self._gns_estimator = gns_estimator
+                self.gradient_accumulation_steps = adaptive_controller.current_accumulation_steps
+            else:
+                self.gradient_accumulation_steps = (
+                    adaptive_batch_config.min_accumulation_steps
+                )
+                self._gns_estimator = GradientNoiseScaleEstimator(
+                    physical_batch_size=physical_batch_size,
+                    measurement_interval=adaptive_batch_config.measurement_interval,
+                )
+                self._adaptive_controller = (
+                    AdaptiveBatchController(
+                        config=adaptive_batch_config,
+                        physical_batch_size=physical_batch_size,
+                    )
+                )
+
             self._adaptive_callback = adaptive_batch_callback
             if self._adaptive_callback is not None:
                 self._adaptive_callback.update_display(
-                    None, self.gradient_accumulation_steps
+                    self._adaptive_controller.smoothed_gns,
+                    self.gradient_accumulation_steps,
                 )
 
             self.logger.info(
@@ -860,16 +878,7 @@ class TrainingLoop:
 
         new_steps = self._adaptive_controller.update(b_noise)
         if new_steps != self.gradient_accumulation_steps:
-            old_steps = self.gradient_accumulation_steps
             self.gradient_accumulation_steps = new_steps
-            self.logger.warning(
-                "gradient_accumulation_steps changed %d → %d: "
-                "学習率は自動調整されません．"
-                "線形スケーリング則に従い lr を手動で調整することを"
-                "検討してください(lr ∝ effective_batch_size)",
-                old_steps,
-                new_steps,
-            )
 
         # AdaptiveBatchCallback の表示を更新
         if self._adaptive_callback is not None:

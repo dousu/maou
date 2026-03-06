@@ -252,8 +252,11 @@ class GradientNoiseScaleEstimator:
 
         ratio = k * s / g
         if ratio <= 1.0:
-            # 全 micro-batch の勾配がほぼ同一方向 → ノイズ極小
-            # B_noise は非常に大きい(制限なくバッチを増やせる)
+            # 全 micro-batch の勾配がほぼ同一方向 → ノイズ極小．
+            # 理論的には B_noise → ∞ (バッチサイズを増やし続けて良い)だが，
+            # 保守的に None を返すことで controller の EMA を更新しない．
+            # 学習安定期に max_accumulation_steps まで増やす挙動が望ましい場合は
+            # ここで大きな B_noise を返す設計に変更すること．
             logger.debug(
                 "GNS ratio <= 1.0 (%.4f), gradient noise is negligible",
                 ratio,
