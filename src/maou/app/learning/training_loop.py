@@ -101,6 +101,10 @@ class TrainingLoop:
                 physical_batch_size=physical_batch_size,
             )
             self._adaptive_callback = adaptive_batch_callback
+            if self._adaptive_callback is not None:
+                self._adaptive_callback.update_display(
+                    None, self.gradient_accumulation_steps
+                )
 
             self.logger.info(
                 "Adaptive batch enabled: accum_steps %d-%d, "
