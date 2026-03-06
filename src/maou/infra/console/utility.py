@@ -21,6 +21,44 @@ from maou.infra.console.common import (
 )
 
 
+def _parse_int_list(
+    value: Optional[str],
+) -> Optional[list[int]]:
+    """カンマ区切りの整数リストをパースする．"""
+    if value is None:
+        return None
+    try:
+        parsed = [int(x.strip()) for x in value.split(",")]
+    except ValueError as e:
+        raise click.BadParameter(
+            f"Invalid integer list '{value}': {e}"
+        ) from e
+    if any(v <= 0 for v in parsed):
+        raise click.BadParameter(
+            f"All values must be positive integers, got: {value}"
+        )
+    return parsed
+
+
+def _parse_float_list(
+    value: Optional[str],
+) -> Optional[list[float]]:
+    """カンマ区切りの浮動小数点数リストをパースする．"""
+    if value is None:
+        return None
+    try:
+        parsed = [float(x.strip()) for x in value.split(",")]
+    except ValueError as e:
+        raise click.BadParameter(
+            f"Invalid float list '{value}': {e}"
+        ) from e
+    if any(v <= 0 for v in parsed):
+        raise click.BadParameter(
+            f"All values must be positive, got: {value}"
+        )
+    return parsed
+
+
 @click.command("benchmark-dataloader")
 @click.option(
     "--stage3-data-path",
@@ -932,6 +970,36 @@ def benchmark_dataloader(
     help="Enable CPU, memory, and GPU usage monitoring during training.",
     required=False,
 )
+@click.option(
+    "--batch-sizes",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated list of batch sizes for sweep experiment "
+        "(e.g., '256,512,1024,2048'). Runs benchmark for each size."
+    ),
+    required=False,
+)
+@click.option(
+    "--learning-rates",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated list of learning rates for sweep experiment "
+        "(e.g., '0.001,0.01,0.1'). Runs benchmark for each rate."
+    ),
+    required=False,
+)
+@click.option(
+    "--estimate-cbs",
+    is_flag=True,
+    default=False,
+    help=(
+        "Estimate Critical Batch Size from batch size sweep results. "
+        "Requires --batch-sizes with 2+ values."
+    ),
+    required=False,
+)
 @handle_exception
 def benchmark_training(
     stage3_data_path: Optional[Path],
@@ -1004,6 +1072,9 @@ def benchmark_training(
     run_validation: Optional[bool],
     sample_ratio: Optional[float],
     enable_resource_monitoring: Optional[bool],
+    batch_sizes: Optional[str],
+    learning_rates: Optional[str],
+    estimate_cbs: bool,
 ) -> None:
     """Benchmark single epoch training performance with detailed timing analysis."""
     if stage == 1 and stage1_data_path is None:
@@ -1365,10 +1436,18 @@ def benchmark_training(
         streaming=streaming,
         streaming_train_source=streaming_train_source,
         streaming_val_source=streaming_val_source,
+        batch_sizes=_parse_int_list(batch_sizes),
+        learning_rates=_parse_float_list(learning_rates),
+        estimate_cbs=estimate_cbs,
     )
 
     # Parse and display results
     result = json.loads(result_json)
+
+    # Sweep results have a different output format
+    if "sweep_type" in result:
+        click.echo(result["summary"])
+        return
 
     click.echo("=== Training Performance Benchmark Results ===")
     click.echo()

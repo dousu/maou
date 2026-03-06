@@ -212,6 +212,9 @@ def benchmark_training(
     trainable_layers: Optional[int] = None,
     stage1_batch_size: Optional[int] = None,
     stage2_batch_size: Optional[int] = None,
+    batch_sizes: Optional[list[int]] = None,
+    learning_rates: Optional[list[float]] = None,
+    estimate_cbs: bool = False,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -252,6 +255,9 @@ def benchmark_training(
         trainable_layers: Number of trailing backbone groups to keep trainable
         stage1_batch_size: Batch size override for Stage 1
         stage2_batch_size: Batch size override for Stage 2
+        batch_sizes: List of batch sizes for sweep mode
+        learning_rates: List of learning rates for sweep mode
+        estimate_cbs: Estimate Critical Batch Size during batch size sweep
 
     Returns:
         JSON string with benchmark results and recommendations
@@ -512,9 +518,29 @@ def benchmark_training(
         trainable_layers=trainable_layers,
         stage1_batch_size=stage1_batch_size,
         stage2_batch_size=stage2_batch_size,
+        batch_sizes=batch_sizes,
+        learning_rates=learning_rates,
+        estimate_cbs=estimate_cbs,
     )
 
     use_case = TrainingBenchmarkUseCase()
+
+    if config.batch_sizes and config.learning_rates:
+        raise ValueError(
+            "batch_sizes and learning_rates are mutually exclusive"
+        )
+
+    if config.estimate_cbs and not config.batch_sizes:
+        logging.getLogger(__name__).warning(
+            "--estimate-cbs is ignored without --batch-sizes"
+        )
+
+    # Sweep modes take precedence over single benchmark
+    if config.batch_sizes:
+        return use_case.execute_batch_size_sweep(config)
+    if config.learning_rates:
+        return use_case.execute_learning_rate_sweep(config)
+
     return use_case.execute(config)
 
 

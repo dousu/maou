@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -769,6 +770,7 @@ class TimingCallback(BaseCallback):
         self.total_samples = 0
         self.running_loss = 0.0
         self.total_loss = 0.0
+        self.last_batch_loss = 0.0
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time: Optional[float] = None
@@ -883,6 +885,7 @@ class TimingCallback(BaseCallback):
             loss_value = context.loss.item()
             self.running_loss += loss_value
             self.total_loss += loss_value
+            self.last_batch_loss = loss_value
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:
@@ -904,12 +907,15 @@ class TimingCallback(BaseCallback):
             self.timing_stats["loss_computation"].append(
                 self._temp_timings["loss_computation"]
             )
-            self.timing_stats["backward_pass"].append(
-                self._temp_timings["backward_pass"]
-            )
-            self.timing_stats["optimizer_step"].append(
-                self._temp_timings["optimizer_step"]
-            )
+            # backward_pass / optimizer_step are absent in validation mode
+            if "backward_pass" in self._temp_timings:
+                self.timing_stats["backward_pass"].append(
+                    self._temp_timings["backward_pass"]
+                )
+            if "optimizer_step" in self._temp_timings:
+                self.timing_stats["optimizer_step"].append(
+                    self._temp_timings["optimizer_step"]
+                )
             self.timing_stats["total_batch"].append(
                 batch_total_time
             )
@@ -955,6 +961,78 @@ class TimingCallback(BaseCallback):
             "average_batch_time": average(
                 self.timing_stats["total_batch"]
             ),
+        }
+
+    def get_timing_distribution(
+        self,
+    ) -> Optional[dict[str, dict[str, float]]]:
+        """Get timing distribution statistics (std dev, min, max, percentiles).
+
+        Returns:
+            各タイミングカテゴリごとの分布統計量を含む辞書．
+            キーはタイミングカテゴリ名，値は統計量の辞書．
+            計測バッチがない場合は None を返す．
+        """
+        if not self.timing_stats["total_batch"]:
+            return None
+
+        def compute_stats(
+            values: list[float],
+        ) -> dict[str, float]:
+            if not values:
+                return {
+                    "mean": 0.0,
+                    "std": 0.0,
+                    "min": 0.0,
+                    "max": 0.0,
+                    "p50": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                }
+            n = len(values)
+            mean = sum(values) / n
+            # Population std dev (divided by n, not n-1).
+            # Returns 0 for single measurement (n=1).
+            # For small n, percentiles use nearest-rank: p50 rounds up
+            # (e.g. n=2 → index 1 = max), p95/p99 coincide with max.
+            variance = (
+                sum((v - mean) ** 2 for v in values) / n
+                if n > 1
+                else 0.0
+            )
+            std = math.sqrt(variance)
+            sorted_vals = sorted(values)
+            # Median: average of two middle values for even n
+            mid = n // 2
+            if n % 2 == 0:
+                p50 = (
+                    sorted_vals[mid - 1] + sorted_vals[mid]
+                ) / 2
+            else:
+                p50 = sorted_vals[mid]
+            return {
+                "mean": mean,
+                "std": std,
+                "min": sorted_vals[0],
+                "max": sorted_vals[-1],
+                "p50": p50,
+                "p95": sorted_vals[
+                    min(
+                        max(int(math.ceil(n * 0.95)) - 1, 0),
+                        n - 1,
+                    )
+                ],
+                "p99": sorted_vals[
+                    min(
+                        max(int(math.ceil(n * 0.99)) - 1, 0),
+                        n - 1,
+                    )
+                ],
+            }
+
+        return {
+            key: compute_stats(values)
+            for key, values in self.timing_stats.items()
         }
 
     def get_performance_metrics(
@@ -1020,6 +1098,7 @@ class TimingCallback(BaseCallback):
         """Get loss metrics."""
         return {
             "total_loss": self.total_loss,
+            "last_batch_loss": self.last_batch_loss,
             "average_loss": (
                 float(self.total_loss) / float(total_batches)
                 if total_batches > 0
@@ -1095,6 +1174,9 @@ class ResourceMonitoringCallback(BaseCallback):
             memory_max_percent=system_usage.memory_max_percent,
             gpu_max_percent=(
                 gpu_usage.gpu_max_percent if gpu_usage else None
+            ),
+            gpu_avg_percent=(
+                gpu_usage.gpu_avg_percent if gpu_usage else None
             ),
             gpu_memory_max_bytes=(
                 gpu_usage.gpu_memory_max_bytes
