@@ -615,9 +615,11 @@ class ValidationCallback(BaseCallback):
             raise ValueError(
                 "Tensors y and t must be 2-dimensional."
             )
-        log_probs = torch.log_softmax(logits, dim=1)
+        logits_detached = logits.detach()
+        targets_detached = target_distribution.detach()
+        log_probs = torch.log_softmax(logits_detached, dim=1)
         cross_entropy = -torch.sum(
-            target_distribution * log_probs, dim=1
+            targets_detached * log_probs, dim=1
         )
         return torch.sum(cross_entropy)
 
@@ -625,8 +627,10 @@ class ValidationCallback(BaseCallback):
         self, y: torch.Tensor, t: torch.Tensor
     ) -> torch.Tensor:
         """Calculate sum of Brier Score as a GPU tensor (no sync)."""
-        probabilities = torch.sigmoid(y)
-        squared_error = torch.square(probabilities - t)
+        y_detached = y.detach()
+        t_detached = t.detach()
+        probabilities = torch.sigmoid(y_detached)
+        squared_error = torch.square(probabilities - t_detached)
         return torch.sum(squared_error)
 
     def _compute_policy_top5_accuracy_stats_gpu(
