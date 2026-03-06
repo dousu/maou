@@ -853,6 +853,24 @@ class TimingCallback(BaseCallback):
         self._temp_timings: dict[str, float] = {}
         self._device_initialized: bool = False
 
+    def reset(self) -> None:
+        """エポック間で蓄積値をリセットする."""
+        for key in self.timing_stats:
+            self.timing_stats[key].clear()
+        self.measured_batches = 0
+        self.total_samples = 0
+        if self._device_initialized:
+            self._total_loss.zero_()
+            self._last_batch_loss.zero_()
+        else:
+            self._total_loss = torch.tensor(0.0)
+            self._last_batch_loss = torch.tensor(0.0)
+        self.epoch_start_time = 0.0
+        self.batch_start_time = 0.0
+        self.previous_batch_end_time = None
+        self._measurement_start_time = None
+        self._temp_timings.clear()
+
     def on_epoch_start(self, epoch_idx: int) -> None:
         self.epoch_start_time = time.perf_counter()
 
@@ -869,9 +887,6 @@ class TimingCallback(BaseCallback):
             data_load_time = 0.0
 
         self._temp_timings["data_loading"] = data_load_time
-
-        if context.batch_size is not None:
-            self.total_samples += context.batch_size
 
     def on_data_transfer_start(
         self, context: TrainingContext
@@ -1005,6 +1020,8 @@ class TimingCallback(BaseCallback):
                 batch_total_time
             )
             self.measured_batches += 1
+            if context.batch_size is not None:
+                self.total_samples += context.batch_size
 
         self.previous_batch_end_time = batch_end_time
 
