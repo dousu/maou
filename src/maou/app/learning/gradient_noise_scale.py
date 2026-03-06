@@ -63,7 +63,9 @@ class GradientNoiseScaleEstimator:
     Args:
         physical_batch_size: DataLoader の物理バッチサイズ．
         measurement_interval: GNS を計測する optimizer step 間隔．
-            1 なら毎ステップ計測する．
+            1 なら毎ステップ計測する．計測中はモデルパラメータ1コピー分の
+            追加メモリを使用するため，大規模モデル(数百M〜数Bパラメータ)
+            では 5〜10 を推奨する．
     """
 
     def __init__(
@@ -73,11 +75,15 @@ class GradientNoiseScaleEstimator:
         measurement_interval: int = 1,
     ) -> None:
         self._physical_batch_size = physical_batch_size
-        self._measurement_interval = max(1, measurement_interval)
+        self._measurement_interval = max(
+            1, measurement_interval
+        )
 
         # accumulation cycle 内の状態
         self._sum_micro_norm_sq: float = 0.0
-        self._prev_grads: list[torch.Tensor | None] | None = None
+        self._prev_grads: list[torch.Tensor | None] | None = (
+            None
+        )
         self._micro_batch_count: int = 0
 
         # optimizer step カウンタ
@@ -87,7 +93,8 @@ class GradientNoiseScaleEstimator:
     def should_measure(self) -> bool:
         """現在の optimizer step で GNS を計測すべきかどうか．"""
         return (
-            self._optimizer_step_count % self._measurement_interval
+            self._optimizer_step_count
+            % self._measurement_interval
             == 0
         )
 
@@ -134,22 +141,25 @@ class GradientNoiseScaleEstimator:
                 )
                 return
             # 差分で micro-batch 勾配のノルムを計算
+            # prev_grads はすべてのパラメータに対応するエントリを持つ
+            # (grad=None のパラメータも含む)ため，idx は全パラメータで
+            # インクリメントする
             micro_norm_sq = 0.0
             new_prev: list[torch.Tensor | None] = []
-            idx = 0
-            for param in model.parameters():
+            for idx, param in enumerate(model.parameters()):
                 if param.grad is not None:
                     g = param.grad.detach()
                     prev = self._prev_grads[idx]
                     if prev is not None:
                         diff = g - prev
-                        micro_norm_sq += diff.pow(2).sum().item()
+                        micro_norm_sq += (
+                            diff.pow(2).sum().item()
+                        )
                     else:
                         micro_norm_sq += g.pow(2).sum().item()
                     new_prev.append(g.clone())
                 else:
                     new_prev.append(None)
-                idx += 1
             self._sum_micro_norm_sq += micro_norm_sq
             self._prev_grads = new_prev
 
@@ -221,6 +231,16 @@ class GradientNoiseScaleEstimator:
         b = self._physical_batch_size
 
         # B_noise = b * K/(K-1) * (K * S / G - 1)
+        # オーバーフロー防止: S が極大の場合は計算をスキップ
+        if s > 1e30 or s != s:  # NaN check
+            logger.debug(
+                "sum_micro_norm_sq overflow or NaN (%.2e), "
+                "skipping GNS estimation",
+                s,
+            )
+            self._reset()
+            return None
+
         ratio = k * s / g
         if ratio <= 1.0:
             # 全 micro-batch の勾配がほぼ同一方向 → ノイズ極小

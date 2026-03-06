@@ -481,11 +481,15 @@ class Learning:
             )
 
         # Adaptive batch config
-        adaptive_batch_config = self.config.adaptive_batch_config
+        adaptive_batch_config = (
+            self.config.adaptive_batch_config
+        )
         physical_batch_size: int | None = None
+        adaptive_cb: AdaptiveBatchCallback | None = None
         if adaptive_batch_config is not None:
             physical_batch_size = self.config.batch_size
-            callbacks.append(AdaptiveBatchCallback())
+            adaptive_cb = AdaptiveBatchCallback()
+            callbacks.append(adaptive_cb)
 
         # Create training loop
         training_loop = TrainingLoop(
@@ -502,6 +506,7 @@ class Learning:
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             adaptive_batch_config=adaptive_batch_config,
             physical_batch_size=physical_batch_size,
+            adaptive_batch_callback=adaptive_cb,
         )
 
         # Run training epoch

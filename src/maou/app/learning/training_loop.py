@@ -44,8 +44,11 @@ class TrainingLoop:
         logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-        adaptive_batch_config: AdaptiveBatchConfig | None = None,
+        adaptive_batch_config: AdaptiveBatchConfig
+        | None = None,
         physical_batch_size: int | None = None,
+        adaptive_batch_callback: AdaptiveBatchCallback
+        | None = None,
     ):
         self.model = model
         self.device = device
@@ -68,13 +71,15 @@ class TrainingLoop:
         self._accumulation_counter: int = 0
 
         # Adaptive batch size 設定
-        self._gns_estimator: GradientNoiseScaleEstimator | None = (
-            None
-        )
-        self._adaptive_controller: AdaptiveBatchController | None = (
-            None
-        )
-        self._adaptive_callback: AdaptiveBatchCallback | None = None
+        self._gns_estimator: (
+            GradientNoiseScaleEstimator | None
+        ) = None
+        self._adaptive_controller: (
+            AdaptiveBatchController | None
+        ) = None
+        self._adaptive_callback: (
+            AdaptiveBatchCallback | None
+        ) = None
 
         if adaptive_batch_config is not None:
             if physical_batch_size is None:
@@ -95,11 +100,7 @@ class TrainingLoop:
                 config=adaptive_batch_config,
                 physical_batch_size=physical_batch_size,
             )
-            # コールバックリストから AdaptiveBatchCallback への参照を取得
-            for cb in self.callbacks:
-                if isinstance(cb, AdaptiveBatchCallback):
-                    self._adaptive_callback = cb
-                    break
+            self._adaptive_callback = adaptive_batch_callback
 
             self.logger.info(
                 "Adaptive batch enabled: accum_steps %d-%d, "
@@ -419,7 +420,16 @@ class TrainingLoop:
         )
 
     def _train_batch(self, context: TrainingContext) -> None:
-        """Train a single batch with gradient computation."""
+        """Train a single batch with gradient computation.
+
+        Adaptive batch 不変条件:
+            gradient_accumulation_steps の変更は _maybe_update_adaptive_batch
+            (accumulation cycle 完了時のみ呼ばれる)で行われるため，
+            同一 cycle 内で steps が変わることはない．
+            ただし cycle 完了判定は現在の steps に基づくため，
+            steps が前 cycle より減少した場合，カウンタが新しい steps を
+            超えていると即座に cycle が完了する(勾配は正しく蓄積済み)．
+        """
         # カウンタベースの accumulation step 管理
         accumulation_step = self._accumulation_counter
         is_accumulation_step = accumulation_step < (
@@ -476,6 +486,9 @@ class TrainingLoop:
                 context.outputs_value, context.labels_value
             )
             # Gradient accumulation: 損失を蓄積ステップ数で正規化
+            # adaptive batch では steps が動的に変わるが，変更は
+            # cycle 完了時のみ行われるため，同一 cycle 内では一貫した
+            # 正規化係数が使用される
             context.loss = (
                 self.policy_loss_ratio * policy_loss
                 + self.value_loss_ratio * value_loss
@@ -680,6 +693,9 @@ class TrainingLoop:
             context.outputs_value, context.labels_value
         )
         # Gradient accumulation: 損失を蓄積ステップ数で正規化
+        # adaptive batch では steps が動的に変わるが，変更は
+        # cycle 完了時のみ行われるため，同一 cycle 内では一貫した
+        # 正規化係数が使用される
         context.loss = (
             self.policy_loss_ratio * policy_loss
             + self.value_loss_ratio * value_loss

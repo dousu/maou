@@ -16,19 +16,19 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
-def round_to_power_of_two(value: float, *, minimum: int = 1) -> int:
+def round_to_power_of_two(
+    value: float, *, minimum: int = 1
+) -> int:
     """値を最も近い2の冪乗に丸める．
 
     Args:
         value: 丸める対象の値．
-        minimum: 下限値(デフォルト 1)．
+        minimum: 下限値(デフォルト 1)．結果はこの値以上になる．
 
     Returns:
         2の冪乗に丸められた整数．
     """
     clamped = max(minimum, value)
-    if clamped < 1:
-        return minimum
     return max(minimum, int(2 ** round(math.log2(clamped))))
 
 
@@ -62,7 +62,10 @@ class AdaptiveBatchConfig:
                 f"got {self.min_accumulation_steps}"
             )
             raise ValueError(msg)
-        if self.max_accumulation_steps < self.min_accumulation_steps:
+        if (
+            self.max_accumulation_steps
+            < self.min_accumulation_steps
+        ):
             msg = (
                 f"max_accumulation_steps ({self.max_accumulation_steps}) "
                 f"must be >= min_accumulation_steps ({self.min_accumulation_steps})"
@@ -151,11 +154,16 @@ class AdaptiveBatchController:
             )
 
         # 調整間隔でない場合はスキップ
-        if self._step_count % self._config.adjustment_interval != 0:
+        if (
+            self._step_count % self._config.adjustment_interval
+            != 0
+        ):
             return self._current_steps
 
         # 目標 accumulation steps を計算
-        target_steps = self._compute_target_steps(self._smoothed_gns)
+        target_steps = self._compute_target_steps(
+            self._smoothed_gns
+        )
 
         if target_steps != self._current_steps:
             old_steps = self._current_steps
@@ -190,7 +198,11 @@ class AdaptiveBatchController:
         target = round_to_power_of_two(raw_steps)
 
         # [min, max] にクリップ
-        target = max(self._config.min_accumulation_steps, target)
-        target = min(self._config.max_accumulation_steps, target)
+        target = max(
+            self._config.min_accumulation_steps, target
+        )
+        target = min(
+            self._config.max_accumulation_steps, target
+        )
 
         return target
