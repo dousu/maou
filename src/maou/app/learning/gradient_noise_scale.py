@@ -20,6 +20,13 @@ B_noise は Critical Batch Size (CBS) の近似であり，
         S = Σ_k |micro_grad_k|² (micro-batch 勾配の二乗ノルム和)
         G = |mean_grad|² (蓄積済み勾配の二乗ノルム)
 
+    G の前提:
+        PyTorch の既定では loss.backward() が param.grad に勾配を加算する．
+        損失を accumulation_steps (K) で除算してから backward() を呼ぶと，
+        K ステップ蓄積後の param.grad は平均勾配になる．
+        本実装はこの loss/K 正規化を前提として G = |param.grad|² を
+        平均勾配の二乗ノルムとして扱う．
+
 メモリオーバーヘッド:
     モデルパラメータ1コピー分(prev_grads snapshot) + スカラー数個
 """
@@ -262,6 +269,10 @@ class GradientNoiseScaleEstimator:
 
         ratio = k * s / g
         if ratio <= 1.0:
+            # 浮動小数点誤差により ratio が 1.0 を僅かに下回る場合がある．
+            # B_noise = b * K/(K-1) * (ratio - 1) で ratio ≈ 1.0 だと
+            # B_noise ≈ 0 となり意味のある推定にならないため，<= 1.0 で切る．
+            #
             # 全 micro-batch の勾配がほぼ同一方向 → ノイズ極小．
             # 理論的には B_noise → ∞ (バッチサイズを増やし続けて良い)だが，
             # 保守的に None を返すことで controller の EMA を更新しない．

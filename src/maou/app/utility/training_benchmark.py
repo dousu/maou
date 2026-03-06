@@ -1820,6 +1820,22 @@ class TrainingBenchmarkUseCase:
                     f"  CLI: {adaptive_rec['cli_example']}"
                 )
 
+            # 戦略選択ガイド
+            strategy = _build_strategy_recommendation(
+                cbs_estimation, adaptive_rec
+            )
+            if strategy is not None:
+                summary_lines.append("")
+                summary_lines.append(
+                    "=== Strategy Guide: "
+                    "Adaptive Batch vs LR Scheduler ==="
+                )
+                for line in strategy["summary_lines"]:
+                    summary_lines.append(f"  {line}")
+                cbs_estimation["strategy_recommendation"] = (
+                    strategy
+                )
+
         output: dict[str, Any] = {
             "sweep_type": "batch_size",
             "comparison": comparison,
@@ -2324,6 +2340,129 @@ def _recommend_measurement_interval(
         return 5
 
     return 1
+
+
+def _build_strategy_recommendation(
+    cbs_estimation: dict[str, Any],
+    adaptive_rec: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """CBS 推定結果から adaptive batch vs LR scheduler の戦略ガイドを生成する．
+
+    Args:
+        cbs_estimation: CBS 推定結果の辞書．
+        adaptive_rec: adaptive batch 推奨設定(None の場合はガイド生成をスキップ)．
+
+    Returns:
+        戦略ガイドの辞書．adaptive_rec が None の場合は None．
+    """
+    if adaptive_rec is None:
+        return None
+
+    cbs = cbs_estimation.get("estimated_cbs", 0)
+    cbs_exceeds = cbs_estimation.get(
+        "cbs_exceeds_tested", False
+    )
+    physical_bs = adaptive_rec.get("physical_batch_size", 0)
+
+    lines: list[str] = []
+
+    # CBS と physical batch size の比率で判断
+    if physical_bs > 0:
+        ratio = cbs / physical_bs
+    else:
+        ratio = 1.0
+
+    # 判定ロジック
+    if cbs_exceeds or ratio >= 4:
+        # CBS が大きい: adaptive batch のメリットが大きい
+        recommendation = "adaptive_batch"
+        lines.append(
+            "推奨: --adaptive-batch (LR scheduler なし)"
+        )
+        lines.append("")
+        lines.append(
+            f"理由: CBS ({cbs}) が physical BS ({physical_bs}) "
+            f"の {ratio:.0f} 倍以上あり，"
+        )
+        lines.append(
+            "勾配ノイズが大きい学習初期では小さい effective BS で"
+        )
+        lines.append(
+            "安定化し，ノイズ減少後に自動で BS を増加できます．"
+        )
+        lines.append("")
+        lines.append(
+            "⚠ 現在 adaptive batch と LR scheduler は併用不可:"
+        )
+        lines.append(
+            "  - accumulation_steps 変更時に scheduler の"
+            " step 進行速度が変わる"
+        )
+        lines.append(
+            "  - effective BS 変化に対する LR の自動スケーリングが未実装"
+        )
+        lines.append("")
+        lines.append(
+            "固定 LR での運用を推奨します．warmup が必要な場合は"
+        )
+        lines.append(
+            "手動で数エポック低 LR → 本番 LR に切り替えてください．"
+        )
+    elif ratio >= 2:
+        # CBS が中程度: どちらも有効
+        recommendation = "either"
+        fixed_accum = max(2, cbs // physical_bs)
+        fixed_accum_p2 = 2 ** round(
+            __import__("math").log2(max(2, fixed_accum))
+        )
+        fixed_effective = physical_bs * fixed_accum_p2
+        lines.append("推奨: どちらの戦略も有効")
+        lines.append("")
+        lines.append(
+            "[A] Adaptive batch (動的調整，scheduler なし):"
+        )
+        lines.append(
+            f"    {adaptive_rec.get('cli_example', '')}"
+        )
+        lines.append("    長所: 学習段階に応じて BS を自動調整")
+        lines.append("    短所: LR scheduler と併用不可")
+        lines.append("")
+        lines.append("[B] 固定 accumulation + LR scheduler:")
+        lines.append(
+            f"    --gradient-accumulation-steps"
+            f" {fixed_accum_p2}"
+            f" --lr-scheduler warmup_cosine_decay"
+        )
+        lines.append(f"    effective BS = {fixed_effective}")
+        lines.append(
+            "    長所: warmup + cosine decay で安定した学習"
+        )
+        lines.append("    短所: CBS 変化に追従しない固定 BS")
+    else:
+        # CBS が小さい: scheduler の方が有効
+        recommendation = "lr_scheduler"
+        lines.append(
+            "推奨: --lr-scheduler warmup_cosine_decay"
+            " (固定 batch size)"
+        )
+        lines.append("")
+        lines.append(
+            f"理由: CBS ({cbs}) が physical BS ({physical_bs}) に近く，"
+        )
+        lines.append(
+            "gradient accumulation の効果が限定的です．"
+        )
+        lines.append("現在の batch size で十分効率的なため，")
+        lines.append(
+            "LR scheduler による warmup + decay が"
+            " 学習品質に貢献します．"
+        )
+
+    return {
+        "recommendation": recommendation,
+        "cbs_to_physical_ratio": round(ratio, 1),
+        "summary_lines": lines,
+    }
 
 
 def _format_timing_summary(

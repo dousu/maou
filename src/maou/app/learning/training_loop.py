@@ -580,6 +580,9 @@ class TrainingLoop:
 
         self._maybe_synchronize("post_forward_mixed_precision")
 
+        for callback in self.callbacks:
+            callback.on_forward_pass_end(context)
+
         # Check loss finitude periodically to reduce GPU sync points
         if (
             context.batch_idx % self._finitude_check_interval
@@ -593,9 +596,6 @@ class TrainingLoop:
                 value_loss_is_finite = torch.isfinite(
                     value_loss
                 )
-                for callback in self.callbacks:
-                    callback.on_forward_pass_end(context)
-
                 self.logger.warning(
                     "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
                     "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
@@ -613,9 +613,6 @@ class TrainingLoop:
                 if self._gns_estimator is not None:
                     self._gns_estimator.reset_cycle()
                 return True
-
-        for callback in self.callbacks:
-            callback.on_forward_pass_end(context)
 
         # 逆伝播
         for callback in self.callbacks:

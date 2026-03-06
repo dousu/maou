@@ -290,6 +290,21 @@ adaptive batch オプション推奨値が出力される:
 この推奨設定をそのまま `learn-model` に渡すことで，GNS-Based adaptive
 batch size を利用できる．
 
+### Strategy Guide: Adaptive Batch vs LR Scheduler
+
+`--estimate-cbs` 実行時，CBS と physical batch size の比率に基づいて
+以下の戦略ガイドが出力される:
+
+| CBS / physical BS | 推奨戦略 | 理由 |
+|---|---|---|
+| ≥ 4x | Adaptive batch (scheduler なし) | ノイズが大きく動的 BS 調整の効果が高い |
+| 2x–4x | どちらも有効 | 両方の CLI 例を併記 |
+| < 2x | LR scheduler (固定 BS) | accumulation の効果が限定的 |
+
+**⚠ 制約:** 現在 adaptive batch と LR scheduler は併用不可．
+accumulation_steps の動的変更により scheduler の step 進行速度が変化し，
+warmup/decay カーブとの不整合が発生するため．
+
 `measurement_interval` は benchmark 実行時の GPU メモリ使用量と
 モデルパラメータ数から自動推奨される．GNS 計測中は勾配スナップショット
 (trainable params × 4 bytes) の追加メモリが必要なため，大規模モデルでは
