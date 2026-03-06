@@ -137,6 +137,9 @@ class TrainingCallback(Protocol):
 class BaseCallback:
     """Base callback implementation with no-op methods."""
 
+    _postfix_sync_interval: int = 50
+    """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
+
     def on_epoch_start(self, epoch_idx: int) -> None:
         pass
 
@@ -783,142 +786,41 @@ class ValidationCallback(BaseCallback):
         target_distribution: torch.Tensor,
     ) -> float:
         """Calculate total cross entropy between logits and target distribution."""
-        if logits.ndim != 2 or target_distribution.ndim != 2:
-            raise ValueError(
-                "Tensors y and t must be 2-dimensional."
-            )
-
-        log_probs = torch.log_softmax(logits, dim=1)
-        cross_entropy = -torch.sum(
-            target_distribution * log_probs, dim=1
+        return float(
+            self._policy_cross_entropy_gpu(
+                logits, target_distribution
+            ).item()
         )
-        return float(torch.sum(cross_entropy).item())
 
     def _policy_accuracy(
         self, logits: torch.Tensor, targets: torch.Tensor
     ) -> float:
         """Calculate average policy Top-5 accuracy for the provided batch."""
-
-        ratio_sum, sample_count = (
-            self._compute_policy_top5_accuracy_stats(
+        ratio_sum_t, sample_count = (
+            self._compute_policy_top5_accuracy_stats_gpu(
                 logits=logits, targets=targets
             )
         )
         if sample_count == 0:
             return 0.0
-        return ratio_sum / float(sample_count)
+        return float(ratio_sum_t.item()) / float(sample_count)
 
     def _compute_policy_top5_accuracy_stats(
         self, *, logits: torch.Tensor, targets: torch.Tensor
     ) -> Tuple[float, int]:
         """Return cumulative ratio sum and sample count for Top-5 accuracy."""
-
-        if logits.ndim != 2 or targets.ndim != 2:
-            raise ValueError(
-                "Tensors logits and targets must be 2-dimensional."
+        ratio_sum_t, sample_count = (
+            self._compute_policy_top5_accuracy_stats_gpu(
+                logits=logits, targets=targets
             )
-
-        batch_size = int(targets.size(0))
-        if batch_size == 0:
-            return 0.0, 0
-
-        topk_pred = min(5, int(logits.size(1)))
-        if topk_pred == 0:
-            return 0.0, 0
-
-        max_label_topk = min(5, int(targets.size(1)))
-        if max_label_topk == 0:
-            return 0.0, 0
-
-        logits_detached = logits.detach()
-        targets_detached = targets.detach()
-
-        positive_mask = targets_detached > 0
-        positive_counts = torch.sum(positive_mask, dim=1)
-        effective_label_topk = torch.minimum(
-            positive_counts,
-            torch.tensor(
-                max_label_topk,
-                device=targets_detached.device,
-                dtype=positive_counts.dtype,
-            ),
         )
-
-        label_top_indices = torch.topk(
-            targets_detached.masked_fill(
-                ~positive_mask, float("-inf")
-            ),
-            k=max_label_topk,
-            dim=1,
-        ).indices
-
-        prediction_top_indices = torch.topk(
-            logits_detached,
-            k=topk_pred,
-            dim=1,
-        ).indices
-
-        current_topk = torch.minimum(
-            effective_label_topk,
-            torch.tensor(
-                topk_pred,
-                device=targets_detached.device,
-                dtype=positive_counts.dtype,
-            ),
-        )
-
-        label_positions = torch.arange(
-            max_label_topk,
-            device=targets_detached.device,
-            dtype=positive_counts.dtype,
-        )
-        pred_positions = torch.arange(
-            topk_pred,
-            device=targets_detached.device,
-            dtype=positive_counts.dtype,
-        )
-
-        label_mask = label_positions.unsqueeze(
-            0
-        ) < effective_label_topk.unsqueeze(1)
-        pred_mask = pred_positions.unsqueeze(
-            0
-        ) < current_topk.unsqueeze(1)
-
-        matches = label_top_indices.unsqueeze(
-            -1
-        ) == prediction_top_indices.unsqueeze(-2)
-        valid_matches = (
-            matches
-            & label_mask.unsqueeze(-1)
-            & pred_mask.unsqueeze(1)
-        )
-        match_counts = torch.sum(valid_matches, dim=(1, 2))
-
-        ratios = torch.zeros(
-            batch_size,
-            device=targets_detached.device,
-            dtype=targets_detached.dtype,
-        )
-        positive_samples = effective_label_topk > 0
-        ratios[positive_samples] = match_counts[
-            positive_samples
-        ].to(targets_detached.dtype) / effective_label_topk[
-            positive_samples
-        ].to(targets_detached.dtype)
-
-        ratio_sum = float(torch.sum(ratios).item())
-        sample_count = batch_size
-
-        return ratio_sum, sample_count
+        return float(ratio_sum_t.item()), sample_count
 
     def _value_brier_score(
         self, y: torch.Tensor, t: torch.Tensor
     ) -> float:
         """Calculate sum of Brier Score components for a batch."""
-        probabilities = torch.sigmoid(y)
-        squared_error = torch.square(probabilities - t)
-        return torch.sum(squared_error).item()
+        return float(self._value_brier_score_gpu(y, t).item())
 
     def _compute_policy_f1_components(
         self, *, logits: torch.Tensor, targets: torch.Tensor
@@ -932,66 +834,16 @@ class ValidationCallback(BaseCallback):
         Returns:
             Tuple of (true_positives, false_positives, false_negatives).
         """
-        if logits.ndim != 2 or targets.ndim != 2:
-            raise ValueError(
-                "Tensors logits and targets must be 2-dimensional."
+        tp_t, fp_t, fn_t = (
+            self._compute_policy_f1_components_gpu(
+                logits=logits, targets=targets
             )
-
-        batch_size = int(targets.size(0))
-        if batch_size == 0:
-            return 0, 0, 0
-
-        # Get top-5 predictions
-        topk_pred = min(5, int(logits.size(1)))
-        if topk_pred == 0:
-            return 0, 0, 0
-
-        logits_detached = logits.detach()
-        targets_detached = targets.detach()
-
-        # Extract positive labels (targets > 0)
-        positive_mask = targets_detached > 0
-        positive_counts = torch.sum(
-            positive_mask, dim=1
-        )  # (batch_size,)
-
-        # Get top-5 prediction indices
-        prediction_top_indices = torch.topk(
-            logits_detached,
-            k=topk_pred,
-            dim=1,
-        ).indices  # (batch_size, topk_pred)
-
-        # Create one-hot encoding of predictions
-        pred_one_hot = torch.zeros_like(
-            targets_detached
-        )  # (batch_size, num_classes)
-        pred_one_hot.scatter_(1, prediction_top_indices, 1.0)
-
-        # True Positives: predictions that are also positive labels
-        tp_mask = (
-            pred_one_hot * positive_mask.float()
-        )  # Element-wise AND
-        tp_per_sample = torch.sum(
-            tp_mask, dim=1
-        )  # (batch_size,)
-
-        # False Positives: predictions that are NOT positive labels
-        fp_per_sample = (
-            topk_pred - tp_per_sample
-        )  # Total predictions - TP
-
-        # False Negatives: positive labels that were NOT predicted
-        fn_per_sample = (
-            positive_counts - tp_per_sample
-        )  # Total labels - TP
-
-        # Sum across batch
-        total_tp = int(torch.sum(tp_per_sample).item())
-        total_fp = int(torch.sum(fp_per_sample).item())
-        total_fn = int(torch.sum(fn_per_sample).item())
-
-        return total_tp, total_fp, total_fn
+        )
+        return (
+            int(tp_t.item()),
+            int(fp_t.item()),
+            int(fn_t.item()),
+        )
 
     def _calculate_f1_from_components(
         self, *, tp: int, fp: int, fn: int
@@ -1532,9 +1384,6 @@ class Stage2F1Callback(BaseCallback):
     F1計算ロジックは Stage 2 の multi-label binary classification に対応する．
     """
 
-    _postfix_sync_interval: int = 50
-    """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
-
     def __init__(self) -> None:
         self._total_f1: torch.Tensor = torch.tensor(0.0)
         self._total_samples: int = 0
@@ -1622,15 +1471,17 @@ class Stage2F1Callback(BaseCallback):
         """
         if self._total_samples == 0:
             return None
-        if self._num_batches % self._postfix_sync_interval == 0:
+        if (
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval
+            == 0
+        ):
             self._cached_f1 = (
                 self._total_f1 / self._total_samples
             ).item()
             self._cached_loss = (
-                (self._total_loss / self._num_batches).item()
-                if self._num_batches > 0
-                else 0.0
-            )
+                self._total_loss / self._num_batches
+            ).item()
         return {
             "f1": f"{self._cached_f1:.4f}",
             "loss": f"{self._cached_loss:.4f}",
@@ -1649,9 +1500,6 @@ class Stage1AccuracyCallback(BaseCallback):
     精度計算ロジックは Stage 1 の element-wise binary classification に対応する:
     ``(sigmoid(logits) > 0.5) == targets.bool()``
     """
-
-    _postfix_sync_interval: int = 50
-    """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
 
     def __init__(self) -> None:
         self._total_correct: torch.Tensor = torch.tensor(0.0)
@@ -1723,15 +1571,17 @@ class Stage1AccuracyCallback(BaseCallback):
         """
         if self._total_elements == 0:
             return None
-        if self._num_batches % self._postfix_sync_interval == 0:
+        if (
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval
+            == 0
+        ):
             self._cached_acc = (
                 self._total_correct / self._total_elements
             ).item()
             self._cached_loss = (
-                (self._total_loss / self._num_batches).item()
-                if self._num_batches > 0
-                else 0.0
-            )
+                self._total_loss / self._num_batches
+            ).item()
         return {
             "acc": f"{self._cached_acc:.1%}",
             "loss": f"{self._cached_loss:.4f}",
@@ -1747,9 +1597,6 @@ class Stage3LossCallback(BaseCallback):
     GPU同期(``.item()``)はエポック終了時のみ行い，
     バッチごとのGPUパイプラインストールを回避する．
     """
-
-    _postfix_sync_interval: int = 50
-    """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
 
     def __init__(self) -> None:
         self._total_loss: torch.Tensor = torch.tensor(0.0)
