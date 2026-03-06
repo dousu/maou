@@ -1,7 +1,6 @@
 import gc
 import json
 import logging
-import math
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Any, cast
@@ -10,6 +9,7 @@ import torch
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
+from maou.app.learning.adaptive_batch import round_to_power_of_two
 from maou.app.learning.callbacks import (
     ResourceMonitoringCallback,
     TimingCallback,
@@ -2125,9 +2125,7 @@ class TrainingBenchmarkUseCase:
             ) / 2
         else:
             median_cbs = sorted_estimates[mid]
-        cbs_rounded = int(
-            2 ** round(math.log2(max(1, median_cbs)))
-        )
+        cbs_rounded = round_to_power_of_two(median_cbs)
 
         # Generate recommendation based on tested range
         tested_sizes = sorted(bs for bs, _ in points)
@@ -2203,8 +2201,8 @@ def _build_adaptive_batch_recommendation(
     max_steps = max(min_steps, (cbs * 2) // physical_bs)
 
     # 2の冪乗に丸める
-    min_steps = int(2 ** round(math.log2(max(2, min_steps))))
-    max_steps = int(2 ** round(math.log2(max(min_steps, max_steps))))
+    min_steps = round_to_power_of_two(min_steps, minimum=2)
+    max_steps = round_to_power_of_two(max_steps, minimum=min_steps)
 
     target_effective_bs = physical_bs * min_steps
 

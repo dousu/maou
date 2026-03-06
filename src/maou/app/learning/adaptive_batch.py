@@ -16,6 +16,22 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+def round_to_power_of_two(value: float, *, minimum: int = 1) -> int:
+    """値を最も近い2の冪乗に丸める．
+
+    Args:
+        value: 丸める対象の値．
+        minimum: 下限値(デフォルト 1)．
+
+    Returns:
+        2の冪乗に丸められた整数．
+    """
+    clamped = max(minimum, value)
+    if clamped < 1:
+        return minimum
+    return max(minimum, int(2 ** round(math.log2(clamped))))
+
+
 @dataclass(frozen=True)
 class AdaptiveBatchConfig:
     """Adaptive batch size の設定．
@@ -171,10 +187,7 @@ class AdaptiveBatchController:
         raw_steps = smoothed_gns / self._physical_batch_size
 
         # 2の冪乗に丸める
-        if raw_steps < 1:
-            target = 1
-        else:
-            target = int(2 ** round(math.log2(raw_steps)))
+        target = round_to_power_of_two(raw_steps)
 
         # [min, max] にクリップ
         target = max(self._config.min_accumulation_steps, target)
