@@ -282,6 +282,25 @@ class TestTimingCallbackReset:
         for key in callback.timing_stats:
             assert len(callback.timing_stats[key]) == 0
 
+    def test_total_samples_excludes_warmup(self) -> None:
+        """total_samples がウォームアップバッチのサンプル数を含まない."""
+        callback = TimingCallback(warmup_batches=2)
+
+        callback.on_epoch_start(epoch_idx=0)
+        # warmup: batch 0, 1
+        for i in range(2):
+            self._run_batch(callback, batch_idx=i)
+
+        assert callback.total_samples == 0
+        assert callback.measured_batches == 0
+
+        # measured: batch 2, 3
+        for i in range(2, 4):
+            self._run_batch(callback, batch_idx=i)
+
+        assert callback.total_samples == 64  # 32 * 2 measured batches
+        assert callback.measured_batches == 2
+
     def test_reset_before_any_batch(self) -> None:
         """バッチ未実行状態で reset() を呼んでもエラーにならない."""
         callback = TimingCallback(warmup_batches=0)

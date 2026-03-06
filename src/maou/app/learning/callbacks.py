@@ -888,9 +888,6 @@ class TimingCallback(BaseCallback):
 
         self._temp_timings["data_loading"] = data_load_time
 
-        if context.batch_size is not None:
-            self.total_samples += context.batch_size
-
     def on_data_transfer_start(
         self, context: TrainingContext
     ) -> None:
@@ -1023,6 +1020,8 @@ class TimingCallback(BaseCallback):
                 batch_total_time
             )
             self.measured_batches += 1
+            if context.batch_size is not None:
+                self.total_samples += context.batch_size
 
         self.previous_batch_end_time = batch_end_time
 
