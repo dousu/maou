@@ -16,7 +16,9 @@ from maou.domain.data.stage1_generator import (
     Stage1DataGenerator,
 )
 from maou.domain.move.label import MOVE_LABELS_NUM
-from maou.infra.visualization.search_index import SearchIndex
+from maou.app.visualization.search_index_protocol import (
+    SearchIndexProtocol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ class DataRetriever:
 
     def __init__(
         self,
-        search_index: SearchIndex,
+        search_index: SearchIndexProtocol,
         file_paths: list[Path],
         array_type: str,
     ) -> None:

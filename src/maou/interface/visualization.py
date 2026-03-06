@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from maou.app.visualization.data_retrieval import DataRetriever
 from maou.app.visualization.record_renderer import (
     RecordRendererFactory,
+)
+from maou.app.visualization.search_index_protocol import (
+    SearchIndexProtocol,
 )
 from maou.domain.visualization.board_renderer import (
     BoardPosition as BoardPosition,  # noqa: F401
@@ -20,11 +23,6 @@ from maou.domain.visualization.board_renderer import (
 from maou.domain.visualization.move_label_converter import (
     MoveLabelConverter,
 )
-
-if TYPE_CHECKING:
-    from maou.infra.visualization.search_index import (
-        SearchIndex,
-    )
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ class VisualizationInterface:
 
     def __init__(
         self,
-        search_index: SearchIndex,
+        search_index: SearchIndexProtocol,
         file_paths: list[Path],
         array_type: str,
     ) -> None:
