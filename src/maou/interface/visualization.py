@@ -23,6 +23,12 @@ from maou.domain.visualization.board_renderer import (
 from maou.domain.visualization.move_label_converter import (
     MoveLabelConverter,
 )
+from maou.interface.data_io import (
+    load_hcpe_df,
+    load_preprocessing_df,
+    load_stage1_df,
+    load_stage2_df,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +56,21 @@ class VisualizationInterface:
         self.file_paths = file_paths
         self.array_type = array_type
 
+        # array_typeに応じたDataFrameローダーを選択
+        loader_map = {
+            "hcpe": load_hcpe_df,
+            "preprocessing": load_preprocessing_df,
+            "stage1": load_stage1_df,
+            "stage2": load_stage2_df,
+        }
+        load_df = loader_map[array_type]
+
         # アプリケーション層のサービスを初期化
         self.data_retriever = DataRetriever(
             search_index=search_index,
             file_paths=file_paths,
             array_type=array_type,
+            load_df=load_df,
         )
 
         # RecordRendererをファクトリで生成
