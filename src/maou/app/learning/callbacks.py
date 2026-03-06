@@ -1412,13 +1412,18 @@ class Stage2F1Callback(BaseCallback):
         if self._total_samples == 0:
             return None
         if self._num_batches == 1 or (
-            self._num_batches % self._postfix_sync_interval == 0
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval == 0
         ):
             self._cached_f1 = (
                 self._total_f1 / self._total_samples
             ).item()
             self._cached_loss = (
                 self._total_loss / self._num_batches
+            ).item()
+        elif self._num_batches == 0 and self._total_samples > 0:
+            self._cached_f1 = (
+                self._total_f1 / self._total_samples
             ).item()
         return {
             "f1": f"{self._cached_f1:.4f}",
@@ -1514,13 +1519,18 @@ class Stage1AccuracyCallback(BaseCallback):
         if self._total_elements == 0:
             return None
         if self._num_batches == 1 or (
-            self._num_batches % self._postfix_sync_interval == 0
+            self._num_batches > 0
+            and self._num_batches % self._postfix_sync_interval == 0
         ):
             self._cached_acc = (
                 self._total_correct / self._total_elements
             ).item()
             self._cached_loss = (
                 self._total_loss / self._num_batches
+            ).item()
+        elif self._num_batches == 0 and self._total_elements > 0:
+            self._cached_acc = (
+                self._total_correct / self._total_elements
             ).item()
         return {
             "acc": f"{self._cached_acc:.1%}",
