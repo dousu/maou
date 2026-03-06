@@ -280,6 +280,8 @@ def learn(
         streaming: Use streaming IterableDataset instead of Map-style Dataset
         streaming_train_source: StreamingDataSource for training data
         streaming_val_source: StreamingDataSource for validation data
+        gradient_accumulation_steps: Number of gradient accumulation steps.
+            Effective batch size = batch_size × gradient_accumulation_steps.
 
     Returns:
         JSON string with training results
@@ -311,6 +313,13 @@ def learn(
     elif batch_size <= 0:
         raise ValueError(
             f"batch_size must be positive, got {batch_size}"
+        )
+
+    # 勾配蓄積ステップ数バリデーション
+    if gradient_accumulation_steps < 1:
+        raise ValueError(
+            f"gradient_accumulation_steps must be >= 1, "
+            f"got {gradient_accumulation_steps}"
         )
 
     # DataLoaderのワーカー数設定 (デフォルト0)
@@ -567,6 +576,7 @@ def _run_stage1(
         compilation: torch.compileを有効化するか．
         stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 1 の訓練結果．
@@ -650,6 +660,7 @@ def _run_stage2(
         stage2_head_dropout: ヘッドのドロップアウト率(デフォルト: 0.0)．
         stage2_test_ratio: 検証データ分割比率(デフォルト: 0.0で分割なし)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 2 の訓練結果．
@@ -724,6 +735,7 @@ def _run_stage1_streaming(
         compilation: torch.compileを有効化するか．
         stage1_pos_weight: 正例の重み(デフォルト: 1.0)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 1 の訓練結果．
@@ -808,6 +820,7 @@ def _run_stage2_streaming(
         pin_memory: pinned memoryを有効にするか(デフォルト: False)．
         prefetch_factor: 各workerの先読みバッチ数(デフォルト: 2)．
         trainable_layers: 訓練可能レイヤー数．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         Stage 2 の訓練結果．
@@ -1039,6 +1052,8 @@ def learn_multi_stage(
         stage2_streaming_source: StreamingDataSource for Stage 2
         stage3_streaming_train_source: StreamingDataSource for Stage 3 training
         stage3_streaming_val_source: StreamingDataSource for Stage 3 validation
+        gradient_accumulation_steps: Number of gradient accumulation steps.
+            Effective batch size = batch_size × gradient_accumulation_steps.
 
     Returns:
         JSON string with training results

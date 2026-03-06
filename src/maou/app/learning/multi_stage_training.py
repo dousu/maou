@@ -430,6 +430,7 @@ def run_stage1_with_training_loop(
         config: Stage 1 の学習制御パラメータ．
         device: 学習デバイス (CPU or CUDA)．
         logger: ロガー．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         (StageResult, ReachableSquaresHead) のタプル．
@@ -578,6 +579,7 @@ def run_stage2_with_training_loop(
         config: Stage 2 の学習制御パラメータ．
         device: 学習デバイス (CPU or CUDA)．
         logger: ロガー．
+        gradient_accumulation_steps: 勾配蓄積ステップ数(デフォルト: 1)．
 
     Returns:
         (StageResult, LegalMovesHead) のタプル．
@@ -781,6 +783,8 @@ class MultiStageTrainingOrchestrator:
             stage2_config: Stage 2 の学習制御パラメータ．
             stage3_config: Configuration for Stage 3 (policy + value)
             save_checkpoints: Whether to save checkpoints after each stage
+            gradient_accumulation_steps: Number of gradient accumulation
+                steps. Effective batch size = batch_size × steps.
 
         Returns:
             Dictionary mapping TrainingStage to StageResult
