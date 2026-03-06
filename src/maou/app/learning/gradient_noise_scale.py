@@ -233,7 +233,10 @@ class GradientNoiseScaleEstimator:
             self._reset()
             return None
 
-        if mean_grad_norm_sq < 1e-30:
+        if (
+            math.isnan(mean_grad_norm_sq)
+            or mean_grad_norm_sq < 1e-30
+        ):
             logger.debug(
                 "Mean gradient norm too small (%.2e) for GNS estimation",
                 mean_grad_norm_sq,

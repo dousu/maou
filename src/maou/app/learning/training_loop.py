@@ -28,7 +28,34 @@ from maou.app.learning.policy_targets import (
 
 
 class TrainingLoop:
-    """Generic training loop with callback support."""
+    """Generic training loop with callback support.
+
+    Args:
+        model: 学習対象のモデル．
+        device: 計算デバイス(cpu / cuda)．
+        optimizer: オプティマイザ．
+        loss_fn_policy: 方策損失関数．
+        loss_fn_value: 価値損失関数．
+        policy_loss_ratio: 方策損失の重み係数．
+        value_loss_ratio: 価値損失の重み係数．
+        callbacks: 学習コールバックのリスト．
+        logger: ロガー．None の場合はモジュールデフォルトを使用．
+        gradient_accumulation_steps: 勾配蓄積ステップ数．
+            adaptive_batch_config が設定されている場合は無視される．
+        policy_target_mode: 方策ターゲットの計算方式．
+        adaptive_batch_config: GNS ベース adaptive batch の設定．
+            指定時は physical_batch_size も必須．
+        physical_batch_size: DataLoader の物理バッチサイズ．
+            adaptive_batch_config と合わせて使用する．
+        adaptive_batch_callback: Adaptive batch 表示用コールバック．
+            callbacks に含まれていなければ自動追加される．
+        gns_estimator: 外部で生成済みの GNS 推定器．
+            adaptive_controller と共に渡すとエポック間で
+            EMA 状態と accumulation_steps を引き継ぐ．
+            片方だけ渡した場合は警告付きで両方新規作成される．
+        adaptive_controller: 外部で生成済みの adaptive batch コントローラ．
+            gns_estimator と共に渡す必要がある．
+    """
 
     def __init__(
         self,
