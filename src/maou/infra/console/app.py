@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
 from types import ModuleType
-from typing import Any, Callable, MutableMapping, Sequence
+from collections.abc import Callable, MutableMapping, Sequence
+from typing import Any
 
 import click
 

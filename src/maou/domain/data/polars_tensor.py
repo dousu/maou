@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Union, cast
+from typing import Any, cast
 
 import numpy as np
 import polars as pl
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def polars_row_to_preprocessing_tensors(
-    row: Union[tuple, dict],
+    row: tuple | dict,
     *,
     from_dict: bool = False,
 ) -> tuple[
@@ -78,7 +78,7 @@ def polars_row_to_preprocessing_tensors(
 
 
 def polars_row_to_hcpe_arrays(
-    row: Union[tuple, dict],
+    row: tuple | dict,
     *,
     from_dict: bool = False,
 ) -> tuple[bytes, int, int, int]:
@@ -109,7 +109,7 @@ def polars_row_to_hcpe_arrays(
 
 
 def polars_row_to_stage1_tensors(
-    row: Union[tuple, dict],
+    row: tuple | dict,
     *,
     from_dict: bool = False,
 ) -> tuple[
@@ -160,7 +160,7 @@ def polars_row_to_stage1_tensors(
 
 
 def polars_row_to_stage2_tensors(
-    row: Union[tuple, dict],
+    row: tuple | dict,
     *,
     from_dict: bool = False,
 ) -> tuple[
@@ -212,13 +212,13 @@ def dataframe_to_tensor_batch(
     df: pl.DataFrame,
     *,
     array_type: str,
-) -> Union[
+) -> (
     tuple[
         tuple[torch.Tensor, torch.Tensor],
         tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-    ],
-    tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor],
-]:
+    ]
+    | tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]
+):
     """Convert an entire Polars DataFrame to batched tensors．
 
     Args:

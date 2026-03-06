@@ -8,7 +8,6 @@
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 from maou.domain.board.shogi import (
     DOMAIN_WHITE_MIN,
@@ -32,10 +31,10 @@ class MoveArrow:
         drop_piece_type: 駒打ちの場合の駒種（0=歩, 1=香, ...）．
     """
 
-    from_square: Optional[int]
+    from_square: int | None
     to_square: int
     is_drop: bool = False
-    drop_piece_type: Optional[int] = None
+    drop_piece_type: int | None = None
 
 
 @dataclass(frozen=True)
@@ -47,8 +46,8 @@ class BoardPosition:
         pieces_in_hand: 持ち駒配列（14要素: 先手7種 + 後手7種）
     """
 
-    board_id_positions: List[List[int]]
-    pieces_in_hand: List[int]
+    board_id_positions: list[list[int]]
+    pieces_in_hand: list[int]
 
     def __post_init__(self) -> None:
         """バリデーション: 盤面と持ち駒のサイズ確認．"""
@@ -138,10 +137,10 @@ class SVGBoardRenderer:
     def render(
         self,
         position: BoardPosition,
-        highlight_squares: Optional[List[int]] = None,
-        turn: Optional[Turn] = None,
-        record_id: Optional[str] = None,
-        move_arrow: Optional[MoveArrow] = None,
+        highlight_squares: list[int] | None = None,
+        turn: Turn | None = None,
+        record_id: str | None = None,
+        move_arrow: MoveArrow | None = None,
     ) -> str:
         """将棋盤をSVGとして描画する．
 
@@ -257,8 +256,8 @@ class SVGBoardRenderer:
 
     def _draw_header(
         self,
-        turn: Optional[Turn],
-        record_id: Optional[str],
+        turn: Turn | None,
+        record_id: str | None,
     ) -> str:
         """盤面上部のヘッダー（レコードIDと手番）を描画．
 
@@ -399,7 +398,7 @@ class SVGBoardRenderer:
 
     def _draw_pieces(
         self,
-        board_id_positions: List[List[int]],
+        board_id_positions: list[list[int]],
         highlight_set: set,
     ) -> str:
         """盤上の駒を描画．
@@ -490,7 +489,7 @@ class SVGBoardRenderer:
         return "\n".join(piece_parts)
 
     def _draw_pieces_in_hand(
-        self, pieces_in_hand: List[int]
+        self, pieces_in_hand: list[int]
     ) -> str:
         """持ち駒を描画．
 
@@ -531,7 +530,7 @@ class SVGBoardRenderer:
 
     def _draw_single_hand(
         self,
-        pieces: List[int],
+        pieces: list[int],
         x_base: float,
         y_base: float,
         title: str,
@@ -674,8 +673,8 @@ class SVGBoardRenderer:
 
     def _draw_arrow(
         self,
-        move_arrow: Optional[MoveArrow],
-        pieces_in_hand: List[int],
+        move_arrow: MoveArrow | None,
+        pieces_in_hand: list[int],
     ) -> str:
         """指し手を表す矢印を描画する．
 
@@ -779,7 +778,7 @@ class SVGBoardRenderer:
 
     def _get_hand_piece_display_index(
         self,
-        hand_pieces: List[int],
+        hand_pieces: list[int],
         piece_type: int,
     ) -> int:
         """持ち駒エリアにおける駒種の表示位置インデックスを取得する．

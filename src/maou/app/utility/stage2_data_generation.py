@@ -10,7 +10,7 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -32,7 +32,7 @@ class Stage2DataGenerationConfig:
     output_dir: Path
     output_data_name: str = "stage2"
     chunk_size: int = 1_000_000
-    cache_dir: Optional[Path] = None
+    cache_dir: Path | None = None
 
 
 class Stage2DataGenerationUseCase:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
 from torch.utils.data import DataLoader
@@ -50,7 +50,7 @@ class StageDataPipeline:
     """
 
     train_dataloader: DataLoader
-    val_dataloader: Optional[DataLoader]
+    val_dataloader: DataLoader | None
     loss_fn: torch.nn.Module
 
 
@@ -64,10 +64,10 @@ class StageComponents:
 
     model: torch.nn.Module
     train_dataloader: DataLoader
-    val_dataloader: Optional[DataLoader]
+    val_dataloader: DataLoader | None
     loss_fn: torch.nn.Module
     optimizer: torch.optim.Optimizer
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler]
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None
 
 
 class StageComponentFactory:
@@ -81,7 +81,7 @@ class StageComponentFactory:
         pos_weight: float = 1.0,
         num_workers: int = 0,
         pin_memory: bool = False,
-        prefetch_factor: Optional[int] = None,
+        prefetch_factor: int | None = None,
     ) -> StageDataPipeline:
         """Stage1 用のデータパイプラインを生成する．
 
@@ -174,7 +174,7 @@ class StageComponentFactory:
         test_ratio: float = 0.0,
         num_workers: int = 0,
         pin_memory: bool = False,
-        prefetch_factor: Optional[int] = None,
+        prefetch_factor: int | None = None,
     ) -> StageDataPipeline:
         """Stage2 用のデータパイプラインを生成する．
 
@@ -212,7 +212,7 @@ class StageComponentFactory:
             train_dataset, **dl_kwargs
         )
 
-        val_dataloader: Optional[DataLoader] = None
+        val_dataloader: DataLoader | None = None
         if test_ratio > 0.0 and val_ds is not None:
             raw_val = Stage2Dataset(datasource=val_ds)
             val_dataset = Stage2DatasetAdapter(raw_val)
@@ -327,17 +327,17 @@ class StageComponentFactory:
         batch_size: int,
         learning_rate: float,
         pos_weight: float = 1.0,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
-        head_hidden_dim: Optional[int] = None,
+        trainable_layers: int | None = None,
+        head_hidden_dim: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         num_workers: int = 0,
         pin_memory: bool = False,
-        prefetch_factor: Optional[int] = None,
+        prefetch_factor: int | None = None,
         total_epochs: int = 1,
     ) -> StageComponents:
         """Stage1 用のコンポーネント一式を生成する．
@@ -404,19 +404,19 @@ class StageComponentFactory:
         gamma_pos: float = 0.0,
         gamma_neg: float = 0.0,
         clip: float = 0.0,
-        head_hidden_dim: Optional[int] = None,
+        head_hidden_dim: int | None = None,
         head_dropout: float = 0.0,
         test_ratio: float = 0.0,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         num_workers: int = 0,
         pin_memory: bool = False,
-        prefetch_factor: Optional[int] = None,
+        prefetch_factor: int | None = None,
         total_epochs: int = 1,
     ) -> StageComponents:
         """Stage2 用のコンポーネント一式を生成する．
@@ -490,12 +490,12 @@ class StageComponentFactory:
         batch_size: int,
         learning_rate: float,
         pos_weight: float = 1.0,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
-        head_hidden_dim: Optional[int] = None,
+        trainable_layers: int | None = None,
+        head_hidden_dim: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         total_epochs: int = 1,
@@ -556,17 +556,17 @@ class StageComponentFactory:
         gamma_pos: float = 0.0,
         gamma_neg: float = 0.0,
         clip: float = 0.0,
-        head_hidden_dim: Optional[int] = None,
+        head_hidden_dim: int | None = None,
         head_dropout: float = 0.0,
         test_ratio: float = 0.0,
         dataloader_workers: int = 0,
         pin_memory: bool = False,
         prefetch_factor: int = 2,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         total_epochs: int = 1,
@@ -638,12 +638,12 @@ class StageComponentFactory:
         pipeline: StageDataPipeline,
         *,
         learning_rate: float,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
-        head_hidden_dim: Optional[int] = None,
+        trainable_layers: int | None = None,
+        head_hidden_dim: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         total_epochs: int = 1,
@@ -727,13 +727,13 @@ class StageComponentFactory:
         pipeline: StageDataPipeline,
         *,
         learning_rate: float,
-        head_hidden_dim: Optional[int] = None,
+        head_hidden_dim: int | None = None,
         head_dropout: float = 0.0,
-        lr_scheduler_name: Optional[str] = None,
+        lr_scheduler_name: str | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         base_batch_size: int = 256,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
         optimizer_name: str = "adamw",
         momentum: float = 0.9,
         total_epochs: int = 1,
@@ -816,7 +816,7 @@ class StageComponentFactory:
         head: torch.nn.Module,
         device: torch.device,
         *,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
         compilation: bool = False,
         actual_batch_size: int = 256,
         stage_name: str = "",

@@ -5,7 +5,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from maou.app.visualization.data_retrieval import DataRetriever
 from maou.app.visualization.record_renderer import (
@@ -31,7 +31,7 @@ class VisualizationInterface:
     def __init__(
         self,
         search_index: SearchIndex,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
     ) -> None:
         """可視化インターフェースを初期化．
@@ -63,7 +63,7 @@ class VisualizationInterface:
 
     def search_by_id(
         self, record_id: str
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """IDでレコードを検索し，ボードを描画．
 
         Args:
@@ -110,16 +110,16 @@ class VisualizationInterface:
 
     def search_by_eval_range(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page: int,
         page_size: int,
-    ) -> Tuple[
-        List[List[Any]],
+    ) -> tuple[
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
     ]:
         """評価値範囲で検索し，結果を表示．
 
@@ -212,9 +212,9 @@ class VisualizationInterface:
 
     def navigate_within_page(
         self,
-        cached_records: List[Dict[str, Any]],
+        cached_records: list[dict[str, Any]],
         record_index: int,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """ページ内レコード間をナビゲートする．
 
         Gradio Stateにキャッシュされたレコードを使用して，
@@ -251,7 +251,7 @@ class VisualizationInterface:
 
         return (board_svg, details)
 
-    def get_table_columns(self) -> List[str]:
+    def get_table_columns(self) -> list[str]:
         """検索結果テーブルのカラム名を取得する．
 
         array_typeに応じたカラム名をRendererから取得する．
@@ -265,7 +265,7 @@ class VisualizationInterface:
         """
         return self.renderer.get_table_columns()
 
-    def get_dataset_stats(self) -> Dict[str, Any]:
+    def get_dataset_stats(self) -> dict[str, Any]:
         """データセット統計情報を取得．
 
         Returns:
@@ -279,7 +279,7 @@ class VisualizationInterface:
 
     def get_id_suggestions(
         self, prefix: str, limit: int = 50
-    ) -> List[str]:
+    ) -> list[str]:
         """IDプレフィックスに基づく候補リストを取得．
 
         Args:
@@ -300,7 +300,7 @@ class VisualizationInterface:
             prefix.strip(), limit=limit
         )
 
-    def get_all_ids(self, limit: int = 1000) -> List[str]:
+    def get_all_ids(self, limit: int = 1000) -> list[str]:
         """全IDリストを取得（Dropdown初期化用）．
 
         Args:
@@ -316,8 +316,8 @@ class VisualizationInterface:
         return self.search_index.get_all_ids(limit=limit)
 
     def generate_analytics(
-        self, records: List[Dict[str, Any]]
-    ) -> Optional[Any]:
+        self, records: list[dict[str, Any]]
+    ) -> Any | None:
         """レコード群からデータ分析用のPlotly Figureを生成する．
 
         Args:

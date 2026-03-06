@@ -7,7 +7,7 @@ import bisect
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class SearchIndex:
 
     def __init__(
         self,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
         use_mock_data: bool = False,
     ) -> None:
@@ -52,20 +52,20 @@ class SearchIndex:
         self.use_mock_data = use_mock_data
 
         # インデックス構造
-        self._id_index: Dict[
-            str, Tuple[int, int]
+        self._id_index: dict[
+            str, tuple[int, int]
         ] = {}  # id -> (file_idx, row_idx)
-        self._eval_index: Dict[int, List[Tuple[int, int]]] = (
+        self._eval_index: dict[int, list[tuple[int, int]]] = (
             defaultdict(list)
         )  # eval -> [(file_idx, row_idx), ...]
         # モックモード用: 位置から評価値への逆引きマッピング
-        self._position_to_eval: Dict[Tuple[int, int], int] = {}
+        self._position_to_eval: dict[tuple[int, int], int] = {}
         self._total_records = 0
 
         # 事前計算済みソート済みデータ (_finalize_index で初期化)
-        self._sorted_eval_keys: List[int] = []
-        self._eval_cumulative_counts: List[int] = []
-        self._sorted_ids: List[str] = []
+        self._sorted_eval_keys: list[int] = []
+        self._eval_cumulative_counts: list[int] = []
+        self._sorted_ids: list[str] = []
 
         if use_mock_data:
             logger.warning(
@@ -144,7 +144,7 @@ class SearchIndex:
 
     def search_by_id(
         self, record_id: str
-    ) -> Optional[Tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """IDでレコードを検索．
 
         Args:
@@ -157,7 +157,7 @@ class SearchIndex:
 
     def get_eval_by_position(
         self, file_index: int, row_number: int
-    ) -> Optional[int]:
+    ) -> int | None:
         """位置から評価値を取得（モックモード用）．
 
         Args:
@@ -173,7 +173,7 @@ class SearchIndex:
 
     def search_id_prefix(
         self, prefix: str, limit: int = 50
-    ) -> List[str]:
+    ) -> list[str]:
         """IDプレフィックスで候補を検索．
 
         Args:
@@ -193,7 +193,7 @@ class SearchIndex:
         left = bisect.bisect_left(self._sorted_ids, prefix)
 
         # プレフィックスに一致するIDを limit 件まで収集
-        results: List[str] = []
+        results: list[str] = []
         for i in range(left, len(self._sorted_ids)):
             if self._sorted_ids[i].startswith(prefix):
                 results.append(self._sorted_ids[i])
@@ -205,8 +205,8 @@ class SearchIndex:
         return results
 
     def get_all_ids(
-        self, limit: Optional[int] = None
-    ) -> List[str]:
+        self, limit: int | None = None
+    ) -> list[str]:
         """全IDリストを取得（ソート済み）．
 
         Args:
@@ -222,11 +222,11 @@ class SearchIndex:
 
     def search_by_eval_range(
         self,
-        min_eval: Optional[int] = None,
-        max_eval: Optional[int] = None,
+        min_eval: int | None = None,
+        max_eval: int | None = None,
         offset: int = 0,
         limit: int = 20,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """評価値範囲でレコードを検索．
 
         Args:
@@ -269,7 +269,7 @@ class SearchIndex:
             )
 
             # 範囲内のキーに対して結果を収集 (offsetを考慮して必要分のみ)
-            results: List[Tuple[int, int]] = []
+            results: list[tuple[int, int]] = []
             skipped = 0
             for i in range(left, right):
                 eval_value = self._sorted_eval_keys[i]
@@ -293,8 +293,8 @@ class SearchIndex:
 
     def count_eval_range(
         self,
-        min_eval: Optional[int] = None,
-        max_eval: Optional[int] = None,
+        min_eval: int | None = None,
+        max_eval: int | None = None,
     ) -> int:
         """評価値範囲内のレコード総数をカウント．
 
@@ -353,9 +353,8 @@ class SearchIndex:
 
     def _build_from_files(
         self,
-        progress_callback: Optional[
-            Callable[[int, int, str], None]
-        ] = None,
+        progress_callback: Callable[[int, int, str], None]
+        | None = None,
     ) -> None:
         """実ファイルをスキャンして検索インデックスを構築．
 
@@ -459,13 +458,12 @@ class SearchIndex:
     @classmethod
     def build(
         cls,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
         use_mock_data: bool = False,
         num_mock_records: int = 1000,
-        progress_callback: Optional[
-            Callable[[int, int, str], None]
-        ] = None,
+        progress_callback: Callable[[int, int, str], None]
+        | None = None,
     ) -> "SearchIndex":
         """インデックスを構築して返す（ファクトリーメソッド）．
 

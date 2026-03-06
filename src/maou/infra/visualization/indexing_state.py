@@ -6,7 +6,7 @@
 
 import threading
 import time
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 
 class IndexingState:
@@ -26,13 +26,11 @@ class IndexingState:
             "idle", "indexing", "ready", "failed"
         ] = "idle"
         self._progress_message: str = ""
-        self._error_message: Optional[str] = None
+        self._error_message: str | None = None
         self._files_processed: int = 0
         self._total_files: int = 0
         self._records_indexed: int = 0
-        self._start_time: Optional[float] = (
-            None  # Unix timestamp
-        )
+        self._start_time: float | None = None  # Unix timestamp
         self._cancelled: bool = False
         self._lock = threading.Lock()
 
@@ -138,7 +136,7 @@ class IndexingState:
         with self._lock:
             return self._status
 
-    def get_progress(self) -> Dict[str, Any]:
+    def get_progress(self) -> dict[str, Any]:
         """進捗情報を取得．
 
         Returns:
@@ -152,7 +150,7 @@ class IndexingState:
                 "message": self._progress_message,
             }
 
-    def get_error(self) -> Optional[str]:
+    def get_error(self) -> str | None:
         """エラーメッセージを取得．
 
         Returns:
@@ -161,7 +159,7 @@ class IndexingState:
         with self._lock:
             return self._error_message
 
-    def estimate_remaining_time(self) -> Optional[int]:
+    def estimate_remaining_time(self) -> int | None:
         """推定残り時間を計算．
 
         現在の進捗に基づいて，残りの処理時間を秒単位で推定する．

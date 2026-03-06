@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Union
+from typing import Literal, TYPE_CHECKING
 
 from maou.domain.data.array_io import (
     DataIOArrayTypeError,
@@ -41,7 +41,7 @@ class DataIOService:
 
     @staticmethod
     def load_dataframe(
-        file_path: Union[str, Path],
+        file_path: str | Path,
         array_type: Literal[
             "hcpe", "preprocessing", "stage1", "stage2"
         ],
@@ -111,7 +111,7 @@ class DataIOService:
     @staticmethod
     def save_dataframe(
         df: pl.DataFrame,
-        file_path: Union[str, Path],
+        file_path: str | Path,
         array_type: Literal[
             "hcpe", "preprocessing", "stage1", "stage2"
         ],

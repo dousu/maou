@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 import google.cloud.storage as storage
 
@@ -61,7 +60,7 @@ class GCS(learn.CloudStorage):
         *,
         local_folder: Path,
         cloud_folder: str,
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
     ) -> None:
         """指定されたローカルフォルダ内のファイルをGCSバケットにアップロードする．
 

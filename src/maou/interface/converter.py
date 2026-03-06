@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 from maou.app.converter.hcpe_converter import (
     FeatureStore,
@@ -36,7 +35,7 @@ class FileSystem(metaclass=abc.ABCMeta):
     @staticmethod
     @abc.abstractmethod
     def collect_files(
-        p: Path, ext: Optional[str] = None
+        p: Path, ext: str | None = None
     ) -> list[Path]:
         pass
 
@@ -79,13 +78,13 @@ def transform(
     input_format: str,
     output_dir: Path,
     *,
-    min_rating: Optional[int] = None,
-    min_moves: Optional[int] = None,
-    max_moves: Optional[int] = None,
-    allowed_endgame_status: Optional[list[str]] = None,
-    exclude_moves: Optional[list[int]] = None,
-    feature_store: Optional[FeatureStore] = None,
-    max_workers: Optional[int] = None,
+    min_rating: int | None = None,
+    min_moves: int | None = None,
+    max_moves: int | None = None,
+    allowed_endgame_status: list[str] | None = None,
+    exclude_moves: list[int] | None = None,
+    feature_store: FeatureStore | None = None,
+    max_workers: int | None = None,
     chunk_size: int = 500_000,
 ) -> str:
     """Convert Shogi game records to HCPE format.

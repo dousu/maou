@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
 from torch.nn.common_types import _size_2_t
@@ -16,7 +14,7 @@ class ResidualBlock(nn.Module):
         in_channels: int,
         out_channels: int,
         stride: _size_2_t = 1,
-        downsample: Optional[nn.Module] = None,
+        downsample: nn.Module | None = None,
         kernel_size: _size_2_t = 3,
         padding: _size_2_t = 1,
     ):
@@ -86,7 +84,7 @@ class BottleneckBlock(nn.Module):
         in_channels: int,
         out_channels: int,
         stride: _size_2_t = 1,
-        downsample: Optional[nn.Module] = None,
+        downsample: nn.Module | None = None,
     ):
         super(BottleneckBlock, self).__init__()
 

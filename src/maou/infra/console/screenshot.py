@@ -10,7 +10,6 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -51,7 +50,7 @@ class ScreenshotAction:
 
     action_type: ActionType
     selector: str
-    value: Optional[str] = None
+    value: str | None = None
 
 
 def _parse_action(action_str: str) -> ScreenshotAction:
@@ -169,9 +168,9 @@ def _execute_action(
 
 def _capture_screenshot(
     url: str,
-    output: Optional[Path],
+    output: Path | None,
     base64_output: bool,
-    selector: Optional[str],
+    selector: str | None,
     full_page: bool,
     wait_for: str,
     timeout: int,
@@ -371,9 +370,9 @@ def _capture_screenshot(
 @handle_exception
 def screenshot(
     url: str,
-    output: Optional[Path],
+    output: Path | None,
     base64_output: bool,
-    selector: Optional[str],
+    selector: str | None,
     full_page: bool,
     wait_for: str,
     timeout: int,

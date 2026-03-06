@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 import maou.interface.converter as converter
 import maou.interface.learn as learn
@@ -20,7 +19,7 @@ class FileSystem(
 
     @staticmethod
     def collect_files(
-        p: Path, ext: Optional[str] = None
+        p: Path, ext: str | None = None
     ) -> list[Path]:
         if p.is_file():
             return [p]

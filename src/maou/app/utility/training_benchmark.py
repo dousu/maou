@@ -4,7 +4,7 @@ import logging
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import torch
 from torch.amp.grad_scaler import GradScaler
@@ -145,20 +145,20 @@ class BenchmarkResult:
     batches_per_second: float
 
     # リソース使用率情報
-    resource_usage: Optional[ResourceUsage] = None
+    resource_usage: ResourceUsage | None = None
 
     data_load_method: str = "map-style"
 
     # タイミング分布統計
-    timing_distribution: Optional[
-        dict[str, dict[str, float]]
-    ] = None
+    timing_distribution: dict[str, dict[str, float]] | None = (
+        None
+    )
 
     # モデル情報
-    model_info: Optional[ModelInfo] = None
+    model_info: ModelInfo | None = None
 
     # GPUメモリ内訳
-    gpu_memory_breakdown: Optional[GPUMemoryBreakdown] = None
+    gpu_memory_breakdown: GPUMemoryBreakdown | None = None
 
     @property
     def unaccounted_time(self) -> float:
@@ -279,9 +279,7 @@ class SingleEpochBenchmark:
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
-            self.scaler: Optional[GradScaler] = GradScaler(
-                "cuda"
-            )
+            self.scaler: GradScaler | None = GradScaler("cuda")
         else:
             self.scaler = None
 
@@ -313,7 +311,7 @@ class SingleEpochBenchmark:
     def _collect_gpu_memory_breakdown(
         self,
         model_param_bytes: int,
-    ) -> Optional[GPUMemoryBreakdown]:
+    ) -> GPUMemoryBreakdown | None:
         """GPUメモリ内訳を収集する．"""
         if self.device.type != "cuda":
             return None
@@ -348,7 +346,7 @@ class SingleEpochBenchmark:
         dataloader: DataLoader,
         *,
         warmup_batches: int = 5,
-        max_batches: Optional[int] = None,
+        max_batches: int | None = None,
         enable_profiling: bool = False,
     ) -> BenchmarkResult:
         """
@@ -498,7 +496,7 @@ class SingleEpochBenchmark:
         self,
         dataloader: DataLoader,
         *,
-        max_batches: Optional[int] = None,
+        max_batches: int | None = None,
     ) -> BenchmarkResult:
         """
         バリデーション(推論のみ)のベンチマークを実行する．
@@ -628,17 +626,17 @@ class SingleEpochBenchmark:
 class TrainingBenchmarkConfig:
     """Configuration for training benchmark."""
 
-    datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None
-    gpu: Optional[str] = None
+    datasource: LearningDataSource.DataSourceSpliter | None = (
+        None
+    )
+    gpu: str | None = None
     compilation: bool = False
     detect_anomaly: bool = False
     batch_size: int = 256
     dataloader_workers: int = 4
-    pin_memory: Optional[bool] = None
+    pin_memory: bool | None = None
     prefetch_factor: int = 2
-    cache_transforms: Optional[bool] = None
+    cache_transforms: bool | None = None
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
@@ -651,34 +649,34 @@ class TrainingBenchmarkConfig:
     optimizer_beta1: float = 0.9
     optimizer_beta2: float = 0.999
     optimizer_eps: float = 1e-8
-    lr_scheduler_name: Optional[str] = None
+    lr_scheduler_name: str | None = None
     warmup_batches: int = 10
-    max_batches: Optional[int] = None
+    max_batches: int | None = None
     enable_profiling: bool = False
     test_ratio: float = 0.2
     run_validation: bool = False
-    sample_ratio: Optional[float] = None
+    sample_ratio: float | None = None
     enable_resource_monitoring: bool = False
     model_architecture: BackboneArchitecture = "resnet"
     streaming: bool = False
-    streaming_train_source: Optional[StreamingDataSource] = None
-    streaming_val_source: Optional[StreamingDataSource] = None
+    streaming_train_source: StreamingDataSource | None = None
+    streaming_val_source: StreamingDataSource | None = None
 
     # Stage 関連
     stage: int = 3
-    stage1_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None
-    stage2_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None
-    stage2_streaming_train_source: Optional[
-        StreamingDataSource
-    ] = None
-    stage2_streaming_val_source: Optional[
-        StreamingDataSource
-    ] = None
-    stage12_lr_scheduler_name: Optional[str] = None
+    stage1_datasource: (
+        LearningDataSource.DataSourceSpliter | None
+    ) = None
+    stage2_datasource: (
+        LearningDataSource.DataSourceSpliter | None
+    ) = None
+    stage2_streaming_train_source: (
+        StreamingDataSource | None
+    ) = None
+    stage2_streaming_val_source: StreamingDataSource | None = (
+        None
+    )
+    stage12_lr_scheduler_name: str | None = None
     stage12_compilation: bool = False
 
     # Stage 1/2 Head パラメータ
@@ -696,15 +694,15 @@ class TrainingBenchmarkConfig:
 
     # Layer freezing
     freeze_backbone: bool = False
-    trainable_layers: Optional[int] = None
+    trainable_layers: int | None = None
 
     # Stage-specific batch sizes
-    stage1_batch_size: Optional[int] = None
-    stage2_batch_size: Optional[int] = None
+    stage1_batch_size: int | None = None
+    stage2_batch_size: int | None = None
 
     # Sweep parameters
-    batch_sizes: Optional[list[int]] = None
-    learning_rates: Optional[list[float]] = None
+    batch_sizes: list[int] | None = None
+    learning_rates: list[float] | None = None
     estimate_cbs: bool = False
 
 
@@ -1178,7 +1176,7 @@ class TrainingBenchmarkUseCase:
 
     def _resolve_trainable_layers(
         self, config: TrainingBenchmarkConfig
-    ) -> Optional[int]:
+    ) -> int | None:
         """Resolve effective trainable_layers from config options.
 
         Returns:
@@ -1470,7 +1468,7 @@ class TrainingBenchmarkUseCase:
 
         # Run validation benchmark if requested
         validation_result = None
-        validation_skipped_reason: Optional[str] = None
+        validation_skipped_reason: str | None = None
 
         if config.run_validation:
             if config.stage == 1:
@@ -1938,7 +1936,7 @@ class TrainingBenchmarkUseCase:
     @staticmethod
     def _recommend_max_batch_size(
         results: list[dict[str, Any]],
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """GPU メモリ使用量からバッチサイズの最大推奨値を推定する．"""
         # Need at least 2 data points to extrapolate
         points: list[tuple[int, int, int, int]] = []
@@ -2008,7 +2006,7 @@ class TrainingBenchmarkUseCase:
     @staticmethod
     def _estimate_cbs_from_sweep(
         results: list[dict[str, Any]],
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """複数バッチサイズの結果からCBSを推定する．
 
         CBS推定手法: 効率スケーリング分析

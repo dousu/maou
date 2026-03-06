@@ -8,7 +8,7 @@ datasets larger than available RAM．
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, Generator, Optional
+from collections.abc import Generator
 
 import duckdb
 import duckdb.typing
@@ -65,7 +65,7 @@ def get_disk_usage(path: Path) -> tuple[int, int, int]:
 
 def estimate_resource_requirements(
     unique_positions: int,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Estimate resource requirements for preprocessing.
 
     Args:
@@ -182,7 +182,7 @@ class IntermediateDataStore:
             position_count_threshold
         )
         self._prior_strength = prior_strength
-        self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._conn: duckdb.DuckDBPyConnection | None = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
         self._sparse_buffer: list[pl.DataFrame] = []
@@ -636,9 +636,9 @@ class IntermediateDataStore:
 
     def check_disk_space(
         self,
-        output_dir: Optional[Path] = None,
+        output_dir: Path | None = None,
         use_chunked_mode: bool = True,
-    ) -> Dict[str, float | int | bool | None]:
+    ) -> dict[str, float | int | bool | None]:
         """Check if sufficient disk space is available.
 
         Args:
@@ -667,7 +667,7 @@ class IntermediateDataStore:
             else "peak_disk_gb_bulk"
         )
 
-        result: Dict[str, float | int | bool | None] = {
+        result: dict[str, float | int | bool | None] = {
             "unique_positions": total_count,
             "estimated_memory_gb": requirements[
                 "finalize_memory_gb"

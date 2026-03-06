@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -84,7 +84,7 @@ class ModelIO:
         model: Network,
         architecture: BackboneArchitecture,
         *,
-        trainable_layers: Optional[int] = None,
+        trainable_layers: int | None = None,
     ) -> str:
         """Generate model tag from architecture and parameter count.
 
@@ -286,10 +286,10 @@ class ModelIO:
         epoch: int,
         device: torch.device,
         architecture: BackboneArchitecture,
-        cloud_storage: Optional[CloudStorage] = None,
+        cloud_storage: CloudStorage | None = None,
         verify_export: bool = False,
-        architecture_config: Optional[dict[str, Any]] = None,
-        hand_projection_dim: Optional[int] = None,
+        architecture_config: dict[str, Any] | None = None,
+        hand_projection_dim: int | None = None,
         save_split_params: bool = False,
     ) -> None:
         try:

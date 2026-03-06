@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 import polars as pl
 

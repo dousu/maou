@@ -2,7 +2,7 @@ import abc
 import logging
 from collections.abc import Sized
 from dataclasses import dataclass
-from typing import Optional, cast
+from typing import cast
 
 import numpy as np
 import torch
@@ -55,17 +55,15 @@ class KifDataset(Dataset, Sized):
         self,
         *,
         datasource: DataSource,
-        transform: Optional[Transform] = None,
+        transform: Transform | None = None,
         cache_transforms: bool = False,
     ):
         self.__datasource = datasource
-        self.transform: Optional[Transform] = transform
+        self.transform: Transform | None = transform
         self.logger.info(f"{len(self.__datasource)} samples")
-        self._cached_samples: Optional[list[_CachedSample]] = (
-            None
-        )
+        self._cached_samples: list[_CachedSample] | None = None
         self._cache_transforms_enabled: bool = False
-        self._has_move_win_rate: Optional[bool] = None
+        self._has_move_win_rate: bool | None = None
 
         should_cache = (
             cache_transforms and self.transform is not None

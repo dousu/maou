@@ -3,14 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Optional,
-    Tuple,
-    Type,
-    cast,
-)
+from typing import Final, TYPE_CHECKING, cast
 
 import torch
 from torch._dynamo.exc import (
@@ -39,11 +32,10 @@ else:  # pragma: no cover - optional import for CUDA builds only
 
 InductorError = InductorErrorType
 
-
 logger = logging.getLogger(__name__)
 
 _DYNAMIC_COMPILATION: Final[bool] = False
-_FALLBACK_EXCEPTIONS: Final[Tuple[Type[Exception], ...]] = (
+_FALLBACK_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
     BackendCompilerFailed,
     TorchRuntimeError,
     InductorError,
@@ -52,7 +44,7 @@ _FALLBACK_EXCEPTIONS: Final[Tuple[Type[Exception], ...]] = (
 
 
 def compile_module(
-    module: torch.nn.Module, *, dynamic: Optional[bool] = None
+    module: torch.nn.Module, *, dynamic: bool | None = None
 ) -> torch.nn.Module:
     """Return a ``torch.compile`` wrapped module.
 

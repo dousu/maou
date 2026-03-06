@@ -11,7 +11,8 @@ import importlib
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Callable, Optional, cast
+from collections.abc import Callable
+from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
@@ -247,7 +248,7 @@ class VisionTransformer(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(self.config.embed_dim)
-        self.head: Optional[nn.Linear]
+        self.head: nn.Linear | None
         if self.config.use_head:
             self.head = nn.Linear(self.config.embed_dim, 1)
         else:

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
-from typing import Any, Callable, Literal, Tuple, Union
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Literal, TypeAlias
 
 import torch
 from torch import nn
@@ -34,8 +34,7 @@ DEFAULT_BOARD_VOCAB_SIZE = 256
 BOARD_EMBEDDING_DIM = 32
 DEFAULT_HAND_PROJECTION_DIM = 32
 
-
-ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
+ModelInputs: TypeAlias = torch.Tensor | Sequence[torch.Tensor]
 PIECES_IN_HAND_VECTOR_SIZE = len(shogi.MAX_PIECES_IN_HAND) * 2
 
 
@@ -48,12 +47,12 @@ class HeadlessNetwork(nn.Module):
         board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
         embedding_dim: int = BOARD_EMBEDDING_DIM,
         hand_projection_dim: int = 0,
-        board_size: Tuple[int, int] = (9, 9),
+        board_size: tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
-        layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
-        strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
-        out_channels: Tuple[int, int, int, int] = (
+        layers: tuple[int, int, int, int] = (2, 2, 2, 2),
+        strides: tuple[int, int, int, int] = (1, 2, 2, 2),
+        out_channels: tuple[int, int, int, int] = (
             64,
             128,
             256,
@@ -554,7 +553,7 @@ class ReachableSquaresHead(nn.Module):
         self,
         *,
         input_dim: int,
-        board_size: Tuple[int, int] = (9, 9),
+        board_size: tuple[int, int] = (9, 9),
         hidden_dim: int | None = None,
     ) -> None:
         """Initialize ReachableSquaresHead.
@@ -674,12 +673,12 @@ class Network(HeadlessNetwork):
         board_vocab_size: int = DEFAULT_BOARD_VOCAB_SIZE,
         embedding_dim: int = BOARD_EMBEDDING_DIM,
         hand_projection_dim: int = DEFAULT_HAND_PROJECTION_DIM,
-        board_size: Tuple[int, int] = (9, 9),
+        board_size: tuple[int, int] = (9, 9),
         architecture: BackboneArchitecture = "resnet",
         block: type[nn.Module] = BottleneckBlock,
-        layers: Tuple[int, int, int, int] = (2, 2, 2, 2),
-        strides: Tuple[int, int, int, int] = (1, 2, 2, 2),
-        out_channels: Tuple[int, int, int, int] = (
+        layers: tuple[int, int, int, int] = (2, 2, 2, 2),
+        strides: tuple[int, int, int, int] = (1, 2, 2, 2),
+        out_channels: tuple[int, int, int, int] = (
             64,
             128,
             256,

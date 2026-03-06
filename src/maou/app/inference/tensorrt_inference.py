@@ -1,7 +1,7 @@
 import ctypes
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import tensorrt as trt
@@ -313,13 +313,13 @@ class TensorRTInference:
 
     @staticmethod
     def infer(
-        onnx_path: Optional[Path],
+        onnx_path: Path | None,
         board_data: np.ndarray,
         hand_data: np.ndarray,
         num: int,
         cuda_available: bool,
         workspace_size_mb: int = 256,
-        engine_path: Optional[Path] = None,
+        engine_path: Path | None = None,
     ) -> tuple[list[int], float]:
         """TensorRTエンジンで推論を実行する．
 

@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -78,7 +77,7 @@ class S3(learn.CloudStorage):
         *,
         local_folder: Path,
         cloud_folder: str,
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
     ) -> None:
         """指定されたローカルフォルダ内のファイルをS3バケットにアップロードする.
 

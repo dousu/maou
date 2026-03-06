@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Callable, cast
+from collections.abc import Callable
+from typing import Any, TYPE_CHECKING, cast
 
 from maou.infra.app_logging import (
     app_logger,

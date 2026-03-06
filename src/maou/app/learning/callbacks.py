@@ -3,7 +3,7 @@ import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Union
+from typing import Protocol, TypeAlias
 
 import torch
 from torch.utils.tensorboard import (
@@ -19,10 +19,10 @@ from maou.app.learning.resource_monitor import (
     SystemResourceMonitor,
 )
 
-ModelInputs = Union[torch.Tensor, Sequence[torch.Tensor]]
+ModelInputs: TypeAlias = torch.Tensor | Sequence[torch.Tensor]
 
 
-def _safe_average(total: float, count: int) -> Optional[float]:
+def _safe_average(total: float, count: int) -> float | None:
     """countが正の場合のみ平均を返す．countが0ならNone．"""
     return total / count if count > 0 else None
 
@@ -36,13 +36,13 @@ class TrainingContext:
     inputs: ModelInputs
     labels_policy: torch.Tensor
     labels_value: torch.Tensor
-    legal_move_mask: Optional[torch.Tensor]
-    outputs_policy: Optional[torch.Tensor] = None
-    outputs_value: Optional[torch.Tensor] = None
-    loss: Optional[torch.Tensor] = None
-    batch_size: Optional[int] = None
-    policy_target_distribution: Optional[torch.Tensor] = None
-    move_win_rate: Optional[torch.Tensor] = None
+    legal_move_mask: torch.Tensor | None
+    outputs_policy: torch.Tensor | None = None
+    outputs_value: torch.Tensor | None = None
+    loss: torch.Tensor | None = None
+    batch_size: int | None = None
+    policy_target_distribution: torch.Tensor | None = None
+    move_win_rate: torch.Tensor | None = None
 
 
 class TrainingCallback(Protocol):
@@ -218,7 +218,7 @@ class LoggingCallback(BaseCallback):
         self,
         writer: SummaryWriter,
         dataloader_length: int,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ):
         self.writer = writer
         self.dataloader_length = dataloader_length
@@ -265,9 +265,9 @@ class ValidationMetrics:
     policy_top5_accuracy: float
     policy_f1_score: float
     value_high_confidence_rate: float
-    policy_top1_win_rate: Optional[float] = None
-    policy_move_label_ce: Optional[float] = None
-    policy_expected_win_rate: Optional[float] = None
+    policy_top1_win_rate: float | None = None
+    policy_move_label_ce: float | None = None
+    policy_expected_win_rate: float | None = None
 
     def format_log_lines(self) -> str:
         """Format metrics as multi-line log output for console."""
@@ -301,7 +301,7 @@ class ValidationCallback(BaseCallback):
     エポック終了時の ``get_average_metrics()`` でのみ ``.item()`` を呼ぶ．
     """
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: logging.Logger | None = None):
         self.logger = logger or logging.getLogger(__name__)
         self._running_vloss: torch.Tensor = torch.tensor(0.0)
         self._policy_cross_entropy_sum: torch.Tensor = (
@@ -833,7 +833,7 @@ class TimingCallback(BaseCallback):
 
     def __init__(self, warmup_batches: int = 5):
         self.warmup_batches = warmup_batches
-        self.timing_stats: Dict[str, List[float]] = {
+        self.timing_stats: dict[str, list[float]] = {
             "data_loading": [],
             "gpu_transfer": [],
             "forward_pass": [],
@@ -848,9 +848,9 @@ class TimingCallback(BaseCallback):
         self._last_batch_loss: torch.Tensor = torch.tensor(0.0)
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
-        self.previous_batch_end_time: Optional[float] = None
-        self._measurement_start_time: Optional[float] = None
-        self._temp_timings: Dict[str, float] = {}
+        self.previous_batch_end_time: float | None = None
+        self._measurement_start_time: float | None = None
+        self._temp_timings: dict[str, float] = {}
         self._device_initialized: bool = False
 
     def on_epoch_start(self, epoch_idx: int) -> None:
@@ -1010,14 +1010,14 @@ class TimingCallback(BaseCallback):
 
     def get_timing_statistics(
         self,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Get averaged timing statistics."""
         if not self.timing_stats["total_batch"]:
             raise RuntimeError(
                 "No batches were processed for timing measurement"
             )
 
-        def average(values: List[float]) -> float:
+        def average(values: list[float]) -> float:
             return (
                 float(sum(values)) / float(len(values))
                 if len(values) > 0
@@ -1050,7 +1050,7 @@ class TimingCallback(BaseCallback):
 
     def get_timing_distribution(
         self,
-    ) -> Optional[dict[str, dict[str, float]]]:
+    ) -> dict[str, dict[str, float]] | None:
         """Get timing distribution statistics (std dev, min, max, percentiles).
 
         Returns:
@@ -1122,7 +1122,7 @@ class TimingCallback(BaseCallback):
 
     def get_performance_metrics(
         self, total_batches: int
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Get performance metrics.
 
         ウォームアップ除外の計測区間に基づくメトリクスを返す．
@@ -1179,7 +1179,7 @@ class TimingCallback(BaseCallback):
 
     def get_loss_metrics(
         self, total_batches: int
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Get loss metrics.
 
         エポック終了時にのみ呼ばれる前提のため，
@@ -1205,7 +1205,7 @@ class ResourceMonitoringCallback(BaseCallback):
     def __init__(
         self,
         device: torch.device,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ):
         """
         Args:
@@ -1221,7 +1221,7 @@ class ResourceMonitoringCallback(BaseCallback):
         )
 
         # GPU監視（CUDA使用時のみ）
-        self.gpu_monitor: Optional[GPUResourceMonitor] = None
+        self.gpu_monitor: GPUResourceMonitor | None = None
         if self.device.type == "cuda":
             gpu_index = (
                 self.device.index
@@ -1413,7 +1413,8 @@ class Stage2F1Callback(BaseCallback):
             return None
         if self._num_batches == 1 or (
             self._num_batches > 0
-            and self._num_batches % self._postfix_sync_interval == 0
+            and self._num_batches % self._postfix_sync_interval
+            == 0
         ):
             self._cached_f1 = (
                 self._total_f1 / self._total_samples
@@ -1520,7 +1521,8 @@ class Stage1AccuracyCallback(BaseCallback):
             return None
         if self._num_batches == 1 or (
             self._num_batches > 0
-            and self._num_batches % self._postfix_sync_interval == 0
+            and self._num_batches % self._postfix_sync_interval
+            == 0
         ):
             self._cached_acc = (
                 self._total_correct / self._total_elements
@@ -1528,7 +1530,9 @@ class Stage1AccuracyCallback(BaseCallback):
             self._cached_loss = (
                 self._total_loss / self._num_batches
             ).item()
-        elif self._num_batches == 0 and self._total_elements > 0:
+        elif (
+            self._num_batches == 0 and self._total_elements > 0
+        ):
             self._cached_acc = (
                 self._total_correct / self._total_elements
             ).item()

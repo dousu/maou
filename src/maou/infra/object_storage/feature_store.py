@@ -2,7 +2,7 @@ import contextlib
 import logging
 import multiprocessing as mp
 from collections.abc import Generator
-from typing import Literal, Optional
+from typing import Literal
 
 import polars as pl
 
@@ -56,7 +56,7 @@ class ObjectStorageFeatureStore(
         # 最大値指定
         self.max_cached_bytes = max_cached_bytes
         # アップロード用のプロセスを別でたてる（spawn contextを使用）
-        self.queue: mp.Queue[Optional[tuple[str, bytes]]] = (
+        self.queue: mp.Queue[tuple[str, bytes] | None] = (
             _mp_context.Queue(maxsize=max_queue_size)
         )
         self.uploader_processes = [
@@ -94,8 +94,8 @@ class ObjectStorageFeatureStore(
         name: str,
         key_columns: list[str],
         dataframe: pl.DataFrame,
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         """GCSにデータを保存する.
         すでに同じIDが存在する場合は更新する
@@ -123,8 +123,8 @@ class ObjectStorageFeatureStore(
         self,
         *,
         key_columns: list[str],
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         """バッファのデータを一括して保存.
         同じスキーマの配列を連結して大きなファイルにまとめることで効率化

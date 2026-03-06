@@ -5,7 +5,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import ContextManager, Dict, Generator, Optional
+from collections.abc import Generator
+from contextlib import AbstractContextManager
 
 import numpy as np
 import polars as pl
@@ -33,7 +34,7 @@ class FeatureStore(metaclass=abc.ABCMeta):
     """
 
     @abc.abstractmethod
-    def feature_store(self) -> ContextManager[None]:
+    def feature_store(self) -> AbstractContextManager[None]:
         pass
 
     @abc.abstractmethod
@@ -43,8 +44,8 @@ class FeatureStore(metaclass=abc.ABCMeta):
         name: str,
         key_columns: list[str],
         dataframe: pl.DataFrame,
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         pass
 
@@ -68,7 +69,7 @@ class HCPEConverter:
     logger: logging.Logger = logging.getLogger(__name__)
 
     def __init__(
-        self, *, feature_store: Optional[FeatureStore] = None
+        self, *, feature_store: FeatureStore | None = None
     ):
         """Initialize HCPE converter.
 
@@ -82,11 +83,11 @@ class HCPEConverter:
         input_paths: list[Path]
         input_format: str
         output_dir: Path
-        min_rating: Optional[int] = None
-        min_moves: Optional[int] = None
-        max_moves: Optional[int] = None
-        allowed_endgame_status: Optional[list[str]] = None
-        exclude_moves: Optional[list[int]] = None
+        min_rating: int | None = None
+        min_moves: int | None = None
+        max_moves: int | None = None
+        allowed_endgame_status: list[str] | None = None
+        exclude_moves: list[int] | None = None
         max_workers: int
         chunk_size: int = 500_000
 
@@ -95,21 +96,21 @@ class HCPEConverter:
         file: Path,
         input_format: str,
         output_dir: Path,
-        min_rating: Optional[int],
-        min_moves: Optional[int],
-        max_moves: Optional[int],
-        allowed_endgame_status: Optional[list[str]],
-        exclude_moves: Optional[list[int]],
+        min_rating: int | None,
+        min_moves: int | None,
+        max_moves: int | None,
+        allowed_endgame_status: list[str] | None,
+        exclude_moves: list[int] | None,
     ) -> tuple[str, str]:
         """Process a single file using Polars DataFrames (outputs .feather files)．"""
         logger = logging.getLogger(__name__)
 
         def game_filter(
             parser: Parser,
-            min_rating: Optional[int] = None,
-            min_moves: Optional[int] = None,
-            max_moves: Optional[int] = None,
-            allowed_endgame_status: Optional[list[str]] = None,
+            min_rating: int | None = None,
+            min_moves: int | None = None,
+            max_moves: int | None = None,
+            allowed_endgame_status: list[str] | None = None,
         ) -> bool:
             """指定された条件を満たす場合Trueを返す"""
             moves: int = len(parser.moves())
@@ -273,7 +274,7 @@ class HCPEConverter:
             logger.error(f"Error processing file {file}: {e}")
             return (str(file), f"error: {str(e)}")
 
-    def convert(self, option: ConvertOption) -> Dict[str, str]:
+    def convert(self, option: ConvertOption) -> dict[str, str]:
         """HCPEファイルを作成する (並列処理版)．
 
         処理フロー:
@@ -281,7 +282,7 @@ class HCPEConverter:
         2. chunk_size > 0 の場合，個別ファイルをチャンクにマージ
         3. feature_store が設定されている場合，チャンクをアップロード
         """
-        conversion_result: Dict[str, str] = {}
+        conversion_result: dict[str, str] = {}
         self.logger.debug(
             f"変換対象のファイル {option.input_paths}"
         )
@@ -382,7 +383,7 @@ class HCPEConverter:
     def _chunk_and_upload(
         self,
         *,
-        conversion_result: Dict[str, str],
+        conversion_result: dict[str, str],
         output_dir: Path,
         chunk_size: int,
     ) -> None:

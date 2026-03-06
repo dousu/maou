@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Fix matplotlib backend for Google Colab compatibility
 # matplotlib reads MPLBACKEND during import, so we must fix it before importing
@@ -331,9 +331,9 @@ class GradioVisualizationServer:
 
     def __init__(
         self,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
-        model_path: Optional[Path] = None,
+        model_path: Path | None = None,
         use_mock_data: bool = False,
     ) -> None:
         """サーバーを初期化．
@@ -366,7 +366,7 @@ class GradioVisualizationServer:
         # Initialize threading infrastructure
         self.indexing_state = IndexingState()
         self._index_lock = threading.Lock()
-        self._indexing_thread: Optional[threading.Thread] = None
+        self._indexing_thread: threading.Thread | None = None
 
         if self.has_data:
             # Start background indexing instead of blocking
@@ -409,7 +409,7 @@ class GradioVisualizationServer:
 
     def _build_index_background(
         self,
-        file_paths: List[Path],
+        file_paths: list[Path],
         array_type: str,
         use_mock_data: bool,
     ) -> None:
@@ -482,7 +482,7 @@ class GradioVisualizationServer:
 
     def _check_indexing_status(
         self,
-    ) -> Tuple[str, gr.Button, gr.Button, str]:
+    ) -> tuple[str, gr.Button, gr.Button, str]:
         """インデックス作成状態をポーリングしてUI更新を返す．
 
         ローディングスピナーと推定残り時間を含むステータスメッセージ，
@@ -595,7 +595,7 @@ class GradioVisualizationServer:
         self,
         prev_status: str,
         page_size: int,
-    ) -> Tuple[
+    ) -> tuple[
         Any,  # status_markdown
         Any,  # load_btn
         Any,  # rebuild_btn
@@ -650,7 +650,7 @@ class GradioVisualizationServer:
         )
 
         # gr.update()の14個のデータコンポーネント（更新しない場合）
-        no_data_updates: Tuple[Any, ...] = (
+        no_data_updates: tuple[Any, ...] = (
             gr.update(),  # results_table
             gr.update(),  # page_info
             gr.update(),  # board_display
@@ -776,7 +776,7 @@ class GradioVisualizationServer:
                 page_size=page_size,
             )
             stats = self._get_current_stats()
-            data_outputs: Tuple[Any, ...] = (
+            data_outputs: tuple[Any, ...] = (
                 *paginate_result,
                 stats,
             )
@@ -908,14 +908,14 @@ class GradioVisualizationServer:
         else:
             return "**Status:** ⚪ No data loaded - select a data source to begin"
 
-    def _resolve_directory(self, dir_path: str) -> List[Path]:
+    def _resolve_directory(self, dir_path: str) -> list[Path]:
         """Resolve directory to list of .feather files．
 
         Args:
             dir_path: Directory path string from UI input
 
         Returns:
-            List of .feather file paths sorted by name
+            list of .feather file paths sorted by name
 
         Raises:
             ValueError: If directory not found, empty, or not a directory
@@ -945,14 +945,14 @@ class GradioVisualizationServer:
         )
         return sorted(feather_files)
 
-    def _resolve_file_list(self, files_str: str) -> List[Path]:
+    def _resolve_file_list(self, files_str: str) -> list[Path]:
         """Resolve comma-separated file paths．
 
         Args:
             files_str: Comma-separated file paths from UI input
 
         Returns:
-            List of validated .feather file paths
+            list of validated .feather file paths
 
         Raises:
             ValueError: If files not found or not .feather format
@@ -991,23 +991,23 @@ class GradioVisualizationServer:
         dir_path: str,
         files_path: str,
         array_type: str,
-    ) -> Tuple[str, bool, str, Any]:
+    ) -> tuple[str, bool, str, Any]:
         """Load new data source and rebuild index in background．
 
         Args:
-            source_mode: "Directory" or "File List"
+            source_mode: "Directory" or "File list"
             dir_path: Directory path (used if source_mode == "Directory")
-            files_path: Comma-separated files (used if source_mode == "File List")
+            files_path: Comma-separated files (used if source_mode == "File list")
             array_type: Data array type (hcpe, preprocessing, stage1, stage2)
 
         Returns:
-            Tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
+            tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
         """
         # Step 1: Validate and resolve paths
         try:
             if source_mode == "Directory":
                 file_paths = self._resolve_directory(dir_path)
-            else:  # "File List"
+            else:  # "File list"
                 file_paths = self._resolve_file_list(files_path)
         except ValueError as e:
             logger.error(f"Path resolution failed: {e}")
@@ -1068,11 +1068,11 @@ class GradioVisualizationServer:
             ),  # タイマーを開始（公式パターン）
         )
 
-    def _rebuild_index(self) -> Tuple[str, bool, str, Any]:
+    def _rebuild_index(self) -> tuple[str, bool, str, Any]:
         """Rebuild search index from current file paths in background．
 
         Returns:
-            Tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
+            tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
         """
         if not self.has_data or not self.file_paths:
             logger.warning(
@@ -1138,17 +1138,15 @@ class GradioVisualizationServer:
 
     def _get_empty_state_outputs(
         self,
-    ) -> Tuple[
-        List[List[Any]],  # table_data
+    ) -> tuple[
+        list[list[Any]],  # table_data
         str,  # page_info
         str,  # board_display
-        Dict[str, Any],  # record_details
-        List[Dict[str, Any]],  # cached_records
+        dict[str, Any],  # record_details
+        list[dict[str, Any]],  # cached_records
         int,  # record_index
         str,  # record_indicator
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,  # prev_btn
         gr.Button,  # next_btn
         gr.Button,  # prev_record_btn
@@ -1158,10 +1156,10 @@ class GradioVisualizationServer:
         """Generate output values for empty state (no data loaded)．
 
         Returns:
-            Tuple matching outputs for pagination methods (13 values).
+            tuple matching outputs for pagination methods (13 values).
         """
-        empty_table: List[
-            List[Any]
+        empty_table: list[
+            list[Any]
         ] = []  # Empty list for results_table
 
         page_info = "No data loaded"
@@ -1173,7 +1171,7 @@ class GradioVisualizationServer:
             "instruction": "Use 'Data Source Management' section to load data",
         }
 
-        cached_records: List[Dict[str, Any]] = []
+        cached_records: list[dict[str, Any]] = []
         record_index = 0
         record_indicator = "Record 0 / 0"
         analytics_figure = (
@@ -1198,18 +1196,16 @@ class GradioVisualizationServer:
 
     def _get_empty_state_navigation(
         self,
-    ) -> Tuple[
+    ) -> tuple[
         int,  # current_page
         int,  # current_record_index
-        List[List[Any]],  # table_data
+        list[list[Any]],  # table_data
         str,  # page_info
         str,  # board_svg
-        Dict[str, Any],  # record_details
-        List[Dict[str, Any]],  # current_page_records
+        dict[str, Any],  # record_details
+        list[dict[str, Any]],  # current_page_records
         str,  # record_indicator
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,  # prev_btn
         gr.Button,  # next_btn
         str,  # selected_record_id
@@ -1217,7 +1213,7 @@ class GradioVisualizationServer:
         """Generate output values for empty state navigation (no viz_interface)．
 
         Returns:
-            Tuple matching outputs for navigation methods (12 values).
+            tuple matching outputs for navigation methods (12 values).
         """
         return (
             1,  # current_page
@@ -1302,7 +1298,7 @@ class GradioVisualizationServer:
                             source_mode = gr.Radio(
                                 choices=[
                                     "Directory",
-                                    "File List",
+                                    "File list",
                                 ],
                                 value="Directory",
                                 label="Source Type",
@@ -1431,7 +1427,7 @@ class GradioVisualizationServer:
                         gr.Markdown("### ID検索")
 
                         # 初期化時にID候補リストを取得（最大1000件）
-                        initial_ids: List[str] = []
+                        initial_ids: list[str] = []
                         if (
                             self.has_data
                             and self.viz_interface is not None
@@ -1539,7 +1535,7 @@ class GradioVisualizationServer:
 
                         with gr.Tab("📊 検索結果"):
                             # Rendererから動的にヘッダーを取得
-                            table_headers: List[str] = (
+                            table_headers: list[str] = (
                                 self.viz_interface.get_table_columns()
                                 if self.viz_interface
                                 is not None
@@ -1807,7 +1803,7 @@ class GradioVisualizationServer:
             source_mode.change(
                 fn=lambda mode: (
                     gr.update(visible=(mode == "Directory")),
-                    gr.update(visible=(mode == "File List")),
+                    gr.update(visible=(mode == "File list")),
                 ),
                 inputs=[source_mode],
                 outputs=[dir_input, files_input],
@@ -1940,21 +1936,19 @@ class GradioVisualizationServer:
 
     def _search_and_cache(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page: int,
         page_size: int,
-    ) -> Tuple[
-        List[List[Any]],
+    ) -> tuple[
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
         int,
         str,
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         gr.Button,
@@ -2074,21 +2068,19 @@ class GradioVisualizationServer:
 
     def _paginate_all_data(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page: int,
         page_size: int,
-    ) -> Tuple[
-        List[List[Any]],
+    ) -> tuple[
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
         int,
         str,
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         gr.Button,
@@ -2123,19 +2115,19 @@ class GradioVisualizationServer:
 
     def _initial_page_load(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page: int,
         page_size: int,
-    ) -> Tuple[
-        List[List[Any]],
+    ) -> tuple[
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
         int,
         str,
-        Optional[Any],
+        Any | None,
         gr.Button,
         gr.Button,
         gr.Button,
@@ -2170,9 +2162,9 @@ class GradioVisualizationServer:
     def _on_table_row_select(
         self,
         evt: gr.SelectData,
-        current_page_records: List[Dict[str, Any]],
-    ) -> Tuple[
-        str, Dict[str, Any], str, int, str, gr.Button, gr.Button
+        current_page_records: list[dict[str, Any]],
+    ) -> tuple[
+        str, dict[str, Any], str, int, str, gr.Button, gr.Button
     ]:
         """テーブル行選択時のハンドラ．
 
@@ -2246,8 +2238,8 @@ class GradioVisualizationServer:
 
     def _search_by_id(
         self, record_id: str
-    ) -> Tuple[
-        str, Dict[str, Any], str, str, gr.Button, gr.Button
+    ) -> tuple[
+        str, dict[str, Any], str, str, gr.Button, gr.Button
     ]:
         """ID検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
 
@@ -2324,7 +2316,7 @@ class GradioVisualizationServer:
 
         return self.renderer.render(position)
 
-    def _get_current_stats(self) -> Dict[str, Any]:
+    def _get_current_stats(self) -> dict[str, Any]:
         """Get current dataset statistics (thread-safe).
 
         Returns:
@@ -2335,7 +2327,7 @@ class GradioVisualizationServer:
                 return self.viz_interface.get_dataset_stats()
             return {}
 
-    def _get_mock_stats(self) -> Dict[str, Any]:
+    def _get_mock_stats(self) -> dict[str, Any]:
         """インデックス統計情報を返す．"""
         total_records = (
             self.search_index.total_records()
@@ -2350,7 +2342,7 @@ class GradioVisualizationServer:
 
     def _search_by_id_mock(
         self, record_id: str
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """ID検索のモック実装．
 
         Args:
@@ -2377,12 +2369,12 @@ class GradioVisualizationServer:
         max_eval: int,
         page: int,
         page_size: int,
-    ) -> Tuple[
-        List[List[Any]],
+    ) -> tuple[
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
     ]:
         """評価値範囲検索のモック実装．
 
@@ -2458,8 +2450,8 @@ class GradioVisualizationServer:
 
     def _calculate_total_pages(
         self,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page_size: int,
     ) -> int:
         """総ページ数を計算する．
@@ -2492,10 +2484,10 @@ class GradioVisualizationServer:
     def _get_button_states(
         self,
         current_page: int,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page_size: int,
-    ) -> Tuple[bool, bool]:
+    ) -> tuple[bool, bool]:
         """ページネーションボタンの有効/無効状態を計算．
 
         Args:
@@ -2522,10 +2514,10 @@ class GradioVisualizationServer:
         current_page: int,
         current_record_index: int,
         num_records_on_page: int,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
+        min_eval: int | None,
+        max_eval: int | None,
         page_size: int,
-    ) -> Tuple[bool, bool]:
+    ) -> tuple[bool, bool]:
         """レコードナビゲーションボタンの有効/無効状態を計算．
 
         Args:
@@ -2563,22 +2555,20 @@ class GradioVisualizationServer:
         self,
         current_page: int,
         current_record_index: int,
-        current_page_records: List[Dict[str, Any]],
+        current_page_records: list[dict[str, Any]],
         page_size: int,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
-    ) -> Tuple[
+        min_eval: int | None,
+        max_eval: int | None,
+    ) -> tuple[
         int,
         int,
-        List[List[Any]],
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
         str,
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         str,  # selected_record_id
@@ -2756,22 +2746,20 @@ class GradioVisualizationServer:
         self,
         current_page: int,
         current_record_index: int,
-        current_page_records: List[Dict[str, Any]],
+        current_page_records: list[dict[str, Any]],
         page_size: int,
-        min_eval: Optional[int],
-        max_eval: Optional[int],
-    ) -> Tuple[
+        min_eval: int | None,
+        max_eval: int | None,
+    ) -> tuple[
         int,
         int,
-        List[List[Any]],
+        list[list[Any]],
         str,
         str,
-        Dict[str, Any],
-        List[Dict[str, Any]],
+        dict[str, Any],
+        list[dict[str, Any]],
         str,
-        Optional[
-            Any
-        ],  # analytics_figure (Plotly Figure or None)
+        Any | None,  # analytics_figure (Plotly Figure or None)
         gr.Button,
         gr.Button,
         str,  # selected_record_id
@@ -2964,12 +2952,12 @@ class GradioVisualizationServer:
 
 
 def launch_server(
-    file_paths: List[Path],
+    file_paths: list[Path],
     array_type: str,
-    port: Optional[int],
+    port: int | None,
     share: bool,
     server_name: str,
-    model_path: Optional[Path],
+    model_path: Path | None,
     debug: bool,
     use_mock_data: bool = False,
 ) -> None:
@@ -3005,7 +2993,7 @@ def launch_server(
         f"(share={share}, debug={debug})"
     )
 
-    launch_kwargs: Dict[str, Any] = {
+    launch_kwargs: dict[str, Any] = {
         "server_name": server_name,
         "share": share,
         "debug": debug,

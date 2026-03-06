@@ -7,11 +7,9 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Any,
     Literal,
-    Optional,
-    Union,
+    TYPE_CHECKING,
     cast,
 )
 
@@ -122,7 +120,7 @@ class FileDataSource(
         def file_level_split(
             self,
             test_ratio: float,
-            seed: Optional[int] = None,
+            seed: int | None = None,
         ) -> tuple[
             "StreamingFileSource", "StreamingFileSource"
         ]:
@@ -195,9 +193,12 @@ class FileDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: Optional[
-                Union[int, float, str, bytes, bytearray]
-            ] = None,
+            seed: int
+            | float
+            | str
+            | bytes
+            | bytearray
+            | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -219,13 +220,13 @@ class FileDataSource(
                 Any
             ]  # Placeholder (not used for DataFrames)
             length: int
-            memmap: Optional[
-                Any
-            ]  # Placeholder (not used for DataFrames)
-            cached_array: Optional[
-                Any
-            ]  # Can be DataFrame or ndarray
-            cached_columnar: Optional[ColumnarBatch] = (
+            memmap: (
+                Any | None
+            )  # Placeholder (not used for DataFrames)
+            cached_array: (
+                Any | None
+            )  # Can be DataFrame or ndarray
+            cached_columnar: ColumnarBatch | None = (
                 None  # SOA representation
             )
 
@@ -275,19 +276,17 @@ class FileDataSource(
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
             # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
-            self._concatenated_array: Optional[np.ndarray] = (
-                None
-            )
-            self._concatenated_columnar: Optional[
-                ColumnarBatch
-            ] = None
+            self._concatenated_array: np.ndarray | None = None
+            self._concatenated_columnar: (
+                ColumnarBatch | None
+            ) = None
 
             # SOA化対応: preprocessing/stage1/stage2はColumnarBatchで保持
             self._use_columnar = (
                 array_type in _DF_TO_COLUMNAR_CONVERTERS
             )
             # structured array再構築用のdtype
-            self._structured_dtype: Optional[np.dtype] = None
+            self._structured_dtype: np.dtype | None = None
             if self._use_columnar:
                 dtype_factory = _STRUCTURED_DTYPES.get(
                     array_type
@@ -791,12 +790,13 @@ class FileDataSource(
     def __init__(
         self,
         *,
-        file_paths: Optional[list[Path]] = None,
-        file_manager: Optional[FileManager] = None,
-        indicies: Optional[Union[list[int], np.ndarray]] = None,
-        array_type: Optional[
-            Literal["hcpe", "preprocessing", "stage1", "stage2"]
-        ] = None,
+        file_paths: list[Path] | None = None,
+        file_manager: FileManager | None = None,
+        indicies: list[int] | np.ndarray | None = None,
+        array_type: Literal[
+            "hcpe", "preprocessing", "stage1", "stage2"
+        ]
+        | None = None,
         bit_pack: bool = True,
         cache_mode: CacheMode = "file",
     ) -> None:
@@ -804,9 +804,9 @@ class FileDataSource(
 
         Args:
             file_paths (list[Path]): .featherファイルのリスト
-            file_manager (Optional[FileManager]): FileManager
-            indicies (Optional[Union[list[int], np.ndarray]]): 選択可能なインデックス
-            array_type (Optional[Literal["hcpe", "preprocessing", "stage1", "stage2"]]): 配列のタイプ
+            file_manager (FileManager | None): FileManager
+            indicies (list[int] | np.ndarray | None): 選択可能なインデックス
+            array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"] | None): 配列のタイプ
             bit_pack (bool): ビットパッキングを使用するかどうか
             cache_mode (CacheMode): キャッシュモード ("file" または "memory")
         """

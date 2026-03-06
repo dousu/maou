@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -29,11 +29,11 @@ logger: logging.Logger = logging.getLogger(__name__)
 def benchmark_dataloader(
     datasource: LearningDataSource.DataSourceSpliter,
     *,
-    gpu: Optional[str] = None,
-    batch_size: Optional[int] = None,
-    pin_memory: Optional[bool] = None,
-    num_batches: Optional[int] = None,
-    sample_ratio: Optional[float] = None,
+    gpu: str | None = None,
+    batch_size: int | None = None,
+    pin_memory: bool | None = None,
+    num_batches: int | None = None,
+    sample_ratio: float | None = None,
 ) -> str:
     """Benchmark DataLoader configurations to find optimal parameters.
 
@@ -148,72 +148,65 @@ def benchmark_dataloader(
 
 
 def benchmark_training(
-    datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
+    datasource: LearningDataSource.DataSourceSpliter
+    | None = None,
     *,
-    gpu: Optional[str] = None,
+    gpu: str | None = None,
     compilation: bool = False,
     detect_anomaly: bool = False,
-    test_ratio: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    dataloader_workers: Optional[int] = None,
-    pin_memory: Optional[bool] = None,
-    prefetch_factor: Optional[int] = None,
-    cache_transforms: Optional[bool] = None,
-    model_architecture: Optional[BackboneArchitecture] = None,
-    gce_parameter: Optional[float] = None,
-    policy_loss_ratio: Optional[float] = None,
-    value_loss_ratio: Optional[float] = None,
+    test_ratio: float | None = None,
+    batch_size: int | None = None,
+    dataloader_workers: int | None = None,
+    pin_memory: bool | None = None,
+    prefetch_factor: int | None = None,
+    cache_transforms: bool | None = None,
+    model_architecture: BackboneArchitecture | None = None,
+    gce_parameter: float | None = None,
+    policy_loss_ratio: float | None = None,
+    value_loss_ratio: float | None = None,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    learning_ratio: Optional[float] = None,
-    momentum: Optional[float] = None,
-    lr_scheduler: Optional[str] = None,
-    optimizer_name: Optional[str] = None,
-    optimizer_beta1: Optional[float] = None,
-    optimizer_beta2: Optional[float] = None,
-    optimizer_eps: Optional[float] = None,
-    stage1_pos_weight: Optional[float] = None,
-    stage2_pos_weight: Optional[float] = None,
-    stage2_gamma_pos: Optional[float] = None,
-    stage2_gamma_neg: Optional[float] = None,
-    stage2_clip: Optional[float] = None,
-    stage2_hidden_dim: Optional[int] = None,
-    stage2_head_dropout: Optional[float] = None,
-    stage2_test_ratio: Optional[float] = None,
-    warmup_batches: Optional[int] = None,
-    max_batches: Optional[int] = None,
-    enable_profiling: Optional[bool] = None,
-    run_validation: Optional[bool] = None,
-    sample_ratio: Optional[float] = None,
-    enable_resource_monitoring: Optional[bool] = None,
+    learning_ratio: float | None = None,
+    momentum: float | None = None,
+    lr_scheduler: str | None = None,
+    optimizer_name: str | None = None,
+    optimizer_beta1: float | None = None,
+    optimizer_beta2: float | None = None,
+    optimizer_eps: float | None = None,
+    stage1_pos_weight: float | None = None,
+    stage2_pos_weight: float | None = None,
+    stage2_gamma_pos: float | None = None,
+    stage2_gamma_neg: float | None = None,
+    stage2_clip: float | None = None,
+    stage2_hidden_dim: int | None = None,
+    stage2_head_dropout: float | None = None,
+    stage2_test_ratio: float | None = None,
+    warmup_batches: int | None = None,
+    max_batches: int | None = None,
+    enable_profiling: bool | None = None,
+    run_validation: bool | None = None,
+    sample_ratio: float | None = None,
+    enable_resource_monitoring: bool | None = None,
     streaming: bool = False,
-    streaming_train_source: Optional[
-        StreamingDataSource
-    ] = None,
-    streaming_val_source: Optional[StreamingDataSource] = None,
+    streaming_train_source: StreamingDataSource | None = None,
+    streaming_val_source: StreamingDataSource | None = None,
     stage: int = 3,
-    stage1_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
-    stage2_datasource: Optional[
-        LearningDataSource.DataSourceSpliter
-    ] = None,
-    stage2_streaming_train_source: Optional[
-        StreamingDataSource
-    ] = None,
-    stage2_streaming_val_source: Optional[
-        StreamingDataSource
-    ] = None,
-    stage12_lr_scheduler: Optional[str] = None,
+    stage1_datasource: LearningDataSource.DataSourceSpliter
+    | None = None,
+    stage2_datasource: LearningDataSource.DataSourceSpliter
+    | None = None,
+    stage2_streaming_train_source: StreamingDataSource
+    | None = None,
+    stage2_streaming_val_source: StreamingDataSource
+    | None = None,
+    stage12_lr_scheduler: str | None = None,
     stage12_compilation: bool = False,
     architecture_config: dict[str, Any] | None = None,
     freeze_backbone: bool = False,
-    trainable_layers: Optional[int] = None,
-    stage1_batch_size: Optional[int] = None,
-    stage2_batch_size: Optional[int] = None,
-    batch_sizes: Optional[list[int]] = None,
-    learning_rates: Optional[list[float]] = None,
+    trainable_layers: int | None = None,
+    stage1_batch_size: int | None = None,
+    stage2_batch_size: int | None = None,
+    batch_sizes: list[int] | None = None,
+    learning_rates: list[float] | None = None,
     estimate_cbs: bool = False,
 ) -> str:
     """
@@ -571,7 +564,7 @@ def generate_stage2_data(
     output_dir: Path,
     output_data_name: str = "stage2",
     chunk_size: int = 1_000_000,
-    cache_dir: Optional[Path] = None,
+    cache_dir: Path | None = None,
 ) -> str:
     """Generate Stage 2 training data for legal moves prediction.
 

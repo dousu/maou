@@ -2,7 +2,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Union
 
 import psutil
 
@@ -21,13 +20,13 @@ class ResourceUsage:
     cpu_max_percent: float
     memory_max_bytes: int
     memory_max_percent: float
-    gpu_max_percent: Optional[float] = None
-    gpu_avg_percent: Optional[float] = None
-    gpu_memory_max_bytes: Optional[int] = None
-    gpu_memory_total_bytes: Optional[int] = None
-    gpu_memory_max_percent: Optional[float] = None
+    gpu_max_percent: float | None = None
+    gpu_avg_percent: float | None = None
+    gpu_memory_max_bytes: int | None = None
+    gpu_memory_total_bytes: int | None = None
+    gpu_memory_max_percent: float | None = None
 
-    def to_dict(self) -> Dict[str, Union[float, int, None]]:
+    def to_dict(self) -> dict[str, float | int | None]:
         """リソース使用率を辞書形式で返す．"""
         return {
             "cpu_max_percent": self.cpu_max_percent,
@@ -61,7 +60,7 @@ class SystemResourceMonitor:
 
         # 監視状態
         self._monitoring = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
 
         # 統計情報
         self._cpu_max_percent = 0.0
@@ -192,7 +191,7 @@ class GPUResourceMonitor:
 
         # 監視状態
         self._monitoring = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
 
         # 統計情報
         self._gpu_max_percent = 0.0

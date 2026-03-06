@@ -4,7 +4,7 @@
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
@@ -31,8 +31,8 @@ class BoardDisplayService:
 
     def render_from_record(
         self,
-        record: Dict[str, Any],
-        highlight_squares: Optional[List[int]] = None,
+        record: dict[str, Any],
+        highlight_squares: list[int] | None = None,
     ) -> str:
         """レコードデータから将棋盤をSVG描画．
 
@@ -117,8 +117,8 @@ class BoardDisplayService:
         """
 
     def render_multiple_boards(
-        self, records: List[Dict[str, Any]]
-    ) -> List[str]:
+        self, records: list[dict[str, Any]]
+    ) -> list[str]:
         """複数レコードのボードを一括描画．
 
         Args:

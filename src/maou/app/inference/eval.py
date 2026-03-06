@@ -1,5 +1,4 @@
 import logging
-from typing import Union
 
 import numpy as np
 import numpy.typing as npt
@@ -10,10 +9,8 @@ logger: logging.Logger = logging.getLogger(__name__)
 class Evaluation:
     @staticmethod
     def get_winrate_from_eval(
-        eval: Union[
-            float, np.floating, npt.NDArray[np.floating]
-        ],
-    ) -> Union[float, np.floating, npt.NDArray[np.floating]]:
+        eval: float | np.floating | npt.NDArray[np.floating],
+    ) -> float | np.floating | npt.NDArray[np.floating]:
         """evalをsigmoidで勝率に変換する．
 
         Args:
@@ -28,9 +25,9 @@ class Evaluation:
 
     @staticmethod
     def get_eval_from_winrate(
-        r: Union[float, np.floating, npt.NDArray[np.floating]],
+        r: float | np.floating | npt.NDArray[np.floating],
         a: int = 600,
-    ) -> Union[float, np.floating, npt.NDArray[np.floating]]:
+    ) -> float | np.floating | npt.NDArray[np.floating]:
         """勝率を評価値スコアに変換する．
 
         評価値スコアは，モデル出力のlogitを600倍したもの:

@@ -5,7 +5,7 @@ import random
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import Literal, TYPE_CHECKING
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -42,7 +42,7 @@ class ObjectStorageDataSource(
             array_type: Literal["hcpe", "preprocessing"],
             max_workers: int = 8,
             max_cached_bytes: int = 100 * 1024 * 1024,
-            sample_ratio: Optional[float] = None,
+            sample_ratio: float | None = None,
             enable_bundling: bool = True,
             bundle_size_gb: float = 1.0,
         ) -> None:
@@ -88,9 +88,12 @@ class ObjectStorageDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: Optional[
-                Union[int, float, str, bytes, bytearray]
-            ] = None,
+            seed: int
+            | float
+            | str
+            | bytes
+            | bytearray
+            | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -114,7 +117,7 @@ class ObjectStorageDataSource(
             array_type: Literal["hcpe", "preprocessing"],
             max_workers: int = 8,
             max_cached_bytes: int = 100 * 1024 * 1024,
-            sample_ratio: Optional[float] = None,
+            sample_ratio: float | None = None,
             enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
         ) -> None:
@@ -397,30 +400,29 @@ class ObjectStorageDataSource(
     def __init__(
         self,
         *,
-        bucket_name: Optional[str] = None,
-        prefix: Optional[str] = None,
-        data_name: Optional[str] = None,
-        page_manager: Optional[PageManager] = None,
-        indicies: Optional[Union[list[int], np.ndarray]] = None,
-        local_cache_dir: Optional[str] = None,
+        bucket_name: str | None = None,
+        prefix: str | None = None,
+        data_name: str | None = None,
+        page_manager: PageManager | None = None,
+        indicies: list[int] | np.ndarray | None = None,
+        local_cache_dir: str | None = None,
         max_workers: int = 8,
         max_cached_bytes: int = 100 * 1024 * 1024,
-        sample_ratio: Optional[float] = None,
-        array_type: Optional[
-            Literal["hcpe", "preprocessing"]
-        ] = None,
+        sample_ratio: float | None = None,
+        array_type: Literal["hcpe", "preprocessing"]
+        | None = None,
         enable_bundling: bool = False,
         bundle_size_gb: float = 1.0,
     ) -> None:
         """
         Args:
-            bucket_name (Optional[str]): GCSバケット名
-            prefix (Optional[str]): GCSオブジェクトのプレフィックス
-            data_name (Optional[str]): データ名
-            page_manager (Optional[PageManager]): PageManager
-            indicies (Optional[list[int]]): 選択可能なインデックスのリスト
-            local_cache_dir (Optional[str]): ローカルキャッシュディレクトリのパス
-            sample_ratio (Optional[float]): サンプリング割合 (0.01-1.0, None=全データ)
+            bucket_name (str | None): GCSバケット名
+            prefix (str | None): GCSオブジェクトのプレフィックス
+            data_name (str | None): データ名
+            page_manager (PageManager | None): PageManager
+            indicies (list[int] | None): 選択可能なインデックスのリスト
+            local_cache_dir (str | None): ローカルキャッシュディレクトリのパス
+            sample_ratio (float | None): サンプリング割合 (0.01-1.0, None=全データ)
             max_workers (int): 並列ダウンロード数 (デフォルト: 8)
             max_cached_bytes (int):
               キャッシュの上限サイズ (バイト単位，デフォルト100MB)

@@ -2,7 +2,7 @@ import contextlib
 import datetime
 import logging
 from io import BytesIO
-from typing import Generator, Optional, Union
+from collections.abc import Generator
 
 import numpy as np
 import polars as pl
@@ -38,9 +38,9 @@ class BigQueryFeatureStore(
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
-    last_key_columns: Optional[list[str]] = None
-    clustering_key: Optional[str] = None
-    partitioning_key_date: Optional[str] = None
+    last_key_columns: list[str] | None = None
+    clustering_key: str | None = None
+    partitioning_key_date: str | None = None
 
     def __init__(
         self,
@@ -161,8 +161,8 @@ class BigQueryFeatureStore(
         dataset_id: str,
         table_name: str,
         schema: list[bigquery.SchemaField],
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> bigquery.Table:
         table_id = (
             f"{self.client.project}.{dataset_id}.{table_name}"
@@ -203,8 +203,8 @@ class BigQueryFeatureStore(
         dataset_id: str,
         table_name: str,
         schema: list[bigquery.SchemaField],
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> bigquery.Table:
         table_id = (
             f"{self.client.project}.{dataset_id}.{table_name}"
@@ -238,11 +238,11 @@ class BigQueryFeatureStore(
     def __drop_table(
         self,
         *,
-        dataset_id: Optional[str] = None,
-        table_name: Optional[str] = None,
-        table: Optional[bigquery.Table] = None,
+        dataset_id: str | None = None,
+        table_name: str | None = None,
+        table: bigquery.Table | None = None,
     ) -> None:
-        table_ref: Union[bigquery.Table, str]
+        table_ref: bigquery.Table | str
         if dataset_id is not None and table_name is not None:
             table_ref = f"{self.client.project}.{dataset_id}.{table_name}"
             table_id = table_ref
@@ -363,8 +363,8 @@ class BigQueryFeatureStore(
         name: str,
         key_columns: list[str],
         dataframe: pl.DataFrame,
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         """BigQueryにデータを保存する.
         すでに同じIDが存在する場合は更新する (MERGEクエリで実装)
@@ -455,8 +455,8 @@ class BigQueryFeatureStore(
         self,
         *,
         key_columns: list[str],
-        clustering_key: Optional[str] = None,
-        partitioning_key_date: Optional[str] = None,
+        clustering_key: str | None = None,
+        partitioning_key_date: str | None = None,
     ) -> None:
         """バッファのデータを一括してMERGEクエリで保存"""
         if not self.__buffer:
