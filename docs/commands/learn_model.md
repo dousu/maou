@@ -27,7 +27,7 @@
 | `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). Stage 3 のみに適用(Stage 1/2 は固定 accumulation steps)．**注意: accumulation steps が変化しても学習率は自動調整されません．線形スケーリング則(Goyal et al. 2017)に従い，学習率を手動で調整することを推奨します．** チェックポイントから再開(--start-epoch)した場合，adaptive state(EMA・accumulation steps)は初期値にリセットされます． |
 | `--adaptive-batch-min-steps INT` | `2` | Minimum gradient accumulation steps for adaptive batch. Must be >= 2 for GNS estimation. |
 | `--adaptive-batch-max-steps INT` | `8` | Maximum gradient accumulation steps for adaptive batch. |
-| `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. |
+| `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. 学習初期は GNS 推定が不安定なため，ウォームアップ期間として大きめの値(100-200)を設定すると安定します． |
 | `--adaptive-batch-smoothing FLOAT` | `0.1` | EMA smoothing factor for GNS estimates. 0 に近いほど安定，1 に近いほど追従性が高い． |
 | `--adaptive-batch-measurement-interval INT` | `1` | GNS 計測の optimizer step 間隔．計測中は勾配スナップショット分の追加メモリを使用するため，大規模モデル(100M+ params)では 5-10 を推奨． |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |

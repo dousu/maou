@@ -236,6 +236,12 @@ class TrainingLoop:
         # モデルのモード設定
         self.model.train(train_mode)
 
+        # エポック境界で accumulation カウンタをリセット
+        # バッチ数が gradient_accumulation_steps の倍数でない場合，
+        # 前エポック末尾の不完全な cycle の stale 勾配が混入するのを防ぐ
+        if train_mode:
+            self._accumulation_counter = 0
+
         # エポック開始のコールバック
         for callback in self.callbacks:
             callback.on_epoch_start(epoch_idx)
