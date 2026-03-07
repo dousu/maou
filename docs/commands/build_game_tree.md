@@ -4,21 +4,21 @@
 
 - preprocessデータ(局面単位・集約済み `.feather`)からBFSでゲームツリーを構築し，
   `nodes.feather` + `edges.feather` として出力する．
-  【F:src/maou/infra/console/build_game_tree.py†L1-L104】
+  【F:src/maou/infra/console/build_game_tree.py†L1-L129】
 - 初期局面(平手)からBFSで探索を行い，各局面の `moveLabel` から
   `min_probability` 以上の指し手をエッジとして展開する．
-  【F:src/maou/app/game_tree/builder.py†L1-L160】
+  【F:src/maou/app/game_tree/builder.py†L1-L189】
 - 出力データは Arrow IPC 形式(LZ4圧縮)で保存される．
-  【F:src/maou/interface/game_tree_io.py†L1-L140】
+  【F:src/maou/interface/game_tree_io.py†L1-L111】
 
 ## CLI options
 
 | Flag | Required | Default | Description |
 | --- | --- | --- | --- |
-| `--input-path PATH` | Yes | — | preprocessデータのディレクトリまたはファイルパス．再帰的に `.feather` ファイルを収集する．【F:src/maou/infra/console/build_game_tree.py†L47-L52】 |
-| `--output-dir PATH` | Yes | — | ツリーデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される．【F:src/maou/infra/console/build_game_tree.py†L53-L58】 |
-| `--max-depth INT` | No | `30` | BFSの最大探索深さ．初期局面からの手数上限．【F:src/maou/infra/console/build_game_tree.py†L59-L64】 |
-| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき．【F:src/maou/infra/console/build_game_tree.py†L65-L70】 |
+| `--input-path PATH` | Yes | — | preprocessデータのディレクトリまたはファイルパス．再帰的に `.feather` ファイルを収集する．【F:src/maou/infra/console/build_game_tree.py†L45-L50】 |
+| `--output-dir PATH` | Yes | — | ツリーデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される．【F:src/maou/infra/console/build_game_tree.py†L51-L56】 |
+| `--max-depth INT` | No | `30` | BFSの最大探索深さ．初期局面からの手数上限．【F:src/maou/infra/console/build_game_tree.py†L57-L63】 |
+| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき．【F:src/maou/infra/console/build_game_tree.py†L64-L70】 |
 
 ## Example invocation
 
