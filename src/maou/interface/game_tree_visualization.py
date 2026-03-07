@@ -7,6 +7,8 @@ Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
 from __future__ import annotations
 
 import copy
+import csv
+import io
 import logging
 from typing import Any
 
@@ -20,6 +22,10 @@ from maou.domain.board.shogi import (
     move_is_drop,
     move_to,
     move_to_usi,
+)
+from maou.domain.game_tree.openings import (
+    OpeningDatabase,
+    OpeningInfo,
 )
 from maou.domain.visualization.board_renderer import (
     BoardPosition,
@@ -69,6 +75,7 @@ class GameTreeVisualizationInterface:
         nodes_df: pl.DataFrame,
         edges_df: pl.DataFrame,
         initial_sfen: str | None = None,
+        opening_db: OpeningDatabase | None = None,
     ) -> None:
         """初期化．
 
@@ -76,6 +83,7 @@ class GameTreeVisualizationInterface:
             nodes_df: ノードデータ(nodes.feather相当)
             edges_df: エッジデータ(edges.feather相当)
             initial_sfen: 開始局面のSFEN文字列．Noneの場合は平手初期局面．
+            opening_db: 定跡データベース．Noneの場合はデフォルトを使用．
 
         Raises:
             ValueError: depth=0のルートノードが見つからない場合
@@ -97,6 +105,11 @@ class GameTreeVisualizationInterface:
         self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
         self._board_cache: _BoardCache | None = None
+        self._opening_db = (
+            opening_db
+            if opening_db is not None
+            else OpeningDatabase()
+        )
 
     def get_cytoscape_elements(
         self,
@@ -277,13 +290,21 @@ class GameTreeVisualizationInterface:
         if not detail:
             return {}
 
-        return {
+        stats: dict[str, str] = {
             "局面ハッシュ": f"0x{detail['position_hash']:016X}",
             "勝率": f"{detail['result_value'] * 100:.1f}%",
             "最善手勝率": f"{detail['best_move_win_rate'] * 100:.1f}%",
             "深さ": str(detail["depth"]),
             "分岐数": str(detail["num_branches"]),
         }
+
+        opening = self.get_opening_name(position_hash)
+        if opening is not None:
+            stats["定跡"] = (
+                f"{opening.name}({opening.category})"
+            )
+
+        return stats
 
     def get_move_table(
         self, position_hash: int
@@ -377,6 +398,224 @@ class GameTreeVisualizationInterface:
             "probabilities": probs,
             "win_rates": win_rates,
         }
+
+    def get_breadcrumb_data(
+        self, position_hash: int
+    ) -> list[dict[str, str]]:
+        """パンくずリスト用のデータを取得する．
+
+        ルートから指定ノードまでのパスを辿り，
+        各ステップの指し手を日本語表記で返す．
+
+        Args:
+            position_hash: 対象ノードのZobrist hash
+
+        Returns:
+            [{"hash": "...", "label": "..."}, ...] 形式のリスト
+        """
+        path = self._query.get_path_to_root(position_hash)
+        if not path:
+            return []
+
+        result: list[dict[str, str]] = [
+            {"hash": str(path[0]), "label": "初期局面"}
+        ]
+
+        board = Board()
+        if self._initial_sfen is not None:
+            board.set_sfen(self._initial_sfen)
+
+        for i in range(len(path) - 1):
+            edge = self._query.get_edge_between(
+                path[i], path[i + 1]
+            )
+            if edge is None:
+                break
+
+            move16 = edge["move16"]
+            usi = move_to_usi(move16)
+            piece_name = (
+                self.get_piece_name(board, move16)
+                if len(usi) >= 2 and usi[1] != "*"
+                else ""
+            )
+            label = self.usi_to_japanese(
+                usi, piece_name=piece_name
+            )
+
+            move = board.get_move_from_move16(move16)
+            board.push_move(move)
+
+            result.append(
+                {"hash": str(path[i + 1]), "label": label}
+            )
+
+        return result
+
+    def get_opening_name(
+        self, position_hash: int
+    ) -> OpeningInfo | None:
+        """指定局面の定跡名を検索する．
+
+        ルートからの指し手列を定跡データベースと照合し，
+        一致するパターンがあれば定跡情報を返す．
+
+        Args:
+            position_hash: 対象ノードのZobrist hash
+
+        Returns:
+            一致した定跡の情報．見つからない場合None．
+        """
+        path = self._query.get_path_to_root(position_hash)
+        if not path or len(path) < 2:
+            return None
+
+        moves: list[str] = []
+        for i in range(len(path) - 1):
+            edge = self._query.get_edge_between(
+                path[i], path[i + 1]
+            )
+            if edge is None:
+                break
+            moves.append(move_to_usi(edge["move16"]))
+
+        return self._opening_db.find_opening(moves)
+
+    def export_sfen_path(self, position_hash: int) -> str:
+        """指定局面までのUSI position文字列を生成する．
+
+        将棋エンジンで使用可能な ``position`` コマンド形式で出力する．
+
+        Args:
+            position_hash: 対象ノードのZobrist hash
+
+        Returns:
+            USI position文字列
+            (例: "position startpos moves 7g7f 3c3d")
+        """
+        path = self._query.get_path_to_root(position_hash)
+        if not path:
+            return ""
+
+        moves: list[str] = []
+        for i in range(len(path) - 1):
+            edge = self._query.get_edge_between(
+                path[i], path[i + 1]
+            )
+            if edge is None:
+                break
+            moves.append(move_to_usi(edge["move16"]))
+
+        if self._initial_sfen is not None:
+            base = f"position sfen {self._initial_sfen}"
+        else:
+            base = "position startpos"
+
+        if moves:
+            return f"{base} moves {' '.join(moves)}"
+        return base
+
+    def export_subtree_csv(
+        self,
+        root_hash: int,
+        max_depth: int = 3,
+        min_probability: float = 0.01,
+    ) -> str:
+        """サブツリーの指し手統計をCSV形式で出力する．
+
+        Args:
+            root_hash: サブツリーのルートhash
+            max_depth: 最大深さ
+            min_probability: 最小確率閾値
+
+        Returns:
+            CSV形式の文字列
+        """
+        sub_nodes, sub_edges = self._query.get_subtree(
+            root_hash, max_depth, min_probability
+        )
+
+        # ノードとエッジを結合して各エッジの情報を出力
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "parent_hash",
+                "child_hash",
+                "move",
+                "probability",
+                "win_rate",
+                "result_value",
+                "depth",
+            ]
+        )
+
+        # 親ノードごとにソートして出力
+        edges_sorted = sub_edges.sort(
+            ["parent_hash", "probability"],
+            descending=[False, True],
+        )
+
+        # child_hash → result_value のマップ
+        node_map: dict[int, float] = {}
+        for row in sub_nodes.iter_rows(named=True):
+            node_map[row["position_hash"]] = row["result_value"]
+
+        # 盤面を構築してUSI→日本語変換
+        child_edge_map: dict[int, dict[str, Any]] = {}
+        for row in sub_edges.iter_rows(named=True):
+            child_hash = row["child_hash"]
+            if (
+                child_hash not in child_edge_map
+                or row["probability"]
+                > child_edge_map[child_hash]["probability"]
+            ):
+                child_edge_map[child_hash] = row
+
+        local_boards = self._build_boards_incrementally(
+            root_hash, sub_nodes, child_edge_map
+        )
+
+        for row in edges_sorted.iter_rows(named=True):
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            parent_board = local_boards.get(row["parent_hash"])
+            piece_name = (
+                self.get_piece_name(parent_board, move16)
+                if parent_board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
+                else ""
+            )
+            move_ja = self.usi_to_japanese(
+                usi, piece_name=piece_name
+            )
+
+            child_hash = row["child_hash"]
+            result_value = node_map.get(child_hash, 0.0)
+            # child の depth を取得
+            child_node = sub_nodes.filter(
+                pl.col("position_hash") == child_hash
+            )
+            depth = (
+                int(child_node["depth"][0])
+                if len(child_node) > 0
+                else -1
+            )
+
+            writer.writerow(
+                [
+                    f"0x{row['parent_hash']:016X}",
+                    f"0x{child_hash:016X}",
+                    move_ja,
+                    f"{row['probability']:.4f}",
+                    f"{row['win_rate']:.4f}",
+                    f"{result_value:.4f}",
+                    depth,
+                ]
+            )
+
+        return output.getvalue()
 
     def _reconstruct_board_from_path(
         self, path: list[int]

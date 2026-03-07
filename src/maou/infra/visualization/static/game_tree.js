@@ -55,6 +55,25 @@
   }
 
   /**
+   * hidden textboxの値を設定してGradioのchangeイベントを発火する
+   */
+  function setHiddenTextbox(selector, value) {
+    const hiddenInput = document.querySelector(selector);
+    if (!hiddenInput) return;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value"
+    )?.set || Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, "value"
+    )?.set;
+    if (nativeSetter) {
+      nativeSetter.call(hiddenInput, value);
+    } else {
+      hiddenInput.value = value;
+    }
+    hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /**
    * Cytoscape.jsインスタンスを初期化・更新する
    */
   function renderTree(elementsJson, containerId) {
@@ -178,50 +197,55 @@
     // Node click -> update hidden textbox for detail panel
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
-      const hiddenInput = document.querySelector(
-        "#selected-node-id textarea, #selected-node-id input"
+      setHiddenTextbox(
+        "#selected-node-id textarea, #selected-node-id input",
+        nodeId
       );
-      if (hiddenInput) {
-        // Use native setter to trigger Gradio's change detection
-        const nativeSetter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype, "value"
-        )?.set || Object.getOwnPropertyDescriptor(
-          window.HTMLTextAreaElement.prototype, "value"
-        )?.set;
-        if (nativeSetter) {
-          nativeSetter.call(hiddenInput, nodeId);
-        } else {
-          hiddenInput.value = nodeId;
-        }
-        hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
-      }
     });
 
     // Double click -> expand subtree
     cy.on("dbltap", "node", function (evt) {
       const nodeId = evt.target.id();
-      const hiddenInput = document.querySelector(
-        "#expand-node-id textarea, #expand-node-id input"
+      setHiddenTextbox(
+        "#expand-node-id textarea, #expand-node-id input",
+        nodeId
       );
-      if (hiddenInput) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype, "value"
-        )?.set || Object.getOwnPropertyDescriptor(
-          window.HTMLTextAreaElement.prototype, "value"
-        )?.set;
-        if (nativeSetter) {
-          nativeSetter.call(hiddenInput, nodeId);
-        } else {
-          hiddenInput.value = nodeId;
-        }
-        hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
-      }
     });
 
     // Fit to view
     cy.fit(undefined, 30);
   }
 
+  /**
+   * パンくずリスト要素のクリックハンドラ(イベント委譲)
+   */
+  document.addEventListener("click", function (e) {
+    var item = e.target.closest(".breadcrumb-item[data-hash]");
+    if (!item) return;
+    var hash = item.getAttribute("data-hash");
+    if (!hash) return;
+    // パンくずクリック → ノード選択(展開はせず詳細パネルのみ更新)
+    setHiddenTextbox(
+      "#selected-node-id textarea, #selected-node-id input",
+      hash
+    );
+  });
+
+  /**
+   * ツリー画像をPNGとしてダウンロードする
+   */
+  function exportTreePNG() {
+    if (!cy) return;
+    var png = cy.png({ scale: 2, bg: "#ffffff", full: true });
+    var link = document.createElement("a");
+    link.href = png;
+    link.download = "game_tree.png";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   // Expose to global scope for Gradio integration
   window.renderGameTree = renderTree;
+  window.exportTreePNG = exportTreePNG;
 })();
