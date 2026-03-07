@@ -186,5 +186,6 @@ def handle_exception(func: Callable) -> Callable:
             app_logger.exception(
                 "Error occurred", stack_info=True
             )
+            raise SystemExit(1)
 
     return wrapper

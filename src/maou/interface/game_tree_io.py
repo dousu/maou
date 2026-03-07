@@ -56,9 +56,11 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
 
     try:
         arrow_batch = load_feather_file(str(path))
-    except OSError:
-        # 空ファイル(0 record batches)はRust I/Oで読めないためPolarsで読み込む
-        return pl.read_ipc(path)
+    except OSError as e:
+        if "no record batches" in str(e):
+            # 空ファイル(0 record batches)はRust I/Oで読めないためPolarsで読み込む
+            return pl.read_ipc(path)
+        raise
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 

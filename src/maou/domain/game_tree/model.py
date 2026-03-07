@@ -13,7 +13,8 @@ class GameTreeNode:
         position_hash: Zobrist hash(局面の一意識別子)
         result_value: 局面の勝率(手番側視点，0.0〜1.0)
         best_move_win_rate: 最善手の勝率
-        num_branches: 分岐数(実際にエッジが生成された指し手数)
+        num_branches: 分岐数．通常ノードでは実際にエッジが生成された数．
+            max_depth到達ノードではmin_probability以上の候補手数(未展開)
         depth: 初期局面からの最短距離
     """
 

@@ -60,7 +60,7 @@ class GameTreeBuilder:
             lookup[hash_val] = idx
         if duplicate_count > 0:
             logger.warning(
-                f"入力データに {duplicate_count} 件のハッシュ重複があります"
+                f"入力データに {duplicate_count} 件のハッシュ重複があります．"
                 f"(後勝ちで最後の行を使用)"
             )
 
@@ -156,18 +156,21 @@ class GameTreeBuilder:
                     )
                     continue
 
-                # USIからmove16に変換
+                # USIからmoveに変換
                 try:
-                    move16 = board.board.move_from_usi(usi_move)
+                    move = board.board.move_from_usi(usi_move)
                 except (ValueError, RuntimeError) as e:
                     logger.warning(
-                        f"USI {usi_move} のmove16変換に失敗"
+                        f"USI {usi_move} のmove変換に失敗 "
                         f"(hash={current_hash}): {e}"
                     )
                     continue
 
+                # 明示的に16-bit move形式に変換
+                move16_val = shogi.move16(move)
+
                 # 子局面のハッシュを取得
-                board.push_move(move16)
+                board.push_move(move)
                 child_hash = board.hash()
                 board.pop_move()
 
@@ -177,7 +180,7 @@ class GameTreeBuilder:
                     GameTreeEdge(
                         parent_hash=current_hash,
                         child_hash=child_hash,
-                        move16=move16,
+                        move16=move16_val,
                         move_label=label_idx,
                         probability=probability,
                         win_rate=win_rate,
@@ -194,7 +197,7 @@ class GameTreeBuilder:
                     parent_info[child_hash] = (
                         current_depth + 1,
                         current_hash,
-                        move16,
+                        move,
                     )
                     queue.append(child_hash)
 

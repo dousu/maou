@@ -146,7 +146,7 @@ class TestGameTreeBuilder:
         edge = edges[0]
         assert edge.parent_hash == root.position_hash
         assert edge.child_hash == child.position_hash
-        assert edge.move16 == move_7g7f
+        assert edge.move16 == shogi.move16(move_7g7f)
         assert edge.probability == pytest.approx(0.9)
 
     def test_min_probability_filtering(self) -> None:
@@ -186,7 +186,7 @@ class TestGameTreeBuilder:
 
         # 2g2f は確率 0.005 < 0.01 なのでフィルタリングされる
         assert len(edges) == 1
-        assert edges[0].move16 == move_7g7f
+        assert edges[0].move16 == shogi.move16(move_7g7f)
 
     def test_max_depth_cutoff(self) -> None:
         """max_depth で展開が停止する."""
@@ -278,7 +278,7 @@ class TestGameTreeBuilder:
         assert len(nodes) == 1
         # エッジは生成される(子局面のデータがなくてもエッジは追加)
         assert len(edges) == 1
-        assert edges[0].move16 == move_7g7f
+        assert edges[0].move16 == shogi.move16(move_7g7f)
 
     def test_duplicate_hash_uses_last(self) -> None:
         """入力データにハッシュ重複がある場合，最後の行が使われる(dict内包表記の後勝ち)."""
