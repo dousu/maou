@@ -131,7 +131,9 @@ def visualize(
                 "containing nodes.feather and edges.feather."
             )
         tree_dir = input_path[0]
-        app_logger.info(f"Game tree data directory: {tree_dir}")
+        app_logger.info(
+            "Game tree data directory: %s", tree_dir
+        )
 
         # Google Colab環境では自動的にshareを有効化
         if not share and _is_google_colab():
@@ -203,10 +205,11 @@ def visualize(
         )
 
     app_logger.info(
-        f"Launching visualization server with {len(file_paths)} files"
+        "Launching visualization server with %d files",
+        len(file_paths),
     )
-    app_logger.info(f"Array type: {array_type}")
-    app_logger.info(f"Server address: {server_name}:{port}")
+    app_logger.info("Array type: %s", array_type)
+    app_logger.info("Server address: %s:%s", server_name, port)
 
     # Google Colab環境では自動的にshareを有効化
     if not share and _is_google_colab():

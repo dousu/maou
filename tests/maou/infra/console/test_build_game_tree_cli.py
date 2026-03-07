@@ -76,6 +76,33 @@ class TestBuildGameTreeCLI:
             assert (output_dir / "nodes.feather").exists()
             assert (output_dir / "edges.feather").exists()
 
+    def test_initial_hash_without_sfen(self) -> None:
+        """--initial-hash のみ指定時にエラーになる."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input"
+            input_path.mkdir()
+            output_dir = Path(tmp) / "output"
+
+            # ダミーファイル作成(バリデーション前に入力チェックを通すため)
+            (input_path / "dummy.feather").write_bytes(b"")
+
+            result = runner.invoke(
+                build_game_tree,
+                [
+                    "--input-path",
+                    str(input_path),
+                    "--output-dir",
+                    str(output_dir),
+                    "--initial-hash",
+                    "12345",
+                ],
+            )
+
+            assert result.exit_code == 1
+            assert "--initial-sfen" in result.output
+
     def test_no_feather_files(self) -> None:
         """入力パスに .feather ファイルがない場合のエラー."""
         runner = CliRunner()
