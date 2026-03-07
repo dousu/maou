@@ -227,6 +227,12 @@ class OpeningDatabase:
                     i,
                 )
                 continue
+            if len(item["moves"]) == 0:
+                logger.warning(
+                    "定跡JSON: エントリ %d の moves が"
+                    "空のため全手順に前方一致します",
+                    i,
+                )
             custom_entries.append(
                 OpeningEntry(
                     moves=tuple(item["moves"]),
