@@ -590,6 +590,16 @@ class Board:
     def __init__(self) -> None:
         self.board = cshogi.Board()  # type: ignore
 
+    def __copy__(self) -> Board:
+        """SFENを経由した安全なコピーを返す．
+
+        内部のcshogi.Boardはシャローコピーで共有されるため，
+        SFENによる再構築でディープコピーを保証する．
+        """
+        new_board = Board()
+        new_board.set_sfen(self.get_sfen())
+        return new_board
+
     def set_turn(self, turn: Turn) -> None:
         self.board.turn = turn.value
 

@@ -1,4 +1,4 @@
-"""ゲームツリー可視化Gradioサーバー（インフラ層）．
+"""ゲームツリー可視化Gradioサーバー(インフラ層)．
 
 構築済みゲームツリーをインタラクティブに可視化するGradio Webインターフェース．
 maou visualize --array-type game-tree から起動される．
