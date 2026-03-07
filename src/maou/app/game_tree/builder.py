@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_UINT16_MAX = 65535
+
 
 class GameTreeBuilder:
     """preprocessデータからゲームツリーを構築する．"""
@@ -56,13 +58,18 @@ class GameTreeBuilder:
 
         Raises:
             ValueError: 開始局面がpreprocessデータに見つからない場合，
-                またはinitial_hash指定時にinitial_sfenが未指定の場合
+                またはinitial_hash指定時にinitial_sfenが未指定の場合，
+                またはmax_depth/min_probabilityが範囲外の場合
         """
-        _UINT16_MAX = 65535
         if max_depth > _UINT16_MAX:
             raise ValueError(
                 f"max_depth={max_depth} は UInt16 の"
                 f"最大値({_UINT16_MAX})を超えています．"
+            )
+        if not (0.0 <= min_probability <= 1.0):
+            raise ValueError(
+                f"min_probability={min_probability} は"
+                "0.0〜1.0の範囲でなければなりません．"
             )
 
         # 1. ルックアップテーブル構築: id → 行インデックス(後勝ち)
@@ -82,9 +89,9 @@ class GameTreeBuilder:
 
         # 2. 開始局面のZobrist hashとSFENを決定
         if initial_hash is None:
-            board = shogi.Board()
-            initial_hash = board.hash()
-            initial_sfen = board.get_sfen()
+            init_board = shogi.Board()
+            initial_hash = init_board.hash()
+            initial_sfen = init_board.get_sfen()
         elif initial_sfen is None:
             raise ValueError(
                 "initial_hash を指定する場合は initial_sfen も"
@@ -109,7 +116,8 @@ class GameTreeBuilder:
         move_label_series = preprocess_df["moveLabel"]
         move_win_rate_series = preprocess_df["moveWinRate"]
 
-        # 3. BFS
+        # 3. BFS (Board インスタンスはループ外で1回だけ生成し再利用)
+        board = shogi.Board()
         nodes: list[GameTreeNode] = []
         edges: list[GameTreeEdge] = []
         # visited: hash → depth(BFS最短距離を記録)
@@ -149,6 +157,8 @@ class GameTreeBuilder:
             )[0]
 
             # max_depth に達したら展開しない
+            # NOTE: num_branches はフィルタ後の候補手数(未展開のため
+            # ラベル変換失敗分も含む．通常ノードとは意味が異なる)
             if current_depth >= max_depth:
                 nodes.append(
                     GameTreeNode(
@@ -164,8 +174,7 @@ class GameTreeBuilder:
                     progress_callback(processed, len(visited))
                 continue
 
-            # SFENから盤面を復元(O(1))
-            board = shogi.Board()
+            # SFENから盤面を復元(O(1)，Boardインスタンスを再利用)
             board.set_sfen(current_sfen)
 
             # 各候補手を処理
@@ -232,7 +241,8 @@ class GameTreeBuilder:
                     visited[child_hash] = current_depth + 1
                     queue.append((child_hash, child_sfen))
 
-            # ノードを追加(実際に生成されたエッジ数をnum_branchesに使用)
+            # ノードを追加(実際に生成されたエッジ数をnum_branchesに使用．
+            # ラベル変換失敗分は除外されるため，max_depthノードとは意味が異なる)
             actual_branches = len(edges) - edges_before
             nodes.append(
                 GameTreeNode(

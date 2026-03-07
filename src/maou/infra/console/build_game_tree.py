@@ -24,7 +24,7 @@ def _collect_feather_files(p: Path) -> list[Path]:
         )
     else:
         raise ValueError(
-            f"Path `{p}` is neither a file nor a directory."
+            f"パスがファイルでもディレクトリでもありません: {p}"
         )
 
 
