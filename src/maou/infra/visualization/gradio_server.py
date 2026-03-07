@@ -2758,7 +2758,7 @@ class GradioVisualizationServer:
         Returns:
             (board_svg, record_details)のタプル
         """
-        logger.info(f"Mock ID search: {record_id}")
+        logger.info("Mock ID search: %s", record_id)
 
         # モックレスポンス
         board_svg = self._get_default_board_svg()
