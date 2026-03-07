@@ -58,6 +58,10 @@ def build_game_tree(
     initial_sfen: str | None,
 ) -> None:
     """preprocessデータからゲームツリーを構築する．"""
+    if initial_hash is not None and initial_sfen is None:
+        raise click.ClickException(
+            "--initial-hash を指定する場合は --initial-sfen も指定してください．"
+        )
     import polars as pl
 
     from maou.app.game_tree.builder import GameTreeBuilder
