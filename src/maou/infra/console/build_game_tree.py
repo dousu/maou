@@ -33,7 +33,7 @@ def _collect_feather_files(p: Path) -> list[Path]:
         return [
             f
             for f in p.glob("**/*")
-            if f.is_file() and ".feather" in f.suffixes
+            if f.is_file() and f.suffix == ".feather"
         ]
     else:
         raise ValueError(

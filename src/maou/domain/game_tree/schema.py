@@ -36,17 +36,10 @@ def get_game_tree_edges_schema() -> dict[str, pl.DataType]:
     }
 
 
-def create_empty_nodes_df(size: int = 0) -> pl.DataFrame:
-    """空の nodes DataFrame を生成する．
-
-    Args:
-        size: 作成する行数(デフォルト: 0)
-
-    Returns:
-        ノードスキーマを持つ空のDataFrame
-    """
-    schema = get_game_tree_nodes_schema()
-
+def _create_empty_df(
+    schema: dict[str, pl.DataType], size: int
+) -> pl.DataFrame:
+    """指定スキーマで空のDataFrameを生成する．"""
     if size == 0:
         return pl.DataFrame(schema=schema)
 
@@ -58,6 +51,18 @@ def create_empty_nodes_df(size: int = 0) -> pl.DataFrame:
             for col, dtype in schema.items()
         }
     )
+
+
+def create_empty_nodes_df(size: int = 0) -> pl.DataFrame:
+    """空の nodes DataFrame を生成する．
+
+    Args:
+        size: 作成する行数(デフォルト: 0)
+
+    Returns:
+        ノードスキーマを持つ空のDataFrame
+    """
+    return _create_empty_df(get_game_tree_nodes_schema(), size)
 
 
 def create_empty_edges_df(size: int = 0) -> pl.DataFrame:
@@ -69,16 +74,4 @@ def create_empty_edges_df(size: int = 0) -> pl.DataFrame:
     Returns:
         エッジスキーマを持つ空のDataFrame
     """
-    schema = get_game_tree_edges_schema()
-
-    if size == 0:
-        return pl.DataFrame(schema=schema)
-
-    return pl.DataFrame(
-        {
-            col: pl.Series(
-                values=[], dtype=dtype
-            ).extend_constant(None, size)
-            for col, dtype in schema.items()
-        }
-    )
+    return _create_empty_df(get_game_tree_edges_schema(), size)
