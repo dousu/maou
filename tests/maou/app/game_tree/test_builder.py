@@ -213,6 +213,7 @@ class TestGameTreeBuilder:
 
         assert len(nodes) == 1
         assert nodes[0].depth == 0
+        assert len(edges) == 0
 
     def test_initial_position_not_found(self) -> None:
         """初期局面がない場合はValueError."""
@@ -279,6 +280,7 @@ class TestGameTreeBuilder:
         # エッジは生成される(子局面のデータがなくてもエッジは追加)
         assert len(edges) == 1
         assert edges[0].move16 == shogi.move16(move_7g7f)
+        assert edges[0].is_leaf is True
 
     def test_duplicate_hash_uses_last(self) -> None:
         """入力データにハッシュ重複がある場合，最後の行が使われる(dict内包表記の後勝ち)."""

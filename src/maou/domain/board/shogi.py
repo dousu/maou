@@ -633,6 +633,7 @@ class Board:
 
         Raises:
             ValueError: 不正なUSI文字列の場合
+            RuntimeError: cshogiの内部エラー(不正な局面での変換など)
         """
         return self.board.move_from_usi(usi)
 
