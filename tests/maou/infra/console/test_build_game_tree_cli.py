@@ -85,7 +85,7 @@ class TestBuildGameTreeCLI:
             input_path.mkdir()
             output_dir = Path(tmp) / "output"
 
-            runner.invoke(
+            result = runner.invoke(
                 build_game_tree,
                 [
                     "--input-path",
@@ -95,8 +95,8 @@ class TestBuildGameTreeCLI:
                 ],
             )
 
-            # handle_exception でキャッチされるため exit_code は 0
-            # 出力ファイルが生成されていないことで確認
+            assert result.exit_code == 1
+            assert "feather" in result.output
             assert not (output_dir / "nodes.feather").exists()
 
     def test_nested_directory_collection(self) -> None:
@@ -125,9 +125,7 @@ class TestBuildGameTreeCLI:
 
         with tempfile.TemporaryDirectory() as tmp:
             # ネストされたディレクトリに配置
-            nested_dir = (
-                Path(tmp) / "input" / "sub1" / "sub2"
-            )
+            nested_dir = Path(tmp) / "input" / "sub1" / "sub2"
             nested_dir.mkdir(parents=True)
             output_dir = Path(tmp) / "output"
 

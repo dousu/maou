@@ -4,19 +4,23 @@ from pathlib import Path
 from typing import Any
 
 import click
-import polars as pl
 
 from maou.infra.app_logging import app_logger
 
 
 def _handle_exception(func: Any) -> Any:
-    """例外ハンドリングデコレータ(common.pyの依存を回避)."""
+    """例外ハンドリングデコレータ(common.pyの依存を回避)．
+
+    click.ClickException はClickのエラー表示機構に委ねるため再送出する．
+    """
     import functools
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
+        except click.ClickException:
+            raise
         except Exception:
             app_logger.exception(
                 "Error occurred", stack_info=True
@@ -76,7 +80,10 @@ def build_game_tree(
     min_probability: float,
 ) -> None:
     """preprocessデータからゲームツリーを構築する．"""
+    import polars as pl
+
     from maou.app.game_tree.builder import GameTreeBuilder
+    from maou.domain.data.rust_io import load_preprocessing_df
     from maou.interface.game_tree_io import GameTreeIO
 
     # 入力ファイル収集
@@ -88,8 +95,8 @@ def build_game_tree(
 
     app_logger.info(f"入力ファイル数: {len(input_files)}")
 
-    # データ読み込み
-    dfs = [pl.read_ipc(f) for f in input_files]
+    # データ読み込み(Rustバックエンド使用)
+    dfs = [load_preprocessing_df(f) for f in input_files]
     preprocess_df = pl.concat(dfs) if len(dfs) > 1 else dfs[0]
 
     app_logger.info(f"局面数: {len(preprocess_df):,}")

@@ -617,6 +617,10 @@ class Board:
     def push_move(self, move: int) -> None:
         self.board.push(move)
 
+    def pop_move(self) -> None:
+        """直前の指し手を取り消す．"""
+        self.board.pop()
+
     def to_piece_planes(self, array: np.ndarray) -> None:
         self.board.piece_planes(array)
         # Reorder channels to match PieceId ordering using centralized method

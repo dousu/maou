@@ -122,7 +122,7 @@ class TestGameTreeBuilder:
             move_probs={},  # 空 → 子なし
             result_value=0.48,
         )
-        board.board.pop()
+        board.pop_move()
 
         df = _build_preprocess_df([initial_row, after_row])
 
@@ -166,14 +166,14 @@ class TestGameTreeBuilder:
         after_7g7f = _create_preprocess_row(
             board, move_probs={}
         )
-        board.board.pop()
+        board.pop_move()
 
         # 2g2f後の局面(フィルタリングされるが一応追加)
         board.push_move(move_2g2f)
         after_2g2f = _create_preprocess_row(
             board, move_probs={}
         )
-        board.board.pop()
+        board.pop_move()
 
         df = _build_preprocess_df(
             [initial_row, after_7g7f, after_2g2f]
@@ -203,7 +203,7 @@ class TestGameTreeBuilder:
         after_row = _create_preprocess_row(
             board, move_probs={move_3c3d: 0.8}
         )
-        board.board.pop()
+        board.pop_move()
 
         df = _build_preprocess_df([initial_row, after_row])
 
@@ -280,8 +280,8 @@ class TestGameTreeBuilder:
         assert len(edges) == 1
         assert edges[0].move16 == move_7g7f
 
-    def test_duplicate_hash_uses_first(self) -> None:
-        """入力データにハッシュ重複がある場合，最初の行が使われる."""
+    def test_duplicate_hash_uses_last(self) -> None:
+        """入力データにハッシュ重複がある場合，最後の行が使われる(dict内包表記の後勝ち)."""
         board = shogi.Board()
         h = board.hash()
 
@@ -325,25 +325,21 @@ class TestGameTreeBuilder:
 
         # 7g7f後の局面: 3c3dを指す
         board.push_move(move_7g7f)
-        move_3c3d_after_7g7f = board.board.move_from_usi(
-            "3c3d"
-        )
+        move_3c3d_after_7g7f = board.board.move_from_usi("3c3d")
         after_7g7f = _create_preprocess_row(
             board,
             move_probs={move_3c3d_after_7g7f: 0.5},
         )
-        board.board.pop()
+        board.pop_move()
 
         # 2g2f後の局面: 3c3dを指す
         board.push_move(move_2g2f)
-        move_3c3d_after_2g2f = board.board.move_from_usi(
-            "3c3d"
-        )
+        move_3c3d_after_2g2f = board.board.move_from_usi("3c3d")
         after_2g2f = _create_preprocess_row(
             board,
             move_probs={move_3c3d_after_2g2f: 0.5},
         )
-        board.board.pop()
+        board.pop_move()
 
         # 合流局面: 7g7f→3c3d と 2g2f→3c3d は異なる局面だが
         # もし同じhashなら合流する(cshogiでは手順が違えば別hash)
@@ -354,8 +350,8 @@ class TestGameTreeBuilder:
         merged_row_a = _create_preprocess_row(
             board, move_probs={}
         )
-        board.board.pop()
-        board.board.pop()
+        board.pop_move()
+        board.pop_move()
 
         board.push_move(move_2g2f)
         board.push_move(move_3c3d_after_2g2f)
@@ -363,8 +359,8 @@ class TestGameTreeBuilder:
         merged_row_b = _create_preprocess_row(
             board, move_probs={}
         )
-        board.board.pop()
-        board.board.pop()
+        board.pop_move()
+        board.pop_move()
 
         rows = [
             initial_row,
@@ -407,10 +403,8 @@ class TestGameTreeBuilder:
         )
 
         board.push_move(move_7g7f)
-        after_row = _create_preprocess_row(
-            board, move_probs={}
-        )
-        board.board.pop()
+        after_row = _create_preprocess_row(board, move_probs={})
+        board.pop_move()
 
         df = _build_preprocess_df([initial_row, after_row])
 

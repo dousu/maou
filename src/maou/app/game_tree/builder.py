@@ -148,16 +148,17 @@ class GameTreeBuilder:
                 # USIからmove16に変換
                 try:
                     move16 = board.board.move_from_usi(usi_move)
-                except Exception:
-                    logger.debug(
-                        f"USI {usi_move} のmove16変換に失敗(hash={current_hash})"
+                except (ValueError, RuntimeError) as e:
+                    logger.warning(
+                        f"USI {usi_move} のmove16変換に失敗"
+                        f"(hash={current_hash}): {e}"
                     )
                     continue
 
                 # 子局面のハッシュを取得
                 board.push_move(move16)
                 child_hash = board.hash()
-                board.board.pop()
+                board.pop_move()
 
                 # エッジ追加
                 edges.append(
