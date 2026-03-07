@@ -240,6 +240,10 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     "pre-process": LazyCommandSpec(
         "maou.infra.console.pre_process", "pre_process"
     ),
+    "build-game-tree": LazyCommandSpec(
+        "maou.infra.console.build_game_tree",
+        "build_game_tree",
+    ),
     "learn-model": LazyCommandSpec(
         "maou.infra.console.learn_model",
         "learn_model",
