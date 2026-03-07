@@ -35,6 +35,7 @@ class GameTreeBuilder:
         progress_callback: Callable[[int, int], None]
         | None = None,
         initial_hash: int | None = None,
+        initial_sfen: str | None = None,
     ) -> tuple[list[GameTreeNode], list[GameTreeEdge]]:
         """BFSでツリーを構築する．
 
@@ -45,33 +46,40 @@ class GameTreeBuilder:
             min_probability: 指し手の最小確率閾値
             progress_callback: プログレスコールバック(処理済み局面数, 発見済み局面数)
             initial_hash: 開始局面のZobrist hash(Noneの場合は平手初期局面)
+            initial_sfen: 開始局面のSFEN文字列．initial_hash指定時は必須
 
         Returns:
             (nodes, edges) のタプル
 
         Raises:
-            ValueError: 開始局面がpreprocessデータに見つからない場合
+            ValueError: 開始局面がpreprocessデータに見つからない場合，
+                またはinitial_hash指定時にinitial_sfenが未指定の場合
         """
         # 1. ルックアップテーブル構築: id → 行インデックス(後勝ち)
         id_list = preprocess_df["id"].to_list()
-        seen: set[int] = set()
         duplicate_count = 0
         lookup: dict[int, int] = {}
         for idx, hash_val in enumerate(id_list):
-            if hash_val in seen:
+            if hash_val in lookup:
                 duplicate_count += 1
-            seen.add(hash_val)
             lookup[hash_val] = idx
         if duplicate_count > 0:
             logger.warning(
-                f"入力データに {duplicate_count} 件のハッシュ重複があります．"
-                f"(後勝ちで最後の行を使用)"
+                "入力データに %d 件のハッシュ重複があります．"
+                "(後勝ちで最後の行を使用)",
+                duplicate_count,
             )
 
-        # 2. 開始局面のZobrist hashを決定
+        # 2. 開始局面のZobrist hashとSFENを決定
         if initial_hash is None:
             board = shogi.Board()
             initial_hash = board.hash()
+            initial_sfen = board.get_sfen()
+        elif initial_sfen is None:
+            raise ValueError(
+                "initial_hash を指定する場合は initial_sfen も"
+                "指定してください．"
+            )
 
         if initial_hash not in lookup:
             raise ValueError(
@@ -99,9 +107,8 @@ class GameTreeBuilder:
             int, tuple[int, int | None, int | None]
         ] = {initial_hash: (0, None, None)}
         # キューは (hash, sfen) を保持し，盤面を O(1) で復元する
-        initial_board = shogi.Board()
         queue: deque[tuple[int, str]] = deque(
-            [(initial_hash, initial_board.get_sfen())]
+            [(initial_hash, initial_sfen)]
         )
         processed = 0
 
@@ -167,8 +174,9 @@ class GameTreeBuilder:
                     )
                 except ValueError:
                     logger.debug(
-                        f"ラベル {label_idx_int} の変換に失敗"
-                        f"(hash={current_hash})"
+                        "ラベル %d の変換に失敗(hash=%d)",
+                        label_idx_int,
+                        current_hash,
                     )
                     continue
 
@@ -177,8 +185,10 @@ class GameTreeBuilder:
                     move = board.move_from_usi(usi_move)
                 except (ValueError, RuntimeError) as e:
                     logger.warning(
-                        f"USI {usi_move} のmove変換に失敗 "
-                        f"(hash={current_hash}): {e}"
+                        "USI %s のmove変換に失敗 (hash=%d): %s",
+                        usi_move,
+                        current_hash,
+                        e,
                     )
                     continue
 

@@ -15,8 +15,9 @@
 | `--input-path PATH` | Yes | — | preprocessデータのディレクトリまたはファイルパス．再帰的に `.feather` ファイルを収集する． |
 | `--output-dir PATH` | Yes | — | ツリーデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される． |
 | `--max-depth INT` | No | `30` | BFSの最大探索深さ．初期局面からの手数上限． |
-| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
-| `--initial-hash INT` | No | 平手初期局面 | 開始局面のZobrist hash(preprocessデータのID)．指定した局面からBFSを開始する． |
+| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値(0.0〜1.0)．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
+| `--initial-hash INT` | No | 平手初期局面 | 開始局面のZobrist hash(preprocessデータのID)．指定した局面からBFSを開始する．`--initial-sfen` と併用必須． |
+| `--initial-sfen TEXT` | No | — | 開始局面のSFEN文字列．`--initial-hash` 指定時に必須．BFSで正しい盤面を復元するために使用する． |
 
 ## Example invocation
 
@@ -33,11 +34,12 @@ maou build-game-tree \
   --max-depth 20 \
   --min-probability 0.005
 
-# 特定の局面からツリーを構築
+# 特定の局面からツリーを構築(hash + SFEN の両方を指定)
 maou build-game-tree \
   --input-path ./data/preprocess/ \
   --output-dir ./data/game-tree/ \
-  --initial-hash 12345678901234567
+  --initial-hash 12345678901234567 \
+  --initial-sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2"
 ```
 
 ## Output format

@@ -57,6 +57,12 @@ def _collect_feather_files(p: Path) -> list[Path]:
     type=int,
     default=None,
 )
+@click.option(
+    "--initial-sfen",
+    help="開始局面のSFEN文字列．--initial-hash 指定時に必須．",
+    type=str,
+    default=None,
+)
 @handle_exception
 def build_game_tree(
     input_path: Path,
@@ -64,6 +70,7 @@ def build_game_tree(
     max_depth: int,
     min_probability: float,
     initial_hash: int | None,
+    initial_sfen: str | None,
 ) -> None:
     """preprocessデータからゲームツリーを構築する．"""
     import polars as pl
@@ -112,6 +119,7 @@ def build_game_tree(
             min_probability=min_probability,
             progress_callback=progress_callback,
             initial_hash=initial_hash,
+            initial_sfen=initial_sfen,
         )
 
     # 出力

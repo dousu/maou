@@ -422,3 +422,62 @@ class TestGameTreeBuilder:
         last_processed, last_total = callback_calls[-1]
         assert last_processed == last_total
         assert last_processed == len(nodes)
+
+    def test_custom_initial_hash_with_sfen(self) -> None:
+        """非平手の initial_hash + initial_sfen でツリーを構築できる."""
+        # 7g7f を指した後の局面を開始局面とする
+        board = shogi.Board()
+        move_7g7f = board.move_from_usi("7g7f")
+        board.push_move(move_7g7f)
+        custom_hash = board.hash()
+        custom_sfen = board.get_sfen()
+
+        # カスタム開始局面のデータ
+        move_3c3d = board.move_from_usi("3c3d")
+        custom_row = _create_preprocess_row(
+            board, move_probs={move_3c3d: 0.8}
+        )
+
+        # 3c3d 後の局面データ
+        board.push_move(move_3c3d)
+        after_row = _create_preprocess_row(board, move_probs={})
+        board.pop_move()
+
+        df = _build_preprocess_df([custom_row, after_row])
+
+        builder = GameTreeBuilder()
+        nodes, edges = builder.build(
+            df,
+            max_depth=5,
+            initial_hash=custom_hash,
+            initial_sfen=custom_sfen,
+        )
+
+        # ルートノードはカスタム開始局面
+        assert len(nodes) == 2
+        root = next(n for n in nodes if n.depth == 0)
+        assert root.position_hash == custom_hash
+
+        # エッジが正しく生成される
+        assert len(edges) == 1
+        assert edges[0].parent_hash == custom_hash
+
+    def test_custom_initial_hash_without_sfen_raises(
+        self,
+    ) -> None:
+        """initial_hash を指定して initial_sfen を省略すると ValueError."""
+        board = shogi.Board()
+        row = {
+            "id": board.hash(),
+            "moveLabel": [0.0] * MOVE_LABELS_NUM,
+            "moveWinRate": [0.0] * MOVE_LABELS_NUM,
+            "resultValue": 0.5,
+            "bestMoveWinRate": 0.5,
+        }
+        df = _build_preprocess_df([row])
+
+        builder = GameTreeBuilder()
+        with pytest.raises(ValueError, match="initial_sfen"):
+            builder.build(
+                df, initial_hash=12345, initial_sfen=None
+            )

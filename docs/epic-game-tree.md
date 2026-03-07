@@ -281,7 +281,8 @@ maou build-game-tree \
   --output-dir ./data/game-tree/ \
   --max-depth 30 \
   --min-probability 0.001 \
-  --initial-hash 1234567890
+  --initial-hash 1234567890 \
+  --initial-sfen "lnsgkgsnl/1r5b1/..."
 ```
 
 | オプション | 型 | デフォルト | 説明 |
@@ -291,6 +292,7 @@ maou build-game-tree \
 | `--max-depth` | INT | 30 | 最大探索深さ |
 | `--min-probability` | FLOAT_RANGE [0.0, 1.0] | 0.001 | 指し手の最小確率閾値(表示時より小さく設定) |
 | `--initial-hash` | INT | None | 開始局面のZobrist hash．省略時は平手初期局面 |
+| `--initial-sfen` | TEXT | None | 開始局面のSFEN文字列．`--initial-hash` 指定時は必須 |
 
 **既存パターンに準拠:**
 - `app.py`の`LAZY_COMMANDS`に登録
