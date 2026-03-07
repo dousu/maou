@@ -132,17 +132,9 @@ class GameTreeVisualizationInterface:
         )
 
         # エッジから各ノードへの親エッジ情報を取得(ラベル用)
-        # child_hash → (move16, probability) のマッピング
-        child_edge_map: dict[int, dict[str, Any]] = {}
-        for row in sub_edges.iter_rows(named=True):
-            child_hash = row["child_hash"]
-            # 最大確率のエッジを採用(複数親の場合)
-            if (
-                child_hash not in child_edge_map
-                or row["probability"]
-                > child_edge_map[child_hash]["probability"]
-            ):
-                child_edge_map[child_hash] = row
+        child_edge_map = self._build_child_edge_map(
+            sub_edges
+        )
 
         # サブツリー内の盤面をdepth順に漸進的に構築する．
         # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
@@ -571,15 +563,9 @@ class GameTreeVisualizationInterface:
             node_depth_map[row["position_hash"]] = row["depth"]
 
         # 盤面を構築してUSI→日本語変換
-        child_edge_map: dict[int, dict[str, Any]] = {}
-        for row in sub_edges.iter_rows(named=True):
-            child_hash = row["child_hash"]
-            if (
-                child_hash not in child_edge_map
-                or row["probability"]
-                > child_edge_map[child_hash]["probability"]
-            ):
-                child_edge_map[child_hash] = row
+        child_edge_map = self._build_child_edge_map(
+            sub_edges
+        )
 
         local_boards = self._build_boards_incrementally(
             root_hash, sub_nodes, child_edge_map
@@ -646,6 +632,31 @@ class GameTreeVisualizationInterface:
             board.push_move(move)
 
         return board
+
+    @staticmethod
+    def _build_child_edge_map(
+        sub_edges: pl.DataFrame,
+    ) -> dict[int, dict[str, Any]]:
+        """エッジDFから child_hash → 最大確率エッジ行のマップを構築する．
+
+        複数の親を持つノードは最大確率のエッジを採用する．
+
+        Args:
+            sub_edges: サブツリーのエッジDataFrame
+
+        Returns:
+            child_hash をキー，エッジ行(dict)を値とするマッピング
+        """
+        child_edge_map: dict[int, dict[str, Any]] = {}
+        for row in sub_edges.iter_rows(named=True):
+            child_hash = row["child_hash"]
+            if (
+                child_hash not in child_edge_map
+                or row["probability"]
+                > child_edge_map[child_hash]["probability"]
+            ):
+                child_edge_map[child_hash] = row
+        return child_edge_map
 
     def _build_boards_incrementally(
         self,

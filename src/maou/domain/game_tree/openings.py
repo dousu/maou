@@ -115,18 +115,11 @@ class OpeningDatabase:
             entries: 定跡パターンのリスト．
                 Noneの場合はデフォルトパターンを使用．
         """
-        if entries is not None:
-            self._entries = sorted(
-                entries,
-                key=lambda e: len(e.moves),
-                reverse=True,
-            )
-        else:
-            self._entries = sorted(
-                _DEFAULT_OPENINGS,
-                key=lambda e: len(e.moves),
-                reverse=True,
-            )
+        self._entries = sorted(
+            entries if entries is not None else _DEFAULT_OPENINGS,
+            key=lambda e: len(e.moves),
+            reverse=True,
+        )
 
     def find_opening(
         self, moves: list[str]
@@ -206,6 +199,15 @@ class OpeningDatabase:
                 logger.warning(
                     "定跡JSON: エントリ %d の moves が"
                     "リストではないためスキップ",
+                    i,
+                )
+                continue
+            if not all(
+                isinstance(m, str) for m in item["moves"]
+            ):
+                logger.warning(
+                    "定跡JSON: エントリ %d の moves に"
+                    "文字列でない要素が含まれるためスキップ",
                     i,
                 )
                 continue

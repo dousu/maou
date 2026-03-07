@@ -142,16 +142,6 @@
 
 /* --- エクスポートセクション --- */
 
-.export-section {
-    padding: 8px 0;
-}
-
-.export-btn-row {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
 .export-btn {
     padding: 6px 12px;
     border: 1px solid var(--grid-lines, #d4c5a9);
