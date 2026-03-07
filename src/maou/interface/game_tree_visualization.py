@@ -24,6 +24,9 @@ from maou.domain.visualization.board_renderer import (
     MoveArrow,
     SVGBoardRenderer,
 )
+from maou.domain.visualization.piece_mapping import (
+    get_piece_name_ja,
+)
 
 
 class GameTreeVisualizationInterface:
@@ -87,6 +90,21 @@ class GameTreeVisualizationInterface:
             ):
                 child_edge_map[child_hash] = row
 
+        # 親ノードの盤面をキャッシュして駒名を取得する
+        board_cache: dict[int, Board | None] = {}
+
+        def _get_board(
+            pos_hash: int,
+        ) -> Board | None:
+            if pos_hash not in board_cache:
+                path = self._query.get_path_to_root(pos_hash)
+                board_cache[pos_hash] = (
+                    self._reconstruct_board_from_path(path)
+                    if path
+                    else None
+                )
+            return board_cache[pos_hash]
+
         cy_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
@@ -95,8 +113,19 @@ class GameTreeVisualizationInterface:
             label = "ROOT"
             probability = 1.0
             if edge_info is not None:
-                usi = move_to_usi(edge_info["move16"])
-                label = self._usi_to_japanese(usi)
+                move16 = edge_info["move16"]
+                usi = move_to_usi(move16)
+                parent_board = _get_board(
+                    edge_info["parent_hash"]
+                )
+                piece_name = (
+                    self._get_piece_name(parent_board, move16)
+                    if parent_board is not None
+                    else ""
+                )
+                label = self._usi_to_japanese(
+                    usi, piece_name=piece_name
+                )
                 probability = edge_info["probability"]
 
             cy_nodes.append(
@@ -234,10 +263,26 @@ class GameTreeVisualizationInterface:
         if len(children) == 0:
             return []
 
+        # 盤面を復元して駒名を取得する
+        path = self._query.get_path_to_root(position_hash)
+        board = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
+        )
+
         result: list[list[str]] = []
         for row in children.iter_rows(named=True):
-            usi = move_to_usi(row["move16"])
-            japanese = self._usi_to_japanese(usi)
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            piece_name = (
+                self._get_piece_name(board, move16)
+                if board is not None
+                else ""
+            )
+            japanese = self._usi_to_japanese(
+                usi, piece_name=piece_name
+            )
             prob = f"{row['probability'] * 100:.1f}%"
             wr = f"{row['win_rate'] * 100:.1f}%"
             result.append([japanese, prob, wr])
@@ -271,14 +316,32 @@ class GameTreeVisualizationInterface:
                 "win_rates": [],
             }
 
+        # 盤面を復元して駒名を取得する
+        path = self._query.get_path_to_root(position_hash)
+        board = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
+        )
+
         top_children = children.head(10)
         moves: list[str] = []
         probs: list[float] = []
         win_rates: list[float] = []
 
         for row in top_children.iter_rows(named=True):
-            usi = move_to_usi(row["move16"])
-            moves.append(self._usi_to_japanese(usi))
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            piece_name = (
+                self._get_piece_name(board, move16)
+                if board is not None
+                else ""
+            )
+            moves.append(
+                self._usi_to_japanese(
+                    usi, piece_name=piece_name
+                )
+            )
             probs.append(float(row["probability"]))
             win_rates.append(float(row["win_rate"]))
 
@@ -339,11 +402,38 @@ class GameTreeVisualizationInterface:
         )
 
     @staticmethod
-    def _usi_to_japanese(usi: str) -> str:
+    def _get_piece_name(board: Board, move16: int) -> str:
+        """盤面とmove16から移動元の駒名を取得する．
+
+        Args:
+            board: 指し手適用前の盤面
+            move16: 16bit指し手
+
+        Returns:
+            日本語の駒名(例: "歩"，"角")
+        """
+        move = board.get_move_from_move16(move16)
+        if move_is_drop(move):
+            hand_piece = move_drop_hand_piece(move)
+            piece_id = Board.cshogi_piece_to_piece_id(
+                hand_piece
+            )
+            return get_piece_name_ja(piece_id)
+        from_sq = move_from(move)
+        cshogi_piece = board.board.piece(from_sq)
+        piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
+        return get_piece_name_ja(piece_id)
+
+    @staticmethod
+    def _usi_to_japanese(
+        usi: str,
+        piece_name: str = "",
+    ) -> str:
         """USI表記を日本語表記に変換する．
 
         Args:
             usi: USI形式の指し手(例: "7g7f", "P*5e")
+            piece_name: 駒名(例: "歩"，"角")．指定時は表記に含める．
 
         Returns:
             日本語表記(例: "7六歩", "5五歩打")
@@ -388,4 +478,4 @@ class GameTreeVisualizationInterface:
         if len(usi) > 4 and usi[4] == "+":
             promotion = "成"
 
-        return f"{to_col}{to_row}{promotion}"
+        return f"{to_col}{to_row}{piece_name}{promotion}"

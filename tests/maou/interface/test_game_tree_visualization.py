@@ -121,6 +121,15 @@ class TestUsiToJapanese:
         )
         assert result == "7六"
 
+    def test_normal_move_with_piece(self) -> None:
+        """通常の指し手に駒名を含めて変換する."""
+        result = (
+            GameTreeVisualizationInterface._usi_to_japanese(
+                "7g7f", piece_name="歩"
+            )
+        )
+        assert result == "7六歩"
+
     def test_drop_move(self) -> None:
         """駒打ちをjapanese表記に変換する."""
         result = (
@@ -138,6 +147,15 @@ class TestUsiToJapanese:
             )
         )
         assert result == "2二成"
+
+    def test_promotion_move_with_piece(self) -> None:
+        """成りの指し手に駒名を含めて変換する."""
+        result = (
+            GameTreeVisualizationInterface._usi_to_japanese(
+                "8h2b+", piece_name="角"
+            )
+        )
+        assert result == "2二角成"
 
 
 class TestGetAnalyticsData:
