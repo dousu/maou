@@ -168,10 +168,26 @@ class OpeningDatabase:
             path: JSONファイルのパス
 
         Returns:
-            読み込み済みのOpeningDatabase
+            読み込み済みのOpeningDatabase．
+            ファイルが存在しない場合やJSONパース失敗時は
+            デフォルトパターンのみのインスタンスを返す．
         """
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            logger.warning(
+                "定跡JSONファイルが見つかりません: %s",
+                path,
+            )
+            return cls()
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "定跡JSONのパースに失敗しました: %s: %s",
+                path,
+                e,
+            )
+            return cls()
 
         if not isinstance(data, list):
             logger.warning(

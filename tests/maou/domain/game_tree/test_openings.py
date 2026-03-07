@@ -174,6 +174,117 @@ class TestOpeningDatabaseLoadJson:
         assert result.name == "矢倉"
 
 
+class TestOpeningDatabaseLoadJsonErrors:
+    """OpeningDatabase.load_from_json のエラーパスのテスト．"""
+
+    def test_file_not_found_returns_default(
+        self, tmp_path: Path
+    ) -> None:
+        """存在しないファイルはデフォルトパターンで返す．"""
+        path = tmp_path / "nonexistent.json"
+        db = OpeningDatabase.load_from_json(path)
+        # デフォルトパターンは利用可能
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
+        assert result is not None
+        assert result.name == "矢倉"
+
+    def test_invalid_json_returns_default(
+        self, tmp_path: Path
+    ) -> None:
+        """不正なJSON形式はデフォルトパターンで返す．"""
+        path = tmp_path / "invalid.json"
+        path.write_text("{broken", encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
+        assert result is not None
+        assert result.name == "矢倉"
+
+    def test_non_list_root_returns_default(
+        self, tmp_path: Path
+    ) -> None:
+        """ルートが配列でないJSONはデフォルトパターンで返す．"""
+        path = tmp_path / "obj.json"
+        path.write_text('{"key": "value"}', encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
+        assert result is not None
+
+    def test_moves_string_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """moves が文字列のエントリはスキップされる．"""
+        data = [
+            {"moves": "7g7f", "name": "不正"},
+            {"moves": ["2g2f"], "name": "正常"},
+        ]
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        assert db.find_opening(["7g7f"]) is None
+        assert db.find_opening(["2g2f"]) is not None
+
+    def test_moves_with_non_string_elements_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """moves の要素に数値が含まれるエントリはスキップされる．"""
+        data = [
+            {"moves": [7, "g7f"], "name": "不正"},
+            {"moves": ["2g2f"], "name": "正常"},
+        ]
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        assert db.find_opening(["2g2f"]) is not None
+
+    def test_empty_moves_entry(
+        self, tmp_path: Path
+    ) -> None:
+        """moves が空リストのエントリは全手順にマッチする．"""
+        data = [{"moves": [], "name": "空手順"}]
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        # 空の moves は 0 長の前方一致 → 任意の手順にマッチ
+        # ただしデフォルトの長いパターンが優先される
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
+        assert result is not None
+        assert result.name == "矢倉"  # 長いパターンが優先
+        # デフォルトに該当しない手順では空手順がマッチ
+        result2 = db.find_opening(["1g1f"])
+        assert result2 is not None
+        assert result2.name == "空手順"
+
+    def test_long_custom_overrides_shorter_default(
+        self, tmp_path: Path
+    ) -> None:
+        """デフォルトより長いカスタムパターンが優先される．"""
+        data = [
+            {
+                "moves": [
+                    "7g7f", "8c8d", "7i6h",
+                    "3c3d", "6h7g",
+                ],
+                "name": "矢倉カスタム",
+                "category": "テスト",
+            }
+        ]
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        db = OpeningDatabase.load_from_json(path)
+        # 長いパターンが優先
+        result = db.find_opening(
+            ["7g7f", "8c8d", "7i6h", "3c3d", "6h7g"]
+        )
+        assert result is not None
+        assert result.name == "矢倉カスタム"
+        # 短い手順ではデフォルトの矢倉がマッチ
+        result2 = db.find_opening(
+            ["7g7f", "8c8d", "7i6h"]
+        )
+        assert result2 is not None
+        assert result2.name == "矢倉"
+
+
 class TestOpeningInfo:
     """OpeningInfo のテスト．"""
 

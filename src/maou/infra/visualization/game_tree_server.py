@@ -9,6 +9,7 @@ import html
 import json
 import logging
 import tempfile
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -655,7 +656,7 @@ def launch_game_tree_server(
             return None
 
         tmp_path = Path(_csv_tmp_dir.name) / (
-            f"game_tree_{id(csv_content):x}.csv"
+            f"game_tree_{uuid.uuid4().hex}.csv"
         )
         tmp_path.write_text(csv_content, encoding="utf-8")
         return str(tmp_path)

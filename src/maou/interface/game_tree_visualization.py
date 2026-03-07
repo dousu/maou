@@ -422,6 +422,12 @@ class GameTreeVisualizationInterface:
                 path[i], path[i + 1]
             )
             if edge is None:
+                logger.warning(
+                    "パンくずリスト: ノード %d → %d 間の"
+                    "エッジが見つかりません",
+                    path[i],
+                    path[i + 1],
+                )
                 break
 
             move16 = edge["move16"]
