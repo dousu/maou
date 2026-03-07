@@ -49,7 +49,10 @@ class GameTreeBuilder:
             initial_sfen: 開始局面のSFEN文字列．initial_hash指定時は必須
 
         Returns:
-            (nodes, edges) のタプル
+            (nodes, edges) のタプル．
+            エッジの child_hash に対応するノードが存在しない場合がある
+            (is_leaf=True のエッジ: 子局面がpreprocessデータに存在しない)．
+            下流処理では LEFT JOIN 時に null-safe な処理が必要
 
         Raises:
             ValueError: 開始局面がpreprocessデータに見つからない場合，
@@ -102,10 +105,8 @@ class GameTreeBuilder:
         # 3. BFS
         nodes: list[GameTreeNode] = []
         edges: list[GameTreeEdge] = []
-        # visited: hash → (depth, parent_hash, move)
-        visited: dict[
-            int, tuple[int, int | None, int | None]
-        ] = {initial_hash: (0, None, None)}
+        # visited: hash → depth(BFS最短距離を記録)
+        visited: dict[int, int] = {initial_hash: 0}
         # キューは (hash, sfen) を保持し，盤面を O(1) で復元する
         queue: deque[tuple[int, str]] = deque(
             [(initial_hash, initial_sfen)]
@@ -114,7 +115,7 @@ class GameTreeBuilder:
 
         while queue:
             current_hash, current_sfen = queue.popleft()
-            current_depth, _, _ = visited[current_hash]
+            current_depth = visited[current_hash]
             row_idx = lookup[current_hash]
 
             # スカラー値はNumPy配列から直接取得
@@ -221,11 +222,7 @@ class GameTreeBuilder:
                     child_in_lookup
                     and child_hash not in visited
                 ):
-                    visited[child_hash] = (
-                        current_depth + 1,
-                        current_hash,
-                        move,
-                    )
+                    visited[child_hash] = current_depth + 1
                     queue.append((child_hash, child_sfen))
 
             # ノードを追加(実際に生成されたエッジ数をnum_branchesに使用)

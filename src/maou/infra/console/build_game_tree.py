@@ -11,6 +11,10 @@ from maou.infra.console.common import handle_exception
 def _collect_feather_files(p: Path) -> list[Path]:
     """指定パスから .feather ファイルを収集する．"""
     if p.is_file():
+        if p.suffix != ".feather":
+            raise ValueError(
+                f"ファイルは .feather 形式でなければなりません: {p}"
+            )
         return [p]
     elif p.is_dir():
         return sorted(

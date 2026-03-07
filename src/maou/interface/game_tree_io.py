@@ -58,7 +58,11 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
         arrow_batch = load_feather_file(str(path))
     except OSError as e:
         if "no record batches" in str(e):
-            # 空ファイル(0 record batches)はRust I/Oで読めないためPolarsで読み込む
+            # 空ファイル(0 record batches)はRust I/Oで読めないためPolarsで読み込む．
+            # NOTE: このエラーメッセージは maou_io::load_feather_file() の
+            # RecordBatchReader 生成時に Apache Arrow が返す文字列に依存している．
+            # Rust バックエンド(src-rust/)の Arrow バージョン更新時に
+            # メッセージが変更される可能性があるため，その際は要確認．
             return pl.read_ipc(path)
         raise
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
