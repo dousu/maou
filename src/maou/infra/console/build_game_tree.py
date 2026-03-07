@@ -99,24 +99,18 @@ def build_game_tree(
     app_logger.info("局面数: %s", f"{len(preprocess_df):,}")
 
     # ツリー構築
+    from tqdm import tqdm
+
     builder = GameTreeBuilder()
-    with click.progressbar(
-        length=1,
-        label="ツリー構築中",
-    ) as bar:
-        last_processed = 0
+    pbar = tqdm(desc="ツリー構築中", unit="局面")
 
-        def progress_callback(
-            processed: int, total: int
-        ) -> None:
-            nonlocal last_processed
-            # totalは発見済み局面数(BFS中に増加する)
-            # NOTE: bar.length の動的更新はClick公式APIではないが，
-            # BFSの総ノード数が事前に不明なため必要．Clickバージョン更新時に要確認．
-            bar.length = total
-            bar.update(processed - last_processed)
-            last_processed = processed
+    def progress_callback(processed: int, total: int) -> None:
+        # totalは発見済み局面数(BFS中に増加する)
+        pbar.total = total
+        pbar.n = processed
+        pbar.refresh()
 
+    try:
         nodes, edges = builder.build(
             preprocess_df,
             max_depth=max_depth,
@@ -125,6 +119,8 @@ def build_game_tree(
             initial_hash=initial_hash,
             initial_sfen=initial_sfen,
         )
+    finally:
+        pbar.close()
 
     # 出力
     io = GameTreeIO()

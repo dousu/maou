@@ -79,6 +79,51 @@ def df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
 _df_to_single_batch = df_to_single_batch
 
 
+def save_generic_df(
+    df: pl.DataFrame, file_path: Path | str
+) -> None:
+    """汎用DataFrameを.featherファイルに保存する(Rustバックエンド使用)．
+
+    スキーマを問わないDataFrameの保存に使用する．
+
+    Args:
+        df: 保存するPolars DataFrame
+        file_path: 出力ファイルパス(.feather拡張子推奨)
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+    """
+    _check_rust_backend()
+
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    arrow_batch = _df_to_single_batch(df)
+    save_feather_file(arrow_batch, str(file_path))
+
+
+def load_generic_df(file_path: Path | str) -> pl.DataFrame:
+    """汎用DataFrameを.featherファイルから読み込む(Rustバックエンド使用)．
+
+    スキーマを問わないDataFrameの読み込みに使用する．
+
+    Args:
+        file_path: 入力ファイルパス(.feather拡張子)
+
+    Returns:
+        Polars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+    """
+    _check_rust_backend()
+
+    arrow_batch = load_feather_file(str(file_path))
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
+
+
 def save_hcpe_df(
     df: pl.DataFrame, file_path: Path | str
 ) -> None:

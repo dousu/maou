@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import cast
 
 import polars as pl
 
@@ -32,13 +31,9 @@ def _save_df_feather(df: pl.DataFrame, path: Path) -> None:
         df.write_ipc(path, compression="lz4")
         return
 
-    from maou._rust.maou_io import save_feather_file
-    from maou.domain.data.rust_io import df_to_single_batch
+    from maou.domain.data.rust_io import save_generic_df
 
-    save_feather_file(
-        df_to_single_batch(df),
-        str(path),
-    )
+    save_generic_df(df, path)
 
 
 def _load_df_feather(path: Path) -> pl.DataFrame:
@@ -53,16 +48,15 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
     Returns:
         読み込んだDataFrame
     """
-    from maou._rust.maou_io import load_feather_file
+    from maou.domain.data.rust_io import load_generic_df
 
     try:
-        arrow_batch = load_feather_file(str(path))
+        return load_generic_df(path)
     except OSError:
         # Rust バックエンドは空 IPC ファイル(0 record batches)を読めない．
         # Polars にフォールバックする．ファイルが本当に破損している場合は
         # Polars も例外を送出するため，エラーが隠蔽されることはない．
         return pl.read_ipc(path)
-    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
 class GameTreeIO:

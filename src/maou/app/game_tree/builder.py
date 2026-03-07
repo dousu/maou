@@ -140,8 +140,8 @@ class GameTreeBuilder:
             )
 
             # List型カラムはオンデマンドでNumPy配列に変換
-            # Polars 1.x ではインデックスアクセスで Series が返るため
-            # np.array() に直接渡す(中間リスト生成を回避)
+            # Polars 1.x では List dtype の Series[idx] は Series を返すため
+            # np.array() で直接変換可能(.to_list() による中間リスト生成が不要)
             move_labels = np.array(
                 move_label_series[row_idx],
                 dtype=np.float32,
