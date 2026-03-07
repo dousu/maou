@@ -6,6 +6,7 @@ Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -130,20 +131,12 @@ class GameTreeVisualizationInterface:
             ):
                 child_edge_map[child_hash] = row
 
-        # 親ノードの盤面をキャッシュして駒名を取得する
-        local_boards: dict[int, Board | None] = {}
-
-        def _get_board(
-            pos_hash: int,
-        ) -> Board | None:
-            if pos_hash not in local_boards:
-                path = self._query.get_path_to_root(pos_hash)
-                local_boards[pos_hash] = (
-                    self._reconstruct_board_from_path(path)
-                    if path
-                    else None
-                )
-            return local_boards[pos_hash]
+        # サブツリー内の盤面をdepth順に漸進的に構築する．
+        # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
+        # 1手適用して子の盤面を得る．
+        local_boards = self._build_boards_incrementally(
+            root_hash, sub_nodes, child_edge_map
+        )
 
         cy_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
@@ -155,7 +148,7 @@ class GameTreeVisualizationInterface:
             if edge_info is not None:
                 move16 = edge_info["move16"]
                 usi = move_to_usi(move16)
-                parent_board = _get_board(
+                parent_board = local_boards.get(
                     edge_info["parent_hash"]
                 )
                 # 駒打ち(usi[1]=="*")はUSIから駒名を取得するため
@@ -413,6 +406,62 @@ class GameTreeVisualizationInterface:
             board.push_move(move)
 
         return board
+
+    def _build_boards_incrementally(
+        self,
+        root_hash: int,
+        sub_nodes: pl.DataFrame,
+        child_edge_map: dict[int, dict[str, Any]],
+    ) -> dict[int, Board | None]:
+        """サブツリー内の全ノードの盤面をdepth順に構築する．
+
+        ルートの盤面のみ get_path_to_root で復元し，
+        残りは親の盤面をコピーして1手適用する．
+        これにより get_path_to_root の呼び出しを1回に削減する．
+
+        Args:
+            root_hash: サブツリーのルートhash
+            sub_nodes: サブツリー内のノードDF
+            child_edge_map: child_hash → エッジ情報
+
+        Returns:
+            position_hash → Board のマッピング
+        """
+        boards: dict[int, Board | None] = {}
+
+        # サブツリーのルート盤面を復元
+        path = self._query.get_path_to_root(root_hash)
+        boards[root_hash] = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
+        )
+
+        # depth順にソートして漸進的に構築
+        sorted_nodes = sub_nodes.sort("depth")
+        for row in sorted_nodes.iter_rows(named=True):
+            pos_hash = row["position_hash"]
+            if pos_hash in boards:
+                continue
+
+            edge_info = child_edge_map.get(pos_hash)
+            if edge_info is None:
+                boards[pos_hash] = None
+                continue
+
+            parent_hash = edge_info["parent_hash"]
+            parent_board = boards.get(parent_hash)
+            if parent_board is None:
+                boards[pos_hash] = None
+                continue
+
+            child_board = copy.copy(parent_board)
+            move16 = edge_info["move16"]
+            move = child_board.get_move_from_move16(move16)
+            child_board.push_move(move)
+            boards[pos_hash] = child_board
+
+        return boards
 
     def _get_board_for_position(
         self, position_hash: int
