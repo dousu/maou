@@ -36,17 +36,22 @@ class GameTreeVisualizationInterface:
         self,
         nodes_df: pl.DataFrame,
         edges_df: pl.DataFrame,
-        root_hash: int,
     ) -> None:
         """初期化．
 
         Args:
             nodes_df: ノードデータ(nodes.feather相当)
             edges_df: エッジデータ(edges.feather相当)
-            root_hash: ツリーのルートノードのhash
+
+        Raises:
+            ValueError: depth=0のルートノードが見つからない場合
         """
         self._query = GameTreeQuery(nodes_df, edges_df)
-        self._root_hash = root_hash
+        root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
+        if len(root_nodes) == 0:
+            msg = "ルートノード(depth=0)が見つかりません"
+            raise ValueError(msg)
+        self._root_hash = int(root_nodes["position_hash"][0])
         self._renderer = SVGBoardRenderer()
 
     def get_cytoscape_elements(

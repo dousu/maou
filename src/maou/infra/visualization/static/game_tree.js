@@ -24,7 +24,8 @@
       const b = Math.round(249 * (1 - t) + 210 * t);
       return `rgb(${r}, ${g}, ${b})`;
     } else if (resultValue < 0.45) {
-      // 後手有利: 赤
+      // 後手有利: 赤 (Red 200 → Red 700)
+      // g == b は意図的: 純粋な赤系統を維持するため
       const t = Math.min((0.45 - resultValue) / 0.35, 1.0);
       const r = Math.round(239 * (1 - t) + 211 * t);
       const g = Math.round(154 * (1 - t) + 47 * t);

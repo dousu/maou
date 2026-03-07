@@ -1146,17 +1146,12 @@ class GradioVisualizationServer:
             len(edges_df),
         )
 
-        root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
-        if len(root_nodes) == 0:
-            raise ValueError(
-                "ルートノード(depth=0)が見つかりません"
-            )
-        root_hash = int(root_nodes["position_hash"][0])
-
         self._game_tree_viz = GameTreeVisualizationInterface(
-            nodes_df, edges_df, root_hash
+            nodes_df, edges_df
         )
-        self._game_tree_root_hash = root_hash
+        self._game_tree_root_hash = (
+            self._game_tree_viz.get_root_hash()
+        )
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
         """Rebuild search index from current file paths in background．

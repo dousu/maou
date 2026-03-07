@@ -6,6 +6,7 @@ maou visualize --array-type game-tree から起動される．
 
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,9 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+@lru_cache(maxsize=None)
 def _load_static_file(filename: str) -> str:
-    """staticディレクトリからファイルを読み込む．
+    """staticディレクトリからファイルを読み込む(結果はキャッシュされる)．
 
     Args:
         filename: ファイル名
@@ -331,17 +333,8 @@ def launch_game_tree_server(
         len(edges_df),
     )
 
-    # ルートノード特定(depth=0)
-    root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
-    if len(root_nodes) == 0:
-        raise ValueError(
-            "ルートノード(depth=0)が見つかりません"
-        )
-    root_hash = int(root_nodes["position_hash"][0])
-
-    viz = GameTreeVisualizationInterface(
-        nodes_df, edges_df, root_hash
-    )
+    viz = GameTreeVisualizationInterface(nodes_df, edges_df)
+    root_hash = viz.get_root_hash()
 
     custom_css = _load_custom_css()
     head_scripts = _build_head_scripts()
@@ -356,7 +349,7 @@ def launch_game_tree_server(
     ]:
         """初期表示コールバック．"""
         return _update_tree_view(
-            viz, root_hash, display_depth, min_prob
+            viz, viz.get_root_hash(), display_depth, min_prob
         )
 
     def on_refresh(
@@ -369,13 +362,15 @@ def launch_game_tree_server(
         """更新ボタンのコールバック．"""
         try:
             rh = (
-                int(current_root) if current_root else root_hash
+                int(current_root)
+                if current_root
+                else viz.get_root_hash()
             )
         except ValueError:
             logger.warning(
                 "Invalid current_root: %s", current_root
             )
-            rh = root_hash
+            rh = viz.get_root_hash()
         return _update_tree_view(
             viz, rh, display_depth, min_prob
         )
@@ -417,7 +412,7 @@ def launch_game_tree_server(
             return (
                 "",
                 "",
-                str(root_hash),
+                str(viz.get_root_hash()),
                 {},
                 [],
                 _create_empty_plot(),
@@ -429,7 +424,7 @@ def launch_game_tree_server(
             return (
                 "",
                 "",
-                str(root_hash),
+                str(viz.get_root_hash()),
                 {},
                 [],
                 _create_empty_plot(),
@@ -460,15 +455,14 @@ def launch_game_tree_server(
         go.Figure,
     ]:
         """ルートに戻るボタンのコールバック．"""
+        rh = viz.get_root_hash()
         tree_html, board_svg, stats, moves, plot = (
-            _update_tree_view(
-                viz, root_hash, display_depth, min_prob
-            )
+            _update_tree_view(viz, rh, display_depth, min_prob)
         )
         return (
             tree_html,
             board_svg,
-            str(root_hash),
+            str(rh),
             stats,
             moves,
             plot,
