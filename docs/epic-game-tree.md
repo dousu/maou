@@ -276,7 +276,7 @@ maou build-game-tree \
   --input-path ./data/preprocess/ \
   --output-dir ./data/game-tree/ \
   --max-depth 30 \
-  --min-probability 0.01
+  --min-probability 0.001
 ```
 
 | オプション | 型 | デフォルト | 説明 |
