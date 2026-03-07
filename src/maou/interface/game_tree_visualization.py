@@ -81,6 +81,9 @@ class GameTreeVisualizationInterface:
         self._root_hash = int(root_nodes["position_hash"][0])
         self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
+        self._board_cache: tuple[int, Board | None] | None = (
+            None
+        )
 
     def get_cytoscape_elements(
         self,
@@ -292,13 +295,7 @@ class GameTreeVisualizationInterface:
         if len(children) == 0:
             return []
 
-        # 盤面を復元して駒名を取得する
-        path = self._query.get_path_to_root(position_hash)
-        board = (
-            self._reconstruct_board_from_path(path)
-            if path
-            else None
-        )
+        board = self._get_board_for_position(position_hash)
 
         result: list[list[str]] = []
         for row in children.iter_rows(named=True):
@@ -347,13 +344,7 @@ class GameTreeVisualizationInterface:
                 "win_rates": [],
             }
 
-        # 盤面を復元して駒名を取得する
-        path = self._query.get_path_to_root(position_hash)
-        board = (
-            self._reconstruct_board_from_path(path)
-            if path
-            else None
-        )
+        board = self._get_board_for_position(position_hash)
 
         top_children = children.head(10)
         moves: list[str] = []
@@ -411,6 +402,35 @@ class GameTreeVisualizationInterface:
             move = board.get_move_from_move16(move16)
             board.push_move(move)
 
+        return board
+
+    def _get_board_for_position(
+        self, position_hash: int
+    ) -> Board | None:
+        """指定局面のBoardを取得する(1エントリキャッシュ付き)．
+
+        同一局面に対する連続呼び出し(get_move_table → get_analytics_data)で
+        重複する盤面復元を回避する．
+
+        Args:
+            position_hash: 対象ノードのZobrist hash
+
+        Returns:
+            復元されたBoardオブジェクト．復元不能の場合None．
+        """
+        if (
+            self._board_cache is not None
+            and self._board_cache[0] == position_hash
+        ):
+            return self._board_cache[1]
+
+        path = self._query.get_path_to_root(position_hash)
+        board = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
+        )
+        self._board_cache = (position_hash, board)
         return board
 
     @staticmethod
