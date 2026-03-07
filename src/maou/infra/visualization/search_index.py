@@ -6,8 +6,8 @@
 import bisect
 import logging
 from collections import defaultdict
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

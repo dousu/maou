@@ -7,8 +7,8 @@ datasets larger than available RAM．
 
 import logging
 import shutil
-from pathlib import Path
 from collections.abc import Generator
+from pathlib import Path
 
 import duckdb
 import duckdb.typing

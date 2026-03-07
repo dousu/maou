@@ -9,8 +9,8 @@ Total patterns: ~1,105 (14 board piece types × ~60-81 positions + 7 hand types)
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Generator
+from dataclasses import dataclass
 
 import polars as pl
 

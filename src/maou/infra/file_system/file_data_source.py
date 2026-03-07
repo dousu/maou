@@ -7,9 +7,9 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Literal,
-    TYPE_CHECKING,
     cast,
 )
 

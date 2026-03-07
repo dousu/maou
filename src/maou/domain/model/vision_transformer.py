@@ -8,10 +8,10 @@ board using the flattened cells as tokens.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType
-from collections.abc import Callable
 from typing import Any, cast
 
 import torch

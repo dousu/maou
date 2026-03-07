@@ -6,9 +6,9 @@ training_benchmark.py と dl.py の重複コードを統一化．
 import logging
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 import torch

@@ -30,11 +30,6 @@ elif "MPLBACKEND" in os.environ:
 
 import gradio as gr  # noqa: E402
 
-from maou.interface.visualization import (  # noqa: E402
-    BoardPosition,
-    SVGBoardRenderer,
-    VisualizationInterface,
-)
 from maou.infra.file_system.file_system import (  # noqa: E402
     FileSystem,
 )
@@ -46,6 +41,11 @@ from maou.infra.visualization.search_index import (  # noqa: E402
 )
 from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
+)
+from maou.interface.visualization import (  # noqa: E402
+    BoardPosition,
+    SVGBoardRenderer,
+    VisualizationInterface,
 )
 
 logger = logging.getLogger(__name__)
