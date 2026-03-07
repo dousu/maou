@@ -1,9 +1,9 @@
 import logging
+from collections.abc import Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
 from types import ModuleType
-from collections.abc import Callable, MutableMapping, Sequence
 from typing import Any
 
 import click
@@ -239,6 +239,10 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     ),
     "pre-process": LazyCommandSpec(
         "maou.infra.console.pre_process", "pre_process"
+    ),
+    "build-game-tree": LazyCommandSpec(
+        "maou.infra.console.build_game_tree",
+        "build_game_tree",
     ),
     "learn-model": LazyCommandSpec(
         "maou.infra.console.learn_model",

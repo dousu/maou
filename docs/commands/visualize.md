@@ -12,6 +12,7 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 | `preprocessing` | 前処理済みデータ | 学習前のデータ検証 |
 | `stage1` | 到達可能マス学習用 | 基礎学習データ確認 |
 | `stage2` | 合法手学習用 | 中間学習データ確認 |
+| `game-tree` | ゲームツリー | 構築済みツリーの可視化 |
 
 ## CLI オプション
 
@@ -28,7 +29,7 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 
 | フラグ | 必須 | 説明 |
 |--------|------|------|
-| `--array-type {hcpe,preprocessing,stage1,stage2}` | Yes | 読み込むデータの形式を指定する． |
+| `--array-type {hcpe,preprocessing,stage1,stage2,game-tree}` | Yes | 読み込むデータの形式を指定する． |
 
 ### サーバー設定
 
@@ -141,12 +142,53 @@ Stage1データ（`--array-type stage1`）では：
    - `reachable_count`: 到達可能マス数
    - `array_type`: "stage1"
 
+## ゲームツリーの可視化
+
+`--array-type game-tree` を指定すると，Cytoscape.jsベースのインタラクティブUIでゲームツリーを可視化する．`--input-path` にはツリーデータディレクトリ(`nodes.feather` + `edges.feather`)を指定する．
+
+### 使用例
+
+```bash
+# 基本的な使用方法
+maou visualize --input-path ./data/game-tree/ --array-type game-tree
+
+# ポートを指定
+maou visualize --input-path ./data/game-tree/ --array-type game-tree --port 7861
+
+# 公開リンクを生成(Google Colab等)
+maou visualize --input-path ./data/game-tree/ --array-type game-tree --share
+```
+
+### ツリービュー(左パネル)
+
+- **Cytoscape.js** + **dagre** レイアウトによる階層的ツリー表示
+- ノードの**色**: 勝率(`result_value`)に応じたグラデーション
+  - 青(先手有利，>55%) / グレー(互角) / 赤(後手有利，<45%)
+- ノードの**サイズ**: 親エッジの確率(`probability`)に比例
+- エッジの**太さ**: 確率に比例
+- **シングルクリック**: 詳細パネルを更新
+- **ダブルクリック**: 選択ノードを新しいルートとしてサブツリーを展開
+
+### 詳細パネル(右パネル)
+
+- **盤面表示**: SVGによる将棋盤の描画(親からの指し手を矢印表示)
+- **局面統計**: 勝率，最善手勝率，深さ，分岐数
+- **指し手一覧**: 確率降順の指し手テーブル(指し手，確率，勝率)
+- **分岐分析**: 上位10手の確率分布バーチャート
+
+### コントロール
+
+- **表示深さ**: サブツリーの表示階層数(1-10，デフォルト3)
+- **最小確率**: 表示するエッジの最小確率閾値(0.001-0.3，デフォルト0.01)
+- **ルートに戻る**: ツリーの根に戻る
+
 ## 既知の問題
 
 - UIからデータを読み込んだ場合，モードバッジ（「REAL MODE」/「NO DATA」）が正しく更新されないことがある（機能には影響なし）
 
 ## 関連コマンド
 
+- [`maou build-game-tree`](./build_game_tree.md) - ゲームツリー構築
 - [`maou utility generate-stage1-data`](./generate-stage1-data.md) - Stage1データ生成
 - [`maou learn-model`](./learn_model.md) - モデル学習
 - [`maou pre-process`](./pre_process.md) - データ前処理

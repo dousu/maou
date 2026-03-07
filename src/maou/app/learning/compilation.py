@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Final, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import torch
 from torch._dynamo.exc import (

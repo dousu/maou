@@ -20,13 +20,15 @@ try:
         load_feather_file,
         load_hcpe_feather,
         load_preprocessing_feather,
+    )
+    from maou._rust.maou_io import (
+        merge_feather_files as _merge_feather_files,
+    )
+    from maou._rust.maou_io import (
         save_feather_file,
         save_hcpe_feather,
         save_preprocessing_feather,
         split_feather_file,
-    )
-    from maou._rust.maou_io import (
-        merge_feather_files as _merge_feather_files,
     )
 
     RUST_BACKEND_AVAILABLE = True
@@ -35,7 +37,7 @@ except ImportError as e:
     _import_error = e
 
 
-def _check_rust_backend() -> None:
+def check_rust_backend() -> None:
     """Rustバックエンドが利用可能かチェックする．"""
     if not RUST_BACKEND_AVAILABLE:
         raise ImportError(
@@ -44,7 +46,11 @@ def _check_rust_backend() -> None:
         )
 
 
-def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
+# 後方互換エイリアス
+_check_rust_backend = check_rust_backend
+
+
+def df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
     """Polars DataFrameを単一のArrow RecordBatchに変換する．
 
     ``pl.concat()`` 等の操作後にDataFrameが複数チャンクを持つ場合，
@@ -67,6 +73,55 @@ def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
         )
     arrow_table = df.to_arrow().combine_chunks()
     return arrow_table.to_batches()[0]
+
+
+# 後方互換エイリアス
+_df_to_single_batch = df_to_single_batch
+
+
+def save_generic_df(
+    df: pl.DataFrame, file_path: Path | str
+) -> None:
+    """汎用DataFrameを.featherファイルに保存する(Rustバックエンド使用)．
+
+    スキーマを問わないDataFrameの保存に使用する．
+
+    Args:
+        df: 保存するPolars DataFrame
+        file_path: 出力ファイルパス(.feather拡張子推奨)
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル書き込みエラーの場合
+    """
+    _check_rust_backend()
+
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    arrow_batch = _df_to_single_batch(df)
+    save_feather_file(arrow_batch, str(file_path))
+
+
+def load_generic_df(file_path: Path | str) -> pl.DataFrame:
+    """汎用DataFrameを.featherファイルから読み込む(Rustバックエンド使用)．
+
+    スキーマを問わないDataFrameの読み込みに使用する．
+
+    Args:
+        file_path: 入力ファイルパス(.feather拡張子)
+
+    Returns:
+        Polars DataFrame
+
+    Raises:
+        ImportError: Rustバックエンドが利用不可の場合
+        IOError: ファイル読み込みエラーの場合
+    """
+    _check_rust_backend()
+
+    arrow_batch = load_feather_file(str(file_path))
+    return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
 def save_hcpe_df(

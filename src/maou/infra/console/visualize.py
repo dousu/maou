@@ -14,8 +14,6 @@ from maou.infra.console.common import (
     handle_exception,
 )
 
-logger = logging.getLogger(__name__)
-
 
 def _is_google_colab() -> bool:
     """Google Colab環境で実行されているか検出する．
@@ -41,9 +39,15 @@ def _is_google_colab() -> bool:
 )
 @click.option(
     "--array-type",
-    help="データ型: hcpe, preprocessing, stage1, stage2．",
+    help="データ型: hcpe, preprocessing, stage1, stage2, game-tree．",
     type=click.Choice(
-        ["hcpe", "preprocessing", "stage1", "stage2"]
+        [
+            "hcpe",
+            "preprocessing",
+            "stage1",
+            "stage2",
+            "game-tree",
+        ]
     ),
     default="hcpe",
     required=True,
@@ -107,12 +111,68 @@ def visualize(
         # 特定のファイルを可視化
         maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
 
+        # ゲームツリーを可視化
+        maou visualize --input-path ./data/game-tree/ --array-type game-tree
+
         # 公開リンクを作成
         maou visualize --input-path ./data --array-type hcpe --share
     """
     # デバッグモード設定
     if debug_mode:
         app_logger.setLevel(logging.DEBUG)
+
+    # game-tree はgradio_serverのimportチェーンを避けて直接起動
+    if array_type == "game-tree":
+        if not input_path:
+            raise click.ClickException(
+                "game-tree requires --input-path to a directory "
+                "containing nodes.feather and edges.feather."
+            )
+        if len(input_path) > 1:
+            app_logger.warning(
+                "game-tree では --input-path は1つのみ有効です．"
+                "2番目以降の入力は無視されます: %s",
+                input_path[1:],
+            )
+        tree_dir = input_path[0]
+        app_logger.info(
+            "Game tree data directory: %s", tree_dir
+        )
+
+        # Google Colab環境では自動的にshareを有効化
+        if not share and _is_google_colab():
+            share = True
+            app_logger.info(
+                "✅ Auto-enabled --share for Google Colab environment "
+                "(localhost not accessible in Colab)"
+            )
+
+        try:
+            from maou.infra.visualization.game_tree_server import (
+                launch_game_tree_server,
+            )
+
+            launch_game_tree_server(
+                tree_path=tree_dir,
+                port=port,
+                share=share,
+                server_name=server_name,
+            )
+        except ImportError as e:
+            error_msg = (
+                "Gradio visualization dependencies not installed. "
+                "Install with: uv sync --extra visualize"
+            )
+            app_logger.error(error_msg)
+            raise click.ClickException(error_msg) from e
+        except Exception as e:
+            app_logger.exception(
+                "Failed to launch game tree server"
+            )
+            raise click.ClickException(
+                f"Server launch failed: {e}"
+            ) from e
+        return
 
     # Gradio importを遅延（依存関係オプショナル）
     try:
@@ -127,7 +187,6 @@ def visualize(
         app_logger.error(error_msg)
         raise click.ClickException(error_msg) from e
 
-    # ファイルパス解決
     if use_mock_data:
         # モックデータモードの場合はダミーファイルパスを使用
         file_paths = [Path("mock_data.feather")]
@@ -150,10 +209,11 @@ def visualize(
         )
 
     app_logger.info(
-        f"Launching visualization server with {len(file_paths)} files"
+        "Launching visualization server with %d files",
+        len(file_paths),
     )
-    app_logger.info(f"Array type: {array_type}")
-    app_logger.info(f"Server address: {server_name}:{port}")
+    app_logger.info("Array type: %s", array_type)
+    app_logger.info("Server address: %s:%s", server_name, port)
 
     # Google Colab環境では自動的にshareを有効化
     if not share and _is_google_colab():

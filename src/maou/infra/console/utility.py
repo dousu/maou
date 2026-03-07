@@ -6,7 +6,6 @@ import click
 
 import maou.interface.learn as learn
 import maou.interface.utility_interface as utility_interface
-from maou.interface.learn import PolicyTargetMode
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -19,6 +18,7 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
+from maou.interface.learn import PolicyTargetMode
 
 
 def _parse_int_list(

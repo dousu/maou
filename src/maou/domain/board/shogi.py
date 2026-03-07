@@ -482,8 +482,42 @@ def move_drop_hand_piece(move: int) -> int:
 
 
 class Board:
+    _CSHOGI_TO_PIECEID: dict[int, int] = {
+        # Black pieces (1-14)
+        0: 0,  # EMPTY
+        1: 1,  # BPAWN → FU
+        2: 2,  # BLANCE → KY
+        3: 3,  # BKNIGHT → KE
+        4: 4,  # BSILVER → GI
+        5: 6,  # BBISHOP → KA (角)
+        6: 7,  # BROOK → HI (飛)
+        7: 5,  # BGOLD → KI (金)
+        8: 8,  # BKING → OU
+        9: 9,  # BPROM_PAWN → TO
+        10: 10,  # BPROM_LANCE → NKY
+        11: 11,  # BPROM_KNIGHT → NKE
+        12: 12,  # BPROM_SILVER → NGI
+        13: 13,  # BPROM_BISHOP → UMA (馬)
+        14: 14,  # BPROM_ROOK → RYU (龍)
+        # White pieces (17-30)
+        17: 15,  # WPAWN → FU + 14
+        18: 16,  # WLANCE → KY + 14
+        19: 17,  # WKNIGHT → KE + 14
+        20: 18,  # WSILVER → GI + 14
+        21: 20,  # WBISHOP → KA + 14 (角)
+        22: 21,  # WROOK → HI + 14 (飛)
+        23: 19,  # WGOLD → KI + 14 (金)
+        24: 22,  # WKING → OU + 14
+        25: 23,  # WPROM_PAWN → TO + 14
+        26: 24,  # WPROM_LANCE → NKY + 14
+        27: 25,  # WPROM_KNIGHT → NKE + 14
+        28: 26,  # WPROM_SILVER → NGI + 14
+        29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
+        30: 28,  # WPROM_ROOK → RYU + 14 (龍)
+    }
+
     @staticmethod
-    def _cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
+    def cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
         """Convert cshogi piece ID to domain PieceId enum value.
 
         cshogi uses BISHOP=5, ROOK=6, GOLD=7 with white offset +16.
@@ -496,47 +530,14 @@ class Board:
             PieceId enum value (0-28)
 
         Examples:
-            >>> Board._cshogi_piece_to_piece_id(0)  # EMPTY
+            >>> Board.cshogi_piece_to_piece_id(0)  # EMPTY
             0
-            >>> Board._cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
+            >>> Board.cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
             6
-            >>> Board._cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
+            >>> Board.cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
             20
         """
-        mapping = {
-            # Black pieces (1-14)
-            0: 0,  # EMPTY
-            1: 1,  # BPAWN → FU
-            2: 2,  # BLANCE → KY
-            3: 3,  # BKNIGHT → KE
-            4: 4,  # BSILVER → GI
-            5: 6,  # BBISHOP → KA (角)
-            6: 7,  # BROOK → HI (飛)
-            7: 5,  # BGOLD → KI (金)
-            8: 8,  # BKING → OU
-            9: 9,  # BPROM_PAWN → TO
-            10: 10,  # BPROM_LANCE → NKY
-            11: 11,  # BPROM_KNIGHT → NKE
-            12: 12,  # BPROM_SILVER → NGI
-            13: 13,  # BPROM_BISHOP → UMA (馬)
-            14: 14,  # BPROM_ROOK → RYU (龍)
-            # White pieces (17-30)
-            17: 15,  # WPAWN → FU + 14
-            18: 16,  # WLANCE → KY + 14
-            19: 17,  # WKNIGHT → KE + 14
-            20: 18,  # WSILVER → GI + 14
-            21: 20,  # WBISHOP → KA + 14 (角)
-            22: 21,  # WROOK → HI + 14 (飛)
-            23: 19,  # WGOLD → KI + 14 (金)
-            24: 22,  # WKING → OU + 14
-            25: 23,  # WPROM_PAWN → TO + 14
-            26: 24,  # WPROM_LANCE → NKY + 14
-            27: 25,  # WPROM_KNIGHT → NKE + 14
-            28: 26,  # WPROM_SILVER → NGI + 14
-            29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
-            30: 28,  # WPROM_ROOK → RYU + 14 (龍)
-        }
-        return mapping.get(cshogi_piece, 0)
+        return Board._CSHOGI_TO_PIECEID.get(cshogi_piece, 0)
 
     @staticmethod
     def _reorder_piece_planes_cshogi_to_pieceid(
@@ -589,6 +590,16 @@ class Board:
     def __init__(self) -> None:
         self.board = cshogi.Board()  # type: ignore
 
+    def __copy__(self) -> Board:
+        """SFENを経由した安全なコピーを返す．
+
+        内部のcshogi.Boardはシャローコピーで共有されるため，
+        SFENによる再構築でディープコピーを保証する．
+        """
+        new_board = Board()
+        new_board.set_sfen(self.get_sfen())
+        return new_board
+
     def set_turn(self, turn: Turn) -> None:
         self.board.turn = turn.value
 
@@ -612,10 +623,37 @@ class Board:
             yield move
 
     def get_move_from_move16(self, move16: int) -> int:
+        """move16形式(16-bit)からフル move(32-bit)に変換する．
+
+        Args:
+            move16: 16-bit move形式の指し手
+
+        Returns:
+            32-bit フル move
+        """
         return self.board.move_from_move16(move16)
+
+    def move_from_usi(self, usi: str) -> int:
+        """USI形式の文字列から move(32-bit)に変換する．
+
+        Args:
+            usi: USI形式の指し手文字列(例: "7g7f")
+
+        Returns:
+            32-bit フル move
+
+        Raises:
+            ValueError: 不正なUSI文字列の場合
+            RuntimeError: cshogiの内部エラー(不正な局面での変換など)
+        """
+        return self.board.move_from_usi(usi)
 
     def push_move(self, move: int) -> None:
         self.board.push(move)
+
+    def pop_move(self) -> None:
+        """直前の指し手を取り消す．"""
+        self.board.pop()
 
     def to_piece_planes(self, array: np.ndarray) -> None:
         self.board.piece_planes(array)
@@ -637,6 +675,17 @@ class Board:
         例: ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
         """
         return self.board.pieces_in_hand
+
+    def get_piece_at(self, square: int) -> int:
+        """指定マスのcshogi駒IDを返す．
+
+        Args:
+            square: マス番号(column-major: col * 9 + row)
+
+        Returns:
+            cshogi駒ID(0-30)．駒がない場合は0．
+        """
+        return self.board.piece(square)
 
     def get_pieces(self) -> list[int]:
         """盤面の駒配列(81要素)を返す．
@@ -663,6 +712,36 @@ class Board:
         """
         return self.board.is_ok()
 
+    def get_board_id_positions(self) -> list[list[int]]:
+        """Get board piece positions as 9x9 nested list.
+
+        盤面の駒配置を[row][col]形式の二次元リストで返す．
+        cshogiのcolumn-major配置(square = col * 9 + row)を
+        Fortran orderでreshapeして[row][col]形式に変換する．
+
+        Returns:
+            9x9のPieceId二次元リスト([row][col]形式)
+
+        Example:
+            >>> board = Board()
+            >>> positions = board.get_board_id_positions()
+            >>> len(positions)
+            9
+            >>> len(positions[0])
+            9
+        """
+        v_map = np.vectorize(
+            Board.cshogi_piece_to_piece_id,
+            otypes=[np.uint8],
+        )
+        positions = v_map(
+            np.array(
+                self.board.pieces,
+                dtype=np.uint8,
+            )
+        ).reshape((9, 9), order="F")
+        return positions.tolist()
+
     def get_board_id_positions_df(self) -> "pl.DataFrame":
         """Get board piece positions as 1-row Polars DataFrame．
 
@@ -685,18 +764,7 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Map cshogi piece IDs to PieceId enum values using centralized conversion
-        v_map = np.vectorize(
-            Board._cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
-        )
-        positions = v_map(
-            np.array(
-                self.board.pieces,
-                dtype=np.uint8,
-            )
-        ).reshape((9, 9), order="F")
-        positions_list = positions.tolist()  # Fast conversion
+        positions_list = self.get_board_id_positions()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(

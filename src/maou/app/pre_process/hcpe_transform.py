@@ -7,12 +7,12 @@ import multiprocessing
 import queue
 import tempfile
 import threading
+from collections.abc import Generator
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Generator
-from contextlib import AbstractContextManager
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from tqdm.auto import tqdm

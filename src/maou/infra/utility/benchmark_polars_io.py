@@ -13,6 +13,9 @@ import numpy as np
 import polars as pl
 import psutil
 
+from maou.infra.file_system.file_data_source import (
+    FileDataSource,
+)
 from maou.interface.data_io import (
     load_hcpe_df,
     load_preprocessing_df,
@@ -25,9 +28,6 @@ from maou.interface.data_schema import (
     get_hcpe_polars_schema,
     get_preprocessing_dtype,
     get_preprocessing_polars_schema,
-)
-from maou.infra.file_system.file_data_source import (
-    FileDataSource,
 )
 
 
