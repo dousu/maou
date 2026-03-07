@@ -556,10 +556,12 @@ class GameTreeVisualizationInterface:
             descending=[False, True],
         )
 
-        # child_hash → result_value のマップ
+        # child_hash → result_value / depth のマップ
         node_map: dict[int, float] = {}
+        node_depth_map: dict[int, int] = {}
         for row in sub_nodes.iter_rows(named=True):
             node_map[row["position_hash"]] = row["result_value"]
+            node_depth_map[row["position_hash"]] = row["depth"]
 
         # 盤面を構築してUSI→日本語変換
         child_edge_map: dict[int, dict[str, Any]] = {}
@@ -593,15 +595,7 @@ class GameTreeVisualizationInterface:
 
             child_hash = row["child_hash"]
             result_value = node_map.get(child_hash, 0.0)
-            # child の depth を取得
-            child_node = sub_nodes.filter(
-                pl.col("position_hash") == child_hash
-            )
-            depth = (
-                int(child_node["depth"][0])
-                if len(child_node) > 0
-                else -1
-            )
+            depth = node_depth_map.get(child_hash, -1)
 
             writer.writerow(
                 [

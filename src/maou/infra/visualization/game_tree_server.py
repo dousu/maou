@@ -7,6 +7,7 @@ maou visualize --array-type game-tree から起動される．
 import html
 import json
 import logging
+import atexit
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -624,6 +625,12 @@ def launch_game_tree_server(
             sfen_text,
         )
 
+    # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
+    _csv_tmp_dir = tempfile.TemporaryDirectory(
+        prefix="maou_game_tree_csv_"
+    )
+    atexit.register(_csv_tmp_dir.cleanup)
+
     def on_export_csv(
         current_root: str,
         display_depth: int,
@@ -647,16 +654,11 @@ def launch_game_tree_server(
         if not csv_content.strip():
             return None
 
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".csv",
-            prefix="game_tree_",
-            delete=False,
-            encoding="utf-8",
+        tmp_path = Path(_csv_tmp_dir.name) / (
+            f"game_tree_{id(csv_content):x}.csv"
         )
-        tmp.write(csv_content)
-        tmp.close()
-        return tmp.name
+        tmp_path.write_text(csv_content, encoding="utf-8")
+        return str(tmp_path)
 
     # --- UI構築 ---
 

@@ -24,7 +24,7 @@ class OpeningEntry:
         category: カテゴリ(例: "相居飛車")
     """
 
-    moves: list[str]
+    moves: tuple[str, ...]
     name: str
     category: str
 
@@ -42,57 +42,56 @@ class OpeningInfo:
     category: str
 
 
-# 指し手列が長い(より具体的な)パターンを先に配置すること
 _DEFAULT_OPENINGS: list[OpeningEntry] = [
     # --- 相居飛車系(長いパターン優先) ---
     OpeningEntry(
-        moves=["7g7f", "3c3d", "2g2f", "8c8d", "2f2e", "8d8e"],
+        moves=("7g7f", "3c3d", "2g2f", "8c8d", "2f2e", "8d8e"),
         name="横歩取り模様",
         category="相居飛車",
     ),
     OpeningEntry(
-        moves=["2g2f", "8c8d", "2f2e", "8d8e"],
+        moves=("2g2f", "8c8d", "2f2e", "8d8e"),
         name="相掛かり",
         category="相居飛車",
     ),
     OpeningEntry(
-        moves=["7g7f", "8c8d", "7i6h"],
+        moves=("7g7f", "8c8d", "7i6h"),
         name="矢倉",
         category="相居飛車",
     ),
     OpeningEntry(
-        moves=["7g7f", "8c8d", "6i7h"],
+        moves=("7g7f", "8c8d", "6i7h"),
         name="矢倉",
         category="相居飛車",
     ),
     OpeningEntry(
-        moves=["7g7f", "3c3d", "8h2b+"],
+        moves=("7g7f", "3c3d", "8h2b+"),
         name="角換わり",
         category="相居飛車",
     ),
     # --- 振り飛車系 ---
     OpeningEntry(
-        moves=[
+        moves=(
             "7g7f",
             "3c3d",
             "6g6f",
             "3d3e",
-        ],
+        ),
         name="相振り飛車模様",
         category="振り飛車",
     ),
     OpeningEntry(
-        moves=["7g7f", "3c3d", "6g6f"],
+        moves=("7g7f", "3c3d", "6g6f"),
         name="振り飛車模様",
         category="振り飛車",
     ),
     OpeningEntry(
-        moves=["7g7f", "3c3d", "2g2f", "5c5d", "2f2e", "5d5e"],
+        moves=("7g7f", "3c3d", "2g2f", "5c5d", "2f2e", "5d5e"),
         name="ゴキゲン中飛車",
         category="振り飛車",
     ),
     OpeningEntry(
-        moves=["5g5f"],
+        moves=("5g5f",),
         name="先手中飛車",
         category="振り飛車",
     ),
@@ -145,7 +144,10 @@ class OpeningDatabase:
         """
         for entry in self._entries:
             n = len(entry.moves)
-            if n <= len(moves) and moves[:n] == entry.moves:
+            if (
+                n <= len(moves)
+                and tuple(moves[:n]) == entry.moves
+            ):
                 return OpeningInfo(
                     name=entry.name,
                     category=entry.category,
@@ -178,14 +180,28 @@ class OpeningDatabase:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
-        custom_entries = [
-            OpeningEntry(
-                moves=item["moves"],
-                name=item["name"],
-                category=item.get("category", ""),
+        custom_entries: list[OpeningEntry] = []
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                logger.warning(
+                    "定跡JSON: エントリ %d はdictではないためスキップ",
+                    i,
+                )
+                continue
+            if "moves" not in item or "name" not in item:
+                logger.warning(
+                    "定跡JSON: エントリ %d に必須キー"
+                    "(moves/name)がないためスキップ",
+                    i,
+                )
+                continue
+            custom_entries.append(
+                OpeningEntry(
+                    moves=tuple(item["moves"]),
+                    name=item["name"],
+                    category=item.get("category", ""),
+                )
             )
-            for item in data
-        ]
 
         # カスタムパターンをデフォルトの前に配置(優先)
         merged = custom_entries + list(_DEFAULT_OPENINGS)

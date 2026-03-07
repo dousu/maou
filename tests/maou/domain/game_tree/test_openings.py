@@ -20,7 +20,7 @@ class TestOpeningDatabase:
         """完全一致するパターンを検索する．"""
         entries = [
             OpeningEntry(
-                moves=["7g7f", "3c3d", "6g6f"],
+                moves=("7g7f", "3c3d", "6g6f"),
                 name="振り飛車模様",
                 category="振り飛車",
             ),
@@ -37,7 +37,7 @@ class TestOpeningDatabase:
         """前方一致するパターンを検索する．"""
         entries = [
             OpeningEntry(
-                moves=["7g7f", "3c3d"],
+                moves=("7g7f", "3c3d"),
                 name="相角道",
                 category="相居飛車",
             ),
@@ -53,12 +53,12 @@ class TestOpeningDatabase:
         """最長一致パターンが優先される．"""
         entries = [
             OpeningEntry(
-                moves=["7g7f"],
+                moves=("7g7f",),
                 name="角道",
                 category="不明",
             ),
             OpeningEntry(
-                moves=["7g7f", "3c3d", "6g6f"],
+                moves=("7g7f", "3c3d", "6g6f"),
                 name="振り飛車模様",
                 category="振り飛車",
             ),
@@ -74,7 +74,7 @@ class TestOpeningDatabase:
         """一致するパターンがない場合はNoneを返す．"""
         entries = [
             OpeningEntry(
-                moves=["7g7f", "3c3d", "6g6f"],
+                moves=("7g7f", "3c3d", "6g6f"),
                 name="振り飛車模様",
                 category="振り飛車",
             ),
