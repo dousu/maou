@@ -1140,6 +1140,7 @@ class GradioVisualizationServer:
 
         io = GameTreeIO()
         nodes_df, edges_df = io.load(tree_dir)
+        metadata = io.load_metadata(tree_dir)
         logger.info(
             "Loaded game tree: %d nodes, %d edges",
             len(nodes_df),
@@ -1147,7 +1148,9 @@ class GradioVisualizationServer:
         )
 
         self._game_tree_viz = GameTreeVisualizationInterface(
-            nodes_df, edges_df
+            nodes_df,
+            edges_df,
+            initial_sfen=metadata.get("initial_sfen"),
         )
         self._game_tree_root_hash = (
             self._game_tree_viz.get_root_hash()

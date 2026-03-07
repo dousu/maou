@@ -4,6 +4,7 @@
 maou visualize --array-type game-tree から起動される．
 """
 
+import html
 import json
 import logging
 from functools import lru_cache
@@ -46,7 +47,7 @@ def _load_custom_css() -> str:
     Returns:
         結合されたCSS文字列
     """
-    css_files = ["theme.css", "components.css", "game_tree.css"]
+    css_files = ["theme.css", "components.css"]
     css_parts = []
     for css_file in css_files:
         css_path = _STATIC_DIR / css_file
@@ -169,11 +170,12 @@ def _build_tree_html(elements_json: str) -> str:
         HTML文字列
     """
     css_code = _load_static_file("game_tree.css")
+    escaped_json = html.escape(elements_json, quote=True)
 
     return f"""
 <style>{css_code}</style>
 <div class="game-tree-container">
-    <div id="cy" data-elements='{elements_json}'></div>
+    <div id="cy" data-elements="{escaped_json}"></div>
     <div class="game-tree-legend">
         <span class="legend-item">
             <span class="legend-swatch" style="background:#2196F3;"></span>先手有利
@@ -327,13 +329,18 @@ def launch_game_tree_server(
     # データ読み込み
     io = GameTreeIO()
     nodes_df, edges_df = io.load(tree_path)
+    metadata = io.load_metadata(tree_path)
     logger.info(
         "Loaded tree: %d nodes, %d edges",
         len(nodes_df),
         len(edges_df),
     )
 
-    viz = GameTreeVisualizationInterface(nodes_df, edges_df)
+    viz = GameTreeVisualizationInterface(
+        nodes_df,
+        edges_df,
+        initial_sfen=metadata.get("initial_sfen"),
+    )
     root_hash = viz.get_root_hash()
 
     custom_css = _load_custom_css()

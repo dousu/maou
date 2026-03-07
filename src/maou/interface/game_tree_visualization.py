@@ -39,12 +39,14 @@ class GameTreeVisualizationInterface:
         self,
         nodes_df: pl.DataFrame,
         edges_df: pl.DataFrame,
+        initial_sfen: str | None = None,
     ) -> None:
         """初期化．
 
         Args:
             nodes_df: ノードデータ(nodes.feather相当)
             edges_df: エッジデータ(edges.feather相当)
+            initial_sfen: 開始局面のSFEN文字列．Noneの場合は平手初期局面．
 
         Raises:
             ValueError: depth=0のルートノードが見つからない場合
@@ -55,6 +57,7 @@ class GameTreeVisualizationInterface:
             msg = "ルートノード(depth=0)が見つかりません"
             raise ValueError(msg)
         self._root_hash = int(root_nodes["position_hash"][0])
+        self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
 
     def get_cytoscape_elements(
@@ -363,6 +366,8 @@ class GameTreeVisualizationInterface:
             復元されたBoardオブジェクト．復元不能の場合None．
         """
         board = Board()
+        if self._initial_sfen is not None:
+            board.set_sfen(self._initial_sfen)
 
         # パスに沿って指し手を適用
         for i in range(len(path) - 1):

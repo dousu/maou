@@ -108,6 +108,12 @@ def build_game_tree(
     # 出力
     io = GameTreeIO()
     io.save(nodes, edges, output_dir)
+    io.save_metadata(
+        output_dir,
+        {
+            "initial_sfen": initial_sfen,
+        },
+    )
 
     click.echo(
         f"完了: ノード数={len(nodes):,}, エッジ数={len(edges):,}"
