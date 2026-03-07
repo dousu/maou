@@ -98,6 +98,8 @@ class GameTreeBuilder:
                 "指定してください．"
             )
 
+        assert initial_sfen is not None  # if/elif で確定済み
+
         if initial_hash not in lookup:
             raise ValueError(
                 f"開始局面(hash={initial_hash})がpreprocessデータに見つかりません．"

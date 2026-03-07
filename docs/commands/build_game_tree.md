@@ -51,8 +51,9 @@ maou build-game-tree \
 | `position_hash` | UInt64 | Zobrist hash(局面の一意識別子) |
 | `result_value` | Float32 | 局面の勝率(手番側視点，0.0〜1.0) |
 | `best_move_win_rate` | Float32 | 最善手の勝率 |
-| `num_branches` | UInt16 | 分岐数．通常ノードでは実際にエッジが生成された指し手数．`max_depth` 到達ノードでは `min_probability` 以上の候補手数(未展開) |
+| `num_branches` | UInt16 | 分岐数．`is_depth_cutoff=false` のノードでは実際にエッジが生成された指し手数．`is_depth_cutoff=true` のノードでは `min_probability` 以上の候補手数(未展開) |
 | `depth` | UInt16 | 初期局面からの最短距離 |
+| `is_depth_cutoff` | Boolean | `max_depth` に到達して展開を打ち切ったノードの場合 `true` |
 
 ### `edges.feather`
 
