@@ -455,11 +455,19 @@ class GameTreeVisualizationInterface:
                 boards[pos_hash] = None
                 continue
 
-            child_board = copy.copy(parent_board)
-            move16 = edge_info["move16"]
-            move = child_board.get_move_from_move16(move16)
-            child_board.push_move(move)
-            boards[pos_hash] = child_board
+            try:
+                child_board = copy.copy(parent_board)
+                move16 = edge_info["move16"]
+                move = child_board.get_move_from_move16(move16)
+                child_board.push_move(move)
+                boards[pos_hash] = child_board
+            except Exception:
+                logger.warning(
+                    "盤面復元に失敗しました: "
+                    "position_hash=0x%016X",
+                    pos_hash,
+                )
+                boards[pos_hash] = None
 
         return boards
 
