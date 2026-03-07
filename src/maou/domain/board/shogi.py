@@ -482,6 +482,40 @@ def move_drop_hand_piece(move: int) -> int:
 
 
 class Board:
+    _CSHOGI_TO_PIECEID: dict[int, int] = {
+        # Black pieces (1-14)
+        0: 0,  # EMPTY
+        1: 1,  # BPAWN → FU
+        2: 2,  # BLANCE → KY
+        3: 3,  # BKNIGHT → KE
+        4: 4,  # BSILVER → GI
+        5: 6,  # BBISHOP → KA (角)
+        6: 7,  # BROOK → HI (飛)
+        7: 5,  # BGOLD → KI (金)
+        8: 8,  # BKING → OU
+        9: 9,  # BPROM_PAWN → TO
+        10: 10,  # BPROM_LANCE → NKY
+        11: 11,  # BPROM_KNIGHT → NKE
+        12: 12,  # BPROM_SILVER → NGI
+        13: 13,  # BPROM_BISHOP → UMA (馬)
+        14: 14,  # BPROM_ROOK → RYU (龍)
+        # White pieces (17-30)
+        17: 15,  # WPAWN → FU + 14
+        18: 16,  # WLANCE → KY + 14
+        19: 17,  # WKNIGHT → KE + 14
+        20: 18,  # WSILVER → GI + 14
+        21: 20,  # WBISHOP → KA + 14 (角)
+        22: 21,  # WROOK → HI + 14 (飛)
+        23: 19,  # WGOLD → KI + 14 (金)
+        24: 22,  # WKING → OU + 14
+        25: 23,  # WPROM_PAWN → TO + 14
+        26: 24,  # WPROM_LANCE → NKY + 14
+        27: 25,  # WPROM_KNIGHT → NKE + 14
+        28: 26,  # WPROM_SILVER → NGI + 14
+        29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
+        30: 28,  # WPROM_ROOK → RYU + 14 (龍)
+    }
+
     @staticmethod
     def cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
         """Convert cshogi piece ID to domain PieceId enum value.
@@ -503,40 +537,7 @@ class Board:
             >>> Board.cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
             20
         """
-        mapping = {
-            # Black pieces (1-14)
-            0: 0,  # EMPTY
-            1: 1,  # BPAWN → FU
-            2: 2,  # BLANCE → KY
-            3: 3,  # BKNIGHT → KE
-            4: 4,  # BSILVER → GI
-            5: 6,  # BBISHOP → KA (角)
-            6: 7,  # BROOK → HI (飛)
-            7: 5,  # BGOLD → KI (金)
-            8: 8,  # BKING → OU
-            9: 9,  # BPROM_PAWN → TO
-            10: 10,  # BPROM_LANCE → NKY
-            11: 11,  # BPROM_KNIGHT → NKE
-            12: 12,  # BPROM_SILVER → NGI
-            13: 13,  # BPROM_BISHOP → UMA (馬)
-            14: 14,  # BPROM_ROOK → RYU (龍)
-            # White pieces (17-30)
-            17: 15,  # WPAWN → FU + 14
-            18: 16,  # WLANCE → KY + 14
-            19: 17,  # WKNIGHT → KE + 14
-            20: 18,  # WSILVER → GI + 14
-            21: 20,  # WBISHOP → KA + 14 (角)
-            22: 21,  # WROOK → HI + 14 (飛)
-            23: 19,  # WGOLD → KI + 14 (金)
-            24: 22,  # WKING → OU + 14
-            25: 23,  # WPROM_PAWN → TO + 14
-            26: 24,  # WPROM_LANCE → NKY + 14
-            27: 25,  # WPROM_KNIGHT → NKE + 14
-            28: 26,  # WPROM_SILVER → NGI + 14
-            29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
-            30: 28,  # WPROM_ROOK → RYU + 14 (龍)
-        }
-        return mapping.get(cshogi_piece, 0)
+        return Board._CSHOGI_TO_PIECEID.get(cshogi_piece, 0)
 
     @staticmethod
     def _reorder_piece_planes_cshogi_to_pieceid(

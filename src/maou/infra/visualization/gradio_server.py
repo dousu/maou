@@ -68,7 +68,7 @@ def _load_custom_css() -> str:
                 css_path.read_text(encoding="utf-8")
             )
         else:
-            logger.warning(f"CSS file not found: {css_path}")
+            logger.warning("CSS file not found: %s", css_path)
 
     return "\n\n".join(css_parts)
 
