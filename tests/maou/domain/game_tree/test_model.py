@@ -21,12 +21,14 @@ class TestGameTreeNode:
             best_move_win_rate=0.531,
             num_branches=30,
             depth=0,
+            is_depth_cutoff=False,
         )
         assert node.position_hash == 12345
         assert node.result_value == pytest.approx(0.523)
         assert node.best_move_win_rate == pytest.approx(0.531)
         assert node.num_branches == 30
         assert node.depth == 0
+        assert node.is_depth_cutoff is False
 
     def test_frozen(self) -> None:
         """frozen dataclass は変更不可."""
@@ -36,14 +38,15 @@ class TestGameTreeNode:
             best_move_win_rate=0.5,
             num_branches=1,
             depth=0,
+            is_depth_cutoff=False,
         )
         with pytest.raises(AttributeError):
             node.depth = 1  # type: ignore[misc]
 
     def test_equality(self) -> None:
         """同じフィールド値のノードは等価."""
-        node1 = GameTreeNode(1, 0.5, 0.5, 1, 0)
-        node2 = GameTreeNode(1, 0.5, 0.5, 1, 0)
+        node1 = GameTreeNode(1, 0.5, 0.5, 1, 0, False)
+        node2 = GameTreeNode(1, 0.5, 0.5, 1, 0, False)
         assert node1 == node2
 
 

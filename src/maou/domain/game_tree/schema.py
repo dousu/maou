@@ -17,6 +17,7 @@ def get_game_tree_nodes_schema() -> dict[str, pl.DataType]:
         "best_move_win_rate": pl.Float32(),
         "num_branches": pl.UInt16(),
         "depth": pl.UInt16(),
+        "is_depth_cutoff": pl.Boolean(),
     }
 
 

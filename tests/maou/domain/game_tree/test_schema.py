@@ -24,6 +24,7 @@ class TestNodesSchema:
             "best_move_win_rate",
             "num_branches",
             "depth",
+            "is_depth_cutoff",
         }
 
     def test_schema_types(self) -> None:
@@ -34,6 +35,7 @@ class TestNodesSchema:
         assert schema["best_move_win_rate"] == pl.Float32()
         assert schema["num_branches"] == pl.UInt16()
         assert schema["depth"] == pl.UInt16()
+        assert schema["is_depth_cutoff"] == pl.Boolean()
 
     def test_create_empty_df(self) -> None:
         """空の DataFrame を生成できる."""

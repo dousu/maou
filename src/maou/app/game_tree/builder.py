@@ -167,6 +167,7 @@ class GameTreeBuilder:
                         best_move_win_rate=best_move_win_rate,
                         num_branches=len(candidate_indices),
                         depth=current_depth,
+                        is_depth_cutoff=True,
                     )
                 )
                 processed += 1
@@ -251,6 +252,7 @@ class GameTreeBuilder:
                     best_move_win_rate=best_move_win_rate,
                     num_branches=actual_branches,
                     depth=current_depth,
+                    is_depth_cutoff=False,
                 )
             )
 

@@ -30,6 +30,7 @@ class TestGameTreeIO:
                 best_move_win_rate=0.53,
                 num_branches=2,
                 depth=0,
+                is_depth_cutoff=False,
             ),
             GameTreeNode(
                 position_hash=200,
@@ -37,6 +38,7 @@ class TestGameTreeIO:
                 best_move_win_rate=0.49,
                 num_branches=1,
                 depth=1,
+                is_depth_cutoff=True,
             ),
         ]
 
@@ -119,9 +121,7 @@ class TestGameTreeIO:
             output_dir.mkdir()
 
             # 不正なカラムを持つ nodes.feather
-            wrong_df = pl.DataFrame(
-                {"wrong_col": [1, 2, 3]}
-            )
+            wrong_df = pl.DataFrame({"wrong_col": [1, 2, 3]})
             wrong_df.write_ipc(
                 output_dir / NODES_FILENAME,
                 compression="lz4",
@@ -153,9 +153,7 @@ class TestGameTreeIO:
             )
 
             # edges.feather を不正なカラムで上書き
-            wrong_df = pl.DataFrame(
-                {"bad_column": [1]}
-            )
+            wrong_df = pl.DataFrame({"bad_column": [1]})
             wrong_df.write_ipc(
                 output_dir / EDGES_FILENAME,
                 compression="lz4",

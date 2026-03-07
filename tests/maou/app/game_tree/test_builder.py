@@ -5,13 +5,12 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
+from maou.app.game_tree.builder import GameTreeBuilder
 from maou.domain.board import shogi
 from maou.domain.move.label import (
     MOVE_LABELS_NUM,
     make_move_label,
 )
-
-from maou.app.game_tree.builder import GameTreeBuilder
 
 
 def _create_preprocess_row(
@@ -102,6 +101,7 @@ class TestGameTreeBuilder:
         assert nodes[0].position_hash == board.hash()
         assert nodes[0].depth == 0
         assert nodes[0].num_branches == 0
+        assert nodes[0].is_depth_cutoff is False
 
     def test_depth_one_expansion(self) -> None:
         """初期局面から depth=1 の展開ができる."""
@@ -137,10 +137,12 @@ class TestGameTreeBuilder:
         assert root.position_hash == shogi.Board().hash()
         assert root.result_value == pytest.approx(0.52)
         assert root.num_branches == 1
+        assert root.is_depth_cutoff is False
 
-        # 子ノード
+        # 子ノード(max_depth=1で打ち切り)
         child = next(n for n in nodes if n.depth == 1)
         assert child.result_value == pytest.approx(0.48)
+        assert child.is_depth_cutoff is True
 
         # エッジ
         edge = edges[0]
@@ -213,6 +215,7 @@ class TestGameTreeBuilder:
 
         assert len(nodes) == 1
         assert nodes[0].depth == 0
+        assert nodes[0].is_depth_cutoff is True
         assert len(edges) == 0
 
     def test_initial_position_not_found(self) -> None:

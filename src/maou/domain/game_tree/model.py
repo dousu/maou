@@ -13,9 +13,11 @@ class GameTreeNode:
         position_hash: Zobrist hash(局面の一意識別子)
         result_value: 局面の勝率(手番側視点，0.0〜1.0)
         best_move_win_rate: 最善手の勝率
-        num_branches: 分岐数．通常ノードでは実際にエッジが生成された数．
-            max_depth到達ノードではmin_probability以上の候補手数(未展開)
+        num_branches: 分岐数．is_depth_cutoff=Falseの場合は実際にエッジが
+            生成された数．is_depth_cutoff=Trueの場合はmin_probability以上の
+            候補手数(未展開のためラベル変換失敗分も含む)
         depth: 初期局面からの最短距離
+        is_depth_cutoff: max_depthに到達して展開を打ち切ったノードの場合True
     """
 
     position_hash: int
@@ -23,6 +25,7 @@ class GameTreeNode:
     best_move_win_rate: float
     num_branches: int  # UInt16範囲内(0〜65535)
     depth: int  # UInt16範囲内(0〜65535)
+    is_depth_cutoff: bool
 
 
 @dataclass(frozen=True)

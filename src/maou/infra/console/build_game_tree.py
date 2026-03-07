@@ -9,7 +9,18 @@ from maou.infra.console.common import handle_exception
 
 
 def _collect_feather_files(p: Path) -> list[Path]:
-    """指定パスから .feather ファイルを収集する．"""
+    """指定パスから .feather ファイルを収集する．
+
+    Args:
+        p: ファイルまたはディレクトリのパス
+
+    Returns:
+        .feather ファイルのリスト(ディレクトリの場合はソート済み)
+
+    Raises:
+        ValueError: パスがファイルでもディレクトリでもない場合，
+            またはファイルの拡張子が .feather でない場合
+    """
     if p.is_file():
         if p.suffix != ".feather":
             raise ValueError(
