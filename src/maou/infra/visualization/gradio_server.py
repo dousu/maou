@@ -68,7 +68,7 @@ def _load_custom_css() -> str:
                 css_path.read_text(encoding="utf-8")
             )
         else:
-            logger.warning(f"CSS file not found: {css_path}")
+            logger.warning("CSS file not found: %s", css_path)
 
     return "\n\n".join(css_parts)
 
@@ -487,7 +487,7 @@ class GradioVisualizationServer:
                     )
 
         except InterruptedError as e:
-            logger.info(f"🚫 Indexing interrupted: {e}")
+            logger.info("Indexing interrupted: %s", e)
             self.indexing_state.set_failed(
                 "インデックス作成がキャンセルされました"
             )
@@ -864,7 +864,7 @@ class GradioVisualizationServer:
             )
             return gr.update(choices=suggestions)
         except Exception as e:
-            logger.error(f"Directory suggestion failed: {e}")
+            logger.error("Directory suggestion failed: %s", e)
             return gr.update(choices=[])
 
     def _get_file_suggestions_handler(self, prefix: str) -> Any:
@@ -891,7 +891,7 @@ class GradioVisualizationServer:
             )
             return gr.update(choices=suggestions)
         except Exception as e:
-            logger.error(f"File suggestion failed: {e}")
+            logger.error("File suggestion failed: %s", e)
             return gr.update(choices=[])
 
     def _supports_eval_search(self) -> bool:
@@ -956,7 +956,9 @@ class GradioVisualizationServer:
             )
 
         logger.info(
-            f"Found {len(feather_files)} .feather files in {path}"
+            "Found %d .feather files in %s",
+            len(feather_files),
+            path,
         )
         return sorted(feather_files)
 
@@ -1040,7 +1042,7 @@ class GradioVisualizationServer:
             else:  # "File list"
                 file_paths = self._resolve_file_list(files_path)
         except ValueError as e:
-            logger.error(f"Path resolution failed: {e}")
+            logger.error("Path resolution failed: %s", e)
             return (
                 f"❌ **Error:** {e}",
                 False,
@@ -1133,7 +1135,6 @@ class GradioVisualizationServer:
         Args:
             tree_dir: ツリーデータディレクトリ
         """
-        from maou.app.game_tree.query import GameTreeQuery
         from maou.interface.game_tree_io import GameTreeIO
         from maou.interface.game_tree_visualization import (
             GameTreeVisualizationInterface,
@@ -1141,23 +1142,21 @@ class GradioVisualizationServer:
 
         io = GameTreeIO()
         nodes_df, edges_df = io.load(tree_dir)
+        metadata = io.load_metadata(tree_dir)
         logger.info(
-            f"Loaded game tree: {len(nodes_df)} nodes, "
-            f"{len(edges_df)} edges"
+            "Loaded game tree: %d nodes, %d edges",
+            len(nodes_df),
+            len(edges_df),
         )
 
-        root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
-        if len(root_nodes) == 0:
-            raise ValueError(
-                "ルートノード(depth=0)が見つかりません"
-            )
-        root_hash = int(root_nodes["position_hash"][0])
-
-        query = GameTreeQuery(nodes_df, edges_df)
         self._game_tree_viz = GameTreeVisualizationInterface(
-            query, root_hash
+            nodes_df,
+            edges_df,
+            initial_sfen=metadata.get("initial_sfen"),
         )
-        self._game_tree_root_hash = root_hash
+        self._game_tree_root_hash = (
+            self._game_tree_viz.get_root_hash()
+        )
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
         """Rebuild search index from current file paths in background．
@@ -2759,7 +2758,7 @@ class GradioVisualizationServer:
         Returns:
             (board_svg, record_details)のタプル
         """
-        logger.info(f"Mock ID search: {record_id}")
+        logger.info("Mock ID search: %s", record_id)
 
         # モックレスポンス
         board_svg = self._get_default_board_svg()

@@ -22,19 +22,23 @@ class FileSystem(
         p: Path, ext: str | None = None
     ) -> list[Path]:
         if p.is_file():
+            if ext is not None and ext not in p.suffixes:
+                msg = (
+                    f"ファイルは {ext} 形式で"
+                    f"なければなりません: {p}"
+                )
+                raise ValueError(msg)
             return [p]
         elif p.is_dir():
             return [
                 f
                 for f in p.glob("**/*")
                 if f.is_file()
-                and (
-                    ext is None
-                    or ext is not None
-                    and ext in f.suffixes
-                )
+                and (ext is None or ext in f.suffixes)
             ]
         else:
-            raise ValueError(
-                f"Path `{p}` is neither a file nor a directory."
+            msg = (
+                f"パスがファイルでも"
+                f"ディレクトリでもありません: {p}"
             )
+            raise ValueError(msg)

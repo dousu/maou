@@ -6,7 +6,11 @@ Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
 
 from __future__ import annotations
 
+import copy
+import logging
 from typing import Any
+
+import polars as pl
 
 from maou.app.game_tree.query import GameTreeQuery
 from maou.domain.board.shogi import (
@@ -22,6 +26,14 @@ from maou.domain.visualization.board_renderer import (
     MoveArrow,
     SVGBoardRenderer,
 )
+from maou.domain.visualization.piece_mapping import (
+    get_piece_name_ja,
+)
+
+logger = logging.getLogger(__name__)
+
+#: _get_board_for_position のキャッシュ型
+_BoardCache = tuple[int, Board | None]
 
 
 class GameTreeVisualizationInterface:
@@ -30,20 +42,61 @@ class GameTreeVisualizationInterface:
     GameTreeQueryのデータをUI向けに変換する．
     """
 
+    _ROW_MAP: dict[str, str] = {
+        "a": "一",
+        "b": "二",
+        "c": "三",
+        "d": "四",
+        "e": "五",
+        "f": "六",
+        "g": "七",
+        "h": "八",
+        "i": "九",
+    }
+
+    _DROP_PIECE_MAP: dict[str, str] = {
+        "P": "歩",
+        "L": "香",
+        "N": "桂",
+        "S": "銀",
+        "G": "金",
+        "B": "角",
+        "R": "飛",
+    }
+
     def __init__(
         self,
-        query: GameTreeQuery,
-        root_hash: int,
+        nodes_df: pl.DataFrame,
+        edges_df: pl.DataFrame,
+        initial_sfen: str | None = None,
     ) -> None:
         """初期化．
 
         Args:
-            query: ゲームツリークエリオブジェクト
-            root_hash: ツリーのルートノードのhash
+            nodes_df: ノードデータ(nodes.feather相当)
+            edges_df: エッジデータ(edges.feather相当)
+            initial_sfen: 開始局面のSFEN文字列．Noneの場合は平手初期局面．
+
+        Raises:
+            ValueError: depth=0のルートノードが見つからない場合
         """
-        self._query = query
-        self._root_hash = root_hash
+        self._query = GameTreeQuery(nodes_df, edges_df)
+        root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
+        if len(root_nodes) == 0:
+            msg = "ルートノード(depth=0)が見つかりません"
+            raise ValueError(msg)
+        if len(root_nodes) > 1:
+            logger.warning(
+                "複数のルートノード(depth=0)が存在します: %d件．"
+                "最初のノードを使用します",
+                len(root_nodes),
+            )
+        self._root_hash = int(
+            root_nodes["position_hash"].item(0)
+        )
+        self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
+        self._board_cache: _BoardCache | None = None
 
     def get_cytoscape_elements(
         self,
@@ -78,6 +131,13 @@ class GameTreeVisualizationInterface:
             ):
                 child_edge_map[child_hash] = row
 
+        # サブツリー内の盤面をdepth順に漸進的に構築する．
+        # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
+        # 1手適用して子の盤面を得る．
+        local_boards = self._build_boards_incrementally(
+            root_hash, sub_nodes, child_edge_map
+        )
+
         cy_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
@@ -86,8 +146,23 @@ class GameTreeVisualizationInterface:
             label = "ROOT"
             probability = 1.0
             if edge_info is not None:
-                usi = move_to_usi(edge_info["move16"])
-                label = self._usi_to_japanese(usi)
+                move16 = edge_info["move16"]
+                usi = move_to_usi(move16)
+                parent_board = local_boards.get(
+                    edge_info["parent_hash"]
+                )
+                # 駒打ち(usi[1]=="*")はUSIから駒名を取得するため
+                # _get_piece_nameの呼び出しは不要
+                piece_name = (
+                    self.get_piece_name(parent_board, move16)
+                    if parent_board is not None
+                    and len(usi) >= 2
+                    and usi[1] != "*"
+                    else ""
+                )
+                label = self.usi_to_japanese(
+                    usi, piece_name=piece_name
+                )
                 probability = edge_info["probability"]
 
             cy_nodes.append(
@@ -141,14 +216,37 @@ class GameTreeVisualizationInterface:
         Returns:
             SVG文字列
         """
-        board = self._reconstruct_board(position_hash)
-        if board is None:
+        path = self._query.get_path_to_root(position_hash)
+        if not path:
             return "<p>盤面を復元できません</p>"
 
+        if len(path) >= 2:
+            # 親の盤面を復元し，最後の指し手の矢印を計算してから適用
+            parent_board = self._reconstruct_board_from_path(
+                path[:-1]
+            )
+            if parent_board is None:
+                return "<p>盤面を復元できません</p>"
+
+            edge = self._query.get_edge_between(
+                path[-2], path[-1]
+            )
+            if edge is None:
+                return "<p>盤面を復元できません</p>"
+
+            move16 = edge["move16"]
+            move = parent_board.get_move_from_move16(move16)
+            move_arrow = self._move_to_arrow(move)
+            parent_board.push_move(move)
+            board = parent_board
+        else:
+            board = self._reconstruct_board_from_path(path)
+            if board is None:
+                return "<p>盤面を復元できません</p>"
+            move_arrow = None
+
         # 盤面からBoardPositionを生成
-        board_id_positions = self._pieces_to_board_id_positions(
-            board
-        )
+        board_id_positions = board.get_board_id_positions()
         black_hand, white_hand = board.get_pieces_in_hand()
         pieces_in_hand = list(black_hand) + list(white_hand)
         position = BoardPosition(
@@ -156,8 +254,6 @@ class GameTreeVisualizationInterface:
             pieces_in_hand=pieces_in_hand,
         )
 
-        # 親からの指し手を矢印で表示
-        move_arrow = self._get_move_arrow(position_hash)
         turn = board.get_turn()
 
         return self._renderer.render(
@@ -204,10 +300,22 @@ class GameTreeVisualizationInterface:
         if len(children) == 0:
             return []
 
+        board = self._get_board_for_position(position_hash)
+
         result: list[list[str]] = []
         for row in children.iter_rows(named=True):
-            usi = move_to_usi(row["move16"])
-            japanese = self._usi_to_japanese(usi)
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            piece_name = (
+                self.get_piece_name(board, move16)
+                if board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
+                else ""
+            )
+            japanese = self.usi_to_japanese(
+                usi, piece_name=piece_name
+            )
             prob = f"{row['probability'] * 100:.1f}%"
             wr = f"{row['win_rate'] * 100:.1f}%"
             result.append([japanese, prob, wr])
@@ -241,14 +349,26 @@ class GameTreeVisualizationInterface:
                 "win_rates": [],
             }
 
+        board = self._get_board_for_position(position_hash)
+
         top_children = children.head(10)
         moves: list[str] = []
         probs: list[float] = []
         win_rates: list[float] = []
 
         for row in top_children.iter_rows(named=True):
-            usi = move_to_usi(row["move16"])
-            moves.append(self._usi_to_japanese(usi))
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            piece_name = (
+                self.get_piece_name(board, move16)
+                if board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
+                else ""
+            )
+            moves.append(
+                self.usi_to_japanese(usi, piece_name=piece_name)
+            )
             probs.append(float(row["probability"]))
             win_rates.append(float(row["win_rate"]))
 
@@ -258,22 +378,20 @@ class GameTreeVisualizationInterface:
             "win_rates": win_rates,
         }
 
-    def _reconstruct_board(
-        self, position_hash: int
+    def _reconstruct_board_from_path(
+        self, path: list[int]
     ) -> Board | None:
-        """ルートからのパスを辿って盤面を復元する．
+        """パスに沿って盤面を復元する．
 
         Args:
-            position_hash: 対象ノードのZobrist hash
+            path: ルートから対象ノードまでのposition_hashリスト
 
         Returns:
             復元されたBoardオブジェクト．復元不能の場合None．
         """
-        path = self._query.get_path_to_root(position_hash)
-        if not path:
-            return None
-
         board = Board()
+        if self._initial_sfen is not None:
+            board.set_sfen(self._initial_sfen)
 
         # パスに沿って指し手を適用
         for i in range(len(path) - 1):
@@ -289,35 +407,115 @@ class GameTreeVisualizationInterface:
 
         return board
 
-    def _get_move_arrow(
+    def _build_boards_incrementally(
+        self,
+        root_hash: int,
+        sub_nodes: pl.DataFrame,
+        child_edge_map: dict[int, dict[str, Any]],
+    ) -> dict[int, Board | None]:
+        """サブツリー内の全ノードの盤面をdepth順に構築する．
+
+        ルートの盤面のみ get_path_to_root で復元し，
+        残りは親の盤面をコピーして1手適用する．
+        これにより get_path_to_root の呼び出しを1回に削減する．
+
+        Args:
+            root_hash: サブツリーのルートhash
+            sub_nodes: サブツリー内のノードDF
+            child_edge_map: child_hash → エッジ情報
+
+        Returns:
+            position_hash → Board のマッピング
+        """
+        boards: dict[int, Board | None] = {}
+
+        # サブツリーのルート盤面を復元
+        path = self._query.get_path_to_root(root_hash)
+        boards[root_hash] = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
+        )
+
+        # depth順にソートして漸進的に構築
+        sorted_nodes = sub_nodes.sort("depth")
+        for row in sorted_nodes.iter_rows(named=True):
+            pos_hash = row["position_hash"]
+            if pos_hash in boards:
+                continue
+
+            edge_info = child_edge_map.get(pos_hash)
+            if edge_info is None:
+                boards[pos_hash] = None
+                continue
+
+            parent_hash = edge_info["parent_hash"]
+            parent_board = boards.get(parent_hash)
+            if parent_board is None:
+                boards[pos_hash] = None
+                continue
+
+            try:
+                child_board = copy.copy(parent_board)
+                move16 = edge_info["move16"]
+                move = child_board.get_move_from_move16(move16)
+                child_board.push_move(move)
+                boards[pos_hash] = child_board
+            except Exception:
+                logger.warning(
+                    "盤面復元に失敗しました: "
+                    "position_hash=0x%016X",
+                    pos_hash,
+                    exc_info=True,
+                )
+                boards[pos_hash] = None
+
+        return boards
+
+    def _get_board_for_position(
         self, position_hash: int
-    ) -> MoveArrow | None:
-        """親からの指し手をMoveArrowに変換する．
+    ) -> Board | None:
+        """指定局面のBoardを取得する(1エントリキャッシュ付き)．
+
+        同一局面に対する連続呼び出し(get_move_table → get_analytics_data)で
+        重複する盤面復元を回避する．
+
+        Note:
+            スレッドセーフではない．Gradioのマルチスレッド環境では
+            キャッシュミスによる重複計算が発生しうるが，
+            データ破壊は起きない(最悪ケースは性能劣化のみ)．
 
         Args:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
-            MoveArrowオブジェクト．ルートの場合None．
+            復元されたBoardオブジェクト．復元不能の場合None．
         """
+        if (
+            self._board_cache is not None
+            and self._board_cache[0] == position_hash
+        ):
+            return self._board_cache[1]
+
         path = self._query.get_path_to_root(position_hash)
-        if len(path) < 2:
-            return None
-
-        parent = path[-2]
-        edge = self._query.get_edge_between(
-            parent, position_hash
+        board = (
+            self._reconstruct_board_from_path(path)
+            if path
+            else None
         )
-        if edge is None:
-            return None
+        self._board_cache = (position_hash, board)
+        return board
 
-        move16 = edge["move16"]
-        # move16からMoveArrowを構築
-        board = self._reconstruct_board(parent)
-        if board is None:
-            return None
+    @staticmethod
+    def _move_to_arrow(move: int) -> MoveArrow:
+        """cshogiの指し手をMoveArrowに変換する．
 
-        move = board.get_move_from_move16(move16)
+        Args:
+            move: cshogiの指し手(get_move_from_move16の返り値)
+
+        Returns:
+            MoveArrowオブジェクト
+        """
         if move_is_drop(move):
             return MoveArrow(
                 from_square=None,
@@ -332,11 +530,38 @@ class GameTreeVisualizationInterface:
         )
 
     @staticmethod
-    def _usi_to_japanese(usi: str) -> str:
+    def get_piece_name(board: Board, move16: int) -> str:
+        """盤面とmove16から移動元の駒名を取得する．
+
+        呼び出し側で駒打ち(usi[1]=="*")を除外済みのため，
+        通常の移動のみを処理する．
+
+        Args:
+            board: 指し手適用前の盤面
+            move16: 16bit指し手(駒打ち以外)
+
+        Returns:
+            日本語の駒名(例: "歩"，"角")
+        """
+        move = board.get_move_from_move16(move16)
+        from_sq = move_from(move)
+        cshogi_piece = board.get_piece_at(from_sq)
+        piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
+        return get_piece_name_ja(piece_id)
+
+    @classmethod
+    def usi_to_japanese(
+        cls,
+        usi: str,
+        piece_name: str = "",
+    ) -> str:
         """USI表記を日本語表記に変換する．
 
         Args:
             usi: USI形式の指し手(例: "7g7f", "P*5e")
+            piece_name: 駒名(例: "歩"，"角")．通常の指し手で表記に含める．
+                駒打ち(usi[1]=="*")の場合はUSI文字列から駒名を取得するため
+                この引数は使用されない．
 
         Returns:
             日本語表記(例: "7六歩", "5五歩打")
@@ -346,79 +571,18 @@ class GameTreeVisualizationInterface:
 
         # 駒打ちの場合
         if usi[1] == "*":
-            piece_map = {
-                "P": "歩",
-                "L": "香",
-                "N": "桂",
-                "S": "銀",
-                "G": "金",
-                "B": "角",
-                "R": "飛",
-            }
-            piece = piece_map.get(usi[0], usi[0])
+            piece = cls._DROP_PIECE_MAP.get(usi[0], usi[0])
             col = usi[2]
-            row_map = {
-                "a": "一",
-                "b": "二",
-                "c": "三",
-                "d": "四",
-                "e": "五",
-                "f": "六",
-                "g": "七",
-                "h": "八",
-                "i": "九",
-            }
-            row = row_map.get(usi[3], usi[3])
+            row = cls._ROW_MAP.get(usi[3], usi[3])
             return f"{col}{row}{piece}打"
 
         # 通常の指し手
-        row_map = {
-            "a": "一",
-            "b": "二",
-            "c": "三",
-            "d": "四",
-            "e": "五",
-            "f": "六",
-            "g": "七",
-            "h": "八",
-            "i": "九",
-        }
         to_col = usi[2]
-        to_row = row_map.get(usi[3], usi[3])
+        to_row = cls._ROW_MAP.get(usi[3], usi[3])
 
         # 成りの場合
         promotion = ""
         if len(usi) > 4 and usi[4] == "+":
             promotion = "成"
 
-        return f"{to_col}{to_row}{promotion}"
-
-    @staticmethod
-    def _pieces_to_board_id_positions(
-        board: Board,
-    ) -> list[list[int]]:
-        """Boardオブジェクトから9×9のboard_id_positionsを生成する．
-
-        SVGBoardRendererは[row][col]形式を期待する．
-        board.get_pieces()はcolumn-major(square = col * 9 + row)なので
-        reshapeにorder="F"を使い，転置して[row][col]形式にする．
-
-        Args:
-            board: Boardオブジェクト
-
-        Returns:
-            9×9のPieceId二次元リスト([row][col]形式)
-        """
-        import numpy as np
-
-        v_map = np.vectorize(
-            Board._cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
-        )
-        # cshogi: square = col * 9 + row
-        # Fortran reshape: 列ごとに埋める → 結果は[row][col]形式
-        # これはSVGBoardRendererが期待する形式と一致
-        positions = v_map(
-            np.array(board.get_pieces(), dtype=np.uint8)
-        ).reshape((9, 9), order="F")
-        return positions.tolist()
+        return f"{to_col}{to_row}{piece_name}{promotion}"

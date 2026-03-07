@@ -6,37 +6,7 @@ import click
 
 from maou.infra.app_logging import app_logger
 from maou.infra.console.common import handle_exception
-
-
-def _collect_feather_files(p: Path) -> list[Path]:
-    """指定パスから .feather ファイルを収集する．
-
-    Args:
-        p: ファイルまたはディレクトリのパス
-
-    Returns:
-        .feather ファイルのリスト(ディレクトリの場合はソート済み)
-
-    Raises:
-        ValueError: パスがファイルでもディレクトリでもない場合，
-            またはファイルの拡張子が .feather でない場合
-    """
-    if p.is_file():
-        if p.suffix != ".feather":
-            raise ValueError(
-                f"ファイルは .feather 形式でなければなりません: {p}"
-            )
-        return [p]
-    elif p.is_dir():
-        return sorted(
-            f
-            for f in p.glob("**/*")
-            if f.is_file() and f.suffix == ".feather"
-        )
-    else:
-        raise ValueError(
-            f"パスがファイルでもディレクトリでもありません: {p}"
-        )
+from maou.infra.file_system.file_system import FileSystem
 
 
 @click.command("build-game-tree")
@@ -95,7 +65,9 @@ def build_game_tree(
     from maou.interface.game_tree_io import GameTreeIO
 
     # 入力ファイル収集
-    input_files = _collect_feather_files(input_path)
+    input_files = sorted(
+        FileSystem.collect_files(input_path, ext=".feather")
+    )
     if not input_files:
         raise click.ClickException(
             f"入力パスに .feather ファイルが見つかりません: {input_path}"
@@ -136,6 +108,12 @@ def build_game_tree(
     # 出力
     io = GameTreeIO()
     io.save(nodes, edges, output_dir)
+    io.save_metadata(
+        output_dir,
+        {
+            "initial_sfen": initial_sfen,
+        },
+    )
 
     click.echo(
         f"完了: ノード数={len(nodes):,}, エッジ数={len(edges):,}"

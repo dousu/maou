@@ -19,16 +19,17 @@
     if (resultValue > 0.55) {
       // 先手有利: 青
       const t = Math.min((resultValue - 0.55) / 0.35, 1.0);
-      const r = Math.round(33 * (1 - t) + 33 * t);
-      const g = Math.round(150 * (1 - t) + 150 * t);
-      const b = Math.round(243 * (1 - t) + 243 * t);
+      const r = Math.round(144 * (1 - t) + 25 * t);
+      const g = Math.round(202 * (1 - t) + 118 * t);
+      const b = Math.round(249 * (1 - t) + 210 * t);
       return `rgb(${r}, ${g}, ${b})`;
     } else if (resultValue < 0.45) {
-      // 後手有利: 赤
+      // 後手有利: 赤 (Red 200 → Red 700)
+      // g == b は意図的: 純粋な赤系統を維持するため
       const t = Math.min((0.45 - resultValue) / 0.35, 1.0);
-      const r = Math.round(244 * (1 - t) + 244 * t);
-      const g = Math.round(100 * (1 - t) + 67 * t);
-      const b = Math.round(100 * (1 - t) + 54 * t);
+      const r = Math.round(239 * (1 - t) + 211 * t);
+      const g = Math.round(154 * (1 - t) + 47 * t);
+      const b = Math.round(154 * (1 - t) + 47 * t);
       return `rgb(${r}, ${g}, ${b})`;
     }
     // 互角: グレー

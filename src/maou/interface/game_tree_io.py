@@ -1,9 +1,11 @@
-"""ゲームツリーデータのI/O(Rustバックエンド使用)."""
+"""ゲームツリーデータのI/O(Rustバックエンド使用)．"""
 
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -18,6 +20,7 @@ from maou.domain.game_tree.schema import (
 
 NODES_FILENAME = "nodes.feather"
 EDGES_FILENAME = "edges.feather"
+METADATA_FILENAME = "metadata.json"
 
 
 def _save_df_feather(df: pl.DataFrame, path: Path) -> None:
@@ -60,7 +63,7 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
 
 
 class GameTreeIO:
-    """ゲームツリーデータのI/O(Rustバックエンド使用)."""
+    """ゲームツリーデータのI/O(Rustバックエンド使用)．"""
 
     def save(
         self,
@@ -133,6 +136,43 @@ class GameTreeIO:
         )
 
         return nodes_df, edges_df
+
+    def save_metadata(
+        self,
+        output_dir: Path,
+        metadata: dict[str, Any],
+    ) -> None:
+        """メタデータをJSONで保存する．
+
+        Args:
+            output_dir: 出力先ディレクトリ
+            metadata: 保存するメタデータ辞書
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / METADATA_FILENAME
+        path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_metadata(
+        self,
+        tree_dir: Path,
+    ) -> dict[str, Any]:
+        """メタデータをJSONから読み込む．
+
+        Args:
+            tree_dir: ツリーデータのディレクトリ
+
+        Returns:
+            メタデータ辞書．ファイルが存在しない場合は空辞書．
+        """
+        path = tree_dir / METADATA_FILENAME
+        if not path.exists():
+            return {}
+        content = path.read_text(encoding="utf-8")
+        result: dict[str, Any] = json.loads(content)
+        return result
 
     @staticmethod
     def _validate_schema(
