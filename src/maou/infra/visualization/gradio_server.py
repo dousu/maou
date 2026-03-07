@@ -1133,7 +1133,6 @@ class GradioVisualizationServer:
         Args:
             tree_dir: ツリーデータディレクトリ
         """
-        from maou.app.game_tree.query import GameTreeQuery
         from maou.interface.game_tree_io import GameTreeIO
         from maou.interface.game_tree_visualization import (
             GameTreeVisualizationInterface,
@@ -1142,8 +1141,9 @@ class GradioVisualizationServer:
         io = GameTreeIO()
         nodes_df, edges_df = io.load(tree_dir)
         logger.info(
-            f"Loaded game tree: {len(nodes_df)} nodes, "
-            f"{len(edges_df)} edges"
+            "Loaded game tree: %d nodes, %d edges",
+            len(nodes_df),
+            len(edges_df),
         )
 
         root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
@@ -1153,9 +1153,8 @@ class GradioVisualizationServer:
             )
         root_hash = int(root_nodes["position_hash"][0])
 
-        query = GameTreeQuery(nodes_df, edges_df)
         self._game_tree_viz = GameTreeVisualizationInterface(
-            query, root_hash
+            nodes_df, edges_df, root_hash
         )
         self._game_tree_root_hash = root_hash
 

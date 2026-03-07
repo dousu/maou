@@ -23,70 +23,60 @@ class TestCshogiToPieceIdConversion:
     def test_black_pieces_basic(self) -> None:
         """Basic black pieces map correctly (歩，香，桂，銀，王)．"""
         assert (
-            Board._cshogi_piece_to_piece_id(0) == PieceId.EMPTY
+            Board.cshogi_piece_to_piece_id(0) == PieceId.EMPTY
         )
-        assert Board._cshogi_piece_to_piece_id(1) == PieceId.FU
-        assert Board._cshogi_piece_to_piece_id(2) == PieceId.KY
-        assert Board._cshogi_piece_to_piece_id(3) == PieceId.KE
-        assert Board._cshogi_piece_to_piece_id(4) == PieceId.GI
-        assert Board._cshogi_piece_to_piece_id(8) == PieceId.OU
+        assert Board.cshogi_piece_to_piece_id(1) == PieceId.FU
+        assert Board.cshogi_piece_to_piece_id(2) == PieceId.KY
+        assert Board.cshogi_piece_to_piece_id(3) == PieceId.KE
+        assert Board.cshogi_piece_to_piece_id(4) == PieceId.GI
+        assert Board.cshogi_piece_to_piece_id(8) == PieceId.OU
 
     def test_black_pieces_reordered(self) -> None:
         """金角飛 are reordered correctly (CRITICAL TEST)．"""
         # cshogi: BISHOP=5, ROOK=6, GOLD=7
         # PieceId: KI=5, KA=6, HI=7
         assert (
-            Board._cshogi_piece_to_piece_id(5) == PieceId.KA
+            Board.cshogi_piece_to_piece_id(5) == PieceId.KA
         )  # BISHOP → KA
         assert (
-            Board._cshogi_piece_to_piece_id(6) == PieceId.HI
+            Board.cshogi_piece_to_piece_id(6) == PieceId.HI
         )  # ROOK → HI
         assert (
-            Board._cshogi_piece_to_piece_id(7) == PieceId.KI
+            Board.cshogi_piece_to_piece_id(7) == PieceId.KI
         )  # GOLD → KI
 
     def test_black_promoted_pieces(self) -> None:
         """Black promoted pieces map correctly．"""
-        assert Board._cshogi_piece_to_piece_id(9) == PieceId.TO
+        assert Board.cshogi_piece_to_piece_id(9) == PieceId.TO
+        assert Board.cshogi_piece_to_piece_id(10) == PieceId.NKY
+        assert Board.cshogi_piece_to_piece_id(11) == PieceId.NKE
+        assert Board.cshogi_piece_to_piece_id(12) == PieceId.NGI
         assert (
-            Board._cshogi_piece_to_piece_id(10) == PieceId.NKY
-        )
-        assert (
-            Board._cshogi_piece_to_piece_id(11) == PieceId.NKE
-        )
-        assert (
-            Board._cshogi_piece_to_piece_id(12) == PieceId.NGI
-        )
-        assert (
-            Board._cshogi_piece_to_piece_id(13) == PieceId.UMA
+            Board.cshogi_piece_to_piece_id(13) == PieceId.UMA
         )  # 馬
         assert (
-            Board._cshogi_piece_to_piece_id(14) == PieceId.RYU
+            Board.cshogi_piece_to_piece_id(14) == PieceId.RYU
         )  # 龍
 
     def test_white_pieces_offset(self) -> None:
         """White pieces use +14 offset, not +16 (CRITICAL TEST)．"""
         # cshogi white offset: +16
         # PieceId white offset: +14
-        assert (
-            Board._cshogi_piece_to_piece_id(17) == 15
-        )  # WPAWN
-        assert (
-            Board._cshogi_piece_to_piece_id(24) == 22
-        )  # WKING
+        assert Board.cshogi_piece_to_piece_id(17) == 15  # WPAWN
+        assert Board.cshogi_piece_to_piece_id(24) == 22  # WKING
 
     def test_white_pieces_reordered(self) -> None:
         """White 金角飛 are reordered correctly．"""
         # cshogi: WBISHOP=21, WROOK=22, WGOLD=23
         # PieceId: KI+14=19, KA+14=20, HI+14=21
         assert (
-            Board._cshogi_piece_to_piece_id(21) == 20
+            Board.cshogi_piece_to_piece_id(21) == 20
         )  # WBISHOP → KA+14
         assert (
-            Board._cshogi_piece_to_piece_id(22) == 21
+            Board.cshogi_piece_to_piece_id(22) == 21
         )  # WROOK → HI+14
         assert (
-            Board._cshogi_piece_to_piece_id(23) == 19
+            Board.cshogi_piece_to_piece_id(23) == 19
         )  # WGOLD → KI+14
 
 

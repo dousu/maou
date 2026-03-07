@@ -12,7 +12,6 @@ from typing import Any
 import gradio as gr
 import plotly.graph_objects as go
 
-from maou.app.game_tree.query import GameTreeQuery
 from maou.interface.game_tree_io import GameTreeIO
 from maou.interface.game_tree_visualization import (
     GameTreeVisualizationInterface,
@@ -35,7 +34,7 @@ def _load_static_file(filename: str) -> str:
     path = _STATIC_DIR / filename
     if path.exists():
         return path.read_text(encoding="utf-8")
-    logger.warning(f"Static file not found: {path}")
+    logger.warning("Static file not found: %s", path)
     return ""
 
 
@@ -59,7 +58,7 @@ def _load_custom_css() -> str:
 def _build_head_scripts() -> str:
     """CDNスクリプトとゲームツリーJSをhead要素に注入するHTMLを生成する．
 
-    Gradio 6のgr.Blocks(head=...)パラメータで使用する．
+    demo.launch(head=...)パラメータで使用する．
     gr.HTMLコンポーネントはinnerHTMLで設定されるため<script>タグが
     実行されない問題を回避する．
 
@@ -327,8 +326,9 @@ def launch_game_tree_server(
     io = GameTreeIO()
     nodes_df, edges_df = io.load(tree_path)
     logger.info(
-        f"Loaded tree: {len(nodes_df)} nodes, "
-        f"{len(edges_df)} edges"
+        "Loaded tree: %d nodes, %d edges",
+        len(nodes_df),
+        len(edges_df),
     )
 
     # ルートノード特定(depth=0)
@@ -339,8 +339,9 @@ def launch_game_tree_server(
         )
     root_hash = int(root_nodes["position_hash"][0])
 
-    query = GameTreeQuery(nodes_df, edges_df)
-    viz = GameTreeVisualizationInterface(query, root_hash)
+    viz = GameTreeVisualizationInterface(
+        nodes_df, edges_df, root_hash
+    )
 
     custom_css = _load_custom_css()
     head_scripts = _build_head_scripts()
@@ -377,7 +378,11 @@ def launch_game_tree_server(
         """ノードクリック時のコールバック．"""
         if not node_id:
             return ("", {}, [], _create_empty_plot())
-        pos_hash = int(node_id)
+        try:
+            pos_hash = int(node_id)
+        except ValueError:
+            logger.warning("Invalid node_id: %s", node_id)
+            return ("", {}, [], _create_empty_plot())
         board_svg = viz.get_board_svg(pos_hash)
         stats = viz.get_node_stats(pos_hash)
         moves = viz.get_move_table(pos_hash)
@@ -409,7 +414,18 @@ def launch_game_tree_server(
                 [],
                 _create_empty_plot(),
             )
-        pos_hash = int(node_id)
+        try:
+            pos_hash = int(node_id)
+        except ValueError:
+            logger.warning("Invalid node_id: %s", node_id)
+            return (
+                "",
+                "",
+                str(root_hash),
+                {},
+                [],
+                _create_empty_plot(),
+            )
         tree_html, board_svg, stats, moves, plot = (
             _update_tree_view(
                 viz, pos_hash, display_depth, min_prob

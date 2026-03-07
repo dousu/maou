@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import polars as pl
+
 from maou.app.game_tree.query import GameTreeQuery
 from maou.domain.board.shogi import (
     Board,
@@ -32,16 +34,18 @@ class GameTreeVisualizationInterface:
 
     def __init__(
         self,
-        query: GameTreeQuery,
+        nodes_df: pl.DataFrame,
+        edges_df: pl.DataFrame,
         root_hash: int,
     ) -> None:
         """初期化．
 
         Args:
-            query: ゲームツリークエリオブジェクト
+            nodes_df: ノードデータ(nodes.feather相当)
+            edges_df: エッジデータ(edges.feather相当)
             root_hash: ツリーのルートノードのhash
         """
-        self._query = query
+        self._query = GameTreeQuery(nodes_df, edges_df)
         self._root_hash = root_hash
         self._renderer = SVGBoardRenderer()
 
@@ -141,7 +145,11 @@ class GameTreeVisualizationInterface:
         Returns:
             SVG文字列
         """
-        board = self._reconstruct_board(position_hash)
+        path = self._query.get_path_to_root(position_hash)
+        if not path:
+            return "<p>盤面を復元できません</p>"
+
+        board = self._reconstruct_board_from_path(path)
         if board is None:
             return "<p>盤面を復元できません</p>"
 
@@ -157,7 +165,7 @@ class GameTreeVisualizationInterface:
         )
 
         # 親からの指し手を矢印で表示
-        move_arrow = self._get_move_arrow(position_hash)
+        move_arrow = self._get_move_arrow_from_path(path, board)
         turn = board.get_turn()
 
         return self._renderer.render(
@@ -258,21 +266,17 @@ class GameTreeVisualizationInterface:
             "win_rates": win_rates,
         }
 
-    def _reconstruct_board(
-        self, position_hash: int
+    def _reconstruct_board_from_path(
+        self, path: list[int]
     ) -> Board | None:
-        """ルートからのパスを辿って盤面を復元する．
+        """パスに沿って盤面を復元する．
 
         Args:
-            position_hash: 対象ノードのZobrist hash
+            path: ルートから対象ノードまでのposition_hashリスト
 
         Returns:
             復元されたBoardオブジェクト．復元不能の場合None．
         """
-        path = self._query.get_path_to_root(position_hash)
-        if not path:
-            return None
-
         board = Board()
 
         # パスに沿って指し手を適用
@@ -289,22 +293,23 @@ class GameTreeVisualizationInterface:
 
         return board
 
-    def _get_move_arrow(
-        self, position_hash: int
+    def _get_move_arrow_from_path(
+        self, path: list[int], board: Board
     ) -> MoveArrow | None:
-        """親からの指し手をMoveArrowに変換する．
+        """パスと現在の盤面から親の指し手をMoveArrowに変換する．
 
         Args:
-            position_hash: 対象ノードのZobrist hash
+            path: ルートから対象ノードまでのposition_hashリスト
+            board: 対象ノードの盤面(指し手適用済み)
 
         Returns:
             MoveArrowオブジェクト．ルートの場合None．
         """
-        path = self._query.get_path_to_root(position_hash)
         if len(path) < 2:
             return None
 
         parent = path[-2]
+        position_hash = path[-1]
         edge = self._query.get_edge_between(
             parent, position_hash
         )
@@ -312,12 +317,14 @@ class GameTreeVisualizationInterface:
             return None
 
         move16 = edge["move16"]
-        # move16からMoveArrowを構築
-        board = self._reconstruct_board(parent)
-        if board is None:
+        # 親の盤面を復元してmove16を解釈する
+        parent_board = self._reconstruct_board_from_path(
+            path[:-1]
+        )
+        if parent_board is None:
             return None
 
-        move = board.get_move_from_move16(move16)
+        move = parent_board.get_move_from_move16(move16)
         if move_is_drop(move):
             return MoveArrow(
                 from_square=None,
@@ -412,7 +419,7 @@ class GameTreeVisualizationInterface:
         import numpy as np
 
         v_map = np.vectorize(
-            Board._cshogi_piece_to_piece_id,
+            Board.cshogi_piece_to_piece_id,
             otypes=[np.uint8],
         )
         # cshogi: square = col * 9 + row

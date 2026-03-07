@@ -483,7 +483,7 @@ def move_drop_hand_piece(move: int) -> int:
 
 class Board:
     @staticmethod
-    def _cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
+    def cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
         """Convert cshogi piece ID to domain PieceId enum value.
 
         cshogi uses BISHOP=5, ROOK=6, GOLD=7 with white offset +16.
@@ -496,11 +496,11 @@ class Board:
             PieceId enum value (0-28)
 
         Examples:
-            >>> Board._cshogi_piece_to_piece_id(0)  # EMPTY
+            >>> Board.cshogi_piece_to_piece_id(0)  # EMPTY
             0
-            >>> Board._cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
+            >>> Board.cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
             6
-            >>> Board._cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
+            >>> Board.cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
             20
         """
         mapping = {
@@ -714,7 +714,7 @@ class Board:
 
         # Map cshogi piece IDs to PieceId enum values using centralized conversion
         v_map = np.vectorize(
-            Board._cshogi_piece_to_piece_id,
+            Board.cshogi_piece_to_piece_id,
             otypes=[np.uint8],
         )
         positions = v_map(

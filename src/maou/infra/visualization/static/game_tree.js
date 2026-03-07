@@ -19,9 +19,9 @@
     if (resultValue > 0.55) {
       // 先手有利: 青
       const t = Math.min((resultValue - 0.55) / 0.35, 1.0);
-      const r = Math.round(33 * (1 - t) + 33 * t);
-      const g = Math.round(150 * (1 - t) + 150 * t);
-      const b = Math.round(243 * (1 - t) + 243 * t);
+      const r = Math.round(144 * (1 - t) + 25 * t);
+      const g = Math.round(202 * (1 - t) + 118 * t);
+      const b = Math.round(249 * (1 - t) + 210 * t);
       return `rgb(${r}, ${g}, ${b})`;
     } else if (resultValue < 0.45) {
       // 後手有利: 赤
