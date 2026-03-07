@@ -91,7 +91,7 @@ def build_game_tree(
     import polars as pl
 
     from maou.app.game_tree.builder import GameTreeBuilder
-    from maou.domain.data.rust_io import load_preprocessing_df
+    from maou.interface.data_io import load_preprocessing_df
     from maou.interface.game_tree_io import GameTreeIO
 
     # 入力ファイル収集
