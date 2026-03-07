@@ -108,7 +108,7 @@ class TestGameTreeBuilder:
         board = shogi.Board()
 
         # 初期局面: 7g7f のみ高確率
-        move_7g7f = board.board.move_from_usi("7g7f")
+        move_7g7f = board.move_from_usi("7g7f")
         initial_row = _create_preprocess_row(
             board,
             move_probs={move_7g7f: 0.9},
@@ -152,8 +152,8 @@ class TestGameTreeBuilder:
     def test_min_probability_filtering(self) -> None:
         """min_probability 未満の手はフィルタリングされる."""
         board = shogi.Board()
-        move_7g7f = board.board.move_from_usi("7g7f")
-        move_2g2f = board.board.move_from_usi("2g2f")
+        move_7g7f = board.move_from_usi("7g7f")
+        move_2g2f = board.move_from_usi("2g2f")
 
         # 7g7f: 0.5, 2g2f: 0.005 (閾値 0.01 未満)
         initial_row = _create_preprocess_row(
@@ -191,7 +191,7 @@ class TestGameTreeBuilder:
     def test_max_depth_cutoff(self) -> None:
         """max_depth で展開が停止する."""
         board = shogi.Board()
-        move_7g7f = board.board.move_from_usi("7g7f")
+        move_7g7f = board.move_from_usi("7g7f")
 
         initial_row = _create_preprocess_row(
             board, move_probs={move_7g7f: 0.9}
@@ -199,7 +199,7 @@ class TestGameTreeBuilder:
 
         board.push_move(move_7g7f)
         # depth=1 の局面にも子を持たせるが max_depth=0 で打ち切り
-        move_3c3d = board.board.move_from_usi("3c3d")
+        move_3c3d = board.move_from_usi("3c3d")
         after_row = _create_preprocess_row(
             board, move_probs={move_3c3d: 0.8}
         )
@@ -263,7 +263,7 @@ class TestGameTreeBuilder:
     def test_child_not_in_lookup_ignored(self) -> None:
         """子局面がルックアップテーブルにない場合はエッジのみ追加されキューに入らない."""
         board = shogi.Board()
-        move_7g7f = board.board.move_from_usi("7g7f")
+        move_7g7f = board.move_from_usi("7g7f")
 
         # 初期局面のみ(子局面のデータなし)
         initial_row = _create_preprocess_row(
@@ -314,8 +314,8 @@ class TestGameTreeBuilder:
     def test_transposition_bfs_shortest_depth(self) -> None:
         """合流局面(transposition)のdepthはBFS最短距離になる."""
         board = shogi.Board()
-        move_7g7f = board.board.move_from_usi("7g7f")
-        move_2g2f = board.board.move_from_usi("2g2f")
+        move_7g7f = board.move_from_usi("7g7f")
+        move_2g2f = board.move_from_usi("2g2f")
 
         # 初期局面: 2つの指し手(7g7f, 2g2f)
         initial_row = _create_preprocess_row(
@@ -325,7 +325,7 @@ class TestGameTreeBuilder:
 
         # 7g7f後の局面: 3c3dを指す
         board.push_move(move_7g7f)
-        move_3c3d_after_7g7f = board.board.move_from_usi("3c3d")
+        move_3c3d_after_7g7f = board.move_from_usi("3c3d")
         after_7g7f = _create_preprocess_row(
             board,
             move_probs={move_3c3d_after_7g7f: 0.5},
@@ -334,7 +334,7 @@ class TestGameTreeBuilder:
 
         # 2g2f後の局面: 3c3dを指す
         board.push_move(move_2g2f)
-        move_3c3d_after_2g2f = board.board.move_from_usi("3c3d")
+        move_3c3d_after_2g2f = board.move_from_usi("3c3d")
         after_2g2f = _create_preprocess_row(
             board,
             move_probs={move_3c3d_after_2g2f: 0.5},
@@ -396,7 +396,7 @@ class TestGameTreeBuilder:
     ) -> None:
         """プログレスコールバックのtotalが最終的にprocessedと一致する."""
         board = shogi.Board()
-        move_7g7f = board.board.move_from_usi("7g7f")
+        move_7g7f = board.move_from_usi("7g7f")
 
         initial_row = _create_preprocess_row(
             board, move_probs={move_7g7f: 0.9}

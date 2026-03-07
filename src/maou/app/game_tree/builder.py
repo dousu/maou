@@ -94,7 +94,7 @@ class GameTreeBuilder:
         # 3. BFS
         nodes: list[GameTreeNode] = []
         edges: list[GameTreeEdge] = []
-        # parent_info: hash → (depth, parent_hash, move16)
+        # parent_info: hash → (depth, parent_hash, move)
         # パスをメモリに保持せず，必要時に遡って盤面を復元する
         parent_info: dict[
             int, tuple[int, int | None, int | None]
@@ -172,7 +172,7 @@ class GameTreeBuilder:
 
                 # USIからmoveに変換
                 try:
-                    move = board.board.move_from_usi(usi_move)
+                    move = board.move_from_usi(usi_move)
                 except (ValueError, RuntimeError) as e:
                     logger.warning(
                         f"USI {usi_move} のmove変換に失敗 "
@@ -244,7 +244,7 @@ class GameTreeBuilder:
 
         Args:
             target_hash: 復元対象の局面ハッシュ
-            parent_info: hash → (depth, parent_hash, move16)
+            parent_info: hash → (depth, parent_hash, move)
 
         Returns:
             復元された盤面
@@ -253,11 +253,11 @@ class GameTreeBuilder:
         moves: list[int] = []
         h = target_hash
         while True:
-            _, parent_hash, move16 = parent_info[h]
+            _, parent_hash, move = parent_info[h]
             if parent_hash is None:
                 break
-            assert move16 is not None
-            moves.append(move16)
+            assert move is not None
+            moves.append(move)
             h = parent_hash
         moves.reverse()
 

@@ -612,7 +612,29 @@ class Board:
             yield move
 
     def get_move_from_move16(self, move16: int) -> int:
+        """move16形式(16-bit)からフル move(32-bit)に変換する．
+
+        Args:
+            move16: 16-bit move形式の指し手
+
+        Returns:
+            32-bit フル move
+        """
         return self.board.move_from_move16(move16)
+
+    def move_from_usi(self, usi: str) -> int:
+        """USI形式の文字列から move(32-bit)に変換する．
+
+        Args:
+            usi: USI形式の指し手文字列(例: "7g7f")
+
+        Returns:
+            32-bit フル move
+
+        Raises:
+            ValueError: 不正なUSI文字列の場合
+        """
+        return self.board.move_from_usi(usi)
 
     def push_move(self, move: int) -> None:
         self.board.push(move)
