@@ -6,6 +6,7 @@ Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import polars as pl
@@ -27,6 +28,8 @@ from maou.domain.visualization.board_renderer import (
 from maou.domain.visualization.piece_mapping import (
     get_piece_name_ja,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GameTreeVisualizationInterface:
@@ -78,6 +81,12 @@ class GameTreeVisualizationInterface:
         if len(root_nodes) == 0:
             msg = "ルートノード(depth=0)が見つかりません"
             raise ValueError(msg)
+        if len(root_nodes) > 1:
+            logger.warning(
+                "複数のルートノード(depth=0)が存在します: %d件．"
+                "最初のノードを使用します",
+                len(root_nodes),
+            )
         self._root_hash = int(root_nodes["position_hash"][0])
         self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()

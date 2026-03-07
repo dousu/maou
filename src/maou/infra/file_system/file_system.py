@@ -34,11 +34,7 @@ class FileSystem(
                 f
                 for f in p.glob("**/*")
                 if f.is_file()
-                and (
-                    ext is None
-                    or ext is not None
-                    and ext in f.suffixes
-                )
+                and (ext is None or ext in f.suffixes)
             ]
         else:
             raise ValueError(

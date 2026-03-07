@@ -1,4 +1,4 @@
-"""ゲームツリー可視化インターフェースのテスト."""
+"""ゲームツリー可視化インターフェースのテスト．"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
+from maou.domain.board.shogi import Board
 from maou.domain.game_tree.schema import (
     get_game_tree_edges_schema,
     get_game_tree_nodes_schema,
@@ -233,6 +234,42 @@ class TestGetBoardSvg:
         ):
             result = viz.get_board_svg(200)
         assert "盤面を復元できません" in result
+
+
+class TestGetPieceName:
+    """_get_piece_name のテスト．"""
+
+    def test_pawn(self) -> None:
+        """歩の駒名を取得する(move16=7739: 7g7f)．"""
+        board = Board()
+        result = GameTreeVisualizationInterface._get_piece_name(
+            board, 7739
+        )
+        assert result == "歩"
+
+    def test_silver(self) -> None:
+        """銀の駒名を取得する(move16=3362: 3i4h)．"""
+        board = Board()
+        result = GameTreeVisualizationInterface._get_piece_name(
+            board, 3362
+        )
+        assert result == "銀"
+
+    def test_gold(self) -> None:
+        """金の駒名を取得する(move16=6845: 6i7h)．"""
+        board = Board()
+        result = GameTreeVisualizationInterface._get_piece_name(
+            board, 6845
+        )
+        assert result == "金"
+
+    def test_rook(self) -> None:
+        """飛の駒名を取得する(move16=2055: 2h1h)．"""
+        board = Board()
+        result = GameTreeVisualizationInterface._get_piece_name(
+            board, 2055
+        )
+        assert result == "飛"
 
 
 class TestGetAnalyticsData:
