@@ -21,8 +21,8 @@ class GameTreeNode:
     position_hash: int
     result_value: float
     best_move_win_rate: float
-    num_branches: int
-    depth: int
+    num_branches: int  # UInt16範囲内(0〜65535)
+    depth: int  # UInt16範囲内(0〜65535)
 
 
 @dataclass(frozen=True)

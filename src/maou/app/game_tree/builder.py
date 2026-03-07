@@ -58,6 +58,13 @@ class GameTreeBuilder:
             ValueError: 開始局面がpreprocessデータに見つからない場合，
                 またはinitial_hash指定時にinitial_sfenが未指定の場合
         """
+        _UINT16_MAX = 65535
+        if max_depth > _UINT16_MAX:
+            raise ValueError(
+                f"max_depth={max_depth} は UInt16 の"
+                f"最大値({_UINT16_MAX})を超えています．"
+            )
+
         # 1. ルックアップテーブル構築: id → 行インデックス(後勝ち)
         id_list = preprocess_df["id"].to_list()
         duplicate_count = 0

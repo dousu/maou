@@ -90,13 +90,13 @@ def build_game_tree(
             f"入力パスに .feather ファイルが見つかりません: {input_path}"
         )
 
-    app_logger.info(f"入力ファイル数: {len(input_files)}")
+    app_logger.info("入力ファイル数: %d", len(input_files))
 
     # データ読み込み(Rustバックエンド使用)
     dfs = [load_preprocessing_df(f) for f in input_files]
     preprocess_df = pl.concat(dfs) if len(dfs) > 1 else dfs[0]
 
-    app_logger.info(f"局面数: {len(preprocess_df):,}")
+    app_logger.info("局面数: %s", f"{len(preprocess_df):,}")
 
     # ツリー構築
     builder = GameTreeBuilder()
