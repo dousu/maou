@@ -94,17 +94,20 @@ class GameTreeBuilder:
         # 3. BFS
         nodes: list[GameTreeNode] = []
         edges: list[GameTreeEdge] = []
-        # parent_info: hash → (depth, parent_hash, move)
-        # パスをメモリに保持せず，必要時に遡って盤面を復元する
-        parent_info: dict[
+        # visited: hash → (depth, parent_hash, move)
+        visited: dict[
             int, tuple[int, int | None, int | None]
         ] = {initial_hash: (0, None, None)}
-        queue: deque[int] = deque([initial_hash])
+        # キューは (hash, sfen) を保持し，盤面を O(1) で復元する
+        initial_board = shogi.Board()
+        queue: deque[tuple[int, str]] = deque(
+            [(initial_hash, initial_board.get_sfen())]
+        )
         processed = 0
 
         while queue:
-            current_hash = queue.popleft()
-            current_depth, _, _ = parent_info[current_hash]
+            current_hash, current_sfen = queue.popleft()
+            current_depth, _, _ = visited[current_hash]
             row_idx = lookup[current_hash]
 
             # スカラー値はNumPy配列から直接取得
@@ -141,15 +144,12 @@ class GameTreeBuilder:
                 )
                 processed += 1
                 if progress_callback:
-                    progress_callback(
-                        processed, len(parent_info)
-                    )
+                    progress_callback(processed, len(visited))
                 continue
 
-            # 盤面を復元(parent_infoを遡ってパスを再構成)
-            board = self._reconstruct_board(
-                current_hash, parent_info
-            )
+            # SFENから盤面を復元(O(1))
+            board = shogi.Board()
+            board.set_sfen(current_sfen)
 
             # 各候補手を処理
             edges_before = len(edges)
@@ -183,9 +183,10 @@ class GameTreeBuilder:
                 # 明示的に16-bit move形式に変換
                 move16_val = shogi.move16(move)
 
-                # 子局面のハッシュを取得
+                # 子局面のハッシュとSFENを取得
                 board.push_move(move)
                 child_hash = board.hash()
+                child_sfen = board.get_sfen()
                 board.pop_move()
 
                 # エッジ追加
@@ -206,14 +207,14 @@ class GameTreeBuilder:
                 # BFSは等コストのため，最初に到達した経路が最短経路となる
                 if (
                     child_in_lookup
-                    and child_hash not in parent_info
+                    and child_hash not in visited
                 ):
-                    parent_info[child_hash] = (
+                    visited[child_hash] = (
                         current_depth + 1,
                         current_hash,
                         move,
                     )
-                    queue.append(child_hash)
+                    queue.append((child_hash, child_sfen))
 
             # ノードを追加(実際に生成されたエッジ数をnum_branchesに使用)
             actual_branches = len(edges) - edges_before
@@ -229,39 +230,6 @@ class GameTreeBuilder:
 
             processed += 1
             if progress_callback:
-                progress_callback(processed, len(parent_info))
+                progress_callback(processed, len(visited))
 
         return nodes, edges
-
-    @staticmethod
-    def _reconstruct_board(
-        target_hash: int,
-        parent_info: dict[
-            int, tuple[int, int | None, int | None]
-        ],
-    ) -> shogi.Board:
-        """parent_infoを遡って盤面を復元する．
-
-        Args:
-            target_hash: 復元対象の局面ハッシュ
-            parent_info: hash → (depth, parent_hash, move)
-
-        Returns:
-            復元された盤面
-        """
-        # ルートまでのパスを逆順に構築
-        moves: list[int] = []
-        h = target_hash
-        while True:
-            _, parent_hash, move = parent_info[h]
-            if parent_hash is None:
-                break
-            assert move is not None
-            moves.append(move)
-            h = parent_hash
-        moves.reverse()
-
-        board = shogi.Board()
-        for move in moves:
-            board.push_move(move)
-        return board

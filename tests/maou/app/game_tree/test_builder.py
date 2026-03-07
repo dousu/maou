@@ -24,7 +24,7 @@ def _create_preprocess_row(
 
     Args:
         board: 局面
-        move_probs: {move16: probability} の辞書．Noneの場合は合法手に均等確率
+        move_probs: {move: probability} の辞書(moveは32-bitフル形式)．Noneの場合は合法手に均等確率
         result_value: 局面の勝率
         best_move_win_rate: 最善手の勝率
     """
@@ -39,8 +39,8 @@ def _create_preprocess_row(
             move_labels[label] = prob
             move_win_rates[label] = 0.5
     else:
-        for move16, prob in move_probs.items():
-            label = make_move_label(board.get_turn(), move16)
+        for move, prob in move_probs.items():
+            label = make_move_label(board.get_turn(), move)
             move_labels[label] = prob
             move_win_rates[label] = 0.5
 

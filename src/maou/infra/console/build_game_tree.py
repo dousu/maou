@@ -13,11 +13,11 @@ def _collect_feather_files(p: Path) -> list[Path]:
     if p.is_file():
         return [p]
     elif p.is_dir():
-        return [
+        return sorted(
             f
             for f in p.glob("**/*")
             if f.is_file() and f.suffix == ".feather"
-        ]
+        )
     else:
         raise ValueError(
             f"Path `{p}` is neither a file nor a directory."
@@ -47,7 +47,7 @@ def _collect_feather_files(p: Path) -> list[Path]:
 @click.option(
     "--min-probability",
     help="指し手の最小確率閾値(表示時より小さく設定)．",
-    type=float,
+    type=click.FloatRange(min=0.0, max=1.0),
     default=0.001,
     show_default=True,
 )
