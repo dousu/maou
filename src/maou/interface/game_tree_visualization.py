@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import polars as pl
 
 from maou.app.game_tree.query import GameTreeQuery
@@ -176,9 +175,7 @@ class GameTreeVisualizationInterface:
             move_arrow = None
 
         # 盤面からBoardPositionを生成
-        board_id_positions = self._pieces_to_board_id_positions(
-            board
-        )
+        board_id_positions = board.get_board_id_positions()
         black_hand, white_hand = board.get_pieces_in_hand()
         pieces_in_hand = list(black_hand) + list(white_hand)
         position = BoardPosition(
@@ -387,31 +384,3 @@ class GameTreeVisualizationInterface:
             promotion = "成"
 
         return f"{to_col}{to_row}{promotion}"
-
-    @staticmethod
-    def _pieces_to_board_id_positions(
-        board: Board,
-    ) -> list[list[int]]:
-        """Boardオブジェクトから9×9のboard_id_positionsを生成する．
-
-        SVGBoardRendererは[row][col]形式を期待する．
-        board.get_pieces()はcolumn-major(square = col * 9 + row)なので
-        reshapeにorder="F"を使い，転置して[row][col]形式にする．
-
-        Args:
-            board: Boardオブジェクト
-
-        Returns:
-            9×9のPieceId二次元リスト([row][col]形式)
-        """
-        v_map = np.vectorize(
-            Board.cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
-        )
-        # cshogi: square = col * 9 + row
-        # Fortran reshape: 列ごとに埋める → 結果は[row][col]形式
-        # これはSVGBoardRendererが期待する形式と一致
-        positions = v_map(
-            np.array(board.get_pieces(), dtype=np.uint8)
-        ).reshape((9, 9), order="F")
-        return positions.tolist()

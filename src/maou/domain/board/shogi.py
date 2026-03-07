@@ -691,6 +691,36 @@ class Board:
         """
         return self.board.is_ok()
 
+    def get_board_id_positions(self) -> list[list[int]]:
+        """Get board piece positions as 9x9 nested list.
+
+        盤面の駒配置を[row][col]形式の二次元リストで返す．
+        cshogiのcolumn-major配置(square = col * 9 + row)を
+        Fortran orderでreshapeして[row][col]形式に変換する．
+
+        Returns:
+            9x9のPieceId二次元リスト([row][col]形式)
+
+        Example:
+            >>> board = Board()
+            >>> positions = board.get_board_id_positions()
+            >>> len(positions)
+            9
+            >>> len(positions[0])
+            9
+        """
+        v_map = np.vectorize(
+            Board.cshogi_piece_to_piece_id,
+            otypes=[np.uint8],
+        )
+        positions = v_map(
+            np.array(
+                self.board.pieces,
+                dtype=np.uint8,
+            )
+        ).reshape((9, 9), order="F")
+        return positions.tolist()
+
     def get_board_id_positions_df(self) -> "pl.DataFrame":
         """Get board piece positions as 1-row Polars DataFrame．
 
@@ -713,18 +743,7 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Map cshogi piece IDs to PieceId enum values using centralized conversion
-        v_map = np.vectorize(
-            Board.cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
-        )
-        positions = v_map(
-            np.array(
-                self.board.pieces,
-                dtype=np.uint8,
-            )
-        ).reshape((9, 9), order="F")
-        positions_list = positions.tolist()  # Fast conversion
+        positions_list = self.get_board_id_positions()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(
