@@ -59,6 +59,7 @@ class TestGameTreeEdge:
             move_label=42,
             probability=0.452,
             win_rate=0.521,
+            is_leaf=False,
         )
         assert edge.parent_hash == 100
         assert edge.child_hash == 200
@@ -66,6 +67,7 @@ class TestGameTreeEdge:
         assert edge.move_label == 42
         assert edge.probability == pytest.approx(0.452)
         assert edge.win_rate == pytest.approx(0.521)
+        assert edge.is_leaf is False
 
     def test_frozen(self) -> None:
         """frozen dataclass は変更不可."""
@@ -76,6 +78,7 @@ class TestGameTreeEdge:
             move_label=0,
             probability=0.5,
             win_rate=0.5,
+            is_leaf=False,
         )
         with pytest.raises(AttributeError):
             edge.probability = 0.9  # type: ignore[misc]

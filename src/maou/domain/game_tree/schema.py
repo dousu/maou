@@ -33,6 +33,7 @@ def get_game_tree_edges_schema() -> dict[str, pl.DataType]:
         "move_label": pl.UInt16(),
         "probability": pl.Float32(),
         "win_rate": pl.Float32(),
+        "is_leaf": pl.Boolean(),
     }
 
 

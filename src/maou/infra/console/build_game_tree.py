@@ -1,32 +1,11 @@
 """ゲームツリー構築CLIコマンド."""
 
 from pathlib import Path
-from typing import Any
 
 import click
 
 from maou.infra.app_logging import app_logger
-
-
-def _handle_exception(func: Any) -> Any:
-    """例外ハンドリングデコレータ(common.pyの依存を回避)．
-
-    click.ClickException はClickのエラー表示機構に委ねるため再送出する．
-    """
-    import functools
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        try:
-            return func(*args, **kwargs)
-        except click.ClickException:
-            raise
-        except Exception:
-            app_logger.exception(
-                "Error occurred", stack_info=True
-            )
-
-    return wrapper
+from maou.infra.console.common import handle_exception
 
 
 def _collect_feather_files(p: Path) -> list[Path]:
@@ -72,7 +51,7 @@ def _collect_feather_files(p: Path) -> list[Path]:
     default=0.001,
     show_default=True,
 )
-@_handle_exception
+@handle_exception
 def build_game_tree(
     input_path: Path,
     output_dir: Path,
@@ -114,6 +93,8 @@ def build_game_tree(
         ) -> None:
             nonlocal last_processed
             # totalは発見済み局面数(BFS中に増加する)
+            # NOTE: bar.length の動的更新はClick公式APIではないが，
+            # BFSの総ノード数が事前に不明なため必要．Clickバージョン更新時に要確認．
             bar.length = total
             bar.update(processed - last_processed)
             last_processed = processed

@@ -33,10 +33,10 @@ def _save_df_feather(df: pl.DataFrame, path: Path) -> None:
         return
 
     from maou._rust.maou_io import save_feather_file
-    from maou.domain.data.rust_io import _df_to_single_batch
+    from maou.domain.data.rust_io import df_to_single_batch
 
     save_feather_file(
-        _df_to_single_batch(df),
+        df_to_single_batch(df),
         str(path),
     )
 
@@ -78,9 +78,9 @@ class GameTreeIO:
             edges: エッジのリスト
             output_dir: 出力先ディレクトリ
         """
-        from maou.domain.data.rust_io import _check_rust_backend
+        from maou.domain.data.rust_io import check_rust_backend
 
-        _check_rust_backend()
+        check_rust_backend()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         nodes_df = pl.DataFrame(
@@ -111,9 +111,9 @@ class GameTreeIO:
             FileNotFoundError: ファイルが見つからない場合
             ValueError: スキーマが一致しない場合
         """
-        from maou.domain.data.rust_io import _check_rust_backend
+        from maou.domain.data.rust_io import check_rust_backend
 
-        _check_rust_backend()
+        check_rust_backend()
 
         nodes_path = tree_dir / NODES_FILENAME
         edges_path = tree_dir / EDGES_FILENAME

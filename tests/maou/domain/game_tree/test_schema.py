@@ -62,6 +62,7 @@ class TestEdgesSchema:
             "move_label",
             "probability",
             "win_rate",
+            "is_leaf",
         }
 
     def test_schema_types(self) -> None:
@@ -73,6 +74,7 @@ class TestEdgesSchema:
         assert schema["move_label"] == pl.UInt16()
         assert schema["probability"] == pl.Float32()
         assert schema["win_rate"] == pl.Float32()
+        assert schema["is_leaf"] == pl.Boolean()
 
     def test_create_empty_df(self) -> None:
         """空の DataFrame を生成できる."""

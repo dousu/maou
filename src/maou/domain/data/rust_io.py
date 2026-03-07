@@ -20,13 +20,15 @@ try:
         load_feather_file,
         load_hcpe_feather,
         load_preprocessing_feather,
+    )
+    from maou._rust.maou_io import (
+        merge_feather_files as _merge_feather_files,
+    )
+    from maou._rust.maou_io import (
         save_feather_file,
         save_hcpe_feather,
         save_preprocessing_feather,
         split_feather_file,
-    )
-    from maou._rust.maou_io import (
-        merge_feather_files as _merge_feather_files,
     )
 
     RUST_BACKEND_AVAILABLE = True
@@ -35,7 +37,7 @@ except ImportError as e:
     _import_error = e
 
 
-def _check_rust_backend() -> None:
+def check_rust_backend() -> None:
     """Rustバックエンドが利用可能かチェックする．"""
     if not RUST_BACKEND_AVAILABLE:
         raise ImportError(
@@ -44,7 +46,11 @@ def _check_rust_backend() -> None:
         )
 
 
-def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
+# 後方互換エイリアス
+_check_rust_backend = check_rust_backend
+
+
+def df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
     """Polars DataFrameを単一のArrow RecordBatchに変換する．
 
     ``pl.concat()`` 等の操作後にDataFrameが複数チャンクを持つ場合，
@@ -67,6 +73,10 @@ def _df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
         )
     arrow_table = df.to_arrow().combine_chunks()
     return arrow_table.to_batches()[0]
+
+
+# 後方互換エイリアス
+_df_to_single_batch = df_to_single_batch
 
 
 def save_hcpe_df(

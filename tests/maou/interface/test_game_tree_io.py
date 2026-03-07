@@ -49,6 +49,7 @@ class TestGameTreeIO:
                 move_label=53,
                 probability=0.45,
                 win_rate=0.52,
+                is_leaf=False,
             ),
         ]
 

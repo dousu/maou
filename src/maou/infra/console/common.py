@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from maou.infra.app_logging import (
     app_logger,
@@ -168,11 +168,20 @@ def validate_cloud_provider_exclusivity(
 
 
 def handle_exception(func: Callable) -> Callable:
-    """Decorator to handle exceptions in CLI commands."""
+    """CLIコマンドの例外ハンドリングデコレータ．
 
+    click.ClickException はClickのエラー表示機構に委ねるため再送出する．
+    """
+    import functools
+
+    import click
+
+    @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
+        except click.ClickException:
+            raise
         except Exception:
             app_logger.exception(
                 "Error occurred", stack_info=True
