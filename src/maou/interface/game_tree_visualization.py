@@ -466,6 +466,7 @@ class GameTreeVisualizationInterface:
                     "盤面復元に失敗しました: "
                     "position_hash=0x%016X",
                     pos_hash,
+                    exc_info=True,
                 )
                 boards[pos_hash] = None
 
