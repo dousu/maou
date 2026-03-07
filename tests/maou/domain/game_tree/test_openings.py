@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+
+import pytest
 
 from maou.domain.game_tree.openings import (
     OpeningDatabase,
@@ -179,3 +182,5 @@ class TestOpeningInfo:
         info = OpeningInfo(name="矢倉", category="相居飛車")
         assert info.name == "矢倉"
         assert info.category == "相居飛車"
+        with pytest.raises(FrozenInstanceError):
+            info.name = "角換わり"  # type: ignore[misc]

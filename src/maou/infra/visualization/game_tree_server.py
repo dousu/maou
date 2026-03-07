@@ -427,9 +427,9 @@ def launch_game_tree_server(
         server_name: サーバーバインドアドレス
     """
     # データ読み込み
-    io = GameTreeIO()
-    nodes_df, edges_df = io.load(tree_path)
-    metadata = io.load_metadata(tree_path)
+    tree_io = GameTreeIO()
+    nodes_df, edges_df = tree_io.load(tree_path)
+    metadata = tree_io.load_metadata(tree_path)
     logger.info(
         "Loaded tree: %d nodes, %d edges",
         len(nodes_df),

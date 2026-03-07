@@ -202,6 +202,13 @@ class OpeningDatabase:
                     i,
                 )
                 continue
+            if not isinstance(item["moves"], list):
+                logger.warning(
+                    "定跡JSON: エントリ %d の moves が"
+                    "リストではないためスキップ",
+                    i,
+                )
+                continue
             custom_entries.append(
                 OpeningEntry(
                     moves=tuple(item["moves"]),
