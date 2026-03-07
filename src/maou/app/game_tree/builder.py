@@ -7,6 +7,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from maou.domain.board import shogi
 from maou.domain.game_tree.model import (
     GameTreeEdge,
@@ -32,6 +34,7 @@ class GameTreeBuilder:
         min_probability: float = 0.001,
         progress_callback: Callable[[int, int], None]
         | None = None,
+        initial_hash: int | None = None,
     ) -> tuple[list[GameTreeNode], list[GameTreeEdge]]:
         """BFSでツリーを構築する．
 
@@ -41,12 +44,13 @@ class GameTreeBuilder:
             max_depth: 最大探索深さ
             min_probability: 指し手の最小確率閾値
             progress_callback: プログレスコールバック(処理済み局面数, 発見済み局面数)
+            initial_hash: 開始局面のZobrist hash(Noneの場合は平手初期局面)
 
         Returns:
             (nodes, edges) のタプル
 
         Raises:
-            ValueError: 初期局面がpreprocessデータに見つからない場合
+            ValueError: 開始局面がpreprocessデータに見つからない場合
         """
         # 1. ルックアップテーブル構築: id → 行インデックス(後勝ち)
         id_list = preprocess_df["id"].to_list()
@@ -64,26 +68,28 @@ class GameTreeBuilder:
                 f"(後勝ちで最後の行を使用)"
             )
 
-        # 2. 初期局面のZobrist hashを取得
-        board = shogi.Board()
-        initial_hash = board.hash()
+        # 2. 開始局面のZobrist hashを決定
+        if initial_hash is None:
+            board = shogi.Board()
+            initial_hash = board.hash()
 
         if initial_hash not in lookup:
             raise ValueError(
-                f"初期局面(hash={initial_hash})がpreprocessデータに見つかりません．"
+                f"開始局面(hash={initial_hash})がpreprocessデータに見つかりません．"
             )
 
-        # moveLabel, moveWinRate を事前にリストとして取得(ランダムアクセス用)
-        move_label_list = preprocess_df["moveLabel"].to_list()
-        move_win_rate_list = preprocess_df[
-            "moveWinRate"
-        ].to_list()
-        result_value_list = preprocess_df[
+        # スカラーカラムはNumPy配列に変換(メモリ効率が良い)
+        # List型カラム(moveLabel, moveWinRate)はPolars Seriesのまま保持し，
+        # BFSで到達した行のみオンデマンドでアクセスする
+        # (40Mレコード × 1496要素 × 4bytes × 2列 ≈ 477GB のため全展開不可)
+        result_value_arr = preprocess_df[
             "resultValue"
-        ].to_list()
-        best_move_win_rate_list = preprocess_df[
+        ].to_numpy()
+        best_move_win_rate_arr = preprocess_df[
             "bestMoveWinRate"
-        ].to_list()
+        ].to_numpy()
+        move_label_series = preprocess_df["moveLabel"]
+        move_win_rate_series = preprocess_df["moveWinRate"]
 
         # 3. BFS
         nodes: list[GameTreeNode] = []
@@ -101,20 +107,26 @@ class GameTreeBuilder:
             current_depth, _, _ = parent_info[current_hash]
             row_idx = lookup[current_hash]
 
-            # ノード情報の取得
-            move_labels = move_label_list[row_idx]
-            move_win_rates = move_win_rate_list[row_idx]
-            result_value = float(result_value_list[row_idx])
+            # スカラー値はNumPy配列から直接取得
+            result_value = float(result_value_arr[row_idx])
             best_move_win_rate = float(
-                best_move_win_rate_list[row_idx]
+                best_move_win_rate_arr[row_idx]
             )
 
-            # min_probability以上の指し手を取得
-            candidate_indices = [
-                i
-                for i in range(len(move_labels))
-                if move_labels[i] >= min_probability
-            ]
+            # List型カラムはオンデマンドでNumPy配列に変換
+            move_labels = np.array(
+                move_label_series[row_idx].to_list(),
+                dtype=np.float32,
+            )
+            move_win_rates = np.array(
+                move_win_rate_series[row_idx].to_list(),
+                dtype=np.float32,
+            )
+
+            # min_probability以上の指し手を取得(NumPyで高速フィルタリング)
+            candidate_indices = np.where(
+                move_labels >= min_probability
+            )[0]
 
             # max_depth に達したら展開しない
             if current_depth >= max_depth:
@@ -142,17 +154,19 @@ class GameTreeBuilder:
             # 各候補手を処理
             edges_before = len(edges)
             for label_idx in candidate_indices:
-                probability = float(move_labels[label_idx])
-                win_rate = float(move_win_rates[label_idx])
+                label_idx_int = int(label_idx)
+                probability = float(move_labels[label_idx_int])
+                win_rate = float(move_win_rates[label_idx_int])
 
                 # ラベルからUSI指し手に変換
                 try:
                     usi_move = make_usi_move_from_label(
-                        board, label_idx
+                        board, label_idx_int
                     )
                 except ValueError:
                     logger.debug(
-                        f"ラベル {label_idx} の変換に失敗(hash={current_hash})"
+                        f"ラベル {label_idx_int} の変換に失敗"
+                        f"(hash={current_hash})"
                     )
                     continue
 
@@ -181,7 +195,7 @@ class GameTreeBuilder:
                         parent_hash=current_hash,
                         child_hash=child_hash,
                         move16=move16_val,
-                        move_label=label_idx,
+                        move_label=label_idx_int,
                         probability=probability,
                         win_rate=win_rate,
                         is_leaf=not child_in_lookup,

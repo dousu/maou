@@ -16,6 +16,7 @@
 | `--output-dir PATH` | Yes | — | ツリーデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される． |
 | `--max-depth INT` | No | `30` | BFSの最大探索深さ．初期局面からの手数上限． |
 | `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
+| `--initial-hash INT` | No | 平手初期局面 | 開始局面のZobrist hash(preprocessデータのID)．指定した局面からBFSを開始する． |
 
 ## Example invocation
 
@@ -31,6 +32,12 @@ maou build-game-tree \
   --output-dir ./data/game-tree/ \
   --max-depth 20 \
   --min-probability 0.005
+
+# 特定の局面からツリーを構築
+maou build-game-tree \
+  --input-path ./data/preprocess/ \
+  --output-dir ./data/game-tree/ \
+  --initial-hash 12345678901234567
 ```
 
 ## Output format

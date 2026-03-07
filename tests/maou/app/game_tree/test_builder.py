@@ -230,7 +230,7 @@ class TestGameTreeBuilder:
         )
 
         builder = GameTreeBuilder()
-        with pytest.raises(ValueError, match="初期局面"):
+        with pytest.raises(ValueError, match="開始局面"):
             builder.build(df)
 
     def test_progress_callback(self) -> None:

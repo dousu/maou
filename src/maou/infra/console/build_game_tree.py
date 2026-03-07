@@ -51,12 +51,19 @@ def _collect_feather_files(p: Path) -> list[Path]:
     default=0.001,
     show_default=True,
 )
+@click.option(
+    "--initial-hash",
+    help="開始局面のZobrist hash(preprocessのID)．省略時は平手初期局面．",
+    type=int,
+    default=None,
+)
 @handle_exception
 def build_game_tree(
     input_path: Path,
     output_dir: Path,
     max_depth: int,
     min_probability: float,
+    initial_hash: int | None,
 ) -> None:
     """preprocessデータからゲームツリーを構築する．"""
     import polars as pl
@@ -104,6 +111,7 @@ def build_game_tree(
             max_depth=max_depth,
             min_probability=min_probability,
             progress_callback=progress_callback,
+            initial_hash=initial_hash,
         )
 
     # 出力
