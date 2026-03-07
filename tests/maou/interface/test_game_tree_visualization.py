@@ -113,50 +113,40 @@ class TestGetMoveTable:
 
 
 class TestUsiToJapanese:
-    """_usi_to_japanese のテスト."""
+    """usi_to_japanese のテスト．"""
 
     def test_normal_move(self) -> None:
         """通常の指し手をjapanese表記に変換する."""
-        result = (
-            GameTreeVisualizationInterface._usi_to_japanese(
-                "7g7f"
-            )
+        result = GameTreeVisualizationInterface.usi_to_japanese(
+            "7g7f"
         )
         assert result == "7六"
 
     def test_normal_move_with_piece(self) -> None:
         """通常の指し手に駒名を含めて変換する."""
-        result = (
-            GameTreeVisualizationInterface._usi_to_japanese(
-                "7g7f", piece_name="歩"
-            )
+        result = GameTreeVisualizationInterface.usi_to_japanese(
+            "7g7f", piece_name="歩"
         )
         assert result == "7六歩"
 
     def test_drop_move(self) -> None:
         """駒打ちをjapanese表記に変換する."""
-        result = (
-            GameTreeVisualizationInterface._usi_to_japanese(
-                "P*5e"
-            )
+        result = GameTreeVisualizationInterface.usi_to_japanese(
+            "P*5e"
         )
         assert result == "5五歩打"
 
     def test_promotion_move(self) -> None:
         """成りの指し手をjapanese表記に変換する."""
-        result = (
-            GameTreeVisualizationInterface._usi_to_japanese(
-                "8h2b+"
-            )
+        result = GameTreeVisualizationInterface.usi_to_japanese(
+            "8h2b+"
         )
         assert result == "2二成"
 
     def test_promotion_move_with_piece(self) -> None:
         """成りの指し手に駒名を含めて変換する."""
-        result = (
-            GameTreeVisualizationInterface._usi_to_japanese(
-                "8h2b+", piece_name="角"
-            )
+        result = GameTreeVisualizationInterface.usi_to_japanese(
+            "8h2b+", piece_name="角"
         )
         assert result == "2二角成"
 
@@ -237,12 +227,12 @@ class TestGetBoardSvg:
 
 
 class TestGetPieceName:
-    """_get_piece_name のテスト．"""
+    """get_piece_name のテスト．"""
 
     def test_pawn(self) -> None:
         """歩の駒名を取得する(move16=7739: 7g7f)．"""
         board = Board()
-        result = GameTreeVisualizationInterface._get_piece_name(
+        result = GameTreeVisualizationInterface.get_piece_name(
             board, 7739
         )
         assert result == "歩"
@@ -250,7 +240,7 @@ class TestGetPieceName:
     def test_silver(self) -> None:
         """銀の駒名を取得する(move16=3362: 3i4h)．"""
         board = Board()
-        result = GameTreeVisualizationInterface._get_piece_name(
+        result = GameTreeVisualizationInterface.get_piece_name(
             board, 3362
         )
         assert result == "銀"
@@ -258,7 +248,7 @@ class TestGetPieceName:
     def test_gold(self) -> None:
         """金の駒名を取得する(move16=6845: 6i7h)．"""
         board = Board()
-        result = GameTreeVisualizationInterface._get_piece_name(
+        result = GameTreeVisualizationInterface.get_piece_name(
             board, 6845
         )
         assert result == "金"
@@ -266,7 +256,7 @@ class TestGetPieceName:
     def test_rook(self) -> None:
         """飛の駒名を取得する(move16=2055: 2h1h)．"""
         board = Board()
-        result = GameTreeVisualizationInterface._get_piece_name(
+        result = GameTreeVisualizationInterface.get_piece_name(
             board, 2055
         )
         assert result == "飛"

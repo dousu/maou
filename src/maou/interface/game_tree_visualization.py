@@ -31,6 +31,9 @@ from maou.domain.visualization.piece_mapping import (
 
 logger = logging.getLogger(__name__)
 
+#: _get_board_for_position のキャッシュ型
+_BoardCache = tuple[int, Board | None]
+
 
 class GameTreeVisualizationInterface:
     """ゲームツリー可視化のインターフェース層．
@@ -87,12 +90,12 @@ class GameTreeVisualizationInterface:
                 "最初のノードを使用します",
                 len(root_nodes),
             )
-        self._root_hash = int(root_nodes["position_hash"][0])
+        self._root_hash = int(
+            root_nodes["position_hash"].item(0)
+        )
         self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
-        self._board_cache: tuple[int, Board | None] | None = (
-            None
-        )
+        self._board_cache: _BoardCache | None = None
 
     def get_cytoscape_elements(
         self,
@@ -128,19 +131,19 @@ class GameTreeVisualizationInterface:
                 child_edge_map[child_hash] = row
 
         # 親ノードの盤面をキャッシュして駒名を取得する
-        board_cache: dict[int, Board | None] = {}
+        local_boards: dict[int, Board | None] = {}
 
         def _get_board(
             pos_hash: int,
         ) -> Board | None:
-            if pos_hash not in board_cache:
+            if pos_hash not in local_boards:
                 path = self._query.get_path_to_root(pos_hash)
-                board_cache[pos_hash] = (
+                local_boards[pos_hash] = (
                     self._reconstruct_board_from_path(path)
                     if path
                     else None
                 )
-            return board_cache[pos_hash]
+            return local_boards[pos_hash]
 
         cy_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
@@ -158,13 +161,13 @@ class GameTreeVisualizationInterface:
                 # 駒打ち(usi[1]=="*")はUSIから駒名を取得するため
                 # _get_piece_nameの呼び出しは不要
                 piece_name = (
-                    self._get_piece_name(parent_board, move16)
+                    self.get_piece_name(parent_board, move16)
                     if parent_board is not None
                     and len(usi) >= 2
                     and usi[1] != "*"
                     else ""
                 )
-                label = self._usi_to_japanese(
+                label = self.usi_to_japanese(
                     usi, piece_name=piece_name
                 )
                 probability = edge_info["probability"]
@@ -311,13 +314,13 @@ class GameTreeVisualizationInterface:
             move16 = row["move16"]
             usi = move_to_usi(move16)
             piece_name = (
-                self._get_piece_name(board, move16)
+                self.get_piece_name(board, move16)
                 if board is not None
                 and len(usi) >= 2
                 and usi[1] != "*"
                 else ""
             )
-            japanese = self._usi_to_japanese(
+            japanese = self.usi_to_japanese(
                 usi, piece_name=piece_name
             )
             prob = f"{row['probability'] * 100:.1f}%"
@@ -364,16 +367,14 @@ class GameTreeVisualizationInterface:
             move16 = row["move16"]
             usi = move_to_usi(move16)
             piece_name = (
-                self._get_piece_name(board, move16)
+                self.get_piece_name(board, move16)
                 if board is not None
                 and len(usi) >= 2
                 and usi[1] != "*"
                 else ""
             )
             moves.append(
-                self._usi_to_japanese(
-                    usi, piece_name=piece_name
-                )
+                self.usi_to_japanese(usi, piece_name=piece_name)
             )
             probs.append(float(row["probability"]))
             win_rates.append(float(row["win_rate"]))
@@ -421,6 +422,11 @@ class GameTreeVisualizationInterface:
         同一局面に対する連続呼び出し(get_move_table → get_analytics_data)で
         重複する盤面復元を回避する．
 
+        Note:
+            スレッドセーフではない．Gradioのマルチスレッド環境では
+            キャッシュミスによる重複計算が発生しうるが，
+            データ破壊は起きない(最悪ケースは性能劣化のみ)．
+
         Args:
             position_hash: 対象ノードのZobrist hash
 
@@ -466,7 +472,7 @@ class GameTreeVisualizationInterface:
         )
 
     @staticmethod
-    def _get_piece_name(board: Board, move16: int) -> str:
+    def get_piece_name(board: Board, move16: int) -> str:
         """盤面とmove16から移動元の駒名を取得する．
 
         呼び出し側で駒打ち(usi[1]=="*")を除外済みのため，
@@ -486,7 +492,7 @@ class GameTreeVisualizationInterface:
         return get_piece_name_ja(piece_id)
 
     @classmethod
-    def _usi_to_japanese(
+    def usi_to_japanese(
         cls,
         usi: str,
         piece_name: str = "",

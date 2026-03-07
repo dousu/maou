@@ -37,6 +37,8 @@ class FileSystem(
                 and (ext is None or ext in f.suffixes)
             ]
         else:
-            raise ValueError(
-                f"Path `{p}` is neither a file nor a directory."
+            msg = (
+                f"パスがファイルでも"
+                f"ディレクトリでもありません: {p}"
             )
+            raise ValueError(msg)
