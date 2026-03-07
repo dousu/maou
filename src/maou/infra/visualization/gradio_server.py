@@ -487,7 +487,7 @@ class GradioVisualizationServer:
                     )
 
         except InterruptedError as e:
-            logger.info(f"🚫 Indexing interrupted: {e}")
+            logger.info("Indexing interrupted: %s", e)
             self.indexing_state.set_failed(
                 "インデックス作成がキャンセルされました"
             )
@@ -864,7 +864,7 @@ class GradioVisualizationServer:
             )
             return gr.update(choices=suggestions)
         except Exception as e:
-            logger.error(f"Directory suggestion failed: {e}")
+            logger.error("Directory suggestion failed: %s", e)
             return gr.update(choices=[])
 
     def _get_file_suggestions_handler(self, prefix: str) -> Any:
@@ -891,7 +891,7 @@ class GradioVisualizationServer:
             )
             return gr.update(choices=suggestions)
         except Exception as e:
-            logger.error(f"File suggestion failed: {e}")
+            logger.error("File suggestion failed: %s", e)
             return gr.update(choices=[])
 
     def _supports_eval_search(self) -> bool:
@@ -1040,7 +1040,7 @@ class GradioVisualizationServer:
             else:  # "File list"
                 file_paths = self._resolve_file_list(files_path)
         except ValueError as e:
-            logger.error(f"Path resolution failed: {e}")
+            logger.error("Path resolution failed: %s", e)
             return (
                 f"❌ **Error:** {e}",
                 False,

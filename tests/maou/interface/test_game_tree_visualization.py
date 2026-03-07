@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import polars as pl
 import pytest
 
@@ -156,6 +158,81 @@ class TestUsiToJapanese:
             )
         )
         assert result == "2二角成"
+
+
+def _build_tree_with_edge() -> tuple[
+    pl.DataFrame, pl.DataFrame
+]:
+    """テスト用のツリー(ルート + 子ノード1つ)．
+
+    指し手は7g7f(move16=7739)．平手初期局面からの合法手．
+    """
+    nodes = _make_nodes(
+        [
+            {
+                "position_hash": 100,
+                "result_value": 0.52,
+                "best_move_win_rate": 0.53,
+                "num_branches": 1,
+                "depth": 0,
+                "is_depth_cutoff": False,
+            },
+            {
+                "position_hash": 200,
+                "result_value": 0.48,
+                "best_move_win_rate": 0.49,
+                "num_branches": 0,
+                "depth": 1,
+                "is_depth_cutoff": False,
+            },
+        ]
+    )
+    edges = _make_edges(
+        [
+            {
+                "parent_hash": 100,
+                "child_hash": 200,
+                "move16": 7739,
+                "move_label": 10,
+                "probability": 0.6,
+                "win_rate": 0.52,
+                "is_leaf": False,
+            },
+        ]
+    )
+    return nodes, edges
+
+
+class TestGetBoardSvg:
+    """get_board_svg のテスト."""
+
+    def test_root_node_returns_svg(self) -> None:
+        """ルートノードの盤面SVGを生成する."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.get_board_svg(100)
+        assert "<svg" in result
+        assert "</svg>" in result
+
+    def test_child_node_returns_svg_with_arrow(self) -> None:
+        """子ノードの盤面SVGを矢印付きで生成する."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.get_board_svg(200)
+        assert "<svg" in result
+        assert "</svg>" in result
+
+    def test_reconstruct_failure_returns_error(self) -> None:
+        """_reconstruct_board_from_pathがNoneを返した場合はエラーHTMLを返す."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        with patch.object(
+            viz,
+            "_reconstruct_board_from_path",
+            return_value=None,
+        ):
+            result = viz.get_board_svg(200)
+        assert "盤面を復元できません" in result
 
 
 class TestGetAnalyticsData:

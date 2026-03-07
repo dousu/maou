@@ -35,6 +35,28 @@ class GameTreeVisualizationInterface:
     GameTreeQueryのデータをUI向けに変換する．
     """
 
+    _ROW_MAP: dict[str, str] = {
+        "a": "一",
+        "b": "二",
+        "c": "三",
+        "d": "四",
+        "e": "五",
+        "f": "六",
+        "g": "七",
+        "h": "八",
+        "i": "九",
+    }
+
+    _DROP_PIECE_MAP: dict[str, str] = {
+        "P": "歩",
+        "L": "香",
+        "N": "桂",
+        "S": "銀",
+        "G": "金",
+        "B": "角",
+        "R": "飛",
+    }
+
     def __init__(
         self,
         nodes_df: pl.DataFrame,
@@ -429,8 +451,9 @@ class GameTreeVisualizationInterface:
         piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
         return get_piece_name_ja(piece_id)
 
-    @staticmethod
+    @classmethod
     def _usi_to_japanese(
+        cls,
         usi: str,
         piece_name: str = "",
     ) -> str:
@@ -438,7 +461,9 @@ class GameTreeVisualizationInterface:
 
         Args:
             usi: USI形式の指し手(例: "7g7f", "P*5e")
-            piece_name: 駒名(例: "歩"，"角")．指定時は表記に含める．
+            piece_name: 駒名(例: "歩"，"角")．通常の指し手で表記に含める．
+                駒打ち(usi[1]=="*")の場合はUSI文字列から駒名を取得するため
+                この引数は使用されない．
 
         Returns:
             日本語表記(例: "7六歩", "5五歩打")
@@ -446,37 +471,16 @@ class GameTreeVisualizationInterface:
         if not usi or len(usi) < 4:
             return usi
 
-        row_map = {
-            "a": "一",
-            "b": "二",
-            "c": "三",
-            "d": "四",
-            "e": "五",
-            "f": "六",
-            "g": "七",
-            "h": "八",
-            "i": "九",
-        }
-
         # 駒打ちの場合
         if usi[1] == "*":
-            piece_map = {
-                "P": "歩",
-                "L": "香",
-                "N": "桂",
-                "S": "銀",
-                "G": "金",
-                "B": "角",
-                "R": "飛",
-            }
-            piece = piece_map.get(usi[0], usi[0])
+            piece = cls._DROP_PIECE_MAP.get(usi[0], usi[0])
             col = usi[2]
-            row = row_map.get(usi[3], usi[3])
+            row = cls._ROW_MAP.get(usi[3], usi[3])
             return f"{col}{row}{piece}打"
 
         # 通常の指し手
         to_col = usi[2]
-        to_row = row_map.get(usi[3], usi[3])
+        to_row = cls._ROW_MAP.get(usi[3], usi[3])
 
         # 成りの場合
         promotion = ""
