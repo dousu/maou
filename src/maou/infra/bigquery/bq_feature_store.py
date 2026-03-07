@@ -1,8 +1,8 @@
 import contextlib
 import datetime
 import logging
-from io import BytesIO
 from collections.abc import Generator
+from io import BytesIO
 
 import numpy as np
 import polars as pl

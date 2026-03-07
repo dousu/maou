@@ -9,13 +9,13 @@ from maou.app.learning.adaptive_batch import (
     AdaptiveBatchConfig,
     AdaptiveBatchController,
 )
-from maou.app.learning.gradient_noise_scale import (
-    GradientNoiseScaleEstimator,
-)
 from maou.app.learning.callbacks import (
     AdaptiveBatchCallback,
     ModelInputs,
     TrainingContext,
+)
+from maou.app.learning.gradient_noise_scale import (
+    GradientNoiseScaleEstimator,
 )
 from maou.app.learning.network import Network
 from maou.app.learning.training_loop import TrainingLoop

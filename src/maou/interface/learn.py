@@ -3,15 +3,15 @@ import gc
 import json
 import logging
 import resource
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any, Literal
 
 import torch
 
-from maou.app.learning.adaptive_batch import (
-    AdaptiveBatchConfig as AdaptiveBatchConfig,  # noqa: F401
+from maou.app.learning.adaptive_batch import (  # noqa: F401
+    AdaptiveBatchConfig as AdaptiveBatchConfig,
 )
 from maou.app.learning.dl import (
     CloudStorage,
@@ -29,8 +29,8 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     HeadlessNetwork,
 )
-from maou.app.learning.policy_targets import (
-    PolicyTargetMode as PolicyTargetMode,  # noqa: F401
+from maou.app.learning.policy_targets import (  # noqa: F401
+    PolicyTargetMode as PolicyTargetMode,
 )
 from maou.app.learning.setup import (
     DeviceSetup,

@@ -1,12 +1,12 @@
 import abc
 import contextlib
 import logging
+from collections.abc import Generator
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Generator
-from contextlib import AbstractContextManager
 
 import numpy as np
 import polars as pl
