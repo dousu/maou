@@ -128,6 +128,12 @@ def visualize(
                 "game-tree requires --input-path to a directory "
                 "containing nodes.feather and edges.feather."
             )
+        if len(input_path) > 1:
+            app_logger.warning(
+                "game-tree では --input-path は1つのみ有効です．"
+                "2番目以降の入力は無視されます: %s",
+                input_path[1:],
+            )
         tree_dir = input_path[0]
         app_logger.info(
             "Game tree data directory: %s", tree_dir
