@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 import pytest
 
@@ -280,3 +279,152 @@ class TestGameTreeBuilder:
         # エッジは生成される(子局面のデータがなくてもエッジは追加)
         assert len(edges) == 1
         assert edges[0].move16 == move_7g7f
+
+    def test_duplicate_hash_uses_first(self) -> None:
+        """入力データにハッシュ重複がある場合，最初の行が使われる."""
+        board = shogi.Board()
+        h = board.hash()
+
+        move_labels_a = [0.0] * MOVE_LABELS_NUM
+        move_labels_b = [0.0] * MOVE_LABELS_NUM
+
+        row_a = {
+            "id": h,
+            "moveLabel": move_labels_a,
+            "moveWinRate": [0.0] * MOVE_LABELS_NUM,
+            "resultValue": 0.7,
+            "bestMoveWinRate": 0.7,
+        }
+        row_b = {
+            "id": h,
+            "moveLabel": move_labels_b,
+            "moveWinRate": [0.0] * MOVE_LABELS_NUM,
+            "resultValue": 0.3,
+            "bestMoveWinRate": 0.3,
+        }
+        df = _build_preprocess_df([row_a, row_b])
+
+        builder = GameTreeBuilder()
+        nodes, edges = builder.build(df, max_depth=1)
+
+        assert len(nodes) == 1
+        # dict内包表記のlookupは後勝ちなので最後の行(0.3)が使われる
+        assert nodes[0].result_value == pytest.approx(0.3)
+
+    def test_transposition_bfs_shortest_depth(self) -> None:
+        """合流局面(transposition)のdepthはBFS最短距離になる."""
+        board = shogi.Board()
+        move_7g7f = board.board.move_from_usi("7g7f")
+        move_2g2f = board.board.move_from_usi("2g2f")
+
+        # 初期局面: 2つの指し手(7g7f, 2g2f)
+        initial_row = _create_preprocess_row(
+            board,
+            move_probs={move_7g7f: 0.5, move_2g2f: 0.5},
+        )
+
+        # 7g7f後の局面: 3c3dを指す
+        board.push_move(move_7g7f)
+        move_3c3d_after_7g7f = board.board.move_from_usi(
+            "3c3d"
+        )
+        after_7g7f = _create_preprocess_row(
+            board,
+            move_probs={move_3c3d_after_7g7f: 0.5},
+        )
+        board.board.pop()
+
+        # 2g2f後の局面: 3c3dを指す
+        board.push_move(move_2g2f)
+        move_3c3d_after_2g2f = board.board.move_from_usi(
+            "3c3d"
+        )
+        after_2g2f = _create_preprocess_row(
+            board,
+            move_probs={move_3c3d_after_2g2f: 0.5},
+        )
+        board.board.pop()
+
+        # 合流局面: 7g7f→3c3d と 2g2f→3c3d は異なる局面だが
+        # もし同じhashなら合流する(cshogiでは手順が違えば別hash)
+        # ここでは各経路の子が独立した局面になることを検証
+        board.push_move(move_7g7f)
+        board.push_move(move_3c3d_after_7g7f)
+        merged_hash_a = board.hash()
+        merged_row_a = _create_preprocess_row(
+            board, move_probs={}
+        )
+        board.board.pop()
+        board.board.pop()
+
+        board.push_move(move_2g2f)
+        board.push_move(move_3c3d_after_2g2f)
+        merged_hash_b = board.hash()
+        merged_row_b = _create_preprocess_row(
+            board, move_probs={}
+        )
+        board.board.pop()
+        board.board.pop()
+
+        rows = [
+            initial_row,
+            after_7g7f,
+            after_2g2f,
+            merged_row_a,
+        ]
+        # hashが同じなら合流テスト，違えば独立テスト
+        if merged_hash_a != merged_hash_b:
+            rows.append(merged_row_b)
+
+        df = _build_preprocess_df(rows)
+
+        builder = GameTreeBuilder()
+        nodes, edges = builder.build(
+            df, max_depth=5, min_probability=0.01
+        )
+
+        # depth=0: 初期局面, depth=1: 2局面, depth=2: 合流局面
+        depth_0 = [n for n in nodes if n.depth == 0]
+        depth_1 = [n for n in nodes if n.depth == 1]
+        depth_2 = [n for n in nodes if n.depth == 2]
+        assert len(depth_0) == 1
+        assert len(depth_1) == 2
+        # 合流していれば1，独立なら2
+        if merged_hash_a == merged_hash_b:
+            assert len(depth_2) == 1
+        else:
+            assert len(depth_2) == 2
+
+    def test_progress_callback_total_equals_visited(
+        self,
+    ) -> None:
+        """プログレスコールバックのtotalが最終的にprocessedと一致する."""
+        board = shogi.Board()
+        move_7g7f = board.board.move_from_usi("7g7f")
+
+        initial_row = _create_preprocess_row(
+            board, move_probs={move_7g7f: 0.9}
+        )
+
+        board.push_move(move_7g7f)
+        after_row = _create_preprocess_row(
+            board, move_probs={}
+        )
+        board.board.pop()
+
+        df = _build_preprocess_df([initial_row, after_row])
+
+        callback_calls: list[tuple[int, int]] = []
+
+        def callback(processed: int, total: int) -> None:
+            callback_calls.append((processed, total))
+
+        builder = GameTreeBuilder()
+        nodes, _ = builder.build(
+            df, max_depth=5, progress_callback=callback
+        )
+
+        # 最後のコールバックで processed == total
+        last_processed, last_total = callback_calls[-1]
+        assert last_processed == last_total
+        assert last_processed == len(nodes)

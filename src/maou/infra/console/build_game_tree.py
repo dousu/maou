@@ -97,7 +97,7 @@ def build_game_tree(
     # ツリー構築
     builder = GameTreeBuilder()
     with click.progressbar(
-        length=len(preprocess_df),
+        length=1,
         label="ツリー構築中",
     ) as bar:
         last_processed = 0
@@ -106,6 +106,8 @@ def build_game_tree(
             processed: int, total: int
         ) -> None:
             nonlocal last_processed
+            # totalは発見済み局面数(BFS中に増加する)
+            bar.length = total
             bar.update(processed - last_processed)
             last_processed = processed
 

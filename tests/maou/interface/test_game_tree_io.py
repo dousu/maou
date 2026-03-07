@@ -108,3 +108,81 @@ class TestGameTreeIO:
             output_dir = Path(tmp) / "a" / "b" / "c"
             io.save([], [], output_dir)
             assert output_dir.exists()
+
+    def test_load_schema_mismatch_nodes(self) -> None:
+        """nodes.feather のカラムが不正な場合 ValueError."""
+        io = GameTreeIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "tree"
+            output_dir.mkdir()
+
+            # 不正なカラムを持つ nodes.feather
+            wrong_df = pl.DataFrame(
+                {"wrong_col": [1, 2, 3]}
+            )
+            wrong_df.write_ipc(
+                output_dir / NODES_FILENAME,
+                compression="lz4",
+            )
+
+            # 正しい edges.feather
+            io.save([], [], output_dir)
+            # edgesは正しいままにする(nodesだけ壊す)
+            wrong_df.write_ipc(
+                output_dir / NODES_FILENAME,
+                compression="lz4",
+            )
+
+            with pytest.raises(ValueError, match="カラム"):
+                io.load(output_dir)
+
+    def test_load_schema_mismatch_edges(self) -> None:
+        """edges.feather のカラムが不正な場合 ValueError."""
+        io = GameTreeIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "tree"
+
+            # まず正しいデータを保存
+            io.save(
+                self._sample_nodes(),
+                self._sample_edges(),
+                output_dir,
+            )
+
+            # edges.feather を不正なカラムで上書き
+            wrong_df = pl.DataFrame(
+                {"bad_column": [1]}
+            )
+            wrong_df.write_ipc(
+                output_dir / EDGES_FILENAME,
+                compression="lz4",
+            )
+
+            with pytest.raises(ValueError, match="カラム"):
+                io.load(output_dir)
+
+    def test_roundtrip_preserves_dtypes(self) -> None:
+        """save → load でデータ型が保持される."""
+        from maou.domain.game_tree.schema import (
+            get_game_tree_edges_schema,
+            get_game_tree_nodes_schema,
+        )
+
+        io = GameTreeIO()
+        nodes = self._sample_nodes()
+        edges = self._sample_edges()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "tree"
+            io.save(nodes, edges, output_dir)
+            nodes_df, edges_df = io.load(output_dir)
+
+            expected_nodes = get_game_tree_nodes_schema()
+            for col, dtype in expected_nodes.items():
+                assert nodes_df[col].dtype == dtype
+
+            expected_edges = get_game_tree_edges_schema()
+            for col, dtype in expected_edges.items():
+                assert edges_df[col].dtype == dtype

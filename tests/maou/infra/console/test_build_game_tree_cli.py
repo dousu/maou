@@ -85,7 +85,7 @@ class TestBuildGameTreeCLI:
             input_path.mkdir()
             output_dir = Path(tmp) / "output"
 
-            result = runner.invoke(
+            runner.invoke(
                 build_game_tree,
                 [
                     "--input-path",
@@ -98,3 +98,103 @@ class TestBuildGameTreeCLI:
             # handle_exception でキャッチされるため exit_code は 0
             # 出力ファイルが生成されていないことで確認
             assert not (output_dir / "nodes.feather").exists()
+
+    def test_nested_directory_collection(self) -> None:
+        """ネストされたディレクトリからも .feather ファイルを収集する."""
+        runner = CliRunner()
+
+        board = shogi.Board()
+        move_labels = [0.0] * MOVE_LABELS_NUM
+        move_win_rates = [0.0] * MOVE_LABELS_NUM
+
+        df = pl.DataFrame(
+            {
+                "id": pl.Series(
+                    [board.hash()], dtype=pl.UInt64
+                ),
+                "moveLabel": [move_labels],
+                "moveWinRate": [move_win_rates],
+                "resultValue": pl.Series(
+                    [0.5], dtype=pl.Float32
+                ),
+                "bestMoveWinRate": pl.Series(
+                    [0.5], dtype=pl.Float32
+                ),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # ネストされたディレクトリに配置
+            nested_dir = (
+                Path(tmp) / "input" / "sub1" / "sub2"
+            )
+            nested_dir.mkdir(parents=True)
+            output_dir = Path(tmp) / "output"
+
+            df.write_ipc(
+                nested_dir / "data.feather",
+                compression="lz4",
+            )
+
+            # 非.featherファイルも配置(無視されるべき)
+            (Path(tmp) / "input" / "readme.txt").write_text(
+                "ignore"
+            )
+
+            result = runner.invoke(
+                build_game_tree,
+                [
+                    "--input-path",
+                    str(Path(tmp) / "input"),
+                    "--output-dir",
+                    str(output_dir),
+                    "--max-depth",
+                    "0",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "完了" in result.output
+            assert (output_dir / "nodes.feather").exists()
+
+    def test_single_file_input(self) -> None:
+        """単一ファイルを直接入力できる."""
+        runner = CliRunner()
+
+        board = shogi.Board()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series(
+                    [board.hash()], dtype=pl.UInt64
+                ),
+                "moveLabel": [[0.0] * MOVE_LABELS_NUM],
+                "moveWinRate": [[0.0] * MOVE_LABELS_NUM],
+                "resultValue": pl.Series(
+                    [0.5], dtype=pl.Float32
+                ),
+                "bestMoveWinRate": pl.Series(
+                    [0.5], dtype=pl.Float32
+                ),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_file = Path(tmp) / "single.feather"
+            output_dir = Path(tmp) / "output"
+
+            df.write_ipc(input_file, compression="lz4")
+
+            result = runner.invoke(
+                build_game_tree,
+                [
+                    "--input-path",
+                    str(input_file),
+                    "--output-dir",
+                    str(output_dir),
+                    "--max-depth",
+                    "0",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "完了" in result.output

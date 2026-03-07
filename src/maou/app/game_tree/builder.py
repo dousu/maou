@@ -40,7 +40,7 @@ class GameTreeBuilder:
                 (カラム: id, moveLabel, moveWinRate, resultValue, bestMoveWinRate)
             max_depth: 最大探索深さ
             min_probability: 指し手の最小確率閾値
-            progress_callback: プログレスコールバック(処理済み局面数, 全局面数)
+            progress_callback: プログレスコールバック(処理済み局面数, 発見済み局面数)
 
         Returns:
             (nodes, edges) のタプル
@@ -54,8 +54,6 @@ class GameTreeBuilder:
             hash_val: idx
             for idx, hash_val in enumerate(id_list)
         }
-        total_positions = len(lookup)
-
         # 2. 初期局面のZobrist hashを取得
         board = shogi.Board()
         initial_hash = board.hash()
@@ -123,9 +121,7 @@ class GameTreeBuilder:
             if current_depth >= max_depth:
                 processed += 1
                 if progress_callback:
-                    progress_callback(
-                        processed, total_positions
-                    )
+                    progress_callback(processed, len(visited))
                 continue
 
             # 盤面を復元
@@ -175,21 +171,18 @@ class GameTreeBuilder:
                     )
                 )
 
-                # 子局面がルックアップテーブルにあり，未訪問または
-                # より短い経路で到達した場合はキューに追加
-                if child_hash in lookup:
-                    if child_hash not in visited:
-                        visited[child_hash] = current_depth + 1
-                        new_path = move_path + [move16]
-                        queue.append((child_hash, new_path))
-                    elif (
-                        current_depth + 1 < visited[child_hash]
-                    ):
-                        # より短い経路が見つかった場合，depthを更新
-                        visited[child_hash] = current_depth + 1
+                # 子局面がルックアップテーブルにあり，未訪問の場合はキューに追加
+                # BFSは等コストのため，最初に到達した経路が最短経路となる
+                if (
+                    child_hash in lookup
+                    and child_hash not in visited
+                ):
+                    visited[child_hash] = current_depth + 1
+                    new_path = move_path + [move16]
+                    queue.append((child_hash, new_path))
 
             processed += 1
             if progress_callback:
-                progress_callback(processed, total_positions)
+                progress_callback(processed, len(visited))
 
         return nodes, edges
