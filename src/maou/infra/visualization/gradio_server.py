@@ -353,6 +353,10 @@ class GradioVisualizationServer:
         # Check if data is available
         self.has_data = len(file_paths) > 0 or use_mock_data
 
+        # ゲームツリー状態(game-tree モード時に使用)
+        self._game_tree_viz: Any = None
+        self._game_tree_root_hash: int = 0
+
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
 
@@ -366,7 +370,20 @@ class GradioVisualizationServer:
         self._index_lock = threading.Lock()
         self._indexing_thread: threading.Thread | None = None
 
-        if self.has_data:
+        if self.has_data and array_type == "game-tree":
+            # ゲームツリー: 直接読み込み(インデックス不要)
+            self.search_index = None  # type: ignore[assignment]
+            self.viz_interface = None  # type: ignore[assignment]
+            try:
+                self._load_game_tree_data(file_paths[0])
+                logger.info(
+                    f"✅ Game tree loaded: root={self._game_tree_root_hash:#018x}"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to load game tree data"
+                )
+        elif self.has_data:
             # Start background indexing instead of blocking
             logger.info(
                 f"🎯 Starting background indexing: "
@@ -989,21 +1006,36 @@ class GradioVisualizationServer:
         dir_path: str,
         files_path: str,
         array_type: str,
-    ) -> tuple[str, bool, str, Any]:
+    ) -> tuple[str, bool, str, Any, Any, Any]:
         """Load new data source and rebuild index in background．
 
         Args:
             source_mode: "Directory" or "File list"
             dir_path: Directory path (used if source_mode == "Directory")
             files_path: Comma-separated files (used if source_mode == "File list")
-            array_type: Data array type (hcpe, preprocessing, stage1, stage2)
+            array_type: Data array type
 
         Returns:
-            tuple of (status_message, rebuild_btn_enabled, mode_badge, timer_update)
+            tuple of (status_message, rebuild_btn_enabled, mode_badge,
+                       timer_update, record_panel_visible, game_tree_panel_visible)
         """
+        is_game_tree = array_type == "game-tree"
+
         # Step 1: Validate and resolve paths
         try:
-            if source_mode == "Directory":
+            if is_game_tree:
+                # game-tree: ディレクトリパスをそのまま使用
+                tree_dir = (
+                    Path(dir_path)
+                    if source_mode == "Directory"
+                    else Path(files_path)
+                )
+                if not tree_dir.is_dir():
+                    raise ValueError(
+                        f"ディレクトリが存在しません: {tree_dir}"
+                    )
+                file_paths = [tree_dir]
+            elif source_mode == "Directory":
                 file_paths = self._resolve_directory(dir_path)
             else:  # "File list"
                 file_paths = self._resolve_file_list(files_path)
@@ -1011,9 +1043,11 @@ class GradioVisualizationServer:
             logger.error(f"Path resolution failed: {e}")
             return (
                 f"❌ **Error:** {e}",
-                False,  # Keep rebuild button disabled
+                False,
                 '<span class="mode-badge-text">⚪ NO DATA</span>',
-                gr.update(),  # タイマー状態は変更なし
+                gr.update(),
+                gr.update(),
+                gr.update(),
             )
 
         # Step 2: Cancel any ongoing indexing
@@ -1022,7 +1056,6 @@ class GradioVisualizationServer:
                 "Cancelling ongoing indexing before loading new data source"
             )
             self.indexing_state.cancel()
-            # Wait for thread to finish (with timeout)
             if (
                 self._indexing_thread is not None
                 and self._indexing_thread.is_alive()
@@ -1039,7 +1072,35 @@ class GradioVisualizationServer:
         self.has_data = True
         self.supports_eval_search = self._supports_eval_search()
 
-        # Step 4: Start new background indexing
+        # Panel visibility
+        record_visible = gr.update(visible=not is_game_tree)
+        tree_visible = gr.update(visible=is_game_tree)
+
+        # game-tree: ツリーデータを直接読み込む(インデックス不要)
+        if is_game_tree:
+            try:
+                self._load_game_tree_data(file_paths[0])
+                return (
+                    f"✅ **Game Tree loaded:** "
+                    f"{self._game_tree_root_hash:#018x}",
+                    False,
+                    '<span class="mode-badge-text">🟢 GAME TREE</span>',
+                    gr.update(),
+                    record_visible,
+                    tree_visible,
+                )
+            except Exception as e:
+                logger.exception("Failed to load game tree")
+                return (
+                    f"❌ **Error:** {e}",
+                    False,
+                    '<span class="mode-badge-text">⚪ NO DATA</span>',
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                )
+
+        # Step 4: Start new background indexing (record types)
         logger.info(
             f"Starting background indexing for {len(file_paths)} files..."
         )
@@ -1059,12 +1120,44 @@ class GradioVisualizationServer:
         # Step 5: Return immediate response (indexing continues in background)
         return (
             f"🟡 **Indexing:** Started for {len(file_paths)} file(s)",
-            False,  # Rebuild button disabled during indexing
+            False,
             '<span class="mode-badge-text">🟡 INDEXING</span>',
-            gr.Timer(
-                value=2.0, active=True
-            ),  # タイマーを開始（公式パターン）
+            gr.Timer(value=2.0, active=True),
+            record_visible,
+            tree_visible,
         )
+
+    def _load_game_tree_data(self, tree_dir: Path) -> None:
+        """ゲームツリーデータを読み込む．
+
+        Args:
+            tree_dir: ツリーデータディレクトリ
+        """
+        from maou.app.game_tree.query import GameTreeQuery
+        from maou.interface.game_tree_io import GameTreeIO
+        from maou.interface.game_tree_visualization import (
+            GameTreeVisualizationInterface,
+        )
+
+        io = GameTreeIO()
+        nodes_df, edges_df = io.load(tree_dir)
+        logger.info(
+            f"Loaded game tree: {len(nodes_df)} nodes, "
+            f"{len(edges_df)} edges"
+        )
+
+        root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
+        if len(root_nodes) == 0:
+            raise ValueError(
+                "ルートノード(depth=0)が見つかりません"
+            )
+        root_hash = int(root_nodes["position_hash"][0])
+
+        query = GameTreeQuery(nodes_df, edges_df)
+        self._game_tree_viz = GameTreeVisualizationInterface(
+            query, root_hash
+        )
+        self._game_tree_root_hash = root_hash
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
         """Rebuild search index from current file paths in background．
@@ -1284,7 +1377,12 @@ class GradioVisualizationServer:
             # Keyboard shortcuts
             gr.HTML(create_keyboard_shortcuts_script())
 
-            with gr.Row():
+            # --- レコードブラウザ UI (hcpe/preprocessing/stage1/stage2) ---
+            is_record_mode = self.array_type != "game-tree"
+            record_browser_panel = gr.Row(
+                visible=is_record_mode
+            )
+            with record_browser_panel:
                 # 左パネル: ナビゲーションと検索コントロール
                 with gr.Column(scale=1):
                     # データソース管理セクション
@@ -1336,6 +1434,7 @@ class GradioVisualizationServer:
                                 "preprocessing",
                                 "stage1",
                                 "stage2",
+                                "game-tree",
                             ],
                             value=self.array_type,
                             label="Array Type",
@@ -1554,6 +1653,77 @@ class GradioVisualizationServer:
                                 value=None,
                                 label="データ分析チャート",
                             )
+
+            # --- ゲームツリー UI (game-tree) ---
+            is_tree_mode = self.array_type == "game-tree"
+            game_tree_panel = gr.Column(visible=is_tree_mode)
+            with game_tree_panel:
+                gt_info = gr.Markdown(
+                    value="ゲームツリーデータを読み込んでください",
+                )
+                with gr.Row():
+                    gt_depth_slider = gr.Slider(
+                        minimum=1,
+                        maximum=10,
+                        value=3,
+                        step=1,
+                        label="表示深さ",
+                        scale=1,
+                    )
+                    gt_min_prob_slider = gr.Slider(
+                        minimum=0.001,
+                        maximum=0.3,
+                        value=0.01,
+                        step=0.001,
+                        label="最小確率",
+                        scale=1,
+                    )
+                    gt_refresh_btn = gr.Button(
+                        "更新",
+                        variant="primary",
+                        scale=0,
+                    )
+                    gt_back_btn = gr.Button(
+                        "ルートに戻る",
+                        variant="secondary",
+                        scale=0,
+                    )
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        gt_tree_html = gr.HTML(
+                            label="ツリー表示",
+                            elem_id="tree-view",
+                        )
+                    with gr.Column(scale=2):
+                        gt_board_html = gr.HTML(
+                            label="盤面",
+                        )
+                        gt_stats_json = gr.JSON(
+                            label="局面統計",
+                        )
+                        gt_move_table = gr.Dataframe(
+                            headers=["指し手", "確率", "勝率"],
+                            label="指し手一覧",
+                            interactive=False,
+                        )
+                        gt_analytics_plot = gr.Plot(
+                            label="分岐分析",
+                        )
+
+                # Hidden state for game tree
+                gt_selected_node = gr.Textbox(
+                    visible=False,
+                    elem_id="selected-node-id",
+                )
+                gt_expand_node = gr.Textbox(
+                    visible=False,
+                    elem_id="expand-node-id",
+                )
+                gt_current_root = gr.Textbox(
+                    value="",
+                    visible=False,
+                    elem_id="current-root",
+                )
 
             # イベントハンドラとState変数
             current_page = gr.State(value=1)
@@ -1821,6 +1991,8 @@ class GradioVisualizationServer:
                     rebuild_btn,
                     mode_badge,
                     status_timer,
+                    record_browser_panel,
+                    game_tree_panel,
                 ],
             )
 
@@ -1929,6 +2101,244 @@ class GradioVisualizationServer:
                     stats_json,
                 ],
             )
+
+            # --- Game Tree Event Handlers ---
+
+            def _gt_update_tree(
+                display_depth: int,
+                min_prob: float,
+                current_root: str,
+            ) -> tuple[
+                str,
+                str,
+                str,
+                dict,
+                list,
+                Any,
+            ]:
+                """ゲームツリーの更新コールバック．"""
+                from maou.infra.visualization.game_tree_server import (
+                    _build_tree_html,
+                    _create_analytics_plot,
+                    _create_empty_plot,
+                )
+
+                viz = self._game_tree_viz
+                if viz is None:
+                    return (
+                        "",
+                        "",
+                        "",
+                        {},
+                        [],
+                        _create_empty_plot(),
+                    )
+
+                rh = (
+                    int(current_root)
+                    if current_root
+                    else self._game_tree_root_hash
+                )
+                import json as _json
+
+                elements = viz.get_cytoscape_elements(
+                    rh, int(display_depth), min_prob
+                )
+                tree_html = _build_tree_html(
+                    _json.dumps(elements, ensure_ascii=False)
+                )
+                board_svg = viz.get_board_svg(rh)
+                stats = viz.get_node_stats(rh)
+                moves = viz.get_move_table(rh)
+                analytics = viz.get_analytics_data(rh)
+                plot = _create_analytics_plot(analytics)
+                if plot is None:
+                    plot = _create_empty_plot()
+
+                info = (
+                    f"Nodes: **{len(viz._query.nodes_df):,}** / "
+                    f"Edges: **{len(viz._query.edges_df):,}** / "
+                    f"Root: `0x{rh:016X}`"
+                )
+                return (
+                    tree_html,
+                    board_svg,
+                    info,
+                    stats,
+                    moves,
+                    plot,
+                )
+
+            def _gt_on_node_selected(
+                node_id: str,
+            ) -> tuple[str, dict, list, Any]:
+                from maou.infra.visualization.game_tree_server import (
+                    _create_analytics_plot,
+                    _create_empty_plot,
+                )
+
+                viz = self._game_tree_viz
+                if not node_id or viz is None:
+                    return ("", {}, [], _create_empty_plot())
+
+                pos_hash = int(node_id)
+                board_svg = viz.get_board_svg(pos_hash)
+                stats = viz.get_node_stats(pos_hash)
+                moves = viz.get_move_table(pos_hash)
+                analytics = viz.get_analytics_data(pos_hash)
+                plot = _create_analytics_plot(analytics)
+                if plot is None:
+                    plot = _create_empty_plot()
+                return board_svg, stats, moves, plot
+
+            def _gt_on_node_expanded(
+                node_id: str,
+                display_depth: int,
+                min_prob: float,
+            ) -> tuple[str, str, str, dict, list, Any]:
+                from maou.infra.visualization.game_tree_server import (
+                    _create_empty_plot,
+                )
+
+                viz = self._game_tree_viz
+                if not node_id or viz is None:
+                    return (
+                        "",
+                        "",
+                        str(self._game_tree_root_hash),
+                        {},
+                        [],
+                        _create_empty_plot(),
+                    )
+                # Reuse _gt_update_tree with new root
+                return _gt_update_tree(
+                    display_depth, min_prob, node_id
+                )
+
+            def _gt_on_back_to_root(
+                display_depth: int,
+                min_prob: float,
+            ) -> tuple[str, str, str, dict, list, Any]:
+                return _gt_update_tree(
+                    display_depth,
+                    min_prob,
+                    str(self._game_tree_root_hash),
+                )
+
+            # Load後にゲームツリーを初期表示
+            load_result.then(
+                fn=lambda depth, prob: (
+                    _gt_update_tree(
+                        depth,
+                        prob,
+                        str(self._game_tree_root_hash),
+                    )
+                    if self._game_tree_viz is not None
+                    else lambda depth, prob: (
+                        "",
+                        "",
+                        "",
+                        {},
+                        [],
+                        None,
+                    )
+                ),
+                inputs=[gt_depth_slider, gt_min_prob_slider],
+                outputs=[
+                    gt_tree_html,
+                    gt_board_html,
+                    gt_info,
+                    gt_stats_json,
+                    gt_move_table,
+                    gt_analytics_plot,
+                ],
+            )
+
+            gt_refresh_btn.click(
+                fn=_gt_update_tree,
+                inputs=[
+                    gt_depth_slider,
+                    gt_min_prob_slider,
+                    gt_current_root,
+                ],
+                outputs=[
+                    gt_tree_html,
+                    gt_board_html,
+                    gt_info,
+                    gt_stats_json,
+                    gt_move_table,
+                    gt_analytics_plot,
+                ],
+            )
+
+            gt_selected_node.change(
+                fn=_gt_on_node_selected,
+                inputs=[gt_selected_node],
+                outputs=[
+                    gt_board_html,
+                    gt_stats_json,
+                    gt_move_table,
+                    gt_analytics_plot,
+                ],
+            )
+
+            gt_expand_node.change(
+                fn=_gt_on_node_expanded,
+                inputs=[
+                    gt_expand_node,
+                    gt_depth_slider,
+                    gt_min_prob_slider,
+                ],
+                outputs=[
+                    gt_tree_html,
+                    gt_board_html,
+                    gt_current_root,
+                    gt_stats_json,
+                    gt_move_table,
+                    gt_analytics_plot,
+                ],
+            )
+
+            gt_back_btn.click(
+                fn=_gt_on_back_to_root,
+                inputs=[
+                    gt_depth_slider,
+                    gt_min_prob_slider,
+                ],
+                outputs=[
+                    gt_tree_html,
+                    gt_board_html,
+                    gt_current_root,
+                    gt_stats_json,
+                    gt_move_table,
+                    gt_analytics_plot,
+                ],
+            )
+
+            # 初回ロード: game-treeモードの場合はツリーを表示
+            if (
+                self.array_type == "game-tree"
+                and self._game_tree_viz is not None
+            ):
+                demo.load(
+                    fn=lambda depth, prob: _gt_update_tree(
+                        depth,
+                        prob,
+                        str(self._game_tree_root_hash),
+                    ),
+                    inputs=[
+                        gt_depth_slider,
+                        gt_min_prob_slider,
+                    ],
+                    outputs=[
+                        gt_tree_html,
+                        gt_board_html,
+                        gt_info,
+                        gt_stats_json,
+                        gt_move_table,
+                        gt_analytics_plot,
+                    ],
+                )
 
         return demo
 
@@ -2961,6 +3371,10 @@ def launch_server(
 ) -> None:
     """Gradioサーバーを起動．
 
+    array_typeに応じて異なるUIを提供する:
+    - hcpe/preprocessing/stage1/stage2: レコードブラウザUI
+    - game-tree: ゲームツリー可視化UI
+
     Args:
         file_paths: データファイルのパスリスト
         array_type: データ型
@@ -2971,6 +3385,25 @@ def launch_server(
         debug: デバッグモード
         use_mock_data: Trueの場合はモックデータを使用
     """
+    # game-tree はゲームツリー専用UIにディスパッチ
+    if array_type == "game-tree":
+        from maou.infra.visualization.game_tree_server import (
+            launch_game_tree_server,
+        )
+
+        tree_path = file_paths[0] if file_paths else None
+        if tree_path is None:
+            raise ValueError(
+                "game-tree requires a tree data directory path"
+            )
+        launch_game_tree_server(
+            tree_path=tree_path,
+            port=port,
+            share=share,
+            server_name=server_name,
+        )
+        return
+
     server = GradioVisualizationServer(
         file_paths=file_paths,
         array_type=array_type,
