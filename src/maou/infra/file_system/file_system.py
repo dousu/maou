@@ -22,6 +22,12 @@ class FileSystem(
         p: Path, ext: str | None = None
     ) -> list[Path]:
         if p.is_file():
+            if ext is not None and ext not in p.suffixes:
+                msg = (
+                    f"ファイルは {ext} 形式で"
+                    f"なければなりません: {p}"
+                )
+                raise ValueError(msg)
             return [p]
         elif p.is_dir():
             return [

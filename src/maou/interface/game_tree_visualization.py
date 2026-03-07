@@ -460,22 +460,19 @@ class GameTreeVisualizationInterface:
     def _get_piece_name(board: Board, move16: int) -> str:
         """盤面とmove16から移動元の駒名を取得する．
 
+        呼び出し側で駒打ち(usi[1]=="*")を除外済みのため，
+        通常の移動のみを処理する．
+
         Args:
             board: 指し手適用前の盤面
-            move16: 16bit指し手
+            move16: 16bit指し手(駒打ち以外)
 
         Returns:
             日本語の駒名(例: "歩"，"角")
         """
         move = board.get_move_from_move16(move16)
-        if move_is_drop(move):
-            hand_piece = move_drop_hand_piece(move)
-            piece_id = Board.cshogi_piece_to_piece_id(
-                hand_piece
-            )
-            return get_piece_name_ja(piece_id)
         from_sq = move_from(move)
-        cshogi_piece = board.board.piece(from_sq)
+        cshogi_piece = board.get_piece_at(from_sq)
         piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
         return get_piece_name_ja(piece_id)
 

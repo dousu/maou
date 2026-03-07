@@ -666,6 +666,17 @@ class Board:
         """
         return self.board.pieces_in_hand
 
+    def get_piece_at(self, square: int) -> int:
+        """指定マスのcshogi駒IDを返す．
+
+        Args:
+            square: マス番号(column-major: col * 9 + row)
+
+        Returns:
+            cshogi駒ID(0-30)．駒がない場合は0．
+        """
+        return self.board.piece(square)
+
     def get_pieces(self) -> list[int]:
         """盤面の駒配列(81要素)を返す．
 
