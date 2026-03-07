@@ -14,8 +14,6 @@ from maou.infra.console.common import (
     handle_exception,
 )
 
-logger = logging.getLogger(__name__)
-
 
 def _is_google_colab() -> bool:
     """Google Colab環境で実行されているか検出する．

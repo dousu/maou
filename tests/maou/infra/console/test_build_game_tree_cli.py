@@ -85,9 +85,6 @@ class TestBuildGameTreeCLI:
             input_path.mkdir()
             output_dir = Path(tmp) / "output"
 
-            # ダミーファイル作成(バリデーション前に入力チェックを通すため)
-            (input_path / "dummy.feather").write_bytes(b"")
-
             result = runner.invoke(
                 build_game_tree,
                 [
