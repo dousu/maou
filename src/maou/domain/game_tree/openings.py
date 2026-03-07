@@ -180,6 +180,13 @@ class OpeningDatabase:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
+        if not isinstance(data, list):
+            logger.warning(
+                "定跡JSON: ルートが配列ではありません: %s",
+                path,
+            )
+            return cls()
+
         custom_entries: list[OpeningEntry] = []
         for i, item in enumerate(data):
             if not isinstance(item, dict):

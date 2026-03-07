@@ -452,6 +452,33 @@ class GameTreeVisualizationInterface:
 
         return result
 
+    def _get_moves_to_position(
+        self, position_hash: int
+    ) -> tuple[list[int], list[str]]:
+        """ルートから指定局面までのパスとUSI指し手列を取得する．
+
+        Args:
+            position_hash: 対象ノードのZobrist hash
+
+        Returns:
+            (パスのハッシュ列, USI指し手列) のタプル．
+            パスが存在しない場合は空リストのタプル．
+        """
+        path = self._query.get_path_to_root(position_hash)
+        if not path:
+            return [], []
+
+        moves: list[str] = []
+        for i in range(len(path) - 1):
+            edge = self._query.get_edge_between(
+                path[i], path[i + 1]
+            )
+            if edge is None:
+                break
+            moves.append(move_to_usi(edge["move16"]))
+
+        return path, moves
+
     def get_opening_name(
         self, position_hash: int
     ) -> OpeningInfo | None:
@@ -466,18 +493,9 @@ class GameTreeVisualizationInterface:
         Returns:
             一致した定跡の情報．見つからない場合None．
         """
-        path = self._query.get_path_to_root(position_hash)
-        if not path or len(path) < 2:
+        path, moves = self._get_moves_to_position(position_hash)
+        if len(path) < 2:
             return None
-
-        moves: list[str] = []
-        for i in range(len(path) - 1):
-            edge = self._query.get_edge_between(
-                path[i], path[i + 1]
-            )
-            if edge is None:
-                break
-            moves.append(move_to_usi(edge["move16"]))
 
         return self._opening_db.find_opening(moves)
 
@@ -493,18 +511,7 @@ class GameTreeVisualizationInterface:
             USI position文字列
             (例: "position startpos moves 7g7f 3c3d")
         """
-        path = self._query.get_path_to_root(position_hash)
-        if not path:
-            return ""
-
-        moves: list[str] = []
-        for i in range(len(path) - 1):
-            edge = self._query.get_edge_between(
-                path[i], path[i + 1]
-            )
-            if edge is None:
-                break
-            moves.append(move_to_usi(edge["move16"]))
+        _, moves = self._get_moves_to_position(position_hash)
 
         if self._initial_sfen is not None:
             base = f"position sfen {self._initial_sfen}"

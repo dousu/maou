@@ -4,10 +4,10 @@
 maou visualize --array-type game-tree から起動される．
 """
 
+import atexit
 import html
 import json
 import logging
-import atexit
 import tempfile
 from functools import lru_cache
 from pathlib import Path

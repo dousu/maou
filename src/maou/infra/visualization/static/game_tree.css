@@ -109,7 +109,7 @@
 }
 
 .breadcrumb-item {
-    color: var(--text-primary, #0070f3);
+    color: var(--link-text, #0070f3);
     cursor: pointer;
     padding: 2px 6px;
     border-radius: 4px;

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 from maou.domain.game_tree.openings import (
@@ -26,9 +25,7 @@ class TestOpeningDatabase:
             ),
         ]
         db = OpeningDatabase(entries)
-        result = db.find_opening(
-            ["7g7f", "3c3d", "6g6f"]
-        )
+        result = db.find_opening(["7g7f", "3c3d", "6g6f"])
         assert result is not None
         assert result.name == "振り飛車模様"
         assert result.category == "振り飛車"
@@ -93,18 +90,14 @@ class TestOpeningDatabase:
         """デフォルト定跡が読み込まれる．"""
         db = OpeningDatabase()
         # 振り飛車模様: 7g7f, 3c3d, 6g6f
-        result = db.find_opening(
-            ["7g7f", "3c3d", "6g6f"]
-        )
+        result = db.find_opening(["7g7f", "3c3d", "6g6f"])
         assert result is not None
         assert result.name == "振り飛車模様"
 
     def test_default_yagura(self) -> None:
         """デフォルト定跡の矢倉を検索する．"""
         db = OpeningDatabase()
-        result = db.find_opening(
-            ["7g7f", "8c8d", "7i6h"]
-        )
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
         assert result is not None
         assert result.name == "矢倉"
 
@@ -121,7 +114,7 @@ class TestOpeningDatabase:
 class TestOpeningDatabaseLoadJson:
     """OpeningDatabase.load_from_json のテスト．"""
 
-    def test_load_custom_json(self) -> None:
+    def test_load_custom_json(self, tmp_path: Path) -> None:
         """JSONファイルからカスタムパターンを読み込む．"""
         data = [
             {
@@ -130,21 +123,17 @@ class TestOpeningDatabaseLoadJson:
                 "category": "テスト",
             }
         ]
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            delete=False,
-        ) as f:
-            json.dump(data, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
 
         db = OpeningDatabase.load_from_json(path)
         result = db.find_opening(["7g7f", "3c3d"])
         assert result is not None
         assert result.name == "カスタム定跡"
 
-    def test_custom_overrides_default(self) -> None:
+    def test_custom_overrides_default(
+        self, tmp_path: Path
+    ) -> None:
         """カスタムパターンがデフォルトより優先される．"""
         data = [
             {
@@ -153,23 +142,17 @@ class TestOpeningDatabaseLoadJson:
                 "category": "テスト",
             }
         ]
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            delete=False,
-        ) as f:
-            json.dump(data, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
 
         db = OpeningDatabase.load_from_json(path)
-        result = db.find_opening(
-            ["7g7f", "3c3d", "6g6f"]
-        )
+        result = db.find_opening(["7g7f", "3c3d", "6g6f"])
         assert result is not None
         assert result.name == "カスタム振り飛車"
 
-    def test_default_patterns_still_available(self) -> None:
+    def test_default_patterns_still_available(
+        self, tmp_path: Path
+    ) -> None:
         """JSONロード後もデフォルトパターンが利用できる．"""
         data = [
             {
@@ -178,20 +161,12 @@ class TestOpeningDatabaseLoadJson:
                 "category": "テスト",
             }
         ]
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            delete=False,
-        ) as f:
-            json.dump(data, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "openings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
 
         db = OpeningDatabase.load_from_json(path)
         # デフォルトの矢倉パターンが残っている
-        result = db.find_opening(
-            ["7g7f", "8c8d", "7i6h"]
-        )
+        result = db.find_opening(["7g7f", "8c8d", "7i6h"])
         assert result is not None
         assert result.name == "矢倉"
 
