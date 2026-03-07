@@ -349,6 +349,18 @@ class GameTreeVisualizationInterface:
         if not usi or len(usi) < 4:
             return usi
 
+        row_map = {
+            "a": "一",
+            "b": "二",
+            "c": "三",
+            "d": "四",
+            "e": "五",
+            "f": "六",
+            "g": "七",
+            "h": "八",
+            "i": "九",
+        }
+
         # 駒打ちの場合
         if usi[1] == "*":
             piece_map = {
@@ -362,32 +374,10 @@ class GameTreeVisualizationInterface:
             }
             piece = piece_map.get(usi[0], usi[0])
             col = usi[2]
-            row_map = {
-                "a": "一",
-                "b": "二",
-                "c": "三",
-                "d": "四",
-                "e": "五",
-                "f": "六",
-                "g": "七",
-                "h": "八",
-                "i": "九",
-            }
             row = row_map.get(usi[3], usi[3])
             return f"{col}{row}{piece}打"
 
         # 通常の指し手
-        row_map = {
-            "a": "一",
-            "b": "二",
-            "c": "三",
-            "d": "四",
-            "e": "五",
-            "f": "六",
-            "g": "七",
-            "h": "八",
-            "i": "九",
-        }
         to_col = usi[2]
         to_row = row_map.get(usi[3], usi[3])
 

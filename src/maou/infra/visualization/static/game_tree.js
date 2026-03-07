@@ -26,9 +26,9 @@
     } else if (resultValue < 0.45) {
       // 後手有利: 赤
       const t = Math.min((0.45 - resultValue) / 0.35, 1.0);
-      const r = Math.round(244 * (1 - t) + 244 * t);
-      const g = Math.round(100 * (1 - t) + 67 * t);
-      const b = Math.round(100 * (1 - t) + 54 * t);
+      const r = Math.round(239 * (1 - t) + 211 * t);
+      const g = Math.round(154 * (1 - t) + 47 * t);
+      const b = Math.round(154 * (1 - t) + 47 * t);
       return `rgb(${r}, ${g}, ${b})`;
     }
     // 互角: グレー

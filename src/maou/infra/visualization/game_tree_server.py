@@ -367,7 +367,15 @@ def launch_game_tree_server(
         str, str, dict[str, str], list[list[str]], go.Figure
     ]:
         """更新ボタンのコールバック．"""
-        rh = int(current_root) if current_root else root_hash
+        try:
+            rh = (
+                int(current_root) if current_root else root_hash
+            )
+        except ValueError:
+            logger.warning(
+                "Invalid current_root: %s", current_root
+            )
+            rh = root_hash
         return _update_tree_view(
             viz, rh, display_depth, min_prob
         )
