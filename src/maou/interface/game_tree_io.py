@@ -1,4 +1,4 @@
-"""ゲームツリーデータのI/O(Rustバックエンド使用)."""
+"""ゲームツリーデータのI/O(Rustバックエンド使用)．"""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
 
 
 class GameTreeIO:
-    """ゲームツリーデータのI/O(Rustバックエンド使用)."""
+    """ゲームツリーデータのI/O(Rustバックエンド使用)．"""
 
     def save(
         self,

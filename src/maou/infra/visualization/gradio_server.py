@@ -956,7 +956,9 @@ class GradioVisualizationServer:
             )
 
         logger.info(
-            f"Found {len(feather_files)} .feather files in {path}"
+            "Found %d .feather files in %s",
+            len(feather_files),
+            path,
         )
         return sorted(feather_files)
 

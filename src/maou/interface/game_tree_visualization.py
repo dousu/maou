@@ -143,9 +143,13 @@ class GameTreeVisualizationInterface:
                 parent_board = _get_board(
                     edge_info["parent_hash"]
                 )
+                # 駒打ち(usi[1]=="*")はUSIから駒名を取得するため
+                # _get_piece_nameの呼び出しは不要
                 piece_name = (
                     self._get_piece_name(parent_board, move16)
                     if parent_board is not None
+                    and len(usi) >= 2
+                    and usi[1] != "*"
                     else ""
                 )
                 label = self._usi_to_japanese(
@@ -303,6 +307,8 @@ class GameTreeVisualizationInterface:
             piece_name = (
                 self._get_piece_name(board, move16)
                 if board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
                 else ""
             )
             japanese = self._usi_to_japanese(
@@ -360,6 +366,8 @@ class GameTreeVisualizationInterface:
             piece_name = (
                 self._get_piece_name(board, move16)
                 if board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
                 else ""
             )
             moves.append(
