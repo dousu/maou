@@ -88,7 +88,6 @@
     const el = document.querySelector(selector);
     if (!el) return;
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   /**
