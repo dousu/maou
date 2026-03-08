@@ -47,11 +47,17 @@ class FileBackedListColumns:
                 f"file_row_counts({len(file_row_counts)}) の"
                 "長さが一致しません．"
             )
+        if not file_paths:
+            raise ValueError(
+                "file_paths が空です．"
+                "少なくとも1つのファイルが必要です．"
+            )
         self._file_paths = file_paths
         # 累積行数の境界: [0, n0, n0+n1, ...]
         self._boundaries: list[int] = [0]
         for n in file_row_counts:
             self._boundaries.append(self._boundaries[-1] + n)
+        self._total_rows = self._boundaries[-1]
         self._cached_file_idx: int = -1
         self._cached_labels: pl.Series | None = None
         self._cached_win_rates: pl.Series | None = None
@@ -78,7 +84,15 @@ class FileBackedListColumns:
 
         Returns:
             (moveLabel, moveWinRate) のNumPy float32配列タプル
+
+        Raises:
+            IndexError: global_row が範囲外の場合
         """
+        if global_row < 0 or global_row >= self._total_rows:
+            raise IndexError(
+                f"global_row={global_row} は範囲外です"
+                f"(総行数={self._total_rows})"
+            )
         file_idx = (
             bisect.bisect_right(self._boundaries, global_row)
             - 1
@@ -122,17 +136,17 @@ class FileBackedListColumns:
             get_rss_mb(),
         )
 
+        # memory_map=False: Python ヒープにロードすることで，
+        # キャッシュ切り替え時の gc.collect() で確実にメモリを解放する．
+        # mmap だと OS のページキャッシュに残り RSS が下がらない場合がある
         df = pl.read_ipc(
             path,
             columns=["moveLabel", "moveWinRate"],
-            memory_map=True,
+            memory_map=False,
         )
         self._cached_labels = df["moveLabel"]
         self._cached_win_rates = df["moveWinRate"]
         self._cached_file_idx = file_idx
-        # NOTE: Series が元データへの参照を保持するため，
-        # del df で実際のメモリ解放は起きないが，
-        # DataFrame のメタデータ分は解放される
         del df
 
         logger.info(

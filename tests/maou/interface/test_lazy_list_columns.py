@@ -120,6 +120,35 @@ class TestFileBackedListColumns:
                 [10],
             )
 
+    def test_empty_file_paths_raises(self) -> None:
+        """空の file_paths で ValueError が発生する．"""
+        with pytest.raises(ValueError, match="file_paths が空"):
+            FileBackedListColumns([], [])
+
+    def test_negative_global_row_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """負の global_row で IndexError が発生する．"""
+        path = tmp_path / "file_0.feather"
+        _create_feather_file(path, [[1.0]], [[0.1]])
+        accessor = FileBackedListColumns([path], [1])
+
+        with pytest.raises(IndexError, match="範囲外"):
+            accessor.get(-1)
+
+    def test_out_of_range_global_row_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """総行数以上の global_row で IndexError が発生する．"""
+        path = tmp_path / "file_0.feather"
+        _create_feather_file(
+            path, [[1.0], [2.0]], [[0.1], [0.2]]
+        )
+        accessor = FileBackedListColumns([path], [2])
+
+        with pytest.raises(IndexError, match="範囲外"):
+            accessor.get(2)
+
     def test_numpy_dtype_is_float32(
         self, tmp_path: Path
     ) -> None:

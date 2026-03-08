@@ -167,10 +167,20 @@ def build_game_tree(
     # 出力
     io = GameTreeIO()
     io.save(nodes, edges, output_dir)
+
+    # initial_sfen が未指定(平手初期局面)の場合は
+    # 実際の SFEN を解決してメタデータに保存する
+    from maou.domain.board.shogi import Board
+
+    resolved_sfen = (
+        initial_sfen
+        if initial_sfen is not None
+        else Board().get_sfen()
+    )
     io.save_metadata(
         output_dir,
         {
-            "initial_sfen": initial_sfen,
+            "initial_sfen": resolved_sfen,
         },
     )
 
