@@ -81,13 +81,17 @@
   }
 
   /**
-   * hidden buttonをクリックしてGradioコールバックを確実に発火する
+   * hidden textboxにinputイベントをディスパッチしてGradio .input()を発火する
+   *
+   * Gradio 6ではプログラマティックなボタン.click()がイベントパイプライン
+   * (jsプリプロセッサ含む)を正しく発火しない．代わりにtextboxの
+   * inputイベントをディスパッチし，.input()ハンドラを発火させる．
    */
-  function clickHiddenButton(elemId) {
-    const wrapper = document.getElementById(elemId);
-    if (!wrapper) return;
-    const btn = wrapper.querySelector("button");
-    if (btn) btn.click();
+  function triggerHiddenInput(selector) {
+    const el = document.querySelector(selector);
+    if (!el) return;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   /**
@@ -228,10 +232,10 @@
           "#selected-node-id textarea, #selected-node-id input",
           nodeId
         );
-        // Svelte に状態更新を反映させてからボタンをクリック
-        requestAnimationFrame(function () {
-          clickHiddenButton("node-select-trigger");
-        });
+        // textbox の input イベントで Gradio .input() コールバックを発火
+        triggerHiddenInput(
+          "#selected-node-id textarea, #selected-node-id input"
+        );
       }, 250);
     });
 
@@ -249,10 +253,10 @@
         "#expand-node-id textarea, #expand-node-id input",
         nodeId
       );
-      // Svelte に状態更新を反映させてからボタンをクリック
-      requestAnimationFrame(function () {
-        clickHiddenButton("node-expand-trigger");
-      });
+      // textbox の input イベントで Gradio .input() コールバックを発火
+      triggerHiddenInput(
+        "#expand-node-id textarea, #expand-node-id input"
+      );
     });
 
     // Fit to view
@@ -274,10 +278,10 @@
       "#expand-node-id textarea, #expand-node-id input",
       hash
     );
-    // Svelte に状態更新を反映させてからボタンをクリック
-    requestAnimationFrame(function () {
-      clickHiddenButton("node-expand-trigger");
-    });
+    // textbox の input イベントで Gradio .input() コールバックを発火
+    triggerHiddenInput(
+      "#expand-node-id textarea, #expand-node-id input"
+    );
   });
 
   /**

@@ -1745,29 +1745,18 @@ class GradioVisualizationServer:
                 gt_selected_node = gr.Textbox(
                     label="",
                     elem_id="selected-node-id",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_classes=["maou-hidden"],
                 )
                 gt_expand_node = gr.Textbox(
                     label="",
                     elem_id="expand-node-id",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_classes=["maou-hidden"],
                 )
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
                     elem_id="current-root",
-                    visible="hidden",  # type: ignore[arg-type]
-                )
-                # Hidden buttons (JSからクリックしてGradioコールバックを発火)
-                gt_select_trigger = gr.Button(
-                    value="",
-                    elem_id="node-select-trigger",
-                    visible="hidden",  # type: ignore[arg-type]
-                )
-                gt_expand_trigger = gr.Button(
-                    value="",
-                    elem_id="node-expand-trigger",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_classes=["maou-hidden"],
                 )
 
             # イベントハンドラとState変数
@@ -2430,8 +2419,8 @@ class GradioVisualizationServer:
                 outputs=_gt_tree_outputs,
             )
 
-            # ノード選択(シングルクリック) - hidden buttonクリックで発火
-            gt_select_trigger.click(
+            # ノード選択(シングルクリック) - textbox inputイベントで発火
+            gt_selected_node.input(
                 fn=_gt_on_node_selected,
                 inputs=[gt_selected_node],
                 outputs=[
@@ -2459,8 +2448,8 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # ノード展開(ダブルクリック/パンくず) - hidden buttonで発火
-            gt_expand_trigger.click(
+            # ノード展開(ダブルクリック/パンくず) - textbox inputで発火
+            gt_expand_node.input(
                 fn=_gt_on_node_expanded,
                 inputs=[
                     gt_expand_node,

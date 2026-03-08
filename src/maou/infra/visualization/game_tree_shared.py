@@ -20,12 +20,13 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # JS constants (Gradio 6 Svelte state bypass)
 # ========================================
 
-# Gradio 6 では setHiddenTextbox() で設定した DOM 値が Svelte の
-# 内部状態に反映されない場合がある．window グローバル変数を
-# 主経路とし，DOM クエリをフォールバックとして使用する．
+# Gradio 6 ではプログラマティックなボタン.click()がイベントパイプライン
+# (jsプリプロセッサ含む)を正しく発火しない．代わりにhidden textboxの
+# .input()イベントをJS側からdispatchEvent(new Event("input"))で発火し，
+# jsパラメータのプリプロセッサでwindowグローバル変数から値を読み取る．
 #
 # NOTE: グローバル変数の読み取り→クリアは非アトミックだが，
-# rAF 遅延(約1フレーム)内で次のクリックが割り込む可能性は
+# dispatchEvent内で次のクリックが割り込む可能性は
 # 実用上無視できるため，競合リスクは意図的に許容している．
 
 JS_READ_SELECTED = (
@@ -39,7 +40,7 @@ JS_READ_SELECTED = (
     "  return (el && el.value) || nodeId;"
     "}"
 )
-"""select_trigger.click の js パラメータ．
+"""selected_node.input の js パラメータ．
 
 window グローバル変数から選択ノード ID を読み取る．
 DOM クエリはフォールバック．
@@ -57,7 +58,7 @@ JS_READ_EXPAND = (
     "  return [(el && el.value) || nodeId, depth, prob];"
     "}"
 )
-"""expand_trigger.click の js パラメータ．
+"""expand_node.input の js パラメータ．
 
 window グローバル変数から展開ノード ID を読み取る．
 DOM クエリはフォールバック．
