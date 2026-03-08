@@ -3,6 +3,7 @@
 将棋データ可視化のためのGradio Webインターフェースを提供する．
 """
 
+import json
 import logging
 import os
 import threading
@@ -41,6 +42,12 @@ from maou.infra.visualization.search_index import (  # noqa: E402
 )
 from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
+)
+from maou.infra.visualization.game_tree_server import (  # noqa: E402
+    _build_breadcrumb_html,
+    _build_tree_html,
+    _create_analytics_plot,
+    _create_empty_plot,
 )
 from maou.interface.visualization import (  # noqa: E402
     BoardPosition,
@@ -2149,13 +2156,6 @@ class GradioVisualizationServer:
                     (tree_html, board_svg, info, stats, moves, plot,
                      breadcrumb_html, sfen_text)
                 """
-                from maou.infra.visualization.game_tree_server import (
-                    _build_breadcrumb_html,
-                    _build_tree_html,
-                    _create_analytics_plot,
-                    _create_empty_plot,
-                )
-
                 viz = self._game_tree_viz
                 if viz is None:
                     return (
@@ -2174,17 +2174,20 @@ class GradioVisualizationServer:
                     if current_root
                     else self._game_tree_root_hash
                 )
-                import json as _json
 
                 elements = viz.get_cytoscape_elements(
                     rh, int(display_depth), min_prob
                 )
                 tree_html = _build_tree_html(
-                    _json.dumps(elements, ensure_ascii=False)
+                    json.dumps(elements, ensure_ascii=False)
                 )
                 board_svg = viz.get_board_svg(rh)
                 stats = viz.get_node_stats(rh)
-                moves = viz.get_move_table(rh)
+                moves_raw = viz.get_move_table(rh)
+                display_moves = [
+                    [r.japanese, r.probability, r.win_rate]
+                    for r in moves_raw
+                ]
                 analytics = viz.get_analytics_data(rh)
                 plot = _create_analytics_plot(analytics)
                 if plot is None:
@@ -2196,9 +2199,10 @@ class GradioVisualizationServer:
                 )
                 sfen_text = viz.export_sfen_path(rh)
 
+                n_nodes, n_edges = viz.get_counts()
                 info = (
-                    f"Nodes: **{len(viz._query.nodes_df):,}** / "
-                    f"Edges: **{len(viz._query.edges_df):,}** / "
+                    f"Nodes: **{n_nodes:,}** / "
+                    f"Edges: **{n_edges:,}** / "
                     f"Root: `0x{rh:016X}`"
                 )
                 return (
@@ -2206,7 +2210,7 @@ class GradioVisualizationServer:
                     board_svg,
                     info,
                     stats,
-                    moves,
+                    display_moves,
                     plot,
                     breadcrumb_html,
                     sfen_text,
@@ -2221,12 +2225,6 @@ class GradioVisualizationServer:
                     (board_svg, stats, moves, plot,
                      breadcrumb_html, sfen_text)
                 """
-                from maou.infra.visualization.game_tree_server import (
-                    _build_breadcrumb_html,
-                    _create_analytics_plot,
-                    _create_empty_plot,
-                )
-
                 viz = self._game_tree_viz
                 if not node_id or viz is None:
                     return (
@@ -2241,7 +2239,11 @@ class GradioVisualizationServer:
                 pos_hash = int(node_id)
                 board_svg = viz.get_board_svg(pos_hash)
                 stats = viz.get_node_stats(pos_hash)
-                moves = viz.get_move_table(pos_hash)
+                moves_raw = viz.get_move_table(pos_hash)
+                display_moves = [
+                    [r.japanese, r.probability, r.win_rate]
+                    for r in moves_raw
+                ]
                 analytics = viz.get_analytics_data(pos_hash)
                 plot = _create_analytics_plot(analytics)
                 if plot is None:
@@ -2256,7 +2258,7 @@ class GradioVisualizationServer:
                 return (
                     board_svg,
                     stats,
-                    moves,
+                    display_moves,
                     plot,
                     breadcrumb_html,
                     sfen_text,
@@ -2275,10 +2277,6 @@ class GradioVisualizationServer:
                     (tree_html, board_svg, current_root, info,
                      stats, moves, plot, breadcrumb_html, sfen_text)
                 """
-                from maou.infra.visualization.game_tree_server import (
-                    _create_empty_plot,
-                )
-
                 viz = self._game_tree_viz
                 if not node_id or viz is None:
                     return (
@@ -2463,14 +2461,7 @@ class GradioVisualizationServer:
                         gt_depth_slider,
                         gt_min_prob_slider,
                     ],
-                    outputs=[
-                        gt_tree_html,
-                        gt_board_html,
-                        gt_info,
-                        gt_stats_json,
-                        gt_move_table,
-                        gt_analytics_plot,
-                    ],
+                    outputs=_gt_tree_outputs,
                 )
 
         return demo
