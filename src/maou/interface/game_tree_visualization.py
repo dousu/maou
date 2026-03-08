@@ -341,7 +341,7 @@ class GameTreeVisualizationInterface:
         Returns:
             SFEN文字列．平手初期局面の場合は "startpos"
         """
-        if self._initial_sfen is not None:
+        if self._initial_sfen:
             return self._initial_sfen
         return "startpos"
 
@@ -605,8 +605,8 @@ class GameTreeVisualizationInterface:
 
             writer.writerow(
                 [
-                    f"0x{row['parent_hash']:016X}",
-                    f"0x{child_hash:016X}",
+                    str(row["parent_hash"]),
+                    str(child_hash),
                     move_ja,
                     f"{row['probability']:.4f}",
                     f"{row['win_rate']:.4f}",

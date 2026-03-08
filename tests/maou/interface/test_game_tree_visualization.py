@@ -87,7 +87,7 @@ class TestGetNodeStats:
         nodes, edges = _build_simple_tree()
         viz = GameTreeVisualizationInterface(nodes, edges)
         stats = viz.get_node_stats(100)
-        assert "局面ハッシュ" in stats
+        assert "Zobrist Hash" in stats
         assert "勝率" in stats
         assert "最善手勝率" in stats
         assert "深さ" in stats
@@ -384,6 +384,36 @@ class TestExportSubtreeCsv:
         )
         lines = csv_content.strip().split("\n")
         assert len(lines) == 1  # ヘッダーのみ
+
+
+class TestGetInitialSfen:
+    """get_initial_sfen のテスト."""
+
+    def test_default_returns_startpos(self) -> None:
+        """initial_sfen=None の場合 "startpos" を返す."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        assert viz.get_initial_sfen() == "startpos"
+
+    def test_custom_sfen(self) -> None:
+        """initial_sfen が指定されている場合そのまま返す."""
+        nodes, edges = _build_simple_tree()
+        custom_sfen = (
+            "lnsgkgsnl/1r5b1/ppppppppp/"
+            "9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+        )
+        viz = GameTreeVisualizationInterface(
+            nodes, edges, initial_sfen=custom_sfen
+        )
+        assert viz.get_initial_sfen() == custom_sfen
+
+    def test_empty_string_returns_startpos(self) -> None:
+        """initial_sfen が空文字列の場合 "startpos" を返す."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(
+            nodes, edges, initial_sfen=""
+        )
+        assert viz.get_initial_sfen() == "startpos"
 
 
 class TestNodeStatsWithOpening:
