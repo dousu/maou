@@ -146,7 +146,9 @@ _DOWN_RIGHT_RANGE_SUMS = {
 }
 
 
-class IllegalMove(Exception):
+class IllegalMove(ValueError):
+    """不正な指し手のラベル変換時に発生する例外．"""
+
     pass
 
 
