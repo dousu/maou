@@ -156,7 +156,6 @@ class FileBackedListColumns:
         )
         self._cached_labels = df["moveLabel"]
         self._cached_win_rates = df["moveWinRate"]
-        self._cached_file_idx = file_idx
         del df
 
         expected_rows = (
@@ -165,12 +164,17 @@ class FileBackedListColumns:
         )
         actual_rows = len(self._cached_labels)
         if actual_rows != expected_rows:
+            # バリデーション失敗時はキャッシュをクリアして整合性を保つ
+            self._cached_labels = None
+            self._cached_win_rates = None
             raise ValueError(
                 f"ファイル {path.name} の List カラム行数"
                 f"({actual_rows}) が"
                 f"スカラー読み込み時の行数"
                 f"({expected_rows}) と一致しません"
             )
+
+        self._cached_file_idx = file_idx
 
         logger.info(
             "List型カラム読み込み完了: %s 行, RSS=%d MB",
