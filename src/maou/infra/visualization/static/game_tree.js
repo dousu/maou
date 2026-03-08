@@ -56,7 +56,7 @@
   }
 
   /**
-   * hidden textboxの値を設定してGradioのchangeイベントを発火する
+   * hidden textboxの値を設定する(イベントディスパッチなし)
    */
   function setHiddenTextbox(selector, value) {
     const hiddenInput = document.querySelector(selector);
@@ -72,12 +72,9 @@
     } else {
       hiddenInput.value = value;
     }
-    // nativeSetter で値を設定すると React/Svelte の内部状態が更新される．
-    // input/change イベントは Gradio 6 では Python コールバックを発火しないが，
-    // Svelte の内部状態同期のためにディスパッチしている．
-    // 実際の Python コールバック発火は clickHiddenButton() で行う．
-    hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+    // nativeSetter で値を設定すると Svelte の内部状態が更新される．
+    // イベントディスパッチは triggerHiddenInput() に一元化し，
+    // ここでは値の設定のみを行う．
   }
 
   /**
