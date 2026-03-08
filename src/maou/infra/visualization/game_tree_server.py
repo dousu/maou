@@ -24,6 +24,21 @@ from maou.interface.game_tree_visualization import (
 
 logger = logging.getLogger(__name__)
 
+# on_node_expanded / on_move_selected / on_back_to_root 共通の返却型
+# (tree_html, board_svg, current_root, stats, moves, child_hashes,
+#  plot, breadcrumb_html, sfen_text)
+_ExpandResult = tuple[
+    str,
+    str,
+    str,
+    dict[str, str],
+    list[list[str]],
+    list[str],
+    go.Figure,
+    str,
+    str,
+]
+
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -324,7 +339,13 @@ def _get_detail_outputs(
     viz: GameTreeVisualizationInterface,
     pos_hash: int,
 ) -> tuple[
-    str, dict[str, str], list[list[str]], go.Figure, str, str
+    str,
+    dict[str, str],
+    list[list[str]],
+    list[str],
+    go.Figure,
+    str,
+    str,
 ]:
     """ノード詳細パネルの出力を生成する．
 
@@ -333,11 +354,12 @@ def _get_detail_outputs(
         pos_hash: 対象ノードのposition_hash
 
     Returns:
-        (board_svg, stats, moves, plot, breadcrumb_html, sfen_text)
+        (board_svg, stats, display_moves, child_hashes,
+         plot, breadcrumb_html, sfen_text)
     """
     board_svg = viz.get_board_svg(pos_hash)
     stats = viz.get_node_stats(pos_hash)
-    moves = viz.get_move_table(pos_hash)
+    moves_with_hash = viz.get_move_table(pos_hash)
     analytics = viz.get_analytics_data(pos_hash)
     plot = _create_analytics_plot(analytics)
     if plot is None:
@@ -348,10 +370,18 @@ def _get_detail_outputs(
 
     sfen_text = viz.export_sfen_path(pos_hash)
 
+    # 表示用データ(3列)とchild_hashリストを分離
+    display_moves = [
+        [r.japanese, r.probability, r.win_rate]
+        for r in moves_with_hash
+    ]
+    child_hashes = [r.child_hash for r in moves_with_hash]
+
     return (
         board_svg,
         stats,
-        moves,
+        display_moves,
+        child_hashes,
         plot,
         breadcrumb_html,
         sfen_text,
@@ -368,6 +398,7 @@ def _update_tree_view(
     str,
     dict[str, str],
     list[list[str]],
+    list[str],
     go.Figure,
     str,
     str,
@@ -381,8 +412,8 @@ def _update_tree_view(
         min_prob: エッジの最小確率閾値
 
     Returns:
-        (tree_html, board_svg, stats, moves, plot,
-         breadcrumb_html, sfen_text)
+        (tree_html, board_svg, stats, display_moves, child_hashes,
+         plot, breadcrumb_html, sfen_text)
     """
     elements = viz.get_cytoscape_elements(
         root_hash, int(display_depth), min_prob
@@ -393,7 +424,8 @@ def _update_tree_view(
     (
         board_svg,
         stats,
-        moves,
+        display_moves,
+        child_hashes,
         plot,
         breadcrumb_html,
         sfen_text,
@@ -403,7 +435,8 @@ def _update_tree_view(
         tree_html,
         board_svg,
         stats,
-        moves,
+        display_moves,
+        child_hashes,
         plot,
         breadcrumb_html,
         sfen_text,
@@ -457,6 +490,7 @@ def launch_game_tree_server(
         str,
         dict[str, str],
         list[list[str]],
+        list[str],
         go.Figure,
         str,
         str,
@@ -475,6 +509,7 @@ def launch_game_tree_server(
         str,
         dict[str, str],
         list[list[str]],
+        list[str],
         go.Figure,
         str,
         str,
@@ -501,6 +536,7 @@ def launch_game_tree_server(
         str,
         dict[str, str],
         list[list[str]],
+        list[str],
         go.Figure,
         str,
         str,
@@ -511,6 +547,7 @@ def launch_game_tree_server(
                 "",
                 {},
                 [],
+                [],
                 _create_empty_plot(),
                 "",
                 "",
@@ -522,6 +559,7 @@ def launch_game_tree_server(
             return (
                 "",
                 {},
+                [],
                 [],
                 _create_empty_plot(),
                 "",
@@ -529,51 +567,50 @@ def launch_game_tree_server(
             )
         return _get_detail_outputs(viz, pos_hash)
 
-    def on_node_expanded(
-        node_id: str,
+    def on_move_selected(
+        current_child_hashes: list[str],
         display_depth: int,
         min_prob: float,
-    ) -> tuple[
-        str,
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        go.Figure,
-        str,
-        str,
-    ]:
-        """ノードダブルクリック(サブツリー展開)のコールバック．"""
-        if not node_id:
-            return (
-                "",
-                "",
-                str(viz.get_root_hash()),
-                {},
-                [],
-                _create_empty_plot(),
-                "",
-                "",
-            )
+        evt: gr.SelectData,
+    ) -> _ExpandResult:
+        """指し手一覧の行選択時のコールバック．
+
+        Args:
+            current_child_hashes: 現在表示中の局面の子ノードhashリスト(gr.State)
+            display_depth: 表示深さ
+            min_prob: エッジの最小確率閾値
+            evt: Gradio の SelectData イベント
+        """
+        _empty: _ExpandResult = (
+            "",
+            "",
+            "",
+            {},
+            [],
+            [],
+            _create_empty_plot(),
+            "",
+            "",
+        )
+        if not current_child_hashes or evt.index is None:
+            return _empty
+        row_idx = (
+            evt.index[0]
+            if isinstance(evt.index, (list, tuple))
+            else evt.index
+        )
+        if row_idx < 0 or row_idx >= len(current_child_hashes):
+            return _empty
         try:
-            pos_hash = int(node_id)
-        except ValueError:
-            logger.warning("Invalid node_id: %s", node_id)
-            return (
-                "",
-                "",
-                str(viz.get_root_hash()),
-                {},
-                [],
-                _create_empty_plot(),
-                "",
-                "",
-            )
+            pos_hash = int(current_child_hashes[row_idx])
+        except (ValueError, IndexError):
+            return _empty
         (
             tree_html,
             board_svg,
             stats,
-            moves,
+            display_moves,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,
@@ -585,7 +622,65 @@ def launch_game_tree_server(
             board_svg,
             str(pos_hash),
             stats,
-            moves,
+            display_moves,
+            child_hashes,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        )
+
+    def on_node_expanded(
+        node_id: str,
+        display_depth: int,
+        min_prob: float,
+    ) -> _ExpandResult:
+        """ノードダブルクリック(サブツリー展開)のコールバック．"""
+        if not node_id:
+            return (
+                "",
+                "",
+                str(viz.get_root_hash()),
+                {},
+                [],
+                [],
+                _create_empty_plot(),
+                "",
+                "",
+            )
+        try:
+            pos_hash = int(node_id)
+        except ValueError:
+            logger.warning("Invalid node_id: %s", node_id)
+            return (
+                "",
+                "",
+                str(viz.get_root_hash()),
+                {},
+                [],
+                [],
+                _create_empty_plot(),
+                "",
+                "",
+            )
+        (
+            tree_html,
+            board_svg,
+            stats,
+            display_moves,
+            child_hashes,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        ) = _update_tree_view(
+            viz, pos_hash, display_depth, min_prob
+        )
+        return (
+            tree_html,
+            board_svg,
+            str(pos_hash),
+            stats,
+            display_moves,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,
@@ -594,23 +689,15 @@ def launch_game_tree_server(
     def on_back_to_root(
         display_depth: int,
         min_prob: float,
-    ) -> tuple[
-        str,
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        go.Figure,
-        str,
-        str,
-    ]:
+    ) -> _ExpandResult:
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
         (
             tree_html,
             board_svg,
             stats,
-            moves,
+            display_moves,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,
@@ -620,7 +707,8 @@ def launch_game_tree_server(
             board_svg,
             str(rh),
             stats,
-            moves,
+            display_moves,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,
@@ -755,6 +843,15 @@ def launch_game_tree_server(
             visible=False,
             elem_id="current-root",
         )
+        # Hidden buttons (JSからクリックしてGradioコールバックを発火)
+        select_trigger = gr.Button(
+            visible=False, elem_id="node-select-trigger"
+        )
+        expand_trigger = gr.Button(
+            visible=False, elem_id="node-expand-trigger"
+        )
+        # 指し手一覧の行選択用child_hashリスト
+        child_hashes_state = gr.State([])
 
         # --- イベントハンドリング ---
 
@@ -764,6 +861,7 @@ def launch_game_tree_server(
             board_html,
             stats_json,
             move_table,
+            child_hashes_state,
             analytics_plot,
             breadcrumb_html,
             sfen_text,
@@ -786,33 +884,49 @@ def launch_game_tree_server(
             outputs=_load_outputs,
         )
 
-        # ノード選択(シングルクリック)
-        selected_node.change(
-            fn=on_node_selected,
-            inputs=[selected_node],
-            outputs=[
-                board_html,
-                stats_json,
-                move_table,
-                analytics_plot,
-                breadcrumb_html,
-                sfen_text,
-            ],
-        )
+        # ノード選択(シングルクリック) - hidden buttonクリックで発火
+        _select_outputs = [
+            board_html,
+            stats_json,
+            move_table,
+            child_hashes_state,
+            analytics_plot,
+            breadcrumb_html,
+            sfen_text,
+        ]
 
-        # ノード展開(ダブルクリック)
+        # ノード展開 / 指し手選択共通の出力(ツリー + 詳細パネル)
         _expand_outputs = [
             tree_html,
             board_html,
             current_root_state,
             stats_json,
             move_table,
+            child_hashes_state,
             analytics_plot,
             breadcrumb_html,
             sfen_text,
         ]
 
-        expand_node.change(
+        select_trigger.click(
+            fn=on_node_selected,
+            inputs=[selected_node],
+            outputs=_select_outputs,
+        )
+
+        # 指し手一覧の行選択
+        move_table.select(
+            fn=on_move_selected,
+            inputs=[
+                child_hashes_state,
+                depth_slider,
+                min_prob_slider,
+            ],
+            outputs=_expand_outputs,
+        )
+
+        # ノード展開(ダブルクリック) - hidden buttonクリックで発火
+        expand_trigger.click(
             fn=on_node_expanded,
             inputs=[
                 expand_node,

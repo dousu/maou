@@ -10,6 +10,7 @@
   "use strict";
 
   let cy = null;
+  let tapTimer = null;
 
   /**
    * 勝率(0.0-1.0)からノードの色を計算する
@@ -71,8 +72,22 @@
     } else {
       hiddenInput.value = value;
     }
+    // nativeSetter で値を設定すると React/Svelte の内部状態が更新される．
+    // input/change イベントは Gradio 6 では Python コールバックを発火しないが，
+    // Svelte の内部状態同期のためにディスパッチしている．
+    // 実際の Python コールバック発火は clickHiddenButton() で行う．
     hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
     hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  /**
+   * hidden buttonをクリックしてGradioコールバックを確実に発火する
+   */
+  function clickHiddenButton(elemId) {
+    const wrapper = document.getElementById(elemId);
+    if (!wrapper) return;
+    const btn = wrapper.querySelector("button");
+    if (btn) btn.click();
   }
 
   /**
@@ -102,7 +117,11 @@
       return;
     }
 
-    // Destroy previous instance
+    // Destroy previous instance and cancel pending tap timer
+    if (tapTimer) {
+      clearTimeout(tapTimer);
+      tapTimer = null;
+    }
     if (cy) {
       cy.destroy();
       cy = null;
@@ -197,21 +216,33 @@
     });
 
     // Node click -> update hidden textbox for detail panel
+    // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
-      setHiddenTextbox(
-        "#selected-node-id textarea, #selected-node-id input",
-        nodeId
-      );
+      if (tapTimer) clearTimeout(tapTimer);
+      tapTimer = setTimeout(function () {
+        tapTimer = null;
+        setHiddenTextbox(
+          "#selected-node-id textarea, #selected-node-id input",
+          nodeId
+        );
+        clickHiddenButton("node-select-trigger");
+      }, 250);
     });
 
     // Double click -> expand subtree
     cy.on("dbltap", "node", function (evt) {
+      // tap タイマーをキャンセルして冗長な select を防止
+      if (tapTimer) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+      }
       const nodeId = evt.target.id();
       setHiddenTextbox(
         "#expand-node-id textarea, #expand-node-id input",
         nodeId
       );
+      clickHiddenButton("node-expand-trigger");
     });
 
     // Fit to view
@@ -222,19 +253,16 @@
    * パンくずリスト要素のクリックハンドラ(イベント委譲)
    */
   document.addEventListener("click", function (e) {
-    var item = e.target.closest(".breadcrumb-item[data-hash]");
+    const item = e.target.closest(".breadcrumb-item[data-hash]");
     if (!item) return;
-    var hash = item.getAttribute("data-hash");
+    const hash = item.getAttribute("data-hash");
     if (!hash) return;
-    // パンくずクリック → ノード選択 + ツリー展開
-    setHiddenTextbox(
-      "#selected-node-id textarea, #selected-node-id input",
-      hash
-    );
+    // パンくずクリック → ツリー展開(expand は select の出力を包含する)
     setHiddenTextbox(
       "#expand-node-id textarea, #expand-node-id input",
       hash
     );
+    clickHiddenButton("node-expand-trigger");
   });
 
   /**
