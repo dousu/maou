@@ -1715,6 +1715,10 @@ class GradioVisualizationServer:
                         gt_stats_json = gr.JSON(
                             label="局面統計",
                         )
+                        # NOTE: 埋め込みモードでは指し手テーブルの行クリック
+                        # による子局面遷移(on_move_selected)は意図的に省略．
+                        # スタンドアロンモード(game_tree_server.py)では
+                        # child_hashes_state を使って実装済み．
                         gt_move_table = gr.Dataframe(
                             headers=["指し手", "確率", "勝率"],
                             label="指し手一覧",
@@ -2154,6 +2158,12 @@ class GradioVisualizationServer:
             ]:
                 """ゲームツリーの更新コールバック．
 
+                NOTE: game_tree_server.py の _update_tree_view +
+                _get_detail_outputs と類似のロジックだが，埋め込みモード
+                固有の出力構造(child_hashes 省略，info 文字列の形式差異)
+                があるため個別に実装している．HTML/Plot 生成は
+                game_tree_shared.py に共通化済み．
+
                 Returns:
                     (tree_html, board_svg, info, stats, moves, plot,
                      breadcrumb_html, sfen_text)
@@ -2171,11 +2181,18 @@ class GradioVisualizationServer:
                         "",
                     )
 
-                rh = (
-                    int(current_root)
-                    if current_root
-                    else self._game_tree_root_hash
-                )
+                try:
+                    rh = (
+                        int(current_root)
+                        if current_root
+                        else self._game_tree_root_hash
+                    )
+                except ValueError:
+                    logger.warning(
+                        "Invalid current_root: %s",
+                        current_root,
+                    )
+                    rh = self._game_tree_root_hash
 
                 elements = viz.get_cytoscape_elements(
                     rh, int(display_depth), min_prob
@@ -2238,7 +2255,20 @@ class GradioVisualizationServer:
                         "",
                     )
 
-                pos_hash = int(node_id)
+                try:
+                    pos_hash = int(node_id)
+                except ValueError:
+                    logger.warning(
+                        "Invalid node_id: %s", node_id
+                    )
+                    return (
+                        "",
+                        {},
+                        [],
+                        create_empty_plot(),
+                        "",
+                        "",
+                    )
                 board_svg = viz.get_board_svg(pos_hash)
                 stats = viz.get_node_stats(pos_hash)
                 moves_raw = viz.get_move_table(pos_hash)
