@@ -1750,6 +1750,9 @@ class GradioVisualizationServer:
                     elem_id="expand-node-id",
                     elem_classes=["maou-hidden"],
                 )
+                # 埋め込みモードではデータがファイルアップロード後に
+                # 非同期で読み込まれるため，UI構築時にはルートハッシュが
+                # 未確定．初回の load_result.then で正しい値を設定する．
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
@@ -2383,16 +2386,16 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # Load後にゲームツリーを初期表示
-            load_result.then(
-                fn=lambda depth, prob: (
-                    _gt_update_tree(
-                        depth,
-                        prob,
-                        str(self._game_tree_root_hash),
-                    )
-                    if self._game_tree_viz is not None
-                    else (
+            # Load後にゲームツリーを初期表示し，gt_current_root にも
+            # ルートハッシュを反映する．
+            def _gt_initial_load(
+                depth: int, prob: float
+            ) -> tuple[
+                str, str, str, dict, list, Any, str, str, str
+            ]:
+                root_str = str(self._game_tree_root_hash)
+                if self._game_tree_viz is None:
+                    return (
                         "",
                         "",
                         "",
@@ -2401,10 +2404,17 @@ class GradioVisualizationServer:
                         create_empty_plot(),
                         "",
                         "",
+                        "",
                     )
-                ),
+                return (
+                    *_gt_update_tree(depth, prob, root_str),
+                    root_str,
+                )
+
+            load_result.then(
+                fn=_gt_initial_load,
                 inputs=[gt_depth_slider, gt_min_prob_slider],
-                outputs=_gt_tree_outputs,
+                outputs=[*_gt_tree_outputs, gt_current_root],
             )
 
             gt_refresh_btn.click(
