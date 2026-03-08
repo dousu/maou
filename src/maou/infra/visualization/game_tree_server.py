@@ -17,10 +17,12 @@ import plotly.graph_objects as go
 
 from maou.infra.visualization.game_tree_shared import (
     ELEM_ID_CURRENT_ROOT,
-    ELEM_ID_EXPAND_NODE,
-    ELEM_ID_SELECTED_NODE,
-    JS_READ_EXPAND,
-    JS_READ_SELECTED,
+    ELEM_ID_DEPTH_SLIDER,
+    ELEM_ID_EXPAND_BRIDGE,
+    ELEM_ID_MIN_PROB_SLIDER,
+    ELEM_ID_SELECT_BRIDGE,
+    JS_ON_LOAD_EXPAND,
+    JS_ON_LOAD_SELECT,
     build_breadcrumb_html,
     build_tree_html,
     create_analytics_plot,
@@ -315,6 +317,11 @@ def launch_game_tree_server(
 
     # --- コールバック定義 ---
 
+    # server_functions → .change() コールバック間のデータ受け渡し用
+    # NOTE: Gradio はセッション内のリクエストを逐次処理するため，
+    # 同一セッション内での競合は発生しない．
+    _pending: dict[str, Any] = {}
+
     def on_load(
         display_depth: int,
         min_prob: float,
@@ -363,9 +370,53 @@ def launch_game_tree_server(
             viz, rh, display_depth, min_prob
         )
 
-    def on_node_selected(
-        node_id: str,
-    ) -> tuple[
+    # --- server_functions: JS から直接呼び出される Python 関数 ---
+    # Gradio 6 では JS DOM 操作で Textbox の値を変更しても
+    # .input() / .change() が発火しない(Issue #3471, #7954)．
+    # gr.HTML の server_functions でデータを処理し，
+    # trigger("change") で .change() コールバックを発火する．
+
+    def handle_select(node_id_str: str) -> bool:
+        """ノード選択の server_function．
+
+        JS から呼ばれ，結果を _pending に格納する．
+        """
+        if not node_id_str:
+            return False
+        try:
+            pos_hash = int(node_id_str)
+        except ValueError:
+            logger.warning("Invalid node_id: %s", node_id_str)
+            return False
+        _pending["select"] = _get_detail_outputs(viz, pos_hash)
+        return True
+
+    def handle_expand(
+        node_id_str: str,
+        display_depth: float = 3,
+        min_prob: float = 0.01,
+    ) -> bool:
+        """ノード展開の server_function．
+
+        JS から呼ばれ，結果を _pending に格納する．
+        depth / prob は JS 側がスライダー DOM から読み取って渡す．
+        """
+        if not node_id_str:
+            return False
+        try:
+            pos_hash = int(node_id_str)
+        except ValueError:
+            logger.warning("Invalid node_id: %s", node_id_str)
+            return False
+        _pending["expand"] = {
+            "data": _update_tree_view(
+                viz, pos_hash, int(display_depth), min_prob
+            ),
+            "hash": pos_hash,
+        }
+        return True
+
+    def on_select_result() -> tuple[
         str,
         dict[str, str],
         list[list[str]],
@@ -374,31 +425,54 @@ def launch_game_tree_server(
         str,
         str,
     ]:
-        """ノードクリック時のコールバック．"""
-        if not node_id:
+        """select_bridge.change のコールバック．
+
+        handle_select が格納した結果を返す．
+        """
+        result = _pending.pop("select", None)
+        if result:
+            return result
+        return ("", {}, [], [], create_empty_plot(), "", "")
+
+    def on_expand_result() -> _ExpandResult:
+        """expand_bridge.change のコールバック．
+
+        handle_expand が格納した結果を返す．
+        """
+        result = _pending.pop("expand", None)
+        if result:
+            (
+                tree_html_v,
+                board_svg,
+                stats,
+                display_moves,
+                child_hashes,
+                plot,
+                breadcrumb_html_v,
+                sfen_text_v,
+            ) = result["data"]
             return (
-                "",
-                {},
-                [],
-                [],
-                create_empty_plot(),
-                "",
-                "",
+                tree_html_v,
+                board_svg,
+                str(result["hash"]),
+                stats,
+                display_moves,
+                child_hashes,
+                plot,
+                breadcrumb_html_v,
+                sfen_text_v,
             )
-        try:
-            pos_hash = int(node_id)
-        except ValueError:
-            logger.warning("Invalid node_id: %s", node_id)
-            return (
-                "",
-                {},
-                [],
-                [],
-                create_empty_plot(),
-                "",
-                "",
-            )
-        return _get_detail_outputs(viz, pos_hash)
+        return (
+            "",
+            "",
+            str(viz.get_root_hash()),
+            {},
+            [],
+            [],
+            create_empty_plot(),
+            "",
+            "",
+        )
 
     def on_move_selected(
         current_child_hashes: list[str],
@@ -439,84 +513,27 @@ def launch_game_tree_server(
         except (ValueError, IndexError):
             return _empty
         (
-            tree_html,
+            tree_html_v,
             board_svg,
             stats,
             display_moves,
             child_hashes,
             plot,
-            breadcrumb_html,
-            sfen_text,
+            breadcrumb_html_v,
+            sfen_text_v,
         ) = _update_tree_view(
             viz, pos_hash, display_depth, min_prob
         )
         return (
-            tree_html,
+            tree_html_v,
             board_svg,
             str(pos_hash),
             stats,
             display_moves,
             child_hashes,
             plot,
-            breadcrumb_html,
-            sfen_text,
-        )
-
-    def on_node_expanded(
-        node_id: str,
-        display_depth: int,
-        min_prob: float,
-    ) -> _ExpandResult:
-        """ノードダブルクリック(サブツリー展開)のコールバック．"""
-        if not node_id:
-            return (
-                "",
-                "",
-                str(viz.get_root_hash()),
-                {},
-                [],
-                [],
-                create_empty_plot(),
-                "",
-                "",
-            )
-        try:
-            pos_hash = int(node_id)
-        except ValueError:
-            logger.warning("Invalid node_id: %s", node_id)
-            return (
-                "",
-                "",
-                str(viz.get_root_hash()),
-                {},
-                [],
-                [],
-                create_empty_plot(),
-                "",
-                "",
-            )
-        (
-            tree_html,
-            board_svg,
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html,
-            sfen_text,
-        ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob
-        )
-        return (
-            tree_html,
-            board_svg,
-            str(pos_hash),
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html,
-            sfen_text,
+            breadcrumb_html_v,
+            sfen_text_v,
         )
 
     def on_back_to_root(
@@ -526,25 +543,25 @@ def launch_game_tree_server(
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
         (
-            tree_html,
+            tree_html_v,
             board_svg,
             stats,
             display_moves,
             child_hashes,
             plot,
-            breadcrumb_html,
-            sfen_text,
+            breadcrumb_html_v,
+            sfen_text_v,
         ) = _update_tree_view(viz, rh, display_depth, min_prob)
         return (
-            tree_html,
+            tree_html_v,
             board_svg,
             str(rh),
             stats,
             display_moves,
             child_hashes,
             plot,
-            breadcrumb_html,
-            sfen_text,
+            breadcrumb_html_v,
+            sfen_text_v,
         )
 
     # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
@@ -604,6 +621,7 @@ def launch_game_tree_server(
                 step=1,
                 label="表示深さ",
                 scale=1,
+                elem_id=ELEM_ID_DEPTH_SLIDER,
             )
             min_prob_slider = gr.Slider(
                 minimum=0.001,
@@ -612,6 +630,7 @@ def launch_game_tree_server(
                 step=0.001,
                 label="最小確率",
                 scale=1,
+                elem_id=ELEM_ID_MIN_PROB_SLIDER,
             )
             refresh_btn = gr.Button(
                 "更新", variant="primary", scale=0
@@ -664,20 +683,28 @@ def launch_game_tree_server(
                         visible=True,
                     )
 
+        # --- Bridge components (server_functions) ---
+        # Gradio 6 では JS DOM 操作で Textbox の値を変更しても
+        # .input() / .change() が発火しない．
+        # gr.HTML の server_functions を使い，JS → Python を直接呼び出す．
+        # 処理完了後に trigger("change") で .change() を発火し，
+        # Gradio の出力パイプラインで UI コンポーネントを更新する．
+        select_bridge = gr.HTML(
+            value="",
+            elem_id=ELEM_ID_SELECT_BRIDGE,
+            elem_classes=["maou-hidden"],
+            server_functions=[handle_select],
+            js_on_load=JS_ON_LOAD_SELECT,
+        )
+        expand_bridge = gr.HTML(
+            value="",
+            elem_id=ELEM_ID_EXPAND_BRIDGE,
+            elem_classes=["maou-hidden"],
+            server_functions=[handle_expand],
+            js_on_load=JS_ON_LOAD_EXPAND,
+        )
+
         # Hidden state
-        # visible=True + CSS(.maou-hidden)で非表示にしつつDOMに残す．
-        # Gradio 6 では visible="hidden" / visible=False の挙動が
-        # 不安定なため，CSS による非表示を採用する．
-        selected_node = gr.Textbox(
-            label="",
-            elem_id=ELEM_ID_SELECTED_NODE,
-            elem_classes=["maou-hidden"],
-        )
-        expand_node = gr.Textbox(
-            label="",
-            elem_id=ELEM_ID_EXPAND_NODE,
-            elem_classes=["maou-hidden"],
-        )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
@@ -718,7 +745,7 @@ def launch_game_tree_server(
             outputs=_load_outputs,
         )
 
-        # ノード選択(シングルクリック) - textbox inputイベントで発火
+        # ノード選択(シングルクリック) - server_functions → trigger("change")
         _select_outputs = [
             board_html,
             stats_json,
@@ -742,15 +769,10 @@ def launch_game_tree_server(
             sfen_text,
         ]
 
-        # Gradio 6 ではプログラマティックなボタン.click()が
-        # イベントパイプライン(jsプリプロセッサ)を正しく発火しない．
-        # 代わりにtextboxの.input()イベントを使用する．
-        # JSからdispatchEvent(new Event("input"))で発火させる．
-        selected_node.input(
-            fn=on_node_selected,
-            inputs=[selected_node],
+        # server_functions で処理後，trigger("change") で発火する
+        select_bridge.change(
+            fn=on_select_result,
             outputs=_select_outputs,
-            js=JS_READ_SELECTED,
         )
 
         # 指し手一覧の行選択
@@ -764,16 +786,10 @@ def launch_game_tree_server(
             outputs=_expand_outputs,
         )
 
-        # ノード展開(ダブルクリック / パンくずクリック) - textbox inputで発火
-        expand_node.input(
-            fn=on_node_expanded,
-            inputs=[
-                expand_node,
-                depth_slider,
-                min_prob_slider,
-            ],
+        # ノード展開(ダブルクリック / パンくずクリック)
+        expand_bridge.change(
+            fn=on_expand_result,
             outputs=_expand_outputs,
-            js=JS_READ_EXPAND,
         )
 
         # ルートに戻る

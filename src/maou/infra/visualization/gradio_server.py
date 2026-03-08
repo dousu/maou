@@ -34,6 +34,19 @@ import gradio as gr  # noqa: E402
 from maou.infra.file_system.file_system import (  # noqa: E402
     FileSystem,
 )
+from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+    ELEM_ID_CURRENT_ROOT,
+    ELEM_ID_DEPTH_SLIDER,
+    ELEM_ID_EXPAND_BRIDGE,
+    ELEM_ID_MIN_PROB_SLIDER,
+    ELEM_ID_SELECT_BRIDGE,
+    JS_ON_LOAD_EXPAND,
+    JS_ON_LOAD_SELECT,
+    build_breadcrumb_html,
+    build_tree_html,
+    create_analytics_plot,
+    create_empty_plot,
+)
 from maou.infra.visualization.indexing_state import (  # noqa: E402
     IndexingState,
 )
@@ -42,17 +55,6 @@ from maou.infra.visualization.search_index import (  # noqa: E402
 )
 from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
-)
-from maou.infra.visualization.game_tree_shared import (  # noqa: E402
-    ELEM_ID_CURRENT_ROOT,
-    ELEM_ID_EXPAND_NODE,
-    ELEM_ID_SELECTED_NODE,
-    JS_READ_EXPAND,
-    JS_READ_SELECTED,
-    build_breadcrumb_html,
-    build_tree_html,
-    create_analytics_plot,
-    create_empty_plot,
 )
 from maou.interface.visualization import (  # noqa: E402
     BoardPosition,
@@ -1680,6 +1682,7 @@ class GradioVisualizationServer:
                         step=1,
                         label="表示深さ",
                         scale=1,
+                        elem_id=ELEM_ID_DEPTH_SLIDER,
                     )
                     gt_min_prob_slider = gr.Slider(
                         minimum=0.001,
@@ -1688,6 +1691,7 @@ class GradioVisualizationServer:
                         step=0.001,
                         label="最小確率",
                         scale=1,
+                        elem_id=ELEM_ID_MIN_PROB_SLIDER,
                     )
                     gt_refresh_btn = gr.Button(
                         "更新",
@@ -1739,20 +1743,6 @@ class GradioVisualizationServer:
                                 lines=2,
                             )
 
-                # Hidden state for game tree
-                # visible=True + CSS(.maou-hidden)で非表示にしつつDOMに残す．
-                # Gradio 6 では visible="hidden" / visible=False の挙動が
-                # 不安定なため，CSS による非表示を採用する．
-                gt_selected_node = gr.Textbox(
-                    label="",
-                    elem_id=ELEM_ID_SELECTED_NODE,
-                    elem_classes=["maou-hidden"],
-                )
-                gt_expand_node = gr.Textbox(
-                    label="",
-                    elem_id=ELEM_ID_EXPAND_NODE,
-                    elem_classes=["maou-hidden"],
-                )
                 # 埋め込みモードではデータがファイルアップロード後に
                 # 非同期で読み込まれるため，UI構築時にはルートハッシュが
                 # 未確定．初回の load_result.then で正しい値を設定する．
@@ -2291,73 +2281,90 @@ class GradioVisualizationServer:
                     sfen_text,
                 )
 
-            def _gt_on_node_selected(
-                node_id: str,
-            ) -> tuple[str, dict, list, Any, str, str]:
-                """ノードクリック時のコールバック(詳細のみ，ツリー再構築なし)．
+            # --- server_functions: JS から直接呼び出される ---
+            # server_functions → .change() 間のデータ受け渡し用
+            _gt_pending: dict[str, Any] = {}
 
-                Returns:
-                    (board_svg, stats, moves, plot,
-                     breadcrumb_html, sfen_text)
-                """
+            def _gt_handle_select(
+                node_id_str: str,
+            ) -> bool:
+                """ノード選択の server_function．"""
                 viz = self._game_tree_viz
-                if not node_id or viz is None:
-                    return (
-                        "",
-                        {},
-                        [],
-                        create_empty_plot(),
-                        "",
-                        "",
-                    )
-
+                if not node_id_str or viz is None:
+                    return False
                 try:
-                    pos_hash = int(node_id)
+                    pos_hash = int(node_id_str)
                 except ValueError:
                     logger.warning(
-                        "Invalid node_id: %s", node_id
+                        "Invalid node_id: %s", node_id_str
                     )
-                    return (
-                        "",
-                        {},
-                        [],
-                        create_empty_plot(),
-                        "",
-                        "",
-                    )
-                return _gt_get_node_details(viz, pos_hash)
+                    return False
+                _gt_pending["select"] = _gt_get_node_details(
+                    viz, pos_hash
+                )
+                return True
 
-            def _gt_on_node_expanded(
-                node_id: str,
-                display_depth: int,
-                min_prob: float,
-            ) -> tuple[
+            def _gt_handle_expand(
+                node_id_str: str,
+                display_depth: float = 3,
+                min_prob: float = 0.01,
+            ) -> bool:
+                """ノード展開の server_function．"""
+                viz = self._game_tree_viz
+                if not node_id_str or viz is None:
+                    return False
+                try:
+                    int(node_id_str)  # バリデーションのみ
+                except ValueError:
+                    logger.warning(
+                        "Invalid node_id: %s", node_id_str
+                    )
+                    return False
+                _gt_pending["expand"] = {
+                    "data": _gt_insert_root(
+                        _gt_update_tree(
+                            int(display_depth),
+                            min_prob,
+                            node_id_str,
+                        ),
+                        node_id_str,
+                    ),
+                }
+                return True
+
+            def _gt_on_select_result() -> tuple[
+                str, dict, list, Any, str, str
+            ]:
+                """select_bridge.change のコールバック．"""
+                result = _gt_pending.pop("select", None)
+                if result:
+                    return result
+                return (
+                    "",
+                    {},
+                    [],
+                    create_empty_plot(),
+                    "",
+                    "",
+                )
+
+            def _gt_on_expand_result() -> tuple[
                 str, str, str, str, dict, list, Any, str, str
             ]:
-                """ノード展開時のコールバック(ツリー再構築 + 詳細更新)．
-
-                Returns:
-                    (tree_html, board_svg, current_root, info,
-                     stats, moves, plot, breadcrumb_html, sfen_text)
-                """
-                viz = self._game_tree_viz
-                if not node_id or viz is None:
-                    return (
-                        "",
-                        "",
-                        str(self._game_tree_root_hash),
-                        "",
-                        {},
-                        [],
-                        create_empty_plot(),
-                        "",
-                        "",
-                    )
-                return _gt_insert_root(
-                    _gt_update_tree(
-                        display_depth, min_prob, node_id
-                    ),
-                    node_id,
+                """expand_bridge.change のコールバック．"""
+                result = _gt_pending.pop("expand", None)
+                if result:
+                    return result["data"]
+                return (
+                    "",
+                    "",
+                    str(self._game_tree_root_hash),
+                    "",
+                    {},
+                    [],
+                    create_empty_plot(),
+                    "",
+                    "",
                 )
 
             def _gt_on_back_to_root(
@@ -2374,6 +2381,23 @@ class GradioVisualizationServer:
                     ),
                     root,
                 )
+
+            # --- Bridge components (server_functions) ---
+            # server_functions の参照先が確定してから生成する．
+            gt_select_bridge = gr.HTML(
+                value="",
+                elem_id=ELEM_ID_SELECT_BRIDGE,
+                elem_classes=["maou-hidden"],
+                server_functions=[_gt_handle_select],
+                js_on_load=JS_ON_LOAD_SELECT,
+            )
+            gt_expand_bridge = gr.HTML(
+                value="",
+                elem_id=ELEM_ID_EXPAND_BRIDGE,
+                elem_classes=["maou-hidden"],
+                server_functions=[_gt_handle_expand],
+                js_on_load=JS_ON_LOAD_EXPAND,
+            )
 
             # _gt_update_tree が返す 8 要素の出力先
             # (tree_html, board_svg, info, stats, moves, plot,
@@ -2436,10 +2460,9 @@ class GradioVisualizationServer:
                 outputs=_gt_tree_outputs,
             )
 
-            # ノード選択(シングルクリック) - textbox inputイベントで発火
-            gt_selected_node.input(
-                fn=_gt_on_node_selected,
-                inputs=[gt_selected_node],
+            # ノード選択(シングルクリック) - server_functions で発火
+            gt_select_bridge.change(
+                fn=_gt_on_select_result,
                 outputs=[
                     gt_board_html,
                     gt_stats_json,
@@ -2448,7 +2471,6 @@ class GradioVisualizationServer:
                     gt_breadcrumb_html,
                     gt_sfen_text,
                 ],
-                js=JS_READ_SELECTED,
             )
 
             # expand / back_to_root 共通の出力先
@@ -2465,16 +2487,10 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # ノード展開(ダブルクリック/パンくず) - textbox inputで発火
-            gt_expand_node.input(
-                fn=_gt_on_node_expanded,
-                inputs=[
-                    gt_expand_node,
-                    gt_depth_slider,
-                    gt_min_prob_slider,
-                ],
+            # ノード展開(ダブルクリック/パンくず) - server_functions で発火
+            gt_expand_bridge.change(
+                fn=_gt_on_expand_result,
                 outputs=_gt_expand_outputs,
-                js=JS_READ_EXPAND,
             )
 
             gt_back_btn.click(
