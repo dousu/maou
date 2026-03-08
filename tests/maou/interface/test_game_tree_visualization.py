@@ -111,6 +111,23 @@ class TestGetMoveTable:
         moves = viz.get_move_table(100)
         assert moves == []
 
+    def test_returns_four_columns(self) -> None:
+        """子がある場合は[指し手, 確率, 勝率, child_hash]の4列を返す."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        moves = viz.get_move_table(100)
+        assert len(moves) == 1
+        row = moves[0]
+        assert len(row) == 4
+        # 指し手(日本語表記)
+        assert "7六" in row[0]
+        # 確率
+        assert row[1] == "60.0%"
+        # 勝率
+        assert row[2] == "52.0%"
+        # child_hash
+        assert row[3] == "200"
+
 
 class TestUsiToJapanese:
     """usi_to_japanese のテスト．"""

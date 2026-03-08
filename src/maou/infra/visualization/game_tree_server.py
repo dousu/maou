@@ -551,8 +551,12 @@ def launch_game_tree_server(
 
     def on_move_selected(
         child_hashes: list[str],
+        display_depth: int,
+        min_prob: float,
         evt: gr.SelectData,
     ) -> tuple[
+        str,
+        str,
         str,
         dict[str, str],
         list[list[str]],
@@ -562,44 +566,63 @@ def launch_game_tree_server(
         str,
     ]:
         """指し手一覧の行選択時のコールバック．"""
-        if not child_hashes or not evt.index:
-            return (
-                "",
-                {},
-                [],
-                [],
-                _create_empty_plot(),
-                "",
-                "",
-            )
+        _empty: tuple[
+            str,
+            str,
+            str,
+            dict[str, str],
+            list[list[str]],
+            list[str],
+            go.Figure,
+            str,
+            str,
+        ] = (
+            gr.update(),  # type: ignore[assignment]
+            "",
+            "",
+            {},
+            [],
+            [],
+            _create_empty_plot(),
+            "",
+            "",
+        )
+        if not child_hashes or evt.index is None:
+            return _empty
         row_idx = (
             evt.index[0]
             if isinstance(evt.index, (list, tuple))
             else evt.index
         )
         if row_idx < 0 or row_idx >= len(child_hashes):
-            return (
-                "",
-                {},
-                [],
-                [],
-                _create_empty_plot(),
-                "",
-                "",
-            )
+            return _empty
         try:
             pos_hash = int(child_hashes[row_idx])
         except (ValueError, IndexError):
-            return (
-                "",
-                {},
-                [],
-                [],
-                _create_empty_plot(),
-                "",
-                "",
-            )
-        return _get_detail_outputs(viz, pos_hash)
+            return _empty
+        (
+            tree_html,
+            board_svg,
+            stats,
+            display_moves,
+            child_hashes_list,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        ) = _update_tree_view(
+            viz, pos_hash, display_depth, min_prob
+        )
+        return (
+            tree_html,
+            board_svg,
+            str(pos_hash),
+            stats,
+            display_moves,
+            child_hashes_list,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        )
 
     def on_node_expanded(
         node_id: str,
@@ -887,20 +910,7 @@ def launch_game_tree_server(
             sfen_text,
         ]
 
-        select_trigger.click(
-            fn=on_node_selected,
-            inputs=[selected_node],
-            outputs=_select_outputs,
-        )
-
-        # 指し手一覧の行選択
-        move_table.select(
-            fn=on_move_selected,
-            inputs=[child_hashes_state],
-            outputs=_select_outputs,
-        )
-
-        # ノード展開(ダブルクリック) - hidden buttonクリックで発火
+        # ノード展開 / 指し手選択共通の出力(ツリー + 詳細パネル)
         _expand_outputs = [
             tree_html,
             board_html,
@@ -912,6 +922,25 @@ def launch_game_tree_server(
             breadcrumb_html,
             sfen_text,
         ]
+
+        select_trigger.click(
+            fn=on_node_selected,
+            inputs=[selected_node],
+            outputs=_select_outputs,
+        )
+
+        # 指し手一覧の行選択
+        move_table.select(
+            fn=on_move_selected,
+            inputs=[
+                child_hashes_state,
+                depth_slider,
+                min_prob_slider,
+            ],
+            outputs=_expand_outputs,
+        )
+
+        # ノード展開(ダブルクリック) - hidden buttonクリックで発火
 
         expand_trigger.click(
             fn=on_node_expanded,
