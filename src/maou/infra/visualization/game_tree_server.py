@@ -371,8 +371,11 @@ def _get_detail_outputs(
     sfen_text = viz.export_sfen_path(pos_hash)
 
     # 表示用データ(3列)とchild_hashリストを分離
-    display_moves = [row[:3] for row in moves_with_hash]
-    child_hashes = [row[3] for row in moves_with_hash]
+    display_moves = [
+        [r.japanese, r.probability, r.win_rate]
+        for r in moves_with_hash
+    ]
+    child_hashes = [r.child_hash for r in moves_with_hash]
 
     return (
         board_svg,
@@ -565,12 +568,19 @@ def launch_game_tree_server(
         return _get_detail_outputs(viz, pos_hash)
 
     def on_move_selected(
-        child_hashes: list[str],
+        current_child_hashes: list[str],
         display_depth: int,
         min_prob: float,
         evt: gr.SelectData,
     ) -> _ExpandResult:
-        """指し手一覧の行選択時のコールバック．"""
+        """指し手一覧の行選択時のコールバック．
+
+        Args:
+            current_child_hashes: 現在表示中の局面の子ノードhashリスト(gr.State)
+            display_depth: 表示深さ
+            min_prob: エッジの最小確率閾値
+            evt: Gradio の SelectData イベント
+        """
         _empty: _ExpandResult = (
             "",
             "",
@@ -582,17 +592,17 @@ def launch_game_tree_server(
             "",
             "",
         )
-        if not child_hashes or evt.index is None:
+        if not current_child_hashes or evt.index is None:
             return _empty
         row_idx = (
             evt.index[0]
             if isinstance(evt.index, (list, tuple))
             else evt.index
         )
-        if row_idx < 0 or row_idx >= len(child_hashes):
+        if row_idx < 0 or row_idx >= len(current_child_hashes):
             return _empty
         try:
-            pos_hash = int(child_hashes[row_idx])
+            pos_hash = int(current_child_hashes[row_idx])
         except (ValueError, IndexError):
             return _empty
         (
@@ -600,7 +610,7 @@ def launch_game_tree_server(
             board_svg,
             stats,
             display_moves,
-            child_hashes_list,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,
@@ -613,7 +623,7 @@ def launch_game_tree_server(
             str(pos_hash),
             stats,
             display_moves,
-            child_hashes_list,
+            child_hashes,
             plot,
             breadcrumb_html,
             sfen_text,

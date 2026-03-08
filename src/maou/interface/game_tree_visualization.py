@@ -10,7 +10,7 @@ import copy
 import csv
 import io
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import polars as pl
 
@@ -40,6 +40,19 @@ logger = logging.getLogger(__name__)
 
 #: _get_board_for_position のキャッシュ型
 _BoardCache = tuple[int, Board | None]
+
+
+class MoveRow(NamedTuple):
+    """指し手一覧テーブルの1行を表す．"""
+
+    japanese: str
+    """日本語表記の指し手(例: "7六歩")"""
+    probability: str
+    """選択確率(例: "60.0%")"""
+    win_rate: str
+    """勝率(例: "52.0%")"""
+    child_hash: str
+    """子局面のZobrist hash文字列"""
 
 
 class GameTreeVisualizationInterface:
@@ -292,14 +305,14 @@ class GameTreeVisualizationInterface:
 
     def get_move_table(
         self, position_hash: int
-    ) -> list[list[str]]:
+    ) -> list[MoveRow]:
         """指定局面の指し手一覧テーブルを生成する．
 
         Args:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
-            [[指し手, 確率, 勝率, child_hash], ...] 形式のリスト(確率降順)．
+            MoveRow のリスト(確率降順)．
             child_hashはUI上で非表示にされるが，行選択時のノード遷移に使用する．
         """
         children = self._query.get_children(position_hash)
@@ -308,7 +321,7 @@ class GameTreeVisualizationInterface:
 
         board = self._get_board_for_position(position_hash)
 
-        result: list[list[str]] = []
+        result: list[MoveRow] = []
         for row in children.iter_rows(named=True):
             move16 = row["move16"]
             usi = move_to_usi(move16)
@@ -325,7 +338,9 @@ class GameTreeVisualizationInterface:
             prob = f"{row['probability'] * 100:.1f}%"
             wr = f"{row['win_rate'] * 100:.1f}%"
             result.append(
-                [japanese, prob, wr, str(row["child_hash"])]
+                MoveRow(
+                    japanese, prob, wr, str(row["child_hash"])
+                )
             )
 
         return result
