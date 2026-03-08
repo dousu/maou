@@ -43,11 +43,13 @@ from maou.infra.visualization.search_index import (  # noqa: E402
 from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
 )
-from maou.infra.visualization.game_tree_server import (  # noqa: E402
-    _build_breadcrumb_html,
-    _build_tree_html,
-    _create_analytics_plot,
-    _create_empty_plot,
+from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+    JS_READ_EXPAND,
+    JS_READ_SELECTED,
+    build_breadcrumb_html,
+    build_tree_html,
+    create_analytics_plot,
+    create_empty_plot,
 )
 from maou.interface.visualization import (  # noqa: E402
     BoardPosition,
@@ -2164,7 +2166,7 @@ class GradioVisualizationServer:
                         "",
                         {},
                         [],
-                        _create_empty_plot(),
+                        create_empty_plot(),
                         "",
                         "",
                     )
@@ -2178,7 +2180,7 @@ class GradioVisualizationServer:
                 elements = viz.get_cytoscape_elements(
                     rh, int(display_depth), min_prob
                 )
-                tree_html = _build_tree_html(
+                tree_html = build_tree_html(
                     json.dumps(elements, ensure_ascii=False)
                 )
                 board_svg = viz.get_board_svg(rh)
@@ -2189,12 +2191,12 @@ class GradioVisualizationServer:
                     for r in moves_raw
                 ]
                 analytics = viz.get_analytics_data(rh)
-                plot = _create_analytics_plot(analytics)
+                plot = create_analytics_plot(analytics)
                 if plot is None:
-                    plot = _create_empty_plot()
+                    plot = create_empty_plot()
 
                 breadcrumb = viz.get_breadcrumb_data(rh)
-                breadcrumb_html = _build_breadcrumb_html(
+                breadcrumb_html = build_breadcrumb_html(
                     breadcrumb
                 )
                 sfen_text = viz.export_sfen_path(rh)
@@ -2231,7 +2233,7 @@ class GradioVisualizationServer:
                         "",
                         {},
                         [],
-                        _create_empty_plot(),
+                        create_empty_plot(),
                         "",
                         "",
                     )
@@ -2245,12 +2247,12 @@ class GradioVisualizationServer:
                     for r in moves_raw
                 ]
                 analytics = viz.get_analytics_data(pos_hash)
-                plot = _create_analytics_plot(analytics)
+                plot = create_analytics_plot(analytics)
                 if plot is None:
-                    plot = _create_empty_plot()
+                    plot = create_empty_plot()
 
                 breadcrumb = viz.get_breadcrumb_data(pos_hash)
-                breadcrumb_html = _build_breadcrumb_html(
+                breadcrumb_html = build_breadcrumb_html(
                     breadcrumb
                 )
                 sfen_text = viz.export_sfen_path(pos_hash)
@@ -2286,7 +2288,7 @@ class GradioVisualizationServer:
                         "",
                         {},
                         [],
-                        _create_empty_plot(),
+                        create_empty_plot(),
                         "",
                         "",
                     )
@@ -2380,22 +2382,6 @@ class GradioVisualizationServer:
                 outputs=_gt_tree_outputs,
             )
 
-            # js パラメータで DOM から直接値を読み取り，Svelte の
-            # 内部状態同期の不整合を回避する．
-            _js_read_selected = (
-                "(nodeId) => "
-                "document.querySelector("
-                "'#selected-node-id textarea, "
-                "#selected-node-id input')?.value || nodeId"
-            )
-            _js_read_expand = (
-                "(nodeId, depth, prob) => ["
-                "document.querySelector("
-                "'#expand-node-id textarea, "
-                "#expand-node-id input')?.value || nodeId, "
-                "depth, prob]"
-            )
-
             # ノード選択(シングルクリック) - hidden buttonクリックで発火
             gt_select_trigger.click(
                 fn=_gt_on_node_selected,
@@ -2408,7 +2394,7 @@ class GradioVisualizationServer:
                     gt_breadcrumb_html,
                     gt_sfen_text,
                 ],
-                js=_js_read_selected,
+                js=JS_READ_SELECTED,
             )
 
             # expand / back_to_root 共通の出力先
@@ -2434,7 +2420,7 @@ class GradioVisualizationServer:
                     gt_min_prob_slider,
                 ],
                 outputs=_gt_expand_outputs,
-                js=_js_read_expand,
+                js=JS_READ_EXPAND,
             )
 
             gt_back_btn.click(
