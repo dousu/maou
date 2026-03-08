@@ -125,6 +125,19 @@ class TestFileBackedListColumns:
         with pytest.raises(ValueError, match="file_paths が空"):
             FileBackedListColumns([], [])
 
+    def test_all_empty_files_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """全ファイルが行数0の場合に ValueError が発生する．"""
+        path0 = tmp_path / "file_0.feather"
+        path1 = tmp_path / "file_1.feather"
+        _create_feather_file(path0, [], [])
+        _create_feather_file(path1, [], [])
+        with pytest.raises(
+            ValueError, match="有効なファイルが残りません"
+        ):
+            FileBackedListColumns([path0, path1], [0, 0])
+
     def test_negative_global_row_raises(
         self, tmp_path: Path
     ) -> None:

@@ -76,6 +76,11 @@ class FileBackedListColumns:
         for n in filtered_row_counts:
             self._boundaries.append(self._boundaries[-1] + n)
         self._total_rows = self._boundaries[-1]
+        if not self._file_paths:
+            raise ValueError(
+                "フィルタ後に有効なファイルが残りませんでした"
+                "(全ファイルが空行数です)．"
+            )
         self._cached_file_idx: int = -1
         self._cached_labels: pl.Series | None = None
         self._cached_win_rates: pl.Series | None = None
