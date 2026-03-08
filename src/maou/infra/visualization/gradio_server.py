@@ -1737,11 +1737,9 @@ class GradioVisualizationServer:
                             )
 
                 # Hidden state for game tree
-                # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で
-                # 追加されたオプションで，コンポーネントをDOMに残しつつ
-                # 視覚的に非表示にする．visible=False は Svelte の条件
-                # レンダリング({#if visible})でDOM要素を生成しないため
-                # 使用不可．
+                # visible=True + CSS(.maou-hidden)で非表示にしつつDOMに残す．
+                # Gradio 6 では visible="hidden" / visible=False の挙動が
+                # 不安定なため，CSS による非表示を採用する．
                 gt_selected_node = gr.Textbox(
                     label="",
                     elem_id="selected-node-id",
