@@ -28,6 +28,11 @@ class FileBackedListColumns:
 
     全ファイルのList型カラムを一度にメモリに載せることを避け，
     1ファイル分のみキャッシュして省メモリでアクセスする．
+
+    Note:
+        ファイル順にアクセスする場合に最もキャッシュ効率が高い．
+        ファイルをまたぐランダムアクセスではキャッシュミスが頻発し，
+        ファイル I/O と gc.collect() のコストが増大する．
     """
 
     def __init__(
@@ -52,19 +57,23 @@ class FileBackedListColumns:
                 "file_paths が空です．"
                 "少なくとも1つのファイルが必要です．"
             )
-        self._file_paths = file_paths
-        # 空ファイル(行数0)を警告
+        self._file_paths: list[Path] = []
+        # 空ファイル(行数0)を除外して警告
+        filtered_row_counts: list[int] = []
         for i, n in enumerate(file_row_counts):
             if n == 0:
                 logger.warning(
                     "file_row_counts[%d] が 0 です(空ファイル: %s)．"
-                    "このファイルの行はスキップされます．",
+                    "このファイルはスキップされます．",
                     i,
                     file_paths[i],
                 )
+            else:
+                self._file_paths.append(file_paths[i])
+                filtered_row_counts.append(n)
         # 累積行数の境界: [0, n0, n0+n1, ...]
         self._boundaries: list[int] = [0]
-        for n in file_row_counts:
+        for n in filtered_row_counts:
             self._boundaries.append(self._boundaries[-1] + n)
         self._total_rows = self._boundaries[-1]
         self._cached_file_idx: int = -1

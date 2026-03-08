@@ -28,7 +28,7 @@ def get_rss_mb() -> int:
 
 def _read_vmrss_mb() -> int:
     """Linux の /proc/self/status から VmRSS を読み取る．"""
-    with open("/proc/self/status") as f:
+    with open("/proc/self/status", encoding="utf-8") as f:
         for line in f:
             if line.startswith("VmRSS:"):
                 # "VmRSS:    123456 kB" → KB 単位の数値を取得

@@ -173,6 +173,26 @@ class TestFileBackedListColumns:
             accessor.log_stats()
         assert "アクセスなし" in caplog.text
 
+    def test_log_stats_with_accesses(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ヒット/ミスが記録された状態で log_stats() が統計をログ出力する．"""
+        path0 = tmp_path / "file_0.feather"
+        path1 = tmp_path / "file_1.feather"
+        _create_feather_file(path0, [[1.0]], [[0.1]])
+        _create_feather_file(path1, [[2.0]], [[0.2]])
+        accessor = FileBackedListColumns([path0, path1], [1, 1])
+
+        accessor.get(0)  # ミス
+        accessor.get(0)  # ヒット
+        accessor.get(1)  # ミス
+
+        with caplog.at_level("INFO"):
+            accessor.log_stats()
+        assert "ヒット=1" in caplog.text
+        assert "ミス=2" in caplog.text
+        assert "33.3%" in caplog.text
+
     def test_row_count_mismatch_raises(
         self, tmp_path: Path
     ) -> None:
