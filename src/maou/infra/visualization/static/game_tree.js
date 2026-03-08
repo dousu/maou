@@ -224,9 +224,13 @@
     if (!item) return;
     var hash = item.getAttribute("data-hash");
     if (!hash) return;
-    // パンくずクリック → ノード選択(展開はせず詳細パネルのみ更新)
+    // パンくずクリック → ノード選択 + ツリー展開
     setHiddenTextbox(
       "#selected-node-id textarea, #selected-node-id input",
+      hash
+    );
+    setHiddenTextbox(
+      "#expand-node-id textarea, #expand-node-id input",
       hash
     );
   });

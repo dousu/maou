@@ -588,7 +588,9 @@ class GameTreeVisualizationInterface:
             )
 
             child_hash = row["child_hash"]
-            result_value = node_map.get(child_hash, 0.0)
+            result_value = node_map.get(
+                child_hash, float("nan")
+            )
             depth = node_depth_map.get(child_hash, -1)
 
             writer.writerow(

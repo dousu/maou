@@ -350,7 +350,7 @@ class TestExportSfenPath:
     def test_missing_node_returns_startpos(self) -> None:
         """存在しないノードはmovesなしの初期局面を返す．
 
-        get_path_to_rootは未知のhashでも[hash]を返すため，
+        get_path_to_rootは未知のhashで空リストを返すため，
         指し手のない初期局面のposition文字列が返される．
         """
         nodes, edges = _build_simple_tree()
