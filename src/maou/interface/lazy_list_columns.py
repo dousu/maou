@@ -154,7 +154,7 @@ class FileBackedListColumns:
         gc.collect()
 
         path = self._file_paths[file_idx]
-        logger.info(
+        logger.debug(
             "List型カラム読み込み: [%d/%d] %s, RSS=%d MB",
             file_idx + 1,
             len(self._file_paths),
@@ -192,7 +192,7 @@ class FileBackedListColumns:
 
         self._cached_file_idx = file_idx
 
-        logger.info(
+        logger.debug(
             "List型カラム読み込み完了: %s 行, RSS=%d MB",
             f"{len(self._cached_labels):,}",
             get_rss_mb(),

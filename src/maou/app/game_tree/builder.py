@@ -252,9 +252,11 @@ class GameTreeBuilder:
                     )
                 except ValueError:
                     logger.debug(
-                        "ラベル %d の変換に失敗(hash=%d)",
+                        "ラベル %d の変換に失敗"
+                        "(hash=%d, sfen=%s)",
                         label_idx_int,
                         current_hash,
+                        current_sfen,
                     )
                     continue
 
