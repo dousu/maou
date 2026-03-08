@@ -28,7 +28,9 @@ class GameTreeQuery:
         self.edges_df = edges_df
         # get_path_to_root のLRUキャッシュ(DataFrameは不変のため安全)
         # _get_detail_outputs で同一ノードに4回呼ばれるのを吸収する
-        self._path_cache: OrderedDict[int, list[int]] = OrderedDict()
+        self._path_cache: OrderedDict[int, list[int]] = (
+            OrderedDict()
+        )
         self._path_cache_maxsize = 64
 
     def get_subtree(
@@ -161,6 +163,11 @@ class GameTreeQuery:
         if position_hash in self._path_cache:
             self._path_cache.move_to_end(position_hash)
             return self._path_cache[position_hash]
+
+        # ノードが存在しない場合は空リストを返す
+        initial_depth = self._get_depth(position_hash)
+        if initial_depth is None:
+            return []
 
         path = [position_hash]
         current = position_hash

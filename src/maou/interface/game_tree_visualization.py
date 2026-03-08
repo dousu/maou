@@ -75,7 +75,6 @@ class GameTreeVisualizationInterface:
         nodes_df: pl.DataFrame,
         edges_df: pl.DataFrame,
         initial_sfen: str | None = None,
-        opening_db: OpeningDatabase | None = None,
     ) -> None:
         """初期化．
 
@@ -83,7 +82,6 @@ class GameTreeVisualizationInterface:
             nodes_df: ノードデータ(nodes.feather相当)
             edges_df: エッジデータ(edges.feather相当)
             initial_sfen: 開始局面のSFEN文字列．Noneの場合は平手初期局面．
-            opening_db: 定跡データベース．Noneの場合はデフォルトを使用．
 
         Raises:
             ValueError: depth=0のルートノードが見つからない場合
@@ -105,11 +103,7 @@ class GameTreeVisualizationInterface:
         self._initial_sfen = initial_sfen
         self._renderer = SVGBoardRenderer()
         self._board_cache: _BoardCache | None = None
-        self._opening_db = (
-            opening_db
-            if opening_db is not None
-            else OpeningDatabase()
-        )
+        self._opening_db = OpeningDatabase()
 
     def get_cytoscape_elements(
         self,
@@ -132,9 +126,7 @@ class GameTreeVisualizationInterface:
         )
 
         # エッジから各ノードへの親エッジ情報を取得(ラベル用)
-        child_edge_map = self._build_child_edge_map(
-            sub_edges
-        )
+        child_edge_map = self._build_child_edge_map(sub_edges)
 
         # サブツリー内の盤面をdepth順に漸進的に構築する．
         # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
@@ -472,7 +464,12 @@ class GameTreeVisualizationInterface:
                 path[i], path[i + 1]
             )
             if edge is None:
-                break
+                logger.warning(
+                    "パス中のエッジが欠損: %d → %d",
+                    path[i],
+                    path[i + 1],
+                )
+                return [], []
             moves.append(move_to_usi(edge["move16"]))
 
         return path, moves
@@ -569,9 +566,7 @@ class GameTreeVisualizationInterface:
             node_depth_map[row["position_hash"]] = row["depth"]
 
         # 盤面を構築してUSI→日本語変換
-        child_edge_map = self._build_child_edge_map(
-            sub_edges
-        )
+        child_edge_map = self._build_child_edge_map(sub_edges)
 
         local_boards = self._build_boards_incrementally(
             root_hash, sub_nodes, child_edge_map
@@ -718,7 +713,7 @@ class GameTreeVisualizationInterface:
                 move = child_board.get_move_from_move16(move16)
                 child_board.push_move(move)
                 boards[pos_hash] = child_board
-            except Exception:
+            except (ValueError, RuntimeError, IndexError):
                 logger.warning(
                     "盤面復元に失敗しました: "
                     "position_hash=0x%016X",

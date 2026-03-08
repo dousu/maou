@@ -299,16 +299,15 @@ class TestGetBreadcrumbData:
         assert "7六" in breadcrumb[1]["label"]
 
     def test_missing_node(self) -> None:
-        """存在しないノードはルート要素のみを返す．
+        """存在しないノードは空リストを返す．
 
-        get_path_to_rootは未知のhashでも[hash]を返すため，
-        パンくずリストには初期局面のみが表示される．
+        get_path_to_rootは未知のhashで空リストを返すため，
+        パンくずリストも空になる．
         """
         nodes, edges = _build_simple_tree()
         viz = GameTreeVisualizationInterface(nodes, edges)
         breadcrumb = viz.get_breadcrumb_data(999)
-        assert len(breadcrumb) == 1
-        assert breadcrumb[0]["label"] == "初期局面"
+        assert len(breadcrumb) == 0
 
 
 class TestGetOpeningName:
