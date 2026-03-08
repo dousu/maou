@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 # ========================================
+# Gradio hidden textbox elem_id constants
+# ========================================
+# JS 側(game_tree.js)でも同じ ID を定数で保持している．
+# 変更する場合は両方を更新すること．
+
+ELEM_ID_SELECTED_NODE = "selected-node-id"
+"""ノード選択用 hidden Textbox の elem_id．"""
+
+ELEM_ID_EXPAND_NODE = "expand-node-id"
+"""ノード展開用 hidden Textbox の elem_id．"""
+
+ELEM_ID_CURRENT_ROOT = "current-root"
+"""現在のルートハッシュ用 hidden Textbox の elem_id．"""
+
+# ========================================
 # JS constants (Gradio 6 Svelte state bypass)
 # ========================================
 
@@ -29,6 +44,9 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # dispatchEvent内で次のクリックが割り込む可能性は
 # 実用上無視できるため，競合リスクは意図的に許容している．
 
+_SEL_SELECTED = f"#{ELEM_ID_SELECTED_NODE} textarea"
+_SEL_EXPAND = f"#{ELEM_ID_EXPAND_NODE} textarea"
+
 JS_READ_SELECTED = (
     "(nodeId) => {"
     "  const v = window.__maou_selected_node_id;"
@@ -36,7 +54,7 @@ JS_READ_SELECTED = (
     "    window.__maou_selected_node_id = ''; return v;"
     "  }"
     "  const el = document.querySelector("
-    "    '#selected-node-id textarea');"
+    f"    '{_SEL_SELECTED}');"
     "  return (el && el.value) || nodeId;"
     "}"
 )
@@ -54,7 +72,7 @@ JS_READ_EXPAND = (
     "    window.__maou_expand_node_id = ''; return [v, depth, prob];"
     "  }"
     "  const el = document.querySelector("
-    "    '#expand-node-id textarea');"
+    f"    '{_SEL_EXPAND}');"
     "  return [(el && el.value) || nodeId, depth, prob];"
     "}"
 )

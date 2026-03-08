@@ -9,6 +9,10 @@
 (function () {
   "use strict";
 
+  // --- Gradio hidden textbox selectors (keep in sync with game_tree_shared.py) ---
+  var SEL_SELECTED = "#selected-node-id textarea";
+  var SEL_EXPAND = "#expand-node-id textarea";
+
   let cy = null;
   let tapTimer = null;
 
@@ -223,14 +227,9 @@
         tapTimer = null;
         // グローバル変数に保存(js パラメータから確実に読み取れる)
         window.__maou_selected_node_id = nodeId;
-        setHiddenTextbox(
-          "#selected-node-id textarea",
-          nodeId
-        );
+        setHiddenTextbox(SEL_SELECTED, nodeId);
         // textbox の input イベントで Gradio .input() コールバックを発火
-        triggerHiddenInput(
-          "#selected-node-id textarea"
-        );
+        triggerHiddenInput(SEL_SELECTED);
       }, 250);
     });
 
@@ -244,14 +243,9 @@
       const nodeId = evt.target.id();
       // グローバル変数に保存(js パラメータから確実に読み取れる)
       window.__maou_expand_node_id = nodeId;
-      setHiddenTextbox(
-        "#expand-node-id textarea",
-        nodeId
-      );
+      setHiddenTextbox(SEL_EXPAND, nodeId);
       // textbox の input イベントで Gradio .input() コールバックを発火
-      triggerHiddenInput(
-        "#expand-node-id textarea"
-      );
+      triggerHiddenInput(SEL_EXPAND);
     });
 
     // Fit to view
@@ -269,14 +263,9 @@
     // グローバル変数に保存(js パラメータから確実に読み取れる)
     window.__maou_expand_node_id = hash;
     // パンくずクリック → ツリー展開(expand は select の出力を包含する)
-    setHiddenTextbox(
-      "#expand-node-id textarea",
-      hash
-    );
+    setHiddenTextbox(SEL_EXPAND, hash);
     // textbox の input イベントで Gradio .input() コールバックを発火
-    triggerHiddenInput(
-      "#expand-node-id textarea"
-    );
+    triggerHiddenInput(SEL_EXPAND);
   });
 
   /**

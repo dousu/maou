@@ -44,6 +44,9 @@ from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
 )
 from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+    ELEM_ID_CURRENT_ROOT,
+    ELEM_ID_EXPAND_NODE,
+    ELEM_ID_SELECTED_NODE,
     JS_READ_EXPAND,
     JS_READ_SELECTED,
     build_breadcrumb_html,
@@ -1742,12 +1745,12 @@ class GradioVisualizationServer:
                 # 不安定なため，CSS による非表示を採用する．
                 gt_selected_node = gr.Textbox(
                     label="",
-                    elem_id="selected-node-id",
+                    elem_id=ELEM_ID_SELECTED_NODE,
                     elem_classes=["maou-hidden"],
                 )
                 gt_expand_node = gr.Textbox(
                     label="",
-                    elem_id="expand-node-id",
+                    elem_id=ELEM_ID_EXPAND_NODE,
                     elem_classes=["maou-hidden"],
                 )
                 # 埋め込みモードではデータがファイルアップロード後に
@@ -1756,7 +1759,7 @@ class GradioVisualizationServer:
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
-                    elem_id="current-root",
+                    elem_id=ELEM_ID_CURRENT_ROOT,
                     elem_classes=["maou-hidden"],
                 )
 
@@ -2393,6 +2396,12 @@ class GradioVisualizationServer:
             ) -> tuple[
                 str, str, str, dict, list, Any, str, str, str
             ]:
+                """初回ロード時のゲームツリー描画とルートハッシュ設定．
+
+                _gt_update_tree の8要素にルートハッシュ文字列を追加した
+                9要素タプルを返す．gt_current_root の初期値を設定するため
+                に _gt_update_tree とは別関数として定義している．
+                """
                 root_str = str(self._game_tree_root_hash)
                 if self._game_tree_viz is None:
                     return (

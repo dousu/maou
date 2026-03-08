@@ -16,6 +16,9 @@ import gradio as gr
 import plotly.graph_objects as go
 
 from maou.infra.visualization.game_tree_shared import (
+    ELEM_ID_CURRENT_ROOT,
+    ELEM_ID_EXPAND_NODE,
+    ELEM_ID_SELECTED_NODE,
     JS_READ_EXPAND,
     JS_READ_SELECTED,
     build_breadcrumb_html,
@@ -667,18 +670,18 @@ def launch_game_tree_server(
         # 不安定なため，CSS による非表示を採用する．
         selected_node = gr.Textbox(
             label="",
-            elem_id="selected-node-id",
+            elem_id=ELEM_ID_SELECTED_NODE,
             elem_classes=["maou-hidden"],
         )
         expand_node = gr.Textbox(
             label="",
-            elem_id="expand-node-id",
+            elem_id=ELEM_ID_EXPAND_NODE,
             elem_classes=["maou-hidden"],
         )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
-            elem_id="current-root",
+            elem_id=ELEM_ID_CURRENT_ROOT,
             elem_classes=["maou-hidden"],
         )
         # 指し手一覧の行選択用child_hashリスト
