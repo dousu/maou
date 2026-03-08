@@ -839,29 +839,29 @@ def launch_game_tree_server(
         selected_node = gr.Textbox(
             label="",
             elem_id="selected-node-id",
-            visible="hidden",
+            visible="hidden",  # type: ignore[arg-type]
         )
         expand_node = gr.Textbox(
             label="",
             elem_id="expand-node-id",
-            visible="hidden",
+            visible="hidden",  # type: ignore[arg-type]
         )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
             elem_id="current-root",
-            visible="hidden",
+            visible="hidden",  # type: ignore[arg-type]
         )
         # Hidden buttons (JSからクリックしてGradioコールバックを発火)
         select_trigger = gr.Button(
             value="",
             elem_id="node-select-trigger",
-            visible="hidden",
+            visible="hidden",  # type: ignore[arg-type]
         )
         expand_trigger = gr.Button(
             value="",
             elem_id="node-expand-trigger",
-            visible="hidden",
+            visible="hidden",  # type: ignore[arg-type]
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
