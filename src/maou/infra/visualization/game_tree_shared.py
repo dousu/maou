@@ -17,71 +17,45 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 # ========================================
-# Gradio hidden textbox elem_id constants
+# Gradio component elem_id constants
 # ========================================
-# JS 側(game_tree.js)でも同じ ID を定数で保持している．
-# 変更する場合は両方を更新すること．
-
-ELEM_ID_SELECTED_NODE = "selected-node-id"
-"""ノード選択用 hidden Textbox の elem_id．"""
-
-ELEM_ID_EXPAND_NODE = "expand-node-id"
-"""ノード展開用 hidden Textbox の elem_id．"""
 
 ELEM_ID_CURRENT_ROOT = "current-root"
 """現在のルートハッシュ用 hidden Textbox の elem_id．"""
 
+ELEM_ID_SELECT_BRIDGE = "select-bridge"
+"""ノード選択ブリッジ用 gr.HTML の elem_id．"""
+
+ELEM_ID_EXPAND_BRIDGE = "expand-bridge"
+"""ノード展開ブリッジ用 gr.HTML の elem_id．"""
+
+ELEM_ID_DEPTH_SLIDER = "gt-depth-slider"
+"""表示深さスライダーの elem_id(JS からの値読み取り用)．"""
+
+ELEM_ID_MIN_PROB_SLIDER = "gt-min-prob-slider"
+"""最小確率スライダーの elem_id(JS からの値読み取り用)．"""
+
 # ========================================
-# JS constants (Gradio 6 Svelte state bypass)
+# JS constants (Gradio 6 server_functions bridge)
 # ========================================
 
-# Gradio 6 ではプログラマティックなボタン.click()がイベントパイプライン
-# (jsプリプロセッサ含む)を正しく発火しない．代わりにhidden textboxの
-# .input()イベントをJS側からdispatchEvent(new Event("input"))で発火し，
-# jsパラメータのプリプロセッサでwindowグローバル変数から値を読み取る．
-#
-# NOTE: グローバル変数の読み取り→クリアは非アトミックだが，
-# dispatchEvent内で次のクリックが割り込む可能性は
-# 実用上無視できるため，競合リスクは意図的に許容している．
+# Gradio 6 では JS から Textbox の値を変更しても .input() / .change()
+# が発火しない(Issue #3471, #7954)．
+# 代わりに gr.HTML の server_functions + js_on_load を使用し，
+# JS → Python の直接呼び出しを実現する．
+# server_functions で処理を実行した後 trigger("change") で
+# .change() コールバックを発火し，Gradio の出力パイプラインで
+# UI コンポーネントを更新する．
 
-_SEL_SELECTED = f"#{ELEM_ID_SELECTED_NODE} textarea"
-_SEL_EXPAND = f"#{ELEM_ID_EXPAND_NODE} textarea"
-
-JS_READ_SELECTED = (
-    "(nodeId) => {"
-    "  const v = window.__maou_selected_node_id;"
-    "  if (v != null && v !== '') {"
-    "    window.__maou_selected_node_id = ''; return v;"
-    "  }"
-    "  const el = document.querySelector("
-    f"    '{_SEL_SELECTED}');"
-    "  return (el && el.value) || nodeId;"
-    "}"
+JS_ON_LOAD_SELECT = (
+    "window.__maou_select = {server: server, trigger: trigger};"
 )
-"""selected_node.input の js パラメータ．
+"""select_bridge の js_on_load．server と trigger をグローバルに公開する．"""
 
-window グローバル変数から選択ノード ID を読み取る．
-DOM クエリはフォールバック．
-inputs: [selected_node] (1引数)
-"""
-
-JS_READ_EXPAND = (
-    "(nodeId, depth, prob) => {"
-    "  const v = window.__maou_expand_node_id;"
-    "  if (v != null && v !== '') {"
-    "    window.__maou_expand_node_id = ''; return [v, depth, prob];"
-    "  }"
-    "  const el = document.querySelector("
-    f"    '{_SEL_EXPAND}');"
-    "  return [(el && el.value) || nodeId, depth, prob];"
-    "}"
+JS_ON_LOAD_EXPAND = (
+    "window.__maou_expand = {server: server, trigger: trigger};"
 )
-"""expand_node.input の js パラメータ．
-
-window グローバル変数から展開ノード ID を読み取る．
-DOM クエリはフォールバック．
-inputs: [expand_node, depth_slider, min_prob_slider] (3引数)
-"""
+"""expand_bridge の js_on_load．server と trigger をグローバルに公開する．"""
 
 
 # ========================================

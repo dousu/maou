@@ -9,10 +9,6 @@
 (function () {
   "use strict";
 
-  // --- Gradio hidden textbox selectors (keep in sync with game_tree_shared.py) ---
-  const SEL_SELECTED = "#selected-node-id textarea";
-  const SEL_EXPAND = "#expand-node-id textarea";
-
   let cy = null;
   let tapTimer = null;
 
@@ -60,37 +56,69 @@
   }
 
   /**
-   * hidden textboxの値を設定する(イベントディスパッチなし)
+   * Gradio slider の現在値を DOM から読み取る
+   *
+   * elem_id は game_tree_shared.py の ELEM_ID_DEPTH_SLIDER /
+   * ELEM_ID_MIN_PROB_SLIDER と同期している．
    */
-  function setHiddenTextbox(selector, value) {
-    const hiddenInput = document.querySelector(selector);
-    if (!hiddenInput) return;
-    // Gradio 6 は Textbox を <textarea> として描画する．
-    // セレクタも textarea に限定しているため，直接参照する．
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype, "value"
-    )?.set;
-    if (nativeSetter) {
-      nativeSetter.call(hiddenInput, value);
-    } else {
-      hiddenInput.value = value;
-    }
-    // nativeSetter で値を設定すると Svelte の内部状態が更新される．
-    // イベントディスパッチは triggerHiddenInput() に一元化し，
-    // ここでは値の設定のみを行う．
+  function readSlider(elemId) {
+    const el = document.getElementById(elemId);
+    if (!el) return null;
+    const numInput = el.querySelector('input[type="number"]');
+    if (numInput) return parseFloat(numInput.value);
+    const rangeInput = el.querySelector('input[type="range"]');
+    if (rangeInput) return parseFloat(rangeInput.value);
+    return null;
   }
 
   /**
-   * hidden textboxにinputイベントをディスパッチしてGradio .input()を発火する
+   * ノード選択をサーバーに通知し，Gradio コールバックを発火する
    *
-   * Gradio 6ではプログラマティックなボタン.click()がイベントパイプライン
-   * (jsプリプロセッサ含む)を正しく発火しない．代わりにtextboxの
-   * inputイベントをディスパッチし，.input()ハンドラを発火させる．
+   * gr.HTML の server_functions でPython関数を直接呼び出し，
+   * 完了後に trigger("change") で .change() コールバックを発火して
+   * Gradio の出力パイプラインで UI を更新する．
    */
-  function triggerHiddenInput(selector) {
-    const el = document.querySelector(selector);
-    if (!el) return;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+  function notifyNodeSelected(nodeId) {
+    const bridge = window.__maou_select;
+    if (!bridge || !bridge.server) {
+      console.warn("[maou] select bridge not ready");
+      return;
+    }
+    bridge.server
+      .handle_select(String(nodeId))
+      .then(function (ok) {
+        if (ok) bridge.trigger("change");
+      })
+      .catch(function (err) {
+        console.error("[maou] handle_select failed:", err);
+      });
+  }
+
+  /**
+   * ノード展開をサーバーに通知し，Gradio コールバックを発火する
+   *
+   * depth / prob はスライダーの DOM から直接読み取る．
+   * elem_id は game_tree_shared.py と同期．
+   */
+  function notifyNodeExpanded(nodeId) {
+    const bridge = window.__maou_expand;
+    if (!bridge || !bridge.server) {
+      console.warn("[maou] expand bridge not ready");
+      return;
+    }
+    // フォールバック値 (3, 0.01) は Python 側のスライダーデフォルト値
+    // (game_tree_server.py: depth_slider value=3,
+    //  min_prob_slider value=0.01) と同期すること．
+    const depth = readSlider("gt-depth-slider") ?? 3;
+    const prob = readSlider("gt-min-prob-slider") ?? 0.01;
+    bridge.server
+      .handle_expand(String(nodeId), depth, prob)
+      .then(function (ok) {
+        if (ok) bridge.trigger("change");
+      })
+      .catch(function (err) {
+        console.error("[maou] handle_expand failed:", err);
+      });
   }
 
   /**
@@ -218,18 +246,14 @@
       wheelSensitivity: 0.3,
     });
 
-    // Node click -> update hidden textbox for detail panel
+    // Node click -> server_functions で詳細パネルを更新
     // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
       if (tapTimer) clearTimeout(tapTimer);
       tapTimer = setTimeout(function () {
         tapTimer = null;
-        // グローバル変数に保存(js パラメータから確実に読み取れる)
-        window.__maou_selected_node_id = nodeId;
-        setHiddenTextbox(SEL_SELECTED, nodeId);
-        // textbox の input イベントで Gradio .input() コールバックを発火
-        triggerHiddenInput(SEL_SELECTED);
+        notifyNodeSelected(nodeId);
       }, 250);
     });
 
@@ -240,12 +264,7 @@
         clearTimeout(tapTimer);
         tapTimer = null;
       }
-      const nodeId = evt.target.id();
-      // グローバル変数に保存(js パラメータから確実に読み取れる)
-      window.__maou_expand_node_id = nodeId;
-      setHiddenTextbox(SEL_EXPAND, nodeId);
-      // textbox の input イベントで Gradio .input() コールバックを発火
-      triggerHiddenInput(SEL_EXPAND);
+      notifyNodeExpanded(evt.target.id());
     });
 
     // Fit to view
@@ -260,12 +279,7 @@
     if (!item) return;
     const hash = item.getAttribute("data-hash");
     if (!hash) return;
-    // グローバル変数に保存(js パラメータから確実に読み取れる)
-    window.__maou_expand_node_id = hash;
-    // パンくずクリック → ツリー展開(expand は select の出力を包含する)
-    setHiddenTextbox(SEL_EXPAND, hash);
-    // textbox の input イベントで Gradio .input() コールバックを発火
-    triggerHiddenInput(SEL_EXPAND);
+    notifyNodeExpanded(hash);
   });
 
   /**
@@ -273,8 +287,8 @@
    */
   function exportTreePNG() {
     if (!cy) return;
-    var png = cy.png({ scale: 2, bg: "#ffffff", full: true });
-    var link = document.createElement("a");
+    const png = cy.png({ scale: 2, bg: "#ffffff", full: true });
+    const link = document.createElement("a");
     link.href = png;
     link.download = "game_tree.png";
     document.body.appendChild(link);
