@@ -23,6 +23,10 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # Gradio 6 では setHiddenTextbox() で設定した DOM 値が Svelte の
 # 内部状態に反映されない場合がある．window グローバル変数を
 # 主経路とし，DOM クエリをフォールバックとして使用する．
+#
+# NOTE: グローバル変数の読み取り→クリアは非アトミックだが，
+# rAF 遅延(約1フレーム)内で次のクリックが割り込む可能性は
+# 実用上無視できるため，競合リスクは意図的に許容している．
 
 JS_READ_SELECTED = (
     "(nodeId) => {"
@@ -31,8 +35,7 @@ JS_READ_SELECTED = (
     "    window.__maou_selected_node_id = ''; return v;"
     "  }"
     "  const el = document.querySelector("
-    "    '#selected-node-id textarea,"
-    "#selected-node-id input');"
+    "    '#selected-node-id textarea, #selected-node-id input');"
     "  return (el && el.value) || nodeId;"
     "}"
 )
@@ -50,8 +53,7 @@ JS_READ_EXPAND = (
     "    window.__maou_expand_node_id = ''; return [v, depth, prob];"
     "  }"
     "  const el = document.querySelector("
-    "    '#expand-node-id textarea,"
-    "#expand-node-id input');"
+    "    '#expand-node-id textarea, #expand-node-id input');"
     "  return [(el && el.value) || nodeId, depth, prob];"
     "}"
 )
