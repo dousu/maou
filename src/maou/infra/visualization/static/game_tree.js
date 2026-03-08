@@ -71,6 +71,10 @@
     } else {
       hiddenInput.value = value;
     }
+    // nativeSetter で値を設定すると React/Svelte の内部状態が更新される．
+    // input/change イベントは Gradio 6 では Python コールバックを発火しないが，
+    // Svelte の内部状態同期のためにディスパッチしている．
+    // 実際の Python コールバック発火は clickHiddenButton() で行う．
     hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
     hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -208,7 +212,7 @@
 
     // Node click -> update hidden textbox for detail panel
     // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
-    var tapTimer = null;
+    let tapTimer = null;
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
       if (tapTimer) clearTimeout(tapTimer);
