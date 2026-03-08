@@ -26,11 +26,13 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 JS_READ_SELECTED = (
     "(nodeId) => {"
-    "  var v = window.__maou_selected_node_id;"
-    "  if (v) { window.__maou_selected_node_id = ''; return v; }"
-    "  var el = document.querySelector("
-    "    '#selected-node-id textarea, "
-    "    #selected-node-id input');"
+    "  const v = window.__maou_selected_node_id;"
+    "  if (v != null && v !== '') {"
+    "    window.__maou_selected_node_id = ''; return v;"
+    "  }"
+    "  const el = document.querySelector("
+    "    '#selected-node-id textarea,"
+    "#selected-node-id input');"
     "  return (el && el.value) || nodeId;"
     "}"
 )
@@ -43,11 +45,13 @@ inputs: [selected_node] (1引数)
 
 JS_READ_EXPAND = (
     "(nodeId, depth, prob) => {"
-    "  var v = window.__maou_expand_node_id;"
-    "  if (v) { window.__maou_expand_node_id = ''; return [v, depth, prob]; }"
-    "  var el = document.querySelector("
-    "    '#expand-node-id textarea, "
-    "    #expand-node-id input');"
+    "  const v = window.__maou_expand_node_id;"
+    "  if (v != null && v !== '') {"
+    "    window.__maou_expand_node_id = ''; return [v, depth, prob];"
+    "  }"
+    "  const el = document.querySelector("
+    "    '#expand-node-id textarea,"
+    "#expand-node-id input');"
     "  return [(el && el.value) || nodeId, depth, prob];"
     "}"
 )
