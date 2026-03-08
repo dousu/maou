@@ -109,8 +109,8 @@
     // フォールバック値 (3, 0.01) は Python 側のスライダーデフォルト値
     // (game_tree_server.py: depth_slider value=3,
     //  min_prob_slider value=0.01) と同期すること．
-    const depth = readSlider("gt-depth-slider") || 3;
-    const prob = readSlider("gt-min-prob-slider") || 0.01;
+    const depth = readSlider("gt-depth-slider") ?? 3;
+    const prob = readSlider("gt-min-prob-slider") ?? 0.01;
     bridge.server
       .handle_expand(String(nodeId), depth, prob)
       .then(function (ok) {

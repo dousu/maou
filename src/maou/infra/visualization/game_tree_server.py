@@ -397,7 +397,7 @@ def launch_game_tree_server(
 
     def handle_expand(
         node_id_str: str,
-        display_depth: float = 3,
+        display_depth: int | float = 3,
         min_prob: float = 0.01,
     ) -> bool:
         """ノード展開の server_function．
