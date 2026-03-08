@@ -832,23 +832,36 @@ def launch_game_tree_server(
                     )
 
         # Hidden state
+        # NOTE: visible=False を指定すると Gradio 6 は Svelte の条件レンダリング
+        # ({#if visible}) によりDOM要素を生成しない．JSから textbox/button に
+        # アクセスする必要があるため，visible はデフォルト(True)のまま残し，
+        # CSSクラス(.js-hidden → display:none)で視覚的に非表示にする．
         selected_node = gr.Textbox(
-            visible=False, elem_id="selected-node-id"
+            label="",
+            elem_id="selected-node-id",
+            elem_classes=["js-hidden"],
         )
         expand_node = gr.Textbox(
-            visible=False, elem_id="expand-node-id"
+            label="",
+            elem_id="expand-node-id",
+            elem_classes=["js-hidden"],
         )
         current_root_state = gr.Textbox(
+            label="",
             value=str(root_hash),
-            visible=False,
             elem_id="current-root",
+            elem_classes=["js-hidden"],
         )
         # Hidden buttons (JSからクリックしてGradioコールバックを発火)
         select_trigger = gr.Button(
-            visible=False, elem_id="node-select-trigger"
+            value="",
+            elem_id="node-select-trigger",
+            elem_classes=["js-hidden"],
         )
         expand_trigger = gr.Button(
-            visible=False, elem_id="node-expand-trigger"
+            value="",
+            elem_id="node-expand-trigger",
+            elem_classes=["js-hidden"],
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
