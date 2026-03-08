@@ -3444,12 +3444,21 @@ def launch_server(
         f"(share={share}, debug={debug})"
     )
 
+    # ゲームツリーJS(Cytoscape.js + イベントハンドラ)をhead要素に注入．
+    # gradio_server.py ではデータソース動的切替でゲームツリーが使われるため必要．
+    from maou.infra.visualization.game_tree_server import (
+        _build_head_scripts,
+    )
+
+    head_scripts = _build_head_scripts()
+
     launch_kwargs: dict[str, Any] = {
         "server_name": server_name,
         "share": share,
         "debug": debug,
         "show_error": True,
         "css": custom_css,
+        "head": head_scripts,
     }
     if port is not None:
         launch_kwargs["server_port"] = port
