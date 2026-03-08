@@ -1710,18 +1710,37 @@ class GradioVisualizationServer:
                         )
 
                 # Hidden state for game tree
+                # NOTE: visible=False を指定すると Gradio 6 は Svelte の
+                # 条件レンダリング({#if visible})によりDOM要素を生成しない．
+                # JSから textbox/button にアクセスする必要があるため，
+                # visible はデフォルト(True)のまま残し，CSSクラス
+                # (.js-hidden → display:none)で視覚的に非表示にする．
                 gt_selected_node = gr.Textbox(
-                    visible=False,
+                    label="",
                     elem_id="selected-node-id",
+                    elem_classes=["js-hidden"],
                 )
                 gt_expand_node = gr.Textbox(
-                    visible=False,
+                    label="",
                     elem_id="expand-node-id",
+                    elem_classes=["js-hidden"],
                 )
                 gt_current_root = gr.Textbox(
+                    label="",
                     value="",
-                    visible=False,
                     elem_id="current-root",
+                    elem_classes=["js-hidden"],
+                )
+                # Hidden buttons (JSからクリックしてGradioコールバックを発火)
+                gt_select_trigger = gr.Button(
+                    value="",
+                    elem_id="node-select-trigger",
+                    elem_classes=["js-hidden"],
+                )
+                gt_expand_trigger = gr.Button(
+                    value="",
+                    elem_id="node-expand-trigger",
+                    elem_classes=["js-hidden"],
                 )
 
             # イベントハンドラとState変数
@@ -2270,7 +2289,8 @@ class GradioVisualizationServer:
                 ],
             )
 
-            gt_selected_node.change(
+            # ノード選択(シングルクリック) - hidden buttonクリックで発火
+            gt_select_trigger.click(
                 fn=_gt_on_node_selected,
                 inputs=[gt_selected_node],
                 outputs=[
@@ -2281,7 +2301,8 @@ class GradioVisualizationServer:
                 ],
             )
 
-            gt_expand_node.change(
+            # ノード展開(ダブルクリック/パンくず) - hidden buttonクリックで発火
+            gt_expand_trigger.click(
                 fn=_gt_on_node_expanded,
                 inputs=[
                     gt_expand_node,
