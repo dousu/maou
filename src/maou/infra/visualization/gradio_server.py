@@ -2393,7 +2393,7 @@ class GradioVisualizationServer:
                         "",
                         {},
                         [],
-                        None,
+                        create_empty_plot(),
                         "",
                         "",
                     )
