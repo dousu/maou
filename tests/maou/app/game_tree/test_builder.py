@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -486,3 +487,98 @@ class TestGameTreeBuilder:
             builder.build(
                 df, initial_hash=12345, initial_sfen=None
             )
+
+    def test_list_column_fn_produces_same_result(
+        self,
+    ) -> None:
+        """list_column_fn パスと DataFrame 直接パスが同一の結果を返す."""
+        board = shogi.Board()
+        move_7g7f = board.move_from_usi("7g7f")
+
+        initial_row = _create_preprocess_row(
+            board,
+            move_probs={move_7g7f: 0.9},
+            result_value=0.52,
+        )
+
+        board.push_move(move_7g7f)
+        after_row = _create_preprocess_row(
+            board,
+            move_probs={},
+            result_value=0.48,
+        )
+        board.pop_move()
+
+        df = _build_preprocess_df([initial_row, after_row])
+
+        # スカラーカラムのみの DataFrame
+        scalar_df = df.select(
+            ["id", "resultValue", "bestMoveWinRate"]
+        )
+
+        # list_column_fn: DataFrame からオンデマンドで取得
+        move_label_series = df["moveLabel"]
+        move_win_rate_series = df["moveWinRate"]
+
+        def list_column_fn(
+            row_idx: int,
+        ) -> tuple[np.ndarray, np.ndarray]:
+            labels = np.array(
+                move_label_series[row_idx],
+                dtype=np.float32,
+            )
+            win_rates = np.array(
+                move_win_rate_series[row_idx],
+                dtype=np.float32,
+            )
+            return labels, win_rates
+
+        builder = GameTreeBuilder()
+
+        # DataFrame 直接パス
+        nodes_direct, edges_direct = builder.build(
+            df, max_depth=1
+        )
+
+        # list_column_fn パス
+        nodes_lazy, edges_lazy = builder.build(
+            scalar_df,
+            max_depth=1,
+            list_column_fn=list_column_fn,
+        )
+
+        # ノード数・エッジ数が一致
+        assert len(nodes_direct) == len(nodes_lazy)
+        assert len(edges_direct) == len(edges_lazy)
+
+        # 各ノードの内容が一致
+        for nd, nl in zip(
+            sorted(nodes_direct, key=lambda n: n.position_hash),
+            sorted(nodes_lazy, key=lambda n: n.position_hash),
+        ):
+            assert nd.position_hash == nl.position_hash
+            assert nd.result_value == pytest.approx(
+                nl.result_value
+            )
+            assert nd.num_branches == nl.num_branches
+            assert nd.depth == nl.depth
+            assert nd.is_depth_cutoff == nl.is_depth_cutoff
+
+        # 各エッジの内容が一致
+        for ed, el in zip(
+            sorted(
+                edges_direct,
+                key=lambda e: (e.parent_hash, e.move_label),
+            ),
+            sorted(
+                edges_lazy,
+                key=lambda e: (e.parent_hash, e.move_label),
+            ),
+        ):
+            assert ed.parent_hash == el.parent_hash
+            assert ed.child_hash == el.child_hash
+            assert ed.move16 == el.move16
+            assert ed.probability == pytest.approx(
+                el.probability
+            )
+            assert ed.is_leaf == el.is_leaf

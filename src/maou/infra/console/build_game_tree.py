@@ -2,31 +2,21 @@
 
 from __future__ import annotations
 
+import bisect
 import gc
-import logging
-import resource
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
+import numpy as np
 
+from maou.app.process_info import get_rss_mb
 from maou.infra.app_logging import app_logger
 from maou.infra.console.common import handle_exception
 from maou.infra.file_system.file_system import FileSystem
 
 if TYPE_CHECKING:
-    import numpy as np
     import polars as pl
-
-logger = logging.getLogger(__name__)
-
-
-def _get_rss_mb() -> int:
-    """現在のRSS(Resident Set Size)をMB単位で返す．"""
-    return (
-        resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        // 1024
-    )
 
 
 class _FileBackedListColumns:
@@ -63,10 +53,6 @@ class _FileBackedListColumns:
         Returns:
             (moveLabel, moveWinRate) のNumPy float32配列タプル
         """
-        import bisect
-
-        import numpy as np
-
         file_idx = (
             bisect.bisect_right(self._boundaries, global_row)
             - 1
@@ -107,7 +93,7 @@ class _FileBackedListColumns:
             file_idx + 1,
             len(self._file_paths),
             path.name,
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
         df = pl.read_ipc(
@@ -118,12 +104,15 @@ class _FileBackedListColumns:
         self._cached_labels = df["moveLabel"]
         self._cached_win_rates = df["moveWinRate"]
         self._cached_file_idx = file_idx
+        # NOTE: Series が元データへの参照を保持するため，
+        # del df で実際のメモリ解放は起きないが，
+        # DataFrame のメタデータ分は解放される
         del df
 
         app_logger.info(
             "List型カラム読み込み完了: %s 行, RSS=%d MB",
             f"{len(self._cached_labels):,}",
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
     def log_stats(self) -> None:
@@ -210,7 +199,7 @@ def build_game_tree(
     app_logger.info(
         "入力ファイル数: %d, RSS=%d MB",
         len(input_files),
-        _get_rss_mb(),
+        get_rss_mb(),
     )
 
     # スカラーカラムのみ読み込み(List型カラムは遅延アクセスで省メモリ化)
@@ -225,7 +214,7 @@ def build_game_tree(
             i + 1,
             len(input_files),
             f.name,
-            _get_rss_mb(),
+            get_rss_mb(),
         )
         df = pl.read_ipc(f, columns=scalar_columns)
         file_row_counts.append(len(df))
@@ -240,7 +229,7 @@ def build_game_tree(
     app_logger.info(
         "スカラーカラム読み込み完了: 局面数=%s, RSS=%d MB",
         f"{len(preprocess_df):,}",
-        _get_rss_mb(),
+        get_rss_mb(),
     )
 
     # List型カラムの遅延アクセス用オブジェクト

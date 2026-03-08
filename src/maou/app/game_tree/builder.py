@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import resource
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from maou.app.process_info import get_rss_mb
 from maou.domain.board import shogi
 from maou.domain.game_tree.model import (
     GameTreeEdge,
@@ -26,15 +26,6 @@ logger = logging.getLogger(__name__)
 
 _UINT16_MAX = 65535
 _BFS_LOG_INTERVAL = 10_000
-
-
-def _get_rss_mb() -> int:
-    """現在のRSS(Resident Set Size)をMB単位で返す．"""
-    # Linux: ru_maxrss は KB 単位
-    return (
-        resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        // 1024
-    )
 
 
 class GameTreeBuilder:
@@ -95,7 +86,7 @@ class GameTreeBuilder:
         logger.info(
             "ルックアップテーブル構築開始: %s 行, RSS=%d MB",
             f"{len(preprocess_df):,}",
-            _get_rss_mb(),
+            get_rss_mb(),
         )
         id_list = preprocess_df["id"].to_list()
         duplicate_count = 0
@@ -113,7 +104,7 @@ class GameTreeBuilder:
         logger.info(
             "ルックアップテーブル構築完了: %s エントリ, RSS=%d MB",
             f"{len(lookup):,}",
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
         # 2. 開始局面のZobrist hashとSFENを決定
@@ -153,7 +144,7 @@ class GameTreeBuilder:
         logger.info(
             "NumPy配列変換完了: list_column_fn=%s, RSS=%d MB",
             "あり" if list_column_fn is not None else "なし",
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
         # 3. BFS (Board インスタンスはループ外で1回だけ生成し再利用)
@@ -173,7 +164,7 @@ class GameTreeBuilder:
             "BFS開始: max_depth=%d, min_probability=%f, RSS=%d MB",
             max_depth,
             min_probability,
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
         while queue:
@@ -193,7 +184,7 @@ class GameTreeBuilder:
                     f"{len(edges):,}",
                     f"{len(queue):,}",
                     f"{len(visited):,}",
-                    _get_rss_mb(),
+                    get_rss_mb(),
                 )
                 prev_depth = current_depth
 
@@ -340,7 +331,7 @@ class GameTreeBuilder:
                     f"{len(nodes):,}",
                     f"{len(edges):,}",
                     f"{len(queue):,}",
-                    _get_rss_mb(),
+                    get_rss_mb(),
                 )
 
         logger.info(
@@ -349,7 +340,7 @@ class GameTreeBuilder:
             f"{len(nodes):,}",
             f"{len(edges):,}",
             prev_depth,
-            _get_rss_mb(),
+            get_rss_mb(),
         )
 
         return nodes, edges
