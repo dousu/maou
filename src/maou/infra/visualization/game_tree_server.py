@@ -588,10 +588,14 @@ def launch_game_tree_server(
 
     def on_set_as_root(
         selected_node: str,
+        current_root: str,
         display_depth: int,
         min_prob: float,
     ) -> _ExpandResult:
-        """選択ノードをルートに設定するボタンのコールバック．"""
+        """選択ノードをルートに設定するボタンのコールバック．
+
+        選択ノードが現在のルートと同じ場合は再描画をスキップする．
+        """
         _empty: _ExpandResult = (
             "",
             "",
@@ -604,6 +608,8 @@ def launch_game_tree_server(
             "",
         )
         if not selected_node:
+            return _empty
+        if selected_node == current_root:
             return _empty
         try:
             pos_hash = int(selected_node)
@@ -879,6 +885,7 @@ def launch_game_tree_server(
             fn=on_set_as_root,
             inputs=[
                 selected_node_state,
+                current_root_state,
                 depth_slider,
                 min_prob_slider,
             ],
