@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from maou.app.process_info import get_rss_mb
 from maou.domain.board import shogi
 from maou.domain.game_tree.model import (
     GameTreeEdge,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _UINT16_MAX = 65535
+_BFS_LOG_INTERVAL = 10_000
 
 
 class GameTreeBuilder:
@@ -38,17 +40,25 @@ class GameTreeBuilder:
         | None = None,
         initial_hash: int | None = None,
         initial_sfen: str | None = None,
+        list_column_fn: Callable[
+            [int], tuple[np.ndarray, np.ndarray]
+        ]
+        | None = None,
     ) -> tuple[list[GameTreeNode], list[GameTreeEdge]]:
         """BFSでツリーを構築する．
 
         Args:
             preprocess_df: preprocessデータのDataFrame
-                (カラム: id, moveLabel, moveWinRate, resultValue, bestMoveWinRate)
+                (カラム: id, resultValue, bestMoveWinRate．
+                list_column_fnがNoneの場合はmoveLabel, moveWinRateも必要)
             max_depth: 最大探索深さ
             min_probability: 指し手の最小確率閾値
             progress_callback: プログレスコールバック(処理済み局面数, 発見済み局面数)
             initial_hash: 開始局面のZobrist hash(Noneの場合は平手初期局面)
             initial_sfen: 開始局面のSFEN文字列．initial_hash指定時は必須
+            list_column_fn: List型カラムの遅延アクセス関数．
+                row_idxを受け取り(moveLabel, moveWinRate)のNumPy配列タプルを返す．
+                Noneの場合はpreprocess_dfから直接読み込む(後方互換)
 
         Returns:
             (nodes, edges) のタプル．
@@ -73,6 +83,11 @@ class GameTreeBuilder:
             )
 
         # 1. ルックアップテーブル構築: id → 行インデックス(後勝ち)
+        logger.info(
+            "ルックアップテーブル構築開始: %s 行, RSS=%d MB",
+            f"{len(preprocess_df):,}",
+            get_rss_mb(),
+        )
         id_list = preprocess_df["id"].to_list()
         duplicate_count = 0
         lookup: dict[int, int] = {}
@@ -86,6 +101,11 @@ class GameTreeBuilder:
                 "(後勝ちで最後の行を使用)",
                 duplicate_count,
             )
+        logger.info(
+            "ルックアップテーブル構築完了: %s エントリ, RSS=%d MB",
+            f"{len(lookup):,}",
+            get_rss_mb(),
+        )
 
         # 2. 開始局面のZobrist hashとSFENを決定
         if initial_hash is None:
@@ -106,17 +126,26 @@ class GameTreeBuilder:
             )
 
         # スカラーカラムはNumPy配列に変換(メモリ効率が良い)
-        # List型カラム(moveLabel, moveWinRate)はPolars Seriesのまま保持し，
-        # BFSで到達した行のみオンデマンドでアクセスする
-        # (40Mレコード × 1496要素 × 4bytes × 2列 ≈ 477GB のため全展開不可)
         result_value_arr = preprocess_df[
             "resultValue"
         ].to_numpy()
         best_move_win_rate_arr = preprocess_df[
             "bestMoveWinRate"
         ].to_numpy()
-        move_label_series = preprocess_df["moveLabel"]
-        move_win_rate_series = preprocess_df["moveWinRate"]
+
+        # List型カラム(moveLabel, moveWinRate)のアクセス方法を決定
+        # list_column_fn が指定されている場合は遅延アクセス(省メモリ)
+        # 指定されていない場合はDataFrameから直接アクセス(後方互換)
+        move_label_series: pl.Series | None = None
+        move_win_rate_series: pl.Series | None = None
+        if list_column_fn is None:
+            move_label_series = preprocess_df["moveLabel"]
+            move_win_rate_series = preprocess_df["moveWinRate"]
+        logger.info(
+            "スカラーカラム準備完了: list_column_fn=%s, RSS=%d MB",
+            "あり" if list_column_fn is not None else "なし",
+            get_rss_mb(),
+        )
 
         # 3. BFS (Board インスタンスはループ外で1回だけ生成し再利用)
         board = shogi.Board()
@@ -129,11 +158,35 @@ class GameTreeBuilder:
             [(initial_hash, initial_sfen)]
         )
         processed = 0
+        prev_depth = 0
+
+        logger.info(
+            "BFS開始: max_depth=%d, min_probability=%f, RSS=%d MB",
+            max_depth,
+            min_probability,
+            get_rss_mb(),
+        )
 
         while queue:
             current_hash, current_sfen = queue.popleft()
             current_depth = visited[current_hash]
             row_idx = lookup[current_hash]
+
+            # 深さが変わった時にログ出力
+            if current_depth != prev_depth:
+                logger.info(
+                    "BFS depth=%d 完了: "
+                    "処理済み=%s, ノード=%s, エッジ=%s, "
+                    "キュー=%s, 訪問済み=%s, RSS=%d MB",
+                    prev_depth,
+                    f"{processed:,}",
+                    f"{len(nodes):,}",
+                    f"{len(edges):,}",
+                    f"{len(queue):,}",
+                    f"{len(visited):,}",
+                    get_rss_mb(),
+                )
+                prev_depth = current_depth
 
             # スカラー値はNumPy配列から直接取得
             result_value = float(result_value_arr[row_idx])
@@ -141,17 +194,22 @@ class GameTreeBuilder:
                 best_move_win_rate_arr[row_idx]
             )
 
-            # List型カラムはオンデマンドでNumPy配列に変換
-            # Polars 1.x では List dtype の Series[idx] は Series を返すため
-            # np.array() で直接変換可能(.to_list() による中間リスト生成が不要)
-            move_labels = np.array(
-                move_label_series[row_idx],
-                dtype=np.float32,
-            )
-            move_win_rates = np.array(
-                move_win_rate_series[row_idx],
-                dtype=np.float32,
-            )
+            # List型カラムはオンデマンドで取得
+            if list_column_fn is not None:
+                move_labels, move_win_rates = list_column_fn(
+                    row_idx
+                )
+            else:
+                assert move_label_series is not None
+                assert move_win_rate_series is not None
+                move_labels = np.array(
+                    move_label_series[row_idx],
+                    dtype=np.float32,
+                )
+                move_win_rates = np.array(
+                    move_win_rate_series[row_idx],
+                    dtype=np.float32,
+                )
 
             # min_probability以上の指し手を取得(NumPyで高速フィルタリング)
             candidate_indices = np.where(
@@ -261,5 +319,28 @@ class GameTreeBuilder:
             processed += 1
             if progress_callback:
                 progress_callback(processed, len(visited))
+
+            # 定期的にBFS進捗をログ出力
+            if processed % _BFS_LOG_INTERVAL == 0:
+                logger.info(
+                    "BFS進捗: depth=%d, 処理済み=%s, "
+                    "ノード=%s, エッジ=%s, "
+                    "キュー=%s, RSS=%d MB",
+                    current_depth,
+                    f"{processed:,}",
+                    f"{len(nodes):,}",
+                    f"{len(edges):,}",
+                    f"{len(queue):,}",
+                    get_rss_mb(),
+                )
+
+        logger.info(
+            "BFS完了: ノード=%s, エッジ=%s, "
+            "最大depth=%d, RSS=%d MB",
+            f"{len(nodes):,}",
+            f"{len(edges):,}",
+            prev_depth,
+            get_rss_mb(),
+        )
 
         return nodes, edges

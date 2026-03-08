@@ -76,3 +76,5 @@ maou build-game-tree \
 | Data I/O | [`src/maou/interface/game_tree_io.py`](../../src/maou/interface/game_tree_io.py) |
 | Data models | [`src/maou/domain/game_tree/model.py`](../../src/maou/domain/game_tree/model.py) |
 | Polars schemas | [`src/maou/domain/game_tree/schema.py`](../../src/maou/domain/game_tree/schema.py) |
+| Lazy loading | [`src/maou/interface/lazy_list_columns.py`](../../src/maou/interface/lazy_list_columns.py) |
+| Process info | [`src/maou/app/process_info.py`](../../src/maou/app/process_info.py) |

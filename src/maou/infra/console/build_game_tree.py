@@ -1,9 +1,12 @@
 """ゲームツリー構築CLIコマンド."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import click
 
+from maou.app.process_info import get_rss_mb
 from maou.infra.app_logging import app_logger
 from maou.infra.console.common import handle_exception
 from maou.infra.file_system.file_system import FileSystem
@@ -65,8 +68,10 @@ def build_game_tree(
     import polars as pl
 
     from maou.app.game_tree.builder import GameTreeBuilder
-    from maou.interface.data_io import load_preprocessing_df
     from maou.interface.game_tree_io import GameTreeIO
+    from maou.interface.lazy_list_columns import (
+        FileBackedListColumns,
+    )
 
     # 入力ファイル収集
     input_files = sorted(
@@ -77,13 +82,46 @@ def build_game_tree(
             f"入力パスに .feather ファイルが見つかりません: {input_path}"
         )
 
-    app_logger.info("入力ファイル数: %d", len(input_files))
+    app_logger.info(
+        "入力ファイル数: %d, RSS=%d MB",
+        len(input_files),
+        get_rss_mb(),
+    )
 
-    # データ読み込み(Rustバックエンド使用)
-    dfs = [load_preprocessing_df(f) for f in input_files]
-    preprocess_df = pl.concat(dfs) if len(dfs) > 1 else dfs[0]
+    # スカラーカラムのみ読み込み(List型カラムは遅延アクセスで省メモリ化)
+    # 全ファイルのList型カラムを一括読み込みすると
+    # 41M行 × 1496要素 × 4bytes × 2列 ≈ 477GB 必要なため
+    scalar_dfs: list[pl.DataFrame] = []
+    file_row_counts: list[int] = []
+    scalar_columns = ["id", "resultValue", "bestMoveWinRate"]
+    for i, f in enumerate(input_files):
+        app_logger.info(
+            "スカラーカラム読み込み: [%d/%d] %s, RSS=%d MB",
+            i + 1,
+            len(input_files),
+            f.name,
+            get_rss_mb(),
+        )
+        df = pl.read_ipc(f, columns=scalar_columns)
+        file_row_counts.append(len(df))
+        scalar_dfs.append(df)
+    preprocess_df: pl.DataFrame = (
+        pl.concat(scalar_dfs)
+        if len(scalar_dfs) > 1
+        else scalar_dfs[0]
+    )
+    del scalar_dfs
 
-    app_logger.info("局面数: %s", f"{len(preprocess_df):,}")
+    app_logger.info(
+        "スカラーカラム読み込み完了: 局面数=%s, RSS=%d MB",
+        f"{len(preprocess_df):,}",
+        get_rss_mb(),
+    )
+
+    # List型カラムの遅延アクセス用オブジェクト
+    list_columns = FileBackedListColumns(
+        input_files, file_row_counts
+    )
 
     # ツリー構築
     from tqdm import tqdm
@@ -91,11 +129,26 @@ def build_game_tree(
     builder = GameTreeBuilder()
     pbar = tqdm(desc="ツリー構築中", unit="局面")
 
+    _prev_cache_misses = 0
+
     def progress_callback(processed: int, total: int) -> None:
+        nonlocal _prev_cache_misses
         # totalは発見済み局面数(BFS中に増加する)
         pbar.total = total
         pbar.n = processed
         pbar.refresh()
+        # キャッシュミス増分を定期ログ(BFS進捗ログと同タイミング)
+        if processed % 10_000 == 0:
+            current_misses = list_columns.cache_misses
+            delta = current_misses - _prev_cache_misses
+            if delta > 0:
+                app_logger.info(
+                    "キャッシュミス: 直近10K局面で %d 回"
+                    "(累計=%d)",
+                    delta,
+                    current_misses,
+                )
+            _prev_cache_misses = current_misses
 
     try:
         nodes, edges = builder.build(
@@ -105,17 +158,29 @@ def build_game_tree(
             progress_callback=progress_callback,
             initial_hash=initial_hash,
             initial_sfen=initial_sfen,
+            list_column_fn=list_columns.get,
         )
     finally:
         pbar.close()
+        list_columns.log_stats()
 
     # 出力
     io = GameTreeIO()
     io.save(nodes, edges, output_dir)
+
+    # initial_sfen が未指定(平手初期局面)の場合は
+    # 実際の SFEN を解決してメタデータに保存する
+    from maou.domain.board.shogi import Board
+
+    resolved_sfen = (
+        initial_sfen
+        if initial_sfen is not None
+        else Board().get_sfen()
+    )
     io.save_metadata(
         output_dir,
         {
-            "initial_sfen": initial_sfen,
+            "initial_sfen": resolved_sfen,
         },
     )
 
