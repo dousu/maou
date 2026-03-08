@@ -275,7 +275,7 @@ class GameTreeVisualizationInterface:
             return {}
 
         stats: dict[str, str] = {
-            "局面ハッシュ": f"0x{detail['position_hash']:016X}",
+            "Zobrist Hash": f"0x{detail['position_hash']:016X}",
             "勝率": f"{detail['result_value'] * 100:.1f}%",
             "最善手勝率": f"{detail['best_move_win_rate'] * 100:.1f}%",
             "深さ": str(detail["depth"]),
@@ -334,6 +334,16 @@ class GameTreeVisualizationInterface:
             ルートノードのposition_hash
         """
         return self._root_hash
+
+    def get_initial_sfen(self) -> str:
+        """開始局面のSFEN文字列を返す．
+
+        Returns:
+            SFEN文字列．平手初期局面の場合は "startpos"
+        """
+        if self._initial_sfen is not None:
+            return self._initial_sfen
+        return "startpos"
 
     def get_analytics_data(
         self, position_hash: int

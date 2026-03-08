@@ -667,10 +667,11 @@ def launch_game_tree_server(
         title="Maou Game Tree Viewer",
     ) as demo:
         gr.Markdown("# Maou Game Tree Viewer")
+        initial_sfen = viz.get_initial_sfen()
         gr.Markdown(
             f"Nodes: **{len(nodes_df):,}** / "
             f"Edges: **{len(edges_df):,}** / "
-            f"Root: `0x{root_hash:016X}`"
+            f"Root: `{initial_sfen}`"
         )
 
         # コントロールバー
