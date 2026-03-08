@@ -18,6 +18,7 @@
 | `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値(0.0〜1.0)．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
 | `--initial-hash INT` | No | 平手初期局面 | 開始局面のZobrist hash(preprocessデータのID)．指定した局面からBFSを開始する．`--initial-sfen` と併用必須． |
 | `--initial-sfen TEXT` | No | — | 開始局面のSFEN文字列．`--initial-hash` 指定時に必須．BFSで正しい盤面を復元するために使用する． |
+| `--max-cache-files INT` | No | `1` | List型カラムのLRUキャッシュファイル数．1ファイルあたり約11.5GBのメモリを使用する(100万行 × 1496要素 × 4bytes × 2列)．メモリに余裕がある場合は2〜3に増やすことでキャッシュヒット率が向上する． |
 
 ## Example invocation
 

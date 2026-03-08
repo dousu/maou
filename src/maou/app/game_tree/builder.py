@@ -157,6 +157,9 @@ class GameTreeBuilder:
         queue: deque[tuple[int, str]] = deque(
             [(initial_hash, initial_sfen)]
         )
+        # 次の深さのアイテムを一時的に蓄積し，深さ境界で
+        # row_idx 順にソートしてキャッシュローカリティを向上する
+        next_depth_items: list[tuple[int, str]] = []
         processed = 0
         prev_depth = 0
 
@@ -167,7 +170,16 @@ class GameTreeBuilder:
             get_rss_mb(),
         )
 
-        while queue:
+        while queue or next_depth_items:
+            # キューが空だが次の深さのアイテムがある場合，
+            # ソートしてキューに投入する
+            if not queue and next_depth_items:
+                next_depth_items.sort(
+                    key=lambda item: lookup[item[0]]
+                )
+                queue.extend(next_depth_items)
+                next_depth_items.clear()
+
             current_hash, current_sfen = queue.popleft()
             current_depth = visited[current_hash]
             row_idx = lookup[current_hash]
@@ -252,9 +264,11 @@ class GameTreeBuilder:
                     )
                 except ValueError:
                     logger.debug(
-                        "ラベル %d の変換に失敗(hash=%d)",
+                        "ラベル %d の変換に失敗"
+                        "(hash=%d, sfen=%s)",
                         label_idx_int,
                         current_hash,
+                        current_sfen,
                     )
                     continue
 
@@ -293,14 +307,16 @@ class GameTreeBuilder:
                     )
                 )
 
-                # 子局面がルックアップテーブルにあり，未訪問の場合はキューに追加
-                # BFSは等コストのため，最初に到達した経路が最短経路となる
+                # 子局面がルックアップテーブルにあり，未訪問の場合は
+                # 次の深さのバッファに追加(深さ境界でソート後にキューへ投入)
                 if (
                     child_in_lookup
                     and child_hash not in visited
                 ):
                     visited[child_hash] = current_depth + 1
-                    queue.append((child_hash, child_sfen))
+                    next_depth_items.append(
+                        (child_hash, child_sfen)
+                    )
 
             # ノードを追加(実際に生成されたエッジ数をnum_branchesに使用．
             # ラベル変換失敗分は除外されるため，max_depthノードとは意味が異なる)

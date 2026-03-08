@@ -51,6 +51,13 @@ from maou.infra.file_system.file_system import FileSystem
     type=str,
     default=None,
 )
+@click.option(
+    "--max-cache-files",
+    help="List型カラムのLRUキャッシュファイル数(1ファイル≈11.5GB)．",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+)
 @handle_exception
 def build_game_tree(
     input_path: Path,
@@ -59,6 +66,7 @@ def build_game_tree(
     min_probability: float,
     initial_hash: int | None,
     initial_sfen: str | None,
+    max_cache_files: int,
 ) -> None:
     """preprocessデータからゲームツリーを構築する．"""
     if initial_hash is not None and initial_sfen is None:
@@ -120,7 +128,9 @@ def build_game_tree(
 
     # List型カラムの遅延アクセス用オブジェクト
     list_columns = FileBackedListColumns(
-        input_files, file_row_counts
+        input_files,
+        file_row_counts,
+        max_cache_files=max_cache_files,
     )
 
     # ツリー構築
