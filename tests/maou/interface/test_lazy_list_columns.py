@@ -218,3 +218,59 @@ class TestFileBackedListColumns:
         accessor = FileBackedListColumns([path], [3])
         with pytest.raises(ValueError, match="一致しません"):
             accessor.get(0)
+
+    def test_lru_cache_multiple_files(
+        self, tmp_path: Path
+    ) -> None:
+        """max_cache_files=2 で2ファイルをキャッシュし，ヒット率が向上する．"""
+        path0 = tmp_path / "file_0.feather"
+        path1 = tmp_path / "file_1.feather"
+        _create_feather_file(path0, [[1.0]], [[0.1]])
+        _create_feather_file(path1, [[2.0]], [[0.2]])
+
+        accessor = FileBackedListColumns(
+            [path0, path1], [1, 1], max_cache_files=2
+        )
+
+        accessor.get(0)  # ミス(file_0ロード)
+        accessor.get(
+            1
+        )  # ミス(file_1ロード，file_0はキャッシュに残る)
+        accessor.get(0)  # ヒット(file_0はまだキャッシュ内)
+        accessor.get(1)  # ヒット(file_1もキャッシュ内)
+
+        assert accessor.cache_hits == 2
+        assert accessor.cache_misses == 2
+
+    def test_lru_cache_eviction(self, tmp_path: Path) -> None:
+        """max_cache_files=2 で3ファイル目にアクセスすると最古のエントリが破棄される．"""
+        path0 = tmp_path / "file_0.feather"
+        path1 = tmp_path / "file_1.feather"
+        path2 = tmp_path / "file_2.feather"
+        _create_feather_file(path0, [[1.0]], [[0.1]])
+        _create_feather_file(path1, [[2.0]], [[0.2]])
+        _create_feather_file(path2, [[3.0]], [[0.3]])
+
+        accessor = FileBackedListColumns(
+            [path0, path1, path2],
+            [1, 1, 1],
+            max_cache_files=2,
+        )
+
+        accessor.get(0)  # ミス(file_0ロード)
+        accessor.get(1)  # ミス(file_1ロード)
+        accessor.get(2)  # ミス(file_2ロード，file_0破棄)
+        accessor.get(1)  # ヒット(file_1はまだキャッシュ内)
+        accessor.get(0)  # ミス(file_0は破棄済み，再ロード)
+
+        assert accessor.cache_hits == 1
+        assert accessor.cache_misses == 4
+
+    def test_max_cache_files_zero_raises(self) -> None:
+        """max_cache_files=0 で ValueError が発生する．"""
+        with pytest.raises(ValueError, match="1以上"):
+            FileBackedListColumns(
+                [Path("a.feather")],
+                [10],
+                max_cache_files=0,
+            )

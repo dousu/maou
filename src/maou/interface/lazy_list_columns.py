@@ -2,7 +2,7 @@
 
 preprocessデータの moveLabel / moveWinRate カラムは
 全ファイル一括読み込みするとメモリに収まらないため，
-1ファイル分のみキャッシュして省メモリでアクセスする．
+LRUキャッシュで限られたファイル数のみ保持して省メモリでアクセスする．
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import bisect
 import gc
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,7 +28,7 @@ class FileBackedListColumns:
     """List型カラム(moveLabel, moveWinRate)へのファイルベース遅延アクセス．
 
     全ファイルのList型カラムを一度にメモリに載せることを避け，
-    1ファイル分のみキャッシュして省メモリでアクセスする．
+    LRUキャッシュで指定数のファイルのみ保持して省メモリでアクセスする．
 
     Note:
         ファイル順にアクセスする場合に最もキャッシュ効率が高い．
@@ -39,12 +40,16 @@ class FileBackedListColumns:
         self,
         file_paths: list[Path],
         file_row_counts: list[int],
+        max_cache_files: int = 1,
     ) -> None:
         """初期化する．
 
         Args:
             file_paths: 各ファイルのパス(読み込み順)
             file_row_counts: 各ファイルの行数
+            max_cache_files: キャッシュするファイル数の上限(LRU方式)．
+                1ファイルあたり約11.5GBのメモリを使用する
+                (100万行 × 1496要素 × 4bytes × 2列)．
         """
         if len(file_paths) != len(file_row_counts):
             raise ValueError(
@@ -56,6 +61,11 @@ class FileBackedListColumns:
             raise ValueError(
                 "file_paths が空です．"
                 "少なくとも1つのファイルが必要です．"
+            )
+        if max_cache_files < 1:
+            raise ValueError(
+                f"max_cache_files({max_cache_files}) は"
+                "1以上でなければなりません．"
             )
         self._file_paths: list[Path] = []
         # 空ファイル(行数0)を除外して警告
@@ -81,9 +91,12 @@ class FileBackedListColumns:
                 "フィルタ後に有効なファイルが残りませんでした"
                 "(全ファイルが空行数です)．"
             )
-        self._cached_file_idx: int = -1
-        self._cached_labels: pl.Series | None = None
-        self._cached_win_rates: pl.Series | None = None
+        self._max_cache_files = max_cache_files
+        # LRUキャッシュ: file_idx → (labels, win_rates)
+        # OrderedDict で最後にアクセスしたエントリを末尾に移動する
+        self._cache: OrderedDict[
+            int, tuple[pl.Series, pl.Series]
+        ] = OrderedDict()
         self._cache_hits: int = 0
         self._cache_misses: int = 0
 
@@ -122,19 +135,17 @@ class FileBackedListColumns:
         )
         local_row = global_row - self._boundaries[file_idx]
 
-        if file_idx != self._cached_file_idx:
-            try:
-                self._load_file(file_idx)
-            finally:
-                self._cache_misses += 1
-        else:
+        if file_idx in self._cache:
+            self._cache.move_to_end(file_idx)
             self._cache_hits += 1
+        else:
+            self._load_file(file_idx)
+            self._cache_misses += 1
 
-        assert self._cached_labels is not None
-        assert self._cached_win_rates is not None
+        cached_labels, cached_win_rates = self._cache[file_idx]
 
-        raw_labels = self._cached_labels[local_row]
-        raw_win_rates = self._cached_win_rates[local_row]
+        raw_labels = cached_labels[local_row]
+        raw_win_rates = cached_win_rates[local_row]
         if raw_labels is None or raw_win_rates is None:
             raise ValueError(
                 f"global_row={global_row} (file_idx={file_idx}, "
@@ -145,12 +156,15 @@ class FileBackedListColumns:
         return labels, win_rates
 
     def _load_file(self, file_idx: int) -> None:
-        """指定ファイルのList型カラムをロードする(既存キャッシュは解放)．"""
+        """指定ファイルのList型カラムをロードする(LRUで古いエントリを解放)．"""
         import polars as pl
 
-        # 既存キャッシュを解放
-        self._cached_labels = None
-        self._cached_win_rates = None
+        # キャッシュが上限に達している場合，最も古いエントリを破棄
+        while len(self._cache) >= self._max_cache_files:
+            evicted_idx, _ = self._cache.popitem(last=False)
+            logger.debug(
+                "LRUキャッシュ破棄: file_idx=%d", evicted_idx
+            )
         gc.collect()
 
         path = self._file_paths[file_idx]
@@ -170,19 +184,16 @@ class FileBackedListColumns:
             columns=["moveLabel", "moveWinRate"],
             memory_map=False,
         )
-        self._cached_labels = df["moveLabel"]
-        self._cached_win_rates = df["moveWinRate"]
+        loaded_labels = df["moveLabel"]
+        loaded_win_rates = df["moveWinRate"]
         del df
 
         expected_rows = (
             self._boundaries[file_idx + 1]
             - self._boundaries[file_idx]
         )
-        actual_rows = len(self._cached_labels)
+        actual_rows = len(loaded_labels)
         if actual_rows != expected_rows:
-            # バリデーション失敗時はキャッシュをクリアして整合性を保つ
-            self._cached_labels = None
-            self._cached_win_rates = None
             raise ValueError(
                 f"ファイル {path.name} の List カラム行数"
                 f"({actual_rows}) が"
@@ -190,11 +201,14 @@ class FileBackedListColumns:
                 f"({expected_rows}) と一致しません"
             )
 
-        self._cached_file_idx = file_idx
+        self._cache[file_idx] = (
+            loaded_labels,
+            loaded_win_rates,
+        )
 
         logger.debug(
             "List型カラム読み込み完了: %s 行, RSS=%d MB",
-            f"{len(self._cached_labels):,}",
+            f"{actual_rows:,}",
             get_rss_mb(),
         )
 
@@ -207,8 +221,10 @@ class FileBackedListColumns:
         hit_rate = self._cache_hits / total * 100
         logger.info(
             "List型カラムキャッシュ統計: "
-            "ヒット=%s, ミス=%s, ヒット率=%.1f%%",
+            "ヒット=%s, ミス=%s, ヒット率=%.1f%%, "
+            "max_cache_files=%d",
             f"{self._cache_hits:,}",
             f"{self._cache_misses:,}",
             hit_rate,
+            self._max_cache_files,
         )
