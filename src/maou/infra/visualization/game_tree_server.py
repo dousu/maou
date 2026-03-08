@@ -577,7 +577,7 @@ def launch_game_tree_server(
             str,
             str,
         ] = (
-            gr.update(),  # type: ignore[assignment]
+            "",
             "",
             "",
             {},
@@ -941,7 +941,6 @@ def launch_game_tree_server(
         )
 
         # ノード展開(ダブルクリック) - hidden buttonクリックで発火
-
         expand_trigger.click(
             fn=on_node_expanded,
             inputs=[

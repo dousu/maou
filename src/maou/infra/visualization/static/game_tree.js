@@ -207,17 +207,28 @@
     });
 
     // Node click -> update hidden textbox for detail panel
+    // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
+    var tapTimer = null;
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
-      setHiddenTextbox(
-        "#selected-node-id textarea, #selected-node-id input",
-        nodeId
-      );
-      clickHiddenButton("node-select-trigger");
+      if (tapTimer) clearTimeout(tapTimer);
+      tapTimer = setTimeout(function () {
+        tapTimer = null;
+        setHiddenTextbox(
+          "#selected-node-id textarea, #selected-node-id input",
+          nodeId
+        );
+        clickHiddenButton("node-select-trigger");
+      }, 250);
     });
 
     // Double click -> expand subtree
     cy.on("dbltap", "node", function (evt) {
+      // tap タイマーをキャンセルして冗長な select を防止
+      if (tapTimer) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+      }
       const nodeId = evt.target.id();
       setHiddenTextbox(
         "#expand-node-id textarea, #expand-node-id input",
@@ -238,16 +249,11 @@
     if (!item) return;
     var hash = item.getAttribute("data-hash");
     if (!hash) return;
-    // パンくずクリック → ノード選択 + ツリー展開
-    setHiddenTextbox(
-      "#selected-node-id textarea, #selected-node-id input",
-      hash
-    );
+    // パンくずクリック → ツリー展開(expand は select の出力を包含する)
     setHiddenTextbox(
       "#expand-node-id textarea, #expand-node-id input",
       hash
     );
-    clickHiddenButton("node-select-trigger");
     clickHiddenButton("node-expand-trigger");
   });
 
