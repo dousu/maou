@@ -61,11 +61,10 @@
   function setHiddenTextbox(selector, value) {
     const hiddenInput = document.querySelector(selector);
     if (!hiddenInput) return;
-    const proto = hiddenInput instanceof HTMLTextAreaElement
-      ? window.HTMLTextAreaElement.prototype
-      : window.HTMLInputElement.prototype;
+    // Gradio 6 は Textbox を <textarea> として描画する．
+    // セレクタも textarea に限定しているため，直接参照する．
     const nativeSetter = Object.getOwnPropertyDescriptor(
-      proto, "value"
+      window.HTMLTextAreaElement.prototype, "value"
     )?.set;
     if (nativeSetter) {
       nativeSetter.call(hiddenInput, value);
@@ -225,12 +224,12 @@
         // グローバル変数に保存(js パラメータから確実に読み取れる)
         window.__maou_selected_node_id = nodeId;
         setHiddenTextbox(
-          "#selected-node-id textarea, #selected-node-id input",
+          "#selected-node-id textarea",
           nodeId
         );
         // textbox の input イベントで Gradio .input() コールバックを発火
         triggerHiddenInput(
-          "#selected-node-id textarea, #selected-node-id input"
+          "#selected-node-id textarea"
         );
       }, 250);
     });
@@ -246,12 +245,12 @@
       // グローバル変数に保存(js パラメータから確実に読み取れる)
       window.__maou_expand_node_id = nodeId;
       setHiddenTextbox(
-        "#expand-node-id textarea, #expand-node-id input",
+        "#expand-node-id textarea",
         nodeId
       );
       // textbox の input イベントで Gradio .input() コールバックを発火
       triggerHiddenInput(
-        "#expand-node-id textarea, #expand-node-id input"
+        "#expand-node-id textarea"
       );
     });
 
@@ -271,12 +270,12 @@
     window.__maou_expand_node_id = hash;
     // パンくずクリック → ツリー展開(expand は select の出力を包含する)
     setHiddenTextbox(
-      "#expand-node-id textarea, #expand-node-id input",
+      "#expand-node-id textarea",
       hash
     );
     // textbox の input イベントで Gradio .input() コールバックを発火
     triggerHiddenInput(
-      "#expand-node-id textarea, #expand-node-id input"
+      "#expand-node-id textarea"
     );
   });
 

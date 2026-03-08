@@ -36,7 +36,7 @@ JS_READ_SELECTED = (
     "    window.__maou_selected_node_id = ''; return v;"
     "  }"
     "  const el = document.querySelector("
-    "    '#selected-node-id textarea, #selected-node-id input');"
+    "    '#selected-node-id textarea');"
     "  return (el && el.value) || nodeId;"
     "}"
 )
@@ -54,7 +54,7 @@ JS_READ_EXPAND = (
     "    window.__maou_expand_node_id = ''; return [v, depth, prob];"
     "  }"
     "  const el = document.querySelector("
-    "    '#expand-node-id textarea, #expand-node-id input');"
+    "    '#expand-node-id textarea');"
     "  return [(el && el.value) || nodeId, depth, prob];"
     "}"
 )
