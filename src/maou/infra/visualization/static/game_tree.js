@@ -258,13 +258,19 @@
     });
 
     // Double click -> expand subtree
+    // 現在のルートと同じノードの場合は再描画をスキップする
     cy.on("dbltap", "node", function (evt) {
       // tap タイマーをキャンセルして冗長な select を防止
       if (tapTimer) {
         clearTimeout(tapTimer);
         tapTimer = null;
       }
-      notifyNodeExpanded(evt.target.id());
+      var nodeId = evt.target.id();
+      if (nodeId === readCurrentRoot()) {
+        notifyNodeSelected(nodeId);
+      } else {
+        notifyNodeExpanded(nodeId);
+      }
     });
 
     // Fit to view
