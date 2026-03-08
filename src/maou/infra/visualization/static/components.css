@@ -1219,7 +1219,7 @@
    Gradio 6 の visible=False は Svelte の条件レンダリング({#if visible})で
    DOM 要素を生成しないため，JS からアクセスする必要があるコンポーネントには
    visible をデフォルト(True)のまま残し，このクラスで視覚的に非表示にする． */
-.js-hidden {
+.gradio-container .js-hidden {
     display: none !important;
 }
 
