@@ -109,8 +109,10 @@ class FileBackedListColumns:
         local_row = global_row - self._boundaries[file_idx]
 
         if file_idx != self._cached_file_idx:
-            self._load_file(file_idx)
-            self._cache_misses += 1
+            try:
+                self._load_file(file_idx)
+            finally:
+                self._cache_misses += 1
         else:
             self._cache_hits += 1
 
@@ -185,12 +187,14 @@ class FileBackedListColumns:
     def log_stats(self) -> None:
         """キャッシュ統計をログに出力する．"""
         total = self._cache_hits + self._cache_misses
-        if total > 0:
-            hit_rate = self._cache_hits / total * 100
-            logger.info(
-                "List型カラムキャッシュ統計: "
-                "ヒット=%s, ミス=%s, ヒット率=%.1f%%",
-                f"{self._cache_hits:,}",
-                f"{self._cache_misses:,}",
-                hit_rate,
-            )
+        if total == 0:
+            logger.info("List型カラムキャッシュ: アクセスなし")
+            return
+        hit_rate = self._cache_hits / total * 100
+        logger.info(
+            "List型カラムキャッシュ統計: "
+            "ヒット=%s, ミス=%s, ヒット率=%.1f%%",
+            f"{self._cache_hits:,}",
+            f"{self._cache_misses:,}",
+            hit_rate,
+        )

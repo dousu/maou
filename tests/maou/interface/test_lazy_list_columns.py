@@ -162,12 +162,16 @@ class TestFileBackedListColumns:
         assert labels.dtype == np.float32
         assert win_rates.dtype == np.float32
 
-    def test_log_stats_no_access(self, tmp_path: Path) -> None:
-        """アクセスなしの状態で log_stats() がエラーにならない．"""
+    def test_log_stats_no_access(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """アクセスなしの状態で log_stats() が「アクセスなし」をログ出力する．"""
         path = tmp_path / "file_0.feather"
         _create_feather_file(path, [[1.0]], [[0.1]])
         accessor = FileBackedListColumns([path], [1])
-        accessor.log_stats()  # total=0 でも例外にならないことを確認
+        with caplog.at_level("INFO"):
+            accessor.log_stats()
+        assert "アクセスなし" in caplog.text
 
     def test_row_count_mismatch_raises(
         self, tmp_path: Path
