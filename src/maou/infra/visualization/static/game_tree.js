@@ -60,10 +60,11 @@
   function setHiddenTextbox(selector, value) {
     const hiddenInput = document.querySelector(selector);
     if (!hiddenInput) return;
+    const proto = hiddenInput instanceof HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
     const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, "value"
-    )?.set || Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype, "value"
+      proto, "value"
     )?.set;
     if (nativeSetter) {
       nativeSetter.call(hiddenInput, value);
@@ -71,6 +72,7 @@
       hiddenInput.value = value;
     }
     hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   /**
