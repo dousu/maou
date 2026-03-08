@@ -62,11 +62,11 @@
    * ELEM_ID_MIN_PROB_SLIDER と同期している．
    */
   function readSlider(elemId) {
-    var el = document.getElementById(elemId);
+    const el = document.getElementById(elemId);
     if (!el) return null;
-    var numInput = el.querySelector('input[type="number"]');
+    const numInput = el.querySelector('input[type="number"]');
     if (numInput) return parseFloat(numInput.value);
-    var rangeInput = el.querySelector('input[type="range"]');
+    const rangeInput = el.querySelector('input[type="range"]');
     if (rangeInput) return parseFloat(rangeInput.value);
     return null;
   }
@@ -79,15 +79,15 @@
    * Gradio の出力パイプラインで UI を更新する．
    */
   function notifyNodeSelected(nodeId) {
-    var bridge = window.__maou_select;
+    const bridge = window.__maou_select;
     if (!bridge || !bridge.server) {
       console.warn("[maou] select bridge not ready");
       return;
     }
     bridge.server
       .handle_select(String(nodeId))
-      .then(function () {
-        bridge.trigger("change");
+      .then(function (ok) {
+        if (ok) bridge.trigger("change");
       })
       .catch(function (err) {
         console.error("[maou] handle_select failed:", err);
@@ -101,7 +101,7 @@
    * elem_id は game_tree_shared.py と同期．
    */
   function notifyNodeExpanded(nodeId) {
-    var bridge = window.__maou_expand;
+    const bridge = window.__maou_expand;
     if (!bridge || !bridge.server) {
       console.warn("[maou] expand bridge not ready");
       return;
@@ -109,12 +109,12 @@
     // フォールバック値 (3, 0.01) は Python 側のスライダーデフォルト値
     // (game_tree_server.py: depth_slider value=3,
     //  min_prob_slider value=0.01) と同期すること．
-    var depth = readSlider("gt-depth-slider") || 3;
-    var prob = readSlider("gt-min-prob-slider") || 0.01;
+    const depth = readSlider("gt-depth-slider") || 3;
+    const prob = readSlider("gt-min-prob-slider") || 0.01;
     bridge.server
       .handle_expand(String(nodeId), depth, prob)
-      .then(function () {
-        bridge.trigger("change");
+      .then(function (ok) {
+        if (ok) bridge.trigger("change");
       })
       .catch(function (err) {
         console.error("[maou] handle_expand failed:", err);
@@ -125,7 +125,7 @@
    * Cytoscape.jsインスタンスを初期化・更新する
    */
   function renderTree(elementsJson, containerId) {
-    var container = document.getElementById(containerId);
+    const container = document.getElementById(containerId);
     if (!container) return;
 
     // Register dagre layout plugin if not yet registered
@@ -133,7 +133,7 @@
       try { cytoscape.use(cytoscapeDagre); } catch (_) { /* already registered */ }
     }
 
-    var elements;
+    let elements;
     try {
       elements = typeof elementsJson === "string"
         ? JSON.parse(elementsJson)
@@ -249,7 +249,7 @@
     // Node click -> server_functions で詳細パネルを更新
     // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
     cy.on("tap", "node", function (evt) {
-      var nodeId = evt.target.id();
+      const nodeId = evt.target.id();
       if (tapTimer) clearTimeout(tapTimer);
       tapTimer = setTimeout(function () {
         tapTimer = null;
@@ -275,9 +275,9 @@
    * パンくずリスト要素のクリックハンドラ(イベント委譲)
    */
   document.addEventListener("click", function (e) {
-    var item = e.target.closest(".breadcrumb-item[data-hash]");
+    const item = e.target.closest(".breadcrumb-item[data-hash]");
     if (!item) return;
-    var hash = item.getAttribute("data-hash");
+    const hash = item.getAttribute("data-hash");
     if (!hash) return;
     notifyNodeExpanded(hash);
   });
@@ -287,8 +287,8 @@
    */
   function exportTreePNG() {
     if (!cy) return;
-    var png = cy.png({ scale: 2, bg: "#ffffff", full: true });
-    var link = document.createElement("a");
+    const png = cy.png({ scale: 2, bg: "#ffffff", full: true });
+    const link = document.createElement("a");
     link.href = png;
     link.download = "game_tree.png";
     document.body.appendChild(link);
