@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
 import polars as pl
@@ -25,6 +26,12 @@ class GameTreeQuery:
         """
         self.nodes_df = nodes_df
         self.edges_df = edges_df
+        # get_path_to_root のLRUキャッシュ(DataFrameは不変のため安全)
+        # _get_detail_outputs で同一ノードに4回呼ばれるのを吸収する
+        self._path_cache: OrderedDict[int, list[int]] = (
+            OrderedDict()
+        )
+        self._path_cache_maxsize = 64
 
     def get_subtree(
         self,
@@ -143,12 +150,25 @@ class GameTreeQuery:
         depthフィールドを利用して，depth が1ずつ減少する
         親エッジのみを辿ることで最短パスを効率的に取得する．
 
+        結果はインスタンスレベルでキャッシュされる．
+        同一 position_hash に対する2回目以降の呼び出しは
+        キャッシュから即座に返す．
+
         Args:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
             ルートから対象ノードまでのposition_hashリスト
         """
+        if position_hash in self._path_cache:
+            self._path_cache.move_to_end(position_hash)
+            return self._path_cache[position_hash]
+
+        # ノードが存在しない場合は空リストを返す
+        initial_depth = self._get_depth(position_hash)
+        if initial_depth is None:
+            return []
+
         path = [position_hash]
         current = position_hash
 
@@ -179,7 +199,11 @@ class GameTreeQuery:
             current = best_parent["parent_hash"]
             path.append(current)
 
-        return list(reversed(path))
+        result = list(reversed(path))
+        self._path_cache[position_hash] = result
+        if len(self._path_cache) > self._path_cache_maxsize:
+            self._path_cache.popitem(last=False)
+        return result
 
     def get_edge_between(
         self, parent_hash: int, child_hash: int

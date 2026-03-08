@@ -4,9 +4,12 @@
 maou visualize --array-type game-tree から起動される．
 """
 
+import atexit
 import html
 import json
 import logging
+import tempfile
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -190,8 +193,52 @@ def _build_tree_html(elements_json: str) -> str:
             &#9679; サイズ = 確率 / 色 = 勝率
         </span>
     </div>
+    <div class="tree-export-overlay">
+        <button class="export-btn" onclick="window.exportTreePNG()">
+            PNG出力
+        </button>
+    </div>
 </div>
 """
+
+
+def _build_breadcrumb_html(
+    breadcrumb_data: list[dict[str, str]],
+) -> str:
+    """パンくずリストのHTMLを生成する．
+
+    Args:
+        breadcrumb_data: [{"hash": "...", "label": "..."}, ...]
+
+    Returns:
+        パンくずリストのHTML文字列
+    """
+    if not breadcrumb_data:
+        return '<div class="breadcrumb-nav"></div>'
+
+    items: list[str] = []
+    last_idx = len(breadcrumb_data) - 1
+    for i, item in enumerate(breadcrumb_data):
+        if i > 0:
+            items.append(
+                '<span class="breadcrumb-sep">&gt;</span>'
+            )
+        escaped_label = html.escape(item["label"])
+        escaped_hash = html.escape(item["hash"])
+        if i == last_idx:
+            # 現在のノード(クリック不可)
+            items.append(
+                f'<span class="breadcrumb-item active">'
+                f"{escaped_label}</span>"
+            )
+        else:
+            items.append(
+                f'<span class="breadcrumb-item" '
+                f'data-hash="{escaped_hash}">'
+                f"{escaped_label}</span>"
+            )
+
+    return f'<div class="breadcrumb-nav">{"".join(items)}</div>'
 
 
 def _create_analytics_plot(
@@ -273,13 +320,57 @@ def _create_empty_plot() -> go.Figure:
     return fig
 
 
+def _get_detail_outputs(
+    viz: GameTreeVisualizationInterface,
+    pos_hash: int,
+) -> tuple[
+    str, dict[str, str], list[list[str]], go.Figure, str, str
+]:
+    """ノード詳細パネルの出力を生成する．
+
+    Args:
+        viz: 可視化インターフェース
+        pos_hash: 対象ノードのposition_hash
+
+    Returns:
+        (board_svg, stats, moves, plot, breadcrumb_html, sfen_text)
+    """
+    board_svg = viz.get_board_svg(pos_hash)
+    stats = viz.get_node_stats(pos_hash)
+    moves = viz.get_move_table(pos_hash)
+    analytics = viz.get_analytics_data(pos_hash)
+    plot = _create_analytics_plot(analytics)
+    if plot is None:
+        plot = _create_empty_plot()
+
+    breadcrumb = viz.get_breadcrumb_data(pos_hash)
+    breadcrumb_html = _build_breadcrumb_html(breadcrumb)
+
+    sfen_text = viz.export_sfen_path(pos_hash)
+
+    return (
+        board_svg,
+        stats,
+        moves,
+        plot,
+        breadcrumb_html,
+        sfen_text,
+    )
+
+
 def _update_tree_view(
     viz: GameTreeVisualizationInterface,
     root_hash: int,
     display_depth: int,
     min_prob: float,
 ) -> tuple[
-    str, str, dict[str, str], list[list[str]], go.Figure
+    str,
+    str,
+    dict[str, str],
+    list[list[str]],
+    go.Figure,
+    str,
+    str,
 ]:
     """ツリービューと詳細パネルを更新する．
 
@@ -290,7 +381,8 @@ def _update_tree_view(
         min_prob: エッジの最小確率閾値
 
     Returns:
-        (tree_html, board_svg, stats, moves, plot) のタプル
+        (tree_html, board_svg, stats, moves, plot,
+         breadcrumb_html, sfen_text)
     """
     elements = viz.get_cytoscape_elements(
         root_hash, int(display_depth), min_prob
@@ -298,15 +390,24 @@ def _update_tree_view(
     elements_json = json.dumps(elements, ensure_ascii=False)
     tree_html = _build_tree_html(elements_json)
 
-    board_svg = viz.get_board_svg(root_hash)
-    stats = viz.get_node_stats(root_hash)
-    moves = viz.get_move_table(root_hash)
-    analytics = viz.get_analytics_data(root_hash)
-    plot = _create_analytics_plot(analytics)
-    if plot is None:
-        plot = _create_empty_plot()
+    (
+        board_svg,
+        stats,
+        moves,
+        plot,
+        breadcrumb_html,
+        sfen_text,
+    ) = _get_detail_outputs(viz, root_hash)
 
-    return tree_html, board_svg, stats, moves, plot
+    return (
+        tree_html,
+        board_svg,
+        stats,
+        moves,
+        plot,
+        breadcrumb_html,
+        sfen_text,
+    )
 
 
 def launch_game_tree_server(
@@ -327,9 +428,9 @@ def launch_game_tree_server(
         server_name: サーバーバインドアドレス
     """
     # データ読み込み
-    io = GameTreeIO()
-    nodes_df, edges_df = io.load(tree_path)
-    metadata = io.load_metadata(tree_path)
+    tree_io = GameTreeIO()
+    nodes_df, edges_df = tree_io.load(tree_path)
+    metadata = tree_io.load_metadata(tree_path)
     logger.info(
         "Loaded tree: %d nodes, %d edges",
         len(nodes_df),
@@ -352,7 +453,13 @@ def launch_game_tree_server(
         display_depth: int,
         min_prob: float,
     ) -> tuple[
-        str, str, dict[str, str], list[list[str]], go.Figure
+        str,
+        str,
+        dict[str, str],
+        list[list[str]],
+        go.Figure,
+        str,
+        str,
     ]:
         """初期表示コールバック．"""
         return _update_tree_view(
@@ -364,7 +471,13 @@ def launch_game_tree_server(
         min_prob: float,
         current_root: str,
     ) -> tuple[
-        str, str, dict[str, str], list[list[str]], go.Figure
+        str,
+        str,
+        dict[str, str],
+        list[list[str]],
+        go.Figure,
+        str,
+        str,
     ]:
         """更新ボタンのコールバック．"""
         try:
@@ -384,23 +497,37 @@ def launch_game_tree_server(
 
     def on_node_selected(
         node_id: str,
-    ) -> tuple[str, dict[str, str], list[list[str]], go.Figure]:
+    ) -> tuple[
+        str,
+        dict[str, str],
+        list[list[str]],
+        go.Figure,
+        str,
+        str,
+    ]:
         """ノードクリック時のコールバック．"""
         if not node_id:
-            return ("", {}, [], _create_empty_plot())
+            return (
+                "",
+                {},
+                [],
+                _create_empty_plot(),
+                "",
+                "",
+            )
         try:
             pos_hash = int(node_id)
         except ValueError:
             logger.warning("Invalid node_id: %s", node_id)
-            return ("", {}, [], _create_empty_plot())
-        board_svg = viz.get_board_svg(pos_hash)
-        stats = viz.get_node_stats(pos_hash)
-        moves = viz.get_move_table(pos_hash)
-        analytics = viz.get_analytics_data(pos_hash)
-        plot = _create_analytics_plot(analytics)
-        if plot is None:
-            plot = _create_empty_plot()
-        return board_svg, stats, moves, plot
+            return (
+                "",
+                {},
+                [],
+                _create_empty_plot(),
+                "",
+                "",
+            )
+        return _get_detail_outputs(viz, pos_hash)
 
     def on_node_expanded(
         node_id: str,
@@ -413,6 +540,8 @@ def launch_game_tree_server(
         dict[str, str],
         list[list[str]],
         go.Figure,
+        str,
+        str,
     ]:
         """ノードダブルクリック(サブツリー展開)のコールバック．"""
         if not node_id:
@@ -423,6 +552,8 @@ def launch_game_tree_server(
                 {},
                 [],
                 _create_empty_plot(),
+                "",
+                "",
             )
         try:
             pos_hash = int(node_id)
@@ -435,11 +566,19 @@ def launch_game_tree_server(
                 {},
                 [],
                 _create_empty_plot(),
+                "",
+                "",
             )
-        tree_html, board_svg, stats, moves, plot = (
-            _update_tree_view(
-                viz, pos_hash, display_depth, min_prob
-            )
+        (
+            tree_html,
+            board_svg,
+            stats,
+            moves,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        ) = _update_tree_view(
+            viz, pos_hash, display_depth, min_prob
         )
         return (
             tree_html,
@@ -448,6 +587,8 @@ def launch_game_tree_server(
             stats,
             moves,
             plot,
+            breadcrumb_html,
+            sfen_text,
         )
 
     def on_back_to_root(
@@ -460,12 +601,20 @@ def launch_game_tree_server(
         dict[str, str],
         list[list[str]],
         go.Figure,
+        str,
+        str,
     ]:
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
-        tree_html, board_svg, stats, moves, plot = (
-            _update_tree_view(viz, rh, display_depth, min_prob)
-        )
+        (
+            tree_html,
+            board_svg,
+            stats,
+            moves,
+            plot,
+            breadcrumb_html,
+            sfen_text,
+        ) = _update_tree_view(viz, rh, display_depth, min_prob)
         return (
             tree_html,
             board_svg,
@@ -473,7 +622,44 @@ def launch_game_tree_server(
             stats,
             moves,
             plot,
+            breadcrumb_html,
+            sfen_text,
         )
+
+    # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
+    _csv_tmp_dir = tempfile.TemporaryDirectory(
+        prefix="maou_game_tree_csv_"
+    )
+    atexit.register(_csv_tmp_dir.cleanup)
+
+    def on_export_csv(
+        current_root: str,
+        display_depth: int,
+        min_prob: float,
+    ) -> str | None:
+        """CSV出力ボタンのコールバック．"""
+        try:
+            rh = (
+                int(current_root)
+                if current_root
+                else viz.get_root_hash()
+            )
+        except ValueError:
+            rh = viz.get_root_hash()
+
+        csv_content = viz.export_subtree_csv(
+            rh,
+            int(display_depth),
+            min_prob,
+        )
+        if not csv_content.strip():
+            return None
+
+        tmp_path = Path(_csv_tmp_dir.name) / (
+            f"game_tree_{uuid.uuid4().hex}.csv"
+        )
+        tmp_path.write_text(csv_content, encoding="utf-8")
+        return str(tmp_path)
 
     # --- UI構築 ---
 
@@ -512,6 +698,15 @@ def launch_game_tree_server(
                 "ルートに戻る", variant="secondary", scale=0
             )
 
+        # パンくずリスト
+        breadcrumb_html = gr.HTML(
+            value=_build_breadcrumb_html(
+                [{"hash": str(root_hash), "label": "初期局面"}]
+            ),
+            label="パンくずリスト",
+            show_label=False,
+        )
+
         # メインコンテンツ
         with gr.Row():
             with gr.Column(scale=3):
@@ -530,6 +725,23 @@ def launch_game_tree_server(
                 )
                 analytics_plot = gr.Plot(label="分岐分析")
 
+                # エクスポートセクション
+                with gr.Accordion("エクスポート", open=False):
+                    sfen_text = gr.Textbox(
+                        label="USI position文字列",
+                        interactive=False,
+                        lines=2,
+                    )
+                    export_csv_btn = gr.Button(
+                        "CSV出力",
+                        variant="secondary",
+                        size="sm",
+                    )
+                    csv_file = gr.File(
+                        label="CSVダウンロード",
+                        visible=True,
+                    )
+
         # Hidden state
         selected_node = gr.Textbox(
             visible=False, elem_id="selected-node-id"
@@ -545,18 +757,24 @@ def launch_game_tree_server(
 
         # --- イベントハンドリング ---
 
+        # 初期表示
+        _load_outputs = [
+            tree_html,
+            board_html,
+            stats_json,
+            move_table,
+            analytics_plot,
+            breadcrumb_html,
+            sfen_text,
+        ]
+
         demo.load(
             fn=on_load,
             inputs=[depth_slider, min_prob_slider],
-            outputs=[
-                tree_html,
-                board_html,
-                stats_json,
-                move_table,
-                analytics_plot,
-            ],
+            outputs=_load_outputs,
         )
 
+        # 更新ボタン
         refresh_btn.click(
             fn=on_refresh,
             inputs=[
@@ -564,15 +782,10 @@ def launch_game_tree_server(
                 min_prob_slider,
                 current_root_state,
             ],
-            outputs=[
-                tree_html,
-                board_html,
-                stats_json,
-                move_table,
-                analytics_plot,
-            ],
+            outputs=_load_outputs,
         )
 
+        # ノード選択(シングルクリック)
         selected_node.change(
             fn=on_node_selected,
             inputs=[selected_node],
@@ -581,8 +794,22 @@ def launch_game_tree_server(
                 stats_json,
                 move_table,
                 analytics_plot,
+                breadcrumb_html,
+                sfen_text,
             ],
         )
+
+        # ノード展開(ダブルクリック)
+        _expand_outputs = [
+            tree_html,
+            board_html,
+            current_root_state,
+            stats_json,
+            move_table,
+            analytics_plot,
+            breadcrumb_html,
+            sfen_text,
+        ]
 
         expand_node.change(
             fn=on_node_expanded,
@@ -591,27 +818,25 @@ def launch_game_tree_server(
                 depth_slider,
                 min_prob_slider,
             ],
-            outputs=[
-                tree_html,
-                board_html,
-                current_root_state,
-                stats_json,
-                move_table,
-                analytics_plot,
-            ],
+            outputs=_expand_outputs,
         )
 
+        # ルートに戻る
         back_btn.click(
             fn=on_back_to_root,
             inputs=[depth_slider, min_prob_slider],
-            outputs=[
-                tree_html,
-                board_html,
+            outputs=_expand_outputs,
+        )
+
+        # CSV出力
+        export_csv_btn.click(
+            fn=on_export_csv,
+            inputs=[
                 current_root_state,
-                stats_json,
-                move_table,
-                analytics_plot,
+                depth_slider,
+                min_prob_slider,
             ],
+            outputs=[csv_file],
         )
 
     # サーバー起動

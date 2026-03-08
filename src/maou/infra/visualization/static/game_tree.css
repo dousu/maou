@@ -92,3 +92,80 @@
     pointer-events: none;
     z-index: 100;
 }
+
+/* --- パンくずリスト --- */
+
+.breadcrumb-nav {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 12px;
+    background: var(--bg-secondary, #f5f5f5);
+    border: 1px solid var(--grid-lines, #d4c5a9);
+    border-radius: 6px;
+    font-size: 13px;
+    min-height: 36px;
+}
+
+.breadcrumb-item {
+    color: var(--link-text, #0070f3);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background-color 0.15s;
+    white-space: nowrap;
+}
+
+.breadcrumb-item:hover {
+    background: rgba(0, 112, 243, 0.1);
+    text-decoration: underline;
+}
+
+.breadcrumb-item.active {
+    color: var(--text-primary, #1a1a1a);
+    font-weight: 600;
+    cursor: default;
+    background: transparent;
+}
+
+.breadcrumb-item.active:hover {
+    background: transparent;
+    text-decoration: none;
+}
+
+.breadcrumb-sep {
+    color: var(--text-secondary, #718096);
+    font-size: 11px;
+    user-select: none;
+}
+
+/* --- エクスポートセクション --- */
+
+.export-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--grid-lines, #d4c5a9);
+    border-radius: 4px;
+    background: var(--bg-secondary, #f5f5f5);
+    color: var(--text-primary, #2d3748);
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.15s;
+}
+
+.export-btn:hover {
+    background: var(--grid-lines, #d4c5a9);
+}
+
+/* PNG export button overlay on tree */
+.tree-export-overlay {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+}
+
+.tree-export-overlay .export-btn {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}

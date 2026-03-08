@@ -273,3 +273,125 @@ class TestGetAnalyticsData:
         assert data["moves"] == []
         assert data["probabilities"] == []
         assert data["win_rates"] == []
+
+
+class TestGetBreadcrumbData:
+    """get_breadcrumb_data のテスト."""
+
+    def test_root_breadcrumb(self) -> None:
+        """ルートノードのパンくずリストは初期局面のみ."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        breadcrumb = viz.get_breadcrumb_data(100)
+        assert len(breadcrumb) == 1
+        assert breadcrumb[0]["label"] == "初期局面"
+        assert breadcrumb[0]["hash"] == "100"
+
+    def test_child_breadcrumb(self) -> None:
+        """子ノードのパンくずリストは2要素."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        breadcrumb = viz.get_breadcrumb_data(200)
+        assert len(breadcrumb) == 2
+        assert breadcrumb[0]["label"] == "初期局面"
+        assert breadcrumb[1]["hash"] == "200"
+        # 7g7f → 日本語表記(歩を含む)
+        assert "7六" in breadcrumb[1]["label"]
+
+    def test_missing_node(self) -> None:
+        """存在しないノードは空リストを返す．
+
+        get_path_to_rootは未知のhashで空リストを返すため，
+        パンくずリストも空になる．
+        """
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        breadcrumb = viz.get_breadcrumb_data(999)
+        assert len(breadcrumb) == 0
+
+
+class TestGetOpeningName:
+    """get_opening_name のテスト."""
+
+    def test_root_has_no_opening(self) -> None:
+        """ルートノードに定跡名はない."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.get_opening_name(100)
+        assert result is None
+
+    def test_single_move_no_match(self) -> None:
+        """1手のみでは定跡に一致しない(パターンが短すぎる場合を除く)."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.get_opening_name(200)
+        # 7g7f のみではデフォルト定跡に一致しない
+        assert result is None
+
+
+class TestExportSfenPath:
+    """export_sfen_path のテスト."""
+
+    def test_root_sfen(self) -> None:
+        """ルートノードのSFEN出力は初期局面."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.export_sfen_path(100)
+        assert result == "position startpos"
+
+    def test_child_sfen(self) -> None:
+        """子ノードのSFEN出力にmovesが含まれる."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.export_sfen_path(200)
+        assert result.startswith("position startpos moves")
+        assert "7g7f" in result
+
+    def test_missing_node_returns_startpos(self) -> None:
+        """存在しないノードはmovesなしの初期局面を返す．
+
+        get_path_to_rootは未知のhashで空リストを返すため，
+        指し手のない初期局面のposition文字列が返される．
+        """
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        result = viz.export_sfen_path(999)
+        assert result == "position startpos"
+
+
+class TestExportSubtreeCsv:
+    """export_subtree_csv のテスト."""
+
+    def test_csv_with_edges(self) -> None:
+        """エッジのあるサブツリーをCSV出力する."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        csv_content = viz.export_subtree_csv(
+            100, max_depth=3, min_probability=0.01
+        )
+        assert "parent_hash" in csv_content
+        assert "child_hash" in csv_content
+        assert "move" in csv_content
+        lines = csv_content.strip().split("\n")
+        assert len(lines) >= 2  # ヘッダー + データ行
+
+    def test_csv_empty_tree(self) -> None:
+        """エッジのないツリーのCSV出力はヘッダーのみ."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        csv_content = viz.export_subtree_csv(
+            100, max_depth=3, min_probability=0.01
+        )
+        lines = csv_content.strip().split("\n")
+        assert len(lines) == 1  # ヘッダーのみ
+
+
+class TestNodeStatsWithOpening:
+    """get_node_stats の定跡名統合テスト."""
+
+    def test_stats_without_opening(self) -> None:
+        """定跡に一致しないノードの統計には定跡キーがない."""
+        nodes, edges = _build_simple_tree()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        stats = viz.get_node_stats(100)
+        assert "定跡" not in stats
