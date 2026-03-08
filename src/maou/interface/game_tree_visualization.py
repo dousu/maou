@@ -299,7 +299,8 @@ class GameTreeVisualizationInterface:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
-            [[指し手, 確率, 勝率], ...] 形式のリスト(確率降順)
+            [[指し手, 確率, 勝率, child_hash], ...] 形式のリスト(確率降順)．
+            child_hashはUI上で非表示にされるが，行選択時のノード遷移に使用する．
         """
         children = self._query.get_children(position_hash)
         if len(children) == 0:
@@ -323,7 +324,9 @@ class GameTreeVisualizationInterface:
             )
             prob = f"{row['probability'] * 100:.1f}%"
             wr = f"{row['win_rate'] * 100:.1f}%"
-            result.append([japanese, prob, wr])
+            result.append(
+                [japanese, prob, wr, str(row["child_hash"])]
+            )
 
         return result
 

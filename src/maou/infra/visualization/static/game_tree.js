@@ -76,6 +76,16 @@
   }
 
   /**
+   * hidden buttonをクリックしてGradioコールバックを確実に発火する
+   */
+  function clickHiddenButton(elemId) {
+    const wrapper = document.getElementById(elemId);
+    if (!wrapper) return;
+    const btn = wrapper.querySelector("button");
+    if (btn) btn.click();
+  }
+
+  /**
    * Cytoscape.jsインスタンスを初期化・更新する
    */
   function renderTree(elementsJson, containerId) {
@@ -203,6 +213,7 @@
         "#selected-node-id textarea, #selected-node-id input",
         nodeId
       );
+      clickHiddenButton("node-select-trigger");
     });
 
     // Double click -> expand subtree
@@ -212,6 +223,7 @@
         "#expand-node-id textarea, #expand-node-id input",
         nodeId
       );
+      clickHiddenButton("node-expand-trigger");
     });
 
     // Fit to view
@@ -235,6 +247,8 @@
       "#expand-node-id textarea, #expand-node-id input",
       hash
     );
+    clickHiddenButton("node-select-trigger");
+    clickHiddenButton("node-expand-trigger");
   });
 
   /**
