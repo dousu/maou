@@ -275,7 +275,7 @@ class GameTreeVisualizationInterface:
             return {}
 
         stats: dict[str, str] = {
-            "Zobrist Hash": f"0x{detail['position_hash']:016X}",
+            "Zobrist Hash": str(detail["position_hash"]),
             "勝率": f"{detail['result_value'] * 100:.1f}%",
             "最善手勝率": f"{detail['best_move_win_rate'] * 100:.1f}%",
             "深さ": str(detail["depth"]),
