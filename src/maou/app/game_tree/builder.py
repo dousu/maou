@@ -142,7 +142,7 @@ class GameTreeBuilder:
             move_label_series = preprocess_df["moveLabel"]
             move_win_rate_series = preprocess_df["moveWinRate"]
         logger.info(
-            "NumPy配列変換完了: list_column_fn=%s, RSS=%d MB",
+            "スカラーカラム準備完了: list_column_fn=%s, RSS=%d MB",
             "あり" if list_column_fn is not None else "なし",
             get_rss_mb(),
         )

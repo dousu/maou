@@ -145,7 +145,7 @@ class FileBackedListColumns:
         return labels, win_rates
 
     def _load_file(self, file_idx: int) -> None:
-        """指定ファイルのList型カラムをロードする(既存キャッシュは解放)."""
+        """指定ファイルのList型カラムをロードする(既存キャッシュは解放)．"""
         import polars as pl
 
         # 既存キャッシュを解放
