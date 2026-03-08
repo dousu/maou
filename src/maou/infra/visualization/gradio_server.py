@@ -2338,17 +2338,25 @@ class GradioVisualizationServer:
                 return True
 
             def _gt_handle_expand(
-                node_id_str: str,
+                node_id_str: str | list[Any],
                 display_depth: int | float = 3,
                 min_prob: float = 0.01,
             ) -> bool:
                 """ノード展開の server_function．"""
+                # server_functions が複数引数をリストで渡す場合の展開
+                if isinstance(node_id_str, list):
+                    args = node_id_str
+                    node_id_str = str(args[0]) if args else ""
+                    if len(args) > 1:
+                        display_depth = args[1]
+                    if len(args) > 2:
+                        min_prob = args[2]
                 viz = self._game_tree_viz
                 if not node_id_str or viz is None:
                     return False
                 try:
                     pos_hash = int(node_id_str)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid node_id: %s", node_id_str
                     )
