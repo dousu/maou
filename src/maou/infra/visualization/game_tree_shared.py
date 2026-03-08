@@ -55,7 +55,7 @@ inputs: [expand_node, depth_slider, min_prob_slider] (3引数)
 # ========================================
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=8)
 def load_static_file(filename: str) -> str:
     """staticディレクトリからファイルを読み込む(結果はキャッシュされる)．
 
