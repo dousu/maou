@@ -21,31 +21,40 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # ========================================
 
 # Gradio 6 では setHiddenTextbox() で設定した DOM 値が Svelte の
-# 内部状態に反映されない場合がある．js パラメータで DOM から
-# 直接値を読み取り，Python コールバックに渡す．
+# 内部状態に反映されない場合がある．window グローバル変数を
+# 主経路とし，DOM クエリをフォールバックとして使用する．
 
 JS_READ_SELECTED = (
-    "(nodeId) => "
-    "document.querySelector("
-    "'#selected-node-id textarea, "
-    "#selected-node-id input')?.value || nodeId"
+    "(nodeId) => {"
+    "  var v = window.__maou_selected_node_id;"
+    "  if (v) { window.__maou_selected_node_id = ''; return v; }"
+    "  var el = document.querySelector("
+    "    '#selected-node-id textarea, "
+    "    #selected-node-id input');"
+    "  return (el && el.value) || nodeId;"
+    "}"
 )
 """select_trigger.click の js パラメータ．
 
-DOM から選択ノード ID を直接読み取る．
+window グローバル変数から選択ノード ID を読み取る．
+DOM クエリはフォールバック．
 inputs: [selected_node] (1引数)
 """
 
 JS_READ_EXPAND = (
-    "(nodeId, depth, prob) => ["
-    "document.querySelector("
-    "'#expand-node-id textarea, "
-    "#expand-node-id input')?.value || nodeId, "
-    "depth, prob]"
+    "(nodeId, depth, prob) => {"
+    "  var v = window.__maou_expand_node_id;"
+    "  if (v) { window.__maou_expand_node_id = ''; return [v, depth, prob]; }"
+    "  var el = document.querySelector("
+    "    '#expand-node-id textarea, "
+    "    #expand-node-id input');"
+    "  return [(el && el.value) || nodeId, depth, prob];"
+    "}"
 )
 """expand_trigger.click の js パラメータ．
 
-DOM から展開ノード ID を直接読み取る．
+window グローバル変数から展開ノード ID を読み取る．
+DOM クエリはフォールバック．
 inputs: [expand_node, depth_slider, min_prob_slider] (3引数)
 """
 

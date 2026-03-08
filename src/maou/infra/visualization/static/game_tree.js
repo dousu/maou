@@ -222,11 +222,16 @@
       if (tapTimer) clearTimeout(tapTimer);
       tapTimer = setTimeout(function () {
         tapTimer = null;
+        // グローバル変数に保存(js パラメータから確実に読み取れる)
+        window.__maou_selected_node_id = nodeId;
         setHiddenTextbox(
           "#selected-node-id textarea, #selected-node-id input",
           nodeId
         );
-        clickHiddenButton("node-select-trigger");
+        // Svelte に状態更新を反映させてからボタンをクリック
+        requestAnimationFrame(function () {
+          clickHiddenButton("node-select-trigger");
+        });
       }, 250);
     });
 
@@ -238,11 +243,16 @@
         tapTimer = null;
       }
       const nodeId = evt.target.id();
+      // グローバル変数に保存(js パラメータから確実に読み取れる)
+      window.__maou_expand_node_id = nodeId;
       setHiddenTextbox(
         "#expand-node-id textarea, #expand-node-id input",
         nodeId
       );
-      clickHiddenButton("node-expand-trigger");
+      // Svelte に状態更新を反映させてからボタンをクリック
+      requestAnimationFrame(function () {
+        clickHiddenButton("node-expand-trigger");
+      });
     });
 
     // Fit to view
@@ -257,12 +267,17 @@
     if (!item) return;
     const hash = item.getAttribute("data-hash");
     if (!hash) return;
+    // グローバル変数に保存(js パラメータから確実に読み取れる)
+    window.__maou_expand_node_id = hash;
     // パンくずクリック → ツリー展開(expand は select の出力を包含する)
     setHiddenTextbox(
       "#expand-node-id textarea, #expand-node-id input",
       hash
     );
-    clickHiddenButton("node-expand-trigger");
+    // Svelte に状態更新を反映させてからボタンをクリック
+    requestAnimationFrame(function () {
+      clickHiddenButton("node-expand-trigger");
+    });
   });
 
   /**
