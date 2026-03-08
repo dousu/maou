@@ -106,6 +106,9 @@
       console.warn("[maou] expand bridge not ready");
       return;
     }
+    // フォールバック値 (3, 0.01) は Python 側のスライダーデフォルト値
+    // (game_tree_server.py: depth_slider value=3,
+    //  min_prob_slider value=0.01) と同期すること．
     var depth = readSlider("gt-depth-slider") || 3;
     var prob = readSlider("gt-min-prob-slider") || 0.01;
     bridge.server

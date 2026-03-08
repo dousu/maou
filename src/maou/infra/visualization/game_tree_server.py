@@ -320,6 +320,10 @@ def launch_game_tree_server(
     # server_functions → .change() コールバック間のデータ受け渡し用
     # NOTE: Gradio はセッション内のリクエストを逐次処理するため，
     # 同一セッション内での競合は発生しない．
+    # WARNING: _pending はクロージャとして全セッションに共有されるため，
+    # 複数ユーザーが同時接続するマルチセッション環境では競合が発生する．
+    # 本モジュール(スタンドアロンモード)は単一ユーザー前提で設計されており，
+    # マルチセッション環境では gr.State を使ったセッション分離が必要．
     _pending: dict[str, Any] = {}
 
     def on_load(

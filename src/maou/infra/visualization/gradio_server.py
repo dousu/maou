@@ -2135,7 +2135,14 @@ class GradioVisualizationServer:
             def _gt_get_node_details(
                 viz: Any,
                 pos_hash: int,
-            ) -> tuple[str, dict, list, Any, str, str]:
+            ) -> tuple[
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
+            ]:
                 """ノード詳細データを取得する共通ヘルパー．
 
                 Returns:
@@ -2169,11 +2176,26 @@ class GradioVisualizationServer:
 
             def _gt_insert_root(
                 tree_result: tuple[
-                    str, str, str, dict, list, Any, str, str
+                    str,
+                    str,
+                    str,
+                    dict[str, str],
+                    list[list[str]],
+                    Any,
+                    str,
+                    str,
                 ],
                 current_root: str,
             ) -> tuple[
-                str, str, str, str, dict, list, Any, str, str
+                str,
+                str,
+                str,
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
             ]:
                 """_gt_update_tree の 8 要素タプルに current_root を挿入．
 
@@ -2208,7 +2230,14 @@ class GradioVisualizationServer:
                 min_prob: float,
                 current_root: str,
             ) -> tuple[
-                str, str, str, dict, list, Any, str, str
+                str,
+                str,
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
             ]:
                 """ゲームツリーの更新コールバック．
 
@@ -2283,6 +2312,10 @@ class GradioVisualizationServer:
 
             # --- server_functions: JS から直接呼び出される ---
             # server_functions → .change() 間のデータ受け渡し用
+            # WARNING: _gt_pending はクロージャとして全セッションに共有される．
+            # 複数ユーザーが同時接続する場合，セッション間でデータ競合が
+            # 発生する．現在は単一ユーザー前提の設計であり，マルチセッション
+            # 環境では gr.State を使ったセッション分離への変更が必要．
             _gt_pending: dict[str, Any] = {}
 
             def _gt_handle_select(
@@ -2314,26 +2347,32 @@ class GradioVisualizationServer:
                 if not node_id_str or viz is None:
                     return False
                 try:
-                    int(node_id_str)  # バリデーションのみ
+                    pos_hash = int(node_id_str)
                 except ValueError:
                     logger.warning(
                         "Invalid node_id: %s", node_id_str
                     )
                     return False
+                root_str = str(pos_hash)
                 _gt_pending["expand"] = {
                     "data": _gt_insert_root(
                         _gt_update_tree(
                             int(display_depth),
                             min_prob,
-                            node_id_str,
+                            root_str,
                         ),
-                        node_id_str,
+                        root_str,
                     ),
                 }
                 return True
 
             def _gt_on_select_result() -> tuple[
-                str, dict, list, Any, str, str
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
             ]:
                 """select_bridge.change のコールバック．"""
                 result = _gt_pending.pop("select", None)
@@ -2349,7 +2388,15 @@ class GradioVisualizationServer:
                 )
 
             def _gt_on_expand_result() -> tuple[
-                str, str, str, str, dict, list, Any, str, str
+                str,
+                str,
+                str,
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
             ]:
                 """expand_bridge.change のコールバック．"""
                 result = _gt_pending.pop("expand", None)
@@ -2371,7 +2418,15 @@ class GradioVisualizationServer:
                 display_depth: int,
                 min_prob: float,
             ) -> tuple[
-                str, str, str, str, dict, list, Any, str, str
+                str,
+                str,
+                str,
+                str,
+                dict[str, str],
+                list[list[str]],
+                Any,
+                str,
+                str,
             ]:
                 """ルートに戻るボタンのコールバック．"""
                 root = str(self._game_tree_root_hash)
