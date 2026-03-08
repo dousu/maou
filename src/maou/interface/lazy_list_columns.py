@@ -53,6 +53,15 @@ class FileBackedListColumns:
                 "少なくとも1つのファイルが必要です．"
             )
         self._file_paths = file_paths
+        # 空ファイル(行数0)を警告
+        for i, n in enumerate(file_row_counts):
+            if n == 0:
+                logger.warning(
+                    "file_row_counts[%d] が 0 です(空ファイル: %s)．"
+                    "このファイルの行はスキップされます．",
+                    i,
+                    file_paths[i],
+                )
         # 累積行数の境界: [0, n0, n0+n1, ...]
         self._boundaries: list[int] = [0]
         for n in file_row_counts:
@@ -90,7 +99,7 @@ class FileBackedListColumns:
         """
         if global_row < 0 or global_row >= self._total_rows:
             raise IndexError(
-                f"global_row={global_row} は範囲外です"
+                f"global_row={global_row} は範囲外です "
                 f"(総行数={self._total_rows})"
             )
         file_idx = (
@@ -108,14 +117,15 @@ class FileBackedListColumns:
         assert self._cached_labels is not None
         assert self._cached_win_rates is not None
 
-        labels = np.array(
-            self._cached_labels[local_row],
-            dtype=np.float32,
-        )
-        win_rates = np.array(
-            self._cached_win_rates[local_row],
-            dtype=np.float32,
-        )
+        raw_labels = self._cached_labels[local_row]
+        raw_win_rates = self._cached_win_rates[local_row]
+        if raw_labels is None or raw_win_rates is None:
+            raise ValueError(
+                f"global_row={global_row} (file_idx={file_idx}, "
+                f"local_row={local_row}) に null 値が含まれています"
+            )
+        labels = np.array(raw_labels, dtype=np.float32)
+        win_rates = np.array(raw_win_rates, dtype=np.float32)
         return labels, win_rates
 
     def _load_file(self, file_idx: int) -> None:
