@@ -16,6 +16,9 @@ import gradio as gr
 import plotly.graph_objects as go
 
 from maou.infra.visualization.game_tree_shared import (
+    ELEM_ID_CURRENT_ROOT,
+    ELEM_ID_EXPAND_NODE,
+    ELEM_ID_SELECTED_NODE,
     JS_READ_EXPAND,
     JS_READ_SELECTED,
     build_breadcrumb_html,
@@ -662,36 +665,24 @@ def launch_game_tree_server(
                     )
 
         # Hidden state
-        # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で追加された
-        # オプションで，コンポーネントをDOMに残しつつ視覚的に非表示にする．
-        # visible=False は Svelte の条件レンダリング({#if visible})で
-        # DOM要素を生成しないため使用不可．
+        # visible=True + CSS(.maou-hidden)で非表示にしつつDOMに残す．
+        # Gradio 6 では visible="hidden" / visible=False の挙動が
+        # 不安定なため，CSS による非表示を採用する．
         selected_node = gr.Textbox(
             label="",
-            elem_id="selected-node-id",
-            visible="hidden",  # type: ignore[arg-type]
+            elem_id=ELEM_ID_SELECTED_NODE,
+            elem_classes=["maou-hidden"],
         )
         expand_node = gr.Textbox(
             label="",
-            elem_id="expand-node-id",
-            visible="hidden",  # type: ignore[arg-type]
+            elem_id=ELEM_ID_EXPAND_NODE,
+            elem_classes=["maou-hidden"],
         )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
-            elem_id="current-root",
-            visible="hidden",  # type: ignore[arg-type]
-        )
-        # Hidden buttons (JSからクリックしてGradioコールバックを発火)
-        select_trigger = gr.Button(
-            value="",
-            elem_id="node-select-trigger",
-            visible="hidden",  # type: ignore[arg-type]
-        )
-        expand_trigger = gr.Button(
-            value="",
-            elem_id="node-expand-trigger",
-            visible="hidden",  # type: ignore[arg-type]
+            elem_id=ELEM_ID_CURRENT_ROOT,
+            elem_classes=["maou-hidden"],
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
@@ -727,7 +718,7 @@ def launch_game_tree_server(
             outputs=_load_outputs,
         )
 
-        # ノード選択(シングルクリック) - hidden buttonクリックで発火
+        # ノード選択(シングルクリック) - textbox inputイベントで発火
         _select_outputs = [
             board_html,
             stats_json,
@@ -751,7 +742,11 @@ def launch_game_tree_server(
             sfen_text,
         ]
 
-        select_trigger.click(
+        # Gradio 6 ではプログラマティックなボタン.click()が
+        # イベントパイプライン(jsプリプロセッサ)を正しく発火しない．
+        # 代わりにtextboxの.input()イベントを使用する．
+        # JSからdispatchEvent(new Event("input"))で発火させる．
+        selected_node.input(
             fn=on_node_selected,
             inputs=[selected_node],
             outputs=_select_outputs,
@@ -769,8 +764,8 @@ def launch_game_tree_server(
             outputs=_expand_outputs,
         )
 
-        # ノード展開(ダブルクリック / パンくずクリック) - hidden buttonで発火
-        expand_trigger.click(
+        # ノード展開(ダブルクリック / パンくずクリック) - textbox inputで発火
+        expand_node.input(
             fn=on_node_expanded,
             inputs=[
                 expand_node,

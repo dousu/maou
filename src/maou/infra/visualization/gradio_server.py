@@ -1,4 +1,4 @@
-"""Gradio UIサーバー実装（インフラ層）．
+"""Gradio UIサーバー実装(インフラ層)．
 
 将棋データ可視化のためのGradio Webインターフェースを提供する．
 """
@@ -44,6 +44,9 @@ from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
 )
 from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+    ELEM_ID_CURRENT_ROOT,
+    ELEM_ID_EXPAND_NODE,
+    ELEM_ID_SELECTED_NODE,
     JS_READ_EXPAND,
     JS_READ_SELECTED,
     build_breadcrumb_html,
@@ -1737,37 +1740,27 @@ class GradioVisualizationServer:
                             )
 
                 # Hidden state for game tree
-                # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で
-                # 追加されたオプションで，コンポーネントをDOMに残しつつ
-                # 視覚的に非表示にする．visible=False は Svelte の条件
-                # レンダリング({#if visible})でDOM要素を生成しないため
-                # 使用不可．
+                # visible=True + CSS(.maou-hidden)で非表示にしつつDOMに残す．
+                # Gradio 6 では visible="hidden" / visible=False の挙動が
+                # 不安定なため，CSS による非表示を採用する．
                 gt_selected_node = gr.Textbox(
                     label="",
-                    elem_id="selected-node-id",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_id=ELEM_ID_SELECTED_NODE,
+                    elem_classes=["maou-hidden"],
                 )
                 gt_expand_node = gr.Textbox(
                     label="",
-                    elem_id="expand-node-id",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_id=ELEM_ID_EXPAND_NODE,
+                    elem_classes=["maou-hidden"],
                 )
+                # 埋め込みモードではデータがファイルアップロード後に
+                # 非同期で読み込まれるため，UI構築時にはルートハッシュが
+                # 未確定．初回の load_result.then で正しい値を設定する．
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
-                    elem_id="current-root",
-                    visible="hidden",  # type: ignore[arg-type]
-                )
-                # Hidden buttons (JSからクリックしてGradioコールバックを発火)
-                gt_select_trigger = gr.Button(
-                    value="",
-                    elem_id="node-select-trigger",
-                    visible="hidden",  # type: ignore[arg-type]
-                )
-                gt_expand_trigger = gr.Button(
-                    value="",
-                    elem_id="node-expand-trigger",
-                    visible="hidden",  # type: ignore[arg-type]
+                    elem_id=ELEM_ID_CURRENT_ROOT,
+                    elem_classes=["maou-hidden"],
                 )
 
             # イベントハンドラとState変数
@@ -2396,16 +2389,22 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # Load後にゲームツリーを初期表示
-            load_result.then(
-                fn=lambda depth, prob: (
-                    _gt_update_tree(
-                        depth,
-                        prob,
-                        str(self._game_tree_root_hash),
-                    )
-                    if self._game_tree_viz is not None
-                    else (
+            # Load後にゲームツリーを初期表示し，gt_current_root にも
+            # ルートハッシュを反映する．
+            def _gt_initial_load(
+                depth: int, prob: float
+            ) -> tuple[
+                str, str, str, dict, list, Any, str, str, str
+            ]:
+                """初回ロード時のゲームツリー描画とルートハッシュ設定．
+
+                _gt_update_tree の8要素にルートハッシュ文字列を追加した
+                9要素タプルを返す．gt_current_root の初期値を設定するため
+                に _gt_update_tree とは別関数として定義している．
+                """
+                root_str = str(self._game_tree_root_hash)
+                if self._game_tree_viz is None:
+                    return (
                         "",
                         "",
                         "",
@@ -2414,10 +2413,17 @@ class GradioVisualizationServer:
                         create_empty_plot(),
                         "",
                         "",
+                        "",
                     )
-                ),
+                return (
+                    *_gt_update_tree(depth, prob, root_str),
+                    root_str,
+                )
+
+            load_result.then(
+                fn=_gt_initial_load,
                 inputs=[gt_depth_slider, gt_min_prob_slider],
-                outputs=_gt_tree_outputs,
+                outputs=[*_gt_tree_outputs, gt_current_root],
             )
 
             gt_refresh_btn.click(
@@ -2430,8 +2436,8 @@ class GradioVisualizationServer:
                 outputs=_gt_tree_outputs,
             )
 
-            # ノード選択(シングルクリック) - hidden buttonクリックで発火
-            gt_select_trigger.click(
+            # ノード選択(シングルクリック) - textbox inputイベントで発火
+            gt_selected_node.input(
                 fn=_gt_on_node_selected,
                 inputs=[gt_selected_node],
                 outputs=[
@@ -2459,8 +2465,8 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # ノード展開(ダブルクリック/パンくず) - hidden buttonで発火
-            gt_expand_trigger.click(
+            # ノード展開(ダブルクリック/パンくず) - textbox inputで発火
+            gt_expand_node.input(
                 fn=_gt_on_node_expanded,
                 inputs=[
                     gt_expand_node,

@@ -9,6 +9,10 @@
 (function () {
   "use strict";
 
+  // --- Gradio hidden textbox selectors (keep in sync with game_tree_shared.py) ---
+  const SEL_SELECTED = "#selected-node-id textarea";
+  const SEL_EXPAND = "#expand-node-id textarea";
+
   let cy = null;
   let tapTimer = null;
 
@@ -56,38 +60,37 @@
   }
 
   /**
-   * hidden textboxの値を設定してGradioのchangeイベントを発火する
+   * hidden textboxの値を設定する(イベントディスパッチなし)
    */
   function setHiddenTextbox(selector, value) {
     const hiddenInput = document.querySelector(selector);
     if (!hiddenInput) return;
-    const proto = hiddenInput instanceof HTMLTextAreaElement
-      ? window.HTMLTextAreaElement.prototype
-      : window.HTMLInputElement.prototype;
+    // Gradio 6 は Textbox を <textarea> として描画する．
+    // セレクタも textarea に限定しているため，直接参照する．
     const nativeSetter = Object.getOwnPropertyDescriptor(
-      proto, "value"
+      window.HTMLTextAreaElement.prototype, "value"
     )?.set;
     if (nativeSetter) {
       nativeSetter.call(hiddenInput, value);
     } else {
       hiddenInput.value = value;
     }
-    // nativeSetter で値を設定すると React/Svelte の内部状態が更新される．
-    // input/change イベントは Gradio 6 では Python コールバックを発火しないが，
-    // Svelte の内部状態同期のためにディスパッチしている．
-    // 実際の Python コールバック発火は clickHiddenButton() で行う．
-    hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+    // nativeSetter で値を設定すると Svelte の内部状態が更新される．
+    // イベントディスパッチは triggerHiddenInput() に一元化し，
+    // ここでは値の設定のみを行う．
   }
 
   /**
-   * hidden buttonをクリックしてGradioコールバックを確実に発火する
+   * hidden textboxにinputイベントをディスパッチしてGradio .input()を発火する
+   *
+   * Gradio 6ではプログラマティックなボタン.click()がイベントパイプライン
+   * (jsプリプロセッサ含む)を正しく発火しない．代わりにtextboxの
+   * inputイベントをディスパッチし，.input()ハンドラを発火させる．
    */
-  function clickHiddenButton(elemId) {
-    const wrapper = document.getElementById(elemId);
-    if (!wrapper) return;
-    const btn = wrapper.querySelector("button");
-    if (btn) btn.click();
+  function triggerHiddenInput(selector) {
+    const el = document.querySelector(selector);
+    if (!el) return;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   /**
@@ -224,14 +227,9 @@
         tapTimer = null;
         // グローバル変数に保存(js パラメータから確実に読み取れる)
         window.__maou_selected_node_id = nodeId;
-        setHiddenTextbox(
-          "#selected-node-id textarea, #selected-node-id input",
-          nodeId
-        );
-        // Svelte に状態更新を反映させてからボタンをクリック
-        requestAnimationFrame(function () {
-          clickHiddenButton("node-select-trigger");
-        });
+        setHiddenTextbox(SEL_SELECTED, nodeId);
+        // textbox の input イベントで Gradio .input() コールバックを発火
+        triggerHiddenInput(SEL_SELECTED);
       }, 250);
     });
 
@@ -245,14 +243,9 @@
       const nodeId = evt.target.id();
       // グローバル変数に保存(js パラメータから確実に読み取れる)
       window.__maou_expand_node_id = nodeId;
-      setHiddenTextbox(
-        "#expand-node-id textarea, #expand-node-id input",
-        nodeId
-      );
-      // Svelte に状態更新を反映させてからボタンをクリック
-      requestAnimationFrame(function () {
-        clickHiddenButton("node-expand-trigger");
-      });
+      setHiddenTextbox(SEL_EXPAND, nodeId);
+      // textbox の input イベントで Gradio .input() コールバックを発火
+      triggerHiddenInput(SEL_EXPAND);
     });
 
     // Fit to view
@@ -270,14 +263,9 @@
     // グローバル変数に保存(js パラメータから確実に読み取れる)
     window.__maou_expand_node_id = hash;
     // パンくずクリック → ツリー展開(expand は select の出力を包含する)
-    setHiddenTextbox(
-      "#expand-node-id textarea, #expand-node-id input",
-      hash
-    );
-    // Svelte に状態更新を反映させてからボタンをクリック
-    requestAnimationFrame(function () {
-      clickHiddenButton("node-expand-trigger");
-    });
+    setHiddenTextbox(SEL_EXPAND, hash);
+    // textbox の input イベントで Gradio .input() コールバックを発火
+    triggerHiddenInput(SEL_EXPAND);
   });
 
   /**
