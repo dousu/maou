@@ -837,24 +837,29 @@ def launch_game_tree_server(
         # アクセスする必要があるため，visible はデフォルト(True)のまま残し，
         # CSSクラス(.js-hidden → display:none)で視覚的に非表示にする．
         selected_node = gr.Textbox(
+            label="",
             elem_id="selected-node-id",
             elem_classes=["js-hidden"],
         )
         expand_node = gr.Textbox(
+            label="",
             elem_id="expand-node-id",
             elem_classes=["js-hidden"],
         )
         current_root_state = gr.Textbox(
+            label="",
             value=str(root_hash),
             elem_id="current-root",
             elem_classes=["js-hidden"],
         )
         # Hidden buttons (JSからクリックしてGradioコールバックを発火)
         select_trigger = gr.Button(
+            value="",
             elem_id="node-select-trigger",
             elem_classes=["js-hidden"],
         )
         expand_trigger = gr.Button(
+            value="",
             elem_id="node-expand-trigger",
             elem_classes=["js-hidden"],
         )
