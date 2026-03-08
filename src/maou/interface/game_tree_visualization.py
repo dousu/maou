@@ -345,6 +345,17 @@ class GameTreeVisualizationInterface:
 
         return result
 
+    def get_counts(self) -> tuple[int, int]:
+        """ノード数とエッジ数を返す．
+
+        Returns:
+            (ノード数, エッジ数)
+        """
+        return (
+            len(self._query.nodes_df),
+            len(self._query.edges_df),
+        )
+
     def get_root_hash(self) -> int:
         """ツリーのルートハッシュを返す．
 

@@ -3,6 +3,7 @@
 将棋データ可視化のためのGradio Webインターフェースを提供する．
 """
 
+import json
 import logging
 import os
 import threading
@@ -41,6 +42,14 @@ from maou.infra.visualization.search_index import (  # noqa: E402
 )
 from maou.interface.path_suggestions import (  # noqa: E402
     PathSuggestionService,
+)
+from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+    JS_READ_EXPAND,
+    JS_READ_SELECTED,
+    build_breadcrumb_html,
+    build_tree_html,
+    create_analytics_plot,
+    create_empty_plot,
 )
 from maou.interface.visualization import (  # noqa: E402
     BoardPosition,
@@ -1687,6 +1696,12 @@ class GradioVisualizationServer:
                         variant="secondary",
                         scale=0,
                     )
+                # パンくずリスト
+                gt_breadcrumb_html = gr.HTML(
+                    value='<div class="breadcrumb-nav"></div>',
+                    label="パンくずリスト",
+                    show_label=False,
+                )
                 with gr.Row():
                     with gr.Column(scale=3):
                         gt_tree_html = gr.HTML(
@@ -1700,6 +1715,10 @@ class GradioVisualizationServer:
                         gt_stats_json = gr.JSON(
                             label="局面統計",
                         )
+                        # NOTE: 埋め込みモードでは指し手テーブルの行クリック
+                        # による子局面遷移(on_move_selected)は意図的に省略．
+                        # スタンドアロンモード(game_tree_server.py)では
+                        # child_hashes_state を使って実装済み．
                         gt_move_table = gr.Dataframe(
                             headers=["指し手", "確率", "勝率"],
                             label="指し手一覧",
@@ -1708,39 +1727,47 @@ class GradioVisualizationServer:
                         gt_analytics_plot = gr.Plot(
                             label="分岐分析",
                         )
+                        with gr.Accordion(
+                            "エクスポート", open=False
+                        ):
+                            gt_sfen_text = gr.Textbox(
+                                label="USI position文字列",
+                                interactive=False,
+                                lines=2,
+                            )
 
                 # Hidden state for game tree
-                # NOTE: visible=False を指定すると Gradio 6 は Svelte の
-                # 条件レンダリング({#if visible})によりDOM要素を生成しない．
-                # JSから textbox/button にアクセスする必要があるため，
-                # visible はデフォルト(True)のまま残し，CSSクラス
-                # (.js-hidden → display:none)で視覚的に非表示にする．
+                # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で
+                # 追加されたオプションで，コンポーネントをDOMに残しつつ
+                # 視覚的に非表示にする．visible=False は Svelte の条件
+                # レンダリング({#if visible})でDOM要素を生成しないため
+                # 使用不可．
                 gt_selected_node = gr.Textbox(
                     label="",
                     elem_id="selected-node-id",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",  # type: ignore[arg-type]
                 )
                 gt_expand_node = gr.Textbox(
                     label="",
                     elem_id="expand-node-id",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",  # type: ignore[arg-type]
                 )
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
                     elem_id="current-root",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",  # type: ignore[arg-type]
                 )
                 # Hidden buttons (JSからクリックしてGradioコールバックを発火)
                 gt_select_trigger = gr.Button(
                     value="",
                     elem_id="node-select-trigger",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",  # type: ignore[arg-type]
                 )
                 gt_expand_trigger = gr.Button(
                     value="",
                     elem_id="node-expand-trigger",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",  # type: ignore[arg-type]
                 )
 
             # イベントハンドラとState変数
@@ -2122,25 +2149,96 @@ class GradioVisualizationServer:
 
             # --- Game Tree Event Handlers ---
 
+            def _gt_get_node_details(
+                viz: Any,
+                pos_hash: int,
+            ) -> tuple[str, dict, list, Any, str, str]:
+                """ノード詳細データを取得する共通ヘルパー．
+
+                Returns:
+                    (board_svg, stats, display_moves, plot,
+                     breadcrumb_html, sfen_text)
+                """
+                board_svg = viz.get_board_svg(pos_hash)
+                stats = viz.get_node_stats(pos_hash)
+                moves_raw = viz.get_move_table(pos_hash)
+                display_moves = [
+                    [r.japanese, r.probability, r.win_rate]
+                    for r in moves_raw
+                ]
+                analytics = viz.get_analytics_data(pos_hash)
+                plot = create_analytics_plot(analytics)
+                if plot is None:
+                    plot = create_empty_plot()
+                breadcrumb = viz.get_breadcrumb_data(pos_hash)
+                breadcrumb_html = build_breadcrumb_html(
+                    breadcrumb
+                )
+                sfen_text = viz.export_sfen_path(pos_hash)
+                return (
+                    board_svg,
+                    stats,
+                    display_moves,
+                    plot,
+                    breadcrumb_html,
+                    sfen_text,
+                )
+
+            def _gt_insert_root(
+                tree_result: tuple[
+                    str, str, str, dict, list, Any, str, str
+                ],
+                current_root: str,
+            ) -> tuple[
+                str, str, str, str, dict, list, Any, str, str
+            ]:
+                """_gt_update_tree の 8 要素タプルに current_root を挿入．
+
+                _gt_update_tree は (tree, board, info, stats, moves,
+                plot, bc, sfen) を返す．expand/back_to_root では
+                info の前に current_root を挿入して 9 要素にする．
+                """
+                (
+                    tree_html,
+                    board_svg,
+                    info,
+                    stats,
+                    moves,
+                    plot,
+                    bc_html,
+                    sfen,
+                ) = tree_result
+                return (
+                    tree_html,
+                    board_svg,
+                    current_root,
+                    info,
+                    stats,
+                    moves,
+                    plot,
+                    bc_html,
+                    sfen,
+                )
+
             def _gt_update_tree(
                 display_depth: int,
                 min_prob: float,
                 current_root: str,
             ) -> tuple[
-                str,
-                str,
-                str,
-                dict,
-                list,
-                Any,
+                str, str, str, dict, list, Any, str, str
             ]:
-                """ゲームツリーの更新コールバック．"""
-                from maou.infra.visualization.game_tree_server import (
-                    _build_tree_html,
-                    _create_analytics_plot,
-                    _create_empty_plot,
-                )
+                """ゲームツリーの更新コールバック．
 
+                NOTE: game_tree_server.py の _update_tree_view +
+                _get_detail_outputs と類似のロジックだが，埋め込みモード
+                固有の出力構造(child_hashes 省略，info 文字列の形式差異)
+                があるため個別に実装している．HTML/Plot 生成は
+                game_tree_shared.py に共通化済み．
+
+                Returns:
+                    (tree_html, board_svg, info, stats, moves, plot,
+                     breadcrumb_html, sfen_text)
+                """
                 viz = self._game_tree_viz
                 if viz is None:
                     return (
@@ -2149,33 +2247,44 @@ class GradioVisualizationServer:
                         "",
                         {},
                         [],
-                        _create_empty_plot(),
+                        create_empty_plot(),
+                        "",
+                        "",
                     )
 
-                rh = (
-                    int(current_root)
-                    if current_root
-                    else self._game_tree_root_hash
-                )
-                import json as _json
+                try:
+                    rh = (
+                        int(current_root)
+                        if current_root
+                        else self._game_tree_root_hash
+                    )
+                except ValueError:
+                    logger.warning(
+                        "Invalid current_root: %s",
+                        current_root,
+                    )
+                    rh = self._game_tree_root_hash
 
                 elements = viz.get_cytoscape_elements(
                     rh, int(display_depth), min_prob
                 )
-                tree_html = _build_tree_html(
-                    _json.dumps(elements, ensure_ascii=False)
+                tree_html = build_tree_html(
+                    json.dumps(elements, ensure_ascii=False)
                 )
-                board_svg = viz.get_board_svg(rh)
-                stats = viz.get_node_stats(rh)
-                moves = viz.get_move_table(rh)
-                analytics = viz.get_analytics_data(rh)
-                plot = _create_analytics_plot(analytics)
-                if plot is None:
-                    plot = _create_empty_plot()
 
+                (
+                    board_svg,
+                    stats,
+                    display_moves,
+                    plot,
+                    breadcrumb_html,
+                    sfen_text,
+                ) = _gt_get_node_details(viz, rh)
+
+                n_nodes, n_edges = viz.get_counts()
                 info = (
-                    f"Nodes: **{len(viz._query.nodes_df):,}** / "
-                    f"Edges: **{len(viz._query.edges_df):,}** / "
+                    f"Nodes: **{n_nodes:,}** / "
+                    f"Edges: **{n_edges:,}** / "
                     f"Root: `0x{rh:016X}`"
                 )
                 return (
@@ -2183,65 +2292,109 @@ class GradioVisualizationServer:
                     board_svg,
                     info,
                     stats,
-                    moves,
+                    display_moves,
                     plot,
+                    breadcrumb_html,
+                    sfen_text,
                 )
 
             def _gt_on_node_selected(
                 node_id: str,
-            ) -> tuple[str, dict, list, Any]:
-                from maou.infra.visualization.game_tree_server import (
-                    _create_analytics_plot,
-                    _create_empty_plot,
-                )
+            ) -> tuple[str, dict, list, Any, str, str]:
+                """ノードクリック時のコールバック(詳細のみ，ツリー再構築なし)．
 
+                Returns:
+                    (board_svg, stats, moves, plot,
+                     breadcrumb_html, sfen_text)
+                """
                 viz = self._game_tree_viz
                 if not node_id or viz is None:
-                    return ("", {}, [], _create_empty_plot())
+                    return (
+                        "",
+                        {},
+                        [],
+                        create_empty_plot(),
+                        "",
+                        "",
+                    )
 
-                pos_hash = int(node_id)
-                board_svg = viz.get_board_svg(pos_hash)
-                stats = viz.get_node_stats(pos_hash)
-                moves = viz.get_move_table(pos_hash)
-                analytics = viz.get_analytics_data(pos_hash)
-                plot = _create_analytics_plot(analytics)
-                if plot is None:
-                    plot = _create_empty_plot()
-                return board_svg, stats, moves, plot
+                try:
+                    pos_hash = int(node_id)
+                except ValueError:
+                    logger.warning(
+                        "Invalid node_id: %s", node_id
+                    )
+                    return (
+                        "",
+                        {},
+                        [],
+                        create_empty_plot(),
+                        "",
+                        "",
+                    )
+                return _gt_get_node_details(viz, pos_hash)
 
             def _gt_on_node_expanded(
                 node_id: str,
                 display_depth: int,
                 min_prob: float,
-            ) -> tuple[str, str, str, dict, list, Any]:
-                from maou.infra.visualization.game_tree_server import (
-                    _create_empty_plot,
-                )
+            ) -> tuple[
+                str, str, str, str, dict, list, Any, str, str
+            ]:
+                """ノード展開時のコールバック(ツリー再構築 + 詳細更新)．
 
+                Returns:
+                    (tree_html, board_svg, current_root, info,
+                     stats, moves, plot, breadcrumb_html, sfen_text)
+                """
                 viz = self._game_tree_viz
                 if not node_id or viz is None:
                     return (
                         "",
                         "",
                         str(self._game_tree_root_hash),
+                        "",
                         {},
                         [],
-                        _create_empty_plot(),
+                        create_empty_plot(),
+                        "",
+                        "",
                     )
-                # Reuse _gt_update_tree with new root
-                return _gt_update_tree(
-                    display_depth, min_prob, node_id
+                return _gt_insert_root(
+                    _gt_update_tree(
+                        display_depth, min_prob, node_id
+                    ),
+                    node_id,
                 )
 
             def _gt_on_back_to_root(
                 display_depth: int,
                 min_prob: float,
-            ) -> tuple[str, str, str, dict, list, Any]:
-                return _gt_update_tree(
-                    display_depth,
-                    min_prob,
-                    str(self._game_tree_root_hash),
+            ) -> tuple[
+                str, str, str, str, dict, list, Any, str, str
+            ]:
+                """ルートに戻るボタンのコールバック．"""
+                root = str(self._game_tree_root_hash)
+                return _gt_insert_root(
+                    _gt_update_tree(
+                        display_depth, min_prob, root
+                    ),
+                    root,
                 )
+
+            # _gt_update_tree が返す 8 要素の出力先
+            # (tree_html, board_svg, info, stats, moves, plot,
+            #  breadcrumb_html, sfen_text)
+            _gt_tree_outputs = [
+                gt_tree_html,
+                gt_board_html,
+                gt_info,
+                gt_stats_json,
+                gt_move_table,
+                gt_analytics_plot,
+                gt_breadcrumb_html,
+                gt_sfen_text,
+            ]
 
             # Load後にゲームツリーを初期表示
             load_result.then(
@@ -2252,24 +2405,19 @@ class GradioVisualizationServer:
                         str(self._game_tree_root_hash),
                     )
                     if self._game_tree_viz is not None
-                    else lambda depth, prob: (
+                    else (
                         "",
                         "",
                         "",
                         {},
                         [],
-                        None,
+                        create_empty_plot(),
+                        "",
+                        "",
                     )
                 ),
                 inputs=[gt_depth_slider, gt_min_prob_slider],
-                outputs=[
-                    gt_tree_html,
-                    gt_board_html,
-                    gt_info,
-                    gt_stats_json,
-                    gt_move_table,
-                    gt_analytics_plot,
-                ],
+                outputs=_gt_tree_outputs,
             )
 
             gt_refresh_btn.click(
@@ -2279,14 +2427,7 @@ class GradioVisualizationServer:
                     gt_min_prob_slider,
                     gt_current_root,
                 ],
-                outputs=[
-                    gt_tree_html,
-                    gt_board_html,
-                    gt_info,
-                    gt_stats_json,
-                    gt_move_table,
-                    gt_analytics_plot,
-                ],
+                outputs=_gt_tree_outputs,
             )
 
             # ノード選択(シングルクリック) - hidden buttonクリックで発火
@@ -2298,10 +2439,27 @@ class GradioVisualizationServer:
                     gt_stats_json,
                     gt_move_table,
                     gt_analytics_plot,
+                    gt_breadcrumb_html,
+                    gt_sfen_text,
                 ],
+                js=JS_READ_SELECTED,
             )
 
-            # ノード展開(ダブルクリック/パンくず) - hidden buttonクリックで発火
+            # expand / back_to_root 共通の出力先
+            # (select と異なり tree_html, current_root, info を含む)
+            _gt_expand_outputs = [
+                gt_tree_html,
+                gt_board_html,
+                gt_current_root,
+                gt_info,
+                gt_stats_json,
+                gt_move_table,
+                gt_analytics_plot,
+                gt_breadcrumb_html,
+                gt_sfen_text,
+            ]
+
+            # ノード展開(ダブルクリック/パンくず) - hidden buttonで発火
             gt_expand_trigger.click(
                 fn=_gt_on_node_expanded,
                 inputs=[
@@ -2309,14 +2467,8 @@ class GradioVisualizationServer:
                     gt_depth_slider,
                     gt_min_prob_slider,
                 ],
-                outputs=[
-                    gt_tree_html,
-                    gt_board_html,
-                    gt_current_root,
-                    gt_stats_json,
-                    gt_move_table,
-                    gt_analytics_plot,
-                ],
+                outputs=_gt_expand_outputs,
+                js=JS_READ_EXPAND,
             )
 
             gt_back_btn.click(
@@ -2325,14 +2477,7 @@ class GradioVisualizationServer:
                     gt_depth_slider,
                     gt_min_prob_slider,
                 ],
-                outputs=[
-                    gt_tree_html,
-                    gt_board_html,
-                    gt_current_root,
-                    gt_stats_json,
-                    gt_move_table,
-                    gt_analytics_plot,
-                ],
+                outputs=_gt_expand_outputs,
             )
 
             # 初回ロード: game-treeモードの場合はツリーを表示
@@ -2350,14 +2495,7 @@ class GradioVisualizationServer:
                         gt_depth_slider,
                         gt_min_prob_slider,
                     ],
-                    outputs=[
-                        gt_tree_html,
-                        gt_board_html,
-                        gt_info,
-                        gt_stats_json,
-                        gt_move_table,
-                        gt_analytics_plot,
-                    ],
+                    outputs=_gt_tree_outputs,
                 )
 
         return demo

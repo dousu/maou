@@ -5,18 +5,25 @@ maou visualize --array-type game-tree から起動される．
 """
 
 import atexit
-import html
 import json
 import logging
 import tempfile
 import uuid
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 import plotly.graph_objects as go
 
+from maou.infra.visualization.game_tree_shared import (
+    JS_READ_EXPAND,
+    JS_READ_SELECTED,
+    build_breadcrumb_html,
+    build_tree_html,
+    create_analytics_plot,
+    create_empty_plot,
+    load_static_file,
+)
 from maou.interface.game_tree_io import GameTreeIO
 from maou.interface.game_tree_visualization import (
     GameTreeVisualizationInterface,
@@ -40,23 +47,6 @@ _ExpandResult = tuple[
 ]
 
 _STATIC_DIR = Path(__file__).parent / "static"
-
-
-@lru_cache(maxsize=None)
-def _load_static_file(filename: str) -> str:
-    """staticディレクトリからファイルを読み込む(結果はキャッシュされる)．
-
-    Args:
-        filename: ファイル名
-
-    Returns:
-        ファイル内容の文字列
-    """
-    path = _STATIC_DIR / filename
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    logger.warning("Static file not found: %s", path)
-    return ""
 
 
 def _load_custom_css() -> str:
@@ -86,7 +76,7 @@ def _build_head_scripts() -> str:
     Returns:
         head要素に注入するHTML文字列
     """
-    js_code = _load_static_file("game_tree.js")
+    js_code = load_static_file("game_tree.js")
 
     return f"""
 <script>
@@ -175,166 +165,6 @@ def _build_head_scripts() -> str:
 """
 
 
-def _build_tree_html(elements_json: str) -> str:
-    """ツリー表示用HTMLを生成する．
-
-    Cytoscape.jsのレンダリングはhead要素のMutationObserverが
-    data-elements属性の変更を検知して自動的に実行する．
-
-    Args:
-        elements_json: Cytoscape elements の JSON 文字列
-
-    Returns:
-        HTML文字列
-    """
-    css_code = _load_static_file("game_tree.css")
-    escaped_json = html.escape(elements_json, quote=True)
-
-    return f"""
-<style>{css_code}</style>
-<div class="game-tree-container">
-    <div id="cy" data-elements="{escaped_json}"></div>
-    <div class="game-tree-legend">
-        <span class="legend-item">
-            <span class="legend-swatch" style="background:#2196F3;"></span>先手有利
-        </span>
-        <span class="legend-item">
-            <span class="legend-swatch" style="background:#9E9E9E;"></span>互角
-        </span>
-        <span class="legend-item">
-            <span class="legend-swatch" style="background:#F44336;"></span>後手有利
-        </span>
-        <span class="legend-item" style="margin-left:12px;">
-            &#9679; サイズ = 確率 / 色 = 勝率
-        </span>
-    </div>
-    <div class="tree-export-overlay">
-        <button class="export-btn" onclick="window.exportTreePNG()">
-            PNG出力
-        </button>
-    </div>
-</div>
-"""
-
-
-def _build_breadcrumb_html(
-    breadcrumb_data: list[dict[str, str]],
-) -> str:
-    """パンくずリストのHTMLを生成する．
-
-    Args:
-        breadcrumb_data: [{"hash": "...", "label": "..."}, ...]
-
-    Returns:
-        パンくずリストのHTML文字列
-    """
-    if not breadcrumb_data:
-        return '<div class="breadcrumb-nav"></div>'
-
-    items: list[str] = []
-    last_idx = len(breadcrumb_data) - 1
-    for i, item in enumerate(breadcrumb_data):
-        if i > 0:
-            items.append(
-                '<span class="breadcrumb-sep">&gt;</span>'
-            )
-        escaped_label = html.escape(item["label"])
-        escaped_hash = html.escape(item["hash"])
-        if i == last_idx:
-            # 現在のノード(クリック不可)
-            items.append(
-                f'<span class="breadcrumb-item active">'
-                f"{escaped_label}</span>"
-            )
-        else:
-            items.append(
-                f'<span class="breadcrumb-item" '
-                f'data-hash="{escaped_hash}">'
-                f"{escaped_label}</span>"
-            )
-
-    return f'<div class="breadcrumb-nav">{"".join(items)}</div>'
-
-
-def _create_analytics_plot(
-    analytics_data: dict[str, Any],
-) -> go.Figure | None:
-    """分岐分析のPlotlyチャートを生成する．
-
-    Args:
-        analytics_data: 分析データ(moves, probabilities, win_rates)
-
-    Returns:
-        Plotly Figure．データがない場合None．
-    """
-    moves = analytics_data.get("moves", [])
-    probs = analytics_data.get("probabilities", [])
-    win_rates = analytics_data.get("win_rates", [])
-
-    if not moves:
-        return None
-
-    colors = []
-    for wr in win_rates:
-        if wr > 0.55:
-            colors.append("#2196F3")
-        elif wr < 0.45:
-            colors.append("#F44336")
-        else:
-            colors.append("#9E9E9E")
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=moves,
-                y=[p * 100 for p in probs],
-                marker_color=colors,
-                text=[f"{wr * 100:.1f}%" for wr in win_rates],
-                textposition="outside",
-                hovertemplate="<b>%{x}</b><br>"
-                + "確率: %{y:.1f}%<br>"
-                + "勝率: %{text}<extra></extra>",
-            )
-        ]
-    )
-    fig.update_layout(
-        title="上位指し手の確率分布",
-        xaxis_title="指し手",
-        yaxis_title="確率 (%)",
-        template="plotly_white",
-        height=300,
-        margin=dict(l=40, r=20, t=40, b=60),
-        font=dict(family="Noto Sans JP, sans-serif"),
-    )
-    return fig
-
-
-def _create_empty_plot() -> go.Figure:
-    """空のPlotlyチャートを生成する．
-
-    Returns:
-        空のPlotly Figure
-    """
-    fig = go.Figure()
-    fig.update_layout(
-        title="分岐分析",
-        template="plotly_white",
-        height=300,
-        annotations=[
-            dict(
-                text="ノードを選択してください",
-                xref="paper",
-                yref="paper",
-                x=0.5,
-                y=0.5,
-                showarrow=False,
-                font=dict(size=14, color="#718096"),
-            )
-        ],
-    )
-    return fig
-
-
 def _get_detail_outputs(
     viz: GameTreeVisualizationInterface,
     pos_hash: int,
@@ -361,12 +191,12 @@ def _get_detail_outputs(
     stats = viz.get_node_stats(pos_hash)
     moves_with_hash = viz.get_move_table(pos_hash)
     analytics = viz.get_analytics_data(pos_hash)
-    plot = _create_analytics_plot(analytics)
+    plot = create_analytics_plot(analytics)
     if plot is None:
-        plot = _create_empty_plot()
+        plot = create_empty_plot()
 
     breadcrumb = viz.get_breadcrumb_data(pos_hash)
-    breadcrumb_html = _build_breadcrumb_html(breadcrumb)
+    breadcrumb_html = build_breadcrumb_html(breadcrumb)
 
     sfen_text = viz.export_sfen_path(pos_hash)
 
@@ -419,7 +249,7 @@ def _update_tree_view(
         root_hash, int(display_depth), min_prob
     )
     elements_json = json.dumps(elements, ensure_ascii=False)
-    tree_html = _build_tree_html(elements_json)
+    tree_html = build_tree_html(elements_json)
 
     (
         board_svg,
@@ -548,7 +378,7 @@ def launch_game_tree_server(
                 {},
                 [],
                 [],
-                _create_empty_plot(),
+                create_empty_plot(),
                 "",
                 "",
             )
@@ -561,7 +391,7 @@ def launch_game_tree_server(
                 {},
                 [],
                 [],
-                _create_empty_plot(),
+                create_empty_plot(),
                 "",
                 "",
             )
@@ -588,7 +418,7 @@ def launch_game_tree_server(
             {},
             [],
             [],
-            _create_empty_plot(),
+            create_empty_plot(),
             "",
             "",
         )
@@ -643,7 +473,7 @@ def launch_game_tree_server(
                 {},
                 [],
                 [],
-                _create_empty_plot(),
+                create_empty_plot(),
                 "",
                 "",
             )
@@ -658,7 +488,7 @@ def launch_game_tree_server(
                 {},
                 [],
                 [],
-                _create_empty_plot(),
+                create_empty_plot(),
                 "",
                 "",
             )
@@ -789,7 +619,7 @@ def launch_game_tree_server(
 
         # パンくずリスト
         breadcrumb_html = gr.HTML(
-            value=_build_breadcrumb_html(
+            value=build_breadcrumb_html(
                 [{"hash": str(root_hash), "label": "初期局面"}]
             ),
             label="パンくずリスト",
@@ -832,36 +662,36 @@ def launch_game_tree_server(
                     )
 
         # Hidden state
-        # NOTE: visible=False を指定すると Gradio 6 は Svelte の条件レンダリング
-        # ({#if visible}) によりDOM要素を生成しない．JSから textbox/button に
-        # アクセスする必要があるため，visible はデフォルト(True)のまま残し，
-        # CSSクラス(.js-hidden → display:none)で視覚的に非表示にする．
+        # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で追加された
+        # オプションで，コンポーネントをDOMに残しつつ視覚的に非表示にする．
+        # visible=False は Svelte の条件レンダリング({#if visible})で
+        # DOM要素を生成しないため使用不可．
         selected_node = gr.Textbox(
             label="",
             elem_id="selected-node-id",
-            elem_classes=["js-hidden"],
+            visible="hidden",  # type: ignore[arg-type]
         )
         expand_node = gr.Textbox(
             label="",
             elem_id="expand-node-id",
-            elem_classes=["js-hidden"],
+            visible="hidden",  # type: ignore[arg-type]
         )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
             elem_id="current-root",
-            elem_classes=["js-hidden"],
+            visible="hidden",  # type: ignore[arg-type]
         )
         # Hidden buttons (JSからクリックしてGradioコールバックを発火)
         select_trigger = gr.Button(
             value="",
             elem_id="node-select-trigger",
-            elem_classes=["js-hidden"],
+            visible="hidden",  # type: ignore[arg-type]
         )
         expand_trigger = gr.Button(
             value="",
             elem_id="node-expand-trigger",
-            elem_classes=["js-hidden"],
+            visible="hidden",  # type: ignore[arg-type]
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
@@ -925,6 +755,7 @@ def launch_game_tree_server(
             fn=on_node_selected,
             inputs=[selected_node],
             outputs=_select_outputs,
+            js=JS_READ_SELECTED,
         )
 
         # 指し手一覧の行選択
@@ -938,7 +769,7 @@ def launch_game_tree_server(
             outputs=_expand_outputs,
         )
 
-        # ノード展開(ダブルクリック) - hidden buttonクリックで発火
+        # ノード展開(ダブルクリック / パンくずクリック) - hidden buttonで発火
         expand_trigger.click(
             fn=on_node_expanded,
             inputs=[
@@ -947,6 +778,7 @@ def launch_game_tree_server(
                 min_prob_slider,
             ],
             outputs=_expand_outputs,
+            js=JS_READ_EXPAND,
         )
 
         # ルートに戻る
