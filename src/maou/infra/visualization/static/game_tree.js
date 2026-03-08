@@ -272,14 +272,31 @@
   }
 
   /**
+   * 現在のルートハッシュを DOM から読み取る
+   */
+  function readCurrentRoot() {
+    var el = document.getElementById("current-root");
+    if (!el) return "";
+    var input = el.querySelector("input") || el.querySelector("textarea");
+    return input ? input.value : "";
+  }
+
+  /**
    * パンくずリスト要素のクリックハンドラ(イベント委譲)
+   *
+   * クリックしたノードが現在のルートと異なる場合のみツリーを再描画し，
+   * 同じ場合は詳細パネルの更新(select)のみ行う．
    */
   document.addEventListener("click", function (e) {
     const item = e.target.closest(".breadcrumb-item[data-hash]");
     if (!item) return;
     const hash = item.getAttribute("data-hash");
     if (!hash) return;
-    notifyNodeExpanded(hash);
+    if (hash === readCurrentRoot()) {
+      notifyNodeSelected(hash);
+    } else {
+      notifyNodeExpanded(hash);
+    }
   });
 
   /**
