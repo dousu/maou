@@ -1710,37 +1710,37 @@ class GradioVisualizationServer:
                         )
 
                 # Hidden state for game tree
-                # NOTE: visible=False を指定すると Gradio 6 は Svelte の
-                # 条件レンダリング({#if visible})によりDOM要素を生成しない．
-                # JSから textbox/button にアクセスする必要があるため，
-                # visible はデフォルト(True)のまま残し，CSSクラス
-                # (.js-hidden → display:none)で視覚的に非表示にする．
+                # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で
+                # 追加されたオプションで，コンポーネントをDOMに残しつつ
+                # 視覚的に非表示にする．visible=False は Svelte の条件
+                # レンダリング({#if visible})でDOM要素を生成しないため
+                # 使用不可．
                 gt_selected_node = gr.Textbox(
                     label="",
                     elem_id="selected-node-id",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",
                 )
                 gt_expand_node = gr.Textbox(
                     label="",
                     elem_id="expand-node-id",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",
                 )
                 gt_current_root = gr.Textbox(
                     label="",
                     value="",
                     elem_id="current-root",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",
                 )
                 # Hidden buttons (JSからクリックしてGradioコールバックを発火)
                 gt_select_trigger = gr.Button(
                     value="",
                     elem_id="node-select-trigger",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",
                 )
                 gt_expand_trigger = gr.Button(
                     value="",
                     elem_id="node-expand-trigger",
-                    elem_classes=["js-hidden"],
+                    visible="hidden",
                 )
 
             # イベントハンドラとState変数
@@ -2289,6 +2289,22 @@ class GradioVisualizationServer:
                 ],
             )
 
+            # js パラメータで DOM から直接値を読み取り，Svelte の
+            # 内部状態同期の不整合を回避する．
+            _js_read_selected = (
+                "(nodeId) => "
+                "document.querySelector("
+                "'#selected-node-id textarea, "
+                "#selected-node-id input')?.value || nodeId"
+            )
+            _js_read_expand = (
+                "(nodeId, depth, prob) => ["
+                "document.querySelector("
+                "'#expand-node-id textarea, "
+                "#expand-node-id input')?.value || nodeId, "
+                "depth, prob]"
+            )
+
             # ノード選択(シングルクリック) - hidden buttonクリックで発火
             gt_select_trigger.click(
                 fn=_gt_on_node_selected,
@@ -2299,9 +2315,10 @@ class GradioVisualizationServer:
                     gt_move_table,
                     gt_analytics_plot,
                 ],
+                js=_js_read_selected,
             )
 
-            # ノード展開(ダブルクリック/パンくず) - hidden buttonクリックで発火
+            # ノード展開(ダブルクリック/パンくず) - hidden buttonで発火
             gt_expand_trigger.click(
                 fn=_gt_on_node_expanded,
                 inputs=[
@@ -2317,6 +2334,7 @@ class GradioVisualizationServer:
                     gt_move_table,
                     gt_analytics_plot,
                 ],
+                js=_js_read_expand,
             )
 
             gt_back_btn.click(

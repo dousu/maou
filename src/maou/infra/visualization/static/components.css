@@ -1215,10 +1215,10 @@
 /* ========================================
    JS-Hidden Components (Gradio 6)
    ======================================== */
-/* visible=False の代わりに CSS で非表示にするクラス．
-   Gradio 6 の visible=False は Svelte の条件レンダリング({#if visible})で
-   DOM 要素を生成しないため，JS からアクセスする必要があるコンポーネントには
-   visible をデフォルト(True)のまま残し，このクラスで視覚的に非表示にする． */
+/* Gradio 6 では visible="hidden" を使用し，DOM に要素を残しつつ
+   視覚的に非表示にする．visible=False は Svelte の条件レンダリングで
+   DOM 要素を生成しないため使用不可．
+   .js-hidden は後方互換のためフォールバックとして残す． */
 .gradio-container .js-hidden {
     display: none !important;
 }

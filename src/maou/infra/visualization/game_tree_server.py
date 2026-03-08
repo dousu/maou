@@ -832,36 +832,36 @@ def launch_game_tree_server(
                     )
 
         # Hidden state
-        # NOTE: visible=False を指定すると Gradio 6 は Svelte の条件レンダリング
-        # ({#if visible}) によりDOM要素を生成しない．JSから textbox/button に
-        # アクセスする必要があるため，visible はデフォルト(True)のまま残し，
-        # CSSクラス(.js-hidden → display:none)で視覚的に非表示にする．
+        # NOTE: visible="hidden" は Gradio 5.36+ / 6.x で追加された
+        # オプションで，コンポーネントをDOMに残しつつ視覚的に非表示にする．
+        # visible=False は Svelte の条件レンダリング({#if visible})で
+        # DOM要素を生成しないため使用不可．
         selected_node = gr.Textbox(
             label="",
             elem_id="selected-node-id",
-            elem_classes=["js-hidden"],
+            visible="hidden",
         )
         expand_node = gr.Textbox(
             label="",
             elem_id="expand-node-id",
-            elem_classes=["js-hidden"],
+            visible="hidden",
         )
         current_root_state = gr.Textbox(
             label="",
             value=str(root_hash),
             elem_id="current-root",
-            elem_classes=["js-hidden"],
+            visible="hidden",
         )
         # Hidden buttons (JSからクリックしてGradioコールバックを発火)
         select_trigger = gr.Button(
             value="",
             elem_id="node-select-trigger",
-            elem_classes=["js-hidden"],
+            visible="hidden",
         )
         expand_trigger = gr.Button(
             value="",
             elem_id="node-expand-trigger",
-            elem_classes=["js-hidden"],
+            visible="hidden",
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
@@ -921,10 +921,28 @@ def launch_game_tree_server(
             sfen_text,
         ]
 
+        # js パラメータで DOM から直接値を読み取り，Svelte の内部状態
+        # 同期の不整合を回避する．setHiddenTextbox() で設定した DOM 値は
+        # Svelte に反映されない場合があるため，js で確実に取得する．
+        _JS_READ_SELECTED = (
+            "(nodeId) => "
+            "document.querySelector("
+            "'#selected-node-id textarea, "
+            "#selected-node-id input')?.value || nodeId"
+        )
+        _JS_READ_EXPAND = (
+            "(nodeId, depth, prob) => ["
+            "document.querySelector("
+            "'#expand-node-id textarea, "
+            "#expand-node-id input')?.value || nodeId, "
+            "depth, prob]"
+        )
+
         select_trigger.click(
             fn=on_node_selected,
             inputs=[selected_node],
             outputs=_select_outputs,
+            js=_JS_READ_SELECTED,
         )
 
         # 指し手一覧の行選択
@@ -938,7 +956,7 @@ def launch_game_tree_server(
             outputs=_expand_outputs,
         )
 
-        # ノード展開(ダブルクリック) - hidden buttonクリックで発火
+        # ノード展開(ダブルクリック / パンくずクリック) - hidden buttonで発火
         expand_trigger.click(
             fn=on_node_expanded,
             inputs=[
@@ -947,6 +965,7 @@ def launch_game_tree_server(
                 min_prob_slider,
             ],
             outputs=_expand_outputs,
+            js=_JS_READ_EXPAND,
         )
 
         # ルートに戻る
