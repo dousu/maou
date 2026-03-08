@@ -10,6 +10,7 @@
   "use strict";
 
   let cy = null;
+  let tapTimer = null;
 
   /**
    * 勝率(0.0-1.0)からノードの色を計算する
@@ -116,7 +117,11 @@
       return;
     }
 
-    // Destroy previous instance
+    // Destroy previous instance and cancel pending tap timer
+    if (tapTimer) {
+      clearTimeout(tapTimer);
+      tapTimer = null;
+    }
     if (cy) {
       cy.destroy();
       cy = null;
@@ -212,7 +217,6 @@
 
     // Node click -> update hidden textbox for detail panel
     // dbltap 時に tap が2回余分に発火するのを防ぐため，タイマーで遅延させる
-    let tapTimer = null;
     cy.on("tap", "node", function (evt) {
       const nodeId = evt.target.id();
       if (tapTimer) clearTimeout(tapTimer);
@@ -249,9 +253,9 @@
    * パンくずリスト要素のクリックハンドラ(イベント委譲)
    */
   document.addEventListener("click", function (e) {
-    var item = e.target.closest(".breadcrumb-item[data-hash]");
+    const item = e.target.closest(".breadcrumb-item[data-hash]");
     if (!item) return;
-    var hash = item.getAttribute("data-hash");
+    const hash = item.getAttribute("data-hash");
     if (!hash) return;
     // パンくずクリック → ツリー展開(expand は select の出力を包含する)
     setHiddenTextbox(

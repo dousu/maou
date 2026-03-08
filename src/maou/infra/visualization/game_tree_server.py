@@ -24,6 +24,21 @@ from maou.interface.game_tree_visualization import (
 
 logger = logging.getLogger(__name__)
 
+# on_node_expanded / on_move_selected / on_back_to_root 共通の返却型
+# (tree_html, board_svg, current_root, stats, moves, child_hashes,
+#  plot, breadcrumb_html, sfen_text)
+_ExpandResult = tuple[
+    str,
+    str,
+    str,
+    dict[str, str],
+    list[list[str]],
+    list[str],
+    go.Figure,
+    str,
+    str,
+]
+
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -554,29 +569,9 @@ def launch_game_tree_server(
         display_depth: int,
         min_prob: float,
         evt: gr.SelectData,
-    ) -> tuple[
-        str,
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-    ]:
+    ) -> _ExpandResult:
         """指し手一覧の行選択時のコールバック．"""
-        _empty: tuple[
-            str,
-            str,
-            str,
-            dict[str, str],
-            list[list[str]],
-            list[str],
-            go.Figure,
-            str,
-            str,
-        ] = (
+        _empty: _ExpandResult = (
             "",
             "",
             "",
@@ -628,17 +623,7 @@ def launch_game_tree_server(
         node_id: str,
         display_depth: int,
         min_prob: float,
-    ) -> tuple[
-        str,
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-    ]:
+    ) -> _ExpandResult:
         """ノードダブルクリック(サブツリー展開)のコールバック．"""
         if not node_id:
             return (
@@ -694,17 +679,7 @@ def launch_game_tree_server(
     def on_back_to_root(
         display_depth: int,
         min_prob: float,
-    ) -> tuple[
-        str,
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-    ]:
+    ) -> _ExpandResult:
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
         (
