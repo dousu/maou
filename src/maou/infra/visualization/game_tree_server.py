@@ -832,9 +832,10 @@ def launch_game_tree_server(
                     )
 
         # Hidden state
-        # NOTE: visible=False だと Gradio 6 の Svelte 条件レンダリングにより
-        # DOM要素が生成されず，JSからアクセスできない．
-        # CSS で非表示にすることでDOMに残しつつ画面には表示しない．
+        # NOTE: visible=False を指定すると Gradio 6 は Svelte の条件レンダリング
+        # ({#if visible}) によりDOM要素を生成しない．JSから textbox/button に
+        # アクセスする必要があるため，visible はデフォルト(True)のまま残し，
+        # CSSクラス(.js-hidden → display:none)で視覚的に非表示にする．
         selected_node = gr.Textbox(
             elem_id="selected-node-id",
             elem_classes=["js-hidden"],
