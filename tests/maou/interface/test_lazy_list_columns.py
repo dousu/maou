@@ -161,3 +161,23 @@ class TestFileBackedListColumns:
 
         assert labels.dtype == np.float32
         assert win_rates.dtype == np.float32
+
+    def test_log_stats_no_access(self, tmp_path: Path) -> None:
+        """アクセスなしの状態で log_stats() がエラーにならない．"""
+        path = tmp_path / "file_0.feather"
+        _create_feather_file(path, [[1.0]], [[0.1]])
+        accessor = FileBackedListColumns([path], [1])
+        accessor.log_stats()  # total=0 でも例外にならないことを確認
+
+    def test_row_count_mismatch_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """List カラムの行数がスカラー行数と異なると ValueError."""
+        path = tmp_path / "file_0.feather"
+        _create_feather_file(
+            path, [[1.0], [2.0]], [[0.1], [0.2]]
+        )
+        # 実際は2行だが file_row_counts=3 と不整合
+        accessor = FileBackedListColumns([path], [3])
+        with pytest.raises(ValueError, match="一致しません"):
+            accessor.get(0)

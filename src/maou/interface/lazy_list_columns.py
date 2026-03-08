@@ -159,6 +159,19 @@ class FileBackedListColumns:
         self._cached_file_idx = file_idx
         del df
 
+        expected_rows = (
+            self._boundaries[file_idx + 1]
+            - self._boundaries[file_idx]
+        )
+        actual_rows = len(self._cached_labels)
+        if actual_rows != expected_rows:
+            raise ValueError(
+                f"ファイル {path.name} の List カラム行数"
+                f"({actual_rows}) が"
+                f"スカラー読み込み時の行数"
+                f"({expected_rows}) と一致しません"
+            )
+
         logger.info(
             "List型カラム読み込み完了: %s 行, RSS=%d MB",
             f"{len(self._cached_labels):,}",
