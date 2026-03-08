@@ -10,8 +10,8 @@
   "use strict";
 
   // --- Gradio hidden textbox selectors (keep in sync with game_tree_shared.py) ---
-  var SEL_SELECTED = "#selected-node-id textarea";
-  var SEL_EXPAND = "#expand-node-id textarea";
+  const SEL_SELECTED = "#selected-node-id textarea";
+  const SEL_EXPAND = "#expand-node-id textarea";
 
   let cy = null;
   let tapTimer = null;
