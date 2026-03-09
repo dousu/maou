@@ -389,14 +389,17 @@ def launch_game_tree_server(
             return False
         try:
             pos_hash = int(node_id_str)
-        except ValueError:
+        except (ValueError, TypeError):
             logger.warning("Invalid node_id: %s", node_id_str)
             return False
-        _pending["select"] = _get_detail_outputs(viz, pos_hash)
+        _pending["select"] = {
+            "data": _get_detail_outputs(viz, pos_hash),
+            "hash": pos_hash,
+        }
         return True
 
     def handle_expand(
-        node_id_str: str,
+        node_id_str: str | list[Any],
         display_depth: int | float = 3,
         min_prob: float = 0.01,
     ) -> bool:
@@ -404,12 +407,25 @@ def launch_game_tree_server(
 
         JS から呼ばれ，結果を _pending に格納する．
         depth / prob は JS 側がスライダー DOM から読み取って渡す．
+
+        Note:
+            Gradio 6 の server_functions は複数の JS 引数を
+            リストとして第1引数に渡す場合があるため，
+            node_id_str がリストの場合は展開して処理する．
         """
+        # server_functions が複数引数をリストで渡す場合の展開
+        if isinstance(node_id_str, list):
+            args = node_id_str
+            node_id_str = str(args[0]) if args else ""
+            if len(args) > 1:
+                display_depth = args[1]
+            if len(args) > 2:
+                min_prob = args[2]
         if not node_id_str:
             return False
         try:
             pos_hash = int(node_id_str)
-        except ValueError:
+        except (ValueError, TypeError):
             logger.warning("Invalid node_id: %s", node_id_str)
             return False
         _pending["expand"] = {
@@ -428,15 +444,17 @@ def launch_game_tree_server(
         go.Figure,
         str,
         str,
+        str,
     ]:
         """select_bridge.change のコールバック．
 
         handle_select が格納した結果を返す．
+        最後の要素は選択ノードのハッシュ文字列．
         """
         result = _pending.pop("select", None)
         if result:
-            return result
-        return ("", {}, [], [], create_empty_plot(), "", "")
+            return (*result["data"], str(result["hash"]))
+        return ("", {}, [], [], create_empty_plot(), "", "", "")
 
     def on_expand_result() -> _ExpandResult:
         """expand_bridge.change のコールバック．
@@ -568,6 +586,59 @@ def launch_game_tree_server(
             sfen_text_v,
         )
 
+    def on_set_as_root(
+        selected_node: str,
+        current_root: str,
+        display_depth: int,
+        min_prob: float,
+    ) -> _ExpandResult:
+        """選択ノードをルートに設定するボタンのコールバック．
+
+        選択ノードが現在のルートと同じ場合は再描画をスキップする．
+        """
+        _noop: _ExpandResult = (
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+            gr.skip(),  # type: ignore[assignment]
+        )
+        if not selected_node:
+            return _noop
+        if selected_node == current_root:
+            return _noop
+        try:
+            pos_hash = int(selected_node)
+        except (ValueError, TypeError):
+            return _noop
+        (
+            tree_html_v,
+            board_svg,
+            stats,
+            display_moves,
+            child_hashes,
+            plot,
+            breadcrumb_html_v,
+            sfen_text_v,
+        ) = _update_tree_view(
+            viz, pos_hash, display_depth, min_prob
+        )
+        return (
+            tree_html_v,
+            board_svg,
+            str(pos_hash),
+            stats,
+            display_moves,
+            child_hashes,
+            plot,
+            breadcrumb_html_v,
+            sfen_text_v,
+        )
+
     # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
     _csv_tmp_dir = tempfile.TemporaryDirectory(
         prefix="maou_game_tree_csv_"
@@ -641,6 +712,9 @@ def launch_game_tree_server(
             )
             back_btn = gr.Button(
                 "ルートに戻る", variant="secondary", scale=0
+            )
+            set_root_btn = gr.Button(
+                "ルートに設定", variant="secondary", scale=0
             )
 
         # パンくずリスト
@@ -717,6 +791,8 @@ def launch_game_tree_server(
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
+        # ツリー上で選択中のノードhash("ルートに設定"ボタン用)
+        selected_node_state = gr.State("")
 
         # --- イベントハンドリング ---
 
@@ -758,6 +834,7 @@ def launch_game_tree_server(
             analytics_plot,
             breadcrumb_html,
             sfen_text,
+            selected_node_state,
         ]
 
         # ノード展開 / 指し手選択共通の出力(ツリー + 詳細パネル)
@@ -800,6 +877,18 @@ def launch_game_tree_server(
         back_btn.click(
             fn=on_back_to_root,
             inputs=[depth_slider, min_prob_slider],
+            outputs=_expand_outputs,
+        )
+
+        # 選択ノードをルートに設定
+        set_root_btn.click(
+            fn=on_set_as_root,
+            inputs=[
+                selected_node_state,
+                current_root_state,
+                depth_slider,
+                min_prob_slider,
+            ],
             outputs=_expand_outputs,
         )
 

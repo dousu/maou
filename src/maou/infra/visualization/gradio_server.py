@@ -1703,6 +1703,9 @@ class GradioVisualizationServer:
                         variant="secondary",
                         scale=0,
                     )
+                    # NOTE: 「ルートに設定」ボタンは省略．
+                    # ダブルクリック / パンくずで同等の操作が可能．
+                    # スタンドアロン版は game_tree_server.py を参照．
                 # パンくずリスト
                 gt_breadcrumb_html = gr.HTML(
                     value='<div class="breadcrumb-nav"></div>',
@@ -2270,7 +2273,7 @@ class GradioVisualizationServer:
                         if current_root
                         else self._game_tree_root_hash
                     )
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid current_root: %s",
                         current_root,
@@ -2327,7 +2330,7 @@ class GradioVisualizationServer:
                     return False
                 try:
                     pos_hash = int(node_id_str)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid node_id: %s", node_id_str
                     )
@@ -2338,17 +2341,25 @@ class GradioVisualizationServer:
                 return True
 
             def _gt_handle_expand(
-                node_id_str: str,
+                node_id_str: str | list[Any],
                 display_depth: int | float = 3,
                 min_prob: float = 0.01,
             ) -> bool:
                 """ノード展開の server_function．"""
+                # server_functions が複数引数をリストで渡す場合の展開
+                if isinstance(node_id_str, list):
+                    args = node_id_str
+                    node_id_str = str(args[0]) if args else ""
+                    if len(args) > 1:
+                        display_depth = args[1]
+                    if len(args) > 2:
+                        min_prob = args[2]
                 viz = self._game_tree_viz
                 if not node_id_str or viz is None:
                     return False
                 try:
                     pos_hash = int(node_id_str)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid node_id: %s", node_id_str
                     )
