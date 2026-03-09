@@ -1703,6 +1703,9 @@ class GradioVisualizationServer:
                         variant="secondary",
                         scale=0,
                     )
+                    # NOTE: 「ルートに設定」ボタンは省略．
+                    # ダブルクリック / パンくずで同等の操作が可能．
+                    # スタンドアロン版は game_tree_server.py を参照．
                 # パンくずリスト
                 gt_breadcrumb_html = gr.HTML(
                     value='<div class="breadcrumb-nav"></div>',
