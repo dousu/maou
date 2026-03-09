@@ -596,6 +596,7 @@ def launch_game_tree_server(
 
         選択ノードが現在のルートと同じ場合は再描画をスキップする．
         """
+        # _ExpandResult は 9 要素タプル — 全出力の更新をスキップ
         _noop = tuple(gr.skip() for _ in range(9))
         if not selected_node:
             return _noop  # type: ignore[return-value]

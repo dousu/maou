@@ -2270,7 +2270,7 @@ class GradioVisualizationServer:
                         if current_root
                         else self._game_tree_root_hash
                     )
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid current_root: %s",
                         current_root,
@@ -2327,7 +2327,7 @@ class GradioVisualizationServer:
                     return False
                 try:
                     pos_hash = int(node_id_str)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         "Invalid node_id: %s", node_id_str
                     )
