@@ -596,25 +596,15 @@ def launch_game_tree_server(
 
         選択ノードが現在のルートと同じ場合は再描画をスキップする．
         """
-        _empty: _ExpandResult = (
-            "",
-            "",
-            "",
-            {},
-            [],
-            [],
-            create_empty_plot(),
-            "",
-            "",
-        )
+        _noop = tuple(gr.skip() for _ in range(9))
         if not selected_node:
-            return _empty
+            return _noop  # type: ignore[return-value]
         if selected_node == current_root:
-            return _empty
+            return _noop  # type: ignore[return-value]
         try:
             pos_hash = int(selected_node)
         except (ValueError, TypeError):
-            return _empty
+            return _noop  # type: ignore[return-value]
         (
             tree_html_v,
             board_svg,
