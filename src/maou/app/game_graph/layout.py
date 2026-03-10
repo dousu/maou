@@ -2,7 +2,7 @@
 
 全ノードの (x, y) 座標をサーバー側で事前計算する．
 depth ベースの Y 座標と確率順の X 座標配置により，
-Cytoscape.js + dagre の辺方向反転バグを回避する．
+Cytoscape.js + dagre の辺方向反転バグを回避するために実装した．
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import polars as pl
 
 
 @dataclasses.dataclass
-class TreeLayout:
-    """事前計算されたツリーレイアウト．
+class GraphLayout:
+    """事前計算されたグラフレイアウト．
 
     Attributes:
         node_positions: position_hash → (x, y) 座標のマッピング
@@ -46,7 +46,7 @@ class GameGraphLayoutService:
         rank_spacing: float = 80.0,
         sibling_spacing: float = 60.0,
         min_node_spacing: float = 40.0,
-    ) -> TreeLayout:
+    ) -> GraphLayout:
         """全ノードの座標を計算する．
 
         Args:
@@ -58,10 +58,10 @@ class GameGraphLayoutService:
             min_node_spacing: 異なる親の子グループ間の最小間隔
 
         Returns:
-            事前計算された TreeLayout
+            事前計算された GraphLayout
         """
         if len(nodes_df) == 0:
-            return TreeLayout(
+            return GraphLayout(
                 node_positions={}, bounds=(0, 0, 0, 0)
             )
 
@@ -238,7 +238,7 @@ class GameGraphLayoutService:
         else:
             bounds = (0.0, 0.0, 0.0, 0.0)
 
-        return TreeLayout(
+        return GraphLayout(
             node_positions=positions, bounds=bounds
         )
 

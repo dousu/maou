@@ -91,7 +91,7 @@ def load_static_file(filename: str) -> str:
 # ========================================
 
 
-def build_tree_html(canvas_data_json: str) -> str:
+def build_graph_html(canvas_data_json: str) -> str:
     """ツリー表示用HTMLを生成する．
 
     Canvas 2D レンダラーが data-canvas 属性の変更を検知して

@@ -1,7 +1,7 @@
 """ゲームグラフ可視化のインターフェース層．
 
 App層のGameGraphQueryとInfra層のGradio UIを接続するアダプタ．
-Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
+Canvas 2D用のデータ変換や盤面SVG生成を担当する．
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
-from maou.app.game_graph.layout import TreeLayout
+from maou.app.game_graph.layout import GraphLayout
 from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
     Board,
@@ -154,7 +154,7 @@ class GameGraphVisualizationInterface:
         root_hash: int,
         display_depth: int,
         min_probability: float,
-        layout: TreeLayout,
+        layout: GraphLayout,
     ) -> dict[str, Any]:
         """Canvas 2D 描画用のノード・エッジデータを生成する．
 
@@ -284,7 +284,7 @@ class GameGraphVisualizationInterface:
     def get_viewport_data(
         self,
         visible_hashes: set[int],
-        layout: TreeLayout,
+        layout: GraphLayout,
     ) -> dict[str, Any]:
         """ビューポート内のノード・エッジデータを返す．
 

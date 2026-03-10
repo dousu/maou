@@ -43,7 +43,7 @@ from maou.infra.visualization.game_graph_shared import (  # noqa: E402
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
     build_breadcrumb_html,
-    build_tree_html,
+    build_graph_html,
     create_analytics_plot,
     create_empty_plot,
 )
@@ -392,11 +392,11 @@ class GradioVisualizationServer:
             try:
                 self._load_game_graph_data(file_paths[0])
                 logger.info(
-                    f"✅ Game tree loaded: root={self._game_graph_root_hash:#018x}"
+                    f"✅ Game graph loaded: root={self._game_graph_root_hash:#018x}"
                 )
             except Exception:
                 logger.exception(
-                    "Failed to load game tree data"
+                    "Failed to load game graph data"
                 )
         elif self.has_data:
             # Start background indexing instead of blocking
@@ -1098,7 +1098,7 @@ class GradioVisualizationServer:
             try:
                 self._load_game_graph_data(file_paths[0])
                 return (
-                    f"✅ **Game Tree loaded:** "
+                    f"✅ **Game Graph loaded:** "
                     f"{self._game_graph_root_hash:#018x}",
                     False,
                     '<span class="mode-badge-text">🟢 GAME TREE</span>',
@@ -1107,7 +1107,7 @@ class GradioVisualizationServer:
                     tree_visible,
                 )
             except Exception as e:
-                logger.exception("Failed to load game tree")
+                logger.exception("Failed to load game graph")
                 return (
                     f"❌ **Error:** {e}",
                     False,
@@ -1162,7 +1162,7 @@ class GradioVisualizationServer:
         nodes_df, edges_df = io.load(tree_dir)
         metadata = io.load_metadata(tree_dir)
         logger.info(
-            "Loaded game tree: %d nodes, %d edges",
+            "Loaded game graph: %d nodes, %d edges",
             len(nodes_df),
             len(edges_df),
         )
@@ -2143,7 +2143,7 @@ class GradioVisualizationServer:
                 ],
             )
 
-            # --- Game Tree Event Handlers ---
+            # --- Game Graph Event Handlers ---
 
             def _gt_get_node_details(
                 viz: Any,
@@ -2296,7 +2296,7 @@ class GradioVisualizationServer:
                     min_prob,
                     self._game_graph_layout,
                 )
-                tree_html = build_tree_html(
+                tree_html = build_graph_html(
                     json.dumps(canvas_data, ensure_ascii=False)
                 )
 
@@ -3683,7 +3683,7 @@ def launch_server(
         f"(share={share}, debug={debug})"
     )
 
-    # ゲームグラフJS(Cytoscape.js + イベントハンドラ)をhead要素に注入．
+    # ゲームグラフJS(Canvas 2D レンダラー + イベントハンドラ)をhead要素に注入．
     # gradio_server.py ではデータソース動的切替でゲームグラフが使われるため必要．
     from maou.infra.visualization.game_graph_server import (
         _build_head_scripts,

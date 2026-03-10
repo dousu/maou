@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 
 from maou.app.game_graph.layout import (
     GameGraphLayoutService,
-    TreeLayout,
+    GraphLayout,
 )
 from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_CURRENT_ROOT,
@@ -31,7 +31,7 @@ from maou.infra.visualization.game_graph_shared import (
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
-    build_tree_html,
+    build_graph_html,
     create_analytics_plot,
     create_empty_plot,
     load_static_file,
@@ -120,7 +120,7 @@ def _build_head_scripts() -> str:
                 window.renderGameGraph(data, 'gt-canvas-container');
             }}
         }} catch (e) {{
-            console.error('[maou] Failed to render game tree:', e);
+            console.error('[maou] Failed to render game graph:', e);
         }}
     }}
 
@@ -206,7 +206,7 @@ def _update_tree_view(
     root_hash: int,
     display_depth: int,
     min_prob: float,
-    layout: TreeLayout | None = None,
+    layout: GraphLayout | None = None,
 ) -> tuple[
     str,
     str,
@@ -231,14 +231,14 @@ def _update_tree_view(
          plot, breadcrumb_html, sfen_text)
     """
     if layout is None:
-        layout = TreeLayout(
+        layout = GraphLayout(
             node_positions={}, bounds=(0, 0, 0, 0)
         )
     canvas_data = viz.get_canvas_data(
         root_hash, int(display_depth), min_prob, layout
     )
     canvas_json = json.dumps(canvas_data, ensure_ascii=False)
-    tree_html = build_tree_html(canvas_json)
+    tree_html = build_graph_html(canvas_json)
 
     (
         board_svg,
@@ -746,9 +746,9 @@ def launch_game_graph_server(
     # --- UI構築 ---
 
     with gr.Blocks(
-        title="Maou Game Tree Viewer",
+        title="Maou Game Graph Viewer",
     ) as demo:
-        gr.Markdown("# Maou Game Tree Viewer")
+        gr.Markdown("# Maou Game Graph Viewer")
         initial_sfen = viz.get_initial_sfen()
         gr.Markdown(
             f"Nodes: **{len(nodes_df):,}** / "

@@ -9,7 +9,7 @@ import pytest
 
 from maou.app.game_graph.layout import (
     GameGraphLayoutService,
-    TreeLayout,
+    GraphLayout,
 )
 from maou.domain.board.shogi import Board
 from maou.domain.game_graph.schema import (
@@ -58,7 +58,7 @@ def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
 
 def _make_layout(
     nodes: pl.DataFrame, edges: pl.DataFrame, root_hash: int
-) -> TreeLayout:
+) -> GraphLayout:
     """テスト用のレイアウトを計算する．"""
     svc = GameGraphLayoutService()
     return svc.compute_layout(nodes, edges, root_hash)

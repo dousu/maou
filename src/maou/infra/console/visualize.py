@@ -136,7 +136,7 @@ def visualize(
             )
         tree_dir = input_path[0]
         app_logger.info(
-            "Game tree data directory: %s", tree_dir
+            "Game graph data directory: %s", tree_dir
         )
 
         # Google Colab環境では自動的にshareを有効化
@@ -167,7 +167,7 @@ def visualize(
             raise click.ClickException(error_msg) from e
         except Exception as e:
             app_logger.exception(
-                "Failed to launch game tree server"
+                "Failed to launch game graph server"
             )
             raise click.ClickException(
                 f"Server launch failed: {e}"

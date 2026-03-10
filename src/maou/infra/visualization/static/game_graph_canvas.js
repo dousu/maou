@@ -1,8 +1,8 @@
 /**
- * Game Tree Viewer - Canvas 2D Frontend
+ * Game Graph Viewer - Canvas 2D Frontend
  *
  * Canvas 2D による仮想描画ベースのゲームグラフ表示．
- * Cytoscape.js + dagre を置換し，以下を実現する:
+ * 旧 Cytoscape.js + dagre を置換し，以下を実現する:
  * - エッジ方向の正確な描画(source → target)
  * - 仮想描画による大規模ツリーの高速表示
  * - サーバー側事前計算済み座標の利用
