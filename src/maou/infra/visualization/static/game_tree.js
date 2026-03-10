@@ -13,7 +13,7 @@
   let tapTimer = null;
 
   /**
-   * 勝率(0.0-1.0)からノードの色を計算する
+   * 先手視点の勝率(0.0-1.0)からノードの色を計算する
    * 先手有利(>0.55): 青系, 互角(0.45-0.55): グレー, 後手有利(<0.45): 赤系
    */
   function winRateToColor(resultValue) {
@@ -177,11 +177,11 @@
             color: "#fff",
             "text-outline-width": 1.5,
             "text-outline-color": function (ele) {
-              return winRateToColor(ele.data("result_value"));
+              return winRateToColor(ele.data("sente_result_value"));
             },
             "text-outline-opacity": 0.8,
             "background-color": function (ele) {
-              return winRateToColor(ele.data("result_value"));
+              return winRateToColor(ele.data("sente_result_value"));
             },
             width: function (ele) {
               return probabilityToSize(ele.data("probability"));

@@ -65,7 +65,53 @@ class TestGetCytoscapeElements:
         node_data = elements["nodes"][0]["data"]
         assert node_data["id"] == "100"
         assert node_data["label"] == "ROOT"
-        assert node_data["result_value"] == pytest.approx(0.52)
+        # depth=0, 先手番 → sente_result_value == result_value
+        assert node_data["sente_result_value"] == pytest.approx(
+            0.52
+        )
+
+    def test_sente_result_value_depth1_flipped(self) -> None:
+        """depth=1(後手番)ではsente_result_valueが反転する."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        elements = viz.get_cytoscape_elements(100, 3, 0.01)
+        node_map = {
+            n["data"]["id"]: n["data"]
+            for n in elements["nodes"]
+        }
+        # depth=0: 先手番 → そのまま
+        assert node_map["100"][
+            "sente_result_value"
+        ] == pytest.approx(0.52)
+        # depth=1: 後手番 → 1 - 0.48 = 0.52
+        assert node_map["200"][
+            "sente_result_value"
+        ] == pytest.approx(0.52)
+
+    def test_sente_result_value_gote_root(self) -> None:
+        """後手番ルート(initial_sfen="w")ではdepth=0が反転する."""
+        nodes, edges = _build_tree_with_edge()
+        # 後手番のSFEN(簡易的に手番だけ"w"に設定)
+        gote_sfen = (
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
+            "PPPPPPPPP/1B5R1/LNSGKGSNL w - 1"
+        )
+        viz = GameTreeVisualizationInterface(
+            nodes, edges, initial_sfen=gote_sfen
+        )
+        elements = viz.get_cytoscape_elements(100, 3, 0.01)
+        node_map = {
+            n["data"]["id"]: n["data"]
+            for n in elements["nodes"]
+        }
+        # depth=0: 後手番ルート → 1 - 0.52 = 0.48
+        assert node_map["100"][
+            "sente_result_value"
+        ] == pytest.approx(0.48)
+        # depth=1: 先手番 → そのまま 0.48
+        assert node_map["200"][
+            "sente_result_value"
+        ] == pytest.approx(0.48)
 
     def test_elements_structure(self) -> None:
         """Cytoscape elementsの構造が正しい."""
@@ -77,7 +123,7 @@ class TestGetCytoscapeElements:
         for node in elements["nodes"]:
             assert "data" in node
             assert "id" in node["data"]
-            assert "result_value" in node["data"]
+            assert "sente_result_value" in node["data"]
 
 
 class TestGetNodeStats:
@@ -89,11 +135,11 @@ class TestGetNodeStats:
         viz = GameTreeVisualizationInterface(nodes, edges)
         stats = viz.get_node_stats(100)
         assert "Zobrist Hash" in stats
-        assert "勝率" in stats
+        assert "勝率(手番視点)" in stats
         assert "最善手勝率" in stats
         assert "深さ" in stats
         assert "分岐数" in stats
-        assert stats["勝率"] == "52.0%"
+        assert stats["勝率(手番視点)"] == "52.0%"
 
     def test_missing_node(self) -> None:
         """存在しないノードは空辞書を返す."""
