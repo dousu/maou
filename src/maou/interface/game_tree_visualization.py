@@ -161,22 +161,9 @@ class GameTreeVisualizationInterface:
             label = "ROOT"
             probability = 1.0
             if edge_info is not None:
-                move16 = edge_info["move16"]
-                usi = move_to_usi(move16)
-                parent_board = local_boards.get(
-                    edge_info["parent_hash"]
-                )
-                # 駒打ち(usi[1]=="*")はUSIから駒名を取得するため
-                # _get_piece_nameの呼び出しは不要
-                piece_name = (
-                    self.get_piece_name(parent_board, move16)
-                    if parent_board is not None
-                    and len(usi) >= 2
-                    and usi[1] != "*"
-                    else ""
-                )
-                label = self.usi_to_japanese(
-                    usi, piece_name=piece_name
+                label = self._move16_to_japanese(
+                    edge_info["move16"],
+                    local_boards.get(edge_info["parent_hash"]),
                 )
                 probability = edge_info["probability"]
 
@@ -212,12 +199,17 @@ class GameTreeVisualizationInterface:
 
         cy_edges: list[dict[str, Any]] = []
         for row in sub_edges.iter_rows(named=True):
+            move_label = self._move16_to_japanese(
+                row["move16"],
+                local_boards.get(row["parent_hash"]),
+            )
+            prob_label = f"{row['probability'] * 100:.1f}%"
             cy_edges.append(
                 {
                     "data": {
                         "source": str(row["parent_hash"]),
                         "target": str(row["child_hash"]),
-                        "label": f"{row['probability'] * 100:.1f}%",
+                        "label": f"{move_label} {prob_label}",
                         "probability": float(
                             row["probability"]
                         ),
@@ -338,17 +330,8 @@ class GameTreeVisualizationInterface:
 
         result: list[MoveRow] = []
         for row in children.iter_rows(named=True):
-            move16 = row["move16"]
-            usi = move_to_usi(move16)
-            piece_name = (
-                self.get_piece_name(board, move16)
-                if board is not None
-                and len(usi) >= 2
-                and usi[1] != "*"
-                else ""
-            )
-            japanese = self.usi_to_japanese(
-                usi, piece_name=piece_name
+            japanese = self._move16_to_japanese(
+                row["move16"], board
             )
             prob = f"{row['probability'] * 100:.1f}%"
             wr = f"{row['win_rate'] * 100:.1f}%"
@@ -416,17 +399,8 @@ class GameTreeVisualizationInterface:
         win_rates: list[float] = []
 
         for row in top_children.iter_rows(named=True):
-            move16 = row["move16"]
-            usi = move_to_usi(move16)
-            piece_name = (
-                self.get_piece_name(board, move16)
-                if board is not None
-                and len(usi) >= 2
-                and usi[1] != "*"
-                else ""
-            )
             moves.append(
-                self.usi_to_japanese(usi, piece_name=piece_name)
+                self._move16_to_japanese(row["move16"], board)
             )
             probs.append(float(row["probability"]))
             win_rates.append(float(row["win_rate"]))
@@ -477,15 +451,7 @@ class GameTreeVisualizationInterface:
                 break
 
             move16 = edge["move16"]
-            usi = move_to_usi(move16)
-            piece_name = (
-                self.get_piece_name(board, move16)
-                if len(usi) >= 2 and usi[1] != "*"
-                else ""
-            )
-            label = self.usi_to_japanese(
-                usi, piece_name=piece_name
-            )
+            label = self._move16_to_japanese(move16, board)
 
             move = board.get_move_from_move16(move16)
             board.push_move(move)
@@ -627,18 +593,9 @@ class GameTreeVisualizationInterface:
         )
 
         for row in edges_sorted.iter_rows(named=True):
-            move16 = row["move16"]
-            usi = move_to_usi(move16)
-            parent_board = local_boards.get(row["parent_hash"])
-            piece_name = (
-                self.get_piece_name(parent_board, move16)
-                if parent_board is not None
-                and len(usi) >= 2
-                and usi[1] != "*"
-                else ""
-            )
-            move_ja = self.usi_to_japanese(
-                usi, piece_name=piece_name
+            move_ja = self._move16_to_japanese(
+                row["move16"],
+                local_boards.get(row["parent_hash"]),
             )
 
             child_hash = row["child_hash"]
@@ -836,6 +793,30 @@ class GameTreeVisualizationInterface:
             from_square=move_from(move),
             to_square=move_to(move),
         )
+
+    def _move16_to_japanese(
+        self,
+        move16: int,
+        parent_board: Board | None,
+    ) -> str:
+        """move16を日本語の指し手表記に変換する．
+
+        Args:
+            move16: 16bit指し手
+            parent_board: 指し手適用前の盤面．Noneの場合は駒名なしで変換．
+
+        Returns:
+            日本語表記(例: "7六歩"，"5五歩打")
+        """
+        usi = move_to_usi(move16)
+        piece_name = (
+            self.get_piece_name(parent_board, move16)
+            if parent_board is not None
+            and len(usi) >= 2
+            and usi[1] != "*"
+            else ""
+        )
+        return self.usi_to_japanese(usi, piece_name=piece_name)
 
     @staticmethod
     def get_piece_name(board: Board, move16: int) -> str:
