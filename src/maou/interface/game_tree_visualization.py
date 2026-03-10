@@ -14,6 +14,7 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
+from maou.app.game_tree.layout import TreeLayout
 from maou.app.game_tree.query import GameTreeQuery
 from maou.domain.board.shogi import (
     Board,
@@ -133,9 +134,9 @@ class GameTreeVisualizationInterface:
         sfen_parts = (
             initial_sfen.split() if initial_sfen else []
         )
-        if (
-            len(sfen_parts) >= 2
-            and sfen_parts[1] not in ("b", "w")
+        if len(sfen_parts) >= 2 and sfen_parts[1] not in (
+            "b",
+            "w",
         ):
             logger.warning(
                 "SFENの手番フィールドが不正です: %r"
@@ -148,21 +149,27 @@ class GameTreeVisualizationInterface:
             else 0
         )
 
-    def get_cytoscape_elements(
+    def get_canvas_data(
         self,
         root_hash: int,
         display_depth: int,
         min_probability: float,
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Cytoscape.js用のノード・エッジデータを生成する．
+        layout: TreeLayout,
+    ) -> dict[str, Any]:
+        """Canvas 2D 描画用のノード・エッジデータを生成する．
+
+        座標は事前計算された layout から取得する．
+        エッジの source/target 座標を直接含むため，
+        フロントエンドのレイアウトエンジンが辺方向を反転しない．
 
         Args:
             root_hash: 表示するサブツリーのルートhash
             display_depth: 表示深さ
             min_probability: エッジの最小確率閾値
+            layout: 事前計算されたレイアウト
 
         Returns:
-            {"nodes": [...], "edges": [...]} 形式のCytoscape elements
+            {"nodes": [...], "edges": [...], "bounds": {...}} 形式
         """
         sub_nodes, sub_edges = self._query.get_subtree(
             root_hash, display_depth, min_probability
@@ -171,14 +178,12 @@ class GameTreeVisualizationInterface:
         # エッジから各ノードへの親エッジ情報を取得(ラベル用)
         child_edge_map = self._build_child_edge_map(sub_edges)
 
-        # サブツリー内の盤面をdepth順に漸進的に構築する．
-        # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
-        # 1手適用して子の盤面を得る．
+        # サブツリー内の盤面を漸進的に構築
         local_boards = self._build_boards_incrementally(
             root_hash, sub_nodes, child_edge_map
         )
 
-        cy_nodes: list[dict[str, Any]] = []
+        canvas_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
             edge_info = child_edge_map.get(pos_hash)
@@ -192,9 +197,6 @@ class GameTreeVisualizationInterface:
                 )
                 probability = edge_info["probability"]
 
-            # result_value は手番側視点．先手視点に変換して
-            # フロントエンドで一貫した色付けに使用する．
-            # Turn.BLACK == 0, Turn.WHITE == 1 を前提とした偶奇判定
             result_value = float(row["result_value"])
             depth = int(row["depth"])
             is_sente_turn = (self._root_turn + depth) % 2 == 0
@@ -204,45 +206,169 @@ class GameTreeVisualizationInterface:
                 else 1 - result_value
             )
 
-            cy_nodes.append(
+            # レイアウトから座標を取得(なければ 0, 0)
+            x, y = layout.node_positions.get(
+                pos_hash, (0.0, 0.0)
+            )
+
+            canvas_nodes.append(
                 {
-                    "data": {
-                        "id": str(pos_hash),
-                        "label": label,
-                        "sente_result_value": sente_value,
-                        "depth": depth,
-                        "probability": float(probability),
-                        "num_branches": int(
-                            row["num_branches"]
-                        ),
-                        "is_depth_cutoff": bool(
-                            row["is_depth_cutoff"]
-                        ),
-                    }
+                    "id": str(pos_hash),
+                    "x": x,
+                    "y": y,
+                    "label": label,
+                    "sente_result_value": sente_value,
+                    "probability": float(probability),
+                    "depth": depth,
+                    "num_branches": int(row["num_branches"]),
+                    "is_depth_cutoff": bool(
+                        row["is_depth_cutoff"]
+                    ),
                 }
             )
 
-        cy_edges: list[dict[str, Any]] = []
+        canvas_edges: list[dict[str, Any]] = []
         for row in sub_edges.iter_rows(named=True):
+            parent_hash = row["parent_hash"]
+            child_hash = row["child_hash"]
             move_label = self._move16_to_japanese(
                 row["move16"],
-                local_boards.get(row["parent_hash"]),
+                local_boards.get(parent_hash),
             )
             prob_label = f"{row['probability'] * 100:.1f}%"
-            cy_edges.append(
+
+            sx, sy = layout.node_positions.get(
+                parent_hash, (0.0, 0.0)
+            )
+            tx, ty = layout.node_positions.get(
+                child_hash, (0.0, 0.0)
+            )
+
+            canvas_edges.append(
                 {
-                    "data": {
-                        "source": str(row["parent_hash"]),
-                        "target": str(row["child_hash"]),
-                        "label": f"{move_label} {prob_label}",
-                        "probability": float(
-                            row["probability"]
-                        ),
-                    }
+                    "source_id": str(parent_hash),
+                    "target_id": str(child_hash),
+                    "source_x": sx,
+                    "source_y": sy,
+                    "target_x": tx,
+                    "target_y": ty,
+                    "label": f"{move_label} {prob_label}",
+                    "probability": float(row["probability"]),
                 }
             )
 
-        return {"nodes": cy_nodes, "edges": cy_edges}
+        # サブツリーの範囲を計算
+        if canvas_nodes:
+            xs = [n["x"] for n in canvas_nodes]
+            ys = [n["y"] for n in canvas_nodes]
+            bounds = {
+                "min_x": min(xs),
+                "min_y": min(ys),
+                "max_x": max(xs),
+                "max_y": max(ys),
+            }
+        else:
+            bounds = {
+                "min_x": 0.0,
+                "min_y": 0.0,
+                "max_x": 0.0,
+                "max_y": 0.0,
+            }
+
+        return {
+            "nodes": canvas_nodes,
+            "edges": canvas_edges,
+            "bounds": bounds,
+        }
+
+    def get_viewport_data(
+        self,
+        visible_hashes: set[int],
+        layout: TreeLayout,
+    ) -> dict[str, Any]:
+        """ビューポート内のノード・エッジデータを返す．
+
+        パン/ズーム後のビューポートクエリで呼ばれ，
+        可視領域のノードとそれらを結ぶエッジのデータを返す．
+        ラベルは含まない(座標と基本属性のみ)．
+
+        Args:
+            visible_hashes: 可視領域内のノードhashの集合
+            layout: 事前計算されたレイアウト
+
+        Returns:
+            {"nodes": [...], "edges": [...]} 形式
+        """
+        if not visible_hashes:
+            return {"nodes": [], "edges": []}
+
+        hash_list = list(visible_hashes)
+        visible_nodes = self._query.nodes_df.filter(
+            pl.col("position_hash").is_in(hash_list)
+        )
+
+        visible_edges = self._query.edges_df.filter(
+            pl.col("parent_hash").is_in(hash_list)
+            & pl.col("child_hash").is_in(hash_list)
+        )
+
+        canvas_nodes: list[dict[str, Any]] = []
+        for row in visible_nodes.iter_rows(named=True):
+            pos_hash = row["position_hash"]
+            result_value = float(row["result_value"])
+            depth = int(row["depth"])
+            is_sente_turn = (self._root_turn + depth) % 2 == 0
+            sente_value = (
+                result_value
+                if is_sente_turn
+                else 1 - result_value
+            )
+            x, y = layout.node_positions.get(
+                pos_hash, (0.0, 0.0)
+            )
+            canvas_nodes.append(
+                {
+                    "id": str(pos_hash),
+                    "x": x,
+                    "y": y,
+                    "label": "",
+                    "sente_result_value": sente_value,
+                    "probability": 1.0,
+                    "depth": depth,
+                    "num_branches": int(row["num_branches"]),
+                    "is_depth_cutoff": bool(
+                        row["is_depth_cutoff"]
+                    ),
+                }
+            )
+
+        canvas_edges: list[dict[str, Any]] = []
+        for row in visible_edges.iter_rows(named=True):
+            parent_hash = row["parent_hash"]
+            child_hash = row["child_hash"]
+            sx, sy = layout.node_positions.get(
+                parent_hash, (0.0, 0.0)
+            )
+            tx, ty = layout.node_positions.get(
+                child_hash, (0.0, 0.0)
+            )
+            canvas_edges.append(
+                {
+                    "source_id": str(parent_hash),
+                    "target_id": str(child_hash),
+                    "source_x": sx,
+                    "source_y": sy,
+                    "target_x": tx,
+                    "target_y": ty,
+                    "label": "",
+                    "probability": float(row["probability"]),
+                }
+            )
+
+        return {
+            "nodes": canvas_nodes,
+            "edges": canvas_edges,
+        }
 
     def get_board_svg(
         self,

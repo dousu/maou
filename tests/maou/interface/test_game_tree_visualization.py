@@ -12,6 +12,10 @@ from maou.domain.game_tree.schema import (
     get_game_tree_edges_schema,
     get_game_tree_nodes_schema,
 )
+from maou.app.game_tree.layout import (
+    GameTreeLayoutService,
+    TreeLayout,
+)
 from maou.interface.game_tree_visualization import (
     GameTreeVisualizationInterface,
     MoveRow,
@@ -52,33 +56,43 @@ def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
     return nodes, edges
 
 
-class TestGetCytoscapeElements:
-    """get_cytoscape_elements のテスト."""
+def _make_layout(
+    nodes: pl.DataFrame, edges: pl.DataFrame, root_hash: int
+) -> TreeLayout:
+    """テスト用のレイアウトを計算する．"""
+    svc = GameTreeLayoutService()
+    return svc.compute_layout(nodes, edges, root_hash)
+
+
+class TestGetCanvasData:
+    """get_canvas_data のテスト."""
 
     def test_single_node(self) -> None:
-        """単一ノードのCytoscape elementsを生成する."""
+        """単一ノードの Canvas データを生成する."""
         nodes, edges = _build_simple_tree()
         viz = GameTreeVisualizationInterface(nodes, edges)
-        elements = viz.get_cytoscape_elements(100, 3, 0.01)
-        assert len(elements["nodes"]) == 1
-        assert len(elements["edges"]) == 0
-        node_data = elements["nodes"][0]["data"]
-        assert node_data["id"] == "100"
-        assert node_data["label"] == "ROOT"
+        layout = _make_layout(nodes, edges, 100)
+        data = viz.get_canvas_data(100, 3, 0.01, layout)
+        assert len(data["nodes"]) == 1
+        assert len(data["edges"]) == 0
+        node = data["nodes"][0]
+        assert node["id"] == "100"
+        assert node["label"] == "ROOT"
         # depth=0, 先手番 → sente_result_value == result_value
-        assert node_data["sente_result_value"] == pytest.approx(
+        assert node["sente_result_value"] == pytest.approx(
             0.52
         )
+        # 座標が含まれる
+        assert "x" in node
+        assert "y" in node
 
     def test_sente_result_value_depth1_flipped(self) -> None:
         """depth=1(後手番)ではsente_result_valueが反転する."""
         nodes, edges = _build_tree_with_edge()
         viz = GameTreeVisualizationInterface(nodes, edges)
-        elements = viz.get_cytoscape_elements(100, 3, 0.01)
-        node_map = {
-            n["data"]["id"]: n["data"]
-            for n in elements["nodes"]
-        }
+        layout = _make_layout(nodes, edges, 100)
+        data = viz.get_canvas_data(100, 3, 0.01, layout)
+        node_map = {n["id"]: n for n in data["nodes"]}
         # depth=0: 先手番 → そのまま
         assert node_map["100"][
             "sente_result_value"
@@ -91,7 +105,6 @@ class TestGetCytoscapeElements:
     def test_sente_result_value_gote_root(self) -> None:
         """後手番ルート(initial_sfen="w")ではdepth=0が反転する."""
         nodes, edges = _build_tree_with_edge()
-        # 後手番のSFEN(簡易的に手番だけ"w"に設定)
         gote_sfen = (
             "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
             "PPPPPPPPP/1B5R1/LNSGKGSNL w - 1"
@@ -99,11 +112,9 @@ class TestGetCytoscapeElements:
         viz = GameTreeVisualizationInterface(
             nodes, edges, initial_sfen=gote_sfen
         )
-        elements = viz.get_cytoscape_elements(100, 3, 0.01)
-        node_map = {
-            n["data"]["id"]: n["data"]
-            for n in elements["nodes"]
-        }
+        layout = _make_layout(nodes, edges, 100)
+        data = viz.get_canvas_data(100, 3, 0.01, layout)
+        node_map = {n["id"]: n for n in data["nodes"]}
         # depth=0: 後手番ルート → 1 - 0.52 = 0.48
         assert node_map["100"][
             "sente_result_value"
@@ -113,17 +124,35 @@ class TestGetCytoscapeElements:
             "sente_result_value"
         ] == pytest.approx(0.48)
 
-    def test_elements_structure(self) -> None:
-        """Cytoscape elementsの構造が正しい."""
+    def test_data_structure(self) -> None:
+        """Canvas データの構造が正しい."""
         nodes, edges = _build_simple_tree()
         viz = GameTreeVisualizationInterface(nodes, edges)
-        elements = viz.get_cytoscape_elements(100, 3, 0.01)
-        assert "nodes" in elements
-        assert "edges" in elements
-        for node in elements["nodes"]:
-            assert "data" in node
-            assert "id" in node["data"]
-            assert "sente_result_value" in node["data"]
+        layout = _make_layout(nodes, edges, 100)
+        data = viz.get_canvas_data(100, 3, 0.01, layout)
+        assert "nodes" in data
+        assert "edges" in data
+        assert "bounds" in data
+        for node in data["nodes"]:
+            assert "id" in node
+            assert "x" in node
+            assert "y" in node
+            assert "sente_result_value" in node
+
+    def test_edges_have_coordinates(self) -> None:
+        """エッジに source/target 座標が含まれる."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameTreeVisualizationInterface(nodes, edges)
+        layout = _make_layout(nodes, edges, 100)
+        data = viz.get_canvas_data(100, 3, 0.01, layout)
+        assert len(data["edges"]) == 1
+        edge = data["edges"][0]
+        assert "source_x" in edge
+        assert "source_y" in edge
+        assert "target_x" in edge
+        assert "target_y" in edge
+        assert "source_id" in edge
+        assert "target_id" in edge
 
 
 class TestGetNodeStats:

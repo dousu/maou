@@ -9,20 +9,27 @@ import json
 import logging
 import tempfile
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 import plotly.graph_objects as go
 
+from maou.app.game_tree.layout import (
+    GameTreeLayoutService,
+    TreeLayout,
+)
 from maou.infra.visualization.game_tree_shared import (
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
     ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
+    ELEM_ID_VIEWPORT_BRIDGE,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
+    JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
     build_tree_html,
     create_analytics_plot,
@@ -72,77 +79,48 @@ def _load_custom_css() -> str:
 
 
 def _build_head_scripts() -> str:
-    """CDNスクリプトとゲームツリーJSをhead要素に注入するHTMLを生成する．
+    """Canvas 2D ゲームツリーJSをhead要素に注入するHTMLを生成する．
 
     demo.launch(head=...)パラメータで使用する．
     gr.HTMLコンポーネントはinnerHTMLで設定されるため<script>タグが
     実行されない問題を回避する．
 
+    CDN依存なし(Cytoscape.js/dagre を除去済み)．
+
     Returns:
         head要素に注入するHTML文字列
     """
-    js_code = load_static_file("game_tree.js")
+    js_code = load_static_file("game_tree_canvas.js")
 
     return f"""
 <script>
 (function() {{
-    var CDN_SCRIPTS = [
-        'https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js',
-        'https://unpkg.com/dagre@0.8.5/dist/dagre.min.js',
-        'https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js'
-    ];
-    var scriptsLoaded = false;
-
-    function loadScriptsSequentially(urls, callback) {{
-        if (urls.length === 0) {{ callback(); return; }}
-        var url = urls[0];
-        var existing = document.querySelector('script[src="' + url + '"]');
-        if (existing) {{
-            loadScriptsSequentially(urls.slice(1), callback);
-            return;
-        }}
-        var s = document.createElement('script');
-        s.src = url;
-        s.onload = function() {{
-            loadScriptsSequentially(urls.slice(1), callback);
-        }};
-        s.onerror = function() {{
-            console.error('Failed to load: ' + url);
-        }};
-        document.head.appendChild(s);
-    }}
+    var jsLoaded = false;
 
     function initGameTreeJS() {{
         {js_code}
     }}
 
     function tryRender() {{
-        var cy = document.getElementById('cy');
-        if (!cy) return;
-        var dataAttr = cy.getAttribute('data-elements');
+        var container = document.getElementById('gt-canvas-container');
+        if (!container) return;
+        var dataAttr = container.getAttribute('data-canvas');
         if (!dataAttr) return;
-        if (cy._lastRendered === dataAttr) return;
-        cy._lastRendered = dataAttr;
+        if (container._lastRendered === dataAttr) return;
+        container._lastRendered = dataAttr;
 
-        function doRender() {{
-            try {{
-                var elements = JSON.parse(dataAttr);
-                if (typeof window.renderGameTree === 'function') {{
-                    window.renderGameTree(elements, 'cy');
-                }}
-            }} catch (e) {{
-                console.error('Failed to render game tree:', e);
-            }}
+        if (!jsLoaded) {{
+            jsLoaded = true;
+            initGameTreeJS();
         }}
 
-        if (scriptsLoaded) {{
-            doRender();
-        }} else {{
-            loadScriptsSequentially(CDN_SCRIPTS, function() {{
-                scriptsLoaded = true;
-                initGameTreeJS();
-                doRender();
-            }});
+        try {{
+            var data = JSON.parse(dataAttr);
+            if (typeof window.renderGameTree === 'function') {{
+                window.renderGameTree(data, 'gt-canvas-container');
+            }}
+        }} catch (e) {{
+            console.error('[maou] Failed to render game tree:', e);
         }}
     }}
 
@@ -155,7 +133,7 @@ def _build_head_scripts() -> str:
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['data-elements'],
+            attributeFilter: ['data-canvas'],
         }});
         tryRender();
     }}
@@ -228,6 +206,7 @@ def _update_tree_view(
     root_hash: int,
     display_depth: int,
     min_prob: float,
+    layout: TreeLayout | None = None,
 ) -> tuple[
     str,
     str,
@@ -245,16 +224,21 @@ def _update_tree_view(
         root_hash: 表示するサブツリーのルートhash
         display_depth: 表示深さ
         min_prob: エッジの最小確率閾値
+        layout: 事前計算されたレイアウト
 
     Returns:
         (tree_html, board_svg, stats, display_moves, child_hashes,
          plot, breadcrumb_html, sfen_text)
     """
-    elements = viz.get_cytoscape_elements(
-        root_hash, int(display_depth), min_prob
+    if layout is None:
+        layout = TreeLayout(
+            node_positions={}, bounds=(0, 0, 0, 0)
+        )
+    canvas_data = viz.get_canvas_data(
+        root_hash, int(display_depth), min_prob, layout
     )
-    elements_json = json.dumps(elements, ensure_ascii=False)
-    tree_html = build_tree_html(elements_json)
+    canvas_json = json.dumps(canvas_data, ensure_ascii=False)
+    tree_html = build_tree_html(canvas_json)
 
     (
         board_svg,
@@ -312,6 +296,27 @@ def launch_game_tree_server(
     )
     root_hash = viz.get_root_hash()
 
+    # レイアウト事前計算
+    layout_svc = GameTreeLayoutService()
+    tree_layout = layout_svc.compute_layout(
+        nodes_df, edges_df, root_hash
+    )
+    logger.info(
+        "Computed layout: %d positions, bounds=%s",
+        len(tree_layout.node_positions),
+        tree_layout.bounds,
+    )
+
+    # ビューポートクエリ用の空間インデックス
+    _spatial_buckets: dict[tuple[int, int], list[int]] = (
+        defaultdict(list)
+    )
+    _bucket_size = 500.0
+    for h, (x, y) in tree_layout.node_positions.items():
+        bx = int(x // _bucket_size)
+        by = int(y // _bucket_size)
+        _spatial_buckets[(bx, by)].append(h)
+
     custom_css = _load_custom_css()
     head_scripts = _build_head_scripts()
 
@@ -341,7 +346,11 @@ def launch_game_tree_server(
     ]:
         """初期表示コールバック．"""
         return _update_tree_view(
-            viz, viz.get_root_hash(), display_depth, min_prob
+            viz,
+            viz.get_root_hash(),
+            display_depth,
+            min_prob,
+            tree_layout,
         )
 
     def on_refresh(
@@ -371,7 +380,7 @@ def launch_game_tree_server(
             )
             rh = viz.get_root_hash()
         return _update_tree_view(
-            viz, rh, display_depth, min_prob
+            viz, rh, display_depth, min_prob, tree_layout
         )
 
     # --- server_functions: JS から直接呼び出される Python 関数 ---
@@ -430,11 +439,69 @@ def launch_game_tree_server(
             return False
         _pending["expand"] = {
             "data": _update_tree_view(
-                viz, pos_hash, int(display_depth), min_prob
+                viz,
+                pos_hash,
+                int(display_depth),
+                min_prob,
+                tree_layout,
             ),
             "hash": pos_hash,
         }
         return True
+
+    def handle_viewport(
+        args: list[Any] | float,
+        max_x: float = 0,
+        min_y: float = 0,
+        max_y: float = 0,
+    ) -> str:
+        """ビューポート範囲内のノード・エッジを返す server_function．
+
+        パン/ズーム後にフロントエンドから呼ばれ，
+        可視領域のノード・エッジデータを返す．
+
+        Note:
+            Gradio 6 の server_functions は複数の JS 引数を
+            リストとして第1引数に渡す場合がある．
+        """
+        # server_functions がリストで渡す場合の展開
+        if isinstance(args, list):
+            min_x_v = float(args[0]) if len(args) > 0 else 0
+            max_x_v = float(args[1]) if len(args) > 1 else 0
+            min_y_v = float(args[2]) if len(args) > 2 else 0
+            max_y_v = float(args[3]) if len(args) > 3 else 0
+        else:
+            min_x_v = float(args)
+            max_x_v = float(max_x)
+            min_y_v = float(min_y)
+            max_y_v = float(max_y)
+
+        # 空間インデックスで該当バケットのノードを収集
+        min_bx = int(min_x_v // _bucket_size) - 1
+        max_bx = int(max_x_v // _bucket_size) + 1
+        min_by = int(min_y_v // _bucket_size) - 1
+        max_by = int(max_y_v // _bucket_size) + 1
+
+        visible_hashes: set[int] = set()
+        for bx in range(min_bx, max_bx + 1):
+            for by in range(min_by, max_by + 1):
+                bucket = _spatial_buckets.get((bx, by), [])
+                for h in bucket:
+                    pos = tree_layout.node_positions.get(h)
+                    if pos is None:
+                        continue
+                    x, y = pos
+                    if (
+                        min_x_v <= x <= max_x_v
+                        and min_y_v <= y <= max_y_v
+                    ):
+                        visible_hashes.add(h)
+
+        # 可視ノードのデータを構築
+        canvas_data = viz.get_viewport_data(
+            visible_hashes, tree_layout
+        )
+        return json.dumps(canvas_data, ensure_ascii=False)
 
     def on_select_result() -> tuple[
         str,
@@ -544,7 +611,7 @@ def launch_game_tree_server(
             breadcrumb_html_v,
             sfen_text_v,
         ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob
+            viz, pos_hash, display_depth, min_prob, tree_layout
         )
         return (
             tree_html_v,
@@ -573,7 +640,9 @@ def launch_game_tree_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(viz, rh, display_depth, min_prob)
+        ) = _update_tree_view(
+            viz, rh, display_depth, min_prob, tree_layout
+        )
         return (
             tree_html_v,
             board_svg,
@@ -625,7 +694,7 @@ def launch_game_tree_server(
             breadcrumb_html_v,
             sfen_text_v,
         ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob
+            viz, pos_hash, display_depth, min_prob, tree_layout
         )
         return (
             tree_html_v,
@@ -691,7 +760,7 @@ def launch_game_tree_server(
         with gr.Row():
             depth_slider = gr.Slider(
                 minimum=1,
-                maximum=10,
+                maximum=20,
                 value=3,
                 step=1,
                 label="表示深さ",
@@ -780,6 +849,14 @@ def launch_game_tree_server(
             elem_classes=["maou-hidden"],
             server_functions=[handle_expand],
             js_on_load=JS_ON_LOAD_EXPAND,
+        )
+        # ビューポートクエリ用ブリッジ(Phase 4: 遅延読み込み)
+        gr.HTML(
+            value="",
+            elem_id=ELEM_ID_VIEWPORT_BRIDGE,
+            elem_classes=["maou-hidden"],
+            server_functions=[handle_viewport],
+            js_on_load=JS_ON_LOAD_VIEWPORT,
         )
 
         # Hidden state

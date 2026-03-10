@@ -370,6 +370,7 @@ class GradioVisualizationServer:
         # ゲームツリー状態(game-tree モード時に使用)
         self._game_tree_viz: Any = None
         self._game_tree_root_hash: int = 0
+        self._game_tree_layout: Any = None
 
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
@@ -1149,6 +1150,9 @@ class GradioVisualizationServer:
         Args:
             tree_dir: ツリーデータディレクトリ
         """
+        from maou.app.game_tree.layout import (
+            GameTreeLayoutService,
+        )
         from maou.interface.game_tree_io import GameTreeIO
         from maou.interface.game_tree_visualization import (
             GameTreeVisualizationInterface,
@@ -1170,6 +1174,12 @@ class GradioVisualizationServer:
         )
         self._game_tree_root_hash = (
             self._game_tree_viz.get_root_hash()
+        )
+
+        # レイアウト事前計算
+        layout_svc = GameTreeLayoutService()
+        self._game_tree_layout = layout_svc.compute_layout(
+            nodes_df, edges_df, self._game_tree_root_hash
         )
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
@@ -2280,11 +2290,14 @@ class GradioVisualizationServer:
                     )
                     rh = self._game_tree_root_hash
 
-                elements = viz.get_cytoscape_elements(
-                    rh, int(display_depth), min_prob
+                canvas_data = viz.get_canvas_data(
+                    rh,
+                    int(display_depth),
+                    min_prob,
+                    self._game_tree_layout,
                 )
                 tree_html = build_tree_html(
-                    json.dumps(elements, ensure_ascii=False)
+                    json.dumps(canvas_data, ensure_ascii=False)
                 )
 
                 (
