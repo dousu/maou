@@ -117,6 +117,11 @@ class GameTreeVisualizationInterface:
         self._renderer = SVGBoardRenderer()
         self._board_cache: _BoardCache | None = None
         self._opening_db = OpeningDatabase()
+        # ルート局面の手番を保持(先手視点の勝率計算に使用)
+        root_board = Board()
+        if initial_sfen is not None:
+            root_board.set_sfen(initial_sfen)
+        self._root_turn = int(root_board.get_turn())
 
     def get_cytoscape_elements(
         self,
@@ -175,15 +180,25 @@ class GameTreeVisualizationInterface:
                 )
                 probability = edge_info["probability"]
 
+            # result_value は手番側視点．先手視点に変換して
+            # フロントエンドで一貫した色付けに使用する．
+            raw_value = float(row["result_value"])
+            depth = int(row["depth"])
+            is_sente_turn = (
+                self._root_turn + depth
+            ) % 2 == 0
+            sente_value = (
+                raw_value if is_sente_turn else 1 - raw_value
+            )
+
             cy_nodes.append(
                 {
                     "data": {
                         "id": str(pos_hash),
                         "label": label,
-                        "result_value": float(
-                            row["result_value"]
-                        ),
-                        "depth": int(row["depth"]),
+                        "result_value": raw_value,
+                        "sente_result_value": sente_value,
+                        "depth": depth,
                         "probability": float(probability),
                         "num_branches": int(
                             row["num_branches"]
