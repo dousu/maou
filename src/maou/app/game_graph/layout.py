@@ -2,7 +2,7 @@
 
 全ノードの (x, y) 座標をサーバー側で事前計算する．
 depth ベースの Y 座標と確率順の X 座標配置により，
-Cytoscape.js + dagre の辺方向反転バグを回避するために実装した．
+フロントエンドのレイアウトエンジンに依存せず正確な描画を実現する．
 """
 
 from __future__ import annotations

@@ -221,6 +221,31 @@ class TestComputeLayout:
                 f"Node {h} missing from positions"
             )
 
+    def test_back_edge_cycle_no_infinite_loop(self) -> None:
+        """閉路(バックエッジ)を持つグラフで無限ループにならない．"""
+        # depth=0 → depth=1 → depth=0 の循環エッジを含むグラフ
+        nodes = _make_nodes(
+            [
+                _default_node(1, 0),
+                _default_node(2, 1),
+            ]
+        )
+        edges = _make_edges(
+            [
+                _default_edge(1, 2, 0.8),  # フォワードエッジ
+                _default_edge(2, 1, 0.2),  # バックエッジ(循環)
+            ]
+        )
+        svc = GameGraphLayoutService()
+        layout = svc.compute_layout(nodes, edges, 1)
+        assert 1 in layout.node_positions
+        assert 2 in layout.node_positions
+        # Y座標が depth に基づいている
+        assert layout.node_positions[1][1] == 0.0
+        assert layout.node_positions[2][1] == pytest.approx(
+            80.0
+        )
+
     def test_bounds_correct(self) -> None:
         """bounds が全ノードの座標を包含する．"""
         nodes = _make_nodes(

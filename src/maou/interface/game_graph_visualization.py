@@ -315,6 +315,14 @@ class GameGraphVisualizationInterface:
             & pl.col("child_hash").is_in(hash_list)
         )
 
+        # 各ノードの親エッジ最大確率を取得(ノードサイズ計算用)
+        max_prob_map: dict[int, float] = {}
+        for row in visible_edges.iter_rows(named=True):
+            child_hash = row["child_hash"]
+            prob = float(row["probability"])
+            if prob > max_prob_map.get(child_hash, 0.0):
+                max_prob_map[child_hash] = prob
+
         canvas_nodes: list[dict[str, Any]] = []
         for row in visible_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
@@ -336,7 +344,9 @@ class GameGraphVisualizationInterface:
                     "y": y,
                     "label": "",
                     "sente_result_value": sente_value,
-                    "probability": 1.0,
+                    "probability": max_prob_map.get(
+                        pos_hash, 1.0
+                    ),
                     "depth": depth,
                     "num_branches": int(row["num_branches"]),
                     "is_depth_cutoff": bool(
