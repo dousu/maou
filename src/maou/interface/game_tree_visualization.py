@@ -197,12 +197,26 @@ class GameTreeVisualizationInterface:
 
         cy_edges: list[dict[str, Any]] = []
         for row in sub_edges.iter_rows(named=True):
+            move16 = row["move16"]
+            usi = move_to_usi(move16)
+            parent_board = local_boards.get(row["parent_hash"])
+            piece_name = (
+                self.get_piece_name(parent_board, move16)
+                if parent_board is not None
+                and len(usi) >= 2
+                and usi[1] != "*"
+                else ""
+            )
+            move_label = self.usi_to_japanese(
+                usi, piece_name=piece_name
+            )
+            prob_label = f"{row['probability'] * 100:.1f}%"
             cy_edges.append(
                 {
                     "data": {
                         "source": str(row["parent_hash"]),
                         "target": str(row["child_hash"]),
-                        "label": f"{row['probability'] * 100:.1f}%",
+                        "label": f"{move_label} {prob_label}",
                         "probability": float(
                             row["probability"]
                         ),
