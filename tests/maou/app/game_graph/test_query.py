@@ -1,14 +1,14 @@
-"""ゲームツリー検索・フィルタリングのテスト."""
+"""ゲームグラフ検索・フィルタリングのテスト."""
 
 from __future__ import annotations
 
 import polars as pl
 import pytest
 
-from maou.app.game_tree.query import GameTreeQuery
-from maou.domain.game_tree.schema import (
-    get_game_tree_edges_schema,
-    get_game_tree_nodes_schema,
+from maou.app.game_graph.query import GameGraphQuery
+from maou.domain.game_graph.schema import (
+    get_game_graph_edges_schema,
+    get_game_graph_nodes_schema,
 )
 
 
@@ -17,7 +17,7 @@ def _make_nodes(
 ) -> pl.DataFrame:
     """テスト用ノードDataFrameを生成する．"""
     return pl.DataFrame(
-        rows, schema=get_game_tree_nodes_schema()
+        rows, schema=get_game_graph_nodes_schema()
     )
 
 
@@ -26,13 +26,11 @@ def _make_edges(
 ) -> pl.DataFrame:
     """テスト用エッジDataFrameを生成する．"""
     return pl.DataFrame(
-        rows, schema=get_game_tree_edges_schema()
+        rows, schema=get_game_graph_edges_schema()
     )
 
 
-def _build_simple_tree() -> (
-    tuple[pl.DataFrame, pl.DataFrame]
-):
+def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
     """シンプルなテスト用ツリーを構築する．
 
     ROOT(depth=0) -> A(depth=1, prob=0.6) -> C(depth=2, prob=0.3)
@@ -114,7 +112,7 @@ class TestGetSubtree:
     def test_depth_1(self) -> None:
         """depth=1ではルートと直接の子のみ取得する."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         sub_nodes, sub_edges = query.get_subtree(
             100, max_depth=1
         )
@@ -126,7 +124,7 @@ class TestGetSubtree:
     def test_depth_2(self) -> None:
         """depth=2では全ノードを取得する."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         sub_nodes, sub_edges = query.get_subtree(
             100, max_depth=2
         )
@@ -136,7 +134,7 @@ class TestGetSubtree:
     def test_min_probability_filter(self) -> None:
         """min_probabilityでエッジをフィルタする."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         sub_nodes, sub_edges = query.get_subtree(
             100, max_depth=2, min_probability=0.5
         )
@@ -147,7 +145,7 @@ class TestGetSubtree:
     def test_empty_result(self) -> None:
         """存在しないハッシュからは空の結果を返す."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         sub_nodes, sub_edges = query.get_subtree(
             999, max_depth=3
         )
@@ -161,7 +159,7 @@ class TestGetNodeDetail:
     def test_existing_node(self) -> None:
         """存在するノードの詳細を取得する."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         detail = query.get_node_detail(100)
         assert detail["position_hash"] == 100
         assert detail["depth"] == 0
@@ -170,7 +168,7 @@ class TestGetNodeDetail:
     def test_missing_node(self) -> None:
         """存在しないノードは空辞書を返す."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         assert query.get_node_detail(999) == {}
 
 
@@ -180,21 +178,17 @@ class TestGetChildren:
     def test_children_sorted_by_probability(self) -> None:
         """子エッジが確率降順でソートされる."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         children = query.get_children(100)
         assert len(children) == 2
         # 0.6 > 0.4 の順
-        assert children["probability"][0] == pytest.approx(
-            0.6
-        )
-        assert children["probability"][1] == pytest.approx(
-            0.4
-        )
+        assert children["probability"][0] == pytest.approx(0.6)
+        assert children["probability"][1] == pytest.approx(0.4)
 
     def test_no_children(self) -> None:
         """子がないノードは空DataFrameを返す."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         children = query.get_children(400)
         assert len(children) == 0
 
@@ -205,21 +199,21 @@ class TestGetPathToRoot:
     def test_root_path(self) -> None:
         """ルート自身のパスはルートのみ."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         path = query.get_path_to_root(100)
         assert path == [100]
 
     def test_depth_1_path(self) -> None:
         """depth=1ノードのパスはルート→ノード."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         path = query.get_path_to_root(200)
         assert path == [100, 200]
 
     def test_depth_2_path(self) -> None:
         """depth=2ノードのパスはルート→中間→ノード."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         path = query.get_path_to_root(400)
         assert path == [100, 200, 400]
 
@@ -230,7 +224,7 @@ class TestGetEdgeBetween:
     def test_existing_edge(self) -> None:
         """存在するエッジの情報を取得する."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         edge = query.get_edge_between(100, 200)
         assert edge is not None
         assert edge["move16"] == 1000
@@ -239,5 +233,5 @@ class TestGetEdgeBetween:
     def test_missing_edge(self) -> None:
         """存在しないエッジはNoneを返す."""
         nodes, edges = _build_simple_tree()
-        query = GameTreeQuery(nodes, edges)
+        query = GameGraphQuery(nodes, edges)
         assert query.get_edge_between(100, 400) is None

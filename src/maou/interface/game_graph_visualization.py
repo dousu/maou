@@ -1,6 +1,6 @@
-"""ゲームツリー可視化のインターフェース層．
+"""ゲームグラフ可視化のインターフェース層．
 
-App層のGameTreeQueryとInfra層のGradio UIを接続するアダプタ．
+App層のGameGraphQueryとInfra層のGradio UIを接続するアダプタ．
 Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
 """
 
@@ -14,8 +14,8 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
-from maou.app.game_tree.layout import TreeLayout
-from maou.app.game_tree.query import GameTreeQuery
+from maou.app.game_graph.layout import TreeLayout
+from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
     Board,
     Turn,
@@ -25,7 +25,7 @@ from maou.domain.board.shogi import (
     move_to,
     move_to_usi,
 )
-from maou.domain.game_tree.openings import (
+from maou.domain.game_graph.openings import (
     OpeningDatabase,
     OpeningInfo,
 )
@@ -66,10 +66,10 @@ class MoveRow(NamedTuple):
     """子局面のZobrist hash文字列"""
 
 
-class GameTreeVisualizationInterface:
-    """ゲームツリー可視化のインターフェース層．
+class GameGraphVisualizationInterface:
+    """ゲームグラフ可視化のインターフェース層．
 
-    GameTreeQueryのデータをUI向けに変換する．
+    GameGraphQueryのデータをUI向けに変換する．
     """
 
     _ROW_MAP: dict[str, str] = {
@@ -110,7 +110,7 @@ class GameTreeVisualizationInterface:
         Raises:
             ValueError: depth=0のルートノードが見つからない場合
         """
-        self._query = GameTreeQuery(nodes_df, edges_df)
+        self._query = GameGraphQuery(nodes_df, edges_df)
         root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
         if len(root_nodes) == 0:
             msg = "ルートノード(depth=0)が見つかりません"
@@ -961,7 +961,7 @@ class GameTreeVisualizationInterface:
         """
         usi = move_to_usi(move16)
         piece_name = (
-            GameTreeVisualizationInterface.get_piece_name(
+            GameGraphVisualizationInterface.get_piece_name(
                 parent_board, move16
             )
             if parent_board is not None
@@ -969,7 +969,7 @@ class GameTreeVisualizationInterface:
             and usi[1] != "*"
             else ""
         )
-        return GameTreeVisualizationInterface.usi_to_japanese(
+        return GameGraphVisualizationInterface.usi_to_japanese(
             usi, piece_name=piece_name
         )
 

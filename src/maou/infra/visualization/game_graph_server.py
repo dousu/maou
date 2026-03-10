@@ -1,7 +1,7 @@
-"""ゲームツリー可視化Gradioサーバー(インフラ層)．
+"""ゲームグラフ可視化Gradioサーバー(インフラ層)．
 
-構築済みゲームツリーをインタラクティブに可視化するGradio Webインターフェース．
-maou visualize --array-type game-tree から起動される．
+構築済みゲームグラフをインタラクティブに可視化するGradio Webインターフェース．
+maou visualize --array-type game-graph から起動される．
 """
 
 import atexit
@@ -16,11 +16,11 @@ from typing import Any
 import gradio as gr
 import plotly.graph_objects as go
 
-from maou.app.game_tree.layout import (
-    GameTreeLayoutService,
+from maou.app.game_graph.layout import (
+    GameGraphLayoutService,
     TreeLayout,
 )
-from maou.infra.visualization.game_tree_shared import (
+from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
@@ -36,9 +36,9 @@ from maou.infra.visualization.game_tree_shared import (
     create_empty_plot,
     load_static_file,
 )
-from maou.interface.game_tree_io import GameTreeIO
-from maou.interface.game_tree_visualization import (
-    GameTreeVisualizationInterface,
+from maou.interface.game_graph_io import GameGraphIO
+from maou.interface.game_graph_visualization import (
+    GameGraphVisualizationInterface,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _load_custom_css() -> str:
-    """カスタムCSSファイルを読み込む(既存テーマ + ゲームツリー用)．
+    """カスタムCSSファイルを読み込む(既存テーマ + ゲームグラフ用)．
 
     Returns:
         結合されたCSS文字列
@@ -79,7 +79,7 @@ def _load_custom_css() -> str:
 
 
 def _build_head_scripts() -> str:
-    """Canvas 2D ゲームツリーJSをhead要素に注入するHTMLを生成する．
+    """Canvas 2D ゲームグラフJSをhead要素に注入するHTMLを生成する．
 
     demo.launch(head=...)パラメータで使用する．
     gr.HTMLコンポーネントはinnerHTMLで設定されるため<script>タグが
@@ -90,14 +90,14 @@ def _build_head_scripts() -> str:
     Returns:
         head要素に注入するHTML文字列
     """
-    js_code = load_static_file("game_tree_canvas.js")
+    js_code = load_static_file("game_graph_canvas.js")
 
     return f"""
 <script>
 (function() {{
     var jsLoaded = false;
 
-    function initGameTreeJS() {{
+    function initGameGraphJS() {{
         {js_code}
     }}
 
@@ -111,13 +111,13 @@ def _build_head_scripts() -> str:
 
         if (!jsLoaded) {{
             jsLoaded = true;
-            initGameTreeJS();
+            initGameGraphJS();
         }}
 
         try {{
             var data = JSON.parse(dataAttr);
-            if (typeof window.renderGameTree === 'function') {{
-                window.renderGameTree(data, 'gt-canvas-container');
+            if (typeof window.renderGameGraph === 'function') {{
+                window.renderGameGraph(data, 'gt-canvas-container');
             }}
         }} catch (e) {{
             console.error('[maou] Failed to render game tree:', e);
@@ -149,7 +149,7 @@ def _build_head_scripts() -> str:
 
 
 def _get_detail_outputs(
-    viz: GameTreeVisualizationInterface,
+    viz: GameGraphVisualizationInterface,
     pos_hash: int,
 ) -> tuple[
     str,
@@ -202,7 +202,7 @@ def _get_detail_outputs(
 
 
 def _update_tree_view(
-    viz: GameTreeVisualizationInterface,
+    viz: GameGraphVisualizationInterface,
     root_hash: int,
     display_depth: int,
     min_prob: float,
@@ -262,15 +262,15 @@ def _update_tree_view(
     )
 
 
-def launch_game_tree_server(
+def launch_game_graph_server(
     tree_path: Path,
     port: int | None = None,
     share: bool = False,
     server_name: str = "127.0.0.1",
 ) -> None:
-    """ゲームツリー可視化サーバーを起動する．
+    """ゲームグラフ可視化サーバーを起動する．
 
-    gradio_server.launch_server() から array_type="game-tree" の場合に
+    gradio_server.launch_server() から array_type="game-graph" の場合に
     ディスパッチされる．
 
     Args:
@@ -280,7 +280,7 @@ def launch_game_tree_server(
         server_name: サーバーバインドアドレス
     """
     # データ読み込み
-    tree_io = GameTreeIO()
+    tree_io = GameGraphIO()
     nodes_df, edges_df = tree_io.load(tree_path)
     metadata = tree_io.load_metadata(tree_path)
     logger.info(
@@ -289,7 +289,7 @@ def launch_game_tree_server(
         len(edges_df),
     )
 
-    viz = GameTreeVisualizationInterface(
+    viz = GameGraphVisualizationInterface(
         nodes_df,
         edges_df,
         initial_sfen=metadata.get("initial_sfen"),
@@ -297,7 +297,7 @@ def launch_game_tree_server(
     root_hash = viz.get_root_hash()
 
     # レイアウト事前計算
-    layout_svc = GameTreeLayoutService()
+    layout_svc = GameGraphLayoutService()
     tree_layout = layout_svc.compute_layout(
         nodes_df, edges_df, root_hash
     )
@@ -710,7 +710,7 @@ def launch_game_tree_server(
 
     # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
     _csv_tmp_dir = tempfile.TemporaryDirectory(
-        prefix="maou_game_tree_csv_"
+        prefix="maou_game_graph_csv_"
     )
     atexit.register(_csv_tmp_dir.cleanup)
 
@@ -738,7 +738,7 @@ def launch_game_tree_server(
             return None
 
         tmp_path = Path(_csv_tmp_dir.name) / (
-            f"game_tree_{uuid.uuid4().hex}.csv"
+            f"game_graph_{uuid.uuid4().hex}.csv"
         )
         tmp_path.write_text(csv_content, encoding="utf-8")
         return str(tmp_path)

@@ -1,4 +1,4 @@
-"""ゲームツリーの検索・フィルタリング."""
+"""ゲームグラフの検索・フィルタリング."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from typing import Any
 import polars as pl
 
 
-class GameTreeQuery:
+class GameGraphQuery:
     """ツリーデータの検索・フィルタリング．
 
-    構築済みのゲームツリー(nodes/edges DataFrames)に対して，
+    構築済みのゲームグラフ(nodes/edges DataFrames)に対して，
     サブツリー取得・ノード詳細・パス探索などのクエリを提供する．
     """
 

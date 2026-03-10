@@ -39,14 +39,14 @@ def _is_google_colab() -> bool:
 )
 @click.option(
     "--array-type",
-    help="データ型: hcpe, preprocessing, stage1, stage2, game-tree．",
+    help="データ型: hcpe, preprocessing, stage1, stage2, game-graph．",
     type=click.Choice(
         [
             "hcpe",
             "preprocessing",
             "stage1",
             "stage2",
-            "game-tree",
+            "game-graph",
         ]
     ),
     default="hcpe",
@@ -111,8 +111,8 @@ def visualize(
         # 特定のファイルを可視化
         maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
 
-        # ゲームツリーを可視化
-        maou visualize --input-path ./data/game-tree/ --array-type game-tree
+        # ゲームグラフを可視化
+        maou visualize --input-path ./data/game-graph/ --array-type game-graph
 
         # 公開リンクを作成
         maou visualize --input-path ./data --array-type hcpe --share
@@ -121,16 +121,16 @@ def visualize(
     if debug_mode:
         app_logger.setLevel(logging.DEBUG)
 
-    # game-tree はgradio_serverのimportチェーンを避けて直接起動
-    if array_type == "game-tree":
+    # game-graph はgradio_serverのimportチェーンを避けて直接起動
+    if array_type == "game-graph":
         if not input_path:
             raise click.ClickException(
-                "game-tree requires --input-path to a directory "
+                "game-graph requires --input-path to a directory "
                 "containing nodes.feather and edges.feather."
             )
         if len(input_path) > 1:
             app_logger.warning(
-                "game-tree では --input-path は1つのみ有効です．"
+                "game-graph では --input-path は1つのみ有効です．"
                 "2番目以降の入力は無視されます: %s",
                 input_path[1:],
             )
@@ -148,11 +148,11 @@ def visualize(
             )
 
         try:
-            from maou.infra.visualization.game_tree_server import (
-                launch_game_tree_server,
+            from maou.infra.visualization.game_graph_server import (
+                launch_game_graph_server,
             )
 
-            launch_game_tree_server(
+            launch_game_graph_server(
                 tree_path=tree_dir,
                 port=port,
                 share=share,

@@ -1,17 +1,16 @@
-"""GameTreeLayoutService のテスト．"""
+"""GameGraphLayoutService のテスト．"""
 
 from __future__ import annotations
 
 import polars as pl
 import pytest
 
-from maou.app.game_tree.layout import (
-    GameTreeLayoutService,
-    TreeLayout,
+from maou.app.game_graph.layout import (
+    GameGraphLayoutService,
 )
-from maou.domain.game_tree.schema import (
-    get_game_tree_edges_schema,
-    get_game_tree_nodes_schema,
+from maou.domain.game_graph.schema import (
+    get_game_graph_edges_schema,
+    get_game_graph_nodes_schema,
 )
 
 
@@ -19,7 +18,7 @@ def _make_nodes(
     rows: list[dict],
 ) -> pl.DataFrame:
     return pl.DataFrame(
-        rows, schema=get_game_tree_nodes_schema()
+        rows, schema=get_game_graph_nodes_schema()
     )
 
 
@@ -27,13 +26,11 @@ def _make_edges(
     rows: list[dict],
 ) -> pl.DataFrame:
     return pl.DataFrame(
-        rows, schema=get_game_tree_edges_schema()
+        rows, schema=get_game_graph_edges_schema()
     )
 
 
-def _default_node(
-    position_hash: int, depth: int
-) -> dict:
+def _default_node(position_hash: int, depth: int) -> dict:
     """テスト用のデフォルトノード行を作成する．"""
     return {
         "position_hash": position_hash,
@@ -69,7 +66,7 @@ class TestComputeLayout:
         """空の DataFrame でエラーにならない．"""
         nodes = _make_nodes([])
         edges = _make_edges([])
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 0)
         assert layout.node_positions == {}
         assert layout.bounds == (0, 0, 0, 0)
@@ -78,7 +75,7 @@ class TestComputeLayout:
         """単一ノード(ルートのみ)の座標が (0, 0) になる．"""
         nodes = _make_nodes([_default_node(100, 0)])
         edges = _make_edges([])
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 100)
         assert layout.node_positions[100] == (0.0, 0.0)
         assert layout.bounds == (0.0, 0.0, 0.0, 0.0)
@@ -98,7 +95,7 @@ class TestComputeLayout:
                 _default_edge(2, 3, 1.0),
             ]
         )
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(
             nodes, edges, 1, rank_spacing=100.0
         )
@@ -125,7 +122,7 @@ class TestComputeLayout:
                 _default_edge(1, 3, 0.4),
             ]
         )
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(
             nodes, edges, 1, sibling_spacing=60.0
         )
@@ -155,7 +152,7 @@ class TestComputeLayout:
                 _default_edge(3, 4, 0.3),
             ]
         )
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 1)
         # ノード 4 は primary parent=2 (確率 0.8 > 0.3) の下に配置
         assert 4 in layout.node_positions
@@ -166,7 +163,7 @@ class TestComputeLayout:
 
     def test_overlap_resolution(self) -> None:
         """重なりが解消される．"""
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         placed = [(1, 0.0), (2, 5.0), (3, 10.0)]
         result = svc._resolve_overlaps(placed, 40.0)
         # 間隔が 40 未満のペアは押し広げられる
@@ -177,17 +174,21 @@ class TestComputeLayout:
         """1000ノードのレイアウトが1秒以内に完了する．"""
         import time
 
-        node_rows = [_default_node(i, min(i, 20)) for i in range(1000)]
+        node_rows = [
+            _default_node(i, min(i, 20)) for i in range(1000)
+        ]
         edge_rows = []
         for i in range(1, 1000):
             parent = max(0, i - 1)
             edge_rows.append(
-                _default_edge(parent, i, 1.0 / max(1, i % 5 + 1))
+                _default_edge(
+                    parent, i, 1.0 / max(1, i % 5 + 1)
+                )
             )
         nodes = _make_nodes(node_rows)
         edges = _make_edges(edge_rows)
 
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         start = time.monotonic()
         layout = svc.compute_layout(nodes, edges, 0)
         elapsed = time.monotonic() - start
@@ -212,7 +213,7 @@ class TestComputeLayout:
                 _default_edge(2, 3, 1.0),
             ]
         )
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 1)
         for row in nodes.iter_rows(named=True):
             h = row["position_hash"]
@@ -235,7 +236,7 @@ class TestComputeLayout:
                 _default_edge(1, 3, 0.4),
             ]
         )
-        svc = GameTreeLayoutService()
+        svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 1)
         min_x, min_y, max_x, max_y = layout.bounds
         for x, y in layout.node_positions.values():

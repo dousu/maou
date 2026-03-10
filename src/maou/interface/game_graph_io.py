@@ -1,4 +1,4 @@
-"""ゲームツリーデータのI/O(Rustバックエンド使用)．"""
+"""ゲームグラフデータのI/O(Rustバックエンド使用)．"""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from typing import Any
 
 import polars as pl
 
-from maou.domain.game_tree.model import (
-    GameTreeEdge,
-    GameTreeNode,
+from maou.domain.game_graph.model import (
+    GameGraphEdge,
+    GameGraphNode,
 )
-from maou.domain.game_tree.schema import (
-    get_game_tree_edges_schema,
-    get_game_tree_nodes_schema,
+from maou.domain.game_graph.schema import (
+    get_game_graph_edges_schema,
+    get_game_graph_nodes_schema,
 )
 
 NODES_FILENAME = "nodes.feather"
@@ -62,13 +62,13 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
         return pl.read_ipc(path)
 
 
-class GameTreeIO:
-    """ゲームツリーデータのI/O(Rustバックエンド使用)．"""
+class GameGraphIO:
+    """ゲームグラフデータのI/O(Rustバックエンド使用)．"""
 
     def save(
         self,
-        nodes: list[GameTreeNode],
-        edges: list[GameTreeEdge],
+        nodes: list[GameGraphNode],
+        edges: list[GameGraphEdge],
         output_dir: Path,
     ) -> None:
         """nodes.feather, edges.feather を Rust I/O で出力する．
@@ -82,12 +82,12 @@ class GameTreeIO:
 
         nodes_df = pl.DataFrame(
             [dataclasses.asdict(n) for n in nodes],
-            schema=get_game_tree_nodes_schema(),
+            schema=get_game_graph_nodes_schema(),
         )
 
         edges_df = pl.DataFrame(
             [dataclasses.asdict(e) for e in edges],
-            schema=get_game_tree_edges_schema(),
+            schema=get_game_graph_edges_schema(),
         )
 
         _save_df_feather(nodes_df, output_dir / NODES_FILENAME)
@@ -126,12 +126,12 @@ class GameTreeIO:
         # スキーマ検証(カラム名 + データ型)
         self._validate_schema(
             nodes_df,
-            get_game_tree_nodes_schema(),
+            get_game_graph_nodes_schema(),
             NODES_FILENAME,
         )
         self._validate_schema(
             edges_df,
-            get_game_tree_edges_schema(),
+            get_game_graph_edges_schema(),
             EDGES_FILENAME,
         )
 

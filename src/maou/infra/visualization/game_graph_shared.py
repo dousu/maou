@@ -1,6 +1,6 @@
-"""ゲームツリー可視化の共有ユーティリティ(インフラ層)．
+"""ゲームグラフ可視化の共有ユーティリティ(インフラ層)．
 
-game_tree_server.py (スタンドアロンモード) と gradio_server.py (埋め込みモード)
+game_graph_server.py (スタンドアロンモード) と gradio_server.py (埋め込みモード)
 の両方から使用されるHTML生成関数・Plotly生成関数・JS定数を提供する．
 """
 
@@ -103,14 +103,14 @@ def build_tree_html(canvas_data_json: str) -> str:
     Returns:
         HTML文字列
     """
-    css_code = load_static_file("game_tree.css")
+    css_code = load_static_file("game_graph.css")
     escaped_json = html.escape(canvas_data_json, quote=True)
 
     return f"""
 <style>{css_code}</style>
-<div class="game-tree-container">
+<div class="game-graph-container">
     <div id="gt-canvas-container" data-canvas="{escaped_json}"></div>
-    <div class="game-tree-legend">
+    <div class="game-graph-legend">
         <span class="legend-item">
             <span class="legend-swatch" style="background:#2196F3;"></span>先手有利
         </span>

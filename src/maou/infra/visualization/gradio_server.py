@@ -34,7 +34,7 @@ import gradio as gr  # noqa: E402
 from maou.infra.file_system.file_system import (  # noqa: E402
     FileSystem,
 )
-from maou.infra.visualization.game_tree_shared import (  # noqa: E402
+from maou.infra.visualization.game_graph_shared import (  # noqa: E402
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
@@ -367,10 +367,10 @@ class GradioVisualizationServer:
         # Check if data is available
         self.has_data = len(file_paths) > 0 or use_mock_data
 
-        # ゲームツリー状態(game-tree モード時に使用)
-        self._game_tree_viz: Any = None
-        self._game_tree_root_hash: int = 0
-        self._game_tree_layout: Any = None
+        # ゲームグラフ状態(game-graph モード時に使用)
+        self._game_graph_viz: Any = None
+        self._game_graph_root_hash: int = 0
+        self._game_graph_layout: Any = None
 
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
@@ -385,14 +385,14 @@ class GradioVisualizationServer:
         self._index_lock = threading.Lock()
         self._indexing_thread: threading.Thread | None = None
 
-        if self.has_data and array_type == "game-tree":
-            # ゲームツリー: 直接読み込み(インデックス不要)
+        if self.has_data and array_type == "game-graph":
+            # ゲームグラフ: 直接読み込み(インデックス不要)
             self.search_index = None  # type: ignore[assignment]
             self.viz_interface = None  # type: ignore[assignment]
             try:
-                self._load_game_tree_data(file_paths[0])
+                self._load_game_graph_data(file_paths[0])
                 logger.info(
-                    f"✅ Game tree loaded: root={self._game_tree_root_hash:#018x}"
+                    f"✅ Game tree loaded: root={self._game_graph_root_hash:#018x}"
                 )
             except Exception:
                 logger.exception(
@@ -1034,14 +1034,14 @@ class GradioVisualizationServer:
 
         Returns:
             tuple of (status_message, rebuild_btn_enabled, mode_badge,
-                       timer_update, record_panel_visible, game_tree_panel_visible)
+                       timer_update, record_panel_visible, game_graph_panel_visible)
         """
-        is_game_tree = array_type == "game-tree"
+        is_game_graph = array_type == "game-graph"
 
         # Step 1: Validate and resolve paths
         try:
-            if is_game_tree:
-                # game-tree: ディレクトリパスをそのまま使用
+            if is_game_graph:
+                # game-graph: ディレクトリパスをそのまま使用
                 tree_dir = (
                     Path(dir_path)
                     if source_mode == "Directory"
@@ -1090,16 +1090,16 @@ class GradioVisualizationServer:
         self.supports_eval_search = self._supports_eval_search()
 
         # Panel visibility
-        record_visible = gr.update(visible=not is_game_tree)
-        tree_visible = gr.update(visible=is_game_tree)
+        record_visible = gr.update(visible=not is_game_graph)
+        tree_visible = gr.update(visible=is_game_graph)
 
-        # game-tree: ツリーデータを直接読み込む(インデックス不要)
-        if is_game_tree:
+        # game-graph: ツリーデータを直接読み込む(インデックス不要)
+        if is_game_graph:
             try:
-                self._load_game_tree_data(file_paths[0])
+                self._load_game_graph_data(file_paths[0])
                 return (
                     f"✅ **Game Tree loaded:** "
-                    f"{self._game_tree_root_hash:#018x}",
+                    f"{self._game_graph_root_hash:#018x}",
                     False,
                     '<span class="mode-badge-text">🟢 GAME TREE</span>',
                     gr.update(),
@@ -1144,21 +1144,21 @@ class GradioVisualizationServer:
             tree_visible,
         )
 
-    def _load_game_tree_data(self, tree_dir: Path) -> None:
-        """ゲームツリーデータを読み込む．
+    def _load_game_graph_data(self, tree_dir: Path) -> None:
+        """ゲームグラフデータを読み込む．
 
         Args:
             tree_dir: ツリーデータディレクトリ
         """
-        from maou.app.game_tree.layout import (
-            GameTreeLayoutService,
+        from maou.app.game_graph.layout import (
+            GameGraphLayoutService,
         )
-        from maou.interface.game_tree_io import GameTreeIO
-        from maou.interface.game_tree_visualization import (
-            GameTreeVisualizationInterface,
+        from maou.interface.game_graph_io import GameGraphIO
+        from maou.interface.game_graph_visualization import (
+            GameGraphVisualizationInterface,
         )
 
-        io = GameTreeIO()
+        io = GameGraphIO()
         nodes_df, edges_df = io.load(tree_dir)
         metadata = io.load_metadata(tree_dir)
         logger.info(
@@ -1167,19 +1167,19 @@ class GradioVisualizationServer:
             len(edges_df),
         )
 
-        self._game_tree_viz = GameTreeVisualizationInterface(
+        self._game_graph_viz = GameGraphVisualizationInterface(
             nodes_df,
             edges_df,
             initial_sfen=metadata.get("initial_sfen"),
         )
-        self._game_tree_root_hash = (
-            self._game_tree_viz.get_root_hash()
+        self._game_graph_root_hash = (
+            self._game_graph_viz.get_root_hash()
         )
 
         # レイアウト事前計算
-        layout_svc = GameTreeLayoutService()
-        self._game_tree_layout = layout_svc.compute_layout(
-            nodes_df, edges_df, self._game_tree_root_hash
+        layout_svc = GameGraphLayoutService()
+        self._game_graph_layout = layout_svc.compute_layout(
+            nodes_df, edges_df, self._game_graph_root_hash
         )
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
@@ -1401,7 +1401,7 @@ class GradioVisualizationServer:
             gr.HTML(create_keyboard_shortcuts_script())
 
             # --- レコードブラウザ UI (hcpe/preprocessing/stage1/stage2) ---
-            is_record_mode = self.array_type != "game-tree"
+            is_record_mode = self.array_type != "game-graph"
             record_browser_panel = gr.Row(
                 visible=is_record_mode
             )
@@ -1457,7 +1457,7 @@ class GradioVisualizationServer:
                                 "preprocessing",
                                 "stage1",
                                 "stage2",
-                                "game-tree",
+                                "game-graph",
                             ],
                             value=self.array_type,
                             label="Array Type",
@@ -1677,12 +1677,12 @@ class GradioVisualizationServer:
                                 label="データ分析チャート",
                             )
 
-            # --- ゲームツリー UI (game-tree) ---
-            is_tree_mode = self.array_type == "game-tree"
-            game_tree_panel = gr.Column(visible=is_tree_mode)
-            with game_tree_panel:
+            # --- ゲームグラフ UI (game-graph) ---
+            is_tree_mode = self.array_type == "game-graph"
+            game_graph_panel = gr.Column(visible=is_tree_mode)
+            with game_graph_panel:
                 gt_info = gr.Markdown(
-                    value="ゲームツリーデータを読み込んでください",
+                    value="ゲームグラフデータを読み込んでください",
                 )
                 with gr.Row():
                     gt_depth_slider = gr.Slider(
@@ -1715,7 +1715,7 @@ class GradioVisualizationServer:
                     )
                     # NOTE: 「ルートに設定」ボタンは省略．
                     # ダブルクリック / パンくずで同等の操作が可能．
-                    # スタンドアロン版は game_tree_server.py を参照．
+                    # スタンドアロン版は game_graph_server.py を参照．
                 # パンくずリスト
                 gt_breadcrumb_html = gr.HTML(
                     value='<div class="breadcrumb-nav"></div>',
@@ -1737,7 +1737,7 @@ class GradioVisualizationServer:
                         )
                         # NOTE: 埋め込みモードでは指し手テーブルの行クリック
                         # による子局面遷移(on_move_selected)は意図的に省略．
-                        # スタンドアロンモード(game_tree_server.py)では
+                        # スタンドアロンモード(game_graph_server.py)では
                         # child_hashes_state を使って実装済み．
                         gt_move_table = gr.Dataframe(
                             headers=["指し手", "確率", "勝率"],
@@ -2033,7 +2033,7 @@ class GradioVisualizationServer:
                     mode_badge,
                     status_timer,
                     record_browser_panel,
-                    game_tree_panel,
+                    game_graph_panel,
                 ],
             )
 
@@ -2252,19 +2252,19 @@ class GradioVisualizationServer:
                 str,
                 str,
             ]:
-                """ゲームツリーの更新コールバック．
+                """ゲームグラフの更新コールバック．
 
-                NOTE: game_tree_server.py の _update_tree_view +
+                NOTE: game_graph_server.py の _update_tree_view +
                 _get_detail_outputs と類似のロジックだが，埋め込みモード
                 固有の出力構造(child_hashes 省略，info 文字列の形式差異)
                 があるため個別に実装している．HTML/Plot 生成は
-                game_tree_shared.py に共通化済み．
+                game_graph_shared.py に共通化済み．
 
                 Returns:
                     (tree_html, board_svg, info, stats, moves, plot,
                      breadcrumb_html, sfen_text)
                 """
-                viz = self._game_tree_viz
+                viz = self._game_graph_viz
                 if viz is None:
                     return (
                         "",
@@ -2281,20 +2281,20 @@ class GradioVisualizationServer:
                     rh = (
                         int(current_root)
                         if current_root
-                        else self._game_tree_root_hash
+                        else self._game_graph_root_hash
                     )
                 except (ValueError, TypeError):
                     logger.warning(
                         "Invalid current_root: %s",
                         current_root,
                     )
-                    rh = self._game_tree_root_hash
+                    rh = self._game_graph_root_hash
 
                 canvas_data = viz.get_canvas_data(
                     rh,
                     int(display_depth),
                     min_prob,
-                    self._game_tree_layout,
+                    self._game_graph_layout,
                 )
                 tree_html = build_tree_html(
                     json.dumps(canvas_data, ensure_ascii=False)
@@ -2338,7 +2338,7 @@ class GradioVisualizationServer:
                 node_id_str: str,
             ) -> bool:
                 """ノード選択の server_function．"""
-                viz = self._game_tree_viz
+                viz = self._game_graph_viz
                 if not node_id_str or viz is None:
                     return False
                 try:
@@ -2367,7 +2367,7 @@ class GradioVisualizationServer:
                         display_depth = args[1]
                     if len(args) > 2:
                         min_prob = args[2]
-                viz = self._game_tree_viz
+                viz = self._game_graph_viz
                 if not node_id_str or viz is None:
                     return False
                 try:
@@ -2429,7 +2429,7 @@ class GradioVisualizationServer:
                 return (
                     "",
                     "",
-                    str(self._game_tree_root_hash),
+                    str(self._game_graph_root_hash),
                     "",
                     {},
                     [],
@@ -2453,7 +2453,7 @@ class GradioVisualizationServer:
                 str,
             ]:
                 """ルートに戻るボタンのコールバック．"""
-                root = str(self._game_tree_root_hash)
+                root = str(self._game_graph_root_hash)
                 return _gt_insert_root(
                     _gt_update_tree(
                         display_depth, min_prob, root
@@ -2492,21 +2492,21 @@ class GradioVisualizationServer:
                 gt_sfen_text,
             ]
 
-            # Load後にゲームツリーを初期表示し，gt_current_root にも
+            # Load後にゲームグラフを初期表示し，gt_current_root にも
             # ルートハッシュを反映する．
             def _gt_initial_load(
                 depth: int, prob: float
             ) -> tuple[
                 str, str, str, dict, list, Any, str, str, str
             ]:
-                """初回ロード時のゲームツリー描画とルートハッシュ設定．
+                """初回ロード時のゲームグラフ描画とルートハッシュ設定．
 
                 _gt_update_tree の8要素にルートハッシュ文字列を追加した
                 9要素タプルを返す．gt_current_root の初期値を設定するため
                 に _gt_update_tree とは別関数として定義している．
                 """
-                root_str = str(self._game_tree_root_hash)
-                if self._game_tree_viz is None:
+                root_str = str(self._game_graph_root_hash)
+                if self._game_graph_viz is None:
                     return (
                         "",
                         "",
@@ -2581,16 +2581,16 @@ class GradioVisualizationServer:
                 outputs=_gt_expand_outputs,
             )
 
-            # 初回ロード: game-treeモードの場合はツリーを表示
+            # 初回ロード: game-graphモードの場合はツリーを表示
             if (
-                self.array_type == "game-tree"
-                and self._game_tree_viz is not None
+                self.array_type == "game-graph"
+                and self._game_graph_viz is not None
             ):
                 demo.load(
                     fn=lambda depth, prob: _gt_update_tree(
                         depth,
                         prob,
-                        str(self._game_tree_root_hash),
+                        str(self._game_graph_root_hash),
                     ),
                     inputs=[
                         gt_depth_slider,
@@ -3632,7 +3632,7 @@ def launch_server(
 
     array_typeに応じて異なるUIを提供する:
     - hcpe/preprocessing/stage1/stage2: レコードブラウザUI
-    - game-tree: ゲームツリー可視化UI
+    - game-graph: ゲームグラフ可視化UI
 
     Args:
         file_paths: データファイルのパスリスト
@@ -3644,18 +3644,18 @@ def launch_server(
         debug: デバッグモード
         use_mock_data: Trueの場合はモックデータを使用
     """
-    # game-tree はゲームツリー専用UIにディスパッチ
-    if array_type == "game-tree":
-        from maou.infra.visualization.game_tree_server import (
-            launch_game_tree_server,
+    # game-graph はゲームグラフ専用UIにディスパッチ
+    if array_type == "game-graph":
+        from maou.infra.visualization.game_graph_server import (
+            launch_game_graph_server,
         )
 
         tree_path = file_paths[0] if file_paths else None
         if tree_path is None:
             raise ValueError(
-                "game-tree requires a tree data directory path"
+                "game-graph requires a tree data directory path"
             )
-        launch_game_tree_server(
+        launch_game_graph_server(
             tree_path=tree_path,
             port=port,
             share=share,
@@ -3683,9 +3683,9 @@ def launch_server(
         f"(share={share}, debug={debug})"
     )
 
-    # ゲームツリーJS(Cytoscape.js + イベントハンドラ)をhead要素に注入．
-    # gradio_server.py ではデータソース動的切替でゲームツリーが使われるため必要．
-    from maou.infra.visualization.game_tree_server import (
+    # ゲームグラフJS(Cytoscape.js + イベントハンドラ)をhead要素に注入．
+    # gradio_server.py ではデータソース動的切替でゲームグラフが使われるため必要．
+    from maou.infra.visualization.game_graph_server import (
         _build_head_scripts,
     )
 

@@ -1,4 +1,4 @@
-"""ゲームツリー構築ロジックのテスト."""
+"""ゲームグラフ構築ロジックのテスト."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from maou.app.game_tree.builder import GameTreeBuilder
+from maou.app.game_graph.builder import GameGraphBuilder
 from maou.domain.board import shogi
 from maou.domain.move.label import (
     MOVE_LABELS_NUM,
@@ -76,8 +76,8 @@ def _build_preprocess_df(
     )
 
 
-class TestGameTreeBuilder:
-    """GameTreeBuilder のテスト."""
+class TestGameGraphBuilder:
+    """GameGraphBuilder のテスト."""
 
     def test_initial_position_only(self) -> None:
         """初期局面のみでツリーを構築できる."""
@@ -94,7 +94,7 @@ class TestGameTreeBuilder:
         }
         df = _build_preprocess_df([row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(df, max_depth=5)
 
         assert len(nodes) == 1
@@ -127,7 +127,7 @@ class TestGameTreeBuilder:
 
         df = _build_preprocess_df([initial_row, after_row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(df, max_depth=1)
 
         assert len(nodes) == 2
@@ -182,7 +182,7 @@ class TestGameTreeBuilder:
             [initial_row, after_7g7f, after_2g2f]
         )
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(
             df, max_depth=1, min_probability=0.01
         )
@@ -210,7 +210,7 @@ class TestGameTreeBuilder:
 
         df = _build_preprocess_df([initial_row, after_row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         # max_depth=0 → 初期局面のみ展開，子は探索しない
         nodes, edges = builder.build(df, max_depth=0)
 
@@ -234,7 +234,7 @@ class TestGameTreeBuilder:
             }
         )
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         with pytest.raises(ValueError, match="開始局面"):
             builder.build(df)
 
@@ -256,7 +256,7 @@ class TestGameTreeBuilder:
         def callback(processed: int, total: int) -> None:
             callback_calls.append((processed, total))
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         builder.build(
             df, max_depth=5, progress_callback=callback
         )
@@ -276,7 +276,7 @@ class TestGameTreeBuilder:
         )
         df = _build_preprocess_df([initial_row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(df, max_depth=5)
 
         # ノードは初期局面のみ
@@ -310,7 +310,7 @@ class TestGameTreeBuilder:
         }
         df = _build_preprocess_df([row_a, row_b])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(df, max_depth=1)
 
         assert len(nodes) == 1
@@ -380,7 +380,7 @@ class TestGameTreeBuilder:
 
         df = _build_preprocess_df(rows)
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(
             df, max_depth=5, min_probability=0.01
         )
@@ -419,7 +419,7 @@ class TestGameTreeBuilder:
         def callback(processed: int, total: int) -> None:
             callback_calls.append((processed, total))
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, _ = builder.build(
             df, max_depth=5, progress_callback=callback
         )
@@ -451,7 +451,7 @@ class TestGameTreeBuilder:
 
         df = _build_preprocess_df([custom_row, after_row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         nodes, edges = builder.build(
             df,
             max_depth=5,
@@ -482,7 +482,7 @@ class TestGameTreeBuilder:
         }
         df = _build_preprocess_df([row])
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
         with pytest.raises(ValueError, match="initial_sfen"):
             builder.build(
                 df, initial_hash=12345, initial_sfen=None
@@ -533,7 +533,7 @@ class TestGameTreeBuilder:
             )
             return labels, win_rates
 
-        builder = GameTreeBuilder()
+        builder = GameGraphBuilder()
 
         # DataFrame 直接パス
         nodes_direct, edges_direct = builder.build(

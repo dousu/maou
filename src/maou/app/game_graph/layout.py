@@ -1,4 +1,4 @@
-"""ゲームツリーのレイアウト事前計算．
+"""ゲームグラフのレイアウト事前計算．
 
 全ノードの (x, y) 座標をサーバー側で事前計算する．
 depth ベースの Y 座標と確率順の X 座標配置により，
@@ -26,8 +26,8 @@ class TreeLayout:
     bounds: tuple[float, float, float, float]
 
 
-class GameTreeLayoutService:
-    """ゲームツリーのレイアウト計算サービス．
+class GameGraphLayoutService:
+    """ゲームグラフのレイアウト計算サービス．
 
     depth ベースの Y 座標配置と，親の X 座標を中心とした
     兄弟ノードの均等配置を行う．

@@ -1,21 +1,21 @@
-"""ゲームツリーデータモデルのテスト."""
+"""ゲームグラフデータモデルのテスト."""
 
 from __future__ import annotations
 
 import pytest
 
-from maou.domain.game_tree.model import (
-    GameTreeEdge,
-    GameTreeNode,
+from maou.domain.game_graph.model import (
+    GameGraphEdge,
+    GameGraphNode,
 )
 
 
-class TestGameTreeNode:
-    """GameTreeNode のテスト."""
+class TestGameGraphNode:
+    """GameGraphNode のテスト."""
 
     def test_create_node(self) -> None:
         """ノードを生成できる."""
-        node = GameTreeNode(
+        node = GameGraphNode(
             position_hash=12345,
             result_value=0.523,
             best_move_win_rate=0.531,
@@ -32,7 +32,7 @@ class TestGameTreeNode:
 
     def test_frozen(self) -> None:
         """frozen dataclass は変更不可."""
-        node = GameTreeNode(
+        node = GameGraphNode(
             position_hash=1,
             result_value=0.5,
             best_move_win_rate=0.5,
@@ -45,17 +45,17 @@ class TestGameTreeNode:
 
     def test_equality(self) -> None:
         """同じフィールド値のノードは等価."""
-        node1 = GameTreeNode(1, 0.5, 0.5, 1, 0, False)
-        node2 = GameTreeNode(1, 0.5, 0.5, 1, 0, False)
+        node1 = GameGraphNode(1, 0.5, 0.5, 1, 0, False)
+        node2 = GameGraphNode(1, 0.5, 0.5, 1, 0, False)
         assert node1 == node2
 
 
-class TestGameTreeEdge:
-    """GameTreeEdge のテスト."""
+class TestGameGraphEdge:
+    """GameGraphEdge のテスト."""
 
     def test_create_edge(self) -> None:
         """エッジを生成できる."""
-        edge = GameTreeEdge(
+        edge = GameGraphEdge(
             parent_hash=100,
             child_hash=200,
             move16=7654,
@@ -74,7 +74,7 @@ class TestGameTreeEdge:
 
     def test_frozen(self) -> None:
         """frozen dataclass は変更不可."""
-        edge = GameTreeEdge(
+        edge = GameGraphEdge(
             parent_hash=1,
             child_hash=2,
             move16=100,

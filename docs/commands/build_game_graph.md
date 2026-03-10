@@ -1,4 +1,4 @@
-# `maou build-game-tree`
+# `maou build-game-graph`
 
 ## Overview
 
@@ -26,21 +26,21 @@
 
 ```bash
 # 基本的な使用方法
-maou build-game-tree \
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/
+  --output-dir ./data/game-graph/
 
 # パラメータを指定
-maou build-game-tree \
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/ \
+  --output-dir ./data/game-graph/ \
   --max-depth 20 \
   --min-probability 0.005
 
 # 特定の局面からグラフを構築(hash + SFEN の両方を指定)
-maou build-game-tree \
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/ \
+  --output-dir ./data/game-graph/ \
   --initial-hash 12345678901234567 \
   --initial-sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2"
 ```
@@ -74,10 +74,10 @@ maou build-game-tree \
 
 | Component | File |
 | --- | --- |
-| CLI command | [`src/maou/infra/console/build_game_tree.py`](../../src/maou/infra/console/build_game_tree.py) |
-| BFS builder | [`src/maou/app/game_tree/builder.py`](../../src/maou/app/game_tree/builder.py) |
-| Data I/O | [`src/maou/interface/game_tree_io.py`](../../src/maou/interface/game_tree_io.py) |
-| Data models | [`src/maou/domain/game_tree/model.py`](../../src/maou/domain/game_tree/model.py) |
-| Polars schemas | [`src/maou/domain/game_tree/schema.py`](../../src/maou/domain/game_tree/schema.py) |
+| CLI command | [`src/maou/infra/console/build_game_graph.py`](../../src/maou/infra/console/build_game_graph.py) |
+| BFS builder | [`src/maou/app/game_graph/builder.py`](../../src/maou/app/game_graph/builder.py) |
+| Data I/O | [`src/maou/interface/game_graph_io.py`](../../src/maou/interface/game_graph_io.py) |
+| Data models | [`src/maou/domain/game_graph/model.py`](../../src/maou/domain/game_graph/model.py) |
+| Polars schemas | [`src/maou/domain/game_graph/schema.py`](../../src/maou/domain/game_graph/schema.py) |
 | Lazy loading | [`src/maou/interface/lazy_list_columns.py`](../../src/maou/interface/lazy_list_columns.py) |
 | Process info | [`src/maou/app/process_info.py`](../../src/maou/app/process_info.py) |

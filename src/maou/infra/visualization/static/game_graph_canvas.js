@@ -1,7 +1,7 @@
 /**
  * Game Tree Viewer - Canvas 2D Frontend
  *
- * Canvas 2D による仮想描画ベースのゲームツリー表示．
+ * Canvas 2D による仮想描画ベースのゲームグラフ表示．
  * Cytoscape.js + dagre を置換し，以下を実現する:
  * - エッジ方向の正確な描画(source → target)
  * - 仮想描画による大規模ツリーの高速表示
@@ -109,10 +109,10 @@
   };
 
   // ========================================
-  // GameTreeRenderer
+  // GameGraphRenderer
   // ========================================
 
-  function GameTreeRenderer(canvas) {
+  function GameGraphRenderer(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
 
@@ -145,7 +145,7 @@
     this._setupHiDPI();
   }
 
-  GameTreeRenderer.prototype._setupHiDPI = function () {
+  GameGraphRenderer.prototype._setupHiDPI = function () {
     var dpr = window.devicePixelRatio || 1;
     var rect = this.canvas.getBoundingClientRect();
     this.canvas.width = rect.width * dpr;
@@ -155,7 +155,7 @@
     this._displayHeight = rect.height;
   };
 
-  GameTreeRenderer.prototype._bindEvents = function () {
+  GameGraphRenderer.prototype._bindEvents = function () {
     var self = this;
 
     this.canvas.addEventListener("mousedown", function (e) {
@@ -197,7 +197,7 @@
   // Data management
   // ========================================
 
-  GameTreeRenderer.prototype.setData = function (canvasData) {
+  GameGraphRenderer.prototype.setData = function (canvasData) {
     if (!canvasData) return;
 
     var nodes = canvasData.nodes || [];
@@ -245,14 +245,14 @@
     this.requestRender();
   };
 
-  GameTreeRenderer.prototype.clearData = function () {
+  GameGraphRenderer.prototype.clearData = function () {
     this.nodes.clear();
     this.edges = [];
     this.grid.clear();
     this.requestRender();
   };
 
-  GameTreeRenderer.prototype.fitToView = function () {
+  GameGraphRenderer.prototype.fitToView = function () {
     if (this.nodes.size === 0) return;
 
     var minX = Infinity, minY = Infinity;
@@ -285,14 +285,14 @@
   // Coordinate transforms
   // ========================================
 
-  GameTreeRenderer.prototype.screenToWorld = function (sx, sy) {
+  GameGraphRenderer.prototype.screenToWorld = function (sx, sy) {
     return {
       x: (sx - this.offsetX) / this.zoom,
       y: (sy - this.offsetY) / this.zoom,
     };
   };
 
-  GameTreeRenderer.prototype.worldToScreen = function (wx, wy) {
+  GameGraphRenderer.prototype.worldToScreen = function (wx, wy) {
     return {
       x: wx * this.zoom + this.offsetX,
       y: wy * this.zoom + this.offsetY,
@@ -303,7 +303,7 @@
   // Rendering
   // ========================================
 
-  GameTreeRenderer.prototype.requestRender = function () {
+  GameGraphRenderer.prototype.requestRender = function () {
     if (this.renderRequested) return;
     this.renderRequested = true;
     var self = this;
@@ -313,7 +313,7 @@
     });
   };
 
-  GameTreeRenderer.prototype._render = function () {
+  GameGraphRenderer.prototype._render = function () {
     var ctx = this.ctx;
     var w = this._displayWidth;
     var h = this._displayHeight;
@@ -336,7 +336,7 @@
     this._renderNodes(ctx, visLeft, visTop, visRight, visBottom);
   };
 
-  GameTreeRenderer.prototype._renderEdges = function (ctx, vl, vt, vr, vb) {
+  GameGraphRenderer.prototype._renderEdges = function (ctx, vl, vt, vr, vb) {
     var zoom = this.zoom;
     var showLabels = zoom >= LOD_LABEL_ZOOM;
 
@@ -397,7 +397,7 @@
     }
   };
 
-  GameTreeRenderer.prototype._renderNodes = function (ctx, vl, vt, vr, vb) {
+  GameGraphRenderer.prototype._renderNodes = function (ctx, vl, vt, vr, vb) {
     var zoom = this.zoom;
     var isDot = zoom < LOD_DOT_ZOOM;
     var showLabel = zoom >= LOD_LABEL_ZOOM;
@@ -464,7 +464,7 @@
   // Hit testing
   // ========================================
 
-  GameTreeRenderer.prototype.hitTest = function (screenX, screenY) {
+  GameGraphRenderer.prototype.hitTest = function (screenX, screenY) {
     var world = this.screenToWorld(screenX, screenY);
     var searchRadius = 50 / this.zoom;
     var candidates = this.grid.query(world.x, world.y, searchRadius);
@@ -491,14 +491,14 @@
   // Event handlers
   // ========================================
 
-  GameTreeRenderer.prototype._onMouseDown = function (e) {
+  GameGraphRenderer.prototype._onMouseDown = function (e) {
     this.dragging = true;
     this.dragStartX = e.offsetX;
     this.dragStartY = e.offsetY;
     this._dragMoved = false;
   };
 
-  GameTreeRenderer.prototype._onMouseMove = function (e) {
+  GameGraphRenderer.prototype._onMouseMove = function (e) {
     if (!this.dragging) return;
     var dx = e.offsetX - this.dragStartX;
     var dy = e.offsetY - this.dragStartY;
@@ -512,7 +512,7 @@
     this.requestRender();
   };
 
-  GameTreeRenderer.prototype._onMouseUp = function (e) {
+  GameGraphRenderer.prototype._onMouseUp = function (e) {
     this.dragging = false;
     if (!this._dragMoved) {
       this._handleClick(e.offsetX, e.offsetY);
@@ -521,7 +521,7 @@
     }
   };
 
-  GameTreeRenderer.prototype._onWheel = function (e) {
+  GameGraphRenderer.prototype._onWheel = function (e) {
     e.preventDefault();
     var zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     var mouseWorld = this.screenToWorld(e.offsetX, e.offsetY);
@@ -533,7 +533,7 @@
     this._notifyViewportChange();
   };
 
-  GameTreeRenderer.prototype._onDblClick = function (e) {
+  GameGraphRenderer.prototype._onDblClick = function (e) {
     // Cancel any pending tap timer
     if (this.tapTimer) {
       clearTimeout(this.tapTimer);
@@ -550,7 +550,7 @@
     }
   };
 
-  GameTreeRenderer.prototype._handleClick = function (sx, sy) {
+  GameGraphRenderer.prototype._handleClick = function (sx, sy) {
     var nodeId = this.hitTest(sx, sy);
     if (nodeId) {
       // Use timer to differentiate click from double-click
@@ -566,7 +566,7 @@
   };
 
   // Touch events
-  GameTreeRenderer.prototype._onTouchStart = function (e) {
+  GameGraphRenderer.prototype._onTouchStart = function (e) {
     if (e.touches.length === 1) {
       e.preventDefault();
       var touch = e.touches[0];
@@ -578,7 +578,7 @@
     }
   };
 
-  GameTreeRenderer.prototype._onTouchMove = function (e) {
+  GameGraphRenderer.prototype._onTouchMove = function (e) {
     if (!this.dragging || e.touches.length !== 1) return;
     e.preventDefault();
     var touch = e.touches[0];
@@ -595,7 +595,7 @@
     this.requestRender();
   };
 
-  GameTreeRenderer.prototype._onTouchEnd = function (e) {
+  GameGraphRenderer.prototype._onTouchEnd = function (e) {
     this.dragging = false;
     if (!this._dragMoved) {
       var rect = this.canvas.getBoundingClientRect();
@@ -611,7 +611,7 @@
   // Viewport change notification
   // ========================================
 
-  GameTreeRenderer.prototype._notifyViewportChange = function () {
+  GameGraphRenderer.prototype._notifyViewportChange = function () {
     if (!this.onViewportChange) return;
     var self = this;
     if (this._viewportDebounce) clearTimeout(this._viewportDebounce);
@@ -633,18 +633,18 @@
   // PNG export
   // ========================================
 
-  GameTreeRenderer.prototype.exportPNG = function () {
+  GameGraphRenderer.prototype.exportPNG = function () {
     var png = this.canvas.toDataURL("image/png");
     var link = document.createElement("a");
     link.href = png;
-    link.download = "game_tree.png";
+    link.download = "game_graph.png";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   // ========================================
-  // Gradio bridge helpers (same as game_tree.js)
+  // Gradio bridge helpers (same as game_graph.js)
   // ========================================
 
   function readSlider(elemId) {
@@ -737,7 +737,7 @@
 
     // Create renderer if not exists or canvas changed
     if (!renderer || renderer.canvas !== canvas) {
-      renderer = new GameTreeRenderer(canvas);
+      renderer = new GameGraphRenderer(canvas);
 
       // Set up viewport query callback
       renderer.onViewportChange = function (minX, maxX, minY, maxY) {
@@ -779,6 +779,6 @@
   });
 
   // Expose to global scope
-  window.renderGameTree = renderTree;
+  window.renderGameGraph = renderTree;
   window.exportTreePNG = exportTreePNG;
 })();

@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from maou.domain.game_tree.openings import (
+from maou.domain.game_graph.openings import (
     OpeningDatabase,
     OpeningInfo,
 )

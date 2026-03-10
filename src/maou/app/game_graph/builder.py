@@ -1,4 +1,4 @@
-"""ゲームツリー構築ロジック(BFS)."""
+"""ゲームグラフ構築ロジック(BFS)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import numpy as np
 
 from maou.app.process_info import get_rss_mb
 from maou.domain.board import shogi
-from maou.domain.game_tree.model import (
-    GameTreeEdge,
-    GameTreeNode,
+from maou.domain.game_graph.model import (
+    GameGraphEdge,
+    GameGraphNode,
 )
 from maou.domain.move.label import (
     make_usi_move_from_label,
@@ -28,8 +28,8 @@ _UINT16_MAX = 65535
 _BFS_LOG_INTERVAL = 10_000
 
 
-class GameTreeBuilder:
-    """preprocessデータからゲームツリーを構築する．"""
+class GameGraphBuilder:
+    """preprocessデータからゲームグラフを構築する．"""
 
     def build(
         self,
@@ -44,7 +44,7 @@ class GameTreeBuilder:
             [int], tuple[np.ndarray, np.ndarray]
         ]
         | None = None,
-    ) -> tuple[list[GameTreeNode], list[GameTreeEdge]]:
+    ) -> tuple[list[GameGraphNode], list[GameGraphEdge]]:
         """BFSでツリーを構築する．
 
         Args:
@@ -149,8 +149,8 @@ class GameTreeBuilder:
 
         # 3. BFS (Board インスタンスはループ外で1回だけ生成し再利用)
         board = shogi.Board()
-        nodes: list[GameTreeNode] = []
-        edges: list[GameTreeEdge] = []
+        nodes: list[GameGraphNode] = []
+        edges: list[GameGraphEdge] = []
         # visited: hash → depth(BFS最短距離を記録)
         visited: dict[int, int] = {initial_hash: 0}
         # キューは (hash, sfen) を保持し，盤面を O(1) で復元する
@@ -233,7 +233,7 @@ class GameTreeBuilder:
             # ラベル変換失敗分も含む．通常ノードとは意味が異なる)
             if current_depth >= max_depth:
                 nodes.append(
-                    GameTreeNode(
+                    GameGraphNode(
                         position_hash=current_hash,
                         result_value=result_value,
                         best_move_win_rate=best_move_win_rate,
@@ -296,7 +296,7 @@ class GameTreeBuilder:
                 # エッジ追加
                 child_in_lookup = child_hash in lookup
                 edges.append(
-                    GameTreeEdge(
+                    GameGraphEdge(
                         parent_hash=current_hash,
                         child_hash=child_hash,
                         move16=move16_val,
@@ -322,7 +322,7 @@ class GameTreeBuilder:
             # ラベル変換失敗分は除外されるため，max_depthノードとは意味が異なる)
             actual_branches = len(edges) - edges_before
             nodes.append(
-                GameTreeNode(
+                GameGraphNode(
                     position_hash=current_hash,
                     result_value=result_value,
                     best_move_win_rate=best_move_win_rate,
