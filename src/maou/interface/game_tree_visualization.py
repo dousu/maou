@@ -17,6 +17,7 @@ import polars as pl
 from maou.app.game_tree.query import GameTreeQuery
 from maou.domain.board.shogi import (
     Board,
+    Turn,
     move_drop_hand_piece,
     move_from,
     move_is_drop,
@@ -37,6 +38,14 @@ from maou.domain.visualization.piece_mapping import (
 )
 
 logger = logging.getLogger(__name__)
+
+# sente_result_value の偶奇判定は Turn.BLACK == 0 を前提とする
+assert int(Turn.BLACK) == 0, (
+    f"Turn.BLACK must be 0, got {int(Turn.BLACK)}"
+)
+assert int(Turn.WHITE) == 1, (
+    f"Turn.WHITE must be 1, got {int(Turn.WHITE)}"
+)
 
 #: _get_board_for_position のキャッシュ型
 _BoardCache = tuple[int, Board | None]
@@ -124,7 +133,9 @@ class GameTreeVisualizationInterface:
             initial_sfen.split() if initial_sfen else []
         )
         self._root_turn = (
-            1 if len(sfen_parts) >= 2 and sfen_parts[1] == "w" else 0
+            1
+            if len(sfen_parts) >= 2 and sfen_parts[1] == "w"
+            else 0
         )
 
     def get_cytoscape_elements(
@@ -176,9 +187,7 @@ class GameTreeVisualizationInterface:
             # Turn.BLACK == 0, Turn.WHITE == 1 を前提とした偶奇判定
             result_value = float(row["result_value"])
             depth = int(row["depth"])
-            is_sente_turn = (
-                self._root_turn + depth
-            ) % 2 == 0
+            is_sente_turn = (self._root_turn + depth) % 2 == 0
             sente_value = (
                 result_value
                 if is_sente_turn
@@ -302,7 +311,7 @@ class GameTreeVisualizationInterface:
 
         stats: dict[str, str] = {
             "Zobrist Hash": str(detail["position_hash"]),
-            "勝率": f"{detail['result_value'] * 100:.1f}%",
+            "勝率(手番視点)": f"{detail['result_value'] * 100:.1f}%",
             "最善手勝率": f"{detail['best_move_win_rate'] * 100:.1f}%",
             "深さ": str(detail["depth"]),
             "分岐数": str(detail["num_branches"]),
