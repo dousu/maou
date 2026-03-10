@@ -40,12 +40,13 @@ from maou.domain.visualization.piece_mapping import (
 logger = logging.getLogger(__name__)
 
 # sente_result_value の偶奇判定は Turn.BLACK == 0 を前提とする
-assert int(Turn.BLACK) == 0, (
-    f"Turn.BLACK must be 0, got {int(Turn.BLACK)}"
-)
-assert int(Turn.WHITE) == 1, (
-    f"Turn.WHITE must be 1, got {int(Turn.WHITE)}"
-)
+# python -O でも無効化されないよう assert ではなく raise を使用
+if int(Turn.BLACK) != 0:
+    msg = f"Turn.BLACK must be 0, got {int(Turn.BLACK)}"
+    raise ValueError(msg)
+if int(Turn.WHITE) != 1:
+    msg = f"Turn.WHITE must be 1, got {int(Turn.WHITE)}"
+    raise ValueError(msg)
 
 #: _get_board_for_position のキャッシュ型
 _BoardCache = tuple[int, Board | None]
