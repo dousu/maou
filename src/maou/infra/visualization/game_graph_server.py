@@ -16,10 +16,6 @@ from typing import Any
 import gradio as gr
 import plotly.graph_objects as go
 
-from maou.app.game_graph.layout import (
-    GameGraphLayoutService,
-    GraphLayout,
-)
 from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
@@ -39,6 +35,7 @@ from maou.infra.visualization.game_graph_shared import (
 from maou.interface.game_graph_io import GameGraphIO
 from maou.interface.game_graph_visualization import (
     GameGraphVisualizationInterface,
+    GraphLayout,
 )
 
 logger = logging.getLogger(__name__)
@@ -297,10 +294,7 @@ def launch_game_graph_server(
     root_hash = viz.get_root_hash()
 
     # レイアウト事前計算
-    layout_svc = GameGraphLayoutService()
-    graph_layout = layout_svc.compute_layout(
-        nodes_df, edges_df, root_hash
-    )
+    graph_layout = viz.compute_layout()
     logger.info(
         "Computed layout: %d positions, bounds=%s",
         len(graph_layout.node_positions),

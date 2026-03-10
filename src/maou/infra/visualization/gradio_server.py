@@ -1150,9 +1150,6 @@ class GradioVisualizationServer:
         Args:
             graph_dir: グラフデータディレクトリ
         """
-        from maou.app.game_graph.layout import (
-            GameGraphLayoutService,
-        )
         from maou.interface.game_graph_io import GameGraphIO
         from maou.interface.game_graph_visualization import (
             GameGraphVisualizationInterface,
@@ -1177,9 +1174,8 @@ class GradioVisualizationServer:
         )
 
         # レイアウト事前計算
-        layout_svc = GameGraphLayoutService()
-        self._game_graph_layout = layout_svc.compute_layout(
-            nodes_df, edges_df, self._game_graph_root_hash
+        self._game_graph_layout = (
+            self._game_graph_viz.compute_layout()
         )
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:

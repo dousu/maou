@@ -14,7 +14,10 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
-from maou.app.game_graph.layout import GraphLayout
+from maou.app.game_graph.layout import (
+    GameGraphLayoutService,
+    GraphLayout,
+)
 from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
     Board,
@@ -512,6 +515,19 @@ class GameGraphVisualizationInterface:
             ルートノードのposition_hash
         """
         return self._root_hash
+
+    def compute_layout(self) -> GraphLayout:
+        """グラフ全体のレイアウトを事前計算する．
+
+        Returns:
+            事前計算された GraphLayout
+        """
+        svc = GameGraphLayoutService()
+        return svc.compute_layout(
+            self._query.nodes_df,
+            self._query.edges_df,
+            self._root_hash,
+        )
 
     def get_initial_sfen(self) -> str:
         """開始局面のSFEN文字列を返す．

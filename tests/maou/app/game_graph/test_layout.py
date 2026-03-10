@@ -134,8 +134,8 @@ class TestComputeLayout:
         # 確率降順: hash=2 (prob=0.6) が左
         assert x2 < x3
 
-    def test_dag_multiple_parents(self) -> None:
-        """DAG: 複数の親を持つノードでもエラーにならない．"""
+    def test_multiple_parents(self) -> None:
+        """複数の親を持つノードでもエラーにならない．"""
         nodes = _make_nodes(
             [
                 _default_node(1, 0),
