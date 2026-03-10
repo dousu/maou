@@ -118,10 +118,14 @@ class GameTreeVisualizationInterface:
         self._board_cache: _BoardCache | None = None
         self._opening_db = OpeningDatabase()
         # ルート局面の手番を保持(先手視点の勝率計算に使用)
-        root_board = Board()
-        if initial_sfen is not None:
-            root_board.set_sfen(initial_sfen)
-        self._root_turn = int(root_board.get_turn())
+        # SFEN文字列から直接手番を読み取る(Board生成を回避)
+        # Turn.BLACK == 0, Turn.WHITE == 1 を前提とした偶奇判定
+        sfen_parts = (
+            initial_sfen.split() if initial_sfen else []
+        )
+        self._root_turn = (
+            1 if len(sfen_parts) >= 2 and sfen_parts[1] == "w" else 0
+        )
 
     def get_cytoscape_elements(
         self,
@@ -169,13 +173,16 @@ class GameTreeVisualizationInterface:
 
             # result_value は手番側視点．先手視点に変換して
             # フロントエンドで一貫した色付けに使用する．
-            raw_value = float(row["result_value"])
+            # Turn.BLACK == 0, Turn.WHITE == 1 を前提とした偶奇判定
+            result_value = float(row["result_value"])
             depth = int(row["depth"])
             is_sente_turn = (
                 self._root_turn + depth
             ) % 2 == 0
             sente_value = (
-                raw_value if is_sente_turn else 1 - raw_value
+                result_value
+                if is_sente_turn
+                else 1 - result_value
             )
 
             cy_nodes.append(
@@ -183,7 +190,6 @@ class GameTreeVisualizationInterface:
                     "data": {
                         "id": str(pos_hash),
                         "label": label,
-                        "result_value": raw_value,
                         "sente_result_value": sente_value,
                         "depth": depth,
                         "probability": float(probability),

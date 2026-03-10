@@ -65,7 +65,8 @@ class TestGetCytoscapeElements:
         node_data = elements["nodes"][0]["data"]
         assert node_data["id"] == "100"
         assert node_data["label"] == "ROOT"
-        assert node_data["result_value"] == pytest.approx(0.52)
+        # depth=0, 先手番 → sente_result_value == result_value
+        assert node_data["sente_result_value"] == pytest.approx(0.52)
 
     def test_elements_structure(self) -> None:
         """Cytoscape elementsの構造が正しい."""
@@ -77,7 +78,7 @@ class TestGetCytoscapeElements:
         for node in elements["nodes"]:
             assert "data" in node
             assert "id" in node["data"]
-            assert "result_value" in node["data"]
+            assert "sente_result_value" in node["data"]
 
 
 class TestGetNodeStats:
