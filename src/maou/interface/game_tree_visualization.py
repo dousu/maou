@@ -133,6 +133,15 @@ class GameTreeVisualizationInterface:
         sfen_parts = (
             initial_sfen.split() if initial_sfen else []
         )
+        if (
+            len(sfen_parts) >= 2
+            and sfen_parts[1] not in ("b", "w")
+        ):
+            logger.warning(
+                "SFENの手番フィールドが不正です: %r"
+                "(先手番として扱います)",
+                sfen_parts[1],
+            )
         self._root_turn = (
             1
             if len(sfen_parts) >= 2 and sfen_parts[1] == "w"
