@@ -39,7 +39,7 @@ def _make_edges(
 
 
 def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
-    """テスト用の単純なツリー(ルートのみ)."""
+    """テスト用の単純なグラフ(ルートのみ)."""
     nodes = _make_nodes(
         [
             {
@@ -251,7 +251,7 @@ class TestUsiToJapanese:
 def _build_tree_with_edge() -> tuple[
     pl.DataFrame, pl.DataFrame
 ]:
-    """テスト用のツリー(ルート + 子ノード1つ)．
+    """テスト用のグラフ(ルート + 子ノード1つ)．
 
     指し手は7g7f(move16=7739)．平手初期局面からの合法手．
     """
@@ -460,7 +460,7 @@ class TestExportSubtreeCsv:
     """export_subtree_csv のテスト."""
 
     def test_csv_with_edges(self) -> None:
-        """エッジのあるサブツリーをCSV出力する."""
+        """エッジのあるサブグラフをCSV出力する."""
         nodes, edges = _build_tree_with_edge()
         viz = GameGraphVisualizationInterface(nodes, edges)
         csv_content = viz.export_subtree_csv(
@@ -473,7 +473,7 @@ class TestExportSubtreeCsv:
         assert len(lines) >= 2  # ヘッダー + データ行
 
     def test_csv_empty_tree(self) -> None:
-        """エッジのないツリーのCSV出力はヘッダーのみ."""
+        """エッジのないグラフのCSV出力はヘッダーのみ."""
         nodes, edges = _build_simple_tree()
         viz = GameGraphVisualizationInterface(nodes, edges)
         csv_content = viz.export_subtree_csv(

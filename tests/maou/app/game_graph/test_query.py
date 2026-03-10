@@ -31,7 +31,7 @@ def _make_edges(
 
 
 def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
-    """シンプルなテスト用ツリーを構築する．
+    """シンプルなテスト用グラフを構築する．
 
     ROOT(depth=0) -> A(depth=1, prob=0.6) -> C(depth=2, prob=0.3)
                   -> B(depth=1, prob=0.4)
@@ -107,13 +107,13 @@ def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
 
 
 class TestGetSubtree:
-    """get_subtree のテスト."""
+    """get_subgraph のテスト."""
 
     def test_depth_1(self) -> None:
         """depth=1ではルートと直接の子のみ取得する."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subtree(
+        sub_nodes, sub_edges = query.get_subgraph(
             100, max_depth=1
         )
         # ルート + 2子 = 3ノード
@@ -125,7 +125,7 @@ class TestGetSubtree:
         """depth=2では全ノードを取得する."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subtree(
+        sub_nodes, sub_edges = query.get_subgraph(
             100, max_depth=2
         )
         assert len(sub_nodes) == 4
@@ -135,7 +135,7 @@ class TestGetSubtree:
         """min_probabilityでエッジをフィルタする."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subtree(
+        sub_nodes, sub_edges = query.get_subgraph(
             100, max_depth=2, min_probability=0.5
         )
         # probability >= 0.5 のエッジのみ: ROOT->A (0.6)
@@ -146,7 +146,7 @@ class TestGetSubtree:
         """存在しないハッシュからは空の結果を返す."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subtree(
+        sub_nodes, sub_edges = query.get_subgraph(
             999, max_depth=3
         )
         # 存在しないノードでも visited に含まれる

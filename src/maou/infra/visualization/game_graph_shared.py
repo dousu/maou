@@ -92,7 +92,7 @@ def load_static_file(filename: str) -> str:
 
 
 def build_graph_html(canvas_data_json: str) -> str:
-    """ツリー表示用HTMLを生成する．
+    """グラフ表示用HTMLを生成する．
 
     Canvas 2D レンダラーが data-canvas 属性の変更を検知して
     自動的にレンダリングを実行する．
@@ -124,8 +124,8 @@ def build_graph_html(canvas_data_json: str) -> str:
             &#9679; サイズ = 確率 / 色 = 勝率
         </span>
     </div>
-    <div class="tree-export-overlay">
-        <button class="export-btn" onclick="window.exportTreePNG()">
+    <div class="graph-export-overlay">
+        <button class="export-btn" onclick="window.exportGraphPNG()">
             PNG出力
         </button>
     </div>

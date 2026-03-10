@@ -1042,16 +1042,16 @@ class GradioVisualizationServer:
         try:
             if is_game_graph:
                 # game-graph: ディレクトリパスをそのまま使用
-                tree_dir = (
+                graph_dir = (
                     Path(dir_path)
                     if source_mode == "Directory"
                     else Path(files_path)
                 )
-                if not tree_dir.is_dir():
+                if not graph_dir.is_dir():
                     raise ValueError(
-                        f"ディレクトリが存在しません: {tree_dir}"
+                        f"ディレクトリが存在しません: {graph_dir}"
                     )
-                file_paths = [tree_dir]
+                file_paths = [graph_dir]
             elif source_mode == "Directory":
                 file_paths = self._resolve_directory(dir_path)
             else:  # "File list"
@@ -1091,9 +1091,9 @@ class GradioVisualizationServer:
 
         # Panel visibility
         record_visible = gr.update(visible=not is_game_graph)
-        tree_visible = gr.update(visible=is_game_graph)
+        graph_visible = gr.update(visible=is_game_graph)
 
-        # game-graph: ツリーデータを直接読み込む(インデックス不要)
+        # game-graph: グラフデータを直接読み込む(インデックス不要)
         if is_game_graph:
             try:
                 self._load_game_graph_data(file_paths[0])
@@ -1104,7 +1104,7 @@ class GradioVisualizationServer:
                     '<span class="mode-badge-text">🟢 GAME TREE</span>',
                     gr.update(),
                     record_visible,
-                    tree_visible,
+                    graph_visible,
                 )
             except Exception as e:
                 logger.exception("Failed to load game graph")
@@ -1141,14 +1141,14 @@ class GradioVisualizationServer:
             '<span class="mode-badge-text">🟡 INDEXING</span>',
             gr.Timer(value=2.0, active=True),
             record_visible,
-            tree_visible,
+            graph_visible,
         )
 
-    def _load_game_graph_data(self, tree_dir: Path) -> None:
+    def _load_game_graph_data(self, graph_dir: Path) -> None:
         """ゲームグラフデータを読み込む．
 
         Args:
-            tree_dir: ツリーデータディレクトリ
+            graph_dir: グラフデータディレクトリ
         """
         from maou.app.game_graph.layout import (
             GameGraphLayoutService,
@@ -1159,8 +1159,8 @@ class GradioVisualizationServer:
         )
 
         io = GameGraphIO()
-        nodes_df, edges_df = io.load(tree_dir)
-        metadata = io.load_metadata(tree_dir)
+        nodes_df, edges_df = io.load(graph_dir)
+        metadata = io.load_metadata(graph_dir)
         logger.info(
             "Loaded game graph: %d nodes, %d edges",
             len(nodes_df),
@@ -1724,9 +1724,9 @@ class GradioVisualizationServer:
                 )
                 with gr.Row():
                     with gr.Column(scale=3):
-                        gt_tree_html = gr.HTML(
-                            label="ツリー表示",
-                            elem_id="tree-view",
+                        gt_graph_html = gr.HTML(
+                            label="グラフ表示",
+                            elem_id="graph-view",
                         )
                     with gr.Column(scale=2):
                         gt_board_html = gr.HTML(
@@ -2188,7 +2188,7 @@ class GradioVisualizationServer:
                 )
 
             def _gt_insert_root(
-                tree_result: tuple[
+                graph_result: tuple[
                     str,
                     str,
                     str,
@@ -2210,14 +2210,14 @@ class GradioVisualizationServer:
                 str,
                 str,
             ]:
-                """_gt_update_tree の 8 要素タプルに current_root を挿入．
+                """_gt_update_graph の 8 要素タプルに current_root を挿入．
 
-                _gt_update_tree は (tree, board, info, stats, moves,
+                _gt_update_graph は (graph, board, info, stats, moves,
                 plot, bc, sfen) を返す．expand/back_to_root では
                 info の前に current_root を挿入して 9 要素にする．
                 """
                 (
-                    tree_html,
+                    graph_html,
                     board_svg,
                     info,
                     stats,
@@ -2225,9 +2225,9 @@ class GradioVisualizationServer:
                     plot,
                     bc_html,
                     sfen,
-                ) = tree_result
+                ) = graph_result
                 return (
-                    tree_html,
+                    graph_html,
                     board_svg,
                     current_root,
                     info,
@@ -2238,7 +2238,7 @@ class GradioVisualizationServer:
                     sfen,
                 )
 
-            def _gt_update_tree(
+            def _gt_update_graph(
                 display_depth: int,
                 min_prob: float,
                 current_root: str,
@@ -2254,14 +2254,14 @@ class GradioVisualizationServer:
             ]:
                 """ゲームグラフの更新コールバック．
 
-                NOTE: game_graph_server.py の _update_tree_view +
+                NOTE: game_graph_server.py の _update_graph_view +
                 _get_detail_outputs と類似のロジックだが，埋め込みモード
                 固有の出力構造(child_hashes 省略，info 文字列の形式差異)
                 があるため個別に実装している．HTML/Plot 生成は
                 game_graph_shared.py に共通化済み．
 
                 Returns:
-                    (tree_html, board_svg, info, stats, moves, plot,
+                    (graph_html, board_svg, info, stats, moves, plot,
                      breadcrumb_html, sfen_text)
                 """
                 viz = self._game_graph_viz
@@ -2296,7 +2296,7 @@ class GradioVisualizationServer:
                     min_prob,
                     self._game_graph_layout,
                 )
-                tree_html = build_graph_html(
+                graph_html = build_graph_html(
                     json.dumps(canvas_data, ensure_ascii=False)
                 )
 
@@ -2316,7 +2316,7 @@ class GradioVisualizationServer:
                     f"Root: `0x{rh:016X}`"
                 )
                 return (
-                    tree_html,
+                    graph_html,
                     board_svg,
                     info,
                     stats,
@@ -2380,7 +2380,7 @@ class GradioVisualizationServer:
                 root_str = str(pos_hash)
                 _gt_pending["expand"] = {
                     "data": _gt_insert_root(
-                        _gt_update_tree(
+                        _gt_update_graph(
                             int(display_depth),
                             min_prob,
                             root_str,
@@ -2455,7 +2455,7 @@ class GradioVisualizationServer:
                 """ルートに戻るボタンのコールバック．"""
                 root = str(self._game_graph_root_hash)
                 return _gt_insert_root(
-                    _gt_update_tree(
+                    _gt_update_graph(
                         display_depth, min_prob, root
                     ),
                     root,
@@ -2478,11 +2478,11 @@ class GradioVisualizationServer:
                 js_on_load=JS_ON_LOAD_EXPAND,
             )
 
-            # _gt_update_tree が返す 8 要素の出力先
-            # (tree_html, board_svg, info, stats, moves, plot,
+            # _gt_update_graph が返す 8 要素の出力先
+            # (graph_html, board_svg, info, stats, moves, plot,
             #  breadcrumb_html, sfen_text)
             _gt_tree_outputs = [
-                gt_tree_html,
+                gt_graph_html,
                 gt_board_html,
                 gt_info,
                 gt_stats_json,
@@ -2501,9 +2501,9 @@ class GradioVisualizationServer:
             ]:
                 """初回ロード時のゲームグラフ描画とルートハッシュ設定．
 
-                _gt_update_tree の8要素にルートハッシュ文字列を追加した
+                _gt_update_graph の8要素にルートハッシュ文字列を追加した
                 9要素タプルを返す．gt_current_root の初期値を設定するため
-                に _gt_update_tree とは別関数として定義している．
+                に _gt_update_graph とは別関数として定義している．
                 """
                 root_str = str(self._game_graph_root_hash)
                 if self._game_graph_viz is None:
@@ -2519,7 +2519,7 @@ class GradioVisualizationServer:
                         "",
                     )
                 return (
-                    *_gt_update_tree(depth, prob, root_str),
+                    *_gt_update_graph(depth, prob, root_str),
                     root_str,
                 )
 
@@ -2530,7 +2530,7 @@ class GradioVisualizationServer:
             )
 
             gt_refresh_btn.click(
-                fn=_gt_update_tree,
+                fn=_gt_update_graph,
                 inputs=[
                     gt_depth_slider,
                     gt_min_prob_slider,
@@ -2553,9 +2553,9 @@ class GradioVisualizationServer:
             )
 
             # expand / back_to_root 共通の出力先
-            # (select と異なり tree_html, current_root, info を含む)
+            # (select と異なり graph_html, current_root, info を含む)
             _gt_expand_outputs = [
-                gt_tree_html,
+                gt_graph_html,
                 gt_board_html,
                 gt_current_root,
                 gt_info,
@@ -2581,13 +2581,13 @@ class GradioVisualizationServer:
                 outputs=_gt_expand_outputs,
             )
 
-            # 初回ロード: game-graphモードの場合はツリーを表示
+            # 初回ロード: game-graphモードの場合はグラフを表示
             if (
                 self.array_type == "game-graph"
                 and self._game_graph_viz is not None
             ):
                 demo.load(
-                    fn=lambda depth, prob: _gt_update_tree(
+                    fn=lambda depth, prob: _gt_update_graph(
                         depth,
                         prob,
                         str(self._game_graph_root_hash),
@@ -3650,13 +3650,13 @@ def launch_server(
             launch_game_graph_server,
         )
 
-        tree_path = file_paths[0] if file_paths else None
-        if tree_path is None:
+        graph_path = file_paths[0] if file_paths else None
+        if graph_path is None:
             raise ValueError(
-                "game-graph requires a tree data directory path"
+                "game-graph requires a graph data directory path"
             )
         launch_game_graph_server(
-            tree_path=tree_path,
+            graph_path=graph_path,
             port=port,
             share=share,
             server_name=server_name,

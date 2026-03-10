@@ -100,6 +100,10 @@ class GameGraphLayoutService:
             ):
                 continue
 
+            # NOTE: バックエッジ(c_depth <= p_depth)も含めて追加する．
+            # これにより子リストの X 座標計算に影響するが，
+            # primary parent 選択は c_depth == p_depth + 1 の
+            # フォワードエッジのみを対象とするため無限ループは発生しない．
             parent_children[p_hash].append((c_hash, prob))
 
             p_depth = node_depths.get(p_hash, -1)

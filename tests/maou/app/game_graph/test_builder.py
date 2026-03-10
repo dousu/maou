@@ -80,7 +80,7 @@ class TestGameGraphBuilder:
     """GameGraphBuilder のテスト."""
 
     def test_initial_position_only(self) -> None:
-        """初期局面のみでツリーを構築できる."""
+        """初期局面のみでグラフを構築できる."""
         board = shogi.Board()
         # 初期局面のみ，子局面なし → 全候補の確率を0にする
         move_labels = [0.0] * MOVE_LABELS_NUM
@@ -430,7 +430,7 @@ class TestGameGraphBuilder:
         assert last_processed == len(nodes)
 
     def test_custom_initial_hash_with_sfen(self) -> None:
-        """非平手の initial_hash + initial_sfen でツリーを構築できる."""
+        """非平手の initial_hash + initial_sfen でグラフを構築できる."""
         # 7g7f を指した後の局面を開始局面とする
         board = shogi.Board()
         move_7g7f = board.move_from_usi("7g7f")

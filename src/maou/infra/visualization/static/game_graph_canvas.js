@@ -4,7 +4,7 @@
  * Canvas 2D による仮想描画ベースのゲームグラフ表示．
  * 旧 Cytoscape.js + dagre を置換し，以下を実現する:
  * - エッジ方向の正確な描画(source → target)
- * - 仮想描画による大規模ツリーの高速表示
+ * - 仮想描画による大規模グラフの高速表示
  * - サーバー側事前計算済み座標の利用
  */
 
@@ -704,7 +704,7 @@
 
   var renderer = null;
 
-  function renderTree(canvasDataJson, containerId) {
+  function renderGraph(canvasDataJson, containerId) {
     var container = document.getElementById(containerId);
     if (!container) return;
 
@@ -761,7 +761,7 @@
     renderer.fitToView();
   }
 
-  function exportTreePNG() {
+  function exportGraphPNG() {
     if (renderer) renderer.exportPNG();
   }
 
@@ -779,6 +779,6 @@
   });
 
   // Expose to global scope
-  window.renderGameGraph = renderTree;
-  window.exportTreePNG = exportTreePNG;
+  window.renderGameGraph = renderGraph;
+  window.exportGraphPNG = exportGraphPNG;
 })();

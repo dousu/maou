@@ -134,9 +134,9 @@ def visualize(
                 "2番目以降の入力は無視されます: %s",
                 input_path[1:],
             )
-        tree_dir = input_path[0]
+        graph_dir = input_path[0]
         app_logger.info(
-            "Game graph data directory: %s", tree_dir
+            "Game graph data directory: %s", graph_dir
         )
 
         # Google Colab環境では自動的にshareを有効化
@@ -153,7 +153,7 @@ def visualize(
             )
 
             launch_game_graph_server(
-                tree_path=tree_dir,
+                graph_path=graph_dir,
                 port=port,
                 share=share,
                 server_name=server_name,

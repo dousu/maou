@@ -45,7 +45,7 @@ class GameGraphBuilder:
         ]
         | None = None,
     ) -> tuple[list[GameGraphNode], list[GameGraphEdge]]:
-        """BFSでツリーを構築する．
+        """BFSでグラフを構築する．
 
         Args:
             preprocess_df: preprocessデータのDataFrame

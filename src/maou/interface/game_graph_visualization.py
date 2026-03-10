@@ -163,7 +163,7 @@ class GameGraphVisualizationInterface:
         フロントエンドのレイアウトエンジンが辺方向を反転しない．
 
         Args:
-            root_hash: 表示するサブツリーのルートhash
+            root_hash: 表示するサブグラフのルートhash
             display_depth: 表示深さ
             min_probability: エッジの最小確率閾値
             layout: 事前計算されたレイアウト
@@ -171,14 +171,14 @@ class GameGraphVisualizationInterface:
         Returns:
             {"nodes": [...], "edges": [...], "bounds": {...}} 形式
         """
-        sub_nodes, sub_edges = self._query.get_subtree(
+        sub_nodes, sub_edges = self._query.get_subgraph(
             root_hash, display_depth, min_probability
         )
 
         # エッジから各ノードへの親エッジ情報を取得(ラベル用)
         child_edge_map = self._build_child_edge_map(sub_edges)
 
-        # サブツリー内の盤面を漸進的に構築
+        # サブグラフ内の盤面を漸進的に構築
         local_boards = self._build_boards_incrementally(
             root_hash, sub_nodes, child_edge_map
         )
@@ -257,7 +257,7 @@ class GameGraphVisualizationInterface:
                 }
             )
 
-        # サブツリーの範囲を計算
+        # サブグラフの範囲を計算
         if canvas_nodes:
             xs = [n["x"] for n in canvas_nodes]
             ys = [n["y"] for n in canvas_nodes]
@@ -506,7 +506,7 @@ class GameGraphVisualizationInterface:
         )
 
     def get_root_hash(self) -> int:
-        """ツリーのルートハッシュを返す．
+        """グラフのルートハッシュを返す．
 
         Returns:
             ルートノードのposition_hash
@@ -694,17 +694,17 @@ class GameGraphVisualizationInterface:
         max_depth: int = 3,
         min_probability: float = 0.01,
     ) -> str:
-        """サブツリーの指し手統計をCSV形式で出力する．
+        """サブグラフの指し手統計をCSV形式で出力する．
 
         Args:
-            root_hash: サブツリーのルートhash
+            root_hash: サブグラフのルートhash
             max_depth: 最大深さ
             min_probability: 最小確率閾値
 
         Returns:
             CSV形式の文字列
         """
-        sub_nodes, sub_edges = self._query.get_subtree(
+        sub_nodes, sub_edges = self._query.get_subgraph(
             root_hash, max_depth, min_probability
         )
 
@@ -807,7 +807,7 @@ class GameGraphVisualizationInterface:
         複数の親を持つノードは最大確率のエッジを採用する．
 
         Args:
-            sub_edges: サブツリーのエッジDataFrame
+            sub_edges: サブグラフのエッジDataFrame
 
         Returns:
             child_hash をキー，エッジ行(dict)を値とするマッピング
@@ -829,15 +829,15 @@ class GameGraphVisualizationInterface:
         sub_nodes: pl.DataFrame,
         child_edge_map: dict[int, dict[str, Any]],
     ) -> dict[int, Board | None]:
-        """サブツリー内の全ノードの盤面をdepth順に構築する．
+        """サブグラフ内の全ノードの盤面をdepth順に構築する．
 
         ルートの盤面のみ get_path_to_root で復元し，
         残りは親の盤面をコピーして1手適用する．
         これにより get_path_to_root の呼び出しを1回に削減する．
 
         Args:
-            root_hash: サブツリーのルートhash
-            sub_nodes: サブツリー内のノードDF
+            root_hash: サブグラフのルートhash
+            sub_nodes: サブグラフ内のノードDF
             child_edge_map: child_hash → エッジ情報
 
         Returns:
@@ -845,7 +845,7 @@ class GameGraphVisualizationInterface:
         """
         boards: dict[int, Board | None] = {}
 
-        # サブツリーのルート盤面を復元
+        # サブグラフのルート盤面を復元
         path = self._query.get_path_to_root(root_hash)
         boards[root_hash] = (
             self._reconstruct_board_from_path(path)

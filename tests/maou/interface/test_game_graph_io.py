@@ -62,7 +62,7 @@ class TestGameGraphIO:
         edges = self._sample_edges()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             io.save(nodes, edges, output_dir)
 
             # ファイルが生成されている
@@ -117,7 +117,7 @@ class TestGameGraphIO:
         io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             output_dir.mkdir()
 
             # 不正なカラムを持つ nodes.feather
@@ -143,7 +143,7 @@ class TestGameGraphIO:
         io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
 
             # まず正しいデータを保存
             io.save(
@@ -174,7 +174,7 @@ class TestGameGraphIO:
         edges = self._sample_edges()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             io.save(nodes, edges, output_dir)
             nodes_df, edges_df = io.load(output_dir)
 

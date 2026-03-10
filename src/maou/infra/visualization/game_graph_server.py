@@ -44,7 +44,7 @@ from maou.interface.game_graph_visualization import (
 logger = logging.getLogger(__name__)
 
 # on_node_expanded / on_move_selected / on_back_to_root 共通の返却型
-# (tree_html, board_svg, current_root, stats, moves, child_hashes,
+# (graph_html, board_svg, current_root, stats, moves, child_hashes,
 #  plot, breadcrumb_html, sfen_text)
 _ExpandResult = tuple[
     str,
@@ -201,7 +201,7 @@ def _get_detail_outputs(
     )
 
 
-def _update_tree_view(
+def _update_graph_view(
     viz: GameGraphVisualizationInterface,
     root_hash: int,
     display_depth: int,
@@ -217,17 +217,17 @@ def _update_tree_view(
     str,
     str,
 ]:
-    """ツリービューと詳細パネルを更新する．
+    """グラフビューと詳細パネルを更新する．
 
     Args:
         viz: 可視化インターフェース
-        root_hash: 表示するサブツリーのルートhash
+        root_hash: 表示するサブグラフのルートhash
         display_depth: 表示深さ
         min_prob: エッジの最小確率閾値
         layout: 事前計算されたレイアウト
 
     Returns:
-        (tree_html, board_svg, stats, display_moves, child_hashes,
+        (graph_html, board_svg, stats, display_moves, child_hashes,
          plot, breadcrumb_html, sfen_text)
     """
     if layout is None:
@@ -238,7 +238,7 @@ def _update_tree_view(
         root_hash, int(display_depth), min_prob, layout
     )
     canvas_json = json.dumps(canvas_data, ensure_ascii=False)
-    tree_html = build_graph_html(canvas_json)
+    graph_html = build_graph_html(canvas_json)
 
     (
         board_svg,
@@ -251,7 +251,7 @@ def _update_tree_view(
     ) = _get_detail_outputs(viz, root_hash)
 
     return (
-        tree_html,
+        graph_html,
         board_svg,
         stats,
         display_moves,
@@ -263,7 +263,7 @@ def _update_tree_view(
 
 
 def launch_game_graph_server(
-    tree_path: Path,
+    graph_path: Path,
     port: int | None = None,
     share: bool = False,
     server_name: str = "127.0.0.1",
@@ -274,17 +274,17 @@ def launch_game_graph_server(
     ディスパッチされる．
 
     Args:
-        tree_path: ツリーデータディレクトリ(nodes.feather + edges.feather)
+        graph_path: グラフデータディレクトリ(nodes.feather + edges.feather)
         port: サーバーポート．Noneの場合Gradioの自動選択に委任
         share: Gradio公開リンクを生成するか
         server_name: サーバーバインドアドレス
     """
     # データ読み込み
-    tree_io = GameGraphIO()
-    nodes_df, edges_df = tree_io.load(tree_path)
-    metadata = tree_io.load_metadata(tree_path)
+    graph_io = GameGraphIO()
+    nodes_df, edges_df = graph_io.load(graph_path)
+    metadata = graph_io.load_metadata(graph_path)
     logger.info(
-        "Loaded tree: %d nodes, %d edges",
+        "Loaded graph: %d nodes, %d edges",
         len(nodes_df),
         len(edges_df),
     )
@@ -298,13 +298,13 @@ def launch_game_graph_server(
 
     # レイアウト事前計算
     layout_svc = GameGraphLayoutService()
-    tree_layout = layout_svc.compute_layout(
+    graph_layout = layout_svc.compute_layout(
         nodes_df, edges_df, root_hash
     )
     logger.info(
         "Computed layout: %d positions, bounds=%s",
-        len(tree_layout.node_positions),
-        tree_layout.bounds,
+        len(graph_layout.node_positions),
+        graph_layout.bounds,
     )
 
     # ビューポートクエリ用の空間インデックス
@@ -312,7 +312,7 @@ def launch_game_graph_server(
         defaultdict(list)
     )
     _bucket_size = 500.0
-    for h, (x, y) in tree_layout.node_positions.items():
+    for h, (x, y) in graph_layout.node_positions.items():
         bx = int(x // _bucket_size)
         by = int(y // _bucket_size)
         _spatial_buckets[(bx, by)].append(h)
@@ -345,12 +345,12 @@ def launch_game_graph_server(
         str,
     ]:
         """初期表示コールバック．"""
-        return _update_tree_view(
+        return _update_graph_view(
             viz,
             viz.get_root_hash(),
             display_depth,
             min_prob,
-            tree_layout,
+            graph_layout,
         )
 
     def on_refresh(
@@ -379,8 +379,8 @@ def launch_game_graph_server(
                 "Invalid current_root: %s", current_root
             )
             rh = viz.get_root_hash()
-        return _update_tree_view(
-            viz, rh, display_depth, min_prob, tree_layout
+        return _update_graph_view(
+            viz, rh, display_depth, min_prob, graph_layout
         )
 
     # --- server_functions: JS から直接呼び出される Python 関数 ---
@@ -438,12 +438,12 @@ def launch_game_graph_server(
             logger.warning("Invalid node_id: %s", node_id_str)
             return False
         _pending["expand"] = {
-            "data": _update_tree_view(
+            "data": _update_graph_view(
                 viz,
                 pos_hash,
                 int(display_depth),
                 min_prob,
-                tree_layout,
+                graph_layout,
             ),
             "hash": pos_hash,
         }
@@ -487,7 +487,7 @@ def launch_game_graph_server(
             for by in range(min_by, max_by + 1):
                 bucket = _spatial_buckets.get((bx, by), [])
                 for h in bucket:
-                    pos = tree_layout.node_positions.get(h)
+                    pos = graph_layout.node_positions.get(h)
                     if pos is None:
                         continue
                     x, y = pos
@@ -499,7 +499,7 @@ def launch_game_graph_server(
 
         # 可視ノードのデータを構築
         canvas_data = viz.get_viewport_data(
-            visible_hashes, tree_layout
+            visible_hashes, graph_layout
         )
         return json.dumps(canvas_data, ensure_ascii=False)
 
@@ -531,7 +531,7 @@ def launch_game_graph_server(
         result = _pending.pop("expand", None)
         if result:
             (
-                tree_html_v,
+                graph_html_v,
                 board_svg,
                 stats,
                 display_moves,
@@ -541,7 +541,7 @@ def launch_game_graph_server(
                 sfen_text_v,
             ) = result["data"]
             return (
-                tree_html_v,
+                graph_html_v,
                 board_svg,
                 str(result["hash"]),
                 stats,
@@ -602,7 +602,7 @@ def launch_game_graph_server(
         except (ValueError, IndexError):
             return _empty
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -610,11 +610,11 @@ def launch_game_graph_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob, tree_layout
+        ) = _update_graph_view(
+            viz, pos_hash, display_depth, min_prob, graph_layout
         )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(pos_hash),
             stats,
@@ -632,7 +632,7 @@ def launch_game_graph_server(
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -640,11 +640,11 @@ def launch_game_graph_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(
-            viz, rh, display_depth, min_prob, tree_layout
+        ) = _update_graph_view(
+            viz, rh, display_depth, min_prob, graph_layout
         )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(rh),
             stats,
@@ -685,7 +685,7 @@ def launch_game_graph_server(
         except (ValueError, TypeError):
             return _noop
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -693,11 +693,11 @@ def launch_game_graph_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob, tree_layout
+        ) = _update_graph_view(
+            viz, pos_hash, display_depth, min_prob, graph_layout
         )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(pos_hash),
             stats,
@@ -798,9 +798,9 @@ def launch_game_graph_server(
         # メインコンテンツ
         with gr.Row():
             with gr.Column(scale=3):
-                tree_html = gr.HTML(
-                    label="ツリー表示",
-                    elem_id="tree-view",
+                graph_html = gr.HTML(
+                    label="グラフ表示",
+                    elem_id="graph-view",
                 )
 
             with gr.Column(scale=2):
@@ -868,14 +868,14 @@ def launch_game_graph_server(
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
-        # ツリー上で選択中のノードhash("ルートに設定"ボタン用)
+        # グラフ上で選択中のノードhash("ルートに設定"ボタン用)
         selected_node_state = gr.State("")
 
         # --- イベントハンドリング ---
 
         # 初期表示
         _load_outputs = [
-            tree_html,
+            graph_html,
             board_html,
             stats_json,
             move_table,
@@ -914,9 +914,9 @@ def launch_game_graph_server(
             selected_node_state,
         ]
 
-        # ノード展開 / 指し手選択共通の出力(ツリー + 詳細パネル)
+        # ノード展開 / 指し手選択共通の出力(グラフ + 詳細パネル)
         _expand_outputs = [
-            tree_html,
+            graph_html,
             board_html,
             current_root_state,
             stats_json,

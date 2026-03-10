@@ -94,12 +94,12 @@ class GameGraphIO:
         _save_df_feather(edges_df, output_dir / EDGES_FILENAME)
 
     def load(
-        self, tree_dir: Path
+        self, graph_dir: Path
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """nodes.feather, edges.feather を Rust I/O で読み込む．
 
         Args:
-            tree_dir: ツリーデータのディレクトリ
+            graph_dir: グラフデータのディレクトリ
 
         Returns:
             (nodes_df, edges_df) のタプル
@@ -108,8 +108,8 @@ class GameGraphIO:
             FileNotFoundError: ファイルが見つからない場合
             ValueError: スキーマが一致しない場合
         """
-        nodes_path = tree_dir / NODES_FILENAME
-        edges_path = tree_dir / EDGES_FILENAME
+        nodes_path = graph_dir / NODES_FILENAME
+        edges_path = graph_dir / EDGES_FILENAME
 
         if not nodes_path.exists():
             raise FileNotFoundError(
@@ -157,17 +157,17 @@ class GameGraphIO:
 
     def load_metadata(
         self,
-        tree_dir: Path,
+        graph_dir: Path,
     ) -> dict[str, Any]:
         """メタデータをJSONから読み込む．
 
         Args:
-            tree_dir: ツリーデータのディレクトリ
+            graph_dir: グラフデータのディレクトリ
 
         Returns:
             メタデータ辞書．ファイルが存在しない場合は空辞書．
         """
-        path = tree_dir / METADATA_FILENAME
+        path = graph_dir / METADATA_FILENAME
         if not path.exists():
             return {}
         content = path.read_text(encoding="utf-8")

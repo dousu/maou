@@ -1,6 +1,6 @@
 /**
  * Game Graph Viewer Styles
- * Canvas 2D ツリー表示用スタイル
+ * Canvas 2D グラフ表示用スタイル
  */
 
 .game-graph-container {
@@ -147,14 +147,14 @@
 }
 
 /* PNG export button overlay on tree */
-.tree-export-overlay {
+.graph-export-overlay {
     position: absolute;
     top: 8px;
     right: 8px;
     z-index: 10;
 }
 
-.tree-export-overlay .export-btn {
+.graph-export-overlay .export-btn {
     background: rgba(255, 255, 255, 0.9);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }

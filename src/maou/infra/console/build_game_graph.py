@@ -21,7 +21,7 @@ from maou.infra.file_system.file_system import FileSystem
 )
 @click.option(
     "--output-dir",
-    help="ツリーデータの出力先ディレクトリ．",
+    help="グラフデータの出力先ディレクトリ．",
     type=click.Path(path_type=Path),
     required=True,
 )
@@ -133,11 +133,11 @@ def build_game_graph(
         max_cache_files=max_cache_files,
     )
 
-    # ツリー構築
+    # グラフ構築
     from tqdm import tqdm
 
     builder = GameGraphBuilder()
-    pbar = tqdm(desc="ツリー構築中", unit="局面")
+    pbar = tqdm(desc="グラフ構築中", unit="局面")
 
     _prev_cache_misses = 0
 
