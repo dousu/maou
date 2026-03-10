@@ -582,7 +582,7 @@ class GameTreeVisualizationInterface:
                 "move",
                 "probability",
                 "win_rate",
-                "result_value",
+                "result_value(手番視点)",
                 "depth",
             ]
         )
@@ -809,8 +809,8 @@ class GameTreeVisualizationInterface:
             to_square=move_to(move),
         )
 
+    @staticmethod
     def _move16_to_japanese(
-        self,
         move16: int,
         parent_board: Board | None,
     ) -> str:
@@ -825,13 +825,17 @@ class GameTreeVisualizationInterface:
         """
         usi = move_to_usi(move16)
         piece_name = (
-            self.get_piece_name(parent_board, move16)
+            GameTreeVisualizationInterface.get_piece_name(
+                parent_board, move16
+            )
             if parent_board is not None
             and len(usi) >= 2
             and usi[1] != "*"
             else ""
         )
-        return self.usi_to_japanese(usi, piece_name=piece_name)
+        return GameTreeVisualizationInterface.usi_to_japanese(
+            usi, piece_name=piece_name
+        )
 
     @staticmethod
     def get_piece_name(board: Board, move16: int) -> str:
