@@ -254,7 +254,8 @@ class GameGraphLayoutService:
         """X 座標の重なりを解消する．
 
         隣接するノード間の間隔が min_spacing 未満の場合，
-        右側のノードを押し広げる．
+        押し広げた後にグループ全体を中心にシフトし，
+        元の配置からの偏りを最小化する．
 
         Args:
             placed: [(hash, x)] のリスト(x 昇順)
@@ -267,10 +268,19 @@ class GameGraphLayoutService:
             return placed
 
         result = list(placed)
+
+        # 1. 右方向に押し広げて最小間隔を確保
         for i in range(1, len(result)):
             _, x_prev = result[i - 1]
             h_curr, x_curr = result[i]
             if x_curr - x_prev < min_spacing:
                 result[i] = (h_curr, x_prev + min_spacing)
+
+        # 2. 元の中心と解消後の中心のずれを補正
+        original_center = (placed[0][1] + placed[-1][1]) / 2
+        resolved_center = (result[0][1] + result[-1][1]) / 2
+        shift = original_center - resolved_center
+        if shift != 0.0:
+            result = [(h, x + shift) for h, x in result]
 
         return result

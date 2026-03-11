@@ -170,6 +170,16 @@ class TestComputeLayout:
         for i in range(1, len(result)):
             assert result[i][1] - result[i - 1][1] >= 40.0
 
+    def test_overlap_resolution_centered(self) -> None:
+        """重なり解消後にグループ中心が保持される．"""
+        svc = GameGraphLayoutService()
+        placed = [(1, -30.0), (2, 30.0)]
+        original_center = (-30.0 + 30.0) / 2  # 0.0
+        result = svc._resolve_overlaps(placed, 100.0)
+        resolved_center = (result[0][1] + result[-1][1]) / 2
+        assert resolved_center == pytest.approx(original_center)
+        assert result[1][1] - result[0][1] >= 100.0
+
     def test_large_tree_performance(self) -> None:
         """1000ノードのレイアウトが1秒以内に完了する．"""
         import time
