@@ -3,6 +3,9 @@ from pathlib import Path
 import maou.interface.converter as converter
 import maou.interface.learn as learn
 import maou.interface.preprocess as preprocess
+from maou.infra.file_system.path_utils import (
+    collect_files as _collect_files,
+)
 
 
 class FileSystem(
@@ -21,24 +24,13 @@ class FileSystem(
     def collect_files(
         p: Path, ext: str | None = None
     ) -> list[Path]:
-        if p.is_file():
-            if ext is not None and ext not in p.suffixes:
-                msg = (
-                    f"ファイルは {ext} 形式で"
-                    f"なければなりません: {p}"
-                )
-                raise ValueError(msg)
-            return [p]
-        elif p.is_dir():
-            return [
-                f
-                for f in p.glob("**/*")
-                if f.is_file()
-                and (ext is None or ext in f.suffixes)
-            ]
-        else:
-            msg = (
-                f"パスがファイルでも"
-                f"ディレクトリでもありません: {p}"
-            )
-            raise ValueError(msg)
+        """指定パスからファイルを収集する．
+
+        Args:
+            p: ファイルまたはディレクトリのパス
+            ext: フィルタする拡張子(例: ".feather")
+
+        Returns:
+            マッチしたファイルパスのリスト
+        """
+        return _collect_files(p, ext=ext)
