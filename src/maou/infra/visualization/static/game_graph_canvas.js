@@ -119,7 +119,7 @@
 
     // State
     this.nodes = new Map(); // id -> {x, y, label, color, radius, ...}
-    this.edges = [];        // [{sx, sy, tx, ty, label, prob, sourceId, targetId}]
+    this.edges = new Map(); // "sourceId:targetId" -> {sx, sy, tx, ty, label, prob, sourceId, targetId}
     this.offsetX = 0;
     this.offsetY = 0;
     this.zoom = 1.0;
@@ -242,11 +242,11 @@
       });
     }
 
-    // Set edges
-    this.edges = [];
+    // Merge edges (keep previously loaded edges outside current viewport)
     for (var j = 0; j < edges.length; j++) {
       var e = edges[j];
-      this.edges.push({
+      var edgeKey = e.source_id + ":" + e.target_id;
+      this.edges.set(edgeKey, {
         sourceId: e.source_id,
         targetId: e.target_id,
         sx: e.source_x,
@@ -269,7 +269,7 @@
 
   GameGraphRenderer.prototype.clearData = function () {
     this.nodes.clear();
-    this.edges = [];
+    this.edges.clear();
     this.grid.clear();
     this.requestRender();
   };
@@ -362,8 +362,11 @@
     var zoom = this.zoom;
     var showLabels = zoom >= LOD_LABEL_ZOOM;
 
-    for (var i = 0; i < this.edges.length; i++) {
-      var e = this.edges[i];
+    var edgesIter = this.edges.values();
+    var edgeEntry = edgesIter.next();
+    while (!edgeEntry.done) {
+      var e = edgeEntry.value;
+      edgeEntry = edgesIter.next();
 
       // Frustum culling: skip if edge bounding box does not intersect viewport.
       // This correctly handles edges that cross the viewport without either
