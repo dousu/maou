@@ -41,6 +41,11 @@ from maou.domain.visualization.piece_mapping import (
     get_piece_name_ja,
 )
 
+__all__ = [
+    "GameGraphVisualizationInterface",
+    "GraphLayout",
+]
+
 logger = logging.getLogger(__name__)
 
 # sente_result_value の偶奇判定は Turn.BLACK == 0 を前提とする

@@ -92,6 +92,8 @@ def _build_head_scripts() -> str:
     return f"""
 <script>
 (function() {{
+    // IIFE スコープに閉じたフラグ．ページ単位で一度だけ
+    // initGameGraphJS() を呼び出すことを保証する．
     var jsLoaded = false;
 
     function initGameGraphJS() {{
