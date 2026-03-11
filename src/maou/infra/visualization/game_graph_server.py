@@ -76,20 +76,23 @@ def _load_custom_css() -> str:
 
 
 def _build_head_scripts() -> str:
-    """Canvas 2D ゲームグラフJSをhead要素に注入するHTMLを生成する．
+    """Canvas 2D ゲームグラフのCSS・JSをhead要素に注入するHTMLを生成する．
 
     demo.launch(head=...)パラメータで使用する．
     gr.HTMLコンポーネントはinnerHTMLで設定されるため<script>タグが
-    実行されない問題を回避する．
+    実行されない問題を回避する．CSSも同様にhead注入することで
+    gr.HTML更新ごとの重複注入を防止する．
 
     CDN依存なし(Cytoscape.js/dagre を除去済み)．
 
     Returns:
         head要素に注入するHTML文字列
     """
+    css_code = load_static_file("game_graph.css")
     js_code = load_static_file("game_graph_canvas.js")
 
     return f"""
+<style>{css_code}</style>
 <script>
 (function() {{
     // IIFE スコープに閉じたフラグ．ページ単位で一度だけ

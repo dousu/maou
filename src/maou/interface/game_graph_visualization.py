@@ -60,6 +60,9 @@ if int(Turn.WHITE) != 1:
 #: _get_board_for_position のキャッシュ型
 _BoardCache = tuple[int, Board | None]
 
+#: boards dict で「未登録」と「復元失敗 (None)」を区別する sentinel
+_MISSING: object = object()
+
 
 class MoveRow(NamedTuple):
     """指し手一覧テーブルの1行を表す．"""
@@ -897,8 +900,8 @@ class GameGraphVisualizationInterface:
                 continue
 
             parent_hash = edge_info["parent_hash"]
-            parent_board = boards.get(parent_hash)
-            if parent_board is None:
+            parent_board = boards.get(parent_hash, _MISSING)
+            if parent_board is _MISSING or parent_board is None:
                 boards[pos_hash] = None
                 continue
 
