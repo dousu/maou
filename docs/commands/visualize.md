@@ -12,7 +12,7 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 | `preprocessing` | 前処理済みデータ | 学習前のデータ検証 |
 | `stage1` | 到達可能マス学習用 | 基礎学習データ確認 |
 | `stage2` | 合法手学習用 | 中間学習データ確認 |
-| `game-tree` | ゲームツリー | 構築済みツリーの可視化 |
+| `game-graph` | ゲームグラフ | 構築済みゲームグラフの可視化 |
 
 ## CLI オプション
 
@@ -29,7 +29,7 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 
 | フラグ | 必須 | 説明 |
 |--------|------|------|
-| `--array-type {hcpe,preprocessing,stage1,stage2,game-tree}` | Yes | 読み込むデータの形式を指定する． |
+| `--array-type {hcpe,preprocessing,stage1,stage2,game-graph}` | Yes | 読み込むデータの形式を指定する． |
 
 ### サーバー設定
 
@@ -142,32 +142,37 @@ Stage1データ（`--array-type stage1`）では：
    - `reachable_count`: 到達可能マス数
    - `array_type`: "stage1"
 
-## ゲームツリーの可視化
+## ゲームグラフの可視化
 
-`--array-type game-tree` を指定すると，Cytoscape.jsベースのインタラクティブUIでゲームツリーを可視化する．`--input-path` にはツリーデータディレクトリ(`nodes.feather` + `edges.feather`)を指定する．
+`--array-type game-graph` を指定すると，Canvas 2DベースのインタラクティブUIでゲームグラフを可視化する．`--input-path` にはグラフデータディレクトリ(`nodes.feather` + `edges.feather`)を指定する．
+
+> **Note**: ゲームグラフは合流(transposition)や千日手等の局面循環により**閉路を含む有向グラフ**である．
+> 木(tree)や DAG(有向非巡回グラフ)ではない．
 
 ### 使用例
 
 ```bash
 # 基本的な使用方法
-maou visualize --input-path ./data/game-tree/ --array-type game-tree
+maou visualize --input-path ./data/game-graph/ --array-type game-graph
 
 # ポートを指定
-maou visualize --input-path ./data/game-tree/ --array-type game-tree --port 7861
+maou visualize --input-path ./data/game-graph/ --array-type game-graph --port 7861
 
 # 公開リンクを生成(Google Colab等)
-maou visualize --input-path ./data/game-tree/ --array-type game-tree --share
+maou visualize --input-path ./data/game-graph/ --array-type game-graph --share
 ```
 
-### ツリービュー(左パネル)
+### グラフビュー(左パネル)
 
-- **Cytoscape.js** + **dagre** レイアウトによる階層的ツリー表示
+- **Canvas 2D** + **サーバー側事前計算レイアウト**による階層的グラフ表示
+  - サーバー側で全ノードの座標を事前計算し，フロントエンドは Canvas 2D で仮想描画を行う
+  - CDN依存なし(外部ライブラリ不要)
 - ノードの**色**: 勝率(`result_value`)に応じたグラデーション
   - 青(先手有利，>55%) / グレー(互角) / 赤(後手有利，<45%)
 - ノードの**サイズ**: 親エッジの確率(`probability`)に比例
 - エッジの**太さ**: 確率に比例
 - **シングルクリック**: 詳細パネルを更新
-- **ダブルクリック**: 選択ノードを新しいルートとしてサブツリーを展開
+- **ダブルクリック**: 選択ノードを新しいルートとしてサブグラフを展開
 
 ### 詳細パネル(右パネル)
 
@@ -178,9 +183,9 @@ maou visualize --input-path ./data/game-tree/ --array-type game-tree --share
 
 ### コントロール
 
-- **表示深さ**: サブツリーの表示階層数(1-10，デフォルト3)
+- **表示深さ**: サブグラフの表示階層数(1-10，デフォルト3)
 - **最小確率**: 表示するエッジの最小確率閾値(0.001-0.3，デフォルト0.01)
-- **ルートに戻る**: ツリーの根に戻る
+- **ルートに戻る**: グラフのルートノードに戻る
 
 ## 既知の問題
 
@@ -188,7 +193,7 @@ maou visualize --input-path ./data/game-tree/ --array-type game-tree --share
 
 ## 関連コマンド
 
-- [`maou build-game-tree`](./build_game_tree.md) - ゲームツリー構築
+- [`maou build-game-graph`](./build_game_graph.md) - ゲームグラフ構築
 - [`maou utility generate-stage1-data`](./generate-stage1-data.md) - Stage1データ生成
 - [`maou learn-model`](./learn_model.md) - モデル学習
 - [`maou pre-process`](./pre_process.md) - データ前処理

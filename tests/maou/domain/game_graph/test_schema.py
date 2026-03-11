@@ -1,14 +1,14 @@
-"""ゲームツリースキーマのテスト."""
+"""ゲームグラフスキーマのテスト."""
 
 from __future__ import annotations
 
 import polars as pl
 
-from maou.domain.game_tree.schema import (
+from maou.domain.game_graph.schema import (
     create_empty_edges_df,
     create_empty_nodes_df,
-    get_game_tree_edges_schema,
-    get_game_tree_nodes_schema,
+    get_game_graph_edges_schema,
+    get_game_graph_nodes_schema,
 )
 
 
@@ -17,7 +17,7 @@ class TestNodesSchema:
 
     def test_schema_columns(self) -> None:
         """必要なカラムが全て含まれる."""
-        schema = get_game_tree_nodes_schema()
+        schema = get_game_graph_nodes_schema()
         assert set(schema.keys()) == {
             "position_hash",
             "result_value",
@@ -29,7 +29,7 @@ class TestNodesSchema:
 
     def test_schema_types(self) -> None:
         """型が正しい."""
-        schema = get_game_tree_nodes_schema()
+        schema = get_game_graph_nodes_schema()
         assert schema["position_hash"] == pl.UInt64()
         assert schema["result_value"] == pl.Float32()
         assert schema["best_move_win_rate"] == pl.Float32()
@@ -42,7 +42,7 @@ class TestNodesSchema:
         df = create_empty_nodes_df()
         assert len(df) == 0
         assert set(df.columns) == set(
-            get_game_tree_nodes_schema().keys()
+            get_game_graph_nodes_schema().keys()
         )
 
     def test_create_empty_df_with_size(self) -> None:
@@ -56,7 +56,7 @@ class TestEdgesSchema:
 
     def test_schema_columns(self) -> None:
         """必要なカラムが全て含まれる."""
-        schema = get_game_tree_edges_schema()
+        schema = get_game_graph_edges_schema()
         assert set(schema.keys()) == {
             "parent_hash",
             "child_hash",
@@ -69,7 +69,7 @@ class TestEdgesSchema:
 
     def test_schema_types(self) -> None:
         """型が正しい."""
-        schema = get_game_tree_edges_schema()
+        schema = get_game_graph_edges_schema()
         assert schema["parent_hash"] == pl.UInt64()
         assert schema["child_hash"] == pl.UInt64()
         assert schema["move16"] == pl.UInt16()
@@ -83,7 +83,7 @@ class TestEdgesSchema:
         df = create_empty_edges_df()
         assert len(df) == 0
         assert set(df.columns) == set(
-            get_game_tree_edges_schema().keys()
+            get_game_graph_edges_schema().keys()
         )
 
     def test_create_empty_df_with_size(self) -> None:

@@ -1,4 +1,4 @@
-"""build-game-tree CLI コマンドのスモークテスト."""
+"""build-game-graph CLI コマンドのスモークテスト."""
 
 from __future__ import annotations
 
@@ -10,16 +10,16 @@ from click.testing import CliRunner
 
 from maou.domain.board import shogi
 from maou.domain.move.label import MOVE_LABELS_NUM
-from maou.infra.console.build_game_tree import build_game_tree
+from maou.infra.console.build_game_graph import build_game_graph
 
 
-class TestBuildGameTreeCLI:
-    """build-game-tree CLI のテスト."""
+class TestBuildGameGraphCLI:
+    """build-game-graph CLI のテスト."""
 
     def test_help(self) -> None:
         """--help が正常に表示される."""
         runner = CliRunner()
-        result = runner.invoke(build_game_tree, ["--help"])
+        result = runner.invoke(build_game_graph, ["--help"])
         assert result.exit_code == 0
         assert "--input-path" in result.output
         assert "--output-dir" in result.output
@@ -60,7 +60,7 @@ class TestBuildGameTreeCLI:
             )
 
             result = runner.invoke(
-                build_game_tree,
+                build_game_graph,
                 [
                     "--input-path",
                     str(input_path),
@@ -86,7 +86,7 @@ class TestBuildGameTreeCLI:
             output_dir = Path(tmp) / "output"
 
             result = runner.invoke(
-                build_game_tree,
+                build_game_graph,
                 [
                     "--input-path",
                     str(input_path),
@@ -110,7 +110,7 @@ class TestBuildGameTreeCLI:
             output_dir = Path(tmp) / "output"
 
             result = runner.invoke(
-                build_game_tree,
+                build_game_graph,
                 [
                     "--input-path",
                     str(input_path),
@@ -164,7 +164,7 @@ class TestBuildGameTreeCLI:
             )
 
             result = runner.invoke(
-                build_game_tree,
+                build_game_graph,
                 [
                     "--input-path",
                     str(Path(tmp) / "input"),
@@ -207,7 +207,7 @@ class TestBuildGameTreeCLI:
             df.write_ipc(input_file, compression="lz4")
 
             result = runner.invoke(
-                build_game_tree,
+                build_game_graph,
                 [
                     "--input-path",
                     str(input_file),

@@ -1,11 +1,11 @@
-"""ゲームツリーデータのPolarsスキーマ定義."""
+"""ゲームグラフデータのPolarsスキーマ定義."""
 
 from __future__ import annotations
 
 import polars as pl
 
 
-def get_game_tree_nodes_schema() -> dict[str, pl.DataType]:
+def get_game_graph_nodes_schema() -> dict[str, pl.DataType]:
     """nodes.feather のPolarsスキーマを返す．
 
     Returns:
@@ -21,7 +21,7 @@ def get_game_tree_nodes_schema() -> dict[str, pl.DataType]:
     }
 
 
-def get_game_tree_edges_schema() -> dict[str, pl.DataType]:
+def get_game_graph_edges_schema() -> dict[str, pl.DataType]:
     """edges.feather のPolarsスキーマを返す．
 
     Returns:
@@ -64,7 +64,7 @@ def create_empty_nodes_df(size: int = 0) -> pl.DataFrame:
     Returns:
         ノードスキーマを持つ空のDataFrame
     """
-    return _create_empty_df(get_game_tree_nodes_schema(), size)
+    return _create_empty_df(get_game_graph_nodes_schema(), size)
 
 
 def create_empty_edges_df(size: int = 0) -> pl.DataFrame:
@@ -76,4 +76,4 @@ def create_empty_edges_df(size: int = 0) -> pl.DataFrame:
     Returns:
         エッジスキーマを持つ空のDataFrame
     """
-    return _create_empty_df(get_game_tree_edges_schema(), size)
+    return _create_empty_df(get_game_graph_edges_schema(), size)

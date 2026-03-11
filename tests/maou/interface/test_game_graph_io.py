@@ -1,4 +1,4 @@
-"""ゲームツリーI/Oのテスト."""
+"""ゲームグラフI/Oのテスト."""
 
 from __future__ import annotations
 
@@ -8,23 +8,23 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from maou.domain.game_tree.model import (
-    GameTreeEdge,
-    GameTreeNode,
+from maou.domain.game_graph.model import (
+    GameGraphEdge,
+    GameGraphNode,
 )
-from maou.interface.game_tree_io import (
+from maou.interface.game_graph_io import (
     EDGES_FILENAME,
     NODES_FILENAME,
-    GameTreeIO,
+    GameGraphIO,
 )
 
 
-class TestGameTreeIO:
-    """GameTreeIO のテスト."""
+class TestGameGraphIO:
+    """GameGraphIO のテスト."""
 
-    def _sample_nodes(self) -> list[GameTreeNode]:
+    def _sample_nodes(self) -> list[GameGraphNode]:
         return [
-            GameTreeNode(
+            GameGraphNode(
                 position_hash=100,
                 result_value=0.52,
                 best_move_win_rate=0.53,
@@ -32,7 +32,7 @@ class TestGameTreeIO:
                 depth=0,
                 is_depth_cutoff=False,
             ),
-            GameTreeNode(
+            GameGraphNode(
                 position_hash=200,
                 result_value=0.48,
                 best_move_win_rate=0.49,
@@ -42,9 +42,9 @@ class TestGameTreeIO:
             ),
         ]
 
-    def _sample_edges(self) -> list[GameTreeEdge]:
+    def _sample_edges(self) -> list[GameGraphEdge]:
         return [
-            GameTreeEdge(
+            GameGraphEdge(
                 parent_hash=100,
                 child_hash=200,
                 move16=7654,
@@ -57,12 +57,12 @@ class TestGameTreeIO:
 
     def test_save_and_load_roundtrip(self) -> None:
         """save → load のラウンドトリップテスト."""
-        io = GameTreeIO()
+        io = GameGraphIO()
         nodes = self._sample_nodes()
         edges = self._sample_edges()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             io.save(nodes, edges, output_dir)
 
             # ファイルが生成されている
@@ -85,7 +85,7 @@ class TestGameTreeIO:
 
     def test_save_empty_data(self) -> None:
         """空データの保存・読み込み."""
-        io = GameTreeIO()
+        io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "empty"
@@ -97,7 +97,7 @@ class TestGameTreeIO:
 
     def test_load_missing_file(self) -> None:
         """ファイルが存在しない場合のエラー."""
-        io = GameTreeIO()
+        io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
             with pytest.raises(FileNotFoundError):
@@ -105,7 +105,7 @@ class TestGameTreeIO:
 
     def test_creates_output_dir(self) -> None:
         """出力先ディレクトリが存在しない場合は作成する."""
-        io = GameTreeIO()
+        io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "a" / "b" / "c"
@@ -114,10 +114,10 @@ class TestGameTreeIO:
 
     def test_load_schema_mismatch_nodes(self) -> None:
         """nodes.feather のカラムが不正な場合 ValueError."""
-        io = GameTreeIO()
+        io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             output_dir.mkdir()
 
             # 不正なカラムを持つ nodes.feather
@@ -140,10 +140,10 @@ class TestGameTreeIO:
 
     def test_load_schema_mismatch_edges(self) -> None:
         """edges.feather のカラムが不正な場合 ValueError."""
-        io = GameTreeIO()
+        io = GameGraphIO()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
 
             # まず正しいデータを保存
             io.save(
@@ -164,24 +164,24 @@ class TestGameTreeIO:
 
     def test_roundtrip_preserves_dtypes(self) -> None:
         """save → load でデータ型が保持される."""
-        from maou.domain.game_tree.schema import (
-            get_game_tree_edges_schema,
-            get_game_tree_nodes_schema,
+        from maou.domain.game_graph.schema import (
+            get_game_graph_edges_schema,
+            get_game_graph_nodes_schema,
         )
 
-        io = GameTreeIO()
+        io = GameGraphIO()
         nodes = self._sample_nodes()
         edges = self._sample_edges()
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tree"
+            output_dir = Path(tmp) / "graph"
             io.save(nodes, edges, output_dir)
             nodes_df, edges_df = io.load(output_dir)
 
-            expected_nodes = get_game_tree_nodes_schema()
+            expected_nodes = get_game_graph_nodes_schema()
             for col, dtype in expected_nodes.items():
                 assert nodes_df[col].dtype == dtype
 
-            expected_edges = get_game_tree_edges_schema()
+            expected_edges = get_game_graph_edges_schema()
             for col, dtype in expected_edges.items():
                 assert edges_df[col].dtype == dtype

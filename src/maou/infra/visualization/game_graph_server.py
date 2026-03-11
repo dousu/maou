@@ -1,7 +1,7 @@
-"""ゲームツリー可視化Gradioサーバー(インフラ層)．
+"""ゲームグラフ可視化Gradioサーバー(インフラ層)．
 
-構築済みゲームツリーをインタラクティブに可視化するGradio Webインターフェース．
-maou visualize --array-type game-tree から起動される．
+構築済みゲームグラフをインタラクティブに可視化するGradio Webインターフェース．
+maou visualize --array-type game-graph から起動される．
 """
 
 import atexit
@@ -9,35 +9,39 @@ import json
 import logging
 import tempfile
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 import plotly.graph_objects as go
 
-from maou.infra.visualization.game_tree_shared import (
+from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
     ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
+    ELEM_ID_VIEWPORT_BRIDGE,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
+    JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
-    build_tree_html,
+    build_graph_html,
     create_analytics_plot,
     create_empty_plot,
     load_static_file,
 )
-from maou.interface.game_tree_io import GameTreeIO
-from maou.interface.game_tree_visualization import (
-    GameTreeVisualizationInterface,
+from maou.interface.game_graph_io import GameGraphIO
+from maou.interface.game_graph_visualization import (
+    GameGraphVisualizationInterface,
+    GraphLayout,
 )
 
 logger = logging.getLogger(__name__)
 
 # on_node_expanded / on_move_selected / on_back_to_root 共通の返却型
-# (tree_html, board_svg, current_root, stats, moves, child_hashes,
+# (graph_html, board_svg, current_root, stats, moves, child_hashes,
 #  plot, breadcrumb_html, sfen_text)
 _ExpandResult = tuple[
     str,
@@ -55,7 +59,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _load_custom_css() -> str:
-    """カスタムCSSファイルを読み込む(既存テーマ + ゲームツリー用)．
+    """カスタムCSSファイルを読み込む(既存テーマ + ゲームグラフ用)．
 
     Returns:
         結合されたCSS文字列
@@ -72,77 +76,53 @@ def _load_custom_css() -> str:
 
 
 def _build_head_scripts() -> str:
-    """CDNスクリプトとゲームツリーJSをhead要素に注入するHTMLを生成する．
+    """Canvas 2D ゲームグラフのCSS・JSをhead要素に注入するHTMLを生成する．
 
     demo.launch(head=...)パラメータで使用する．
     gr.HTMLコンポーネントはinnerHTMLで設定されるため<script>タグが
-    実行されない問題を回避する．
+    実行されない問題を回避する．CSSも同様にhead注入することで
+    gr.HTML更新ごとの重複注入を防止する．
+
+    CDN依存なし(Cytoscape.js/dagre を除去済み)．
 
     Returns:
         head要素に注入するHTML文字列
     """
-    js_code = load_static_file("game_tree.js")
+    css_code = load_static_file("game_graph.css")
+    js_code = load_static_file("game_graph_canvas.js")
 
     return f"""
+<style>{css_code}</style>
 <script>
 (function() {{
-    var CDN_SCRIPTS = [
-        'https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js',
-        'https://unpkg.com/dagre@0.8.5/dist/dagre.min.js',
-        'https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js'
-    ];
-    var scriptsLoaded = false;
+    // IIFE スコープに閉じたフラグ．ページ単位で一度だけ
+    // initGameGraphJS() を呼び出すことを保証する．
+    var jsLoaded = false;
 
-    function loadScriptsSequentially(urls, callback) {{
-        if (urls.length === 0) {{ callback(); return; }}
-        var url = urls[0];
-        var existing = document.querySelector('script[src="' + url + '"]');
-        if (existing) {{
-            loadScriptsSequentially(urls.slice(1), callback);
-            return;
-        }}
-        var s = document.createElement('script');
-        s.src = url;
-        s.onload = function() {{
-            loadScriptsSequentially(urls.slice(1), callback);
-        }};
-        s.onerror = function() {{
-            console.error('Failed to load: ' + url);
-        }};
-        document.head.appendChild(s);
-    }}
-
-    function initGameTreeJS() {{
+    function initGameGraphJS() {{
         {js_code}
     }}
 
     function tryRender() {{
-        var cy = document.getElementById('cy');
-        if (!cy) return;
-        var dataAttr = cy.getAttribute('data-elements');
+        var container = document.getElementById('gt-canvas-container');
+        if (!container) return;
+        var dataAttr = container.getAttribute('data-canvas');
         if (!dataAttr) return;
-        if (cy._lastRendered === dataAttr) return;
-        cy._lastRendered = dataAttr;
+        if (container._lastRendered === dataAttr) return;
+        container._lastRendered = dataAttr;
 
-        function doRender() {{
-            try {{
-                var elements = JSON.parse(dataAttr);
-                if (typeof window.renderGameTree === 'function') {{
-                    window.renderGameTree(elements, 'cy');
-                }}
-            }} catch (e) {{
-                console.error('Failed to render game tree:', e);
-            }}
+        if (!jsLoaded) {{
+            jsLoaded = true;
+            initGameGraphJS();
         }}
 
-        if (scriptsLoaded) {{
-            doRender();
-        }} else {{
-            loadScriptsSequentially(CDN_SCRIPTS, function() {{
-                scriptsLoaded = true;
-                initGameTreeJS();
-                doRender();
-            }});
+        try {{
+            var data = JSON.parse(dataAttr);
+            if (typeof window.renderGameGraph === 'function') {{
+                window.renderGameGraph(data, 'gt-canvas-container');
+            }}
+        }} catch (e) {{
+            console.error('[maou] Failed to render game graph:', e);
         }}
     }}
 
@@ -155,7 +135,7 @@ def _build_head_scripts() -> str:
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['data-elements'],
+            attributeFilter: ['data-canvas'],
         }});
         tryRender();
     }}
@@ -171,7 +151,7 @@ def _build_head_scripts() -> str:
 
 
 def _get_detail_outputs(
-    viz: GameTreeVisualizationInterface,
+    viz: GameGraphVisualizationInterface,
     pos_hash: int,
 ) -> tuple[
     str,
@@ -223,11 +203,12 @@ def _get_detail_outputs(
     )
 
 
-def _update_tree_view(
-    viz: GameTreeVisualizationInterface,
+def _update_graph_view(
+    viz: GameGraphVisualizationInterface,
     root_hash: int,
     display_depth: int,
     min_prob: float,
+    layout: GraphLayout | None = None,
 ) -> tuple[
     str,
     str,
@@ -238,23 +219,28 @@ def _update_tree_view(
     str,
     str,
 ]:
-    """ツリービューと詳細パネルを更新する．
+    """グラフビューと詳細パネルを更新する．
 
     Args:
         viz: 可視化インターフェース
-        root_hash: 表示するサブツリーのルートhash
+        root_hash: 表示するサブグラフのルートhash
         display_depth: 表示深さ
         min_prob: エッジの最小確率閾値
+        layout: 事前計算されたレイアウト
 
     Returns:
-        (tree_html, board_svg, stats, display_moves, child_hashes,
+        (graph_html, board_svg, stats, display_moves, child_hashes,
          plot, breadcrumb_html, sfen_text)
     """
-    elements = viz.get_cytoscape_elements(
-        root_hash, int(display_depth), min_prob
+    if layout is None:
+        layout = GraphLayout(
+            node_positions={}, bounds=(0.0, 0.0, 0.0, 0.0)
+        )
+    canvas_data = viz.get_canvas_data(
+        root_hash, int(display_depth), min_prob, layout
     )
-    elements_json = json.dumps(elements, ensure_ascii=False)
-    tree_html = build_tree_html(elements_json)
+    canvas_json = json.dumps(canvas_data, ensure_ascii=False)
+    graph_html = build_graph_html(canvas_json)
 
     (
         board_svg,
@@ -267,7 +253,7 @@ def _update_tree_view(
     ) = _get_detail_outputs(viz, root_hash)
 
     return (
-        tree_html,
+        graph_html,
         board_svg,
         stats,
         display_moves,
@@ -278,39 +264,57 @@ def _update_tree_view(
     )
 
 
-def launch_game_tree_server(
-    tree_path: Path,
+def launch_game_graph_server(
+    graph_path: Path,
     port: int | None = None,
     share: bool = False,
     server_name: str = "127.0.0.1",
 ) -> None:
-    """ゲームツリー可視化サーバーを起動する．
+    """ゲームグラフ可視化サーバーを起動する．
 
-    gradio_server.launch_server() から array_type="game-tree" の場合に
+    gradio_server.launch_server() から array_type="game-graph" の場合に
     ディスパッチされる．
 
     Args:
-        tree_path: ツリーデータディレクトリ(nodes.feather + edges.feather)
+        graph_path: グラフデータディレクトリ(nodes.feather + edges.feather)
         port: サーバーポート．Noneの場合Gradioの自動選択に委任
         share: Gradio公開リンクを生成するか
         server_name: サーバーバインドアドレス
     """
     # データ読み込み
-    tree_io = GameTreeIO()
-    nodes_df, edges_df = tree_io.load(tree_path)
-    metadata = tree_io.load_metadata(tree_path)
+    graph_io = GameGraphIO()
+    nodes_df, edges_df = graph_io.load(graph_path)
+    metadata = graph_io.load_metadata(graph_path)
     logger.info(
-        "Loaded tree: %d nodes, %d edges",
+        "Loaded graph: %d nodes, %d edges",
         len(nodes_df),
         len(edges_df),
     )
 
-    viz = GameTreeVisualizationInterface(
+    viz = GameGraphVisualizationInterface(
         nodes_df,
         edges_df,
         initial_sfen=metadata.get("initial_sfen"),
     )
     root_hash = viz.get_root_hash()
+
+    # レイアウト事前計算
+    graph_layout = viz.compute_layout()
+    logger.info(
+        "Computed layout: %d positions, bounds=%s",
+        len(graph_layout.node_positions),
+        graph_layout.bounds,
+    )
+
+    # ビューポートクエリ用の空間インデックス
+    _spatial_buckets: dict[tuple[int, int], list[int]] = (
+        defaultdict(list)
+    )
+    _bucket_size = 500.0
+    for h, (x, y) in graph_layout.node_positions.items():
+        bx = int(x // _bucket_size)
+        by = int(y // _bucket_size)
+        _spatial_buckets[(bx, by)].append(h)
 
     custom_css = _load_custom_css()
     head_scripts = _build_head_scripts()
@@ -340,8 +344,12 @@ def launch_game_tree_server(
         str,
     ]:
         """初期表示コールバック．"""
-        return _update_tree_view(
-            viz, viz.get_root_hash(), display_depth, min_prob
+        return _update_graph_view(
+            viz,
+            viz.get_root_hash(),
+            display_depth,
+            min_prob,
+            graph_layout,
         )
 
     def on_refresh(
@@ -370,8 +378,8 @@ def launch_game_tree_server(
                 "Invalid current_root: %s", current_root
             )
             rh = viz.get_root_hash()
-        return _update_tree_view(
-            viz, rh, display_depth, min_prob
+        return _update_graph_view(
+            viz, rh, display_depth, min_prob, graph_layout
         )
 
     # --- server_functions: JS から直接呼び出される Python 関数 ---
@@ -429,12 +437,75 @@ def launch_game_tree_server(
             logger.warning("Invalid node_id: %s", node_id_str)
             return False
         _pending["expand"] = {
-            "data": _update_tree_view(
-                viz, pos_hash, int(display_depth), min_prob
+            "data": _update_graph_view(
+                viz,
+                pos_hash,
+                int(display_depth),
+                min_prob,
+                graph_layout,
             ),
             "hash": pos_hash,
         }
         return True
+
+    def handle_viewport(
+        min_x_or_args: list[Any] | float,
+        max_x: float = 0,
+        min_y: float = 0,
+        max_y: float = 0,
+    ) -> str:
+        """ビューポート範囲内のノード・エッジを返す server_function．
+
+        パン/ズーム後にフロントエンドから呼ばれ，
+        可視領域のノード・エッジデータを返す．
+
+        Args:
+            min_x_or_args: ビューポートの min_x 値．Gradio 6 の
+                server_functions が複数の JS 引数をリストとして
+                第1引数に渡す場合は [min_x, max_x, min_y, max_y]．
+            max_x: ビューポートの max_x (個別引数渡し時)
+            min_y: ビューポートの min_y (個別引数渡し時)
+            max_y: ビューポートの max_y (個別引数渡し時)
+        """
+        # server_functions がリストで渡す場合の展開
+        if isinstance(min_x_or_args, list):
+            args = min_x_or_args
+            min_x_v = float(args[0]) if len(args) > 0 else 0
+            max_x_v = float(args[1]) if len(args) > 1 else 0
+            min_y_v = float(args[2]) if len(args) > 2 else 0
+            max_y_v = float(args[3]) if len(args) > 3 else 0
+        else:
+            min_x_v = float(min_x_or_args)
+            max_x_v = float(max_x)
+            min_y_v = float(min_y)
+            max_y_v = float(max_y)
+
+        # 空間インデックスで該当バケットのノードを収集
+        min_bx = int(min_x_v // _bucket_size) - 1
+        max_bx = int(max_x_v // _bucket_size) + 1
+        min_by = int(min_y_v // _bucket_size) - 1
+        max_by = int(max_y_v // _bucket_size) + 1
+
+        visible_hashes: set[int] = set()
+        for bx in range(min_bx, max_bx + 1):
+            for by in range(min_by, max_by + 1):
+                bucket = _spatial_buckets.get((bx, by), [])
+                for h in bucket:
+                    pos = graph_layout.node_positions.get(h)
+                    if pos is None:
+                        continue
+                    x, y = pos
+                    if (
+                        min_x_v <= x <= max_x_v
+                        and min_y_v <= y <= max_y_v
+                    ):
+                        visible_hashes.add(h)
+
+        # 可視ノードのデータを構築
+        canvas_data = viz.get_viewport_data(
+            visible_hashes, graph_layout
+        )
+        return json.dumps(canvas_data, ensure_ascii=False)
 
     def on_select_result() -> tuple[
         str,
@@ -464,7 +535,7 @@ def launch_game_tree_server(
         result = _pending.pop("expand", None)
         if result:
             (
-                tree_html_v,
+                graph_html_v,
                 board_svg,
                 stats,
                 display_moves,
@@ -474,7 +545,7 @@ def launch_game_tree_server(
                 sfen_text_v,
             ) = result["data"]
             return (
-                tree_html_v,
+                graph_html_v,
                 board_svg,
                 str(result["hash"]),
                 stats,
@@ -535,7 +606,7 @@ def launch_game_tree_server(
         except (ValueError, IndexError):
             return _empty
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -543,11 +614,11 @@ def launch_game_tree_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob
+        ) = _update_graph_view(
+            viz, pos_hash, display_depth, min_prob, graph_layout
         )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(pos_hash),
             stats,
@@ -565,7 +636,7 @@ def launch_game_tree_server(
         """ルートに戻るボタンのコールバック．"""
         rh = viz.get_root_hash()
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -573,9 +644,11 @@ def launch_game_tree_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(viz, rh, display_depth, min_prob)
+        ) = _update_graph_view(
+            viz, rh, display_depth, min_prob, graph_layout
+        )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(rh),
             stats,
@@ -616,7 +689,7 @@ def launch_game_tree_server(
         except (ValueError, TypeError):
             return _noop
         (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             stats,
             display_moves,
@@ -624,11 +697,11 @@ def launch_game_tree_server(
             plot,
             breadcrumb_html_v,
             sfen_text_v,
-        ) = _update_tree_view(
-            viz, pos_hash, display_depth, min_prob
+        ) = _update_graph_view(
+            viz, pos_hash, display_depth, min_prob, graph_layout
         )
         return (
-            tree_html_v,
+            graph_html_v,
             board_svg,
             str(pos_hash),
             stats,
@@ -641,7 +714,7 @@ def launch_game_tree_server(
 
     # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
     _csv_tmp_dir = tempfile.TemporaryDirectory(
-        prefix="maou_game_tree_csv_"
+        prefix="maou_game_graph_csv_"
     )
     atexit.register(_csv_tmp_dir.cleanup)
 
@@ -660,7 +733,7 @@ def launch_game_tree_server(
         except ValueError:
             rh = viz.get_root_hash()
 
-        csv_content = viz.export_subtree_csv(
+        csv_content = viz.export_subgraph_csv(
             rh,
             int(display_depth),
             min_prob,
@@ -669,7 +742,7 @@ def launch_game_tree_server(
             return None
 
         tmp_path = Path(_csv_tmp_dir.name) / (
-            f"game_tree_{uuid.uuid4().hex}.csv"
+            f"game_graph_{uuid.uuid4().hex}.csv"
         )
         tmp_path.write_text(csv_content, encoding="utf-8")
         return str(tmp_path)
@@ -677,9 +750,9 @@ def launch_game_tree_server(
     # --- UI構築 ---
 
     with gr.Blocks(
-        title="Maou Game Tree Viewer",
+        title="Maou Game Graph Viewer",
     ) as demo:
-        gr.Markdown("# Maou Game Tree Viewer")
+        gr.Markdown("# Maou Game Graph Viewer")
         initial_sfen = viz.get_initial_sfen()
         gr.Markdown(
             f"Nodes: **{len(nodes_df):,}** / "
@@ -691,7 +764,7 @@ def launch_game_tree_server(
         with gr.Row():
             depth_slider = gr.Slider(
                 minimum=1,
-                maximum=10,
+                maximum=20,
                 value=3,
                 step=1,
                 label="表示深さ",
@@ -729,9 +802,9 @@ def launch_game_tree_server(
         # メインコンテンツ
         with gr.Row():
             with gr.Column(scale=3):
-                tree_html = gr.HTML(
-                    label="ツリー表示",
-                    elem_id="tree-view",
+                graph_html = gr.HTML(
+                    label="グラフ表示",
+                    elem_id="graph-view",
                 )
 
             with gr.Column(scale=2):
@@ -781,6 +854,14 @@ def launch_game_tree_server(
             server_functions=[handle_expand],
             js_on_load=JS_ON_LOAD_EXPAND,
         )
+        # ビューポートクエリ用ブリッジ(Phase 4: 遅延読み込み)
+        gr.HTML(
+            value="",
+            elem_id=ELEM_ID_VIEWPORT_BRIDGE,
+            elem_classes=["maou-hidden"],
+            server_functions=[handle_viewport],
+            js_on_load=JS_ON_LOAD_VIEWPORT,
+        )
 
         # Hidden state
         current_root_state = gr.Textbox(
@@ -791,14 +872,14 @@ def launch_game_tree_server(
         )
         # 指し手一覧の行選択用child_hashリスト
         child_hashes_state = gr.State([])
-        # ツリー上で選択中のノードhash("ルートに設定"ボタン用)
+        # グラフ上で選択中のノードhash("ルートに設定"ボタン用)
         selected_node_state = gr.State("")
 
         # --- イベントハンドリング ---
 
         # 初期表示
         _load_outputs = [
-            tree_html,
+            graph_html,
             board_html,
             stats_json,
             move_table,
@@ -837,9 +918,9 @@ def launch_game_tree_server(
             selected_node_state,
         ]
 
-        # ノード展開 / 指し手選択共通の出力(ツリー + 詳細パネル)
+        # ノード展開 / 指し手選択共通の出力(グラフ + 詳細パネル)
         _expand_outputs = [
-            tree_html,
+            graph_html,
             board_html,
             current_root_state,
             stats_json,

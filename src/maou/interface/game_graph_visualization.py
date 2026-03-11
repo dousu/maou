@@ -1,7 +1,7 @@
-"""ゲームツリー可視化のインターフェース層．
+"""ゲームグラフ可視化のインターフェース層．
 
-App層のGameTreeQueryとInfra層のGradio UIを接続するアダプタ．
-Cytoscape.js用のデータ変換や盤面SVG生成を担当する．
+App層のGameGraphQueryとInfra層のGradio UIを接続するアダプタ．
+Canvas 2D用のデータ変換や盤面SVG生成を担当する．
 """
 
 from __future__ import annotations
@@ -14,7 +14,11 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
-from maou.app.game_tree.query import GameTreeQuery
+from maou.app.game_graph.layout import (
+    GameGraphLayoutService,
+    GraphLayout,
+)
+from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
     Board,
     Turn,
@@ -24,7 +28,7 @@ from maou.domain.board.shogi import (
     move_to,
     move_to_usi,
 )
-from maou.domain.game_tree.openings import (
+from maou.domain.game_graph.openings import (
     OpeningDatabase,
     OpeningInfo,
 )
@@ -36,6 +40,11 @@ from maou.domain.visualization.board_renderer import (
 from maou.domain.visualization.piece_mapping import (
     get_piece_name_ja,
 )
+
+__all__ = [
+    "GameGraphVisualizationInterface",
+    "GraphLayout",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,9 @@ if int(Turn.WHITE) != 1:
 #: _get_board_for_position のキャッシュ型
 _BoardCache = tuple[int, Board | None]
 
+#: boards dict で「未登録」と「復元失敗 (None)」を区別する sentinel
+_MISSING: object = object()
+
 
 class MoveRow(NamedTuple):
     """指し手一覧テーブルの1行を表す．"""
@@ -65,10 +77,10 @@ class MoveRow(NamedTuple):
     """子局面のZobrist hash文字列"""
 
 
-class GameTreeVisualizationInterface:
-    """ゲームツリー可視化のインターフェース層．
+class GameGraphVisualizationInterface:
+    """ゲームグラフ可視化のインターフェース層．
 
-    GameTreeQueryのデータをUI向けに変換する．
+    GameGraphQueryのデータをUI向けに変換する．
     """
 
     _ROW_MAP: dict[str, str] = {
@@ -109,7 +121,7 @@ class GameTreeVisualizationInterface:
         Raises:
             ValueError: depth=0のルートノードが見つからない場合
         """
-        self._query = GameTreeQuery(nodes_df, edges_df)
+        self._query = GameGraphQuery(nodes_df, edges_df)
         root_nodes = nodes_df.filter(nodes_df["depth"] == 0)
         if len(root_nodes) == 0:
             msg = "ルートノード(depth=0)が見つかりません"
@@ -133,9 +145,9 @@ class GameTreeVisualizationInterface:
         sfen_parts = (
             initial_sfen.split() if initial_sfen else []
         )
-        if (
-            len(sfen_parts) >= 2
-            and sfen_parts[1] not in ("b", "w")
+        if len(sfen_parts) >= 2 and sfen_parts[1] not in (
+            "b",
+            "w",
         ):
             logger.warning(
                 "SFENの手番フィールドが不正です: %r"
@@ -148,37 +160,41 @@ class GameTreeVisualizationInterface:
             else 0
         )
 
-    def get_cytoscape_elements(
+    def get_canvas_data(
         self,
         root_hash: int,
         display_depth: int,
         min_probability: float,
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Cytoscape.js用のノード・エッジデータを生成する．
+        layout: GraphLayout,
+    ) -> dict[str, Any]:
+        """Canvas 2D 描画用のノード・エッジデータを生成する．
+
+        座標は事前計算された layout から取得する．
+        エッジの source/target 座標を直接含むため，
+        フロントエンドのレイアウトエンジンが辺方向を反転しない．
 
         Args:
-            root_hash: 表示するサブツリーのルートhash
+            root_hash: 表示するサブグラフのルートhash
             display_depth: 表示深さ
             min_probability: エッジの最小確率閾値
+            layout: 事前計算されたレイアウト
 
         Returns:
-            {"nodes": [...], "edges": [...]} 形式のCytoscape elements
+            {"nodes": [...], "edges": [...], "bounds": {...}} 形式
         """
-        sub_nodes, sub_edges = self._query.get_subtree(
+        sub_nodes, sub_edges = self._query.get_subgraph(
             root_hash, display_depth, min_probability
         )
 
         # エッジから各ノードへの親エッジ情報を取得(ラベル用)
         child_edge_map = self._build_child_edge_map(sub_edges)
 
-        # サブツリー内の盤面をdepth順に漸進的に構築する．
-        # get_path_to_root を毎回呼ぶ代わりに，親の盤面から
-        # 1手適用して子の盤面を得る．
+        # サブグラフ内の盤面を漸進的に構築
         local_boards = self._build_boards_incrementally(
             root_hash, sub_nodes, child_edge_map
         )
 
-        cy_nodes: list[dict[str, Any]] = []
+        canvas_nodes: list[dict[str, Any]] = []
         for row in sub_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
             edge_info = child_edge_map.get(pos_hash)
@@ -192,9 +208,6 @@ class GameTreeVisualizationInterface:
                 )
                 probability = edge_info["probability"]
 
-            # result_value は手番側視点．先手視点に変換して
-            # フロントエンドで一貫した色付けに使用する．
-            # Turn.BLACK == 0, Turn.WHITE == 1 を前提とした偶奇判定
             result_value = float(row["result_value"])
             depth = int(row["depth"])
             is_sente_turn = (self._root_turn + depth) % 2 == 0
@@ -204,45 +217,179 @@ class GameTreeVisualizationInterface:
                 else 1 - result_value
             )
 
-            cy_nodes.append(
+            # レイアウトから座標を取得(なければ 0, 0)
+            x, y = layout.node_positions.get(
+                pos_hash, (0.0, 0.0)
+            )
+
+            canvas_nodes.append(
                 {
-                    "data": {
-                        "id": str(pos_hash),
-                        "label": label,
-                        "sente_result_value": sente_value,
-                        "depth": depth,
-                        "probability": float(probability),
-                        "num_branches": int(
-                            row["num_branches"]
-                        ),
-                        "is_depth_cutoff": bool(
-                            row["is_depth_cutoff"]
-                        ),
-                    }
+                    "id": str(pos_hash),
+                    "x": x,
+                    "y": y,
+                    "label": label,
+                    "sente_result_value": sente_value,
+                    "probability": float(probability),
+                    "depth": depth,
+                    "num_branches": int(row["num_branches"]),
+                    "is_depth_cutoff": bool(
+                        row["is_depth_cutoff"]
+                    ),
                 }
             )
 
-        cy_edges: list[dict[str, Any]] = []
+        canvas_edges: list[dict[str, Any]] = []
         for row in sub_edges.iter_rows(named=True):
+            parent_hash = row["parent_hash"]
+            child_hash = row["child_hash"]
             move_label = self._move16_to_japanese(
                 row["move16"],
-                local_boards.get(row["parent_hash"]),
+                local_boards.get(parent_hash),
             )
             prob_label = f"{row['probability'] * 100:.1f}%"
-            cy_edges.append(
+
+            sx, sy = layout.node_positions.get(
+                parent_hash, (0.0, 0.0)
+            )
+            tx, ty = layout.node_positions.get(
+                child_hash, (0.0, 0.0)
+            )
+
+            canvas_edges.append(
                 {
-                    "data": {
-                        "source": str(row["parent_hash"]),
-                        "target": str(row["child_hash"]),
-                        "label": f"{move_label} {prob_label}",
-                        "probability": float(
-                            row["probability"]
-                        ),
-                    }
+                    "source_id": str(parent_hash),
+                    "target_id": str(child_hash),
+                    "source_x": sx,
+                    "source_y": sy,
+                    "target_x": tx,
+                    "target_y": ty,
+                    "label": f"{move_label} {prob_label}",
+                    "probability": float(row["probability"]),
                 }
             )
 
-        return {"nodes": cy_nodes, "edges": cy_edges}
+        # サブグラフの範囲を計算
+        if canvas_nodes:
+            xs = [n["x"] for n in canvas_nodes]
+            ys = [n["y"] for n in canvas_nodes]
+            bounds = {
+                "min_x": min(xs),
+                "min_y": min(ys),
+                "max_x": max(xs),
+                "max_y": max(ys),
+            }
+        else:
+            bounds = {
+                "min_x": 0.0,
+                "min_y": 0.0,
+                "max_x": 0.0,
+                "max_y": 0.0,
+            }
+
+        return {
+            "nodes": canvas_nodes,
+            "edges": canvas_edges,
+            "bounds": bounds,
+        }
+
+    def get_viewport_data(
+        self,
+        visible_hashes: set[int],
+        layout: GraphLayout,
+    ) -> dict[str, Any]:
+        """ビューポート内のノード・エッジデータを返す．
+
+        パン/ズーム後のビューポートクエリで呼ばれ，
+        可視領域のノードとそれらを結ぶエッジのデータを返す．
+        ラベルは含まない(座標と基本属性のみ)．
+
+        Args:
+            visible_hashes: 可視領域内のノードhashの集合
+            layout: 事前計算されたレイアウト
+
+        Returns:
+            {"nodes": [...], "edges": [...]} 形式
+        """
+        if not visible_hashes:
+            return {"nodes": [], "edges": []}
+
+        hash_list = list(visible_hashes)
+        visible_nodes = self._query.nodes_df.filter(
+            pl.col("position_hash").is_in(hash_list)
+        )
+
+        visible_edges = self._query.edges_df.filter(
+            pl.col("parent_hash").is_in(hash_list)
+            & pl.col("child_hash").is_in(hash_list)
+        )
+
+        # 各ノードの親エッジ最大確率を取得(ノードサイズ計算用)
+        max_prob_map: dict[int, float] = {}
+        for row in visible_edges.iter_rows(named=True):
+            child_hash = row["child_hash"]
+            prob = float(row["probability"])
+            if prob > max_prob_map.get(child_hash, 0.0):
+                max_prob_map[child_hash] = prob
+
+        canvas_nodes: list[dict[str, Any]] = []
+        for row in visible_nodes.iter_rows(named=True):
+            pos_hash = row["position_hash"]
+            result_value = float(row["result_value"])
+            depth = int(row["depth"])
+            is_sente_turn = (self._root_turn + depth) % 2 == 0
+            sente_value = (
+                result_value
+                if is_sente_turn
+                else 1 - result_value
+            )
+            x, y = layout.node_positions.get(
+                pos_hash, (0.0, 0.0)
+            )
+            canvas_nodes.append(
+                {
+                    "id": str(pos_hash),
+                    "x": x,
+                    "y": y,
+                    "label": "",
+                    "sente_result_value": sente_value,
+                    "probability": max_prob_map.get(
+                        pos_hash, 1.0
+                    ),
+                    "depth": depth,
+                    "num_branches": int(row["num_branches"]),
+                    "is_depth_cutoff": bool(
+                        row["is_depth_cutoff"]
+                    ),
+                }
+            )
+
+        canvas_edges: list[dict[str, Any]] = []
+        for row in visible_edges.iter_rows(named=True):
+            parent_hash = row["parent_hash"]
+            child_hash = row["child_hash"]
+            sx, sy = layout.node_positions.get(
+                parent_hash, (0.0, 0.0)
+            )
+            tx, ty = layout.node_positions.get(
+                child_hash, (0.0, 0.0)
+            )
+            canvas_edges.append(
+                {
+                    "source_id": str(parent_hash),
+                    "target_id": str(child_hash),
+                    "source_x": sx,
+                    "source_y": sy,
+                    "target_x": tx,
+                    "target_y": ty,
+                    "label": "",
+                    "probability": float(row["probability"]),
+                }
+            )
+
+        return {
+            "nodes": canvas_nodes,
+            "edges": canvas_edges,
+        }
 
     def get_board_svg(
         self,
@@ -380,12 +527,25 @@ class GameTreeVisualizationInterface:
         )
 
     def get_root_hash(self) -> int:
-        """ツリーのルートハッシュを返す．
+        """グラフのルートハッシュを返す．
 
         Returns:
             ルートノードのposition_hash
         """
         return self._root_hash
+
+    def compute_layout(self) -> GraphLayout:
+        """グラフ全体のレイアウトを事前計算する．
+
+        Returns:
+            事前計算された GraphLayout
+        """
+        svc = GameGraphLayoutService()
+        return svc.compute_layout(
+            self._query.nodes_df,
+            self._query.edges_df,
+            self._root_hash,
+        )
 
     def get_initial_sfen(self) -> str:
         """開始局面のSFEN文字列を返す．
@@ -562,23 +722,23 @@ class GameTreeVisualizationInterface:
             return f"{base} moves {' '.join(moves)}"
         return base
 
-    def export_subtree_csv(
+    def export_subgraph_csv(
         self,
         root_hash: int,
         max_depth: int = 3,
         min_probability: float = 0.01,
     ) -> str:
-        """サブツリーの指し手統計をCSV形式で出力する．
+        """サブグラフの指し手統計をCSV形式で出力する．
 
         Args:
-            root_hash: サブツリーのルートhash
+            root_hash: サブグラフのルートhash
             max_depth: 最大深さ
             min_probability: 最小確率閾値
 
         Returns:
             CSV形式の文字列
         """
-        sub_nodes, sub_edges = self._query.get_subtree(
+        sub_nodes, sub_edges = self._query.get_subgraph(
             root_hash, max_depth, min_probability
         )
 
@@ -681,7 +841,7 @@ class GameTreeVisualizationInterface:
         複数の親を持つノードは最大確率のエッジを採用する．
 
         Args:
-            sub_edges: サブツリーのエッジDataFrame
+            sub_edges: サブグラフのエッジDataFrame
 
         Returns:
             child_hash をキー，エッジ行(dict)を値とするマッピング
@@ -703,15 +863,15 @@ class GameTreeVisualizationInterface:
         sub_nodes: pl.DataFrame,
         child_edge_map: dict[int, dict[str, Any]],
     ) -> dict[int, Board | None]:
-        """サブツリー内の全ノードの盤面をdepth順に構築する．
+        """サブグラフ内の全ノードの盤面をdepth順に構築する．
 
         ルートの盤面のみ get_path_to_root で復元し，
         残りは親の盤面をコピーして1手適用する．
         これにより get_path_to_root の呼び出しを1回に削減する．
 
         Args:
-            root_hash: サブツリーのルートhash
-            sub_nodes: サブツリー内のノードDF
+            root_hash: サブグラフのルートhash
+            sub_nodes: サブグラフ内のノードDF
             child_edge_map: child_hash → エッジ情報
 
         Returns:
@@ -719,7 +879,7 @@ class GameTreeVisualizationInterface:
         """
         boards: dict[int, Board | None] = {}
 
-        # サブツリーのルート盤面を復元
+        # サブグラフのルート盤面を復元
         path = self._query.get_path_to_root(root_hash)
         boards[root_hash] = (
             self._reconstruct_board_from_path(path)
@@ -740,8 +900,8 @@ class GameTreeVisualizationInterface:
                 continue
 
             parent_hash = edge_info["parent_hash"]
-            parent_board = boards.get(parent_hash)
-            if parent_board is None:
+            parent_board = boards.get(parent_hash, _MISSING)
+            if parent_board is _MISSING or parent_board is None:
                 boards[pos_hash] = None
                 continue
 
@@ -835,7 +995,7 @@ class GameTreeVisualizationInterface:
         """
         usi = move_to_usi(move16)
         piece_name = (
-            GameTreeVisualizationInterface.get_piece_name(
+            GameGraphVisualizationInterface.get_piece_name(
                 parent_board, move16
             )
             if parent_board is not None
@@ -843,7 +1003,7 @@ class GameTreeVisualizationInterface:
             and usi[1] != "*"
             else ""
         )
-        return GameTreeVisualizationInterface.usi_to_japanese(
+        return GameGraphVisualizationInterface.usi_to_japanese(
             usi, piece_name=piece_name
         )
 

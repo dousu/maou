@@ -1,6 +1,6 @@
-"""ゲームツリー可視化の共有ユーティリティ(インフラ層)．
+"""ゲームグラフ可視化の共有ユーティリティ(インフラ層)．
 
-game_tree_server.py (スタンドアロンモード) と gradio_server.py (埋め込みモード)
+game_graph_server.py (スタンドアロンモード) と gradio_server.py (埋め込みモード)
 の両方から使用されるHTML生成関数・Plotly生成関数・JS定数を提供する．
 """
 
@@ -35,6 +35,9 @@ ELEM_ID_DEPTH_SLIDER = "gt-depth-slider"
 ELEM_ID_MIN_PROB_SLIDER = "gt-min-prob-slider"
 """最小確率スライダーの elem_id(JS からの値読み取り用)．"""
 
+ELEM_ID_VIEWPORT_BRIDGE = "viewport-bridge"
+"""ビューポートクエリブリッジ用 gr.HTML の elem_id．"""
+
 # ========================================
 # JS constants (Gradio 6 server_functions bridge)
 # ========================================
@@ -56,6 +59,9 @@ JS_ON_LOAD_EXPAND = (
     "window.__maou_expand = {server: server, trigger: trigger};"
 )
 """expand_bridge の js_on_load．server と trigger をグローバルに公開する．"""
+
+JS_ON_LOAD_VIEWPORT = "window.__maou_viewport = {server: server, trigger: trigger};"
+"""viewport_bridge の js_on_load．server と trigger をグローバルに公開する．"""
 
 
 # ========================================
@@ -85,26 +91,24 @@ def load_static_file(filename: str) -> str:
 # ========================================
 
 
-def build_tree_html(elements_json: str) -> str:
-    """ツリー表示用HTMLを生成する．
+def build_graph_html(canvas_data_json: str) -> str:
+    """グラフ表示用HTMLを生成する．
 
-    Cytoscape.jsのレンダリングはhead要素のMutationObserverが
-    data-elements属性の変更を検知して自動的に実行する．
+    Canvas 2D レンダラーが data-canvas 属性の変更を検知して
+    自動的にレンダリングを実行する．
 
     Args:
-        elements_json: Cytoscape elements の JSON 文字列
+        canvas_data_json: Canvas 描画データの JSON 文字列
 
     Returns:
         HTML文字列
     """
-    css_code = load_static_file("game_tree.css")
-    escaped_json = html.escape(elements_json, quote=True)
+    escaped_json = html.escape(canvas_data_json, quote=True)
 
     return f"""
-<style>{css_code}</style>
-<div class="game-tree-container">
-    <div id="cy" data-elements="{escaped_json}"></div>
-    <div class="game-tree-legend">
+<div class="game-graph-container">
+    <div id="gt-canvas-container" data-canvas="{escaped_json}"></div>
+    <div class="game-graph-legend">
         <span class="legend-item">
             <span class="legend-swatch" style="background:#2196F3;"></span>先手有利
         </span>
@@ -118,8 +122,8 @@ def build_tree_html(elements_json: str) -> str:
             &#9679; サイズ = 確率 / 色 = 勝率
         </span>
     </div>
-    <div class="tree-export-overlay">
-        <button class="export-btn" onclick="window.exportTreePNG()">
+    <div class="graph-export-overlay">
+        <button class="export-btn" onclick="window.exportGraphPNG()">
             PNG出力
         </button>
     </div>

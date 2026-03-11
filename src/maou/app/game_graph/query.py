@@ -1,4 +1,4 @@
-"""ゲームツリーの検索・フィルタリング."""
+"""ゲームグラフの検索・フィルタリング."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Any
 import polars as pl
 
 
-class GameTreeQuery:
-    """ツリーデータの検索・フィルタリング．
+class GameGraphQuery:
+    """グラフデータの検索・フィルタリング．
 
-    構築済みのゲームツリー(nodes/edges DataFrames)に対して，
-    サブツリー取得・ノード詳細・パス探索などのクエリを提供する．
+    構築済みのゲームグラフ(nodes/edges DataFrames)に対して，
+    サブグラフ取得・ノード詳細・パス探索などのクエリを提供する．
     """
 
     def __init__(
@@ -33,13 +33,13 @@ class GameTreeQuery:
         )
         self._path_cache_maxsize = 64
 
-    def get_subtree(
+    def get_subgraph(
         self,
         root_hash: int,
         max_depth: int = 3,
         min_probability: float = 0.01,
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
-        """指定ノードを起点としたサブツリーを取得する．
+        """指定ノードを起点としたサブグラフを取得する．
 
         UIに送信するデータ量を制限するため，
         表示深さとエッジ確率閾値でフィルタリングする．
@@ -88,21 +88,21 @@ class GameTreeQuery:
             current_level = next_level
 
         # ノードをフィルタ
-        subtree_nodes = self.nodes_df.filter(
+        subgraph_nodes = self.nodes_df.filter(
             pl.col("position_hash").is_in(list(visited))
         )
 
         # エッジを結合し，両端が訪問済みノードに含まれるもののみ保持
         if collected_edges:
             visited_list = list(visited)
-            subtree_edges = pl.concat(collected_edges).filter(
+            subgraph_edges = pl.concat(collected_edges).filter(
                 pl.col("parent_hash").is_in(visited_list)
                 & pl.col("child_hash").is_in(visited_list)
             )
         else:
-            subtree_edges = self.edges_df.head(0)
+            subgraph_edges = self.edges_df.head(0)
 
-        return subtree_nodes, subtree_edges
+        return subgraph_nodes, subgraph_edges
 
     def get_node_detail(
         self, position_hash: int

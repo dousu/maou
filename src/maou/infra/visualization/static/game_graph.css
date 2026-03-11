@@ -1,9 +1,9 @@
 /**
- * Game Tree Viewer Styles
- * Cytoscape.js ツリー表示用スタイル
+ * Game Graph Viewer Styles
+ * Canvas 2D グラフ表示用スタイル
  */
 
-.game-tree-container {
+.game-graph-container {
     width: 100%;
     height: 600px;
     border: 1px solid var(--grid-lines, #d4c5a9);
@@ -13,12 +13,12 @@
     position: relative;
 }
 
-#cy {
+#gt-canvas-container {
     width: 100%;
     height: 100%;
 }
 
-.game-tree-legend {
+.game-graph-legend {
     position: absolute;
     bottom: 8px;
     left: 8px;
@@ -31,13 +31,13 @@
     z-index: 10;
 }
 
-.game-tree-legend .legend-item {
+.game-graph-legend .legend-item {
     display: inline-flex;
     align-items: center;
     margin-right: 12px;
 }
 
-.game-tree-legend .legend-swatch {
+.game-graph-legend .legend-swatch {
     width: 12px;
     height: 12px;
     border-radius: 50%;
@@ -80,17 +80,6 @@
 
 .stats-panel .stat-value {
     color: var(--text-primary, #1a1a1a);
-}
-
-/* Tooltip styling for Cytoscape popper */
-.cy-tooltip {
-    background: rgba(26, 26, 26, 0.9);
-    color: #fff;
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    pointer-events: none;
-    z-index: 100;
 }
 
 /* --- パンくずリスト --- */
@@ -157,15 +146,15 @@
     background: var(--grid-lines, #d4c5a9);
 }
 
-/* PNG export button overlay on tree */
-.tree-export-overlay {
+/* PNG export button overlay on graph */
+.graph-export-overlay {
     position: absolute;
     top: 8px;
     right: 8px;
     z-index: 10;
 }
 
-.tree-export-overlay .export-btn {
+.graph-export-overlay .export-btn {
     background: rgba(255, 255, 255, 0.9);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }

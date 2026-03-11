@@ -1,4 +1,4 @@
-"""ゲームツリー構築CLIコマンド."""
+"""ゲームグラフ構築CLIコマンド."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from maou.infra.console.common import handle_exception
 from maou.infra.file_system.file_system import FileSystem
 
 
-@click.command("build-game-tree")
+@click.command("build-game-graph")
 @click.option(
     "--input-path",
     help="preprocessデータのディレクトリまたはファイルパス．",
@@ -21,7 +21,7 @@ from maou.infra.file_system.file_system import FileSystem
 )
 @click.option(
     "--output-dir",
-    help="ツリーデータの出力先ディレクトリ．",
+    help="グラフデータの出力先ディレクトリ．",
     type=click.Path(path_type=Path),
     required=True,
 )
@@ -59,7 +59,7 @@ from maou.infra.file_system.file_system import FileSystem
     show_default=True,
 )
 @handle_exception
-def build_game_tree(
+def build_game_graph(
     input_path: Path,
     output_dir: Path,
     max_depth: int,
@@ -68,15 +68,15 @@ def build_game_tree(
     initial_sfen: str | None,
     max_cache_files: int,
 ) -> None:
-    """preprocessデータからゲームツリーを構築する．"""
+    """preprocessデータからゲームグラフを構築する．"""
     if initial_hash is not None and initial_sfen is None:
         raise click.ClickException(
             "--initial-hash を指定する場合は --initial-sfen も指定してください．"
         )
     import polars as pl
 
-    from maou.app.game_tree.builder import GameTreeBuilder
-    from maou.interface.game_tree_io import GameTreeIO
+    from maou.app.game_graph.builder import GameGraphBuilder
+    from maou.interface.game_graph_io import GameGraphIO
     from maou.interface.lazy_list_columns import (
         FileBackedListColumns,
     )
@@ -133,11 +133,11 @@ def build_game_tree(
         max_cache_files=max_cache_files,
     )
 
-    # ツリー構築
+    # グラフ構築
     from tqdm import tqdm
 
-    builder = GameTreeBuilder()
-    pbar = tqdm(desc="ツリー構築中", unit="局面")
+    builder = GameGraphBuilder()
+    pbar = tqdm(desc="グラフ構築中", unit="局面")
 
     _prev_cache_misses = 0
 
@@ -175,7 +175,7 @@ def build_game_tree(
         list_columns.log_stats()
 
     # 出力
-    io = GameTreeIO()
+    io = GameGraphIO()
     io.save(nodes, edges, output_dir)
 
     # initial_sfen が未指定(平手初期局面)の場合は

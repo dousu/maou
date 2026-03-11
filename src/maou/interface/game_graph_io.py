@@ -1,4 +1,4 @@
-"""ゲームツリーデータのI/O(Rustバックエンド使用)．"""
+"""ゲームグラフデータのI/O(Rustバックエンド使用)．"""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from typing import Any
 
 import polars as pl
 
-from maou.domain.game_tree.model import (
-    GameTreeEdge,
-    GameTreeNode,
+from maou.domain.game_graph.model import (
+    GameGraphEdge,
+    GameGraphNode,
 )
-from maou.domain.game_tree.schema import (
-    get_game_tree_edges_schema,
-    get_game_tree_nodes_schema,
+from maou.domain.game_graph.schema import (
+    get_game_graph_edges_schema,
+    get_game_graph_nodes_schema,
 )
 
 NODES_FILENAME = "nodes.feather"
@@ -62,13 +62,13 @@ def _load_df_feather(path: Path) -> pl.DataFrame:
         return pl.read_ipc(path)
 
 
-class GameTreeIO:
-    """ゲームツリーデータのI/O(Rustバックエンド使用)．"""
+class GameGraphIO:
+    """ゲームグラフデータのI/O(Rustバックエンド使用)．"""
 
     def save(
         self,
-        nodes: list[GameTreeNode],
-        edges: list[GameTreeEdge],
+        nodes: list[GameGraphNode],
+        edges: list[GameGraphEdge],
         output_dir: Path,
     ) -> None:
         """nodes.feather, edges.feather を Rust I/O で出力する．
@@ -82,24 +82,24 @@ class GameTreeIO:
 
         nodes_df = pl.DataFrame(
             [dataclasses.asdict(n) for n in nodes],
-            schema=get_game_tree_nodes_schema(),
+            schema=get_game_graph_nodes_schema(),
         )
 
         edges_df = pl.DataFrame(
             [dataclasses.asdict(e) for e in edges],
-            schema=get_game_tree_edges_schema(),
+            schema=get_game_graph_edges_schema(),
         )
 
         _save_df_feather(nodes_df, output_dir / NODES_FILENAME)
         _save_df_feather(edges_df, output_dir / EDGES_FILENAME)
 
     def load(
-        self, tree_dir: Path
+        self, graph_dir: Path
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """nodes.feather, edges.feather を Rust I/O で読み込む．
 
         Args:
-            tree_dir: ツリーデータのディレクトリ
+            graph_dir: グラフデータのディレクトリ
 
         Returns:
             (nodes_df, edges_df) のタプル
@@ -108,8 +108,8 @@ class GameTreeIO:
             FileNotFoundError: ファイルが見つからない場合
             ValueError: スキーマが一致しない場合
         """
-        nodes_path = tree_dir / NODES_FILENAME
-        edges_path = tree_dir / EDGES_FILENAME
+        nodes_path = graph_dir / NODES_FILENAME
+        edges_path = graph_dir / EDGES_FILENAME
 
         if not nodes_path.exists():
             raise FileNotFoundError(
@@ -126,12 +126,12 @@ class GameTreeIO:
         # スキーマ検証(カラム名 + データ型)
         self._validate_schema(
             nodes_df,
-            get_game_tree_nodes_schema(),
+            get_game_graph_nodes_schema(),
             NODES_FILENAME,
         )
         self._validate_schema(
             edges_df,
-            get_game_tree_edges_schema(),
+            get_game_graph_edges_schema(),
             EDGES_FILENAME,
         )
 
@@ -157,17 +157,17 @@ class GameTreeIO:
 
     def load_metadata(
         self,
-        tree_dir: Path,
+        graph_dir: Path,
     ) -> dict[str, Any]:
         """メタデータをJSONから読み込む．
 
         Args:
-            tree_dir: ツリーデータのディレクトリ
+            graph_dir: グラフデータのディレクトリ
 
         Returns:
             メタデータ辞書．ファイルが存在しない場合は空辞書．
         """
-        path = tree_dir / METADATA_FILENAME
+        path = graph_dir / METADATA_FILENAME
         if not path.exists():
             return {}
         content = path.read_text(encoding="utf-8")

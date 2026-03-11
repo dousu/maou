@@ -1,4 +1,4 @@
-"""ゲームツリーのデータモデル定義."""
+"""ゲームグラフのデータモデル定義."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class GameTreeNode:
-    """ゲームツリーのノード(一意の局面)．
+class GameGraphNode:
+    """ゲームグラフのノード(一意の局面)．
 
     Attributes:
         position_hash: Zobrist hash(局面の一意識別子)
@@ -29,8 +29,8 @@ class GameTreeNode:
 
 
 @dataclass(frozen=True)
-class GameTreeEdge:
-    """ゲームツリーのエッジ(局面間の遷移)．
+class GameGraphEdge:
+    """ゲームグラフのエッジ(局面間の遷移)．
 
     Attributes:
         parent_hash: 親局面のZobrist hash

@@ -1,11 +1,13 @@
-# `maou build-game-tree`
+# `maou build-game-graph`
 
 ## Overview
 
-- preprocessデータ(局面単位・集約済み `.feather`)からBFSでゲームツリーを構築し，
+- preprocessデータ(局面単位・集約済み `.feather`)からBFSでゲームグラフ(有向グラフ)を構築し，
   `nodes.feather` + `edges.feather` として出力する．
 - 初期局面(平手)からBFSで探索を行い，各局面の `moveLabel` から
   `min_probability` 以上の指し手をエッジとして展開する．
+- 同一局面への合流(transposition)や局面循環(千日手等)により，構築されるグラフは閉路を含む有向グラフとなる．
+  各ノードの `depth` はBFS最短距離を記録する．
 - 出力データは Arrow IPC 形式(LZ4圧縮，Rustバックエンド使用)で保存される．
 
 ## CLI options
@@ -13,9 +15,9 @@
 | Flag | Required | Default | Description |
 | --- | --- | --- | --- |
 | `--input-path PATH` | Yes | — | preprocessデータのディレクトリまたはファイルパス．再帰的に `.feather` ファイルを収集する． |
-| `--output-dir PATH` | Yes | — | ツリーデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される． |
+| `--output-dir PATH` | Yes | — | グラフデータ(`nodes.feather`, `edges.feather`)の出力先ディレクトリ．存在しない場合は自動作成される． |
 | `--max-depth INT` | No | `30` | BFSの最大探索深さ．初期局面からの手数上限． |
-| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値(0.0〜1.0)．この値未満の指し手はツリーに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
+| `--min-probability FLOAT` | No | `0.001` | 指し手の最小確率閾値(0.0〜1.0)．この値未満の指し手はグラフに含まれない．表示時のフィルタリング(Epic 2)より小さい値を設定すべき． |
 | `--initial-hash INT` | No | 平手初期局面 | 開始局面のZobrist hash(preprocessデータのID)．指定した局面からBFSを開始する．`--initial-sfen` と併用必須． |
 | `--initial-sfen TEXT` | No | — | 開始局面のSFEN文字列．`--initial-hash` 指定時に必須．BFSで正しい盤面を復元するために使用する． |
 | `--max-cache-files INT` | No | `1` | List型カラムのLRUキャッシュファイル数．1ファイルあたり約11.5GBのメモリを使用する(100万行 × 1496要素 × 4bytes × 2列)．メモリに余裕がある場合は2〜3に増やすことでキャッシュヒット率が向上する． |
@@ -24,21 +26,21 @@
 
 ```bash
 # 基本的な使用方法
-maou build-game-tree \
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/
+  --output-dir ./data/game-graph/
 
 # パラメータを指定
-maou build-game-tree \
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/ \
+  --output-dir ./data/game-graph/ \
   --max-depth 20 \
   --min-probability 0.005
 
-# 特定の局面からツリーを構築(hash + SFEN の両方を指定)
-maou build-game-tree \
+# 特定の局面からグラフを構築(hash + SFEN の両方を指定)
+maou build-game-graph \
   --input-path ./data/preprocess/ \
-  --output-dir ./data/game-tree/ \
+  --output-dir ./data/game-graph/ \
   --initial-hash 12345678901234567 \
   --initial-sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2"
 ```
@@ -72,10 +74,10 @@ maou build-game-tree \
 
 | Component | File |
 | --- | --- |
-| CLI command | [`src/maou/infra/console/build_game_tree.py`](../../src/maou/infra/console/build_game_tree.py) |
-| BFS builder | [`src/maou/app/game_tree/builder.py`](../../src/maou/app/game_tree/builder.py) |
-| Data I/O | [`src/maou/interface/game_tree_io.py`](../../src/maou/interface/game_tree_io.py) |
-| Data models | [`src/maou/domain/game_tree/model.py`](../../src/maou/domain/game_tree/model.py) |
-| Polars schemas | [`src/maou/domain/game_tree/schema.py`](../../src/maou/domain/game_tree/schema.py) |
+| CLI command | [`src/maou/infra/console/build_game_graph.py`](../../src/maou/infra/console/build_game_graph.py) |
+| BFS builder | [`src/maou/app/game_graph/builder.py`](../../src/maou/app/game_graph/builder.py) |
+| Data I/O | [`src/maou/interface/game_graph_io.py`](../../src/maou/interface/game_graph_io.py) |
+| Data models | [`src/maou/domain/game_graph/model.py`](../../src/maou/domain/game_graph/model.py) |
+| Polars schemas | [`src/maou/domain/game_graph/schema.py`](../../src/maou/domain/game_graph/schema.py) |
 | Lazy loading | [`src/maou/interface/lazy_list_columns.py`](../../src/maou/interface/lazy_list_columns.py) |
 | Process info | [`src/maou/app/process_info.py`](../../src/maou/app/process_info.py) |
