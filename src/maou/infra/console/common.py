@@ -9,26 +9,17 @@ from maou.infra.app_logging import (
 )
 
 if TYPE_CHECKING:
-    from maou.infra.file_system.file_data_source import (
-        FileDataSource as FileDataSource,
-    )
-    from maou.infra.file_system.file_system import (
-        FileSystem as FileSystem,
-    )
-
-# NOTE:
-#   Optional cloud provider dependencies (BigQuery, GCS, AWS) might not be
-#   installed in every runtime.  To keep the public API of this module stable,
-#   we initialise the exported symbols with ``None`` so that "from
-#   maou.infra.console.common import S3DataSource" continues to succeed even
-#   when the dependency is unavailable.  Callers must consult the corresponding
-#   ``HAS_*`` flag before using the objects.
-if TYPE_CHECKING:
     from maou.infra.bigquery.bq_data_source import (
         BigQueryDataSource as _BigQueryDataSource,
     )
     from maou.infra.bigquery.bq_feature_store import (
         BigQueryFeatureStore as _BigQueryFeatureStore,
+    )
+    from maou.infra.file_system.file_data_source import (
+        FileDataSource as FileDataSource,
+    )
+    from maou.infra.file_system.file_system import (
+        FileSystem as FileSystem,
     )
     from maou.infra.gcs.gcs import GCS as _GCS
     from maou.infra.gcs.gcs_data_source import (

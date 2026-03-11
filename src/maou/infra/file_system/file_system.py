@@ -28,7 +28,8 @@ class FileSystem(
 
         Args:
             p: ファイルまたはディレクトリのパス
-            ext: フィルタする拡張子(例: ".feather")
+            ext: フィルタする拡張子(例: ".feather")．
+                ``None`` の場合は全ファイルを返す．
 
         Returns:
             マッチしたファイルパスのリスト
