@@ -69,7 +69,7 @@ class TestComputeLayout:
         svc = GameGraphLayoutService()
         layout = svc.compute_layout(nodes, edges, 0)
         assert layout.node_positions == {}
-        assert layout.bounds == (0, 0, 0, 0)
+        assert layout.bounds == (0.0, 0.0, 0.0, 0.0)
 
     def test_single_node(self) -> None:
         """単一ノード(ルートのみ)の座標が (0, 0) になる．"""

@@ -679,8 +679,8 @@
       console.warn("[maou] expand bridge not ready");
       return;
     }
-    var depth = readSlider("gt-depth-slider") ?? 3;
-    var prob = readSlider("gt-min-prob-slider") ?? 0.01;
+    var depth = readSlider("gt-depth-slider") || 3;
+    var prob = readSlider("gt-min-prob-slider") || 0.01;
     bridge.server
       .handle_expand(String(nodeId), depth, prob)
       .then(function (ok) {

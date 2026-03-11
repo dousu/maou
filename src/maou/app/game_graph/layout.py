@@ -62,7 +62,7 @@ class GameGraphLayoutService:
         """
         if len(nodes_df) == 0:
             return GraphLayout(
-                node_positions={}, bounds=(0, 0, 0, 0)
+                node_positions={}, bounds=(0.0, 0.0, 0.0, 0.0)
             )
 
         # --- データ構造の構築 ---
