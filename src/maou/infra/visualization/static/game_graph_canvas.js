@@ -130,6 +130,7 @@
 
     // Interaction state
     this.dragging = false;
+    this._dragMoved = false;
     this.dragStartX = 0;
     this.dragStartY = 0;
     this.tapTimer = null;
