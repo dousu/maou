@@ -733,7 +733,7 @@ def launch_game_graph_server(
         except ValueError:
             rh = viz.get_root_hash()
 
-        csv_content = viz.export_subtree_csv(
+        csv_content = viz.export_subgraph_csv(
             rh,
             int(display_depth),
             min_prob,

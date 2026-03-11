@@ -56,7 +56,7 @@ class GameGraphLayoutService:
                 nodes_df に含まれている必要がある(呼び出し元で検証済み前提)
             rank_spacing: depth 間の Y 方向間隔
             sibling_spacing: 兄弟ノード間の X 方向間隔
-            min_node_spacing: 異なる親の子グループ間の最小間隔
+            min_node_spacing: 同一 depth の隣接ノード間の最小 X 間隔
 
         Returns:
             事前計算された GraphLayout

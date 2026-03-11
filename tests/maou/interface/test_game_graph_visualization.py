@@ -456,14 +456,14 @@ class TestExportSfenPath:
         assert result == "position startpos"
 
 
-class TestExportSubtreeCsv:
-    """export_subtree_csv のテスト."""
+class TestExportSubgraphCsv:
+    """export_subgraph_csv のテスト."""
 
     def test_csv_with_edges(self) -> None:
         """エッジのあるサブグラフをCSV出力する."""
         nodes, edges = _build_tree_with_edge()
         viz = GameGraphVisualizationInterface(nodes, edges)
-        csv_content = viz.export_subtree_csv(
+        csv_content = viz.export_subgraph_csv(
             100, max_depth=3, min_probability=0.01
         )
         assert "parent_hash" in csv_content
@@ -476,7 +476,7 @@ class TestExportSubtreeCsv:
         """エッジのないグラフのCSV出力はヘッダーのみ."""
         nodes, edges = _build_simple_tree()
         viz = GameGraphVisualizationInterface(nodes, edges)
-        csv_content = viz.export_subtree_csv(
+        csv_content = viz.export_subgraph_csv(
             100, max_depth=3, min_probability=0.01
         )
         lines = csv_content.strip().split("\n")

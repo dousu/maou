@@ -434,8 +434,9 @@
     var self = this;
 
     this.nodes.forEach(function (n, id) {
-      // Frustum culling
-      if (n.x < vl || n.x > vr || n.y < vt || n.y > vb) return;
+      // Frustum culling (半径分の余裕を持たせる)
+      var r = n.radius;
+      if (n.x + r < vl || n.x - r > vr || n.y + r < vt || n.y - r > vb) return;
 
       var screen = self.worldToScreen(n.x, n.y);
 
@@ -509,7 +510,7 @@
       var dx = n.x - world.x;
       var dy = n.y - world.y;
       var dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < n.radius / this.zoom + 5 / this.zoom && dist < bestDist) {
+      if (dist < n.radius + 5 / this.zoom && dist < bestDist) {
         bestDist = dist;
         bestId = id;
       }

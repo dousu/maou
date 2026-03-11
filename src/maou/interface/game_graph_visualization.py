@@ -722,7 +722,7 @@ class GameGraphVisualizationInterface:
             return f"{base} moves {' '.join(moves)}"
         return base
 
-    def export_subtree_csv(
+    def export_subgraph_csv(
         self,
         root_hash: int,
         max_depth: int = 3,
