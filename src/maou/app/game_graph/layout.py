@@ -268,7 +268,7 @@ class GameGraphLayoutService:
 
         result = list(placed)
         for i in range(1, len(result)):
-            h_prev, x_prev = result[i - 1]
+            _, x_prev = result[i - 1]
             h_curr, x_curr = result[i]
             if x_curr - x_prev < min_spacing:
                 result[i] = (h_curr, x_prev + min_spacing)
