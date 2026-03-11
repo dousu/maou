@@ -52,7 +52,8 @@ class GameGraphLayoutService:
         Args:
             nodes_df: ノードデータ
             edges_df: エッジデータ
-            root_hash: ルートノードのposition_hash
+            root_hash: ルートノードのposition_hash．
+                nodes_df に含まれている必要がある(呼び出し元で検証済み前提)
             rank_spacing: depth 間の Y 方向間隔
             sibling_spacing: 兄弟ノード間の X 方向間隔
             min_node_spacing: 異なる親の子グループ間の最小間隔
@@ -83,9 +84,9 @@ class GameGraphLayoutService:
         parent_children: dict[int, list[tuple[int, float]]] = (
             defaultdict(list)
         )
-        # 子 → primary parent (depth-1 で確率最大の親)
+        # 子 → primary parent (depth-1 で確率最大の親) と
+        # その確率を対で管理する
         child_primary_parent: dict[int, int] = {}
-        # 子 → primary parent からの確率
         child_primary_prob: dict[int, float] = {}
 
         for row in edges_df.iter_rows(named=True):

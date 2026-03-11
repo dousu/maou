@@ -38,17 +38,18 @@
    * 先手視点の勝率(0.0-1.0)からノードの色を計算する
    */
   function winRateToColor(resultValue) {
+    var t, r, g, b;
     if (resultValue > 0.55) {
-      var t = Math.min((resultValue - 0.55) / 0.35, 1.0);
-      var r = Math.round(144 * (1 - t) + 25 * t);
-      var g = Math.round(202 * (1 - t) + 118 * t);
-      var b = Math.round(249 * (1 - t) + 210 * t);
+      t = Math.min((resultValue - 0.55) / 0.35, 1.0);
+      r = Math.round(144 * (1 - t) + 25 * t);
+      g = Math.round(202 * (1 - t) + 118 * t);
+      b = Math.round(249 * (1 - t) + 210 * t);
       return "rgb(" + r + "," + g + "," + b + ")";
     } else if (resultValue < 0.45) {
-      var t = Math.min((0.45 - resultValue) / 0.35, 1.0);
-      var r = Math.round(239 * (1 - t) + 211 * t);
-      var g = Math.round(154 * (1 - t) + 47 * t);
-      var b = Math.round(154 * (1 - t) + 47 * t);
+      t = Math.min((0.45 - resultValue) / 0.35, 1.0);
+      r = Math.round(239 * (1 - t) + 211 * t);
+      g = Math.round(154 * (1 - t) + 47 * t);
+      b = Math.round(154 * (1 - t) + 47 * t);
       return "rgb(" + r + "," + g + "," + b + ")";
     }
     return "#9E9E9E";
