@@ -32,5 +32,9 @@ class FileSystem(
 
         Returns:
             マッチしたファイルパスのリスト
+
+        Raises:
+            ValueError: パスがファイルでもディレクトリでもない場合，
+                または拡張子が一致しないファイルが指定された場合
         """
         return _collect_files(p, ext=ext)
