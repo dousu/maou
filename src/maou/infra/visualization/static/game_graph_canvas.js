@@ -364,10 +364,14 @@
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
 
-      // Frustum culling: skip if both endpoints outside viewport
-      var sxIn = e.sx >= vl && e.sx <= vr && e.sy >= vt && e.sy <= vb;
-      var txIn = e.tx >= vl && e.tx <= vr && e.ty >= vt && e.ty <= vb;
-      if (!sxIn && !txIn) continue;
+      // Frustum culling: skip if edge bounding box does not intersect viewport.
+      // This correctly handles edges that cross the viewport without either
+      // endpoint being inside it.
+      var eMinX = e.sx < e.tx ? e.sx : e.tx;
+      var eMaxX = e.sx > e.tx ? e.sx : e.tx;
+      var eMinY = e.sy < e.ty ? e.sy : e.ty;
+      var eMaxY = e.sy > e.ty ? e.sy : e.ty;
+      if (eMaxX < vl || eMinX > vr || eMaxY < vt || eMinY > vb) continue;
 
       // Transform to screen
       var s = this.worldToScreen(e.sx, e.sy);
