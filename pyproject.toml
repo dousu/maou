@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.17.11"
+version = "0.17.12"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -73,7 +73,6 @@ aws = [
 visualize = [
     "gradio>=6.0.0,<7.0.0",
     "matplotlib>=3.5.0",
-    "playwright>=1.40.0",
 ]
 
 [project.scripts]
@@ -134,6 +133,7 @@ dev = [
     "yapf>=0.43.0",
     "netron>=8.6.8",
     "maturin[patchelf]>=1.7.0",
+    "playwright>=1.40.0",
     "pytest-cov>=4.0.0",
     "serena-agent",
 ]
