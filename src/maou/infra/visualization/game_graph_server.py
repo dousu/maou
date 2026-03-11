@@ -444,7 +444,7 @@ def launch_game_graph_server(
         return True
 
     def handle_viewport(
-        args: list[Any] | float,
+        min_x_or_args: list[Any] | float,
         max_x: float = 0,
         min_y: float = 0,
         max_y: float = 0,
@@ -454,18 +454,23 @@ def launch_game_graph_server(
         パン/ズーム後にフロントエンドから呼ばれ，
         可視領域のノード・エッジデータを返す．
 
-        Note:
-            Gradio 6 の server_functions は複数の JS 引数を
-            リストとして第1引数に渡す場合がある．
+        Args:
+            min_x_or_args: ビューポートの min_x 値．Gradio 6 の
+                server_functions が複数の JS 引数をリストとして
+                第1引数に渡す場合は [min_x, max_x, min_y, max_y]．
+            max_x: ビューポートの max_x (個別引数渡し時)
+            min_y: ビューポートの min_y (個別引数渡し時)
+            max_y: ビューポートの max_y (個別引数渡し時)
         """
         # server_functions がリストで渡す場合の展開
-        if isinstance(args, list):
+        if isinstance(min_x_or_args, list):
+            args = min_x_or_args
             min_x_v = float(args[0]) if len(args) > 0 else 0
             max_x_v = float(args[1]) if len(args) > 1 else 0
             min_y_v = float(args[2]) if len(args) > 2 else 0
             max_y_v = float(args[3]) if len(args) > 3 else 0
         else:
-            min_x_v = float(args)
+            min_x_v = float(min_x_or_args)
             max_x_v = float(max_x)
             min_y_v = float(min_y)
             max_y_v = float(max_y)

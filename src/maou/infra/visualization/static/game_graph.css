@@ -146,7 +146,7 @@
     background: var(--grid-lines, #d4c5a9);
 }
 
-/* PNG export button overlay on tree */
+/* PNG export button overlay on graph */
 .graph-export-overlay {
     position: absolute;
     top: 8px;
