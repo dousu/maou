@@ -26,16 +26,6 @@ class FileSystem(
     ) -> list[Path]:
         """指定パスからファイルを収集する．
 
-        Args:
-            p: ファイルまたはディレクトリのパス
-            ext: フィルタする拡張子(例: ".feather")．
-                ``None`` の場合は全ファイルを返す．
-
-        Returns:
-            マッチしたファイルパスのリスト
-
-        Raises:
-            ValueError: パスがファイルでもディレクトリでもない場合，
-                または拡張子が一致しないファイルが指定された場合
+        詳細は :func:`maou.infra.file_system.path_utils.collect_files` を参照．
         """
         return _collect_files(p, ext=ext)
