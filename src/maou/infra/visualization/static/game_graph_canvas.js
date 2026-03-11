@@ -45,11 +45,11 @@
       var b = Math.round(249 * (1 - t) + 210 * t);
       return "rgb(" + r + "," + g + "," + b + ")";
     } else if (resultValue < 0.45) {
-      var t2 = Math.min((0.45 - resultValue) / 0.35, 1.0);
-      var r2 = Math.round(239 * (1 - t2) + 211 * t2);
-      var g2 = Math.round(154 * (1 - t2) + 47 * t2);
-      var b2 = Math.round(154 * (1 - t2) + 47 * t2);
-      return "rgb(" + r2 + "," + g2 + "," + b2 + ")";
+      var t = Math.min((0.45 - resultValue) / 0.35, 1.0);
+      var r = Math.round(239 * (1 - t) + 211 * t);
+      var g = Math.round(154 * (1 - t) + 47 * t);
+      var b = Math.round(154 * (1 - t) + 47 * t);
+      return "rgb(" + r + "," + g + "," + b + ")";
     }
     return "#9E9E9E";
   }

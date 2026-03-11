@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,10 @@ from maou.infra.visualization.game_graph_shared import (  # noqa: E402
     ELEM_ID_EXPAND_BRIDGE,
     ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
+    ELEM_ID_VIEWPORT_BRIDGE,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
+    JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
     build_graph_html,
     create_analytics_plot,
@@ -371,6 +374,10 @@ class GradioVisualizationServer:
         self._game_graph_viz: Any = None
         self._game_graph_root_hash: int = 0
         self._game_graph_layout: Any = None
+        self._game_graph_spatial_buckets: dict[
+            tuple[int, int], list[int]
+        ] = {}
+        self._game_graph_bucket_size: float = 500.0
 
         # 評価値検索をサポートするかどうかを判定
         self.supports_eval_search = self._supports_eval_search()
@@ -1177,6 +1184,20 @@ class GradioVisualizationServer:
         self._game_graph_layout = (
             self._game_graph_viz.compute_layout()
         )
+
+        # ビューポートクエリ用の空間インデックス
+        bucket_size = self._game_graph_bucket_size
+        buckets: dict[tuple[int, int], list[int]] = defaultdict(
+            list
+        )
+        for h, (
+            x,
+            y,
+        ) in self._game_graph_layout.node_positions.items():
+            bx = int(x // bucket_size)
+            by = int(y // bucket_size)
+            buckets[(bx, by)].append(h)
+        self._game_graph_spatial_buckets = buckets
 
     def _rebuild_index(self) -> tuple[str, bool, str, Any]:
         """Rebuild search index from current file paths in background．
@@ -2386,6 +2407,76 @@ class GradioVisualizationServer:
                 }
                 return True
 
+            def _gt_handle_viewport(
+                min_x_or_args: list[Any] | float,
+                max_x: float = 0,
+                min_y: float = 0,
+                max_y: float = 0,
+            ) -> str:
+                """ビューポート範囲内のノード・エッジを返す server_function．
+
+                Args:
+                    min_x_or_args: ビューポートの min_x 値．Gradio 6 の
+                        server_functions が複数の JS 引数をリストとして
+                        第1引数に渡す場合は [min_x, max_x, min_y, max_y]．
+                    max_x: ビューポートの max_x (個別引数渡し時)
+                    min_y: ビューポートの min_y (個別引数渡し時)
+                    max_y: ビューポートの max_y (個別引数渡し時)
+                """
+                if isinstance(min_x_or_args, list):
+                    args = min_x_or_args
+                    min_x_v = (
+                        float(args[0]) if len(args) > 0 else 0
+                    )
+                    max_x_v = (
+                        float(args[1]) if len(args) > 1 else 0
+                    )
+                    min_y_v = (
+                        float(args[2]) if len(args) > 2 else 0
+                    )
+                    max_y_v = (
+                        float(args[3]) if len(args) > 3 else 0
+                    )
+                else:
+                    min_x_v = float(min_x_or_args)
+                    max_x_v = float(max_x)
+                    min_y_v = float(min_y)
+                    max_y_v = float(max_y)
+
+                viz = self._game_graph_viz
+                layout = self._game_graph_layout
+                if viz is None or layout is None:
+                    return "{}"
+
+                bucket_size = self._game_graph_bucket_size
+                spatial = self._game_graph_spatial_buckets
+                min_bx = int(min_x_v // bucket_size) - 1
+                max_bx = int(max_x_v // bucket_size) + 1
+                min_by = int(min_y_v // bucket_size) - 1
+                max_by = int(max_y_v // bucket_size) + 1
+
+                visible_hashes: set[int] = set()
+                for bx in range(min_bx, max_bx + 1):
+                    for by in range(min_by, max_by + 1):
+                        bucket = spatial.get((bx, by), [])
+                        for h in bucket:
+                            pos = layout.node_positions.get(h)
+                            if pos is None:
+                                continue
+                            x, y = pos
+                            if (
+                                min_x_v <= x <= max_x_v
+                                and min_y_v <= y <= max_y_v
+                            ):
+                                visible_hashes.add(h)
+
+                canvas_data = viz.get_viewport_data(
+                    visible_hashes, layout
+                )
+                return json.dumps(
+                    canvas_data, ensure_ascii=False
+                )
+
             def _gt_on_select_result() -> tuple[
                 str,
                 dict[str, str],
@@ -2472,6 +2563,14 @@ class GradioVisualizationServer:
                 elem_classes=["maou-hidden"],
                 server_functions=[_gt_handle_expand],
                 js_on_load=JS_ON_LOAD_EXPAND,
+            )
+            # ビューポートクエリ用ブリッジ(遅延読み込み)
+            gr.HTML(
+                value="",
+                elem_id=ELEM_ID_VIEWPORT_BRIDGE,
+                elem_classes=["maou-hidden"],
+                server_functions=[_gt_handle_viewport],
+                js_on_load=JS_ON_LOAD_VIEWPORT,
             )
 
             # _gt_update_graph が返す 8 要素の出力先
