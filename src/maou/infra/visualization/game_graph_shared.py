@@ -106,8 +106,20 @@ def build_graph_html(canvas_data_json: str) -> str:
     css_code = load_static_file("game_graph.css")
     escaped_json = html.escape(canvas_data_json, quote=True)
 
+    # id 付き <style> を使い，同一 CSS の重複注入を防止する．
+    # Gradio の gr.HTML は更新のたびに innerHTML を置換するため
+    # 毎回 <style> タグが挿入されるが，JS で既存タグを検出して
+    # 重複を除去する．
+    style_id = "maou-game-graph-css"
+
     return f"""
-<style>{css_code}</style>
+<style id="{style_id}">{css_code}</style>
+<script>
+(function() {{
+  var tags = document.querySelectorAll('style#{style_id}');
+  for (var i = 1; i < tags.length; i++) tags[i].remove();
+}})();
+</script>
 <div class="game-graph-container">
     <div id="gt-canvas-container" data-canvas="{escaped_json}"></div>
     <div class="game-graph-legend">

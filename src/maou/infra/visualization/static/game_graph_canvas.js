@@ -213,6 +213,7 @@
     }
   };
 
+
   // ========================================
   // Data management
   // ========================================
@@ -789,7 +790,7 @@
   }
 
   // Breadcrumb click handler (event delegation)
-  document.addEventListener("click", function (e) {
+  function handleBreadcrumbClick(e) {
     var item = e.target.closest(".breadcrumb-item[data-hash]");
     if (!item) return;
     var hash = item.getAttribute("data-hash");
@@ -799,9 +800,17 @@
     } else {
       notifyNodeExpanded(hash);
     }
-  });
+  }
+  document.addEventListener("click", handleBreadcrumbClick);
 
   // Expose to global scope
   window.renderGameGraph = renderGraph;
   window.exportGraphPNG = exportGraphPNG;
+  window.destroyGameGraph = function () {
+    if (renderer) {
+      renderer.destroy();
+      renderer = null;
+    }
+    document.removeEventListener("click", handleBreadcrumbClick);
+  };
 })();

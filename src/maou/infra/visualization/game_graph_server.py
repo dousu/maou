@@ -229,7 +229,7 @@ def _update_graph_view(
     """
     if layout is None:
         layout = GraphLayout(
-            node_positions={}, bounds=(0, 0, 0, 0)
+            node_positions={}, bounds=(0.0, 0.0, 0.0, 0.0)
         )
     canvas_data = viz.get_canvas_data(
         root_hash, int(display_depth), min_prob, layout
