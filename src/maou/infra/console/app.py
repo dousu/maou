@@ -312,7 +312,6 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         required_packages=(
             PackageRequirement("gradio", ("visualize",)),
             PackageRequirement("matplotlib", ("visualize",)),
-            PackageRequirement("playwright", ("visualize",)),
         ),
     ),
 }

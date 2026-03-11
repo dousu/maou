@@ -9,10 +9,8 @@ from pathlib import Path
 import click
 
 from maou.infra.app_logging import app_logger
-from maou.infra.console.common import (
-    FileSystem,
-    handle_exception,
-)
+from maou.infra.console.common import handle_exception
+from maou.infra.file_system.path_utils import collect_files
 
 
 def _is_google_colab() -> bool:
@@ -258,9 +256,7 @@ def _resolve_file_paths(
     """
     result: list[Path] = []
     for p in input_paths:
-        result.extend(
-            FileSystem.collect_files(p, ext=".feather")
-        )
+        result.extend(collect_files(p, ext=".feather"))
 
     if not result:
         app_logger.warning(

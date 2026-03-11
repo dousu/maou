@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -5,24 +7,19 @@ from maou.infra.app_logging import (
     app_logger,
     get_log_level_from_env,
 )
-from maou.infra.file_system.file_data_source import (
-    FileDataSource,
-)
-from maou.infra.file_system.file_system import FileSystem
 
-# NOTE:
-#   Optional cloud provider dependencies (BigQuery, GCS, AWS) might not be
-#   installed in every runtime.  To keep the public API of this module stable,
-#   we initialise the exported symbols with ``None`` so that "from
-#   maou.infra.console.common import S3DataSource" continues to succeed even
-#   when the dependency is unavailable.  Callers must consult the corresponding
-#   ``HAS_*`` flag before using the objects.
 if TYPE_CHECKING:
     from maou.infra.bigquery.bq_data_source import (
         BigQueryDataSource as _BigQueryDataSource,
     )
     from maou.infra.bigquery.bq_feature_store import (
         BigQueryFeatureStore as _BigQueryFeatureStore,
+    )
+    from maou.infra.file_system.file_data_source import (
+        FileDataSource as FileDataSource,
+    )
+    from maou.infra.file_system.file_system import (
+        FileSystem as FileSystem,
     )
     from maou.infra.gcs.gcs import GCS as _GCS
     from maou.infra.gcs.gcs_data_source import (
@@ -189,3 +186,35 @@ def handle_exception(func: Callable) -> Callable:
             raise SystemExit(1)
 
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# PEP 562 lazy imports: FileDataSource / FileSystem は torch に間接依存する
+# ため，visualize 等の torch 不要コマンドでインポートコストを避ける．
+# ---------------------------------------------------------------------------
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "FileDataSource": (
+        "maou.infra.file_system.file_data_source",
+        "FileDataSource",
+    ),
+    "FileSystem": (
+        "maou.infra.file_system.file_system",
+        "FileSystem",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    spec = _LAZY_IMPORTS.get(name)
+    if spec is not None:
+        module_path, attr_name = spec
+        from importlib import import_module
+
+        module = import_module(module_path)
+        value = getattr(module, attr_name)
+        # キャッシュ: 次回以降は __getattr__ を経由しない
+        globals()[name] = value
+        return value
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}"
+    )

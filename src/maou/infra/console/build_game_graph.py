@@ -9,7 +9,7 @@ import click
 from maou.app.process_info import get_rss_mb
 from maou.infra.app_logging import app_logger
 from maou.infra.console.common import handle_exception
-from maou.infra.file_system.file_system import FileSystem
+from maou.infra.file_system.path_utils import collect_files
 
 
 @click.command("build-game-graph")
@@ -83,7 +83,7 @@ def build_game_graph(
 
     # 入力ファイル収集
     input_files = sorted(
-        FileSystem.collect_files(input_path, ext=".feather")
+        collect_files(input_path, ext=".feather")
     )
     if not input_files:
         raise click.ClickException(
