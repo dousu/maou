@@ -158,39 +158,59 @@
   GameGraphRenderer.prototype._bindEvents = function () {
     var self = this;
 
-    this.canvas.addEventListener("mousedown", function (e) {
-      self._onMouseDown(e);
-    });
-    this.canvas.addEventListener("mousemove", function (e) {
-      self._onMouseMove(e);
-    });
-    this.canvas.addEventListener("mouseup", function (e) {
-      self._onMouseUp(e);
-    });
-    this.canvas.addEventListener("wheel", function (e) {
-      self._onWheel(e);
-    }, { passive: false });
-    this.canvas.addEventListener("dblclick", function (e) {
-      self._onDblClick(e);
-    });
+    // Store handler references for cleanup in destroy()
+    this._handlers = {
+      mousedown: function (e) { self._onMouseDown(e); },
+      mousemove: function (e) { self._onMouseMove(e); },
+      mouseup: function (e) { self._onMouseUp(e); },
+      wheel: function (e) { self._onWheel(e); },
+      dblclick: function (e) { self._onDblClick(e); },
+      touchstart: function (e) { self._onTouchStart(e); },
+      touchmove: function (e) { self._onTouchMove(e); },
+      touchend: function (e) { self._onTouchEnd(e); }
+    };
+
+    this.canvas.addEventListener("mousedown", this._handlers.mousedown);
+    this.canvas.addEventListener("mousemove", this._handlers.mousemove);
+    this.canvas.addEventListener("mouseup", this._handlers.mouseup);
+    this.canvas.addEventListener("wheel", this._handlers.wheel, { passive: false });
+    this.canvas.addEventListener("dblclick", this._handlers.dblclick);
 
     // Touch support
-    this.canvas.addEventListener("touchstart", function (e) {
-      self._onTouchStart(e);
-    }, { passive: false });
-    this.canvas.addEventListener("touchmove", function (e) {
-      self._onTouchMove(e);
-    }, { passive: false });
-    this.canvas.addEventListener("touchend", function (e) {
-      self._onTouchEnd(e);
-    });
+    this.canvas.addEventListener("touchstart", this._handlers.touchstart, { passive: false });
+    this.canvas.addEventListener("touchmove", this._handlers.touchmove, { passive: false });
+    this.canvas.addEventListener("touchend", this._handlers.touchend);
 
     // Resize observer
-    var ro = new ResizeObserver(function () {
+    this._resizeObserver = new ResizeObserver(function () {
       self._setupHiDPI();
       self.requestRender();
     });
-    ro.observe(this.canvas);
+    this._resizeObserver.observe(this.canvas);
+  };
+
+  /**
+   * リソースを解放する．
+   *
+   * canvas が動的に再生成される場合(Gradio の re-render 等)に，
+   * 旧 canvas のイベントリスナーと ResizeObserver をクリーンアップする．
+   */
+  GameGraphRenderer.prototype.destroy = function () {
+    if (this._handlers) {
+      this.canvas.removeEventListener("mousedown", this._handlers.mousedown);
+      this.canvas.removeEventListener("mousemove", this._handlers.mousemove);
+      this.canvas.removeEventListener("mouseup", this._handlers.mouseup);
+      this.canvas.removeEventListener("wheel", this._handlers.wheel);
+      this.canvas.removeEventListener("dblclick", this._handlers.dblclick);
+      this.canvas.removeEventListener("touchstart", this._handlers.touchstart);
+      this.canvas.removeEventListener("touchmove", this._handlers.touchmove);
+      this.canvas.removeEventListener("touchend", this._handlers.touchend);
+      this._handlers = null;
+    }
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
   };
 
   // ========================================
@@ -737,6 +757,9 @@
 
     // Create renderer if not exists or canvas changed
     if (!renderer || renderer.canvas !== canvas) {
+      if (renderer) {
+        renderer.destroy();
+      }
       renderer = new GameGraphRenderer(canvas);
 
       // Set up viewport query callback

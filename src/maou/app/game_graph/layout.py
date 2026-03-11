@@ -121,7 +121,7 @@ class GameGraphLayoutService:
         # 各親の子リストを確率降順でソート
         for p_hash in parent_children:
             parent_children[p_hash].sort(
-                key=lambda x: x[1], reverse=True
+                key=lambda item: item[1], reverse=True
             )
 
         # --- 座標計算 ---
@@ -208,7 +208,7 @@ class GameGraphLayoutService:
                     placed.append((h, i * sibling_spacing))
 
             # X 座標順にソートして重なり解消
-            placed.sort(key=lambda x: x[1])
+            placed.sort(key=lambda item: item[1])
             resolved = self._resolve_overlaps(
                 placed, min_node_spacing
             )
