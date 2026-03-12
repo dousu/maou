@@ -419,15 +419,20 @@ class TestServerFunctionsBridge:
         on_expand_result が発火してグラフHTMLが更新されることを確認する．
         """
         # 展開前の graph-view の data-canvas 属性を取得
+        browser_page.wait_for_selector(
+            "#graph-view [data-canvas]", timeout=10000
+        )
         before = browser_page.evaluate(
             """() => {
                 const container = document.querySelector(
                     '#graph-view [data-canvas]'
                 );
-                return container
-                    ? container.getAttribute('data-canvas').substring(0, 50)
-                    : '';
+                return container.getAttribute('data-canvas').substring(0, 50);
             }"""
+        )
+        assert before, (
+            "#graph-view [data-canvas] exists but data-canvas attribute "
+            "is empty — cannot reliably detect graph redraw"
         )
 
         # handle_expand(_NODE_A_HASH, depth=3, prob=0.01) を呼び出し
