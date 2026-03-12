@@ -373,6 +373,47 @@ class TestEdgeLabelVisibility:
         renderer の zoom/offset を直接操作して拡大表示し，
         スクリーンショットでラベルの視認性を確認する．
         """
+        # グラフが展開済みでなければ展開する(テストの独立実行対応)
+        needs_expand = browser_page.evaluate(
+            """() => {
+                const r = window.__maou_get_renderer
+                    ? window.__maou_get_renderer() : null;
+                return !r || r.edges.size === 0;
+            }"""
+        )
+        if needs_expand:
+            result = browser_page.evaluate(
+                """async (nodeHash) => {
+                    const bridge = window.__maou_expand;
+                    if (!bridge || !bridge.server)
+                        return 'bridge_not_ready';
+                    const ok = await bridge.server.handle_expand(
+                        String(nodeHash), 3, 0.01
+                    );
+                    if (!ok) return 'handle_expand_returned_false';
+                    bridge.trigger('change');
+                    return 'ok';
+                }""",
+                arg=_ROOT_HASH,
+            )
+            assert result == "ok", (
+                f"handle_expand failed: {result}"
+            )
+            browser_page.wait_for_function(
+                """() => {
+                    const canvas = document.querySelector(
+                        '#graph-view canvas'
+                    );
+                    if (!canvas) return false;
+                    const ctx = canvas.getContext('2d');
+                    const data = ctx.getImageData(
+                        0, 0, canvas.width, canvas.height
+                    ).data;
+                    return data.some(v => v !== 0);
+                }""",
+                timeout=10000,
+            )
+
         # renderer を直接操作してズームイン + 中心に配置
         zoom_info = browser_page.evaluate(
             """() => {

@@ -25,6 +25,9 @@
   const LOD_DOT_ZOOM = 0.3;
   const LOD_LABEL_ZOOM = 0.6;
 
+  // エッジラベル配置(ソースからターゲットへの距離の割合)
+  const EDGE_LABEL_POSITION = 0.65;
+
   // ノード描画
   const NODE_MIN_SIZE = 25;
   const NODE_MAX_SIZE = 60;
@@ -414,8 +417,8 @@
 
       // Edge label (ターゲット寄り 65% に配置して同一ソースからの重なりを軽減)
       if (showLabels && e.label) {
-        const mx = s.x + (t.x - s.x) * 0.65;
-        const my = s.y + (t.y - s.y) * 0.65;
+        const mx = s.x + (t.x - s.x) * EDGE_LABEL_POSITION;
+        const my = s.y + (t.y - s.y) * EDGE_LABEL_POSITION;
         ctx.save();
         const edgeFontSize = Math.max(
           9,
@@ -432,8 +435,9 @@
         const padY = 2;
         const tw = metrics.width;
         const th =
-          metrics.actualBoundingBoxAscent +
-          metrics.actualBoundingBoxDescent;
+          (metrics.actualBoundingBoxAscent +
+            metrics.actualBoundingBoxDescent) ||
+          edgeFontSize;
         const bx = mx - tw / 2 - padX;
         const by = my - th / 2 - padY;
         const bw = tw + 2 * padX;
