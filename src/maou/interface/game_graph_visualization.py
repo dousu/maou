@@ -160,6 +160,23 @@ class GameGraphVisualizationInterface:
             else 0
         )
 
+    def _to_sente_perspective(
+        self, value: float, depth: int
+    ) -> float:
+        """手番視点の値を先手視点に変換する．
+
+        Args:
+            value: 手番視点の値(0.0-1.0)．NaN はそのまま返す．
+            depth: ノードの深さ(ルートからの距離)
+
+        Returns:
+            先手視点に変換された値
+        """
+        is_sente_turn = (self._root_turn + depth) % 2 == 0
+        if is_sente_turn:
+            return value
+        return 1 - value
+
     def get_canvas_data(
         self,
         root_hash: int,
@@ -180,7 +197,9 @@ class GameGraphVisualizationInterface:
             layout: 事前計算されたレイアウト
 
         Returns:
-            {"nodes": [...], "edges": [...], "bounds": {...}} 形式
+            {"nodes": [...], "edges": [...], "bounds": {...}} 形式．
+            各ノードは sente_result_value(先手視点の勝率)と
+            sente_best_move_win_rate(先手視点の最善手勝率)を含む．
         """
         sub_nodes, sub_edges = self._query.get_subgraph(
             root_hash, display_depth, min_probability
@@ -208,21 +227,14 @@ class GameGraphVisualizationInterface:
                 )
                 probability = edge_info["probability"]
 
-            result_value = float(row["result_value"])
-            best_move_wr = float(
-                row["best_move_win_rate"]
-            )
             depth = int(row["depth"])
-            is_sente_turn = (self._root_turn + depth) % 2 == 0
-            sente_value = (
-                result_value
-                if is_sente_turn
-                else 1 - result_value
+            sente_value = self._to_sente_perspective(
+                float(row["result_value"]), depth
             )
             sente_best_move_wr = (
-                best_move_wr
-                if is_sente_turn
-                else 1 - best_move_wr
+                self._to_sente_perspective(
+                    float(row["best_move_win_rate"]), depth
+                )
             )
 
             # レイアウトから座標を取得(なければ 0, 0)
@@ -317,7 +329,9 @@ class GameGraphVisualizationInterface:
             layout: 事前計算されたレイアウト
 
         Returns:
-            {"nodes": [...], "edges": [...]} 形式
+            {"nodes": [...], "edges": [...]} 形式．
+            各ノードは sente_result_value(先手視点の勝率)と
+            sente_best_move_win_rate(先手視点の最善手勝率)を含む．
         """
         if not visible_hashes:
             return {"nodes": [], "edges": []}
@@ -343,21 +357,15 @@ class GameGraphVisualizationInterface:
         canvas_nodes: list[dict[str, Any]] = []
         for row in visible_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
-            result_value = float(row["result_value"])
-            best_move_wr = float(
-                row["best_move_win_rate"]
-            )
             depth = int(row["depth"])
-            is_sente_turn = (self._root_turn + depth) % 2 == 0
-            sente_value = (
-                result_value
-                if is_sente_turn
-                else 1 - result_value
+            sente_value = self._to_sente_perspective(
+                float(row["result_value"]), depth
             )
             sente_best_move_wr = (
-                best_move_wr
-                if is_sente_turn
-                else 1 - best_move_wr
+                self._to_sente_perspective(
+                    float(row["best_move_win_rate"]),
+                    depth,
+                )
             )
             x, y = layout.node_positions.get(
                 pos_hash, (0.0, 0.0)
