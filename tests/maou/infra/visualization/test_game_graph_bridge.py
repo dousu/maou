@@ -1,6 +1,6 @@
 """Playwright E2E テスト: ゲームグラフの JS→Python server_functions ブリッジ．
 
-コミット 572b120 で導入された server_functions ブリッジが正しく動作し，
+server_functions ブリッジが正しく動作し，
 ノード選択(シングルクリック)・ノード展開(ダブルクリック)が
 JS → Python → Gradio UI 更新のパイプラインを完走することを検証する．
 
@@ -377,25 +377,36 @@ class TestServerFunctionsBridge:
         # handle_select(_NODE_A_HASH) を呼び出し，
         # trigger("change") で Gradio の出力パイプラインを発火
         result = browser_page.evaluate(
-            f"""async () => {{
+            """async (nodeHash) => {
                 const bridge = window.__maou_select;
                 if (!bridge || !bridge.server) return 'bridge_not_ready';
-                const ok = await bridge.server.handle_select('{_NODE_A_HASH}');
+                const ok = await bridge.server.handle_select(
+                    String(nodeHash)
+                );
                 if (!ok) return 'handle_select_returned_false';
                 bridge.trigger('change');
                 return 'ok';
-            }}"""
+            }""",
+            arg=_NODE_A_HASH,
         )
         assert result == "ok", f"handle_select failed: {result}"
 
         # Gradio が UI を更新するのを待機
-        # 盤面 HTML に SVG が表示されるか，stats に情報が表示される
+        # ノード詳細パネル内にハッシュ値または評価値が表示される
         browser_page.wait_for_function(
-            f"""() => {{
+            """(nodeHash) => {
+                const panel = document.querySelector('#detail-panel')
+                    || document.querySelector('[id*="detail"]');
+                if (panel) {
+                    const text = panel.innerText;
+                    return text.includes(String(nodeHash))
+                        || text.includes('0.48');
+                }
                 const body = document.body.innerText;
-                return body.includes('{_NODE_A_HASH}')
-                    || body.includes('0.48');
-            }}""",
+                return body.includes(String(nodeHash))
+                    && body.includes('0.48');
+            }""",
+            arg=_NODE_A_HASH,
             timeout=10000,
         )
 
@@ -421,16 +432,17 @@ class TestServerFunctionsBridge:
 
         # handle_expand(_NODE_A_HASH, depth=3, prob=0.01) を呼び出し
         result = browser_page.evaluate(
-            f"""async () => {{
+            """async (nodeHash) => {
                 const bridge = window.__maou_expand;
                 if (!bridge || !bridge.server) return 'bridge_not_ready';
                 const ok = await bridge.server.handle_expand(
-                    '{_NODE_A_HASH}', 3, 0.01
+                    String(nodeHash), 3, 0.01
                 );
                 if (!ok) return 'handle_expand_returned_false';
                 bridge.trigger('change');
                 return 'ok';
-            }}"""
+            }""",
+            arg=_NODE_A_HASH,
         )
         assert result == "ok", f"handle_expand failed: {result}"
 
