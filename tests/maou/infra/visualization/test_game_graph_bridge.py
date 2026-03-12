@@ -97,6 +97,12 @@ if _CHROMIUM_PATH is None:
 # 平手初期局面の SFEN
 _HIRATE_SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
 
+# テスト用ノードハッシュ
+_ROOT_HASH = 100
+_NODE_A_HASH = 200
+_NODE_B_HASH = 300
+_NODE_C_HASH = 400
+
 
 def _make_nodes(rows: list[dict[str, Any]]) -> pl.DataFrame:
     """テスト用ノード DataFrame を生成する．"""
@@ -126,7 +132,7 @@ def _build_test_graph(graph_dir: Path) -> None:
     nodes = _make_nodes(
         [
             {
-                "position_hash": 100,
+                "position_hash": _ROOT_HASH,
                 "result_value": 0.52,
                 "best_move_win_rate": 0.53,
                 "num_branches": 2,
@@ -134,7 +140,7 @@ def _build_test_graph(graph_dir: Path) -> None:
                 "is_depth_cutoff": False,
             },
             {
-                "position_hash": 200,
+                "position_hash": _NODE_A_HASH,
                 "result_value": 0.48,
                 "best_move_win_rate": 0.50,
                 "num_branches": 1,
@@ -142,7 +148,7 @@ def _build_test_graph(graph_dir: Path) -> None:
                 "is_depth_cutoff": False,
             },
             {
-                "position_hash": 300,
+                "position_hash": _NODE_B_HASH,
                 "result_value": 0.55,
                 "best_move_win_rate": 0.56,
                 "num_branches": 0,
@@ -150,7 +156,7 @@ def _build_test_graph(graph_dir: Path) -> None:
                 "is_depth_cutoff": False,
             },
             {
-                "position_hash": 400,
+                "position_hash": _NODE_C_HASH,
                 "result_value": 0.45,
                 "best_move_win_rate": 0.46,
                 "num_branches": 0,
@@ -166,8 +172,8 @@ def _build_test_graph(graph_dir: Path) -> None:
     edges = _make_edges(
         [
             {
-                "parent_hash": 100,
-                "child_hash": 200,
+                "parent_hash": _ROOT_HASH,
+                "child_hash": _NODE_A_HASH,
                 "move16": 7739,
                 "move_label": 10,
                 "probability": 0.6,
@@ -175,8 +181,8 @@ def _build_test_graph(graph_dir: Path) -> None:
                 "is_leaf": False,
             },
             {
-                "parent_hash": 100,
-                "child_hash": 300,
+                "parent_hash": _ROOT_HASH,
+                "child_hash": _NODE_B_HASH,
                 "move16": 1934,
                 "move_label": 11,
                 "probability": 0.4,
@@ -184,8 +190,8 @@ def _build_test_graph(graph_dir: Path) -> None:
                 "is_leaf": False,
             },
             {
-                "parent_hash": 200,
-                "child_hash": 400,
+                "parent_hash": _NODE_A_HASH,
+                "child_hash": _NODE_C_HASH,
                 "move16": 2581,
                 "move_label": 12,
                 "probability": 0.3,
@@ -221,8 +227,8 @@ def _wait_for_server(url: str, timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=2)  # noqa: S310
-            return
+            with urllib.request.urlopen(url, timeout=2):  # noqa: S310
+                return
         except Exception:  # noqa: BLE001
             time.sleep(0.5)
     msg = f"Server at {url} did not start within {timeout}s"
@@ -368,27 +374,28 @@ class TestServerFunctionsBridge:
         JS から handle_select を呼び出し，trigger("change") で
         on_select_result が発火してUIが更新されることを確認する．
         """
-        # handle_select(200) を呼び出し，
+        # handle_select(_NODE_A_HASH) を呼び出し，
         # trigger("change") で Gradio の出力パイプラインを発火
         result = browser_page.evaluate(
-            """async () => {
+            f"""async () => {{
                 const bridge = window.__maou_select;
                 if (!bridge || !bridge.server) return 'bridge_not_ready';
-                const ok = await bridge.server.handle_select('200');
+                const ok = await bridge.server.handle_select('{_NODE_A_HASH}');
                 if (!ok) return 'handle_select_returned_false';
                 bridge.trigger('change');
                 return 'ok';
-            }"""
+            }}"""
         )
         assert result == "ok", f"handle_select failed: {result}"
 
         # Gradio が UI を更新するのを待機
         # 盤面 HTML に SVG が表示されるか，stats に情報が表示される
         browser_page.wait_for_function(
-            """() => {
+            f"""() => {{
                 const body = document.body.innerText;
-                return body.includes('200') || body.includes('0.48');
-            }""",
+                return body.includes('{_NODE_A_HASH}')
+                    || body.includes('0.48');
+            }}""",
             timeout=10000,
         )
 
@@ -412,18 +419,18 @@ class TestServerFunctionsBridge:
             }"""
         )
 
-        # handle_expand(200, depth=3, prob=0.01) を呼び出し
+        # handle_expand(_NODE_A_HASH, depth=3, prob=0.01) を呼び出し
         result = browser_page.evaluate(
-            """async () => {
+            f"""async () => {{
                 const bridge = window.__maou_expand;
                 if (!bridge || !bridge.server) return 'bridge_not_ready';
                 const ok = await bridge.server.handle_expand(
-                    '200', 3, 0.01
+                    '{_NODE_A_HASH}', 3, 0.01
                 );
                 if (!ok) return 'handle_expand_returned_false';
                 bridge.trigger('change');
                 return 'ok';
-            }"""
+            }}"""
         )
         assert result == "ok", f"handle_expand failed: {result}"
 
