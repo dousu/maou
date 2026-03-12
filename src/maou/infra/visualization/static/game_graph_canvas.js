@@ -22,7 +22,7 @@
   const DEBOUNCE_MS = 200;
 
   // LOD 閾値
-  const LOD_DOT_ZOOM = 0.3;
+  const LOD_DOT_ZOOM = 0.08;
   const LOD_LABEL_ZOOM = 0.3;
 
   // エッジラベル配置(ソースからターゲットへの距離の割合)
@@ -40,16 +40,16 @@
   /**
    * 先手視点の最善手勝率(0.0-1.0)からノードの色を計算する
    */
-  function winRateToColor(resultValue) {
+  function winRateToColor(winRate) {
     let t, r, g, b;
-    if (resultValue > 0.55) {
-      t = Math.min((resultValue - 0.55) / 0.35, 1.0);
+    if (winRate > 0.55) {
+      t = Math.min((winRate - 0.55) / 0.35, 1.0);
       r = Math.round(144 * (1 - t) + 25 * t);
       g = Math.round(202 * (1 - t) + 118 * t);
       b = Math.round(249 * (1 - t) + 210 * t);
       return "rgb(" + r + "," + g + "," + b + ")";
-    } else if (resultValue < 0.45) {
-      t = Math.min((0.45 - resultValue) / 0.35, 1.0);
+    } else if (winRate < 0.45) {
+      t = Math.min((0.45 - winRate) / 0.35, 1.0);
       r = Math.round(239 * (1 - t) + 211 * t);
       g = Math.round(154 * (1 - t) + 47 * t);
       b = Math.round(154 * (1 - t) + 47 * t);

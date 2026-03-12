@@ -174,6 +174,47 @@ class TestGetCanvasData:
         assert "target_id" in edge
 
 
+class TestGetViewportData:
+    """get_viewport_data のテスト."""
+
+    def test_data_structure(self) -> None:
+        """ビューポートデータに sente_best_move_win_rate が含まれる."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameGraphVisualizationInterface(nodes, edges)
+        layout = _make_layout(nodes, edges, 100)
+        visible_hashes = {100, 200}
+        data = viz.get_viewport_data(
+            visible_hashes, layout
+        )
+        assert "nodes" in data
+        assert "edges" in data
+        for node in data["nodes"]:
+            assert "id" in node
+            assert "sente_result_value" in node
+            assert "sente_best_move_win_rate" in node
+
+    def test_sente_best_move_win_rate_values(
+        self,
+    ) -> None:
+        """ビューポートデータの最善手勝率が正しく変換される."""
+        nodes, edges = _build_tree_with_edge()
+        viz = GameGraphVisualizationInterface(nodes, edges)
+        layout = _make_layout(nodes, edges, 100)
+        visible_hashes = {100, 200}
+        data = viz.get_viewport_data(
+            visible_hashes, layout
+        )
+        node_map = {n["id"]: n for n in data["nodes"]}
+        # depth=0: 先手番 → そのまま 0.53
+        assert node_map["100"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.53)
+        # depth=1: 後手番 → 1 - 0.49 = 0.51
+        assert node_map["200"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.51)
+
+
 class TestGetNodeStats:
     """get_node_stats のテスト."""
 
