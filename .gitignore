@@ -153,3 +153,4 @@ stage1_data/
 スクリーンショット*
 .claude/settings.local.json
 docs/plans/
+tests/maou/infra/visualization/screenshots/
