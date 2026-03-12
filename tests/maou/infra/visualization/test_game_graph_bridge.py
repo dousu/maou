@@ -31,7 +31,7 @@ from maou.domain.game_graph.schema import (
 
 # --- Playwright import (optional dep) ---
 try:
-    from playwright.sync_api import Page, sync_playwright
+    from playwright.sync_api import Page, Route, sync_playwright
 except ImportError:
     pytest.skip(
         "playwright is not installed",
@@ -290,7 +290,7 @@ def browser_page(
         page = browser.new_page()
 
         # 外部 CDN をブロック(ネットワーク制限環境対応)
-        def _route_handler(route) -> None:  # type: ignore[no-untyped-def]
+        def _route_handler(route: Route) -> None:
             url: str = route.request.url
             if "127.0.0.1" in url or "localhost" in url:
                 route.continue_()
@@ -336,7 +336,7 @@ def browser_page(
 class TestServerFunctionsBridge:
     """server_functions ブリッジの E2E テスト．
 
-    コミット 572b120 で導入された JS→Python 通信が
+    JS→Python 通信パイプライン(ノード選択・展開・ビューポートクエリ)が
     正しく動作することを検証する．
     """
 
