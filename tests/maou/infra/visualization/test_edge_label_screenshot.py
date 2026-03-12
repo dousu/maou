@@ -340,16 +340,21 @@ class TestEdgeLabelVisibility:
             timeout=10000,
         )
 
-        # Canvas の描画完了を待機
-        browser_page.wait_for_timeout(3000)
-
-        # Canvas が存在することを確認
-        has_canvas = browser_page.evaluate(
+        # Canvas の描画完了をピクセル確認で待機
+        browser_page.wait_for_function(
             """() => {
-                return !!document.querySelector('#graph-view canvas');
-            }"""
+                const canvas = document.querySelector(
+                    '#graph-view canvas'
+                );
+                if (!canvas) return false;
+                const ctx = canvas.getContext('2d');
+                const data = ctx.getImageData(
+                    0, 0, canvas.width, canvas.height
+                ).data;
+                return data.some(v => v !== 0);
+            }""",
+            timeout=10000,
         )
-        assert has_canvas, "Canvas element not found in #graph-view"
 
         # スクリーンショットを保存
         _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)

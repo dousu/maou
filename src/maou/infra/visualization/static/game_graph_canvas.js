@@ -431,37 +431,16 @@
         const padX = 4;
         const padY = 2;
         const tw = metrics.width;
-        const th = edgeFontSize;
+        const th =
+          metrics.actualBoundingBoxAscent +
+          metrics.actualBoundingBoxDescent;
         const bx = mx - tw / 2 - padX;
         const by = my - th / 2 - padY;
+        const bw = tw + 2 * padX;
+        const bh = th + 2 * padY;
         ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
         ctx.beginPath();
-        var br = 3;
-        ctx.moveTo(bx + br, by);
-        ctx.lineTo(bx + tw + 2 * padX - br, by);
-        ctx.quadraticCurveTo(
-          bx + tw + 2 * padX,
-          by,
-          bx + tw + 2 * padX,
-          by + br
-        );
-        ctx.lineTo(bx + tw + 2 * padX, by + th + 2 * padY - br);
-        ctx.quadraticCurveTo(
-          bx + tw + 2 * padX,
-          by + th + 2 * padY,
-          bx + tw + 2 * padX - br,
-          by + th + 2 * padY
-        );
-        ctx.lineTo(bx + br, by + th + 2 * padY);
-        ctx.quadraticCurveTo(
-          bx,
-          by + th + 2 * padY,
-          bx,
-          by + th + 2 * padY - br
-        );
-        ctx.lineTo(bx, by + br);
-        ctx.quadraticCurveTo(bx, by, bx + br, by);
-        ctx.closePath();
+        ctx.roundRect(bx, by, bw, bh, 3);
         ctx.fill();
         ctx.strokeStyle = "rgba(160, 160, 160, 0.5)";
         ctx.lineWidth = 0.5;
