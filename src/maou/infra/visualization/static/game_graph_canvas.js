@@ -230,12 +230,14 @@
     const edges = canvasData.edges || [];
 
     // Merge nodes (add new, update existing)
+    // ビューポートデータはラベルを含まないため，既存ラベルを保持する
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
+      const existing = this.nodes.get(n.id);
       this.nodes.set(n.id, {
         x: n.x,
         y: n.y,
-        label: n.label,
+        label: n.label || (existing ? existing.label : ""),
         color: winRateToColor(n.sente_result_value),
         radius: probabilityToRadius(n.probability),
         probability: n.probability,
@@ -247,9 +249,11 @@
     }
 
     // Merge edges (keep previously loaded edges outside current viewport)
+    // ビューポートデータはラベルを含まないため，既存ラベルを保持する
     for (let j = 0; j < edges.length; j++) {
       const e = edges[j];
       const edgeKey = e.source_id + ":" + e.target_id;
+      const existingEdge = this.edges.get(edgeKey);
       this.edges.set(edgeKey, {
         sourceId: e.source_id,
         targetId: e.target_id,
@@ -257,7 +261,7 @@
         sy: e.source_y,
         tx: e.target_x,
         ty: e.target_y,
-        label: e.label,
+        label: e.label || (existingEdge ? existingEdge.label : ""),
         prob: e.probability,
       });
     }
