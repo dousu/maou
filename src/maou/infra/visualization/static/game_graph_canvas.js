@@ -23,7 +23,7 @@
 
   // LOD 閾値
   const LOD_DOT_ZOOM = 0.3;
-  const LOD_LABEL_ZOOM = 0.6;
+  const LOD_LABEL_ZOOM = 0.3;
 
   // エッジラベル配置(ソースからターゲットへの距離の割合)
   const EDGE_LABEL_POSITION = 0.65;
@@ -38,7 +38,7 @@
   // ========================================
 
   /**
-   * 先手視点の勝率(0.0-1.0)からノードの色を計算する
+   * 先手視点の最善手勝率(0.0-1.0)からノードの色を計算する
    */
   function winRateToColor(resultValue) {
     let t, r, g, b;
@@ -238,13 +238,14 @@
         x: n.x,
         y: n.y,
         label: n.label || (existing ? existing.label : ""),
-        color: winRateToColor(n.sente_result_value),
+        color: winRateToColor(n.sente_best_move_win_rate),
         radius: probabilityToRadius(n.probability),
         probability: n.probability,
         depth: n.depth,
         numBranches: n.num_branches,
         isDepthCutoff: n.is_depth_cutoff,
         senteResultValue: n.sente_result_value,
+        senteBestMoveWinRate: n.sente_best_move_win_rate,
       });
     }
 

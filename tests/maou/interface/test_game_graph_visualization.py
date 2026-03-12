@@ -80,6 +80,10 @@ class TestGetCanvasData:
         assert node["label"] == "ROOT"
         # depth=0, 先手番 → sente_result_value == result_value
         assert node["sente_result_value"] == pytest.approx(0.52)
+        # depth=0, 先手番 → sente_best_move_win_rate == best_move_win_rate
+        assert node[
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.53)
         # 座標が含まれる
         assert "x" in node
         assert "y" in node
@@ -99,6 +103,14 @@ class TestGetCanvasData:
         assert node_map["200"][
             "sente_result_value"
         ] == pytest.approx(0.52)
+        # best_move_win_rate も同様に反転
+        assert node_map["100"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.53)
+        # depth=1: 後手番 → 1 - 0.49 = 0.51
+        assert node_map["200"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.51)
 
     def test_sente_result_value_gote_root(self) -> None:
         """後手番ルート(initial_sfen="w")ではdepth=0が反転する."""
@@ -121,6 +133,14 @@ class TestGetCanvasData:
         assert node_map["200"][
             "sente_result_value"
         ] == pytest.approx(0.48)
+        # best_move_win_rate: depth=0 後手番 → 1 - 0.53 = 0.47
+        assert node_map["100"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.47)
+        # depth=1: 先手番 → そのまま 0.49
+        assert node_map["200"][
+            "sente_best_move_win_rate"
+        ] == pytest.approx(0.49)
 
     def test_data_structure(self) -> None:
         """Canvas データの構造が正しい."""
@@ -136,6 +156,7 @@ class TestGetCanvasData:
             assert "x" in node
             assert "y" in node
             assert "sente_result_value" in node
+            assert "sente_best_move_win_rate" in node
 
     def test_edges_have_coordinates(self) -> None:
         """エッジに source/target 座標が含まれる."""

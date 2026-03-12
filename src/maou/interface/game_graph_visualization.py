@@ -209,12 +209,20 @@ class GameGraphVisualizationInterface:
                 probability = edge_info["probability"]
 
             result_value = float(row["result_value"])
+            best_move_wr = float(
+                row["best_move_win_rate"]
+            )
             depth = int(row["depth"])
             is_sente_turn = (self._root_turn + depth) % 2 == 0
             sente_value = (
                 result_value
                 if is_sente_turn
                 else 1 - result_value
+            )
+            sente_best_move_wr = (
+                best_move_wr
+                if is_sente_turn
+                else 1 - best_move_wr
             )
 
             # レイアウトから座標を取得(なければ 0, 0)
@@ -229,6 +237,7 @@ class GameGraphVisualizationInterface:
                     "y": y,
                     "label": label,
                     "sente_result_value": sente_value,
+                    "sente_best_move_win_rate": sente_best_move_wr,
                     "probability": float(probability),
                     "depth": depth,
                     "num_branches": int(row["num_branches"]),
@@ -335,12 +344,20 @@ class GameGraphVisualizationInterface:
         for row in visible_nodes.iter_rows(named=True):
             pos_hash = row["position_hash"]
             result_value = float(row["result_value"])
+            best_move_wr = float(
+                row["best_move_win_rate"]
+            )
             depth = int(row["depth"])
             is_sente_turn = (self._root_turn + depth) % 2 == 0
             sente_value = (
                 result_value
                 if is_sente_turn
                 else 1 - result_value
+            )
+            sente_best_move_wr = (
+                best_move_wr
+                if is_sente_turn
+                else 1 - best_move_wr
             )
             x, y = layout.node_positions.get(
                 pos_hash, (0.0, 0.0)
@@ -352,6 +369,7 @@ class GameGraphVisualizationInterface:
                     "y": y,
                     "label": "",
                     "sente_result_value": sente_value,
+                    "sente_best_move_win_rate": sente_best_move_wr,
                     "probability": max_prob_map.get(
                         pos_hash, 1.0
                     ),

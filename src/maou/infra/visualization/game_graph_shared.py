@@ -119,7 +119,7 @@ def build_graph_html(canvas_data_json: str) -> str:
             <span class="legend-swatch" style="background:#F44336;"></span>後手有利
         </span>
         <span class="legend-item" style="margin-left:12px;">
-            &#9679; サイズ = 確率 / 色 = 勝率
+            &#9679; サイズ = 確率 / 色 = 最善手勝率
         </span>
     </div>
     <div class="graph-export-overlay">
