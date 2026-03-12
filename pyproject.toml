@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.17.15"
+version = "0.17.16"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -71,7 +71,7 @@ aws = [
 ]
 # 可視化ツール用のextra
 visualize = [
-    "gradio>=6.0.0,<7.0.0",
+    "gradio>=6.7.0,<7.0.0",
     "matplotlib>=3.5.0",
 ]
 
