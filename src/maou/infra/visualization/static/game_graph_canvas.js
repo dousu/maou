@@ -23,7 +23,7 @@
 
   // LOD 閾値
   const LOD_DOT_ZOOM = 0.3;
-  const LOD_LABEL_ZOOM = 0.8;
+  const LOD_LABEL_ZOOM = 0.6;
 
   // ノード描画
   const NODE_MIN_SIZE = 25;
@@ -412,16 +412,64 @@
       ctx.fillStyle = "rgba(176,176,176," + (0.3 + 0.7 * e.prob) + ")";
       ctx.fill();
 
-      // Edge label
+      // Edge label (ターゲット寄り 65% に配置して同一ソースからの重なりを軽減)
       if (showLabels && e.label) {
-        const mx = (s.x + t.x) / 2;
-        const my = (s.y + t.y) / 2;
+        const mx = s.x + (t.x - s.x) * 0.65;
+        const my = s.y + (t.y - s.y) * 0.65;
         ctx.save();
-        ctx.font = "8px 'Noto Sans JP', sans-serif";
-        ctx.fillStyle = "#718096";
+        const edgeFontSize = Math.max(
+          9,
+          Math.min(12, 10 * Math.min(zoom, 1.5))
+        );
+        ctx.font =
+          "bold " + edgeFontSize + "px 'Noto Sans JP', sans-serif";
         ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-        ctx.fillText(e.label, mx, my - 4);
+        ctx.textBaseline = "middle";
+
+        // 背景ピルで視認性を確保
+        const metrics = ctx.measureText(e.label);
+        const padX = 4;
+        const padY = 2;
+        const tw = metrics.width;
+        const th = edgeFontSize;
+        const bx = mx - tw / 2 - padX;
+        const by = my - th / 2 - padY;
+        ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+        ctx.beginPath();
+        var br = 3;
+        ctx.moveTo(bx + br, by);
+        ctx.lineTo(bx + tw + 2 * padX - br, by);
+        ctx.quadraticCurveTo(
+          bx + tw + 2 * padX,
+          by,
+          bx + tw + 2 * padX,
+          by + br
+        );
+        ctx.lineTo(bx + tw + 2 * padX, by + th + 2 * padY - br);
+        ctx.quadraticCurveTo(
+          bx + tw + 2 * padX,
+          by + th + 2 * padY,
+          bx + tw + 2 * padX - br,
+          by + th + 2 * padY
+        );
+        ctx.lineTo(bx + br, by + th + 2 * padY);
+        ctx.quadraticCurveTo(
+          bx,
+          by + th + 2 * padY,
+          bx,
+          by + th + 2 * padY - br
+        );
+        ctx.lineTo(bx, by + br);
+        ctx.quadraticCurveTo(bx, by, bx + br, by);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(160, 160, 160, 0.5)";
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        // テキスト描画
+        ctx.fillStyle = "#2d3748";
+        ctx.fillText(e.label, mx, my);
         ctx.restore();
       }
     }
@@ -821,5 +869,9 @@
       renderer = null;
     }
     document.removeEventListener("click", handleBreadcrumbClick);
+  };
+  /** テスト用: renderer の内部状態にアクセスする． */
+  window.__maou_get_renderer = function () {
+    return renderer;
   };
 })();
