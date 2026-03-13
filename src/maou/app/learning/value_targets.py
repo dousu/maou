@@ -54,5 +54,7 @@ def resolve_value_targets(
         dim=1, keepdim=True
     ).values
     return best_win_rate.to(
-        dtype=labels_value.dtype, device=labels_value.device
+        dtype=labels_value.dtype,
+        device=labels_value.device,
+        non_blocking=True,
     )

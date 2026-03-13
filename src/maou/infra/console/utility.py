@@ -779,6 +779,7 @@ def benchmark_dataloader(
         case_sensitive=False,
     ),
     default=ValueTargetMode.BEST_MOVE_WIN_RATE.value,
+    show_default=True,
     help=(
         "Value教師信号モード．result-value=局面勝率，"
         "best-move-win-rate=最善手勝率．"
