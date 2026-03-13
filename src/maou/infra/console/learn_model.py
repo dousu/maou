@@ -595,7 +595,7 @@ def _build_adaptive_batch_config(
         [m.value for m in ValueTargetMode],
         case_sensitive=False,
     ),
-    default=ValueTargetMode.RESULT_VALUE.value,
+    default=ValueTargetMode.BEST_MOVE_WIN_RATE.value,
     show_default=True,
     help="Value教師信号モード．result-value=局面勝率，best-move-win-rate=最善手勝率．",
 )

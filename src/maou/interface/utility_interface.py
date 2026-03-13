@@ -166,7 +166,7 @@ def benchmark_training(
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     learning_ratio: float | None = None,
     momentum: float | None = None,
     lr_scheduler: str | None = None,

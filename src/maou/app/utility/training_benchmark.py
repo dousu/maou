@@ -265,7 +265,7 @@ class SingleEpochBenchmark:
         policy_loss_ratio: float,
         value_loss_ratio: float,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-        value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
+        value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
     ):
@@ -652,7 +652,7 @@ class TrainingBenchmarkConfig:
         PolicyTargetMode.WIN_RATE
     )
     value_target_mode: ValueTargetMode = (
-        ValueTargetMode.RESULT_VALUE
+        ValueTargetMode.BEST_MOVE_WIN_RATE
     )
     learning_ratio: float = 0.01
     momentum: float = 0.9

@@ -76,7 +76,7 @@ class TrainingLoop:
         logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-        value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
+        value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
         adaptive_batch_config: AdaptiveBatchConfig
         | None = None,
         physical_batch_size: int | None = None,

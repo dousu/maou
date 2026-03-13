@@ -240,7 +240,7 @@ def learn(
     streaming_val_source: StreamingDataSource | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
@@ -993,7 +993,7 @@ def learn_multi_stage(
     | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:

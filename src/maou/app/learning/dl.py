@@ -140,7 +140,7 @@ class Learning:
             PolicyTargetMode.WIN_RATE
         )
         value_target_mode: ValueTargetMode = (
-            ValueTargetMode.RESULT_VALUE
+            ValueTargetMode.BEST_MOVE_WIN_RATE
         )
         gradient_accumulation_steps: int = 1
         adaptive_batch_config: AdaptiveBatchConfig | None = None
