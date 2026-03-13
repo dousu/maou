@@ -46,8 +46,6 @@ impl Position {
 
     /// 手を実行する．
     pub fn do_move(&mut self, m: Move) {
-        let _us = self.board.turn;
-
         let captured = self.board.do_move(m);
 
         // 相手の玉に王手をかけているか(do_move後は手番が交代済み)

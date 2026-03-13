@@ -333,7 +333,8 @@ fn test_hcp_fixtures() {
             .unwrap_or_else(|e| panic!("{}: SFEN parse error: {}", fixture.name, e));
 
         // maou_shogi -> HCP
-        let hcp_bytes = hcp::to_hcp(&board);
+        let hcp_bytes = hcp::to_hcp(&board)
+            .unwrap_or_else(|e| panic!("{}: HCP encode error: {}", fixture.name, e));
         let hcp_hex: String = hcp_bytes.iter().map(|b| format!("{:02x}", b)).collect();
 
         assert_eq!(

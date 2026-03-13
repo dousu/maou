@@ -326,7 +326,7 @@ impl Square {
 
 /// 定数．
 pub const PIECE_TYPES_NUM: usize = 14;
-pub const FEATURES_NUM: usize = PIECE_TYPES_NUM * 2 + 76; // 14*2 + 38*2 = 104
+pub const FEATURES_NUM: usize = PIECE_TYPES_NUM * 2 + 76; // 28 (board) + 76 (hand) = 104
 
 #[cfg(test)]
 mod tests {

@@ -125,7 +125,7 @@ fn is_legal(board: &Board, m: Move) -> bool {
     let us = board.turn;
 
     // 打ち歩詰めチェック
-    if m.is_drop() && m.drop_piece_type() == PieceType::Pawn {
+    if m.is_drop() && m.drop_piece_type() == Some(PieceType::Pawn) {
         // 歩を打って王手になるかチェック
         let to = m.to_sq();
         let opp_king = board.king_square(us.opponent());
@@ -219,7 +219,7 @@ mod tests {
         let moves = generate_legal_moves(&board);
         // 歩を打てるマスに5筋が含まれていないことを確認
         for m in &moves {
-            if m.is_drop() && m.drop_piece_type() == PieceType::Pawn {
+            if m.is_drop() && m.drop_piece_type() == Some(PieceType::Pawn) {
                 assert_ne!(
                     m.to_sq().col(),
                     4,

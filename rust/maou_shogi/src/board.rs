@@ -170,7 +170,7 @@ impl Board {
 
         if m.is_drop() {
             // 駒打ち
-            let pt = m.drop_piece_type();
+            let pt = m.drop_piece_type().unwrap();
             let to = m.to_sq();
             let piece = Piece::new(self.turn, pt);
 
@@ -236,7 +236,7 @@ impl Board {
 
         if m.is_drop() {
             let to = m.to_sq();
-            let pt = m.drop_piece_type();
+            let pt = m.drop_piece_type().unwrap();
 
             // 盤上から駒を除去
             self.remove_piece(to);

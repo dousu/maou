@@ -72,11 +72,16 @@ impl Move {
         (self.0 & Self::PROMOTE_FLAG) != 0
     }
 
-    /// 打った駒種を返す(駒打ちの場合のみ有効)．
+    /// 打った駒種を返す．
+    ///
+    /// 駒打ちでない場合は `None` を返す．
     #[inline]
-    pub fn drop_piece_type(self) -> PieceType {
+    pub fn drop_piece_type(self) -> Option<PieceType> {
+        if !self.is_drop() {
+            return None;
+        }
         let pt = ((self.0 & Self::FROM_MASK) >> 7) as u8;
-        PieceType::from_u8(pt).expect("invalid drop piece type")
+        PieceType::from_u8(pt)
     }
 
     /// 取った駒のcshogi IDを返す(0=取っていない)．
@@ -101,7 +106,8 @@ impl Move {
     /// USI文字列に変換する．
     pub fn to_usi(self) -> String {
         if self.is_drop() {
-            let ch = match self.drop_piece_type() {
+            let pt = self.drop_piece_type().unwrap();
+            let ch = match pt {
                 PieceType::Pawn => 'P',
                 PieceType::Lance => 'L',
                 PieceType::Knight => 'N',
@@ -217,9 +223,11 @@ pub fn move_is_promotion(m: Move) -> bool {
 }
 
 /// cshogi互換: move_drop_hand_piece関数．
+///
+/// 駒打ちでない場合は 0 を返す．
 #[inline]
 pub fn move_drop_hand_piece(m: Move) -> u8 {
-    m.drop_piece_type() as u8
+    m.drop_piece_type().map_or(0, |pt| pt as u8)
 }
 
 #[cfg(test)]
@@ -241,7 +249,7 @@ mod tests {
         // P*5e: 5五歩打ち to=Square(4*9+4)=40
         let m = Move::new_drop(Square(40), PieceType::Pawn);
         assert!(m.is_drop());
-        assert_eq!(m.drop_piece_type(), PieceType::Pawn);
+        assert_eq!(m.drop_piece_type(), Some(PieceType::Pawn));
         assert_eq!(m.to_sq(), Square(40));
     }
 
@@ -285,7 +293,7 @@ mod tests {
     fn test_usi_drop() {
         let m = Move::from_usi("P*5e").unwrap();
         assert!(m.is_drop());
-        assert_eq!(m.drop_piece_type(), PieceType::Pawn);
+        assert_eq!(m.drop_piece_type(), Some(PieceType::Pawn));
         assert_eq!(m.to_usi(), "P*5e");
     }
 

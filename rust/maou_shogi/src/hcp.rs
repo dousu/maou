@@ -228,18 +228,21 @@ fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color)
 }
 
 /// Board を HCP (32バイト) にエンコードする．
-pub fn to_hcp(board: &Board) -> Hcp {
+///
+/// HCPフォーマットは両玉が存在する標準局面を前提としている．
+/// 片玉局面(詰将棋など)はサポート対象外であり，`Err` を返す．
+pub fn to_hcp(board: &Board) -> Result<Hcp, String> {
     let mut writer = BitWriter::new();
 
     // 1. 手番 (1ビット)
     writer.write_bit(board.turn as u8);
 
     // 2. 先手玉のマス番号 (7ビット)
-    let bk_sq = find_king(board, Color::Black);
+    let bk_sq = find_king(board, Color::Black)?;
     writer.write_bits(bk_sq as u32, 7);
 
     // 3. 後手玉のマス番号 (7ビット)
-    let wk_sq = find_king(board, Color::White);
+    let wk_sq = find_king(board, Color::White)?;
     writer.write_bits(wk_sq as u32, 7);
 
     // 4. 盤上の駒 (sq=0..80, 玉は飛ばす)
@@ -262,7 +265,7 @@ pub fn to_hcp(board: &Board) -> Hcp {
         }
     }
 
-    writer.buf
+    Ok(writer.buf)
 }
 
 // ============================================================
@@ -396,7 +399,7 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
 
 /// 持ち駒の1つをビットストリームからデコードする．
 /// 戻り値: (駒種, 色)
-fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
+fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), String> {
     if reader.read_bit() == 0 {
         // 0,...
         if reader.read_bit() == 0 {
@@ -407,15 +410,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
             } else {
                 Color::White
             };
-            return (PieceType::Pawn, color);
+            return Ok((PieceType::Pawn, color));
         }
-        // 0,1,... → not a valid hand prefix in this scheme
-        // Actually let me re-check the hand prefixes
-        // Pawn: 0,0 → starts with 0,0
-        // But this branch handles first bit = 0, second bit = 1
-        // That doesn't match any hand prefix that starts with 0,1
-        // Hmm, let me re-examine the hand code table
-        unreachable!("invalid hand piece code");
+        return Err("invalid hand piece code: prefix 0,1 is not defined".to_string());
     }
 
     // 1,...
@@ -431,10 +428,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
                 } else {
                     Color::White
                 };
-                return (PieceType::Lance, color);
+                return Ok((PieceType::Lance, color));
             }
-            // 1,0,0,1 → not a standard prefix
-            unreachable!("invalid hand piece code");
+            return Err("invalid hand piece code: prefix 1,0,0,1 is not defined".to_string());
         }
         // 1,0,1,...
         if reader.read_bit() == 0 {
@@ -445,10 +441,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
             } else {
                 Color::White
             };
-            return (PieceType::Silver, color);
+            return Ok((PieceType::Silver, color));
         }
-        // 1,0,1,1 → not standard
-        unreachable!("invalid hand piece code");
+        return Err("invalid hand piece code: prefix 1,0,1,1 is not defined".to_string());
     }
 
     // 1,1,...
@@ -462,10 +457,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
             } else {
                 Color::White
             };
-            return (PieceType::Knight, color);
+            return Ok((PieceType::Knight, color));
         }
-        // 1,1,0,1 → not standard
-        unreachable!("invalid hand piece code");
+        return Err("invalid hand piece code: prefix 1,1,0,1 is not defined".to_string());
     }
 
     // 1,1,1,...
@@ -477,16 +471,12 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
         } else {
             Color::White
         };
-        return (PieceType::Gold, color);
+        return Ok((PieceType::Gold, color));
     }
 
     // 1,1,1,1,...
     if reader.read_bit() == 0 {
-        // 1,1,1,1,0 → not matching any 5-bit hand prefix
-        // Wait - Bishop hand prefix is 1,1,1,1,1,0 (6 bits)
-        // We've read 1,1,1,1,0 so far (5 bits).
-        // That's not bishop. Let me re-check.
-        unreachable!("invalid hand piece code");
+        return Err("invalid hand piece code: prefix 1,1,1,1,0 is not defined".to_string());
     }
 
     // 1,1,1,1,1,...
@@ -498,7 +488,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
         } else {
             Color::White
         };
-        return (PieceType::Bishop, color);
+        return Ok((PieceType::Bishop, color));
     }
 
     // prefix 1,1,1,1,1,1 → Rook
@@ -508,7 +498,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> (PieceType, Color) {
     } else {
         Color::White
     };
-    (PieceType::Rook, color)
+    Ok((PieceType::Rook, color))
 }
 
 /// HCP (32バイト) から Board をデコードする．
@@ -564,7 +554,7 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
     }
 
     for _ in 0..total_remaining {
-        let (decoded_pt, color) = decode_hand_piece(&mut reader);
+        let (decoded_pt, color) = decode_hand_piece(&mut reader)?;
         let hand_idx = decoded_pt
             .hand_index()
             .expect("decoded non-hand piece type from hand section");
@@ -600,14 +590,19 @@ fn count_on_board(board: &Board, base_pt: PieceType) -> usize {
 }
 
 /// 指定した色の玉のマス番号を返す．
-fn find_king(board: &Board, color: Color) -> u8 {
+///
+/// 玉が見つからない場合は `Err` を返す(片玉局面など)．
+fn find_king(board: &Board, color: Color) -> Result<u8, String> {
     let king_piece = Piece::new(color, PieceType::King);
     for sq in 0..81u8 {
         if board.squares[sq as usize] == king_piece {
-            return sq;
+            return Ok(sq);
         }
     }
-    panic!("king not found for {:?}", color);
+    Err(format!(
+        "king not found for {:?}: HCP requires both kings on the board",
+        color
+    ))
 }
 
 #[cfg(test)]
@@ -617,7 +612,7 @@ mod tests {
     #[test]
     fn test_hcp_hirate_roundtrip() {
         let board = Board::new();
-        let hcp = to_hcp(&board);
+        let hcp = to_hcp(&board).unwrap();
         let decoded = from_hcp(&hcp).unwrap();
 
         assert_eq!(decoded.turn, board.turn);
@@ -642,7 +637,7 @@ mod tests {
         board
             .set_sfen("lnsgkg1nl/1r5s1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL b Bb 5")
             .unwrap();
-        let hcp = to_hcp(&board);
+        let hcp = to_hcp(&board).unwrap();
         let decoded = from_hcp(&hcp).unwrap();
 
         assert_eq!(decoded.turn, board.turn);
@@ -662,7 +657,7 @@ mod tests {
         board
             .set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2")
             .unwrap();
-        let hcp = to_hcp(&board);
+        let hcp = to_hcp(&board).unwrap();
         let decoded = from_hcp(&hcp).unwrap();
         assert_eq!(decoded.turn, Color::White);
         for sq in 0..81 {
