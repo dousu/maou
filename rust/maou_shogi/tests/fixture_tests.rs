@@ -1,5 +1,6 @@
 use maou_shogi::board::Board;
 use maou_shogi::feature;
+use maou_shogi::hcp;
 use maou_shogi::movegen;
 use maou_shogi::moves::Move;
 use maou_shogi::types::FEATURES_NUM;
@@ -308,5 +309,49 @@ fn test_feature_fixtures() {
                 }
             }
         }
+    }
+}
+
+// === HCP Fixtures ===
+
+#[derive(Deserialize)]
+struct HcpFixture {
+    name: String,
+    sfen: String,
+    hcp_hex: String,
+    roundtrip_sfen: String,
+}
+
+#[test]
+fn test_hcp_fixtures() {
+    let fixtures: Vec<HcpFixture> = load_fixture("hcp_fixtures.json");
+
+    for fixture in &fixtures {
+        let mut board = Board::empty();
+        board
+            .set_sfen(&fixture.sfen)
+            .unwrap_or_else(|e| panic!("{}: SFEN parse error: {}", fixture.name, e));
+
+        // maou_shogi -> HCP
+        let hcp_bytes = hcp::to_hcp(&board);
+        let hcp_hex: String = hcp_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+        assert_eq!(
+            hcp_hex, fixture.hcp_hex,
+            "{}: HCP mismatch\n  maou_shogi: {}\n  cshogi:     {}",
+            fixture.name, hcp_hex, fixture.hcp_hex
+        );
+
+        // HCP -> Board (roundtrip)
+        let decoded = hcp::from_hcp(&hcp_bytes)
+            .unwrap_or_else(|e| panic!("{}: HCP decode error: {}", fixture.name, e));
+        let decoded_sfen = decoded.sfen();
+
+        // cshogiのroundtrip SFENと比較
+        assert_eq!(
+            decoded_sfen, fixture.roundtrip_sfen,
+            "{}: roundtrip SFEN mismatch\n  maou_shogi: {}\n  cshogi:     {}",
+            fixture.name, decoded_sfen, fixture.roundtrip_sfen
+        );
     }
 }

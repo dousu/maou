@@ -281,7 +281,7 @@ impl Board {
     }
 
     /// 盤面全体からZobrist hashを計算する(初期化用)．
-    fn compute_hash(&self) -> u64 {
+    pub fn compute_hash(&self) -> u64 {
         let mut hash = 0u64;
 
         // 盤上の駒

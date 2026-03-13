@@ -9,3 +9,4 @@ pub mod attack;
 pub mod movegen;
 pub mod position;
 pub mod feature;
+pub mod hcp;
