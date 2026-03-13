@@ -41,6 +41,7 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.policy_targets import PolicyTargetMode
+from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.setup import (
     DataLoaderFactory,
     DeviceConfig,
@@ -137,6 +138,9 @@ class Learning:
         save_split_params: bool = False
         policy_target_mode: PolicyTargetMode = (
             PolicyTargetMode.WIN_RATE
+        )
+        value_target_mode: ValueTargetMode = (
+            ValueTargetMode.RESULT_VALUE
         )
         gradient_accumulation_steps: int = 1
         adaptive_batch_config: AdaptiveBatchConfig | None = None
@@ -516,6 +520,7 @@ class Learning:
             callbacks=callbacks,
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
+            value_target_mode=self.config.value_target_mode,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             adaptive_batch_config=adaptive_batch_config,
             physical_batch_size=physical_batch_size,
@@ -654,6 +659,7 @@ class Learning:
                 ],
                 logger=self.logger,
                 policy_target_mode=self.config.policy_target_mode,
+                value_target_mode=self.config.value_target_mode,
             )
 
             # Run validation epoch
@@ -880,6 +886,7 @@ class Learning:
             "policy_loss_ratio": config.policy_loss_ratio,
             "value_loss_ratio": config.value_loss_ratio,
             "policy_target_mode": config.policy_target_mode.value,
+            "value_target_mode": config.value_target_mode.value,
         }
 
         # Adaptive batch パラメータ

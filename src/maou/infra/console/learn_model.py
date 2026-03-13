@@ -9,6 +9,7 @@ from maou.interface.learn import (
     AdaptiveBatchConfig,
     PolicyTargetMode,
     StageDataConfig,
+    ValueTargetMode,
 )
 
 if TYPE_CHECKING:
@@ -589,6 +590,16 @@ def _build_adaptive_batch_config(
     help="Policy教師信号モード．move-label=棋譜頻度，win-rate=勝率正規化，weighted=頻度×勝率．",
 )
 @click.option(
+    "--value-target-mode",
+    type=click.Choice(
+        [m.value for m in ValueTargetMode],
+        case_sensitive=False,
+    ),
+    default=ValueTargetMode.RESULT_VALUE.value,
+    show_default=True,
+    help="Value教師信号モード．result-value=局面勝率，best-move-win-rate=最善手勝率．",
+)
+@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -708,6 +719,7 @@ def learn_model(
     resume_legal_moves_head_from: Path | None,
     no_streaming: bool,
     policy_target_mode: str,
+    value_target_mode: str,
     log_dir: Path | None,
     model_dir: Path | None,
     output_gcs: bool | None,
@@ -967,6 +979,9 @@ def learn_model(
             save_split_params=save_split_params,
             policy_target_mode=PolicyTargetMode(
                 policy_target_mode
+            ),
+            value_target_mode=ValueTargetMode(
+                value_target_mode
             ),
             gradient_accumulation_steps=gradient_accumulation_steps,
             adaptive_batch_config=_build_adaptive_batch_config(

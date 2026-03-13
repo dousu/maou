@@ -28,6 +28,7 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.policy_targets import PolicyTargetMode
+from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import (
     DataLoaderFactory,
@@ -246,6 +247,7 @@ class SingleEpochBenchmark:
         policy_loss_ratio: 方策損失の重み係数
         value_loss_ratio: 価値損失の重み係数
         policy_target_mode: Policy教師信号モード
+        value_target_mode: Value教師信号モード
         enable_resource_monitoring: リソース監視を有効にするか
         training_loop_class: 使用するTrainingLoopクラス（デフォルト: TrainingLoop）
     """
@@ -263,6 +265,7 @@ class SingleEpochBenchmark:
         policy_loss_ratio: float,
         value_loss_ratio: float,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+        value_target_mode: ValueTargetMode = ValueTargetMode.RESULT_VALUE,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
     ):
@@ -274,6 +277,7 @@ class SingleEpochBenchmark:
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
         self.policy_target_mode = policy_target_mode
+        self.value_target_mode = value_target_mode
         self.enable_resource_monitoring = (
             enable_resource_monitoring
         )
@@ -392,6 +396,7 @@ class SingleEpochBenchmark:
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
             policy_target_mode=self.policy_target_mode,
+            value_target_mode=self.value_target_mode,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -541,6 +546,7 @@ class SingleEpochBenchmark:
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
             policy_target_mode=self.policy_target_mode,
+            value_target_mode=self.value_target_mode,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -644,6 +650,9 @@ class TrainingBenchmarkConfig:
     value_loss_ratio: float = 1.0
     policy_target_mode: PolicyTargetMode = (
         PolicyTargetMode.WIN_RATE
+    )
+    value_target_mode: ValueTargetMode = (
+        ValueTargetMode.RESULT_VALUE
     )
     learning_ratio: float = 0.01
     momentum: float = 0.9
@@ -1452,6 +1461,7 @@ class TrainingBenchmarkUseCase:
             policy_loss_ratio=config.policy_loss_ratio,
             value_loss_ratio=actual_value_loss_ratio,
             policy_target_mode=config.policy_target_mode,
+            value_target_mode=config.value_target_mode,
             enable_resource_monitoring=config.enable_resource_monitoring,
             training_loop_class=training_loop_class,
         )

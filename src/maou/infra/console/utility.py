@@ -18,7 +18,10 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
-from maou.interface.learn import PolicyTargetMode
+from maou.interface.learn import (
+    PolicyTargetMode,
+    ValueTargetMode,
+)
 
 
 def _parse_int_list(
@@ -770,6 +773,19 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
+    "--value-target-mode",
+    type=click.Choice(
+        [m.value for m in ValueTargetMode],
+        case_sensitive=False,
+    ),
+    default=ValueTargetMode.RESULT_VALUE.value,
+    help=(
+        "Value教師信号モード．result-value=局面勝率，"
+        "best-move-win-rate=最善手勝率．"
+    ),
+    required=False,
+)
+@click.option(
     "--learning-ratio",
     type=float,
     help="Learning rate (default: 0.01).",
@@ -1046,6 +1062,7 @@ def benchmark_training(
     policy_loss_ratio: float,
     value_loss_ratio: float,
     policy_target_mode: str,
+    value_target_mode: str,
     learning_ratio: float,
     momentum: float,
     lr_scheduler: str,
@@ -1401,6 +1418,7 @@ def benchmark_training(
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         policy_target_mode=PolicyTargetMode(policy_target_mode),
+        value_target_mode=ValueTargetMode(value_target_mode),
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler=lr_scheduler,
