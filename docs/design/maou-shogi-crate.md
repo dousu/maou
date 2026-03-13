@@ -18,11 +18,11 @@ cshogiの依存部分をRustで再実装し，既存Rustワークスペースに
 - piece_planes(特徴平面): 104×9×9のNN入力特徴量生成
 - SFEN: パース/シリアライズ
 - Zobrist hashing: 局面のハッシュ値計算
+- HCP(HuffmanCodedPos): Apery/cshogi互換の32バイトバイナリシリアライズ
 
 ### 対象外
 
 - KIF/CSAパーサー
-- HuffmanCodedPos (HCP): SFENベースのシリアライズで代替
 - GUI/通信プロトコル
 
 ## 座標系
@@ -156,6 +156,63 @@ struct StateInfo {
 `Position`レベルで判定する．手を指した結果，同一局面が4回出現し，
 その間の自分の手が全て王手だった場合，その手を合法手から除外する．
 
+## HuffmanCodedPos (HCP)
+
+### 概要
+
+Apery/cshogiで使用されている32バイト(256ビット)の局面バイナリシリアライズ形式．
+`hcp.rs`モジュールで`to_hcp()`(エンコード)と`from_hcp()`(デコード)を提供する．
+
+### ビットレイアウト
+
+```
+ビット0:     手番 (0=先手, 1=後手)
+ビット1-7:   先手玉のマス番号 (7ビット, LSBファースト)
+ビット8-14:  後手玉のマス番号 (7ビット, LSBファースト)
+ビット15以降: 79マスの駒をHuffman符号化 (sq=0..80, 玉のマスはスキップ)
+残りビット:   持ち駒をHuffman符号化
+```
+
+合計は常に256ビット(駒数が標準のゲーム局面の場合)．
+
+### 盤上駒のHuffman符号
+
+各マスの符号は `prefix + color_bit + promotion_bit` の構造を持つ．
+Goldは成れないため`promotion_bit`なし．
+
+| 駒種   | prefix (LSBファースト) | prefix長 | +color | +promoted | 合計 |
+|--------|----------------------|----------|--------|-----------|------|
+| Empty  | `0`                  | 1        | -      | -         | 1    |
+| Pawn   | `1,0`                | 2        | +1     | +1        | 4    |
+| Lance  | `1,1,0,0`            | 4        | +1     | +1        | 6    |
+| Knight | `1,1,1,0`            | 4        | +1     | +1        | 6    |
+| Silver | `1,1,0,1`            | 4        | +1     | +1        | 6    |
+| Gold   | `1,1,1,1,0`          | 5        | +1     | -         | 6    |
+| Bishop | `1,1,1,1,1,0`        | 6        | +1     | +1        | 8    |
+| Rook   | `1,1,1,1,1,1`        | 6        | +1     | +1        | 8    |
+
+### 持ち駒のHuffman符号
+
+持ち駒は**色別にグループ化**してエンコードする:
+先手の全持ち駒(歩→飛の順)，次に後手の全持ち駒(同順)．
+
+各符号は prefix-free(自己識別可能)であり，デコード時に順序を知る必要がない．
+
+| 駒種   | prefix (LSBファースト) | prefix長 | +color | 合計 |
+|--------|----------------------|----------|--------|------|
+| Pawn   | `0,0`                | 2        | +1     | 3    |
+| Lance  | `1,0,0,0`            | 4        | +1     | 5    |
+| Knight | `1,1,0,0`            | 4        | +1     | 5    |
+| Silver | `1,0,1,0`            | 4        | +1     | 5    |
+| Gold   | `1,1,1,0`            | 4        | +1     | 5    |
+| Bishop | `1,1,1,1,1,0`        | 6        | +1     | 7    |
+| Rook   | `1,1,1,1,1,1`        | 6        | +1     | 7    |
+
+### 制約
+
+HCPは標準の駒数(歩18枚，香桂銀金各4枚，角飛各2枚)を前提としている．
+駒数が標準と異なる非正規局面では，合計ビット数が256にならず正しくエンコードできない．
+
 ## 特徴平面 (piece_planes)
 
 ### 形状
@@ -193,7 +250,8 @@ rust/maou_shogi/
 │   ├── sfen.rs          # SFENパース/シリアライズ
 │   ├── zobrist.rs       # Zobristハッシュ
 │   ├── feature.rs       # piece_planes生成
-│   └── attack.rs        # 利き計算
+│   ├── attack.rs        # 利き計算
+│   └── hcp.rs           # HuffmanCodedPos(32バイトバイナリシリアライズ)
 ├── tests/
 │   ├── fixtures/        # JSON test fixtures (cshogiから生成)
 │   └── fixture_tests.rs # 統合テスト
@@ -216,6 +274,7 @@ Rustの統合テストでこれらのfixtureを読み込み，出力が一致す
 | legal_move_fixtures.json | 各局面の全合法手リスト(sorted) |
 | special_rule_fixtures.json | 二歩/打ち歩詰めの特殊ルール検証 |
 | feature_fixtures.json | piece_planes/piece_planes_rotate出力の一致 |
+| hcp_fixtures.json | HCPエンコード結果のcshogi出力とのバイト一致 + roundtrip |
 
 ### 単体テスト
 
