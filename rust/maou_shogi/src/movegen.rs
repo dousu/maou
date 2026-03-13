@@ -339,6 +339,79 @@ mod tests {
     }
 
     #[test]
+    fn test_nifu() {
+        // 二歩テスト: 3筋,5筋,7筋に先手の歩がある局面
+        // → これらの筋には歩を打てない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/9/2P1P1P2/9/4K4 b P 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 56手(48歩打ち + 8盤上)
+        assert_eq!(
+            moves.len(),
+            56,
+            "expected 56 legal moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 3筋,5筋,7筋に歩打ちがないことを確認
+        let nifu_drops: Vec<&String> = usi_moves
+            .iter()
+            .filter(|u| u.starts_with("P*") && matches!(u.chars().nth(2), Some('3' | '5' | '7')))
+            .collect();
+        assert!(
+            nifu_drops.is_empty(),
+            "should not have pawn drops on files 3,5,7 (nifu), but found: {:?}",
+            nifu_drops
+        );
+
+        // と金の筋には歩を打てることを確認(と金は二歩の対象外)
+        // 3筋にと金，5筋に歩がある局面
+        let mut board_tokin = Board::empty();
+        board_tokin
+            .set_sfen("4k4/9/9/9/9/9/2+P1P4/9/4K4 b P 1")
+            .unwrap();
+        let moves_tokin = generate_legal_moves(&board_tokin);
+        let mut usi_tokin: Vec<String> = moves_tokin.iter().map(|m| m.to_usi()).collect();
+        usi_tokin.sort();
+
+        // cshogiで検証: 75手(63歩打ち + 12盤上)
+        assert_eq!(
+            moves_tokin.len(),
+            75,
+            "expected 75 legal moves with tokin, got {}\nmoves: {:?}",
+            moves_tokin.len(),
+            usi_tokin
+        );
+
+        // 3筋に歩打ちがあること(と金は二歩対象外)
+        let p3_drops: Vec<&String> = usi_tokin
+            .iter()
+            .filter(|u| u.starts_with("P*3"))
+            .collect();
+        assert!(
+            !p3_drops.is_empty(),
+            "should have pawn drops on file 3 (tokin is not nifu)"
+        );
+
+        // 5筋に歩打ちがないこと(歩がある)
+        let p5_drops: Vec<&String> = usi_tokin
+            .iter()
+            .filter(|u| u.starts_with("P*5"))
+            .collect();
+        assert!(
+            p5_drops.is_empty(),
+            "should not have pawn drops on file 5 (nifu), but found: {:?}",
+            p5_drops
+        );
+    }
+
+    #[test]
     fn test_uchifuzume() {
         // 打ち歩詰め局面: 後手玉1a，白桂2a，黒金2c，黒飛2d，黒玉9i
         // P*1bは打ち歩詰め(玉の逃げ場なし)なので合法手に含まれない
