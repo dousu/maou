@@ -12,7 +12,7 @@ from maou.app.learning.value_targets import (
 
 
 def test_result_value_mode_returns_labels_unchanged() -> None:
-    """RESULT_VALUEモードではlabels_valueがそのまま返される．"""
+    """RESULT_VALUEモードではlabels_valueがそのまま返される(コピーなし)．"""
     labels_value = torch.tensor(
         [[0.6], [0.3], [0.8]], dtype=torch.float32
     )
@@ -20,7 +20,7 @@ def test_result_value_mode_returns_labels_unchanged() -> None:
         labels_value,
         mode=ValueTargetMode.RESULT_VALUE,
     )
-    assert torch.equal(result, labels_value)
+    assert result is labels_value
 
 
 def test_result_value_mode_ignores_move_win_rate() -> None:
@@ -61,14 +61,14 @@ def test_best_move_win_rate_mode_returns_max() -> None:
 def test_best_move_win_rate_mode_fallback_without_move_win_rate() -> (
     None
 ):
-    """BEST_MOVE_WIN_RATEモードでmove_win_rateがNoneの場合はlabels_valueにフォールバック．"""
+    """BEST_MOVE_WIN_RATEモードでmove_win_rateがNoneの場合はlabels_valueにフォールバック(コピーなし)．"""
     labels_value = torch.tensor([[0.5]], dtype=torch.float32)
     result = resolve_value_targets(
         labels_value,
         mode=ValueTargetMode.BEST_MOVE_WIN_RATE,
         move_win_rate=None,
     )
-    assert torch.equal(result, labels_value)
+    assert result is labels_value
 
 
 def test_best_move_win_rate_mode_preserves_dtype() -> None:
