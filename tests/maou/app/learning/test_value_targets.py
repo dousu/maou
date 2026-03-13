@@ -88,12 +88,12 @@ def test_best_move_win_rate_mode_preserves_dtype() -> None:
 
 
 def test_best_move_win_rate_mode_empty_move_win_rate() -> None:
-    """move_win_rateが空テンソル(N, 0)の場合はRuntimeError．"""
+    """move_win_rateが空テンソル(N, 0)の場合はIndexError．"""
     labels_value = torch.tensor(
         [[0.5], [0.3]], dtype=torch.float32
     )
     move_win_rate = torch.empty((2, 0), dtype=torch.float32)
-    with pytest.raises((RuntimeError, IndexError)):
+    with pytest.raises(IndexError):
         resolve_value_targets(
             labels_value,
             mode=ValueTargetMode.BEST_MOVE_WIN_RATE,
