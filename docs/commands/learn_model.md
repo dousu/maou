@@ -207,3 +207,7 @@ poetry run maou learn-model \
   - `--adaptive-batch-measurement-interval`: GNS 計測間隔(勾配スナップショット頻度)
   - 訓練中に Gradient Noise Scale をオンライン計測し，gradient accumulation steps を動的に調整
   - `benchmark-training --estimate-cbs` の出力に adaptive batch 推奨設定を追加
+- **2026-03-13**: `--value-target-mode` を追加
+  - Value教師信号のモード選択オプション(`result-value` / `best-move-win-rate`)
+  - デフォルトは `best-move-win-rate`(moveWinRateの最大値)
+  - `result-value` は過去の学習再現用
