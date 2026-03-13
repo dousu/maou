@@ -25,6 +25,10 @@ from maou.app.learning.policy_targets import (
     PolicyTargetMode,
     build_policy_targets,
 )
+from maou.app.learning.value_targets import (
+    ValueTargetMode,
+    resolve_value_targets,
+)
 
 
 class TrainingLoop:
@@ -43,6 +47,7 @@ class TrainingLoop:
         gradient_accumulation_steps: 勾配蓄積ステップ数．
             adaptive_batch_config が設定されている場合は無視される．
         policy_target_mode: 方策ターゲットの計算方式．
+        value_target_mode: 価値ターゲットの計算方式．
         adaptive_batch_config: GNS ベース adaptive batch の設定．
             指定時は physical_batch_size も必須．
         physical_batch_size: DataLoader の物理バッチサイズ．
@@ -71,6 +76,7 @@ class TrainingLoop:
         logger: logging.Logger | None = None,
         gradient_accumulation_steps: int = 1,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+        value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
         adaptive_batch_config: AdaptiveBatchConfig
         | None = None,
         physical_batch_size: int | None = None,
@@ -92,6 +98,7 @@ class TrainingLoop:
         self.logger = logger or logging.getLogger(__name__)
         self._cuda_sync_enabled = False
         self.policy_target_mode = policy_target_mode
+        self.value_target_mode = value_target_mode
 
         # Gradient accumulation設定
         self.gradient_accumulation_steps = max(
@@ -140,6 +147,7 @@ class TrainingLoop:
                     "片方のみ渡された場合は両方とも新規作成します"
                 )
             if _has_controller and _has_estimator:
+                assert adaptive_controller is not None
                 self._adaptive_controller = adaptive_controller
                 self._gns_estimator = gns_estimator
                 self.gradient_accumulation_steps = adaptive_controller.current_accumulation_steps
@@ -169,6 +177,7 @@ class TrainingLoop:
                     self.callbacks.append(
                         self._adaptive_callback
                     )
+                assert self._adaptive_controller is not None
                 self._adaptive_callback.update_display(
                     self._adaptive_controller.smoothed_gns,
                     self.gradient_accumulation_steps,
@@ -487,13 +496,20 @@ class TrainingLoop:
         if len(targets) > 3:
             move_win_rate = targets[3]
 
+        # ValueTargetModeに応じてvalue教師信号を切り替え
+        resolved_value = resolve_value_targets(
+            labels_value,
+            mode=self.value_target_mode,
+            move_win_rate=move_win_rate,
+        )
+
         batch_size = self._resolve_batch_size(inputs)
         return TrainingContext(
             batch_idx=batch_idx,
             epoch_idx=epoch_idx,
             inputs=inputs,
             labels_policy=labels_policy,
-            labels_value=labels_value,
+            labels_value=resolved_value,
             legal_move_mask=legal_move_mask,
             batch_size=batch_size,
             move_win_rate=move_win_rate,

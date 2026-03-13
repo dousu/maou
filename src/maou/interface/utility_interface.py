@@ -7,6 +7,7 @@ import torch
 
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.policy_targets import PolicyTargetMode
+from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
 )
@@ -165,6 +166,7 @@ def benchmark_training(
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     learning_ratio: float | None = None,
     momentum: float | None = None,
     lr_scheduler: str | None = None,
@@ -473,6 +475,7 @@ def benchmark_training(
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         policy_target_mode=policy_target_mode,
+        value_target_mode=value_target_mode,
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler_name=lr_scheduler_key,

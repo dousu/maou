@@ -32,6 +32,9 @@ from maou.app.learning.network import (
 from maou.app.learning.policy_targets import (  # noqa: F401
     PolicyTargetMode as PolicyTargetMode,
 )
+from maou.app.learning.value_targets import (  # noqa: F401
+    ValueTargetMode as ValueTargetMode,
+)
 from maou.app.learning.setup import (
     DeviceSetup,
     ModelFactory,
@@ -237,6 +240,7 @@ def learn(
     streaming_val_source: StreamingDataSource | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
@@ -516,6 +520,7 @@ def learn(
         streaming_val_source=streaming_val_source,
         save_split_params=save_split_params,
         policy_target_mode=policy_target_mode,
+        value_target_mode=value_target_mode,
         gradient_accumulation_steps=gradient_accumulation_steps,
         adaptive_batch_config=adaptive_batch_config,
     )
@@ -988,6 +993,7 @@ def learn_multi_stage(
     | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
+    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
@@ -1358,6 +1364,7 @@ def learn_multi_stage(
             streaming_val_source=stage3_streaming_val_source,
             save_split_params=save_split_params,
             policy_target_mode=policy_target_mode,
+            value_target_mode=value_target_mode,
             gradient_accumulation_steps=gradient_accumulation_steps,
             adaptive_batch_config=adaptive_batch_config,
         )
