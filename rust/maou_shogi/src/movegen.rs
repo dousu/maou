@@ -281,6 +281,64 @@ mod tests {
     }
 
     #[test]
+    fn test_tsume_mixed_pieces() {
+        // 片玉局面: 銀・飛・香・桂・角・金が混在する局面
+        // cshogiは片玉でバグがあるため(存在しない銀の打ちを生成)，
+        // 正しい合法手数はcshogi結果からphantom S*を除いた98手
+        let mut board = Board::empty();
+        board
+            .set_sfen("9/9/9/9/9/SSSSrllll/2nbbGGGG/9/8k b R3n18p 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        assert_eq!(
+            moves.len(),
+            98,
+            "expected 98 legal moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 銀の打ちが含まれていないことを確認(手持ちに銀がない)
+        let silver_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("S*")).collect();
+        assert!(
+            silver_drops.is_empty(),
+            "should not have silver drops (no silver in hand), but found: {:?}",
+            silver_drops
+        );
+
+        // 盤上の駒の移動手を検証(34手)
+        let board_moves: Vec<&String> = usi_moves.iter().filter(|u| !u.contains('*')).collect();
+        assert_eq!(board_moves.len(), 34, "board moves should be 34: {:?}", board_moves);
+
+        // 飛車打ち(64手)
+        let rook_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("R*")).collect();
+        assert_eq!(rook_drops.len(), 64, "rook drops should be 64: {:?}", rook_drops);
+
+        // 歩打ちがないこと(手持ちに歩がない)
+        let pawn_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("P*")).collect();
+        assert!(
+            pawn_drops.is_empty(),
+            "should not have pawn drops (no pawn in hand), but found: {:?}",
+            pawn_drops
+        );
+
+        // 桂打ちがないこと(手持ちに桂があるが打ち先がない - 全空きマスが1-2段目)
+        // 注: 桂は先手の場合1-2段目(row 0-1)に打てないが，空きマスは3段目以上にもある
+        let knight_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("N*")).collect();
+        // 桂は3段目以降の空きマスに打てる
+        // 手持ちの桂3枚，空きマスのうちrow>=2のマスに打てる
+        // (検証のみ，具体的数値はcshogi結果から逆算: 98 - 34 - 64 = 0 → 桂打ちなし)
+        assert!(
+            knight_drops.is_empty(),
+            "knight drops count: {:?}",
+            knight_drops
+        );
+    }
+
+    #[test]
     fn test_tsume_single_king() {
         // 片玉局面: 攻め方(先手)に玉がない
         let mut board = Board::empty();
