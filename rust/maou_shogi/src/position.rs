@@ -1,4 +1,4 @@
-use crate::board::Board;
+use crate::board::{Board, SfenError};
 use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece};
@@ -35,7 +35,7 @@ impl Position {
     }
 
     /// SFEN文字列から生成する．
-    pub fn from_sfen(sfen: &str) -> Result<Position, String> {
+    pub fn from_sfen(sfen: &str) -> Result<Position, SfenError> {
         let mut board = Board::new();
         board.set_sfen(sfen)?;
         Ok(Position {
@@ -45,6 +45,10 @@ impl Position {
     }
 
     /// 手を実行する．
+    ///
+    /// # 前提条件
+    /// - 手番は先後交互に呼び出すこと．連続して同じ色が手を指した場合，
+    ///   連続王手の千日手判定(`is_perpetual_check_move`)のparity計算が不正になる．
     pub fn do_move(&mut self, m: Move) {
         let captured = self.board.do_move(m);
 

@@ -1,5 +1,5 @@
 use crate::bitboard::Bitboard;
-use crate::types::{Color, PieceType, Square};
+use crate::types::{Color, PIECE_BB_SIZE, PieceType, Square};
 
 /// 駒の利きを計算する．
 ///
@@ -10,10 +10,10 @@ use crate::types::{Color, PieceType, Square};
 /// step_attacks[color][piece_type][square]
 ///
 /// 先手(Black)は上方向(row減少)が前，後手(White)は下方向(row増加)が前．
-static STEP_ATTACKS: std::sync::LazyLock<[[[Bitboard; 81]; 15]; 2]> =
+static STEP_ATTACKS: std::sync::LazyLock<[[[Bitboard; 81]; PIECE_BB_SIZE]; 2]> =
     std::sync::LazyLock::new(init_step_attacks);
 
-fn init_step_attacks() -> [[[Bitboard; 81]; 15]; 2] {
+fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
     let mut table = [[[Bitboard::EMPTY; 81]; 15]; 2];
 
     for sq_idx in 0..81u8 {

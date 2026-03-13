@@ -14,6 +14,12 @@ use crate::types::{Color, PieceType, Square};
 ///
 /// 注: 連続王手の千日手は考慮しない．千日手を含む完全な合法手は
 /// [`Position::legal_moves()`](crate::position::Position::legal_moves) を使用すること．
+///
+/// # パニック安全性
+///
+/// `&mut Board` を受け取るが，正常終了時は盤面を元の状態に復元する．
+/// ただし内部の `do_move`/`undo_move` 間で panic が発生した場合，
+/// Board が不整合な中間状態のままになる可能性がある．
 pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
     let pseudo_moves = generate_pseudo_legal_moves(board);
     let mut legal_moves = Vec::with_capacity(pseudo_moves.len());

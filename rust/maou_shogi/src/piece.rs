@@ -99,7 +99,12 @@ pub fn piece_to_sfen_string(piece: Piece) -> String {
         PieceType::Rook => 'R',
         PieceType::Gold => 'G',
         PieceType::King => 'K',
-        _ => unreachable!(),
+        PieceType::ProPawn
+        | PieceType::ProLance
+        | PieceType::ProKnight
+        | PieceType::ProSilver
+        | PieceType::Horse
+        | PieceType::Dragon => unreachable!("promoted piece after unpromoted(): {:?}", base_pt),
     };
 
     let ch = match color {
@@ -124,7 +129,13 @@ pub fn hand_piece_to_sfen_char(pt: PieceType) -> char {
         PieceType::Gold => 'G',
         PieceType::Bishop => 'B',
         PieceType::Rook => 'R',
-        _ => unreachable!("not a hand piece: {:?}", pt),
+        PieceType::King
+        | PieceType::ProPawn
+        | PieceType::ProLance
+        | PieceType::ProKnight
+        | PieceType::ProSilver
+        | PieceType::Horse
+        | PieceType::Dragon => unreachable!("not a hand piece: {:?}", pt),
     }
 }
 

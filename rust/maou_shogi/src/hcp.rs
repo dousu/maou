@@ -14,6 +14,23 @@
 use crate::board::Board;
 use crate::types::{Color, Piece, PieceType, Square};
 
+/// HCPエンコード/デコード時のエラー．
+#[derive(Debug, thiserror::Error)]
+pub enum HcpError {
+    /// ビットリーダーが256ビットバッファを超過した．
+    #[error("HCP bit reader overflow at position {0}")]
+    BitReaderOverflow(usize),
+    /// 無効な持ち駒のHuffman符号．
+    #[error("invalid HCP hand piece code: {0}")]
+    InvalidHandPieceCode(String),
+    /// 無効な玉のマス番号．
+    #[error("invalid king square: {0}")]
+    InvalidKingSquare(u8),
+    /// 玉が見つからない(片玉局面など)．
+    #[error("king not found for {0:?}: HCP requires both kings")]
+    KingNotFound(Color),
+}
+
 /// HCPのバイト数．
 pub const HCP_SIZE: usize = 32;
 
@@ -106,12 +123,9 @@ impl<'a> BitReader<'a> {
     ///
     /// 256ビット(32バイト)を超えて読み進めた場合は `Err` を返す．
     #[inline]
-    fn read_bit(&mut self) -> Result<u8, String> {
+    fn read_bit(&mut self) -> Result<u8, HcpError> {
         if self.pos >= 256 {
-            return Err(format!(
-                "HCP bit reader overflow: pos {} exceeds 256-bit buffer",
-                self.pos
-            ));
+            return Err(HcpError::BitReaderOverflow(self.pos));
         }
         let bit = (self.buf[self.pos / 8] >> (self.pos % 8)) & 1;
         self.pos += 1;
@@ -120,7 +134,7 @@ impl<'a> BitReader<'a> {
 
     /// nビットをLSBファーストで読み込み値として返す．
     #[inline]
-    fn read_bits(&mut self, n: usize) -> Result<u32, String> {
+    fn read_bits(&mut self, n: usize) -> Result<u32, HcpError> {
         let mut value = 0u32;
         for i in 0..n {
             value |= (self.read_bit()? as u32) << i;
@@ -238,7 +252,7 @@ fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color)
 ///
 /// HCPフォーマットは両玉が存在する標準局面を前提としている．
 /// 片玉局面(詰将棋など)はサポート対象外であり，`Err` を返す．
-pub fn to_hcp(board: &Board) -> Result<Hcp, String> {
+pub fn to_hcp(board: &Board) -> Result<Hcp, HcpError> {
     let mut writer = BitWriter::new();
 
     // 1. 手番 (1ビット)
@@ -280,7 +294,7 @@ pub fn to_hcp(board: &Board) -> Result<Hcp, String> {
 // ============================================================
 
 /// 盤上の駒をビットストリームからデコードする．
-fn decode_board_piece(reader: &mut BitReader) -> Result<Piece, String> {
+fn decode_board_piece(reader: &mut BitReader) -> Result<Piece, HcpError> {
     // 最初のビット: 0=空, 1=駒あり
     if reader.read_bit()? == 0 {
         return Ok(Piece::EMPTY);
@@ -406,7 +420,7 @@ fn decode_board_piece(reader: &mut BitReader) -> Result<Piece, String> {
 
 /// 持ち駒の1つをビットストリームからデコードする．
 /// 戻り値: (駒種, 色)
-fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), String> {
+fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpError> {
     if reader.read_bit()? == 0 {
         // 0,...
         if reader.read_bit()? == 0 {
@@ -419,7 +433,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
             };
             return Ok((PieceType::Pawn, color));
         }
-        return Err("invalid hand piece code: prefix 0,1 is not defined".to_string());
+        return Err(HcpError::InvalidHandPieceCode("prefix 0,1 is not defined".to_string()));
     }
 
     // 1,...
@@ -437,7 +451,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
                 };
                 return Ok((PieceType::Lance, color));
             }
-            return Err("invalid hand piece code: prefix 1,0,0,1 is not defined".to_string());
+            return Err(HcpError::InvalidHandPieceCode("prefix 1,0,0,1 is not defined".to_string()));
         }
         // 1,0,1,...
         if reader.read_bit()? == 0 {
@@ -450,7 +464,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
             };
             return Ok((PieceType::Silver, color));
         }
-        return Err("invalid hand piece code: prefix 1,0,1,1 is not defined".to_string());
+        return Err(HcpError::InvalidHandPieceCode("prefix 1,0,1,1 is not defined".to_string()));
     }
 
     // 1,1,...
@@ -466,7 +480,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
             };
             return Ok((PieceType::Knight, color));
         }
-        return Err("invalid hand piece code: prefix 1,1,0,1 is not defined".to_string());
+        return Err(HcpError::InvalidHandPieceCode("prefix 1,1,0,1 is not defined".to_string()));
     }
 
     // 1,1,1,...
@@ -483,7 +497,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
 
     // 1,1,1,1,...
     if reader.read_bit()? == 0 {
-        return Err("invalid hand piece code: prefix 1,1,1,1,0 is not defined".to_string());
+        return Err(HcpError::InvalidHandPieceCode("prefix 1,1,1,1,0 is not defined".to_string()));
     }
 
     // 1,1,1,1,1,...
@@ -509,7 +523,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
 }
 
 /// HCP (32バイト) から Board をデコードする．
-pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
+pub fn from_hcp(hcp: &Hcp) -> Result<Board, HcpError> {
     let mut reader = BitReader::new(hcp);
     let mut board = Board::empty();
 
@@ -524,13 +538,13 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
     // 2. 先手玉
     let bk_sq = reader.read_bits(7)? as u8;
     if bk_sq >= 81 {
-        return Err(format!("invalid black king square: {}", bk_sq));
+        return Err(HcpError::InvalidKingSquare(bk_sq));
     }
 
     // 3. 後手玉
     let wk_sq = reader.read_bits(7)? as u8;
     if wk_sq >= 81 {
-        return Err(format!("invalid white king square: {}", wk_sq));
+        return Err(HcpError::InvalidKingSquare(wk_sq));
     }
 
     // 玉を配置
@@ -599,17 +613,14 @@ fn count_on_board(board: &Board, base_pt: PieceType) -> usize {
 /// 指定した色の玉のマス番号を返す．
 ///
 /// 玉が見つからない場合は `Err` を返す(片玉局面など)．
-fn find_king(board: &Board, color: Color) -> Result<u8, String> {
+fn find_king(board: &Board, color: Color) -> Result<u8, HcpError> {
     let king_piece = Piece::new(color, PieceType::King);
     for sq in 0..81u8 {
         if board.squares[sq as usize] == king_piece {
             return Ok(sq);
         }
     }
-    Err(format!(
-        "king not found for {:?}: HCP requires both kings on the board",
-        color
-    ))
+    Err(HcpError::KingNotFound(color))
 }
 
 #[cfg(test)]

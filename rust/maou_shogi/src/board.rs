@@ -2,7 +2,8 @@ use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::moves::Move;
 use crate::sfen::{self, HIRATE_SFEN};
-use crate::types::{Color, Piece, PieceType, Square};
+pub use crate::sfen::SfenError;
+use crate::types::{Color, HAND_KINDS, Piece, PIECE_BB_SIZE, PieceType, Square};
 use crate::zobrist::ZOBRIST;
 
 /// 将棋盤の状態．
@@ -13,12 +14,16 @@ pub struct Board {
     /// 81マスの駒配列(cshogi互換ID: 0-30)．
     pub squares: [Piece; 81],
     /// 駒種×色ごとのビットボード．piece_bb[color][piece_type as usize]
-    pub piece_bb: [[Bitboard; 15]; 2],
+    ///
+    /// インデックス0は未使用(PieceTypeは1から始まるため)．
+    /// `piece_bb[color][pt as usize]` で直接アクセスできるよう，
+    /// サイズを PIECE_TYPES_NUM + 1 = 15 としている．
+    pub piece_bb: [[Bitboard; PIECE_BB_SIZE]; 2],
     /// 色ごとの全駒占有ビットボード．
     pub occupied: [Bitboard; 2],
     /// 持ち駒 [色][駒種7] = 個数．
     /// 順序: 歩(0), 香(1), 桂(2), 銀(3), 金(4), 角(5), 飛(6)
-    pub hand: [[u8; 7]; 2],
+    pub hand: [[u8; HAND_KINDS]; 2],
     /// 手番．
     pub turn: Color,
     /// 手数．
@@ -39,9 +44,9 @@ impl Board {
     pub fn empty() -> Board {
         Board {
             squares: [Piece::EMPTY; 81],
-            piece_bb: [[Bitboard::EMPTY; 15]; 2],
+            piece_bb: [[Bitboard::EMPTY; PIECE_BB_SIZE]; 2],
             occupied: [Bitboard::EMPTY; 2],
-            hand: [[0u8; 7]; 2],
+            hand: [[0u8; HAND_KINDS]; 2],
             turn: Color::Black,
             ply: 1,
             hash: 0,
@@ -49,7 +54,7 @@ impl Board {
     }
 
     /// SFEN文字列から局面を設定する．
-    pub fn set_sfen(&mut self, sfen: &str) -> Result<(), String> {
+    pub fn set_sfen(&mut self, sfen: &str) -> Result<(), SfenError> {
         let pos = sfen::parse_sfen(sfen)?;
 
         self.squares = pos.squares;
@@ -58,7 +63,7 @@ impl Board {
         self.ply = pos.ply;
 
         // ビットボードを再構築
-        self.piece_bb = [[Bitboard::EMPTY; 15]; 2];
+        self.piece_bb = [[Bitboard::EMPTY; PIECE_BB_SIZE]; 2];
         self.occupied = [Bitboard::EMPTY; 2];
 
         for sq_idx in 0..81u8 {
@@ -399,7 +404,7 @@ impl Board {
     /// 持ち駒を返す．
     /// 返り値: ([先手の持ち駒; 7], [後手の持ち駒; 7])
     /// 順序: 歩, 香, 桂, 銀, 金, 角, 飛
-    pub fn pieces_in_hand(&self) -> ([u8; 7], [u8; 7]) {
+    pub fn pieces_in_hand(&self) -> ([u8; HAND_KINDS], [u8; HAND_KINDS]) {
         (self.hand[0], self.hand[1])
     }
 

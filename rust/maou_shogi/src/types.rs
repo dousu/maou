@@ -98,7 +98,7 @@ impl PieceType {
     ];
 
     /// 各持ち駒の最大枚数．HAND_PIECES と同じ順序．
-    pub const MAX_HAND_COUNT: [u8; 7] = [18, 4, 4, 4, 4, 2, 2];
+    pub const MAX_HAND_COUNT: [u8; HAND_KINDS] = [18, 4, 4, 4, 4, 2, 2];
 
     /// 持ち駒のインデックスを返す(0-6)．持ち駒にできない駒種はNone．
     #[inline]
@@ -313,6 +313,12 @@ impl Square {
 
 /// 定数．
 pub const PIECE_TYPES_NUM: usize = 14;
+/// piece_bb配列のサイズ．PieceTypeは1始まりのため，インデックス0は未使用．
+pub const PIECE_BB_SIZE: usize = PIECE_TYPES_NUM + 1;
+/// 持ち駒の種類数(歩,香,桂,銀,金,角,飛)．
+pub const HAND_KINDS: usize = 7;
+/// 持ち駒1種あたりの最大状態数(歩の最大18枚 + 0枚状態 = 19)．
+pub const MAX_HAND_STATES: usize = 19;
 /// 特徴平面数: 28 (盤上14駒種×2色) + 76 (持ち駒38枚×2色, 38=18歩+4香+4桂+4銀+4金+2角+2飛) = 104
 pub const FEATURES_NUM: usize = PIECE_TYPES_NUM * 2 + 76;
 
