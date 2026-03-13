@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 class ValueTargetMode(str, Enum):
@@ -48,6 +51,10 @@ def resolve_value_targets(
         return labels_value
 
     if move_win_rate is None:
+        logger.warning(
+            "BEST_MOVE_WIN_RATE mode requested but move_win_rate is None; "
+            "falling back to labels_value (result_value)"
+        )
         return labels_value
 
     # moveWinRateの最大値を最善手勝率として使用する
@@ -57,5 +64,4 @@ def resolve_value_targets(
     return best_win_rate.to(
         dtype=labels_value.dtype,
         device=labels_value.device,
-        non_blocking=True,
     )
