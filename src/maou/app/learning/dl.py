@@ -988,6 +988,8 @@ class Learning:
             f"Loss: GCE(q={config.gce_parameter}), "
             f"policy_ratio={config.policy_loss_ratio}, "
             f"value_ratio={config.value_loss_ratio}",
+            f"Targets: policy={config.policy_target_mode.value}, "
+            f"value={config.value_target_mode.value}",
             f"Data: preprocessing, "
             f"cache={config.input_cache_mode}",
             "==============================",

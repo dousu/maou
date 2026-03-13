@@ -58,17 +58,17 @@ def test_best_move_win_rate_mode_returns_max() -> None:
     assert torch.allclose(result, expected)
 
 
-def test_best_move_win_rate_mode_raises_without_move_win_rate() -> (
+def test_best_move_win_rate_mode_fallback_without_move_win_rate() -> (
     None
 ):
-    """BEST_MOVE_WIN_RATEモードでmove_win_rateがNoneの場合はValueError．"""
+    """BEST_MOVE_WIN_RATEモードでmove_win_rateがNoneの場合はlabels_valueにフォールバック．"""
     labels_value = torch.tensor([[0.5]], dtype=torch.float32)
-    with pytest.raises(ValueError, match="move_win_rate"):
-        resolve_value_targets(
-            labels_value,
-            mode=ValueTargetMode.BEST_MOVE_WIN_RATE,
-            move_win_rate=None,
-        )
+    result = resolve_value_targets(
+        labels_value,
+        mode=ValueTargetMode.BEST_MOVE_WIN_RATE,
+        move_win_rate=None,
+    )
+    assert torch.equal(result, labels_value)
 
 
 def test_best_move_win_rate_mode_preserves_dtype() -> None:
