@@ -228,4 +228,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_tsume_single_king() {
+        // 片玉局面: 攻め方(先手)に玉がない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        // 合法手が生成できること(玉がなくてもpanicしない)
+        assert!(!moves.is_empty(), "tsume position should have legal moves");
+    }
+
+    #[test]
+    fn test_tsume_defender_turn() {
+        // 片玉局面: 受け方(後手)の手番
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/4G4/9/9/9/9/9/9/9 w - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        // 後手は王手されているので応手が必要
+        // 合法手が生成できること
+        assert!(!moves.is_empty(), "defender should have escape moves");
+    }
 }

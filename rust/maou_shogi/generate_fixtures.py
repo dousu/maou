@@ -106,6 +106,17 @@ def generate_legal_move_fixtures() -> None:
             "name": "pawn_drop_positions",
             "sfen": "4k4/9/9/9/9/9/4P4/9/4K4 b P 1",
         },
+        # 詰将棋風の局面(両玉あり，片方は攻め駒のみ)
+        # 注: cshogiは片玉局面でバグがあるため(存在しない銀の打ちを生成)，
+        # fixture testでは両玉局面を使用する．片玉はunit testで検証する．
+        {
+            "name": "tsume_like_attacker",
+            "sfen": "4k4/9/4G4/9/9/9/9/9/4K4 b G 1",
+        },
+        {
+            "name": "tsume_like_defender_turn",
+            "sfen": "4k4/4G4/9/9/9/9/9/9/4K4 w - 1",
+        },
     ]
 
     fixtures = []
@@ -169,6 +180,9 @@ def generate_special_rule_fixtures() -> None:
             "all_moves_usi": sorted(moves_usi),
         }
     )
+
+    # 注: cshogiは片玉局面で存在しない駒の打ちを生成するバグがあるため，
+    # fixture testでは片玉局面を使用しない．片玉はRust unit testで検証する．
 
     save_fixture("special_rule_fixtures.json", fixtures)
 

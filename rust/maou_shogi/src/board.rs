@@ -336,11 +336,18 @@ impl Board {
     }
 
     /// 盤面が有効かどうか検証する．
+    ///
+    /// 片玉局面(詰将棋)もサポートする．
+    /// 各色の玉は0枚または1枚のみ有効．
     pub fn is_ok(&self) -> bool {
-        // 両方の王が存在するか
+        // 各色の王は0枚か1枚
         let bk = self.piece_bb[0][PieceType::King as usize];
         let wk = self.piece_bb[1][PieceType::King as usize];
-        if bk.count() != 1 || wk.count() != 1 {
+        if bk.count() > 1 || wk.count() > 1 {
+            return false;
+        }
+        // 少なくとも1枚の玉が存在すること
+        if bk.count() == 0 && wk.count() == 0 {
             return false;
         }
 
@@ -450,5 +457,33 @@ mod tests {
             .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b R 1")
             .unwrap();
         assert!(!board.is_in_check(Color::White));
+    }
+
+    #[test]
+    fn test_single_king_tsume() {
+        // 片玉局面(詰将棋): 攻め方に玉がない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
+            .unwrap();
+        assert!(board.is_ok());
+        assert_eq!(board.king_square(Color::Black), None);
+        assert!(board.king_square(Color::White).is_some());
+
+        // 攻め方に玉がなくても合法手を生成できる
+        assert!(!board.is_in_check(Color::Black)); // 玉がない → 王手されていない
+    }
+
+    #[test]
+    fn test_single_king_is_ok() {
+        // 片玉は有効
+        let mut board = Board::empty();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/9 b G 1").unwrap();
+        assert!(board.is_ok());
+
+        // 玉なしは無効
+        let mut board = Board::empty();
+        board.set_sfen("9/9/9/9/9/9/9/9/9 b G 1").unwrap();
+        assert!(!board.is_ok());
     }
 }

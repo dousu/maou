@@ -233,7 +233,8 @@ fn test_special_rule_fixtures() {
                 let has_p5a = usi_moves.iter().any(|u| u == "P*5a");
                 assert_eq!(
                     has_p5a, fixture.p_drop_5a_is_legal,
-                    "uchifuzume: P*5a legality mismatch"
+                    "{}: P*5a legality mismatch",
+                    fixture.name
                 );
             }
             _ => {}
