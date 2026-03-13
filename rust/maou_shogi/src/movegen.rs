@@ -230,6 +230,57 @@ mod tests {
     }
 
     #[test]
+    fn test_tsume_complex_position() {
+        // 片玉局面: 馬・歩・桂を持つ攻め方の詰将棋
+        // cshogiは片玉でバグがあるため(存在しない銀の打ちを生成)，
+        // 正しい合法手数はcshogi結果からphantom S*を除いた144手
+        let mut board = Board::empty();
+        board
+            .set_sfen("7n1/5+BPk1/5N3/7P1/9/9/9/9/9 b GP2rb3g4s2n4l15p 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        assert_eq!(
+            moves.len(),
+            144,
+            "expected 144 legal moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 銀の打ちが含まれていないことを確認(手持ちに銀がない)
+        let silver_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("S*")).collect();
+        assert!(
+            silver_drops.is_empty(),
+            "should not have silver drops (no silver in hand), but found: {:?}",
+            silver_drops
+        );
+
+        // 盤上の駒の移動手を検証
+        // 馬(4b): 3a, 3c, 4a, 5a, 5b, 5c, 6d, 7e, 8f, 9g
+        let horse_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("4b")).collect();
+        assert_eq!(horse_moves.len(), 10, "horse should have 10 moves: {:?}", horse_moves);
+
+        // 歩(2d): 2c, 2c+(成り)
+        let pawn_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("2d")).collect();
+        assert_eq!(pawn_moves.len(), 2, "pawn should have 2 moves: {:?}", pawn_moves);
+
+        // 桂(4c): 3a+(成り必須), 5a+(成り必須)
+        let knight_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("4c")).collect();
+        assert_eq!(knight_moves.len(), 2, "knight should have 2 moves (forced promotion): {:?}", knight_moves);
+        assert!(knight_moves.iter().all(|u| u.ends_with('+')), "knight moves to row 0 must promote");
+
+        // 二歩チェック: 2筋(col=1)と3筋(col=2)に歩があるので歩打ち不可
+        let pawn_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("P*")).collect();
+        assert!(
+            pawn_drops.iter().all(|u| !u.starts_with("P*2") && !u.starts_with("P*3")),
+            "should not have pawn drops on files 2 and 3 (nifu)"
+        );
+    }
+
+    #[test]
     fn test_tsume_single_king() {
         // 片玉局面: 攻め方(先手)に玉がない
         let mut board = Board::empty();
