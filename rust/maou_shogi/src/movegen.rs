@@ -13,7 +13,7 @@ use crate::types::{Color, PieceType, Square};
 /// 4. 打ち歩詰め
 ///
 /// 注: 連続王手の千日手はPosition側で処理する．
-pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
+pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
     let pseudo_moves = generate_pseudo_legal_moves(board);
     let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
 
@@ -121,7 +121,7 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 }
 
 /// 手が合法かどうかを検証する(自玉の王手放置チェック + 打ち歩詰め)．
-fn is_legal(board: &Board, m: Move) -> bool {
+fn is_legal(board: &mut Board, m: Move) -> bool {
     let us = board.turn;
 
     // 打ち歩詰めチェック
@@ -142,38 +142,37 @@ fn is_legal(board: &Board, m: Move) -> bool {
     }
 
     // 自玉の王手放置チェック: 手を指した後に自玉に王手がかかるか
-    let mut board_copy = board.clone();
-    let _captured = board_copy.do_move(m);
+    let captured = board.do_move(m);
+    let in_check = board.is_in_check(us);
+    board.undo_move(m, captured);
 
-    // do_move後は手番が交代しているので，usの玉をチェック
-    let in_check = board_copy.is_in_check(us);
-
-    // 戻す(board_copyは使い捨て)
     !in_check
 }
 
 /// 打ち歩詰めかどうかを判定する．
 ///
 /// 歩を打って相手玉に王手 → 相手に合法手がないなら打ち歩詰め．
-fn is_pawn_drop_mate(board: &Board, pawn_drop: Move) -> bool {
-    let mut board_copy = board.clone();
-    let _captured = board_copy.do_move(pawn_drop);
+fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
+    let captured = board.do_move(pawn_drop);
 
     // 相手(手番交代後の現在手番)の合法手があるかチェック
     // 1手でも見つかれば詰みではない
-    let them = board_copy.turn; // 歩を打たれた側
-    let pseudo_moves = generate_pseudo_legal_moves(&board_copy);
+    let them = board.turn; // 歩を打たれた側
+    let pseudo_moves = generate_pseudo_legal_moves(board);
 
+    let mut has_legal = false;
     for m in pseudo_moves {
-        // この手で王手が解消されるかチェック
-        let mut board_copy2 = board_copy.clone();
-        let _cap = board_copy2.do_move(m);
-        if !board_copy2.is_in_check(them) {
-            return false; // 合法手がある → 詰みではない
+        let cap2 = board.do_move(m);
+        let evades_check = !board.is_in_check(them);
+        board.undo_move(m, cap2);
+        if evades_check {
+            has_legal = true;
+            break;
         }
     }
 
-    true // 合法手がない → 打ち歩詰め
+    board.undo_move(pawn_drop, captured);
+    !has_legal // 合法手がない → 打ち歩詰め
 }
 
 /// 強制成りが必要かどうか(行き所がなくなるため)．
@@ -199,8 +198,8 @@ mod tests {
 
     #[test]
     fn test_hirate_legal_moves_count() {
-        let board = Board::new();
-        let moves = generate_legal_moves(&board);
+        let mut board = Board::new();
+        let moves = generate_legal_moves(&mut board);
         // 平手初期局面の合法手は30手
         // 歩9枚×1 = 9, 香0, 桂0, 銀0, 金0, 角1, 飛1, 王0 (待機)
         // 実際は: 歩9 + 角0(塞がってる) + 飛0(塞がってる) + 銀0 + 金0 + 桂0 + 香0 + 王0
@@ -216,7 +215,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/4P4/9/9/9/4K4 b P 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         // 歩を打てるマスに5筋が含まれていないことを確認
         for m in &moves {
             if m.is_drop() && m.drop_piece_type() == Some(PieceType::Pawn) {
@@ -238,7 +237,7 @@ mod tests {
         board
             .set_sfen("7n1/5+BPk1/5N3/7P1/9/9/9/9/9 b GP2rb3g4s2n4l15p 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -289,7 +288,7 @@ mod tests {
         board
             .set_sfen("9/9/9/9/9/SSSSrllll/2nbbGGGG/9/8k b R3n18p 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -346,7 +345,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/9/2P1P1P2/9/4K4 b P 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -376,7 +375,7 @@ mod tests {
         board_tokin
             .set_sfen("4k4/9/9/9/9/9/2+P1P4/9/4K4 b P 1")
             .unwrap();
-        let moves_tokin = generate_legal_moves(&board_tokin);
+        let moves_tokin = generate_legal_moves(&mut board_tokin);
         let mut usi_tokin: Vec<String> = moves_tokin.iter().map(|m| m.to_usi()).collect();
         usi_tokin.sort();
 
@@ -419,7 +418,7 @@ mod tests {
         board
             .set_sfen("7nk/9/7G1/7R1/9/9/9/9/K8 b P 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -449,7 +448,7 @@ mod tests {
         board_no_knight
             .set_sfen("8k/9/7G1/7R1/9/9/9/9/K8 b P 1")
             .unwrap();
-        let moves_no_knight = generate_legal_moves(&board_no_knight);
+        let moves_no_knight = generate_legal_moves(&mut board_no_knight);
         let usi_no_knight: Vec<String> = moves_no_knight.iter().map(|m| m.to_usi()).collect();
 
         // cshogiで検証: 90手(P*1bが合法)
@@ -475,7 +474,7 @@ mod tests {
         board
             .set_sfen("4r4/9/9/9/9/9/9/9/4K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -503,7 +502,7 @@ mod tests {
         board
             .set_sfen("4r4/9/9/9/9/9/9/4G4/4K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -534,7 +533,7 @@ mod tests {
         board
             .set_sfen("4l4/9/9/9/9/9/4B4/9/4K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -565,7 +564,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/9/9/9/r1B1K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -596,7 +595,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/1b7/9/3B5/4K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -627,7 +626,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/1b7/9/3R5/4K4 b - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -656,7 +655,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b N 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
         // cshogiで検証: 67手(玉5手 + 桂打ち62手)
@@ -686,7 +685,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b L 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
         // cshogiで検証: 76手(玉5手 + 香打ち71手)
@@ -716,7 +715,7 @@ mod tests {
         board
             .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
         // cshogiで検証: 76手(玉5手 + 歩打ち71手)
@@ -746,7 +745,7 @@ mod tests {
         board
             .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         // 合法手が生成できること(玉がなくてもpanicしない)
         assert!(!moves.is_empty(), "tsume position should have legal moves");
     }
@@ -758,7 +757,7 @@ mod tests {
         board
             .set_sfen("4k4/4G4/9/9/9/9/9/9/9 w - 1")
             .unwrap();
-        let moves = generate_legal_moves(&board);
+        let moves = generate_legal_moves(&mut board);
         // 後手は王手されているので応手が必要
         // 合法手が生成できること
         assert!(!moves.is_empty(), "defender should have escape moves");

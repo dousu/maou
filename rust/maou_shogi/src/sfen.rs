@@ -111,7 +111,9 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, String> {
 
     // 4. 手数(省略可能)
     let ply = if parts.len() >= 4 {
-        parts[3].parse().unwrap_or(1)
+        parts[3]
+            .parse()
+            .map_err(|_| format!("invalid ply number: '{}'", parts[3]))?
     } else {
         1
     };

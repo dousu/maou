@@ -326,7 +326,8 @@ impl Square {
 
 /// 定数．
 pub const PIECE_TYPES_NUM: usize = 14;
-pub const FEATURES_NUM: usize = PIECE_TYPES_NUM * 2 + 76; // 28 (board) + 76 (hand) = 104
+/// 特徴平面数: 28 (盤上14駒種×2色) + 76 (持ち駒38枚×2色, 38=18歩+4香+4桂+4銀+4金+2角+2飛) = 104
+pub const FEATURES_NUM: usize = PIECE_TYPES_NUM * 2 + 76;
 
 #[cfg(test)]
 mod tests {

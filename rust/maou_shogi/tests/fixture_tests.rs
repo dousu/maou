@@ -147,7 +147,7 @@ fn test_legal_move_fixtures() {
             .set_sfen(&fixture.sfen)
             .unwrap_or_else(|e| panic!("{}: {}", fixture.name, e));
 
-        let moves = movegen::generate_legal_moves(&board);
+        let moves = movegen::generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
 
@@ -198,7 +198,7 @@ fn test_special_rule_fixtures() {
             .set_sfen(&fixture.sfen)
             .unwrap_or_else(|e| panic!("{}: {}", fixture.name, e));
 
-        let moves = movegen::generate_legal_moves(&board);
+        let moves = movegen::generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
         assert_eq!(

@@ -103,22 +103,29 @@ impl<'a> BitReader<'a> {
     }
 
     /// 1ビット読み込む．
+    ///
+    /// 256ビット(32バイト)を超えて読み進めた場合は `Err` を返す．
     #[inline]
-    fn read_bit(&mut self) -> u8 {
-        debug_assert!(self.pos < 256);
+    fn read_bit(&mut self) -> Result<u8, String> {
+        if self.pos >= 256 {
+            return Err(format!(
+                "HCP bit reader overflow: pos {} exceeds 256-bit buffer",
+                self.pos
+            ));
+        }
         let bit = (self.buf[self.pos / 8] >> (self.pos % 8)) & 1;
         self.pos += 1;
-        bit
+        Ok(bit)
     }
 
     /// nビットをLSBファーストで読み込み値として返す．
     #[inline]
-    fn read_bits(&mut self, n: usize) -> u32 {
+    fn read_bits(&mut self, n: usize) -> Result<u32, String> {
         let mut value = 0u32;
         for i in 0..n {
-            value |= (self.read_bit() as u32) << i;
+            value |= (self.read_bit()? as u32) << i;
         }
-        value
+        Ok(value)
     }
 }
 
@@ -273,17 +280,17 @@ pub fn to_hcp(board: &Board) -> Result<Hcp, String> {
 // ============================================================
 
 /// 盤上の駒をビットストリームからデコードする．
-fn decode_board_piece(reader: &mut BitReader) -> Piece {
+fn decode_board_piece(reader: &mut BitReader) -> Result<Piece, String> {
     // 最初のビット: 0=空, 1=駒あり
-    if reader.read_bit() == 0 {
-        return Piece::EMPTY;
+    if reader.read_bit()? == 0 {
+        return Ok(Piece::EMPTY);
     }
 
     // 駒あり: プレフィックスを読む
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // prefix 1,0 → Pawn
-        let color_bit = reader.read_bit();
-        let promoted = reader.read_bit();
+        let color_bit = reader.read_bit()?;
+        let promoted = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
@@ -294,16 +301,16 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
         } else {
             PieceType::ProPawn
         };
-        return Piece::new(color, pt);
+        return Ok(Piece::new(color, pt));
     }
 
     // 1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // 1,1,0,...
-        if reader.read_bit() == 0 {
+        if reader.read_bit()? == 0 {
             // prefix 1,1,0,0 → Lance
-            let color_bit = reader.read_bit();
-            let promoted = reader.read_bit();
+            let color_bit = reader.read_bit()?;
+            let promoted = reader.read_bit()?;
             let color = if color_bit == 0 {
                 Color::Black
             } else {
@@ -314,11 +321,11 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
             } else {
                 PieceType::ProLance
             };
-            return Piece::new(color, pt);
+            return Ok(Piece::new(color, pt));
         } else {
             // prefix 1,1,0,1 → Silver
-            let color_bit = reader.read_bit();
-            let promoted = reader.read_bit();
+            let color_bit = reader.read_bit()?;
+            let promoted = reader.read_bit()?;
             let color = if color_bit == 0 {
                 Color::Black
             } else {
@@ -329,15 +336,15 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
             } else {
                 PieceType::ProSilver
             };
-            return Piece::new(color, pt);
+            return Ok(Piece::new(color, pt));
         }
     }
 
     // 1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // prefix 1,1,1,0 → Knight
-        let color_bit = reader.read_bit();
-        let promoted = reader.read_bit();
+        let color_bit = reader.read_bit()?;
+        let promoted = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
@@ -348,26 +355,26 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
         } else {
             PieceType::ProKnight
         };
-        return Piece::new(color, pt);
+        return Ok(Piece::new(color, pt));
     }
 
     // 1,1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // prefix 1,1,1,1,0 → Gold
-        let color_bit = reader.read_bit();
+        let color_bit = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
             Color::White
         };
-        return Piece::new(color, PieceType::Gold);
+        return Ok(Piece::new(color, PieceType::Gold));
     }
 
     // 1,1,1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // prefix 1,1,1,1,1,0 → Bishop
-        let color_bit = reader.read_bit();
-        let promoted = reader.read_bit();
+        let color_bit = reader.read_bit()?;
+        let promoted = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
@@ -378,12 +385,12 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
         } else {
             PieceType::Horse
         };
-        return Piece::new(color, pt);
+        return Ok(Piece::new(color, pt));
     }
 
     // prefix 1,1,1,1,1,1 → Rook
-    let color_bit = reader.read_bit();
-    let promoted = reader.read_bit();
+    let color_bit = reader.read_bit()?;
+    let promoted = reader.read_bit()?;
     let color = if color_bit == 0 {
         Color::Black
     } else {
@@ -394,17 +401,17 @@ fn decode_board_piece(reader: &mut BitReader) -> Piece {
     } else {
         PieceType::Dragon
     };
-    Piece::new(color, pt)
+    Ok(Piece::new(color, pt))
 }
 
 /// 持ち駒の1つをビットストリームからデコードする．
 /// 戻り値: (駒種, 色)
 fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), String> {
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // 0,...
-        if reader.read_bit() == 0 {
+        if reader.read_bit()? == 0 {
             // prefix 0,0 → Pawn
-            let color_bit = reader.read_bit();
+            let color_bit = reader.read_bit()?;
             let color = if color_bit == 0 {
                 Color::Black
             } else {
@@ -416,13 +423,13 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
     }
 
     // 1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // 1,0,...
-        if reader.read_bit() == 0 {
+        if reader.read_bit()? == 0 {
             // 1,0,0,...
-            if reader.read_bit() == 0 {
+            if reader.read_bit()? == 0 {
                 // prefix 1,0,0,0 → Lance
-                let color_bit = reader.read_bit();
+                let color_bit = reader.read_bit()?;
                 let color = if color_bit == 0 {
                     Color::Black
                 } else {
@@ -433,9 +440,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
             return Err("invalid hand piece code: prefix 1,0,0,1 is not defined".to_string());
         }
         // 1,0,1,...
-        if reader.read_bit() == 0 {
+        if reader.read_bit()? == 0 {
             // prefix 1,0,1,0 → Silver
-            let color_bit = reader.read_bit();
+            let color_bit = reader.read_bit()?;
             let color = if color_bit == 0 {
                 Color::Black
             } else {
@@ -447,11 +454,11 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
     }
 
     // 1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // 1,1,0,...
-        if reader.read_bit() == 0 {
+        if reader.read_bit()? == 0 {
             // prefix 1,1,0,0 → Knight
-            let color_bit = reader.read_bit();
+            let color_bit = reader.read_bit()?;
             let color = if color_bit == 0 {
                 Color::Black
             } else {
@@ -463,9 +470,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
     }
 
     // 1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // 1,1,1,0 → Gold
-        let color_bit = reader.read_bit();
+        let color_bit = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
@@ -475,14 +482,14 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
     }
 
     // 1,1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         return Err("invalid hand piece code: prefix 1,1,1,1,0 is not defined".to_string());
     }
 
     // 1,1,1,1,1,...
-    if reader.read_bit() == 0 {
+    if reader.read_bit()? == 0 {
         // prefix 1,1,1,1,1,0 → Bishop
-        let color_bit = reader.read_bit();
+        let color_bit = reader.read_bit()?;
         let color = if color_bit == 0 {
             Color::Black
         } else {
@@ -492,7 +499,7 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), Strin
     }
 
     // prefix 1,1,1,1,1,1 → Rook
-    let color_bit = reader.read_bit();
+    let color_bit = reader.read_bit()?;
     let color = if color_bit == 0 {
         Color::Black
     } else {
@@ -507,7 +514,7 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
     let mut board = Board::empty();
 
     // 1. 手番
-    let turn_bit = reader.read_bit();
+    let turn_bit = reader.read_bit()?;
     board.turn = if turn_bit == 0 {
         Color::Black
     } else {
@@ -515,13 +522,13 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
     };
 
     // 2. 先手玉
-    let bk_sq = reader.read_bits(7) as u8;
+    let bk_sq = reader.read_bits(7)? as u8;
     if bk_sq >= 81 {
         return Err(format!("invalid black king square: {}", bk_sq));
     }
 
     // 3. 後手玉
-    let wk_sq = reader.read_bits(7) as u8;
+    let wk_sq = reader.read_bits(7)? as u8;
     if wk_sq >= 81 {
         return Err(format!("invalid white king square: {}", wk_sq));
     }
@@ -535,7 +542,7 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, String> {
         if sq == bk_sq || sq == wk_sq {
             continue;
         }
-        let piece = decode_board_piece(&mut reader);
+        let piece = decode_board_piece(&mut reader)?;
         if !piece.is_empty() {
             board.put_piece(Square(sq), piece);
         }

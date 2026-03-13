@@ -98,29 +98,17 @@ impl Bitboard {
     }
 
     /// 指定した筋(col)の全マスがセットされたビットボードを返す．
+    #[inline]
     pub fn file_mask(col: u8) -> Bitboard {
         debug_assert!(col < 9);
-        let start = col as u64 * 9;
-        let mut bb = Bitboard::EMPTY;
-        for row in 0..9u64 {
-            let idx = start + row;
-            if idx < 63 {
-                bb.lo |= 1u64 << idx;
-            } else {
-                bb.hi |= 1u64 << (idx - 63);
-            }
-        }
-        bb
+        FILE_MASKS[col as usize]
     }
 
     /// 指定した段(row)の全マスがセットされたビットボードを返す．
+    #[inline]
     pub fn rank_mask(row: u8) -> Bitboard {
         debug_assert!(row < 9);
-        let mut bb = Bitboard::EMPTY;
-        for col in 0..9u8 {
-            bb.set(Square::new(col, row));
-        }
-        bb
+        RANK_MASKS[row as usize]
     }
 }
 
@@ -211,6 +199,57 @@ impl Iterator for BitboardIter {
         }
     }
 }
+
+// ============================================================
+// 事前計算済みマスクテーブル
+// ============================================================
+
+/// 筋(col)ごとのビットボードマスク．`file_mask(col)` で使用．
+const FILE_MASKS: [Bitboard; 9] = {
+    let mut masks = [Bitboard::EMPTY; 9];
+    let mut col = 0u8;
+    while col < 9 {
+        let start = col as u64 * 9;
+        let mut lo = 0u64;
+        let mut hi = 0u64;
+        let mut row = 0u64;
+        while row < 9 {
+            let idx = start + row;
+            if idx < 63 {
+                lo |= 1u64 << idx;
+            } else {
+                hi |= 1u64 << (idx - 63);
+            }
+            row += 1;
+        }
+        masks[col as usize] = Bitboard { lo, hi };
+        col += 1;
+    }
+    masks
+};
+
+/// 段(row)ごとのビットボードマスク．`rank_mask(row)` で使用．
+const RANK_MASKS: [Bitboard; 9] = {
+    let mut masks = [Bitboard::EMPTY; 9];
+    let mut row = 0u8;
+    while row < 9 {
+        let mut lo = 0u64;
+        let mut hi = 0u64;
+        let mut col = 0u8;
+        while col < 9 {
+            let idx = col as u64 * 9 + row as u64;
+            if idx < 63 {
+                lo |= 1u64 << idx;
+            } else {
+                hi |= 1u64 << (idx - 63);
+            }
+            col += 1;
+        }
+        masks[row as usize] = Bitboard { lo, hi };
+        row += 1;
+    }
+    masks
+};
 
 #[cfg(test)]
 mod tests {
