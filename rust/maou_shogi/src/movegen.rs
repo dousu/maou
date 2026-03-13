@@ -526,6 +526,130 @@ mod tests {
     }
 
     #[test]
+    fn test_pin_bishop_by_lance_vertical() {
+        // 香で角と玉が縦に串刺し(ピン)
+        // 先手玉5i，先手角5g，後手香5a
+        // 角は縦に動けないため全ての角の手が不合法
+        let mut board = Board::empty();
+        board
+            .set_sfen("4l4/9/9/9/9/9/4B4/9/4K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 5手(玉のみ)
+        assert_eq!(
+            moves.len(),
+            5,
+            "expected 5 legal moves (king only), got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 角の手が含まれないことを確認
+        let bishop_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("5g")).collect();
+        assert!(
+            bishop_moves.is_empty(),
+            "bishop pinned vertically by lance should have no moves: {:?}",
+            bishop_moves
+        );
+    }
+
+    #[test]
+    fn test_pin_bishop_by_rook_horizontal() {
+        // 飛で角と玉が横に串刺し(ピン)
+        // 先手玉5i，先手角7i，後手飛9i
+        // 角は横に動けないため全ての角の手が不合法
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/9/9/9/r1B1K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 5手(玉のみ)
+        assert_eq!(
+            moves.len(),
+            5,
+            "expected 5 legal moves (king only), got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 角の手が含まれないことを確認
+        let bishop_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("7i")).collect();
+        assert!(
+            bishop_moves.is_empty(),
+            "bishop pinned horizontally by rook should have no moves: {:?}",
+            bishop_moves
+        );
+    }
+
+    #[test]
+    fn test_pin_bishop_by_bishop_diagonal() {
+        // 角で角が斜めにピン
+        // 先手玉5i，先手角6h，後手角8f
+        // 斜めライン上の移動のみ合法(7gと8f=角取り)
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/1b7/9/3B5/4K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 6手(角2手 + 玉4手)
+        assert_eq!(
+            moves.len(),
+            6,
+            "expected 6 legal moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 角はピンライン上の2手のみ(7g, 8f=角取り)
+        let bishop_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("6h")).collect();
+        assert_eq!(
+            bishop_moves,
+            vec!["6h7g", "6h8f"],
+            "bishop pinned diagonally should only move along pin line"
+        );
+    }
+
+    #[test]
+    fn test_pin_rook_by_bishop_diagonal() {
+        // 角で飛が斜めにピン
+        // 先手玉5i，先手飛6h，後手角8f
+        // 飛は斜めに動けないため全ての飛の手が不合法
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/1b7/9/3R5/4K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 4手(玉のみ)
+        assert_eq!(
+            moves.len(),
+            4,
+            "expected 4 legal moves (king only), got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 飛の手が含まれないことを確認
+        let rook_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("6h")).collect();
+        assert!(
+            rook_moves.is_empty(),
+            "rook pinned diagonally by bishop should have no moves: {:?}",
+            rook_moves
+        );
+    }
+
+    #[test]
     fn test_immovable_drop_knight() {
         // 桂打ち制限: 先手は1-2段目(row a,b)に桂を打てない
         let mut board = Board::empty();
