@@ -468,6 +468,154 @@ mod tests {
     }
 
     #[test]
+    fn test_check_evasion() {
+        // 王手放置禁止テスト: 後手飛車5aが先手玉5iに王手
+        // 玉の移動のみ合法(5筋を離れる手のみ)
+        let mut board = Board::empty();
+        board
+            .set_sfen("4r4/9/9/9/9/9/9/9/4K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 4手(4h,4i,6h,6i)
+        assert_eq!(
+            moves.len(),
+            4,
+            "expected 4 check evasion moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 5筋に留まる手がないことを確認(飛車の利き上)
+        assert!(
+            usi_moves.iter().all(|u| !u.starts_with("5i5")),
+            "king should not stay on file 5 (rook line)"
+        );
+    }
+
+    #[test]
+    fn test_pin() {
+        // ピンテスト: 後手飛車5a，先手金5h，先手玉5i
+        // 金は飛車と玉の間にピンされている → 5筋に沿った手のみ合法
+        let mut board = Board::empty();
+        board
+            .set_sfen("4r4/9/9/9/9/9/9/4G4/4K4 b - 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 5手(金5h5g + 玉4手)
+        assert_eq!(
+            moves.len(),
+            5,
+            "expected 5 legal moves with pin, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // 金の合法手は5h5gのみ(5筋に沿って前進)
+        let gold_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("5h")).collect();
+        assert_eq!(
+            gold_moves,
+            vec!["5h5g"],
+            "pinned gold should only move along file 5"
+        );
+    }
+
+    #[test]
+    fn test_immovable_drop_knight() {
+        // 桂打ち制限: 先手は1-2段目(row a,b)に桂を打てない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b N 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+
+        // cshogiで検証: 67手(玉5手 + 桂打ち62手)
+        assert_eq!(
+            moves.len(),
+            67,
+            "expected 67 legal moves, got {}",
+            moves.len()
+        );
+
+        // 1-2段目への桂打ちがないことを確認
+        let bad_drops: Vec<&String> = usi_moves
+            .iter()
+            .filter(|u| u.starts_with("N*") && matches!(u.chars().nth(3), Some('a' | 'b')))
+            .collect();
+        assert!(
+            bad_drops.is_empty(),
+            "knight drops on rows a,b should be excluded: {:?}",
+            bad_drops
+        );
+    }
+
+    #[test]
+    fn test_immovable_drop_lance() {
+        // 香打ち制限: 先手は1段目(row a)に香を打てない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b L 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+
+        // cshogiで検証: 76手(玉5手 + 香打ち71手)
+        assert_eq!(
+            moves.len(),
+            76,
+            "expected 76 legal moves, got {}",
+            moves.len()
+        );
+
+        // 1段目への香打ちがないことを確認
+        let bad_drops: Vec<&String> = usi_moves
+            .iter()
+            .filter(|u| u.starts_with("L*") && u.ends_with('a'))
+            .collect();
+        assert!(
+            bad_drops.is_empty(),
+            "lance drops on row a should be excluded: {:?}",
+            bad_drops
+        );
+    }
+
+    #[test]
+    fn test_immovable_drop_pawn() {
+        // 歩打ち制限: 先手は1段目(row a)に歩を打てない
+        let mut board = Board::empty();
+        board
+            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+
+        // cshogiで検証: 76手(玉5手 + 歩打ち71手)
+        assert_eq!(
+            moves.len(),
+            76,
+            "expected 76 legal moves, got {}",
+            moves.len()
+        );
+
+        // 1段目への歩打ちがないことを確認
+        let bad_drops: Vec<&String> = usi_moves
+            .iter()
+            .filter(|u| u.starts_with("P*") && u.ends_with('a'))
+            .collect();
+        assert!(
+            bad_drops.is_empty(),
+            "pawn drops on row a should be excluded: {:?}",
+            bad_drops
+        );
+    }
+
+    #[test]
     fn test_tsume_single_king() {
         // 片玉局面: 攻め方(先手)に玉がない
         let mut board = Board::empty();
