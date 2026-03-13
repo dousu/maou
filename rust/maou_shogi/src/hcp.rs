@@ -93,7 +93,7 @@ impl BitWriter {
     /// 1ビット書き込む．
     #[inline]
     fn write_bit(&mut self, bit: u8) {
-        debug_assert!(self.pos < 256);
+        assert!(self.pos < 256, "HCP bit writer overflow: pos {} exceeds 256-bit buffer", self.pos);
         if bit != 0 {
             self.buf[self.pos / 8] |= 1 << (self.pos % 8);
         }
@@ -207,7 +207,15 @@ fn encode_board_piece(writer: &mut BitWriter, piece: Piece) {
             writer.write_bit(color_bit);
             writer.write_bit(is_promoted as u8);
         }
-        _ => panic!("unexpected piece type in board encoding: {:?}", base_pt),
+        PieceType::King
+        | PieceType::ProPawn
+        | PieceType::ProLance
+        | PieceType::ProKnight
+        | PieceType::ProSilver
+        | PieceType::Horse
+        | PieceType::Dragon => {
+            unreachable!("unexpected piece type in board encoding: {:?}", base_pt)
+        }
     }
 }
 
@@ -244,7 +252,15 @@ fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color)
             writer.write_bits(0b111111, 6);
             writer.write_bit(color_bit);
         }
-        _ => panic!("invalid hand piece type: {:?}", hand_type),
+        PieceType::King
+        | PieceType::ProPawn
+        | PieceType::ProLance
+        | PieceType::ProKnight
+        | PieceType::ProSilver
+        | PieceType::Horse
+        | PieceType::Dragon => {
+            unreachable!("invalid hand piece type: {:?}", hand_type)
+        }
     }
 }
 

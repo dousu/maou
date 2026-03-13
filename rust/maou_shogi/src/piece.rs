@@ -40,13 +40,13 @@ const CSHOGI_TO_DOMAIN: [u8; 31] = [
 ];
 
 /// cshogi駒ID(0-30)をdomain PieceId(0-28)に変換する．
+///
+/// 無効なIDの場合は `None` を返す．
 #[inline]
-pub fn cshogi_to_domain_piece_id(cshogi_piece: u8) -> u8 {
-    if (cshogi_piece as usize) < CSHOGI_TO_DOMAIN.len() {
-        CSHOGI_TO_DOMAIN[cshogi_piece as usize]
-    } else {
-        0
-    }
+pub fn cshogi_to_domain_piece_id(cshogi_piece: u8) -> Option<u8> {
+    CSHOGI_TO_DOMAIN
+        .get(cshogi_piece as usize)
+        .copied()
 }
 
 /// SFENの駒文字からPieceを生成する．
@@ -145,15 +145,16 @@ mod tests {
 
     #[test]
     fn test_cshogi_to_domain() {
-        assert_eq!(cshogi_to_domain_piece_id(0), 0); // EMPTY
-        assert_eq!(cshogi_to_domain_piece_id(1), 1); // BPAWN → FU
-        assert_eq!(cshogi_to_domain_piece_id(5), 6); // BBISHOP → KA
-        assert_eq!(cshogi_to_domain_piece_id(6), 7); // BROOK → HI
-        assert_eq!(cshogi_to_domain_piece_id(7), 5); // BGOLD → KI
-        assert_eq!(cshogi_to_domain_piece_id(17), 15); // WPAWN
-        assert_eq!(cshogi_to_domain_piece_id(21), 20); // WBISHOP
-        assert_eq!(cshogi_to_domain_piece_id(22), 21); // WROOK
-        assert_eq!(cshogi_to_domain_piece_id(23), 19); // WGOLD
+        assert_eq!(cshogi_to_domain_piece_id(0), Some(0)); // EMPTY
+        assert_eq!(cshogi_to_domain_piece_id(1), Some(1)); // BPAWN → FU
+        assert_eq!(cshogi_to_domain_piece_id(5), Some(6)); // BBISHOP → KA
+        assert_eq!(cshogi_to_domain_piece_id(6), Some(7)); // BROOK → HI
+        assert_eq!(cshogi_to_domain_piece_id(7), Some(5)); // BGOLD → KI
+        assert_eq!(cshogi_to_domain_piece_id(17), Some(15)); // WPAWN
+        assert_eq!(cshogi_to_domain_piece_id(21), Some(20)); // WBISHOP
+        assert_eq!(cshogi_to_domain_piece_id(22), Some(21)); // WROOK
+        assert_eq!(cshogi_to_domain_piece_id(23), Some(19)); // WGOLD
+        assert_eq!(cshogi_to_domain_piece_id(31), None); // invalid
     }
 
     #[test]

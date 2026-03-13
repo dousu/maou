@@ -64,9 +64,12 @@ impl Position {
     }
 
     /// 手を取り消す．
-    pub fn undo_move(&mut self) {
-        let state = self.history.pop().expect("no move to undo");
+    ///
+    /// 履歴が空の場合は `None` を返す．
+    pub fn undo_move(&mut self) -> Option<Move> {
+        let state = self.history.pop()?;
         self.board.undo_move(state.last_move, state.captured);
+        Some(state.last_move)
     }
 
     /// 合法手を生成する．
