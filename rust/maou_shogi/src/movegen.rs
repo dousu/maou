@@ -12,7 +12,8 @@ use crate::types::{Color, PieceType, Square};
 /// 3. 行き所のない駒
 /// 4. 打ち歩詰め
 ///
-/// 注: 連続王手の千日手はPosition側で処理する．
+/// 注: 連続王手の千日手は考慮しない．千日手を含む完全な合法手は
+/// [`Position::legal_moves()`](crate::position::Position::legal_moves) を使用すること．
 pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
     let pseudo_moves = generate_pseudo_legal_moves(board);
     let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
@@ -33,14 +34,12 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     let our_occ = board.occupied[us.index()];
     let all_occ = board.all_occupied();
 
-    // 1. 盤上の駒の移動手
-    for sq_idx in 0..81u8 {
-        let piece = board.squares[sq_idx as usize];
-        if piece.is_empty() || piece.color() != Some(us) {
-            continue;
-        }
+    // 1. 盤上の駒の移動手(occupied bitboardを利用して自駒のみ走査)
+    let mut our_bb = our_occ;
+    while our_bb.is_not_empty() {
+        let from = our_bb.pop_lsb();
+        let piece = board.squares[from.index()];
         let pt = piece.piece_type().unwrap();
-        let from = Square(sq_idx);
         let attacks = attack::piece_attacks(us, pt, from, all_occ);
         // 味方の駒がいるマスは除外
         let targets = attacks & !our_occ;
@@ -62,7 +61,7 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
             } else {
                 // 成れない場合は不成のみ
                 // 行き所のない駒チェック(盤上の駒の移動)
-                if !is_immovable(us, pt, to) {
+                if !must_promote(us, pt, to) {
                     moves.push(Move::new_move(from, to, false, captured_raw, pt as u8));
                 }
             }
@@ -184,11 +183,6 @@ fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
         (Color::White, PieceType::Knight) => to.row() >= 7,
         _ => false,
     }
-}
-
-/// 行き所のない駒になるか(強制成りの別の書き方，打ち駒の移動にも使用)．
-fn is_immovable(color: Color, pt: PieceType, to: Square) -> bool {
-    must_promote(color, pt, to)
 }
 
 #[cfg(test)]

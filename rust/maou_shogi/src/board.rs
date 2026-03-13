@@ -100,43 +100,117 @@ impl Board {
     }
 
     /// 指定した色が王手されているか(相手の利きが自玉にかかっているか)．
+    ///
+    /// Inverse bitboard approach: 対象マスから各駒種の利きを逆算し，
+    /// 相手の対応する駒種のbitboardと交差判定する．
     pub fn is_in_check(&self, color: Color) -> bool {
         if let Some(king_sq) = self.king_square(color) {
-            let opp = color.opponent();
-            let occ = self.all_occupied();
-
-            // 相手の各駒からの利きが自玉にかかるかチェック
-            for sq_idx in 0..81u8 {
-                let piece = self.squares[sq_idx as usize];
-                if piece.is_empty() || piece.color() != Some(opp) {
-                    continue;
-                }
-                let pt = piece.piece_type().unwrap();
-                let att = attack::piece_attacks(opp, pt, Square(sq_idx), occ);
-                if att.contains(king_sq) {
-                    return true;
-                }
-            }
-            false
+            self.is_attacked_by(king_sq, color.opponent())
         } else {
             false
         }
     }
 
     /// 指定したマスに対して指定した色からの利きがあるか．
+    ///
+    /// Inverse bitboard approach: 対象マスから各駒種の利きパターンを逆方向に展開し，
+    /// 攻撃側の対応する駒種のbitboardとの交差で判定する．
+    /// 全81マスをスキャンする代わりに，駒種ごとのbitboard演算で高速化．
     pub fn is_attacked_by(&self, sq: Square, attacker_color: Color) -> bool {
         let occ = self.all_occupied();
-        for sq_idx in 0..81u8 {
-            let piece = self.squares[sq_idx as usize];
-            if piece.is_empty() || piece.color() != Some(attacker_color) {
-                continue;
-            }
-            let pt = piece.piece_type().unwrap();
-            let att = attack::piece_attacks(attacker_color, pt, Square(sq_idx), occ);
-            if att.contains(sq) {
-                return true;
-            }
+        let opp = attacker_color.index();
+
+        // 歩: 対象マスから「相手の歩の利き方向の逆」を見る
+        // = 対象マスから attacker_color の歩の利きを計算し，相手の歩bitboardと交差判定
+        // 注: 歩の利きは非対称(色依存)なので，attacker_colorの逆方向を使う
+        let defender = attacker_color.opponent();
+        if (attack::step_attacks(defender, PieceType::Pawn, sq)
+            & self.piece_bb[opp][PieceType::Pawn as usize])
+            .is_not_empty()
+        {
+            return true;
         }
+
+        // 桂: 同様にinverse
+        if (attack::step_attacks(defender, PieceType::Knight, sq)
+            & self.piece_bb[opp][PieceType::Knight as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 銀
+        if (attack::step_attacks(defender, PieceType::Silver, sq)
+            & self.piece_bb[opp][PieceType::Silver as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 金 + 成駒(と,成香,成桂,成銀): 金と同じ動き
+        let gold_movers = self.piece_bb[opp][PieceType::Gold as usize]
+            | self.piece_bb[opp][PieceType::ProPawn as usize]
+            | self.piece_bb[opp][PieceType::ProLance as usize]
+            | self.piece_bb[opp][PieceType::ProKnight as usize]
+            | self.piece_bb[opp][PieceType::ProSilver as usize];
+        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
+            return true;
+        }
+
+        // 王
+        if (attack::step_attacks(defender, PieceType::King, sq)
+            & self.piece_bb[opp][PieceType::King as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 香: 対象マスからdefenderの香の利き方向にattackerの香がいるか
+        if (attack::lance_attacks(defender, sq, occ)
+            & self.piece_bb[opp][PieceType::Lance as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 角・馬: 対象マスから斜め方向に角or馬がいるか
+        let bishop_attacks = attack::bishop_attacks(sq, occ);
+        if (bishop_attacks
+            & (self.piece_bb[opp][PieceType::Bishop as usize]
+                | self.piece_bb[opp][PieceType::Horse as usize]))
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 飛・龍: 対象マスから縦横方向に飛or龍がいるか
+        let rook_attacks = attack::rook_attacks(sq, occ);
+        if (rook_attacks
+            & (self.piece_bb[opp][PieceType::Rook as usize]
+                | self.piece_bb[opp][PieceType::Dragon as usize]))
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 馬のステップ部分(前後左右1マス): 王と同じ判定ではカバーされない
+        // 馬は斜め走り+前後左右1マスなので，斜めは上のbishop_attacksでカバー済み
+        // 前後左右1マスは馬固有のステップ
+        if (attack::step_attacks(defender, PieceType::Horse, sq)
+            & self.piece_bb[opp][PieceType::Horse as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        // 龍のステップ部分(斜め1マス): 同様に龍固有のステップ
+        if (attack::step_attacks(defender, PieceType::Dragon, sq)
+            & self.piece_bb[opp][PieceType::Dragon as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+
         false
     }
 

@@ -72,9 +72,15 @@ impl Position {
         let mut moves = movegen::generate_legal_moves(&mut self.board);
 
         // 連続王手の千日手チェック
-        moves.retain(|&m| !self.is_perpetual_check_move(m));
+        // retain with &mut selfが使えないため，手動でフィルタリング
+        let mut filtered = Vec::with_capacity(moves.len());
+        for m in moves.drain(..) {
+            if !self.is_perpetual_check_move(m) {
+                filtered.push(m);
+            }
+        }
 
-        moves
+        filtered
     }
 
     /// この手を指すと連続王手の千日手が成立するかを判定する．
@@ -83,14 +89,18 @@ impl Position {
     /// - この手が王手である
     /// - 手を指した後の局面hashが履歴に3回以上出現(計4回目)
     /// - 最初の出現から現在まで，自分の全ての手が王手だった
-    fn is_perpetual_check_move(&self, m: Move) -> bool {
-        // 手を仮に指してhashを計算
-        let mut board_copy = self.board.clone();
-        let _captured = board_copy.do_move(m);
-        let new_hash = board_copy.hash;
+    fn is_perpetual_check_move(&mut self, m: Move) -> bool {
+        // 手を仮に指してhashを計算(do_move/undo_moveで元に戻す)
+        let captured = self.board.do_move(m);
+        let new_hash = self.board.hash;
 
         // この手で王手をかけるかチェック
-        if !board_copy.is_in_check(board_copy.turn) {
+        let gives_check = self.board.is_in_check(self.board.turn);
+
+        // 元に戻す
+        self.board.undo_move(m, captured);
+
+        if !gives_check {
             return false;
         }
 

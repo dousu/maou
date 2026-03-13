@@ -219,27 +219,6 @@ pub fn piece_attacks(color: Color, pt: PieceType, sq: Square, occupied: Bitboard
     }
 }
 
-/// 指定した色の全駒からのattacks bitboardを計算する．
-pub fn all_attacks(
-    color: Color,
-    squares: &[crate::types::Piece; 81],
-    occupied: Bitboard,
-) -> Bitboard {
-    let mut attacks = Bitboard::EMPTY;
-    for sq_idx in 0..81u8 {
-        let piece = squares[sq_idx as usize];
-        if piece.is_empty() {
-            continue;
-        }
-        if piece.color() != Some(color) {
-            continue;
-        }
-        let pt = piece.piece_type().unwrap();
-        attacks |= piece_attacks(color, pt, Square(sq_idx), occupied);
-    }
-    attacks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

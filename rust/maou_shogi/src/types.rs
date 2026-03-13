@@ -163,19 +163,6 @@ impl PieceType {
         (self as u8) >= 9
     }
 
-    /// 飛び駒(長距離移動できる駒)かどうか．
-    #[inline]
-    pub fn is_slider(self) -> bool {
-        matches!(
-            self,
-            PieceType::Lance
-                | PieceType::Bishop
-                | PieceType::Rook
-                | PieceType::Horse
-                | PieceType::Dragon
-        )
-    }
-
     /// u8から変換する．
     #[inline]
     pub fn from_u8(v: u8) -> Option<PieceType> {

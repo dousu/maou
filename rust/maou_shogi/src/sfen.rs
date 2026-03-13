@@ -66,6 +66,12 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, String> {
                 col += 1;
             }
         }
+        if col != 9 {
+            return Err(format!(
+                "invalid SFEN board: row {} has {} columns, expected 9",
+                row, col
+            ));
+        }
     }
 
     // 2. 手番
