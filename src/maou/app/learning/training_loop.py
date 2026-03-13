@@ -147,6 +147,7 @@ class TrainingLoop:
                     "片方のみ渡された場合は両方とも新規作成します"
                 )
             if _has_controller and _has_estimator:
+                assert adaptive_controller is not None
                 self._adaptive_controller = adaptive_controller
                 self._gns_estimator = gns_estimator
                 self.gradient_accumulation_steps = adaptive_controller.current_accumulation_steps
@@ -176,6 +177,7 @@ class TrainingLoop:
                     self.callbacks.append(
                         self._adaptive_callback
                     )
+                assert self._adaptive_controller is not None
                 self._adaptive_callback.update_display(
                     self._adaptive_controller.smoothed_gns,
                     self.gradient_accumulation_steps,
