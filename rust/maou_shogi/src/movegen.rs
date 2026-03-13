@@ -339,6 +339,62 @@ mod tests {
     }
 
     #[test]
+    fn test_uchifuzume() {
+        // 打ち歩詰め局面: 後手玉1a，白桂2a，黒金2c，黒飛2d，黒玉9i
+        // P*1bは打ち歩詰め(玉の逃げ場なし)なので合法手に含まれない
+        let mut board = Board::empty();
+        board
+            .set_sfen("7nk/9/7G1/7R1/9/9/9/9/K8 b P 1")
+            .unwrap();
+        let moves = generate_legal_moves(&board);
+        let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        usi_moves.sort();
+
+        // cshogiで検証: 89手(P*1bが打ち歩詰めで除外)
+        assert_eq!(
+            moves.len(),
+            89,
+            "expected 89 legal moves, got {}\nmoves: {:?}",
+            moves.len(),
+            usi_moves
+        );
+
+        // P*1bが含まれないことを確認(打ち歩詰め)
+        assert!(
+            !usi_moves.contains(&"P*1b".to_string()),
+            "P*1b should be excluded (uchifuzume)"
+        );
+
+        // P*1aも含まれないことを確認(1段目に歩は打てない)
+        assert!(
+            !usi_moves.contains(&"P*1a".to_string()),
+            "P*1a should be excluded (immovable pawn)"
+        );
+
+        // 比較: 桂がない局面ではP*1bが合法(打ち歩詰めにならない)
+        let mut board_no_knight = Board::empty();
+        board_no_knight
+            .set_sfen("8k/9/7G1/7R1/9/9/9/9/K8 b P 1")
+            .unwrap();
+        let moves_no_knight = generate_legal_moves(&board_no_knight);
+        let usi_no_knight: Vec<String> = moves_no_knight.iter().map(|m| m.to_usi()).collect();
+
+        // cshogiで検証: 90手(P*1bが合法)
+        assert_eq!(
+            moves_no_knight.len(),
+            90,
+            "expected 90 legal moves without knight, got {}",
+            moves_no_knight.len()
+        );
+
+        // P*1bが含まれることを確認(玉が2aに逃げられるので打ち歩詰めではない)
+        assert!(
+            usi_no_knight.contains(&"P*1b".to_string()),
+            "P*1b should be legal when king can escape to 2a"
+        );
+    }
+
+    #[test]
     fn test_tsume_single_king() {
         // 片玉局面: 攻め方(先手)に玉がない
         let mut board = Board::empty();
