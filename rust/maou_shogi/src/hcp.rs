@@ -624,21 +624,17 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, HcpError> {
 // ============================================================
 
 /// 盤上の指定した基本駒種(成駒含む)の個数を数える．
+///
+/// Bitboard の popcount を利用して O(1) で計算する．
 fn count_on_board(board: &Board, base_pt: PieceType) -> usize {
-    let mut count = 0usize;
-    for sq in 0..81 {
-        let piece = board.squares[sq];
-        if piece.is_empty() {
-            continue;
-        }
-        if let Some(pt) = piece.piece_type() {
-            let base = pt.captured_to_hand();
-            if base == base_pt {
-                count += 1;
-            }
+    let mut count = 0u32;
+    for color_idx in 0..2 {
+        count += board.piece_bb[color_idx][base_pt as usize].count();
+        if let Some(promoted) = base_pt.promoted() {
+            count += board.piece_bb[color_idx][promoted as usize].count();
         }
     }
-    count
+    count as usize
 }
 
 /// 指定した色の玉のマス番号を返す．
