@@ -107,6 +107,8 @@ impl Board {
 
     /// 指定した色が王手されているか(相手の利きが自玉にかかっているか)．
     ///
+    /// 玉が存在しない場合(片玉の詰将棋など)は `false` を返す．
+    ///
     /// Inverse bitboard approach: 対象マスから各駒種の利きを逆算し，
     /// 相手の対応する駒種のbitboardと交差判定する．
     #[inline]
@@ -305,12 +307,17 @@ impl Board {
     }
 
     /// 手を取り消す．
+    ///
+    /// # 前提条件
+    ///
+    /// `do_move` で実行した手に対してのみ呼ぶこと．
+    /// `do_move` を経ずに呼んだ場合の動作は未定義(debug ビルドではパニック)．
     #[inline]
     pub fn undo_move(&mut self, m: Move, captured: Piece) {
         // 手番を戻す
         self.turn = self.turn.opponent();
         self.hash ^= ZOBRIST.turn_hash();
-        debug_assert!(self.ply > 0, "undo_move called with ply == 0");
+        debug_assert!(self.ply > 1, "undo_move called without prior do_move");
         self.ply -= 1;
 
         if m.is_drop() {
@@ -464,6 +471,11 @@ impl Board {
             if hand_total + on_board > max as u32 {
                 return false;
             }
+        }
+
+        // Zobristハッシュの整合性
+        if self.hash != self.compute_hash() {
+            return false;
         }
 
         // ビットボードとmailboxの整合性
