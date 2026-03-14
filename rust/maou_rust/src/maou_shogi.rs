@@ -131,9 +131,10 @@ impl PyBoard {
 
     /// 直前の指し手を取り消す．
     fn pop(&mut self) -> PyResult<()> {
-        let (m_raw, cap_raw) = self.undo_stack.pop().ok_or_else(|| {
-            pyo3::exceptions::PyIndexError::new_err("no moves to undo")
-        })?;
+        let (m_raw, cap_raw) = self
+            .undo_stack
+            .pop()
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("no moves to undo"))?;
         self.board
             .undo_move(Move::from_raw_u32(m_raw), Piece::from_raw_u8(cap_raw));
         Ok(())
@@ -145,7 +146,7 @@ impl PyBoard {
         // SAFETY: The caller must ensure no other Python reference aliases `arr`
         // during this call. `as_array_mut()` bypasses Python-level aliasing checks;
         // if another ndarray view shares the same buffer, this is undefined behavior.
-        // In practice, `to_piece_planes()` in shogi.py creates a thread-local array
+        // In practice, `to_piece_planes()` in shogi.py creates a new local array
         // that is not shared, satisfying this invariant.
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
@@ -180,8 +181,13 @@ impl PyBoard {
     }
 
     /// 指定マスの駒 ID を返す (0=空)．
-    fn piece(&self, sq: u8) -> u32 {
-        self.board.piece_at(Square::from_raw_u8(sq)) as u32
+    fn piece(&self, sq: u8) -> PyResult<u32> {
+        if sq >= 81 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "square index out of range: {sq} (must be 0..80)"
+            )));
+        }
+        Ok(self.board.piece_at(Square::from_raw_u8(sq)) as u32)
     }
 
     /// 盤面の駒配列 (81 要素) を返す．
