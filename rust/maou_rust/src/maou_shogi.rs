@@ -10,6 +10,18 @@ use maou_shogi::movegen;
 use maou_shogi::moves::{self, Move};
 use maou_shogi::types::{Color, Piece, Square, FEATURES_NUM};
 
+/// PyArray3<f32> の feature planes の形状を検証する．
+fn validate_feature_array_shape(arr: &Bound<'_, PyArray3<f32>>) -> PyResult<()> {
+    let shape = arr.dims();
+    let expected = [FEATURES_NUM, 9, 9];
+    if shape != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "expected array shape {expected:?}, got {shape:?}"
+        )));
+    }
+    Ok(())
+}
+
 #[pyclass]
 struct PyBoard {
     board: Board,
@@ -107,33 +119,21 @@ impl PyBoard {
     }
 
     fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
+        validate_feature_array_shape(arr)?;
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        if slice.len() != FEATURES_NUM * 9 * 9 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "expected array of size {}, got {}",
-                FEATURES_NUM * 9 * 9,
-                slice.len()
-            )));
-        }
         feature::piece_planes(&self.board, slice);
         Ok(())
     }
 
     fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
+        validate_feature_array_shape(arr)?;
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        if slice.len() != FEATURES_NUM * 9 * 9 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "expected array of size {}, got {}",
-                FEATURES_NUM * 9 * 9,
-                slice.len()
-            )));
-        }
         feature::piece_planes_rotate(&self.board, slice);
         Ok(())
     }

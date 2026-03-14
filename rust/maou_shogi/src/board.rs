@@ -519,27 +519,18 @@ impl Board {
     /// 盤面の状態から captured piece と moving piece type を補完する．
     /// 不正な move16(移動元に駒がない等)の場合は `None` を返す．
     pub fn move_from_move16(&self, move16: u16) -> Option<Move> {
-        let m16 = Move::from_move16(move16);
-        if m16.is_drop() {
-            Some(m16)
-        } else {
-            let from = m16.from_sq();
-            let to = m16.to_sq();
-            let moving_piece = self.squares[from.index()];
-            if moving_piece.is_empty() {
-                return None;
-            }
-            let moving_pt = moving_piece.piece_type()? as u8;
-            let captured = self.squares[to.index()].0;
-            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
-        }
+        self.complete_move(Move::from_move16(move16))
     }
 
     /// USI 文字列から完全な 32-bit Move を生成する．
     ///
     /// 盤面の状態から captured piece と moving piece type を補完する．
     pub fn move_from_usi(&self, usi: &str) -> Option<Move> {
-        let m16 = Move::from_usi(usi)?;
+        self.complete_move(Move::from_usi(usi)?)
+    }
+
+    /// 16-bit Move に盤面情報(移動駒種・取得駒)を補完して 32-bit Move を返す．
+    fn complete_move(&self, m16: Move) -> Option<Move> {
         if m16.is_drop() {
             Some(m16)
         } else {
