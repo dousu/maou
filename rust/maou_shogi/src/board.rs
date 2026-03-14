@@ -99,20 +99,17 @@ impl Board {
     }
 
     /// 指定した色の玉のマスを返す．
+    #[inline]
     pub fn king_square(&self, color: Color) -> Option<Square> {
         let bb = self.piece_bb[color.index()][PieceType::King as usize];
-        if bb.is_empty() {
-            None
-        } else {
-            let mut bb_copy = bb;
-            Some(bb_copy.pop_lsb())
-        }
+        bb.lsb()
     }
 
     /// 指定した色が王手されているか(相手の利きが自玉にかかっているか)．
     ///
     /// Inverse bitboard approach: 対象マスから各駒種の利きを逆算し，
     /// 相手の対応する駒種のbitboardと交差判定する．
+    #[inline]
     pub fn is_in_check(&self, color: Color) -> bool {
         if let Some(king_sq) = self.king_square(color) {
             self.is_attacked_by(king_sq, color.opponent())
@@ -126,6 +123,7 @@ impl Board {
     /// Inverse bitboard approach: 対象マスから各駒種の利きパターンを逆方向に展開し，
     /// 攻撃側の対応する駒種のbitboardとの交差で判定する．
     /// 全81マスをスキャンする代わりに，駒種ごとのbitboard演算で高速化．
+    #[inline]
     pub fn is_attacked_by(&self, sq: Square, attacker_color: Color) -> bool {
         let occ = self.all_occupied();
         let opp = attacker_color.index();
@@ -213,6 +211,7 @@ impl Board {
     ///
     /// - `sq` が空マスであること(`debug_assert` で検証)．
     /// - `piece` が有効な色と駒種を持つこと．
+    #[inline]
     pub fn put_piece(&mut self, sq: Square, piece: Piece) {
         debug_assert!(self.squares[sq.index()].is_empty());
         let color = piece.color().unwrap();
@@ -228,6 +227,7 @@ impl Board {
     /// # 前提条件
     ///
     /// - `sq` に駒が存在すること(`debug_assert` で検証)．
+    #[inline]
     pub fn remove_piece(&mut self, sq: Square) -> Piece {
         let piece = self.squares[sq.index()];
         debug_assert!(!piece.is_empty());
@@ -241,6 +241,7 @@ impl Board {
     }
 
     /// 手を実行する(取った駒を返す)．
+    #[inline]
     pub fn do_move(&mut self, m: Move) -> Piece {
         let captured;
 
@@ -304,6 +305,7 @@ impl Board {
     }
 
     /// 手を取り消す．
+    #[inline]
     pub fn undo_move(&mut self, m: Move, captured: Piece) {
         // 手番を戻す
         self.turn = self.turn.opponent();
@@ -443,6 +445,13 @@ impl Board {
         // 少なくとも1枚の玉が存在すること
         if bk.count() == 0 && wk.count() == 0 {
             return false;
+        }
+
+        // 持ち駒の枚数上限
+        for (i, &max) in PieceType::MAX_HAND_COUNT.iter().enumerate() {
+            if self.hand[0][i] > max || self.hand[1][i] > max {
+                return false;
+            }
         }
 
         // ビットボードとmailboxの整合性

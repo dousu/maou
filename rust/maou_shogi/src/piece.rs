@@ -77,46 +77,46 @@ pub fn piece_from_sfen_char(ch: char) -> Option<Piece> {
     Some(Piece::new(color, pt))
 }
 
-/// PieceをSFEN文字に変換する．成駒の場合は'+X'の2文字．
-pub fn piece_to_sfen_string(piece: Piece) -> String {
+/// PieceをSFEN文字列に変換する．成駒の場合は'+X'の2文字．
+///
+/// ヒープアロケーションを避けるため `&'static str` を返す．
+#[inline]
+pub fn piece_to_sfen_string(piece: Piece) -> &'static str {
     if piece.is_empty() {
-        return String::new();
+        return "";
     }
     let color = piece.color().unwrap();
     let pt = piece.piece_type().unwrap();
 
-    let (promoted, base_pt) = if pt.is_promoted() {
-        (true, pt.unpromoted().unwrap())
-    } else {
-        (false, pt)
-    };
-
-    let ch = match base_pt {
-        PieceType::Pawn => 'P',
-        PieceType::Lance => 'L',
-        PieceType::Knight => 'N',
-        PieceType::Silver => 'S',
-        PieceType::Bishop => 'B',
-        PieceType::Rook => 'R',
-        PieceType::Gold => 'G',
-        PieceType::King => 'K',
-        PieceType::ProPawn
-        | PieceType::ProLance
-        | PieceType::ProKnight
-        | PieceType::ProSilver
-        | PieceType::Horse
-        | PieceType::Dragon => unreachable!("promoted piece after unpromoted(): {:?}", base_pt),
-    };
-
-    let ch = match color {
-        Color::Black => ch,
-        Color::White => ch.to_ascii_lowercase(),
-    };
-
-    if promoted {
-        format!("+{}", ch)
-    } else {
-        ch.to_string()
+    match (color, pt) {
+        (Color::Black, PieceType::Pawn) => "P",
+        (Color::Black, PieceType::Lance) => "L",
+        (Color::Black, PieceType::Knight) => "N",
+        (Color::Black, PieceType::Silver) => "S",
+        (Color::Black, PieceType::Bishop) => "B",
+        (Color::Black, PieceType::Rook) => "R",
+        (Color::Black, PieceType::Gold) => "G",
+        (Color::Black, PieceType::King) => "K",
+        (Color::Black, PieceType::ProPawn) => "+P",
+        (Color::Black, PieceType::ProLance) => "+L",
+        (Color::Black, PieceType::ProKnight) => "+N",
+        (Color::Black, PieceType::ProSilver) => "+S",
+        (Color::Black, PieceType::Horse) => "+B",
+        (Color::Black, PieceType::Dragon) => "+R",
+        (Color::White, PieceType::Pawn) => "p",
+        (Color::White, PieceType::Lance) => "l",
+        (Color::White, PieceType::Knight) => "n",
+        (Color::White, PieceType::Silver) => "s",
+        (Color::White, PieceType::Bishop) => "b",
+        (Color::White, PieceType::Rook) => "r",
+        (Color::White, PieceType::Gold) => "g",
+        (Color::White, PieceType::King) => "k",
+        (Color::White, PieceType::ProPawn) => "+p",
+        (Color::White, PieceType::ProLance) => "+l",
+        (Color::White, PieceType::ProKnight) => "+n",
+        (Color::White, PieceType::ProSilver) => "+s",
+        (Color::White, PieceType::Horse) => "+b",
+        (Color::White, PieceType::Dragon) => "+r",
     }
 }
 

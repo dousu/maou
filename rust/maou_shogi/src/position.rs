@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::board::{Board, SfenError};
 use crate::movegen;
 use crate::moves::Move;
@@ -19,18 +21,25 @@ struct StateInfo {
 /// 局面(Board + 履歴管理)．
 ///
 /// 連続王手の千日手判定のために局面履歴を管理する．
+/// 局面ハッシュの出現回数を `HashMap` で管理し，千日手判定を O(1) で行う．
 #[derive(Clone)]
 pub struct Position {
     pub(crate) board: Board,
     history: Vec<StateInfo>,
+    /// 局面ハッシュの出現回数．千日手判定の O(1) 化用．
+    hash_count: HashMap<u64, usize>,
 }
 
 impl Position {
     /// 平手初期局面で生成する．
     pub fn new() -> Position {
+        let board = Board::new();
+        let mut hash_count = HashMap::new();
+        *hash_count.entry(board.hash).or_insert(0) += 1;
         Position {
-            board: Board::new(),
+            board,
             history: Vec::new(),
+            hash_count,
         }
     }
 
@@ -38,9 +47,12 @@ impl Position {
     pub fn from_sfen(sfen: &str) -> Result<Position, SfenError> {
         let mut board = Board::empty();
         board.set_sfen(sfen)?;
+        let mut hash_count = HashMap::new();
+        *hash_count.entry(board.hash).or_insert(0) += 1;
         Ok(Position {
             board,
             history: Vec::new(),
+            hash_count,
         })
     }
 
@@ -55,6 +67,8 @@ impl Position {
         // 相手の玉に王手をかけているか(do_move後は手番が交代済み)
         let gives_check = self.board.is_in_check(self.board.turn);
 
+        *self.hash_count.entry(self.board.hash).or_insert(0) += 1;
+
         self.history.push(StateInfo {
             hash: self.board.hash,
             captured,
@@ -68,6 +82,13 @@ impl Position {
     /// 履歴が空の場合は `None` を返す．
     pub fn undo_move(&mut self) -> Option<Move> {
         let state = self.history.pop()?;
+        // hash_count をデクリメント(do_move で加算した分を戻す)
+        if let Some(count) = self.hash_count.get_mut(&state.hash) {
+            *count -= 1;
+            if *count == 0 {
+                self.hash_count.remove(&state.hash);
+            }
+        }
         self.board.undo_move(state.last_move, state.captured);
         Some(state.last_move)
     }
@@ -111,35 +132,27 @@ impl Position {
             return false;
         }
 
-        // 同一局面hashの出現回数と最初の出現位置を単一パスで取得
-        //
+        // hash_count で O(1) 判定: 3回未満なら千日手不成立(この手で4回目になる)
+        let current_count = self.hash_count.get(&new_hash).copied().unwrap_or(0);
+        if current_count < 3 {
+            return false;
+        }
+
+        // 3回以上出現している場合のみ，連続王手の検証を行う
         // 手番側の手は history_len と同じパリティのインデックスに配置される．
-        // 次の手は history[history_len] に記録されるため，手番側の過去の手は
-        // history_len, history_len-2, history_len-4, ... つまり history_len % 2
-        // と同じパリティのインデックスにある．
         //
         // 注: from_sfen で後手番開始の場合，turn.index() != history_len % 2 となるが，
         // 手の配置順序(history 内の位置)に基づくため history_len % 2 が正しい．
         let history_len = self.history.len();
         let my_parity = history_len % 2;
 
-        let mut count = 0usize;
-        let mut first_idx = None;
-        for (i, s) in self.history.iter().enumerate() {
-            if s.hash == new_hash {
-                count += 1;
-                if first_idx.is_none() {
-                    first_idx = Some(i);
-                }
-            }
-        }
-
-        if count < 3 {
-            return false;
-        }
+        // 最初の出現位置を探す
+        let first_idx = match self.history.iter().position(|s| s.hash == new_hash) {
+            Some(idx) => idx,
+            None => return false,
+        };
 
         // 最初の出現から現在まで，自分の全ての手が王手かチェック
-        let first_idx = first_idx.unwrap();
         for i in first_idx..history_len {
             if i % 2 == my_parity && !self.history[i].gives_check {
                 return false;

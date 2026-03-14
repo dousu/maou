@@ -51,7 +51,7 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, SfenError> {
     }
 
     // SFENの行は上(1段目=row0)から下(9段目=row8)，
-    // 各行は左(9筋=col0)から右(1筋=col8)の順．
+    // 各行は左(9筋=col8)から右(1筋=col0)の順．
     for (row, row_str) in rows.iter().enumerate() {
         let mut col: u8 = 0;
         let mut chars = row_str.chars().peekable();
@@ -193,7 +193,7 @@ pub fn to_sfen(squares: &[Piece; 81], turn: Color, hand: &[[u8; HAND_KINDS]; 2],
                     result.push_str(&empty_count.to_string());
                     empty_count = 0;
                 }
-                result.push_str(&piece_to_sfen_string(piece));
+                result.push_str(piece_to_sfen_string(piece));
             }
         }
         if empty_count > 0 {

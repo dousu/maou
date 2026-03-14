@@ -35,7 +35,7 @@ pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
 
 /// 疑似合法手を生成する(自玉の王手放置チェックなし)．
 fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
-    let mut moves = Vec::with_capacity(128);
+    let mut moves = Vec::with_capacity(256);
     let us = board.turn;
     let our_occ = board.occupied[us.index()];
     let all_occ = board.all_occupied();
@@ -126,6 +126,7 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 }
 
 /// 手が合法かどうかを検証する(自玉の王手放置チェック + 打ち歩詰め)．
+#[inline]
 fn is_legal(board: &mut Board, m: Move) -> bool {
     let us = board.turn;
 
