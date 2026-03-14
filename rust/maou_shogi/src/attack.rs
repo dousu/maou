@@ -132,7 +132,7 @@ fn add_step(table: &mut [Bitboard; 81], sq: Square, dirs: &[(i8, i8)]) {
             bb.set(Square::new(nc as u8, nr as u8));
         }
     }
-    table[sq.index()] = table[sq.index()] | bb;
+    table[sq.index()] |= bb;
 }
 
 /// 近接駒の利きを返す(飛び駒のスライド部分は含まない)．

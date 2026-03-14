@@ -67,6 +67,15 @@ pub enum PieceType {
     Dragon = 14,    // 龍 (成飛)
 }
 
+// is_promoted() が King < 9 <= ProPawn を前提としていることをコンパイル時に検証
+const _: () = {
+    assert!(PieceType::King as u8 == 8, "is_promoted() assumes King == 8");
+    assert!(
+        PieceType::ProPawn as u8 == 9,
+        "is_promoted() assumes ProPawn == 9"
+    );
+};
+
 impl PieceType {
     /// 全駒種のスライス．
     pub const ALL: [PieceType; 14] = [

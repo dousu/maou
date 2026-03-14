@@ -310,7 +310,8 @@ impl Board {
         // 手番を戻す
         self.turn = self.turn.opponent();
         self.hash ^= ZOBRIST.turn_hash();
-        self.ply = self.ply.saturating_sub(1);
+        debug_assert!(self.ply > 0, "undo_move called with ply == 0");
+        self.ply -= 1;
 
         if m.is_drop() {
             let to = m.to_sq();
