@@ -247,8 +247,8 @@ class TestStage2VsPreprocess:
         [
             # 初期局面 (先手番)
             "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
-            # 先手番: 持ち駒あり
-            "lnsgk1snl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b - 5",
+            # 先手番: 持ち駒あり (先手が金を持っている)
+            "lnsgk1snl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b G 5",
             # 後手番
             "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
         ],
@@ -257,8 +257,6 @@ class TestStage2VsPreprocess:
         self, sfen: str
     ) -> None:
         """HCPエンコード→デコードで同一のboardIdPositions/piecesInHandが得られること."""
-        import cshogi
-
         # 元の局面から特徴量を生成
         board = Board()
         board.set_sfen(sfen)
@@ -268,9 +266,7 @@ class TestStage2VsPreprocess:
         # HCPにエンコードしてから復元 (Stage2/Preprocess のパスを模倣)
         hcp_df = board.get_hcp_df()
         hcp_bytes = hcp_df["hcp"][0]
-        hcp = np.frombuffer(
-            hcp_bytes, dtype=cshogi.HuffmanCodedPos
-        )
+        hcp = np.frombuffer(hcp_bytes, dtype=np.uint8)
 
         board2 = Board()
         board2.set_hcp(hcp)

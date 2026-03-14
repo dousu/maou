@@ -5,11 +5,13 @@
 //!
 //! - `maou._rust.maou_io` - Arrow IPC I/O and sparse array operations
 //! - `maou._rust.maou_index` - Search index for data visualization
+//! - `maou._rust.maou_shogi` - Shogi board, move generation, and feature extraction
 
 use pyo3::prelude::*;
 
-mod maou_io;
 mod maou_index;
+mod maou_io;
+mod maou_shogi;
 
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -18,6 +20,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_submodule(&maou_io::create_module(py)?)?;
     m.add_submodule(&maou_index::create_module(py)?)?;
+    m.add_submodule(&maou_shogi::create_module(py)?)?;
 
     // Register submodules in sys.modules for proper importing
     py.import("sys")?
@@ -27,6 +30,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py.import("sys")?
         .getattr("modules")?
         .set_item("maou._rust.maou_index", m.getattr("maou_index")?)?;
+
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("maou._rust.maou_shogi", m.getattr("maou_shogi")?)?;
 
     Ok(())
 }

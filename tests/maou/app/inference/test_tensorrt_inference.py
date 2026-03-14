@@ -554,20 +554,6 @@ class TestInferWithEnginePath:
         """engine_path 指定時に onnx_path=None を明示的に渡してもエラーにならないこと．"""
         trt_mock = _create_trt_mock()
         cuda_mocks = _create_cuda_mocks()
-        cudart_mock = cuda_mocks["cuda.bindings.runtime"]
-
-        # deserialize_cuda_engine が成功を返すように設定
-        runtime_mock = MagicMock()
-        runtime_mock.deserialize_cuda_engine.return_value = (
-            MagicMock()
-        )
-        trt_mock.Runtime.return_value = runtime_mock
-
-        # cudaStreamCreate が成功を返すように設定
-        cudart_mock.cudaStreamCreate.return_value = (
-            MagicMock(),
-            MagicMock(),
-        )
 
         # エンジンファイルを作成
         engine_file = tmp_path / "test.engine"
@@ -584,23 +570,32 @@ class TestInferWithEnginePath:
                 TensorRTInference,
             )
 
-            # onnx_path=None かつ engine_path 指定で ValueError が出ないことを確認
-            # (推論処理自体はモックなので途中で例外が出ても問題ない)
-            try:
-                TensorRTInference.infer(
-                    onnx_path=None,
-                    board_data=MagicMock(),
-                    hand_data=MagicMock(),
-                    num=5,
-                    cuda_available=True,
-                    engine_path=engine_file,
-                )
-            except ValueError:
-                pytest.fail(
-                    "ValueError should not be raised when engine_path is specified with onnx_path=None"
-                )
-            except Exception:
-                pass  # 推論処理中のその他の例外は許容
+            # onnx_path=None + engine_path 指定の場合，
+            # load_engine が呼ばれ build_engine_from_onnx は呼ばれないことを確認
+            with patch.object(
+                TensorRTInference,
+                "load_engine",
+                return_value=b"dummy_serialized",
+            ) as mock_load, patch.object(
+                TensorRTInference,
+                "build_engine_from_onnx",
+            ) as mock_build:
+                try:
+                    TensorRTInference.infer(
+                        onnx_path=None,
+                        board_data=MagicMock(),
+                        hand_data=MagicMock(),
+                        num=5,
+                        cuda_available=True,
+                        engine_path=engine_file,
+                    )
+                except Exception:
+                    pass  # 推論処理中の例外は許容
+
+                # engine_path 指定時は load_engine が呼ばれる
+                mock_load.assert_called_once_with(engine_file)
+                # build_engine_from_onnx は呼ばれない
+                mock_build.assert_not_called()
 
 
 def _create_onnx_model_with_int64(

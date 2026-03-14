@@ -315,13 +315,13 @@ impl Board {
     /// # 前提条件
     ///
     /// `do_move` で実行した手に対してのみ呼ぶこと．
-    /// `do_move` を経ずに呼んだ場合の動作は未定義(debug ビルドではパニック)．
+    /// `do_move` を経ずに呼んだ場合はパニックする．
     #[inline]
     pub fn undo_move(&mut self, m: Move, captured: Piece) {
         // 手番を戻す
         self.turn = self.turn.opponent();
         self.hash ^= ZOBRIST.turn_hash();
-        debug_assert!(self.ply > 1, "undo_move called without prior do_move");
+        assert!(self.ply > 1, "undo_move called without prior do_move");
         self.ply -= 1;
 
         if m.is_drop() {
@@ -434,6 +434,12 @@ impl Board {
         self.turn
     }
 
+    /// 手番を設定し，Zobrist hashを再計算する(外部クレート向け)．
+    pub fn set_turn(&mut self, color: Color) {
+        self.turn = color;
+        self.hash = self.compute_hash();
+    }
+
     /// 手数を返す．
     #[inline]
     pub fn ply(&self) -> u16 {
@@ -506,6 +512,38 @@ impl Board {
         }
 
         true
+    }
+
+    /// 16-bit move から完全な 32-bit Move を生成する．
+    ///
+    /// 盤面の状態から captured piece と moving piece type を補完する．
+    /// 不正な move16(移動元に駒がない等)の場合は `None` を返す．
+    pub fn move_from_move16(&self, move16: u16) -> Option<Move> {
+        self.complete_move(Move::from_move16(move16))
+    }
+
+    /// USI 文字列から完全な 32-bit Move を生成する．
+    ///
+    /// 盤面の状態から captured piece と moving piece type を補完する．
+    pub fn move_from_usi(&self, usi: &str) -> Option<Move> {
+        self.complete_move(Move::from_usi(usi)?)
+    }
+
+    /// 16-bit Move に盤面情報(移動駒種・取得駒)を補完して 32-bit Move を返す．
+    fn complete_move(&self, m16: Move) -> Option<Move> {
+        if m16.is_drop() {
+            Some(m16)
+        } else {
+            let from = m16.from_sq();
+            let to = m16.to_sq();
+            let moving_piece = self.squares[from.index()];
+            if moving_piece.is_empty() {
+                return None;
+            }
+            let moving_pt = moving_piece.piece_type()? as u8;
+            let captured = self.squares[to.index()].0;
+            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
+        }
     }
 }
 

@@ -2,18 +2,22 @@ use crate::types::{PieceType, Square};
 
 /// 指し手(32-bit)．
 ///
-/// 内部的にはcshogi互換の16-bitエンコーディングに追加情報を持たせる．
+/// cshogi互換の16-bitエンコーディングに追加情報を持たせる．
 /// 16-bit部分:
 /// - Bits 0-6: to_sq (0-80)
-/// - Bits 7-13: from_sq (0-80) or drop piece (駒打ちの場合)
+/// - Bits 7-13: from_sq (0-80，通常手) or 81+piece_type (駒打ち)
 /// - Bit 14: promotion flag
-/// - Bit 15: drop flag
+///
+/// 駒打ちの判定は from_field >= 81 で行う(cshogi互換)．
 ///
 /// 追加情報(上位16-bit):
 /// - Bits 16-20: captured piece (取った駒の cshogi ID，0=取っていない)
 /// - Bits 21-24: moving piece type (動かした駒種)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Move(pub(crate) u32);
+
+/// 盤面のマス数(cshogi互換の駒打ち判定閾値)．
+const SQ_SIZE: u32 = 81;
 
 impl Move {
     pub const NONE: Move = Move(0);
@@ -24,11 +28,16 @@ impl Move {
         self.0
     }
 
+    /// 生のu32値からMoveを生成する(外部クレート向け)．
+    #[inline]
+    pub fn from_raw_u32(v: u32) -> Move {
+        Move(v)
+    }
+
     // 16-bit move masks
     const TO_MASK: u32 = 0x7F; // bits 0-6
     const FROM_MASK: u32 = 0x7F << 7; // bits 7-13
     const PROMOTE_FLAG: u32 = 1 << 14;
-    const DROP_FLAG: u32 = 1 << 15;
 
     // 32-bit extension masks
     const CAPTURED_SHIFT: u32 = 16;
@@ -53,9 +62,13 @@ impl Move {
     }
 
     /// 駒を打つ手を生成する(クレート内部専用)．
+    ///
+    /// cshogi互換: from_field に `81 + drop_move_index` を格納する．
+    /// drop_move_index: 歩=0, 香=1, 桂=2, 銀=3, 角=4, 飛=5, 金=6
     #[inline]
     pub(crate) fn new_drop(to: Square, piece_type: PieceType) -> Move {
-        let v = (to.0 as u32) | ((piece_type as u32) << 7) | Self::DROP_FLAG;
+        let idx = piece_type.drop_move_index().unwrap();
+        let v = (to.0 as u32) | ((SQ_SIZE + idx) << 7);
         Move(v)
     }
 
@@ -65,16 +78,22 @@ impl Move {
         Square((self.0 & Self::TO_MASK) as u8)
     }
 
+    /// 移動元のフィールド値を返す(駒打ちの場合は 81+piece_type)．
+    #[inline]
+    fn from_field(self) -> u32 {
+        (self.0 & Self::FROM_MASK) >> 7
+    }
+
     /// 移動元のマスを返す(駒打ちの場合は意味を持たない)．
     #[inline]
     pub fn from_sq(self) -> Square {
-        Square(((self.0 & Self::FROM_MASK) >> 7) as u8)
+        Square(self.from_field() as u8)
     }
 
-    /// 駒打ちかどうか．
+    /// 駒打ちかどうか(cshogi互換: from_field >= 81)．
     #[inline]
     pub fn is_drop(self) -> bool {
-        (self.0 & Self::DROP_FLAG) != 0
+        self.from_field() >= SQ_SIZE
     }
 
     /// 成りかどうか．
@@ -86,13 +105,14 @@ impl Move {
     /// 打った駒種を返す．
     ///
     /// 駒打ちでない場合は `None` を返す．
+    /// cshogi互換のdrop_move_indexからPieceTypeに変換する．
     #[inline]
     pub fn drop_piece_type(self) -> Option<PieceType> {
         if !self.is_drop() {
             return None;
         }
-        let pt = ((self.0 & Self::FROM_MASK) >> 7) as u8;
-        PieceType::from_u8(pt)
+        let idx = self.from_field() - SQ_SIZE;
+        PieceType::from_drop_move_index(idx)
     }
 
     /// 取った駒のcshogi IDを返す(0=取っていない)．
@@ -209,9 +229,11 @@ pub fn move_to(m: Move) -> u8 {
 }
 
 /// cshogi互換: move_from関数．
+///
+/// 駒打ちの場合は 81+piece_type を返す(cshogi互換)．
 #[inline]
 pub fn move_from(m: Move) -> u8 {
-    m.from_sq().raw_u8()
+    m.from_field() as u8
 }
 
 /// cshogi互換: move_to_usi関数．
@@ -234,10 +256,16 @@ pub fn move_is_promotion(m: Move) -> bool {
 
 /// cshogi互換: move_drop_hand_piece関数．
 ///
+/// cshogi の HandPiece enum 値(歩=0,香=1,桂=2,銀=3,金=4,角=5,飛=6)を返す．
+/// 指し手エンコーディング内の順序(歩=0,...,角=4,飛=5,金=6)から
+/// HandPiece enum 順序(歩=0,...,金=4,角=5,飛=6)に変換する．
 /// 駒打ちでない場合は 0 を返す．
 #[inline]
 pub fn move_drop_hand_piece(m: Move) -> u8 {
-    m.drop_piece_type().map_or(0, |pt| pt as u8)
+    m.drop_piece_type()
+        .and_then(|pt| pt.hand_index())
+        .map(|idx| idx as u8)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -312,6 +340,49 @@ mod tests {
         let m = Move::new_drop(Square(40), PieceType::Pawn);
         assert!(move_is_drop(m));
         assert_eq!(move_to(m), 40);
-        assert_eq!(move_drop_hand_piece(m), PieceType::Pawn as u8);
+        // Pawn: hand_index()=0
+        assert_eq!(move_drop_hand_piece(m), 0);
+    }
+
+    #[test]
+    fn test_cshogi_drop_encoding_compat() {
+        // Verify cshogi-compatible drop move encoding.
+        // Move encoding stores drops as: to | ((81 + drop_move_index) << 7)
+        // drop_move_index order: P=0,L=1,N=2,S=3,B=4,R=5,G=6
+        // But move_drop_hand_piece returns hand_index order: P=0,L=1,N=2,S=3,G=4,B=5,R=6
+        // (matching cshogi.HPAWN=0,...,HGOLD=4,HBISHOP=5,HROOK=6)
+
+        // R*9i: cshogi move16 = 11088 (to=80, drop_move_index=5=Rook)
+        let m = Move::new_drop(Square(80), PieceType::Rook);
+        assert_eq!(m.raw_u32() & 0xFFFF, 11088);
+        assert!(m.is_drop());
+        assert_eq!(m.drop_piece_type(), Some(PieceType::Rook));
+        // hand_index: Rook=6 (cshogi HROOK=6)
+        assert_eq!(move_drop_hand_piece(m), 6);
+        assert_eq!(m.to_usi(), "R*9i");
+
+        // P*5b: cshogi move16 = 10405 (to=37, drop_move_index=0=Pawn)
+        let m = Move::new_drop(Square(37), PieceType::Pawn);
+        assert_eq!(m.raw_u32() & 0xFFFF, 10405);
+        // hand_index: Pawn=0 (cshogi HPAWN=0)
+        assert_eq!(move_drop_hand_piece(m), 0);
+
+        // B*5b: cshogi move16 = 10917 (to=37, drop_move_index=4=Bishop)
+        let m = Move::new_drop(Square(37), PieceType::Bishop);
+        assert_eq!(m.raw_u32() & 0xFFFF, 10917);
+        // hand_index: Bishop=5 (cshogi HBISHOP=5)
+        assert_eq!(move_drop_hand_piece(m), 5);
+
+        // G*5b: cshogi move16 = 11173 (to=37, drop_move_index=6=Gold)
+        let m = Move::new_drop(Square(37), PieceType::Gold);
+        assert_eq!(m.raw_u32() & 0xFFFF, 11173);
+        // hand_index: Gold=4 (cshogi HGOLD=4)
+        assert_eq!(move_drop_hand_piece(m), 4);
+
+        // Verify cshogi raw values decode correctly
+        let m = Move::from_raw_u32(11088);
+        assert!(m.is_drop());
+        assert_eq!(m.drop_piece_type(), Some(PieceType::Rook));
+        assert_eq!(m.to_sq(), Square(80));
     }
 }

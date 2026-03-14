@@ -20,9 +20,7 @@ def test_transform_returns_board_features() -> None:
     hcp_bytes = hcp_df["hcp"][0]
 
     # Convert bytes to numpy array for Transform
-    import cshogi
-
-    hcp = np.frombuffer(hcp_bytes, dtype=cshogi.HuffmanCodedPos)  # type: ignore
+    hcp = np.frombuffer(hcp_bytes, dtype=np.uint8)
 
     move = next(board.get_legal_moves())
     move16 = shogi.move16(move)

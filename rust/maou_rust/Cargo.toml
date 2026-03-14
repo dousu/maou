@@ -11,8 +11,10 @@ crate-type = ["cdylib"]
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-pyarrow = { workspace = true }
+numpy = { workspace = true }
 maou_io = { path = "../maou_io" }
 maou_index = { path = "../maou_index" }
+maou_shogi = { path = "../maou_shogi" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

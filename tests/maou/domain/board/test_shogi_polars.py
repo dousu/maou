@@ -219,13 +219,7 @@ class TestBoardDataFrameIntegration:
 
         # Create new board and set HCP
         board2 = Board()
-        import cshogi
-
-        hcp_array = np.frombuffer(
-            hcp_bytes,
-            dtype=cshogi.HuffmanCodedPos,  # type: ignore
-        )
-        board2.set_hcp(hcp_array)
+        board2.set_hcp(hcp_bytes)
 
         # Should have same position
         assert board1.get_sfen() == board2.get_sfen()

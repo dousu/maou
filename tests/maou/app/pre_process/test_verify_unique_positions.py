@@ -37,15 +37,14 @@ def _generate_distinct_positions(
     positions: list[tuple[bytes, int, int]] = []
 
     for _ in range(n):
-        hcp = np.zeros(32, dtype=np.uint8)
-        board.to_hcp(hcp)
+        hcp_bytes = board.to_hcp()
         z_hash = board.hash()
 
         legal_moves = list(board.get_legal_moves())
         m = legal_moves[0]
         m16 = move16(m)
 
-        positions.append((hcp.tobytes(), int(m16), z_hash))
+        positions.append((hcp_bytes, int(m16), z_hash))
         board.push_move(m)
 
     return positions

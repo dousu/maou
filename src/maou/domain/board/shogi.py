@@ -5,8 +5,20 @@ from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING, ClassVar
 
-import cshogi
 import numpy as np
+
+from maou._rust.maou_shogi import PyBoard as _PyBoard
+from maou._rust.maou_shogi import move16 as _move16
+from maou._rust.maou_shogi import (
+    move_drop_hand_piece as _move_drop_hand_piece,
+)
+from maou._rust.maou_shogi import move_from as _move_from
+from maou._rust.maou_shogi import move_is_drop as _move_is_drop
+from maou._rust.maou_shogi import (
+    move_is_promotion as _move_is_promotion,
+)
+from maou._rust.maou_shogi import move_to as _move_to
+from maou._rust.maou_shogi import move_to_usi as _move_to_usi
 
 if TYPE_CHECKING:
     import polars as pl
@@ -33,18 +45,6 @@ MAX_PIECES_IN_HAND: list[int] = [
 # 駒8種類，成駒6種類
 PIECE_TYPES: int = 14  # 8 unpromoted + 6 promoted piece types
 
-# Verify domain constants match cshogi (catch upstream changes)
-assert (
-    cshogi.MAX_PIECES_IN_HAND == MAX_PIECES_IN_HAND  # type: ignore
-), (
-    f"cshogi constant changed: {cshogi.MAX_PIECES_IN_HAND} != {MAX_PIECES_IN_HAND}"
-)  # type: ignore
-assert (
-    len(cshogi.PIECE_TYPES) == PIECE_TYPES  # type: ignore
-), (
-    f"cshogi constant changed: {len(cshogi.PIECE_TYPES)} != {PIECE_TYPES}"
-)  # type: ignore
-
 # MAX_PIECES_IN_HANDの構成
 # 歩18，香車4，桂馬4，銀4，金4，角2，飛車2
 
@@ -53,14 +53,14 @@ FEATURES_NUM = PIECE_TYPES * 2 + sum(MAX_PIECES_IN_HAND) * 2
 
 
 class Turn(IntEnum):
-    BLACK = cshogi.BLACK  # type: ignore
-    WHITE = cshogi.WHITE  # type: ignore
+    BLACK = 0
+    WHITE = 1
 
 
 class Result(IntEnum):
-    BLACK_WIN = cshogi.BLACK_WIN  # type: ignore
-    WHITE_WIN = cshogi.WHITE_WIN  # type: ignore
-    DRAW = cshogi.DRAW  # type: ignore
+    BLACK_WIN = 0
+    WHITE_WIN = 1
+    DRAW = 2
 
 
 class PieceId(IntEnum):
@@ -226,8 +226,8 @@ class ColoredPiece:
     オフセット計算のバグを防止する．
 
     Attributes:
-        turn: 駒の所有者（Turn.BLACK または Turn.WHITE）
-        piece_id: 駒の種類（PieceId enum）
+        turn: 駒の所有者(Turn.BLACK または Turn.WHITE)
+        piece_id: 駒の種類(PieceId enum)
 
     Examples:
         >>> cp = ColoredPiece.from_cshogi(17)  # 白歩
@@ -242,7 +242,7 @@ class ColoredPiece:
     turn: Turn
     piece_id: PieceId
 
-    # cshogi形式の定数（クラス変数として参照可能）
+    # cshogi形式の定数(クラス変数として参照可能)
     CSHOGI_WHITE_OFFSET: ClassVar[int] = CSHOGI_WHITE_OFFSET
     CSHOGI_BLACK_MIN: ClassVar[int] = CSHOGI_BLACK_MIN
     CSHOGI_BLACK_MAX: ClassVar[int] = CSHOGI_BLACK_MAX
@@ -279,7 +279,7 @@ class ColoredPiece:
             return cls(Turn.BLACK, PieceId.EMPTY)
 
         if CSHOGI_BLACK_MIN <= cshogi_piece <= CSHOGI_BLACK_MAX:
-            # 黒駒: cshogi 1-14 → PieceId 1-14（同じ）
+            # 黒駒: cshogi 1-14 → PieceId 1-14(同じ)
             return cls(Turn.BLACK, PieceId(cshogi_piece))
 
         if CSHOGI_WHITE_MIN <= cshogi_piece <= CSHOGI_WHITE_MAX:
@@ -316,7 +316,7 @@ class ColoredPiece:
         if domain_piece == 0:
             return cls(Turn.BLACK, PieceId.EMPTY)
 
-        if DOMAIN_BLACK_MIN < domain_piece <= DOMAIN_BLACK_MAX:
+        if 1 <= domain_piece <= DOMAIN_BLACK_MAX:
             # 黒駒: domain 1-14 → PieceId 1-14
             return cls(Turn.BLACK, PieceId(domain_piece))
 
@@ -389,99 +389,115 @@ class ColoredPiece:
 def move16(move: int) -> int:
     """Convert move to 16-bit representation used in HCPE format.
 
-    This is a thin wrapper around cshogi.move16(). The 16-bit move format
-    is part of the HCPE binary specification used for efficient storage
-    in training data.
+    The 16-bit move format is part of the HCPE binary specification
+    used for efficient storage in training data.
 
     Args:
-        move: Full 32-bit move integer from cshogi
+        move: Full 32-bit move integer
 
     Returns:
         16-bit compact move representation
 
     Note:
-        If replacing cshogi, implement move16 encoding per HCPE spec:
+        16-bit encoding:
         - Bits 0-6: destination square (0-80)
-        - Bits 7-13: source square or drop piece type
+        - Bits 7-13: source square (0-80) or drop piece index (81+)
         - Bit 14: promotion flag
-        - Bit 15: drop flag
+        Drops are identified by from_field >= 81, not by a dedicated flag bit.
     """
-    return cshogi.move16(move)  # type: ignore
+    return _move16(move)
 
 
 def move_to(move: int) -> int:
     """Extract destination square from move.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         Destination square index (0-80)
     """
-    return cshogi.move_to(move)  # type: ignore
+    return _move_to(move)
 
 
 def move_from(move: int) -> int:
-    """Extract source square from move.
+    """指し手から移動元マスを取得する．
+
+    通常の指し手の場合はマス番号(0-80)を返す．
+    駒打ちの場合は move_is_drop() で判定し，
+    move_drop_hand_piece() で駒種を取得すること．
 
     Args:
-        move: Move integer from cshogi
+        move: 指し手整数値
 
     Returns:
-        Source square index (0-80) for normal moves
+        通常手: 移動元マス番号(0-80)
+        駒打ち: 内部エンコード値(マス番号ではない)
     """
-    return cshogi.move_from(move)  # type: ignore
+    return _move_from(move)
 
 
 def move_to_usi(move: int) -> str:
     """Convert move to USI (Universal Shogi Interface) string format.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         USI move string (e.g., \"7g7f\", \"P*5e\")
     """
-    return cshogi.move_to_usi(move)  # type: ignore
+    return _move_to_usi(move)
 
 
 def move_is_drop(move: int) -> bool:
     """Check if move is a drop (placing a piece from hand).
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         True if move is a drop, False otherwise
     """
-    return cshogi.move_is_drop(move)  # type: ignore
+    return _move_is_drop(move)
 
 
 def move_is_promotion(move: int) -> bool:
     """Check if move includes piece promotion.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         True if move promotes the piece, False otherwise
     """
-    return cshogi.move_is_promotion(move)  # type: ignore
+    return _move_is_promotion(move)
 
 
 def move_drop_hand_piece(move: int) -> int:
-    """Get which hand piece type is being dropped.
+    """駒打ちの駒種を取得する．
 
     Args:
-        move: Drop move integer from cshogi
+        move: 駒打ちの指し手整数値
 
     Returns:
-        Piece type being dropped (only valid for drop moves)
+        打つ駒の種類
+
+    Raises:
+        ValueError: move_is_drop(move) が False の場合
     """
-    return cshogi.move_drop_hand_piece(move)  # type: ignore
+    if not move_is_drop(move):
+        msg = f"move_drop_hand_piece called on non-drop move: {move}"
+        raise ValueError(msg)
+    return _move_drop_hand_piece(move)
 
 
 class Board:
+    """将棋の盤面を表すドメインモデル．
+
+    maou_shogi (Rust PyO3) の PyBoard をラップし，
+    PieceId体系への変換やPolars DataFrame出力などのドメインロジックを提供する．
+    """
+
     _CSHOGI_TO_PIECEID: dict[int, int] = {
         # Black pieces (1-14)
         0: 0,  # EMPTY
@@ -558,68 +574,112 @@ class Board:
             Promoted pieces (UMA=馬, RYU=龍) don't need reordering as their
             relative positions are consistent between cshogi and PieceId.
         """
-        temp = array.copy()
+        # Only copy the 6 channels that need reordering (not all 104)
+        black_temp = array[4:7].copy()  # channels 4,5,6
+        white_temp = array[18:21].copy()  # channels 18,19,20
+
         # Black pieces reordering (indices 4-6)
-        array[4] = temp[6]  # GOLD (cshogi) → KI (PieceId)
-        array[5] = temp[
-            4
-        ]  # BISHOP (cshogi) → KA (PieceId) - 角
-        array[6] = temp[5]  # ROOK (cshogi) → HI (PieceId) - 飛
-        array[12] = temp[
-            12
-        ]  # PROM_BISHOP (cshogi) → UMA (PieceId) - 馬
-        array[13] = temp[
-            13
-        ]  # PROM_ROOK (cshogi) → RYU (PieceId) - 龍
+        array[4] = black_temp[
+            2
+        ]  # GOLD (cshogi[6]) → KI (PieceId)
+        array[5] = black_temp[
+            0
+        ]  # BISHOP (cshogi[4]) → KA (PieceId)
+        array[6] = black_temp[
+            1
+        ]  # ROOK (cshogi[5]) → HI (PieceId)
 
         # White pieces reordering (same pattern, offset +14)
-        array[18] = temp[20]  # GOLD (cshogi) → KI (PieceId)
-        array[19] = temp[
-            18
-        ]  # BISHOP (cshogi) → KA (PieceId) - 角
-        array[20] = temp[
-            19
-        ]  # ROOK (cshogi) → HI (PieceId) - 飛
-        array[26] = temp[
-            26
-        ]  # PROM_BISHOP (cshogi) → UMA (PieceId) - 馬
-        array[27] = temp[
-            27
-        ]  # PROM_ROOK (cshogi) → RYU (PieceId) - 龍
+        array[18] = white_temp[
+            2
+        ]  # GOLD (cshogi[20]) → KI (PieceId)
+        array[19] = white_temp[
+            0
+        ]  # BISHOP (cshogi[18]) → KA (PieceId)
+        array[20] = white_temp[
+            1
+        ]  # ROOK (cshogi[19]) → HI (PieceId)
 
     def __init__(self) -> None:
-        self.board = cshogi.Board()  # type: ignore
+        """初期局面(平手)でBoardを生成する．"""
+        self.board = _PyBoard()
 
     def __copy__(self) -> Board:
         """SFENを経由した安全なコピーを返す．
 
-        内部のcshogi.Boardはシャローコピーで共有されるため，
+        内部の_PyBoardはシャローコピーで共有されるため，
         SFENによる再構築でディープコピーを保証する．
+
+        Note:
+            コピー後は undo_stack がリセットされるため，
+            コピー先での pop_move() は使用不可．
         """
         new_board = Board()
         new_board.set_sfen(self.get_sfen())
         return new_board
 
     def set_turn(self, turn: Turn) -> None:
-        self.board.turn = turn.value
+        """手番を設定する．
+
+        Args:
+            turn: 設定する手番
+        """
+        self.board.set_turn(turn.value)
 
     def get_turn(self) -> Turn:
+        """現在の手番を取得する．
+
+        Returns:
+            現在の手番
+        """
         return Turn(self.board.turn)
 
     def set_sfen(self, sfen: str) -> None:
+        """SFEN文字列から局面を設定する．
+
+        Args:
+            sfen: SFEN形式の局面文字列
+
+        Raises:
+            ValueError: 不正なSFEN文字列の場合
+        """
         self.board.set_sfen(sfen)
 
     def get_sfen(self) -> str:
+        """現在の局面をSFEN文字列で取得する．
+
+        Returns:
+            SFEN形式の局面文字列
+        """
         return self.board.sfen()
 
-    def set_hcp(self, hcp: np.ndarray) -> None:
-        self.board.set_hcp(hcp)
+    def set_hcp(self, hcp: np.ndarray | bytes) -> None:
+        """HCPデータから局面を設定する．
 
-    def to_hcp(self, array: np.ndarray) -> None:
-        self.board.to_hcp(array)
+        Args:
+            hcp: 32バイトのHCPデータ(numpy配列またはbytes)
+        """
+        if isinstance(hcp, np.ndarray):
+            data = hcp.tobytes()
+        else:
+            data = hcp
+        self.board.set_hcp(data)
+
+    def to_hcp(self) -> bytes:
+        """局面をHCPバイト列にエンコードする．
+
+        Returns:
+            32バイトのHCPデータ
+        """
+        return bytes(self.board.to_hcp())
 
     def get_legal_moves(self) -> Generator[int, None, None]:
-        for move in self.board.legal_moves:
+        """現在の局面で合法手を列挙する．
+
+        Yields:
+            合法手のmove整数値(32-bit)
+        """
+        for move in self.board.legal_moves():
             yield move
 
     def get_move_from_move16(self, move16: int) -> int:
@@ -644,37 +704,83 @@ class Board:
 
         Raises:
             ValueError: 不正なUSI文字列の場合
-            RuntimeError: cshogiの内部エラー(不正な局面での変換など)
         """
         return self.board.move_from_usi(usi)
 
     def push_move(self, move: int) -> None:
+        """指し手を実行して局面を進める．
+
+        Args:
+            move: 実行する指し手(32-bit move整数値)
+
+        Raises:
+            ValueError: 不正な指し手の場合
+        """
         self.board.push(move)
 
     def pop_move(self) -> None:
-        """直前の指し手を取り消す．"""
+        """直前の指し手を取り消す．
+
+        Raises:
+            IndexError: 取り消す指し手がない場合(コピー後の盤面を含む)
+        """
         self.board.pop()
 
     def to_piece_planes(self, array: np.ndarray) -> None:
+        """先手視点の駒特徴平面を配列に書き込む(in-place)．
+
+        PieceId順にチャネルを並べ替え，座標系を転置する．
+
+        Args:
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
+                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
+        """
         self.board.piece_planes(array)
         # Reorder channels to match PieceId ordering using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Transpose to match board_id_positions coordinate system
-        array[:] = np.transpose(array, (0, 2, 1))
+        # Rust feature::piece_planes fills array in column-major order (col, row).
+        # Transpose axes (1,2) to convert to row-major (row, col) matching
+        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
+        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
+        array[:] = np.ascontiguousarray(
+            np.transpose(array, (0, 2, 1))
+        )
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
+        """後手視点(180度回転)の駒特徴平面を配列に書き込む(in-place)．
+
+        PieceId順にチャネルを並べ替え，座標系を転置する．
+
+        Args:
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
+                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
+        """
         self.board.piece_planes_rotate(array)
         # Reorder channels (same as to_piece_planes) using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Transpose to match board_id_positions coordinate system
-        array[:] = np.transpose(array, (0, 2, 1))
+        # Rust feature::piece_planes_rotate fills array in column-major order (col, row).
+        # Transpose axes (1,2) to convert to row-major (row, col) matching
+        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
+        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
+        array[:] = np.ascontiguousarray(
+            np.transpose(array, (0, 2, 1))
+        )
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
-        """手番関係なく常に(先手, 後手)の順にtupleにはいっている
-        歩，香車，桂馬，銀，金，角，飛車の順番
-        例: ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
+        """持ち駒を取得する．
+
+        手番に関係なく常に(先手, 後手)の順で返す．
+        各リストは歩，香車，桂馬，銀，金，角，飛車の順番．
+
+        Returns:
+            (先手の持ち駒, 後手の持ち駒) のタプル．
+            各要素は駒種ごとの所持数リスト(長さ7)．
+
+        Examples:
+            >>> board.get_pieces_in_hand()
+            ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
         """
-        return self.board.pieces_in_hand
+        return self.board.pieces_in_hand()
 
     def get_piece_at(self, square: int) -> int:
         """指定マスのcshogi駒IDを返す．
@@ -696,19 +802,32 @@ class Board:
         Returns:
             81要素のリスト(cshogi駒ID)
         """
-        return self.board.pieces
+        return self.board.pieces()
 
     def to_pretty_board(self) -> str:
+        """盤面を人間が読める文字列で返す．
+
+        Returns:
+            盤面の文字列表現
+        """
         return str(self.board)
 
     def hash(self) -> int:
+        """Zobristハッシュ値を取得する．
+
+        Returns:
+            現在の局面のZobristハッシュ値
+        """
         return self.board.zobrist_hash()
 
     def is_ok(self) -> bool:
-        """Check if the board state is valid.
+        """盤面状態の整合性を検証する．
+
+        Rust 側は片玉局面(詰将棋)もサポートしており，
+        少なくとも1枚の王が存在すれば有効と判定する．
 
         Returns:
-            bool: True if the board is in a valid state (両方の王が存在する等)
+            bool: 盤面が有効な状態であれば True
         """
         return self.board.is_ok()
 
@@ -736,7 +855,7 @@ class Board:
         )
         positions = v_map(
             np.array(
-                self.board.pieces,
+                self.board.pieces(),
                 dtype=np.uint8,
             )
         ).reshape((9, 9), order="F")
@@ -799,10 +918,8 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get HCP data from cshogi board
-        hcp_array = np.empty(1, dtype=cshogi.HuffmanCodedPos)  # type: ignore
-        self.board.to_hcp(hcp_array)
-        hcp_bytes = hcp_array.tobytes()  # Convert to bytes
+        # Get HCP data from board
+        hcp_bytes = self.to_hcp()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(
@@ -831,17 +948,12 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get piece planes from cshogi board
-        planes = np.empty(
+        # Get piece planes from board (reorder + transpose via to_piece_planes)
+        planes = np.zeros(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
-        planes.fill(0)
-        self.board.piece_planes(planes)
-        # Reorder channels to match PieceId ordering using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(planes)
-        # Transpose to match board_id_positions coordinate system
-        planes = np.transpose(planes, (0, 2, 1))
-        planes_list = planes.tolist()  # Fast conversion
+        self.to_piece_planes(planes)
+        planes_list = planes.tolist()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(
@@ -875,17 +987,12 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get rotated piece planes from cshogi board
-        planes = np.empty(
+        # Get rotated piece planes from board (reorder + transpose via to_piece_planes_rotate)
+        planes = np.zeros(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
-        planes.fill(0)
-        self.board.piece_planes_rotate(planes)
-        # Reorder channels to match PieceId ordering using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(planes)
-        # Transpose to match get_board_id_positions_df coordinate system
-        planes = np.transpose(planes, (0, 2, 1))
-        planes_list = planes.tolist()  # Fast conversion
+        self.to_piece_planes_rotate(planes)
+        planes_list = planes.tolist()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(

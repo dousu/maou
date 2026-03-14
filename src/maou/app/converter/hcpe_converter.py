@@ -219,11 +219,8 @@ class HCPEConverter:
                     continue
 
                 # HCP (Huffman Coded Position)
-                # to_hcp() expects numpy array, not bytearray
-                hcp_array = np.zeros(32, dtype=np.uint8)
-                board.to_hcp(hcp_array)
-                # Convert to bytes for Polars Binary type
-                hcpe_data["hcp"].append(hcp_array.tobytes())
+                hcp_bytes = board.to_hcp()
+                hcpe_data["hcp"].append(hcp_bytes)
 
                 # 評価値（16bitに収める）
                 eval = min(32767, max(score, -32767))

@@ -110,6 +110,9 @@ impl PieceType {
     pub const MAX_HAND_COUNT: [u8; HAND_KINDS] = [18, 4, 4, 4, 4, 2, 2];
 
     /// 持ち駒のインデックスを返す(0-6)．持ち駒にできない駒種はNone．
+    ///
+    /// 順序: 歩=0, 香=1, 桂=2, 銀=3, 金=4, 角=5, 飛=6
+    /// (cshogi の pieces_in_hand プロパティと同じ順序)
     #[inline]
     pub fn hand_index(self) -> Option<usize> {
         match self {
@@ -120,6 +123,41 @@ impl PieceType {
             PieceType::Gold => Some(4),
             PieceType::Bishop => Some(5),
             PieceType::Rook => Some(6),
+            _ => None,
+        }
+    }
+
+    /// cshogi互換の駒打ち用インデックスを返す(0-6)．
+    ///
+    /// 順序: 歩=0, 香=1, 桂=2, 銀=3, 角=4, 飛=5, 金=6
+    /// (cshogi の HandPiece enum / 指し手エンコーディングと同じ順序)
+    ///
+    /// `hand_index()` とは金・角・飛の順序が異なる点に注意．
+    #[inline]
+    pub fn drop_move_index(self) -> Option<u32> {
+        match self {
+            PieceType::Pawn => Some(0),
+            PieceType::Lance => Some(1),
+            PieceType::Knight => Some(2),
+            PieceType::Silver => Some(3),
+            PieceType::Bishop => Some(4),
+            PieceType::Rook => Some(5),
+            PieceType::Gold => Some(6),
+            _ => None,
+        }
+    }
+
+    /// cshogi互換の駒打ちインデックスからPieceTypeに変換する．
+    #[inline]
+    pub fn from_drop_move_index(idx: u32) -> Option<PieceType> {
+        match idx {
+            0 => Some(PieceType::Pawn),
+            1 => Some(PieceType::Lance),
+            2 => Some(PieceType::Knight),
+            3 => Some(PieceType::Silver),
+            4 => Some(PieceType::Bishop),
+            5 => Some(PieceType::Rook),
+            6 => Some(PieceType::Gold),
             _ => None,
         }
     }
@@ -223,6 +261,12 @@ impl Piece {
         self.0
     }
 
+    /// 生のu8値からPieceを生成する(外部クレート向け)．
+    #[inline]
+    pub fn from_raw_u8(v: u8) -> Piece {
+        Piece(v)
+    }
+
     /// cshogi互換の白駒オフセット．
     pub const WHITE_OFFSET: u8 = 16;
 
@@ -287,6 +331,12 @@ impl Square {
     #[inline]
     pub fn raw_u8(self) -> u8 {
         self.0
+    }
+
+    /// 生のu8値からSquareを生成する(外部クレート向け)．
+    #[inline]
+    pub fn from_raw_u8(v: u8) -> Square {
+        Square(v)
     }
 
     /// col, rowから生成する．

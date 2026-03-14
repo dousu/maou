@@ -2,8 +2,16 @@
 
 ## Overview
 
-The project uses Rust for high-performance I/O operations with Arrow IPC format．
-Rust code is located in `rust/maou_io/` and integrated via PyO3 + maturin．
+The project uses Rust (PyO3 + maturin) for high-performance operations．
+Rust ワークスペースは `rust/` 以下に配置され，単一の `cdylib` (`maou_rust`) から
+3 つのサブモジュールとして Python に公開される．
+
+```
+maou._rust
+├── maou._rust.maou_io      # Arrow IPC I/O
+├── maou._rust.maou_index   # インデックス操作
+└── maou._rust.maou_shogi   # 将棋盤面操作・合法手生成・特徴量抽出
+```
 
 ## Initial Rust Setup
 
@@ -14,11 +22,11 @@ Rust code is located in `rust/maou_io/` and integrated via PyO3 + maturin．
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
-# Build Rust extension (automatically done during poetry install)
-poetry install
+# Build Rust extension (automatically done during uv sync)
+uv sync
 
 # Verify Rust backend
-poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 # Expected output: "Maou I/O Rust backend initialized"
 ```
 
@@ -102,7 +110,7 @@ wheel のインストールにより `maou` コマンドが利用可能になる
 
 ```bash
 # After modifying Rust code
-poetry run maturin develop  # Rebuild extension
+uv run maturin develop  # Rebuild extension
 
 # Run Rust tests
 cargo test --manifest-path rust/maou_io/Cargo.toml
@@ -192,19 +200,19 @@ export RUSTFLAGS="-C codegen-units=1 -C incremental=1"  # Sequential compilation
 
 **Development (default):**
 ```bash
-poetry run maturin develop  # Uses [profile.dev]
+uv run maturin develop  # Uses [profile.dev]
 # opt-level = 0, codegen-units = 1, incremental = true
 ```
 
 **Production (optimized):**
 ```bash
-poetry run maturin develop --release  # Uses [profile.release]
+uv run maturin develop --release  # Uses [profile.release]
 # opt-level = 3, codegen-units = 1, lto = "thin"
 ```
 
 **Balanced (memory-optimized):**
 ```bash
-CARGO_PROFILE=mem-opt poetry run maturin develop  # Uses [profile.mem-opt]
+CARGO_PROFILE=mem-opt uv run maturin develop  # Uses [profile.mem-opt]
 # opt-level = 2, codegen-units = 1, lto = "thin"
 ```
 
@@ -218,14 +226,14 @@ If you still encounter OOM errors:
 free -h
 
 # Monitor build process
-/usr/bin/time -v poetry run maturin develop 2>&1 | grep "Maximum resident"
+/usr/bin/time -v uv run maturin develop 2>&1 | grep "Maximum resident"
 ```
 
 **2. Reduce parallelism further:**
 ```bash
 # Temporarily disable incremental compilation
 export CARGO_INCREMENTAL=0
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **3. Clean build cache:**
@@ -234,7 +242,7 @@ poetry run maturin develop
 cargo clean
 
 # Rebuild from scratch
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **4. Verify configuration:**
@@ -281,15 +289,76 @@ The project replaces `dtype-full` with minimal dtype features based on actual us
 ## Rust Project Structure
 
 ```
-rust/maou_io/
-├── Cargo.toml          # Crate configuration
-├── src/
-│   ├── lib.rs         # PyO3 module entry point
-│   ├── arrow_io.rs    # Arrow IPC I/O implementation
-│   ├── schema.rs      # Arrow schema definitions
-│   └── error.rs       # Error types
-└── benches/           # Performance benchmarks (future)
+rust/
+├── maou_rust/              # PyO3 cdylib (Python バインディング)
+│   └── src/
+│       ├── lib.rs          # エントリポイント，サブモジュール登録
+│       ├── maou_io.rs      # Arrow I/O ラッパー
+│       ├── maou_index.rs   # インデックスラッパー
+│       └── maou_shogi.rs   # 将棋エンジンラッパー (PyBoard 等)
+├── maou_io/                # Arrow IPC I/O クレート
+│   └── src/
+│       ├── lib.rs
+│       ├── arrow_io.rs
+│       ├── schema.rs
+│       └── error.rs
+├── maou_index/             # インデックスクレート
+└── maou_shogi/             # 将棋エンジンクレート
+    └── src/
+        ├── lib.rs
+        ├── board.rs        # 盤面表現 (Bitboard + Mailbox)
+        ├── movegen.rs      # 合法手生成
+        ├── moves.rs        # Move エンコーディング
+        ├── types.rs        # PieceType, Square 等
+        ├── feature.rs      # 特徴量抽出 (104×9×9)
+        └── hcp.rs          # HuffmanCodedPos
 ```
+
+## maou_shogi モジュール
+
+`maou._rust.maou_shogi` は将棋エンジン機能を Python に公開する．
+旧 `cshogi` ライブラリの置き換えとして設計され，API レベルの互換性を維持する．
+
+### PyBoard クラス
+
+| メソッド | 説明 |
+|---------|------|
+| `PyBoard()` | 平手初期局面で生成 |
+| `set_sfen(sfen)` / `sfen()` | SFEN の設定・取得 |
+| `set_turn(turn)` / `turn` | 手番の設定・取得 (0=先手, 1=後手) |
+| `set_hcp(data)` / `to_hcp()` | HCP (32バイト) のデコード・エンコード |
+| `legal_moves()` | 合法手リスト (`Vec<u32>`) |
+| `move_from_move16(m16)` | 16-bit → 32-bit move 変換 |
+| `move_from_usi(usi)` | USI 文字列 → 32-bit move 変換 |
+| `push(m)` | 指し手適用 (内部 undo スタックに保存) |
+| `pop()` | 直前の指し手取消 |
+| `piece_planes(arr)` / `piece_planes_rotate(arr)` | 特徴量抽出 (in-place，`np.ndarray[f32]`) |
+| `pieces_in_hand()` | 持ち駒 `(Vec<u8>, Vec<u8>)` |
+| `piece(sq)` / `pieces()` | 駒情報取得 |
+| `zobrist_hash()` | Zobrist ハッシュ値 |
+| `is_ok()` | 盤面整合性検証 |
+
+### フリー関数
+
+| 関数 | 説明 |
+|------|------|
+| `move16(m)` | 32-bit → 16-bit 圧縮 |
+| `move_to(m)` / `move_from(m)` | 移動先・移動元の取得 |
+| `move_to_usi(m)` | USI 文字列変換 |
+| `move_is_drop(m)` / `move_is_promotion(m)` | 打ち・成り判定 |
+| `move_drop_hand_piece(m)` | 打ち駒の種類取得 |
+
+### cshogi 互換性に関する設計判断
+
+- **Move エンコーディング**: cshogi 互換の 16-bit/32-bit ビットレイアウトを採用．
+  打ち手は bit 15 フラグではなく `from_field >= 81` で識別する．
+- **Piece ID**: cshogi 互換 ID を使用 (0=空, 1-14=先手, 17-30=後手)．
+  Python 側の `_reorder_piece_planes_cshogi_to_pieceid()` で PieceId 順序に並び替える．
+- **push/pop セマンティクス**: `maou_shogi::Board` の `do_move`/`undo_move` は
+  捕獲駒の受け渡しが必要．PyO3 ラッパー側で `Vec<(u32, u8)>` の undo スタックを保持し，
+  cshogi 互換の `push()`/`pop()` インターフェースを提供する．
+- **HCP**: Apery 互換の 32 バイトバイナリフォーマット．既存データとの互換性を保証．
+- **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序．
 
 ## Using Polars + Rust I/O
 

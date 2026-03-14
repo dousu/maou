@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from maou.app.visualization.board_display import (
@@ -130,6 +131,7 @@ class TestVisualizationIntegration:
             search_index=search_index,
             file_paths=file_paths,
             array_type="preprocessing",
+            load_df=lambda path: pl.read_ipc(path),
         )
 
         board_display = BoardDisplayService(renderer=renderer)
