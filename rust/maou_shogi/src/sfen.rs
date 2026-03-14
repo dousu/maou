@@ -223,7 +223,8 @@ pub fn to_sfen(squares: &[Piece; 81], turn: Color, hand: &[[u8; HAND_KINDS]; 2],
                 if count > 1 {
                     result.push_str(&count.to_string());
                 }
-                let ch = hand_piece_to_sfen_char(pt);
+                // HAND_PIECES は持ち駒になれる駒種のみなので unwrap は安全
+                let ch = hand_piece_to_sfen_char(pt).unwrap();
                 result.push(match color {
                     Color::Black => ch,
                     Color::White => ch.to_ascii_lowercase(),

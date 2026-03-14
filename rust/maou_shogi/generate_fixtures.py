@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import cshogi  # type: ignore
+import numpy as np  # type: ignore
 
 FIXTURES_DIR = Path(__file__).parent / "tests" / "fixtures"
 
@@ -154,7 +155,8 @@ def generate_legal_move_fixtures() -> None:
     for tc in test_positions:
         try:
             board = cshogi.Board(tc["sfen"])
-        except Exception:
+        except Exception as e:
+            print(f"WARNING: skipping '{tc['name']}': {e}")
             continue
 
         move16_list = sorted(int(cshogi.move16(m)) for m in board.legal_moves)
@@ -221,8 +223,6 @@ def generate_special_rule_fixtures() -> None:
 def generate_feature_fixtures() -> None:
     """piece_planes出力を生成する(平手のみ，サイズ制限)．"""
     board = cshogi.Board()
-
-    import numpy as np
 
     planes = np.zeros((104, 9, 9), dtype=np.float32)
     board.piece_planes(planes)
