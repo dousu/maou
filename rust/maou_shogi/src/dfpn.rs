@@ -945,53 +945,25 @@ mod tests {
 
     /// 3手詰め: 後手玉1一，先手飛3三，先手持ち駒: 金
     ///
-    /// 正解: G*2b(2二金打)，1a2a(2一玉)，3c2c+(飛車2三成，col=1 check) まで3手詰
+    /// 正解: 1三飛成，2一玉，2二金打 まで3手詰
     #[test]
     fn test_tsume_3te() {
-        // 飛3三(col=2,row=2)は1一に直接利かない(col,rowが異なる)
-        // G*2b(金打2二): 金(1,1)が1一(0,0)にfw-diag利き→王手
-        // 玉の逃げ場: 2一(1,0): 金fw→✗. 1二(0,1): 金side→✗. 2二(1,1): 金自体→✗.
-        // 唯一の手: K captures? 1a can't go to 2b(金). Can't capture.
-        // Wait: 1一→2一 is blocked by gold fw? Gold at (1,1) forward = (1,0) = 2一. Yes ✗.
-        // So this might be 1-move mate...
-        //
-        // Let's verify: 1二(0,1) attacked by gold side → ✗. 2一(1,0) attacked by gold → ✗.
-        // But what about 2二(1,1)? That's the gold. Can king take? Protected by rook at 3三(2,2)?
-        // Rook at (2,2) attacks row=2: (0,2),(1,2),(3,2),...,(8,2) and col=2: (2,0),(2,1),...,(2,8).
-        // (1,1) NOT on row=2 or col=2. Not protected. So king CAN capture gold at 2二.
-        // After Kx2b (king at 2二(1,1)): rook at 3三(2,2) attacks (1,2),(0,2),(2,1),(2,0),...
-        // King at (1,1): is it attacked by rook? (1,1) is not on col=2 or row=2. Not attacked. ✓
-        // So Kx2b is a valid defense and it's not mate. ✓
-        //
-        // After Kx2b: sente needs to check again.
-        // Rook at 3三ⅱ can go to 3b(2,1) with check? Rook at (2,1) attacks col=2 and row=1.
-        // King at (1,1) is on row=1. Check! ✓
-        // Then king at 2二(1,1): 1一(0,0) not attacked by rook, 1二(0,1) on row 1 → ✗,
-        // 2一(1,0) not on col=2/row=1, 2三(1,2) not on col=2/row=1, 3二(2,1) rook itself,
-        // 3一(2,0) on col=2 → ✗, 3三(2,2) on col=2 → ✗.
-        // King can go to: 1一(0,0), 2一(1,0), 2三(1,2).
-        // Multiple escapes → not mate from 3c3b.
-        //
-        // This is actually more complex. Let's just use the solver to verify.
         let sfen = "8k/9/6R2/9/9/9/9/9/9 b G 1";
-        let mut board = Board::empty();
-        board.set_sfen(sfen).unwrap();
+        let result = solve_tsume(sfen, Some(7), Some(1_048_576), None).unwrap();
 
-        let mut solver = DfPnSolver::new(7, 1_048_576, 32767);
-        let result = solver.solve(&mut board);
+        let expected = ["3c1c+", "1a2a", "G*2b"];
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                assert!(
-                    usi_moves.len() % 2 == 1,
-                    "checkmate should be odd number of moves, got: {:?}",
-                    usi_moves
+                assert_eq!(
+                    usi_moves.len(), 3,
+                    "expected 3 moves, got {}: {:?}", usi_moves.len(), usi_moves
                 );
-                assert!(
-                    usi_moves.len() <= 7,
-                    "should be at most 7-move checkmate, got: {:?}",
-                    usi_moves
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
+                    usi_moves, expected,
                 );
             }
             other => panic!("expected Checkmate, got {:?}", other),
