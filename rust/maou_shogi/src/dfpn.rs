@@ -16,7 +16,7 @@ use crate::attack;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
-use crate::types::Square;
+use crate::types::{Color, PieceType, Square};
 
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
@@ -85,7 +85,7 @@ impl DfPnSolver {
             max_nodes,
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
-            table: HashMap::new(),
+            table: HashMap::with_capacity(max_nodes.min(1_048_576) as usize),
             nodes_searched: 0,
             path: Vec::new(),
             start_time: Instant::now(),
@@ -270,23 +270,23 @@ impl DfPnSolver {
 
             // 子ノードの閾値を計算
             let (child_pn_th, child_dn_th) = if or_node {
-                let cpn = dn_threshold
+                let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
                     .saturating_add(child_entries[best_idx].dn)
                     .min(INF - 1);
-                let cdn = pn_threshold
+                let child_pn_th = pn_threshold
                     .min(second_pn.saturating_add(1))
                     .min(INF - 1);
-                (cdn, cpn)
+                (child_pn_th, child_dn_th)
             } else {
-                let cpn = pn_threshold
+                let child_pn_th = pn_threshold
                     .saturating_sub(current_pn)
                     .saturating_add(child_entries[best_idx].pn)
                     .min(INF - 1);
-                let cdn = dn_threshold
+                let child_dn_th = dn_threshold
                     .min(second_dn.saturating_add(1))
                     .min(INF - 1);
-                (cpn, cdn)
+                (child_pn_th, child_dn_th)
             };
 
             // 子ノードを探索
@@ -337,14 +337,291 @@ impl DfPnSolver {
         (best_idx, 0, second_dn)
     }
 
-    /// 玉方の応手を生成する．
+    /// 玉方の応手を生成する(合い効かずを除外)．
     ///
-    /// 現時点では合法手をそのまま返す．
-    /// 無駄合い(futile interposition)の判定は，単に「取っても王手が続く」だけでは
-    /// 不十分であり，取った後の駒配置変化により後続の詰み手順が変わるため，
-    /// 正確な判定には深い探索が必要．将来的に実装予定．
+    /// 飛び駒(飛/龍/角/馬/香)による王手に対して，合い駒が効かない場合を検出する．
+    /// 合い効かず条件:
+    /// 1. 飛び駒と玉の間のマスに玉方の駒(玉除く)の効きがない
+    /// 2. 飛び駒が合い駒を取った後，玉がその駒を取り返せない
+    ///    (取り返せる = 取った位置が玉に隣接かつ攻め方の他の駒が利いていない)
     fn generate_defense_moves(&self, board: &mut Board) -> Vec<Move> {
-        movegen::generate_legal_moves(board)
+        let moves = movegen::generate_legal_moves(board);
+
+        // 玉の位置を取得
+        let king_sq = match board.king_square(board.turn) {
+            Some(sq) => sq,
+            None => return moves,
+        };
+
+        // 飛び駒による王手駒を特定
+        let attacker = board.turn.opponent();
+        let checker_sq = self.find_sliding_checker(board, king_sq, attacker);
+
+        let checker_sq = match checker_sq {
+            Some(sq) => sq,
+            None => return moves, // 飛び駒の王手でない or 両王手
+        };
+
+        // 間のマスを計算
+        let between = attack::between_bb(checker_sq, king_sq);
+        if between.is_empty() {
+            return moves; // 隣接する王手(合い駒不可)
+        }
+
+        // 各間マスごとに合い効かず判定
+        // 条件: 玉方の駒(玉除く)の効きがなく，かつ飛び駒が取った後に玉が取り返せない
+        let defender = board.turn;
+        let futile_squares = attack::between_bb(checker_sq, king_sq);
+        let king_step = attack::step_attacks(
+            defender.opponent(),
+            PieceType::King,
+            king_sq,
+        );
+
+        // 各間マスについて個別判定
+        let mut filtered_between = crate::bitboard::Bitboard::EMPTY;
+        for sq in futile_squares {
+            // 条件1: 玉方の非玉駒が利いている → 合い効かずでない
+            if self.is_attacked_by_non_king(board, sq, defender) {
+                continue;
+            }
+
+            // 条件2: 飛び駒が取った後，玉が取り返せるか？
+            // 取った位置が玉に隣接，かつ攻め方の他の駒がその位置に利いていない場合，
+            // 玉が取り返せる → 合い効かずでない
+            if king_step.contains(sq) {
+                // 飛び駒がこのマスに移動した後，攻め方の他の駒が利いているかを
+                // 近似的に判定: 現在の局面で攻め方(飛び駒自身を除く)が利いているか
+                // 飛び駒は移動するため除外が必要だが，is_attacked_by で近似
+                // (飛び駒自身の利きも含まれるが，移動元からの利きは消える)
+                //
+                // より正確な判定: 飛び駒を除外した攻め方利きを計算
+                if !self.is_attacked_by_excluding(board, sq, attacker, checker_sq) {
+                    continue; // 攻め方の他の駒が利いていない → 玉が取り返せる
+                }
+            }
+
+            filtered_between.set(sq);
+        }
+
+        if filtered_between.is_empty() {
+            return moves;
+        }
+
+        // 合い効かずマスへの合い駒打ちを除外
+        moves
+            .into_iter()
+            .filter(|m| {
+                if !m.is_drop() {
+                    return true; // 駒移動は常に有効
+                }
+                !filtered_between.contains(m.to_sq())
+            })
+            .collect()
+    }
+
+    /// 飛び駒で王手している駒のマスを返す(単一の場合のみ)．
+    ///
+    /// 飛び駒が複数(両王手)の場合は None を返す(合い駒不可のため)．
+    /// 飛び駒の王手がない場合も None を返す．
+    fn find_sliding_checker(
+        &self,
+        board: &Board,
+        king_sq: Square,
+        attacker: Color,
+    ) -> Option<Square> {
+        let occ = board.all_occupied();
+        let att = attacker.index();
+
+        let mut checkers = attack::rook_attacks(king_sq, occ)
+            & (board.piece_bb[att][PieceType::Rook as usize]
+                | board.piece_bb[att][PieceType::Dragon as usize]);
+        checkers = checkers
+            | (attack::bishop_attacks(king_sq, occ)
+                & (board.piece_bb[att][PieceType::Bishop as usize]
+                    | board.piece_bb[att][PieceType::Horse as usize]));
+        checkers = checkers
+            | (attack::lance_attacks(board.turn, king_sq, occ)
+                & board.piece_bb[att][PieceType::Lance as usize]);
+
+        // 単一の飛び駒のみ対象
+        if checkers.count() == 1 {
+            checkers.lsb()
+        } else {
+            None
+        }
+    }
+
+    /// 指定マスに対して指定色の玉以外の駒の効きがあるか判定する．
+    ///
+    /// `Board::is_attacked_by` と同等だが，King の効きを除外する．
+    /// 合い効かず判定で使用: 玉は間のマスに移動しても王手ライン上にいるため．
+    fn is_attacked_by_non_king(
+        &self,
+        board: &Board,
+        sq: Square,
+        attacker_color: Color,
+    ) -> bool {
+        let occ = board.all_occupied();
+        let att = attacker_color.index();
+        let defender = attacker_color.opponent();
+
+        // 歩
+        if (attack::step_attacks(defender, PieceType::Pawn, sq)
+            & board.piece_bb[att][PieceType::Pawn as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 桂
+        if (attack::step_attacks(defender, PieceType::Knight, sq)
+            & board.piece_bb[att][PieceType::Knight as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 銀
+        if (attack::step_attacks(defender, PieceType::Silver, sq)
+            & board.piece_bb[att][PieceType::Silver as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 金 + 成駒
+        let gold_movers = board.piece_bb[att][PieceType::Gold as usize]
+            | board.piece_bb[att][PieceType::ProPawn as usize]
+            | board.piece_bb[att][PieceType::ProLance as usize]
+            | board.piece_bb[att][PieceType::ProKnight as usize]
+            | board.piece_bb[att][PieceType::ProSilver as usize];
+        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
+            return true;
+        }
+        // 馬(ステップ部分のみ — スライド部分は角で判定)
+        // 龍(ステップ部分のみ — スライド部分は飛で判定)
+        // 玉は除外するが，馬・龍のステップ部分は含める
+        let king_step = attack::step_attacks(defender, PieceType::King, sq);
+        let horse_dragon = board.piece_bb[att][PieceType::Horse as usize]
+            | board.piece_bb[att][PieceType::Dragon as usize];
+        if (king_step & horse_dragon).is_not_empty() {
+            return true;
+        }
+        // 香
+        if (attack::lance_attacks(defender, sq, occ)
+            & board.piece_bb[att][PieceType::Lance as usize])
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 角・馬(スライド部分)
+        if (attack::bishop_attacks(sq, occ)
+            & (board.piece_bb[att][PieceType::Bishop as usize]
+                | board.piece_bb[att][PieceType::Horse as usize]))
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 飛・龍(スライド部分)
+        if (attack::rook_attacks(sq, occ)
+            & (board.piece_bb[att][PieceType::Rook as usize]
+                | board.piece_bb[att][PieceType::Dragon as usize]))
+            .is_not_empty()
+        {
+            return true;
+        }
+        false
+    }
+
+    /// 指定マスに対して指定色の駒の効きがあるか判定する(特定マスの駒を除外)．
+    ///
+    /// `Board::is_attacked_by` と同等だが，`excluded_sq` にある駒を除外する．
+    /// 合い効かず判定で使用: 飛び駒が移動した後の利きを近似するため，
+    /// 移動元の飛び駒を除外して判定する．
+    fn is_attacked_by_excluding(
+        &self,
+        board: &Board,
+        sq: Square,
+        attacker_color: Color,
+        excluded_sq: Square,
+    ) -> bool {
+        let occ = board.all_occupied();
+        let att = attacker_color.index();
+        let defender = attacker_color.opponent();
+
+        // 除外マスの駒を含まないビットボードを作成
+        let mut exclude_mask = crate::bitboard::Bitboard::EMPTY;
+        exclude_mask.set(excluded_sq);
+        let exclude_inv = !exclude_mask;
+
+        // 歩
+        if (attack::step_attacks(defender, PieceType::Pawn, sq)
+            & board.piece_bb[att][PieceType::Pawn as usize]
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 桂
+        if (attack::step_attacks(defender, PieceType::Knight, sq)
+            & board.piece_bb[att][PieceType::Knight as usize]
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 銀
+        if (attack::step_attacks(defender, PieceType::Silver, sq)
+            & board.piece_bb[att][PieceType::Silver as usize]
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 金 + 成駒
+        let gold_movers = (board.piece_bb[att][PieceType::Gold as usize]
+            | board.piece_bb[att][PieceType::ProPawn as usize]
+            | board.piece_bb[att][PieceType::ProLance as usize]
+            | board.piece_bb[att][PieceType::ProKnight as usize]
+            | board.piece_bb[att][PieceType::ProSilver as usize])
+            & exclude_inv;
+        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
+            return true;
+        }
+        // 玉・馬・龍(ステップ部分)
+        let king_step = attack::step_attacks(defender, PieceType::King, sq);
+        let king_horse_dragon = (board.piece_bb[att][PieceType::King as usize]
+            | board.piece_bb[att][PieceType::Horse as usize]
+            | board.piece_bb[att][PieceType::Dragon as usize])
+            & exclude_inv;
+        if (king_step & king_horse_dragon).is_not_empty() {
+            return true;
+        }
+        // 香
+        if (attack::lance_attacks(defender, sq, occ)
+            & board.piece_bb[att][PieceType::Lance as usize]
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 角・馬(スライド部分)
+        if (attack::bishop_attacks(sq, occ)
+            & (board.piece_bb[att][PieceType::Bishop as usize]
+                | board.piece_bb[att][PieceType::Horse as usize])
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 飛・龍(スライド部分)
+        if (attack::rook_attacks(sq, occ)
+            & (board.piece_bb[att][PieceType::Rook as usize]
+                | board.piece_bb[att][PieceType::Dragon as usize])
+            & exclude_inv)
+            .is_not_empty()
+        {
+            return true;
+        }
+        false
     }
 
     /// 攻め方の王手になる手を生成する．
@@ -430,7 +707,7 @@ impl DfPnSolver {
             }
 
             // PV に沿って盤面を進める
-            board_clone.do_move(*pv_move);
+            let _ = board_clone.do_move(*pv_move);
         }
 
         any_changed
@@ -569,7 +846,7 @@ impl DfPnSolver {
 /// - `depth`: 最大探索手数(None でデフォルト 31)．
 /// - `nodes`: 最大ノード数(None でデフォルト 1,048,576)．
 /// - `draw_ply`: 引き分け手数(None でデフォルト 32767)．
-/// - `timeout_secs`: 実行時間制限(秒)(None でデフォルト 30 秒)．
+/// - `timeout_secs`: 実行時間制限(秒)(None でデフォルト 300 秒)．
 pub fn solve_tsume(
     sfen: &str,
     depth: Option<u32>,
@@ -758,7 +1035,10 @@ mod tests {
     }
 
     /// 診断テスト: G*3b 後の AND ノードと 1二玉後の OR ノードの TT 状態を分析する．
+    ///
+    /// アサーションなしのデバッグ用テスト．通常は `--ignored` で実行する．
     #[test]
+    #[ignore]
     fn diagnose_pv_extraction() {
         let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
         let mut board = Board::empty();
@@ -977,31 +1257,34 @@ mod tests {
 
     /// 詰将棋テストケース4．
     ///
-    /// 局面: 7nk/9/5R3/8p/6P2/9/9/9/9 b SNPrb2g4s3n2l4p15
+    /// 局面: 7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p
+    /// 11手詰め(合い効かずにより3二歩打を除外): 2二銀打，1二玉，1三歩打，
+    /// 2二玉，3四桂打，1一玉，1二と，同玉，4二飛成，1一玉，2二桂成
     #[test]
     fn test_tsume_4() {
-        // ユーザー指定: SNPrb2g4s3n2l4p15 (count-after形式)
-        // 標準SFEN形式に変換: S,N,P=先手各1, r,b2,g4,s3,n2,l4,15p=後手
-        // → SNP r 2b 4g 3s 2n 4l 15p (count-before形式)
         let sfen = "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1";
         let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        let expected = [
+            "S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a",
+            "1c1b+", "1a1b", "4c4b+", "1b1a", "3d2b+",
+        ];
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!("Tsume4 PV ({}): {:?}", usi_moves.len(), usi_moves);
-                assert!(
-                    usi_moves.len() % 2 == 1,
-                    "checkmate should be odd moves, got {}: {:?}",
-                    usi_moves.len(), usi_moves
+                assert_eq!(
+                    usi_moves.len(), 11,
+                    "expected 11 moves, got {}: {:?}", usi_moves.len(), usi_moves
+                );
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
+                    usi_moves, expected,
                 );
             }
-            TsumeResult::NoCheckmate { nodes_searched } => {
-                panic!("No checkmate found (nodes: {})", nodes_searched);
-            }
-            TsumeResult::Unknown { nodes_searched } => {
-                panic!("Unknown (nodes: {}, may need more nodes/time)", nodes_searched);
-            }
+            other => panic!("expected Checkmate, got {:?}", other),
         }
     }
 }
