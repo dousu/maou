@@ -242,7 +242,11 @@ impl Piece {
         self.0 == 0
     }
 
-    /// 色を返す．空マスの場合はNone．
+    /// 色を返す．空マスまたは未定義値 (15, 16) の場合は `None`．
+    ///
+    /// cshogi 互換 ID 空間では 15, 16 はギャップであり，`Piece::new()` では
+    /// 生成されない．`raw_u8()` 経由で外部から不正値が渡された場合は
+    /// `None` を返すことで安全にフォールバックする．
     #[inline]
     pub fn color(self) -> Option<Color> {
         if self.0 == 0 {
@@ -252,6 +256,7 @@ impl Piece {
         } else if self.0 >= 17 && self.0 <= 30 {
             Some(Color::White)
         } else {
+            // cshogi 互換ギャップ (15, 16) または範囲外
             None
         }
     }
@@ -285,9 +290,14 @@ impl Square {
     }
 
     /// col, rowから生成する．
+    ///
+    /// # Safety (論理的前提条件)
+    ///
+    /// `col < 9 && row < 9` であること．リリースビルドではチェックされない．
+    /// 呼び出し元(SFENパーサー等)で事前にバリデーションすること．
     #[inline]
     pub fn new(col: u8, row: u8) -> Square {
-        debug_assert!(col < 9 && row < 9);
+        debug_assert!(col < 9 && row < 9, "Square::new: col={}, row={} out of range", col, row);
         Square(col * 9 + row)
     }
 

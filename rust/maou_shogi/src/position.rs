@@ -155,7 +155,9 @@ impl Position {
         let history_len = self.history.len();
         let my_parity = history_len % 2;
 
-        // 最初の出現から現在まで，自分の全ての手が王手かチェック
+        // 最初の出現から現在まで，自分の全ての手が王手かチェック．
+        // 計算量: O(history_len - first_idx)．長期戦では線形スキャンになるが，
+        // 将棋の実戦では千日手成立までの手数が限定的であり実用上の問題は少ない．
         for i in first_idx..history_len {
             if i % 2 == my_parity && !self.history[i].gives_check {
                 return false;

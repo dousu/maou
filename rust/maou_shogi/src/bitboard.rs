@@ -100,10 +100,14 @@ impl Bitboard {
     #[inline]
     pub fn lsb(self) -> Option<Square> {
         if self.lo != 0 {
-            Some(Square(self.lo.trailing_zeros() as u8))
+            let idx = self.lo.trailing_zeros();
+            debug_assert!(idx < 63, "lo bit index {} out of range", idx);
+            Some(Square(idx as u8))
         } else if self.hi != 0 {
             // hi のビット位置 0 がマス 63 に対応
-            Some(Square((self.hi.trailing_zeros() + 63) as u8))
+            let idx = self.hi.trailing_zeros() + 63;
+            debug_assert!(idx <= 80, "hi bit index {} out of square range", idx);
+            Some(Square(idx as u8))
         } else {
             None
         }
@@ -118,9 +122,12 @@ impl Bitboard {
         if self.hi != 0 {
             // hi のビット位置 0 がマス 63 に対応するため +63
             let bit = 63 - self.hi.leading_zeros();
-            Some(Square((bit + 63) as u8))
+            let idx = bit + 63;
+            debug_assert!(idx <= 80, "hi msb index {} out of square range", idx);
+            Some(Square(idx as u8))
         } else if self.lo != 0 {
             let bit = 63 - self.lo.leading_zeros();
+            debug_assert!(bit < 63, "lo msb index {} out of range", bit);
             Some(Square(bit as u8))
         } else {
             None

@@ -36,8 +36,13 @@ impl Move {
     const MOVING_PIECE_SHIFT: u32 = 21;
 
     /// 盤上の駒を移動する手を生成する．
+    ///
+    /// `captured` は cshogi 互換の駒 ID (0-30)，`moving_pt` は `PieceType as u8` (1-14)．
+    /// いずれも 5 ビットに収まる値であること(リリースビルドではチェックされない)．
     #[inline]
     pub fn new_move(from: Square, to: Square, promote: bool, captured: u8, moving_pt: u8) -> Move {
+        debug_assert!(captured <= 30, "captured raw ID {} out of range", captured);
+        debug_assert!(moving_pt <= 14, "moving_pt {} out of range", moving_pt);
         let mut v = (to.0 as u32) | ((from.0 as u32) << 7);
         if promote {
             v |= Self::PROMOTE_FLAG;

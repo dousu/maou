@@ -121,6 +121,11 @@ pub fn piece_to_sfen_string(piece: Piece) -> &'static str {
 }
 
 /// 持ち駒の駒種からSFEN文字(大文字)を返す．
+///
+/// # Panics
+///
+/// 持ち駒になれない駒種(王・成駒)を渡した場合はパニックする．
+/// 呼び出し元で `PieceType::hand_index().is_some()` を確認すること．
 pub fn hand_piece_to_sfen_char(pt: PieceType) -> char {
     match pt {
         PieceType::Pawn => 'P',
