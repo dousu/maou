@@ -421,14 +421,14 @@ def move_to(move: int) -> int:
 
 
 def move_from(move: int) -> int:
-    """Extract source square from move.
+    """指し手から移動元マスを取得する．
 
     通常の指し手の場合はマス番号(0-80)を返す．
     駒打ちの場合は move_is_drop() で判定し，
     move_drop_hand_piece() で駒種を取得すること．
 
     Args:
-        move: Move integer
+        move: 指し手整数値
 
     Returns:
         通常手: 移動元マス番号(0-80)
@@ -474,18 +474,25 @@ def move_is_promotion(move: int) -> bool:
 
 
 def move_drop_hand_piece(move: int) -> int:
-    """Get which hand piece type is being dropped.
+    """駒打ちの駒種を取得する．
 
     Args:
-        move: Drop move integer
+        move: 駒打ちの指し手整数値
 
     Returns:
-        Piece type being dropped
+        打つ駒の種類
 
     Note:
-        Must only be called when move_is_drop(move) is True.
-        Returns 0 (same as Pawn) for non-drop moves.
+        move_is_drop(move) が True の場合のみ呼び出すこと．
+        非駒打ちの指し手では 0 を返すが，これは歩(HPAWN)と同値であり
+        区別できない．
+
+    Raises:
+        AssertionError: move_is_drop(move) が False の場合(debug モード)
     """
+    assert move_is_drop(move), (
+        f"move_drop_hand_piece called on non-drop move: {move}"
+    )
     return _move_drop_hand_piece(move)
 
 
@@ -600,6 +607,10 @@ class Board:
 
         内部の_PyBoardはシャローコピーで共有されるため，
         SFENによる再構築でディープコピーを保証する．
+
+        Note:
+            コピー後は undo_stack がリセットされるため，
+            コピー先での pop_move() は使用不可．
         """
         new_board = Board()
         new_board.set_sfen(self.get_sfen())
@@ -742,9 +753,18 @@ class Board:
         array[:] = np.transpose(array, (0, 2, 1))
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
-        """手番関係なく常に(先手, 後手)の順にtupleにはいっている
-        歩，香車，桂馬，銀，金，角，飛車の順番
-        例: ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
+        """持ち駒を取得する．
+
+        手番に関係なく常に(先手, 後手)の順で返す．
+        各リストは歩，香車，桂馬，銀，金，角，飛車の順番．
+
+        Returns:
+            (先手の持ち駒, 後手の持ち駒) のタプル．
+            各要素は駒種ごとの所持数リスト(長さ7)．
+
+        Examples:
+            >>> board.get_pieces_in_hand()
+            ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
         """
         return self.board.pieces_in_hand()
 

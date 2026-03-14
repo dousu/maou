@@ -22,11 +22,11 @@ maou._rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
-# Build Rust extension (automatically done during poetry install)
-poetry install
+# Build Rust extension (automatically done during uv sync)
+uv sync
 
 # Verify Rust backend
-poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 # Expected output: "Maou I/O Rust backend initialized"
 ```
 
@@ -110,7 +110,7 @@ wheel のインストールにより `maou` コマンドが利用可能になる
 
 ```bash
 # After modifying Rust code
-poetry run maturin develop  # Rebuild extension
+uv run maturin develop  # Rebuild extension
 
 # Run Rust tests
 cargo test --manifest-path rust/maou_io/Cargo.toml
@@ -200,19 +200,19 @@ export RUSTFLAGS="-C codegen-units=1 -C incremental=1"  # Sequential compilation
 
 **Development (default):**
 ```bash
-poetry run maturin develop  # Uses [profile.dev]
+uv run maturin develop  # Uses [profile.dev]
 # opt-level = 0, codegen-units = 1, incremental = true
 ```
 
 **Production (optimized):**
 ```bash
-poetry run maturin develop --release  # Uses [profile.release]
+uv run maturin develop --release  # Uses [profile.release]
 # opt-level = 3, codegen-units = 1, lto = "thin"
 ```
 
 **Balanced (memory-optimized):**
 ```bash
-CARGO_PROFILE=mem-opt poetry run maturin develop  # Uses [profile.mem-opt]
+CARGO_PROFILE=mem-opt uv run maturin develop  # Uses [profile.mem-opt]
 # opt-level = 2, codegen-units = 1, lto = "thin"
 ```
 
@@ -226,14 +226,14 @@ If you still encounter OOM errors:
 free -h
 
 # Monitor build process
-/usr/bin/time -v poetry run maturin develop 2>&1 | grep "Maximum resident"
+/usr/bin/time -v uv run maturin develop 2>&1 | grep "Maximum resident"
 ```
 
 **2. Reduce parallelism further:**
 ```bash
 # Temporarily disable incremental compilation
 export CARGO_INCREMENTAL=0
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **3. Clean build cache:**
@@ -242,7 +242,7 @@ poetry run maturin develop
 cargo clean
 
 # Rebuild from scratch
-poetry run maturin develop
+uv run maturin develop
 ```
 
 **4. Verify configuration:**

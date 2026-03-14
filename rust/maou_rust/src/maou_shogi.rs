@@ -142,8 +142,11 @@ impl PyBoard {
     /// 先手視点の駒特徴平面 (104x9x9) を書き込む．
     fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
-        // SAFETY: arr is exclusively owned by this call; no other Python reference
-        // aliases it while we hold the Bound<'_, PyArray3<f32>> borrow.
+        // SAFETY: The caller must ensure no other Python reference aliases `arr`
+        // during this call. `as_array_mut()` bypasses Python-level aliasing checks;
+        // if another ndarray view shares the same buffer, this is undefined behavior.
+        // In practice, `to_piece_planes()` in shogi.py creates a thread-local array
+        // that is not shared, satisfying this invariant.
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()
@@ -155,8 +158,8 @@ impl PyBoard {
     /// 後手視点 (180度回転) の駒特徴平面 (104x9x9) を書き込む．
     fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
-        // SAFETY: arr is exclusively owned by this call; no other Python reference
-        // aliases it while we hold the Bound<'_, PyArray3<f32>> borrow.
+        // SAFETY: Same invariant as `piece_planes` — caller must ensure
+        // exclusive access to `arr`. See comment in `piece_planes` for details.
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()
