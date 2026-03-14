@@ -36,7 +36,7 @@ impl Position {
 
     /// SFEN文字列から生成する．
     pub fn from_sfen(sfen: &str) -> Result<Position, SfenError> {
-        let mut board = Board::new();
+        let mut board = Board::empty();
         board.set_sfen(sfen)?;
         Ok(Position {
             board,
