@@ -974,4 +974,34 @@ mod tests {
 
         board.undo_move(p2c, cap);
     }
+
+    /// 詰将棋テストケース4．
+    ///
+    /// 局面: 7nk/9/5R3/8p/6P2/9/9/9/9 b SNPrb2g4s3n2l4p15
+    #[test]
+    fn test_tsume_4() {
+        // ユーザー指定: SNPrb2g4s3n2l4p15 (count-after形式)
+        // 標準SFEN形式に変換: S,N,P=先手各1, r,b2,g4,s3,n2,l4,15p=後手
+        // → SNP r 2b 4g 3s 2n 4l 15p (count-before形式)
+        let sfen = "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("Tsume4 PV ({}): {:?}", usi_moves.len(), usi_moves);
+                assert!(
+                    usi_moves.len() % 2 == 1,
+                    "checkmate should be odd moves, got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+            }
+            TsumeResult::NoCheckmate { nodes_searched } => {
+                panic!("No checkmate found (nodes: {})", nodes_searched);
+            }
+            TsumeResult::Unknown { nodes_searched } => {
+                panic!("Unknown (nodes: {}, may need more nodes/time)", nodes_searched);
+            }
+        }
+    }
 }
