@@ -488,11 +488,11 @@ def move_drop_hand_piece(move: int) -> int:
         区別できない．
 
     Raises:
-        AssertionError: move_is_drop(move) が False の場合(debug モード)
+        ValueError: move_is_drop(move) が False の場合
     """
-    assert move_is_drop(move), (
-        f"move_drop_hand_piece called on non-drop move: {move}"
-    )
+    if not move_is_drop(move):
+        msg = f"move_drop_hand_piece called on non-drop move: {move}"
+        raise ValueError(msg)
     return _move_drop_hand_piece(move)
 
 
@@ -579,24 +579,31 @@ class Board:
             Promoted pieces (UMA=馬, RYU=龍) don't need reordering as their
             relative positions are consistent between cshogi and PieceId.
         """
-        temp = array.copy()
+        # Only copy the 6 channels that need reordering (not all 104)
+        black_temp = array[4:7].copy()  # channels 4,5,6
+        white_temp = array[18:21].copy()  # channels 18,19,20
+
         # Black pieces reordering (indices 4-6)
-        array[4] = temp[6]  # GOLD (cshogi) → KI (PieceId)
-        array[5] = temp[
-            4
-        ]  # BISHOP (cshogi) → KA (PieceId) - 角
-        array[6] = temp[5]  # ROOK (cshogi) → HI (PieceId) - 飛
-        # PROM_BISHOP (馬) and PROM_ROOK (龍) need no reordering
+        array[4] = black_temp[
+            2
+        ]  # GOLD (cshogi[6]) → KI (PieceId)
+        array[5] = black_temp[
+            0
+        ]  # BISHOP (cshogi[4]) → KA (PieceId)
+        array[6] = black_temp[
+            1
+        ]  # ROOK (cshogi[5]) → HI (PieceId)
 
         # White pieces reordering (same pattern, offset +14)
-        array[18] = temp[20]  # GOLD (cshogi) → KI (PieceId)
-        array[19] = temp[
-            18
-        ]  # BISHOP (cshogi) → KA (PieceId) - 角
-        array[20] = temp[
-            19
-        ]  # ROOK (cshogi) → HI (PieceId) - 飛
-        # PROM_BISHOP (馬) and PROM_ROOK (龍) need no reordering
+        array[18] = white_temp[
+            2
+        ]  # GOLD (cshogi[20]) → KI (PieceId)
+        array[19] = white_temp[
+            0
+        ]  # BISHOP (cshogi[18]) → KA (PieceId)
+        array[20] = white_temp[
+            1
+        ]  # ROOK (cshogi[19]) → HI (PieceId)
 
     def __init__(self) -> None:
         """初期局面(平手)でBoardを生成する．"""
@@ -807,10 +814,13 @@ class Board:
         return self.board.zobrist_hash()
 
     def is_ok(self) -> bool:
-        """Check if the board state is valid.
+        """盤面状態の整合性を検証する．
+
+        Rust 側は片玉局面(詰将棋)もサポートしており，
+        少なくとも1枚の王が存在すれば有効と判定する．
 
         Returns:
-            bool: True if the board is in a valid state (両方の王が存在する等)
+            bool: 盤面が有効な状態であれば True
         """
         return self.board.is_ok()
 
