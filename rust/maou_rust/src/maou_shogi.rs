@@ -126,6 +126,8 @@ impl PyBoard {
 
     fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
+        // SAFETY: arr is exclusively owned by this call; no other Python reference
+        // aliases it while we hold the Bound<'_, PyArray3<f32>> borrow.
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()
@@ -136,6 +138,8 @@ impl PyBoard {
 
     fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
+        // SAFETY: arr is exclusively owned by this call; no other Python reference
+        // aliases it while we hold the Bound<'_, PyArray3<f32>> borrow.
         let mut rw = unsafe { arr.as_array_mut() };
         let slice = rw
             .as_slice_mut()

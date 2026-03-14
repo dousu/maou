@@ -399,9 +399,9 @@ def move16(move: int) -> int:
     Note:
         16-bit encoding:
         - Bits 0-6: destination square (0-80)
-        - Bits 7-13: source square or drop piece type
+        - Bits 7-13: source square (0-80) or drop piece index (81+)
         - Bit 14: promotion flag
-        - Bit 15: drop flag
+        Drops are identified by from_field >= 81, not by a dedicated flag bit.
     """
     return _move16(move)
 
@@ -580,7 +580,7 @@ class Board:
     def __copy__(self) -> Board:
         """SFENを経由した安全なコピーを返す．
 
-        内部のcshogi.Boardはシャローコピーで共有されるため，
+        内部の_PyBoardはシャローコピーで共有されるため，
         SFENによる再構築でディープコピーを保証する．
         """
         new_board = Board()
