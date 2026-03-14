@@ -94,11 +94,15 @@ impl Bitboard {
     }
 
     /// 最下位セットビットのマスを返す(非破壊)．空の場合は None．
+    ///
+    /// lo はマス 0..63，hi はマス 63..80 に対応するため，
+    /// hi のビット位置には +63 のオフセットを加える．
     #[inline]
     pub fn lsb(self) -> Option<Square> {
         if self.lo != 0 {
             Some(Square(self.lo.trailing_zeros() as u8))
         } else if self.hi != 0 {
+            // hi のビット位置 0 がマス 63 に対応
             Some(Square((self.hi.trailing_zeros() + 63) as u8))
         } else {
             None
@@ -106,9 +110,13 @@ impl Bitboard {
     }
 
     /// 最上位セットビットのマスを返す(非破壊)．空の場合は None．
+    ///
+    /// lo はマス 0..63，hi はマス 63..80 に対応するため，
+    /// hi のビット位置には +63 のオフセットを加える．
     #[inline]
     pub fn msb(self) -> Option<Square> {
         if self.hi != 0 {
+            // hi のビット位置 0 がマス 63 に対応するため +63
             let bit = 63 - self.hi.leading_zeros();
             Some(Square((bit + 63) as u8))
         } else if self.lo != 0 {

@@ -258,7 +258,9 @@ impl Board {
             debug_assert!(self.hand[self.turn.index()][hi] > 0);
             self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             self.hand[self.turn.index()][hi] -= 1;
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            if self.hand[self.turn.index()][hi] > 0 {
+                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            }
 
             self.put_piece(to, piece);
             captured = Piece::EMPTY;
@@ -279,7 +281,9 @@ impl Board {
                 // 王は持ち駒にできない(合法手では王の捕獲は発生しないが，
                 // 疑似合法手の検証中に発生しうる)
                 if let Some(hi) = cap_hand_pt.hand_index() {
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    if self.hand[self.turn.index()][hi] > 0 {
+                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    }
                     self.hand[self.turn.index()][hi] += 1;
                     self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                 }
@@ -329,7 +333,9 @@ impl Board {
 
             // 持ち駒に戻す
             let hi = pt.hand_index().unwrap();
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            if self.hand[self.turn.index()][hi] > 0 {
+                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            }
             self.hand[self.turn.index()][hi] += 1;
             self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
         } else {
@@ -360,7 +366,9 @@ impl Board {
                 if let Some(hi) = cap_hand_pt.hand_index() {
                     self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                     self.hand[self.turn.index()][hi] -= 1;
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    if self.hand[self.turn.index()][hi] > 0 {
+                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    }
                 }
             }
         }
