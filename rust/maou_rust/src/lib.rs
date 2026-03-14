@@ -8,8 +8,8 @@
 
 use pyo3::prelude::*;
 
-mod maou_io;
 mod maou_index;
+mod maou_io;
 mod maou_shogi;
 
 #[pymodule]
