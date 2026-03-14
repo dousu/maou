@@ -258,9 +258,48 @@ fn move_drop_hand_piece(m: u32) -> u8 {
     moves::move_drop_hand_piece(Move::from_raw_u32(m))
 }
 
+/// 詰将棋の探索結果．
+///
+/// - `status`: `"checkmate"` / `"no_checkmate"` / `"unknown"` のいずれか．
+/// - `moves`: 詰みの場合は手順(USI形式のリスト)．不詰・不明の場合は空リスト．
+/// - `nodes_searched`: 探索ノード数．
+#[pyclass(frozen)]
+struct TsumeResult {
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    moves: Vec<String>,
+    #[pyo3(get)]
+    nodes_searched: u64,
+}
+
+#[pymethods]
+impl TsumeResult {
+    fn __repr__(&self) -> String {
+        if self.status == "checkmate" {
+            format!(
+                "TsumeResult(status='checkmate', moves={:?}, nodes_searched={})",
+                self.moves, self.nodes_searched
+            )
+        } else {
+            format!(
+                "TsumeResult(status='{}', nodes_searched={})",
+                self.status, self.nodes_searched
+            )
+        }
+    }
+
+    fn __bool__(&self) -> bool {
+        self.status == "checkmate"
+    }
+}
+
 /// 詰将棋を解く(Df-Pn アルゴリズム)．
 ///
-/// 返り値: 詰みの場合は手順(USI形式のリスト)，不詰の場合は None．
+/// 返り値: `TsumeResult` オブジェクト．
+///   - `status`: `"checkmate"` / `"no_checkmate"` / `"unknown"`
+///   - `moves`: 詰みの場合は手順(USI形式のリスト)
+///   - `nodes_searched`: 探索ノード数
 ///
 /// # 引数
 ///
@@ -268,18 +307,35 @@ fn move_drop_hand_piece(m: u32) -> u8 {
 /// - `depth`: 最大探索手数(デフォルト 31)．
 /// - `nodes`: 最大ノード数(デフォルト 1,048,576)．
 /// - `draw_ply`: 引き分け手数(デフォルト 32767)．
-/// - `timeout_secs`: 実行時間制限(秒)(デフォルト 30)．
+/// - `timeout_secs`: 実行時間制限(秒)(デフォルト 300)．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=30))]
-fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32, timeout_secs: u64) -> PyResult<Option<Vec<String>>> {
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300))]
+fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32, timeout_secs: u64) -> PyResult<TsumeResult> {
     let result = dfpn::solve_tsume_with_timeout(sfen, Some(depth), Some(nodes), Some(draw_ply), Some(timeout_secs))
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     match result {
-        dfpn::TsumeResult::Checkmate { moves, .. } => {
-            Ok(Some(moves.iter().map(|m| m.to_usi()).collect()))
+        dfpn::TsumeResult::Checkmate { moves, nodes_searched } => {
+            Ok(TsumeResult {
+                status: "checkmate".to_string(),
+                moves: moves.iter().map(|m| m.to_usi()).collect(),
+                nodes_searched,
+            })
         }
-        _ => Ok(None),
+        dfpn::TsumeResult::NoCheckmate { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "no_checkmate".to_string(),
+                moves: Vec::new(),
+                nodes_searched,
+            })
+        }
+        dfpn::TsumeResult::Unknown { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "unknown".to_string(),
+                moves: Vec::new(),
+                nodes_searched,
+            })
+        }
     }
 }
 
@@ -288,6 +344,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
 
     m.add_class::<PyBoard>()?;
+    m.add_class::<TsumeResult>()?;
     m.add_function(wrap_pyfunction!(move16, &m)?)?;
     m.add_function(wrap_pyfunction!(move_to, &m)?)?;
     m.add_function(wrap_pyfunction!(move_from, &m)?)?;

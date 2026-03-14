@@ -9,7 +9,7 @@
 //! - `nodes`: 最大ノード数(デフォルト 1,048,576 = 2^20)．計算時間・メモリ制限用．
 //! - `draw_ply`: 引き分け手数(デフォルト 32767)．
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::attack;
@@ -63,7 +63,7 @@ pub struct DfPnSolver {
     /// 探索ノード数．
     nodes_searched: u64,
     /// 探索中のパス(ループ検出用)．
-    path: Vec<u64>,
+    path: HashSet<u64>,
     /// 探索開始時刻．
     start_time: Instant,
     /// タイムアウトしたかどうか．
@@ -71,9 +71,7 @@ pub struct DfPnSolver {
 }
 
 impl DfPnSolver {
-    /// 新しいソルバーを生成する．
-    ///
-    /// `timeout_secs` で実行時間制限(秒)を指定する．0 の場合はデフォルト 30 秒．
+    /// 新しいソルバーを生成する(タイムアウト 300 秒)．
     pub fn new(depth: u32, max_nodes: u64, draw_ply: u32) -> Self {
         Self::with_timeout(depth, max_nodes, draw_ply, 300)
     }
@@ -87,7 +85,7 @@ impl DfPnSolver {
             timeout: Duration::from_secs(timeout_secs),
             table: HashMap::with_capacity(max_nodes.min(1_048_576) as usize),
             nodes_searched: 0,
-            path: Vec::new(),
+            path: HashSet::new(),
             start_time: Instant::now(),
             timed_out: false,
         }
@@ -213,7 +211,7 @@ impl DfPnSolver {
             return;
         }
 
-        self.path.push(hash);
+        self.path.insert(hash);
 
         // MID ループ
         loop {
@@ -261,32 +259,27 @@ impl DfPnSolver {
                 break;
             }
 
-            // 最良の子ノードを選択
-            let (best_idx, second_pn, second_dn) = if or_node {
-                self.select_best_or(&child_entries)
-            } else {
-                self.select_best_and(&child_entries)
-            };
-
-            // 子ノードの閾値を計算
-            let (child_pn_th, child_dn_th) = if or_node {
+            // 最良の子ノードを選択し，閾値を計算
+            let (best_idx, child_pn_th, child_dn_th) = if or_node {
+                let (idx, second_pn) = self.select_best_or(&child_entries);
                 let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
-                    .saturating_add(child_entries[best_idx].dn)
+                    .saturating_add(child_entries[idx].dn)
                     .min(INF - 1);
                 let child_pn_th = pn_threshold
                     .min(second_pn.saturating_add(1))
                     .min(INF - 1);
-                (child_pn_th, child_dn_th)
+                (idx, child_pn_th, child_dn_th)
             } else {
+                let (idx, second_dn) = self.select_best_and(&child_entries);
                 let child_pn_th = pn_threshold
                     .saturating_sub(current_pn)
-                    .saturating_add(child_entries[best_idx].pn)
+                    .saturating_add(child_entries[idx].pn)
                     .min(INF - 1);
                 let child_dn_th = dn_threshold
                     .min(second_dn.saturating_add(1))
                     .min(INF - 1);
-                (child_pn_th, child_dn_th)
+                (idx, child_pn_th, child_dn_th)
             };
 
             // 子ノードを探索
@@ -296,11 +289,13 @@ impl DfPnSolver {
             board.undo_move(m, captured);
         }
 
-        self.path.pop();
+        self.path.remove(&hash);
     }
 
     /// OR ノードの最良子ノードを選択する．
-    fn select_best_or(&self, entries: &[DfPnEntry]) -> (usize, u32, u32) {
+    ///
+    /// 返り値: (最良インデックス, 2番目に小さい pn)
+    fn select_best_or(&self, entries: &[DfPnEntry]) -> (usize, u32) {
         let mut best_idx = 0;
         let mut best_pn = INF;
         let mut second_pn = INF;
@@ -315,11 +310,13 @@ impl DfPnSolver {
             }
         }
 
-        (best_idx, second_pn, 0)
+        (best_idx, second_pn)
     }
 
     /// AND ノードの最良子ノードを選択する．
-    fn select_best_and(&self, entries: &[DfPnEntry]) -> (usize, u32, u32) {
+    ///
+    /// 返り値: (最良インデックス, 2番目に小さい dn)
+    fn select_best_and(&self, entries: &[DfPnEntry]) -> (usize, u32) {
         let mut best_idx = 0;
         let mut best_dn = INF;
         let mut second_dn = INF;
@@ -334,7 +331,7 @@ impl DfPnSolver {
             }
         }
 
-        (best_idx, 0, second_dn)
+        (best_idx, second_dn)
     }
 
     /// 玉方の応手を生成する(合い効かずを除外)．
@@ -452,110 +449,36 @@ impl DfPnSolver {
         }
     }
 
-    /// 指定マスに対して指定色の玉以外の駒の効きがあるか判定する．
+    /// 指定マスに対して指定色の駒の効きがあるか判定する(除外条件付き)．
     ///
-    /// `Board::is_attacked_by` と同等だが，King の効きを除外する．
-    /// 合い効かず判定で使用: 玉は間のマスに移動しても王手ライン上にいるため．
-    fn is_attacked_by_non_king(
+    /// - `exclude_king`: 玉の効きを除外する(合い効かず: 玉はライン上に移動できないため)
+    /// - `excluded_sq`: 特定マスの駒を除外する(飛び駒の移動元を除外するため)
+    fn is_attacked_by_filtered(
         &self,
         board: &Board,
         sq: Square,
         attacker_color: Color,
+        exclude_king: bool,
+        excluded_sq: Option<Square>,
     ) -> bool {
         let occ = board.all_occupied();
         let att = attacker_color.index();
         let defender = attacker_color.opponent();
 
-        // 歩
-        if (attack::step_attacks(defender, PieceType::Pawn, sq)
-            & board.piece_bb[att][PieceType::Pawn as usize])
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 桂
-        if (attack::step_attacks(defender, PieceType::Knight, sq)
-            & board.piece_bb[att][PieceType::Knight as usize])
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 銀
-        if (attack::step_attacks(defender, PieceType::Silver, sq)
-            & board.piece_bb[att][PieceType::Silver as usize])
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 金 + 成駒
-        let gold_movers = board.piece_bb[att][PieceType::Gold as usize]
-            | board.piece_bb[att][PieceType::ProPawn as usize]
-            | board.piece_bb[att][PieceType::ProLance as usize]
-            | board.piece_bb[att][PieceType::ProKnight as usize]
-            | board.piece_bb[att][PieceType::ProSilver as usize];
-        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
-            return true;
-        }
-        // 馬(ステップ部分のみ — スライド部分は角で判定)
-        // 龍(ステップ部分のみ — スライド部分は飛で判定)
-        // 玉は除外するが，馬・龍のステップ部分は含める
-        let king_step = attack::step_attacks(defender, PieceType::King, sq);
-        let horse_dragon = board.piece_bb[att][PieceType::Horse as usize]
-            | board.piece_bb[att][PieceType::Dragon as usize];
-        if (king_step & horse_dragon).is_not_empty() {
-            return true;
-        }
-        // 香
-        if (attack::lance_attacks(defender, sq, occ)
-            & board.piece_bb[att][PieceType::Lance as usize])
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 角・馬(スライド部分)
-        if (attack::bishop_attacks(sq, occ)
-            & (board.piece_bb[att][PieceType::Bishop as usize]
-                | board.piece_bb[att][PieceType::Horse as usize]))
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 飛・龍(スライド部分)
-        if (attack::rook_attacks(sq, occ)
-            & (board.piece_bb[att][PieceType::Rook as usize]
-                | board.piece_bb[att][PieceType::Dragon as usize]))
-            .is_not_empty()
-        {
-            return true;
-        }
-        false
-    }
-
-    /// 指定マスに対して指定色の駒の効きがあるか判定する(特定マスの駒を除外)．
-    ///
-    /// `Board::is_attacked_by` と同等だが，`excluded_sq` にある駒を除外する．
-    /// 合い効かず判定で使用: 飛び駒が移動した後の利きを近似するため，
-    /// 移動元の飛び駒を除外して判定する．
-    fn is_attacked_by_excluding(
-        &self,
-        board: &Board,
-        sq: Square,
-        attacker_color: Color,
-        excluded_sq: Square,
-    ) -> bool {
-        let occ = board.all_occupied();
-        let att = attacker_color.index();
-        let defender = attacker_color.opponent();
-
-        // 除外マスの駒を含まないビットボードを作成
-        let mut exclude_mask = crate::bitboard::Bitboard::EMPTY;
-        exclude_mask.set(excluded_sq);
-        let exclude_inv = !exclude_mask;
+        // 除外マスのマスクを計算
+        let mask = match excluded_sq {
+            Some(esq) => {
+                let mut m = crate::bitboard::Bitboard::EMPTY;
+                m.set(esq);
+                !m
+            }
+            None => !crate::bitboard::Bitboard::EMPTY, // 全ビット1
+        };
 
         // 歩
         if (attack::step_attacks(defender, PieceType::Pawn, sq)
             & board.piece_bb[att][PieceType::Pawn as usize]
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
@@ -563,7 +486,7 @@ impl DfPnSolver {
         // 桂
         if (attack::step_attacks(defender, PieceType::Knight, sq)
             & board.piece_bb[att][PieceType::Knight as usize]
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
@@ -571,7 +494,7 @@ impl DfPnSolver {
         // 銀
         if (attack::step_attacks(defender, PieceType::Silver, sq)
             & board.piece_bb[att][PieceType::Silver as usize]
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
@@ -582,23 +505,24 @@ impl DfPnSolver {
             | board.piece_bb[att][PieceType::ProLance as usize]
             | board.piece_bb[att][PieceType::ProKnight as usize]
             | board.piece_bb[att][PieceType::ProSilver as usize])
-            & exclude_inv;
+            & mask;
         if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
             return true;
         }
         // 玉・馬・龍(ステップ部分)
         let king_step = attack::step_attacks(defender, PieceType::King, sq);
-        let king_horse_dragon = (board.piece_bb[att][PieceType::King as usize]
-            | board.piece_bb[att][PieceType::Horse as usize]
-            | board.piece_bb[att][PieceType::Dragon as usize])
-            & exclude_inv;
-        if (king_step & king_horse_dragon).is_not_empty() {
+        let mut step_pieces = board.piece_bb[att][PieceType::Horse as usize]
+            | board.piece_bb[att][PieceType::Dragon as usize];
+        if !exclude_king {
+            step_pieces = step_pieces | board.piece_bb[att][PieceType::King as usize];
+        }
+        if (king_step & step_pieces & mask).is_not_empty() {
             return true;
         }
         // 香
         if (attack::lance_attacks(defender, sq, occ)
             & board.piece_bb[att][PieceType::Lance as usize]
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
@@ -607,7 +531,7 @@ impl DfPnSolver {
         if (attack::bishop_attacks(sq, occ)
             & (board.piece_bb[att][PieceType::Bishop as usize]
                 | board.piece_bb[att][PieceType::Horse as usize])
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
@@ -616,12 +540,33 @@ impl DfPnSolver {
         if (attack::rook_attacks(sq, occ)
             & (board.piece_bb[att][PieceType::Rook as usize]
                 | board.piece_bb[att][PieceType::Dragon as usize])
-            & exclude_inv)
+            & mask)
             .is_not_empty()
         {
             return true;
         }
         false
+    }
+
+    /// 指定マスに対して指定色の玉以外の駒の効きがあるか判定する．
+    fn is_attacked_by_non_king(
+        &self,
+        board: &Board,
+        sq: Square,
+        attacker_color: Color,
+    ) -> bool {
+        self.is_attacked_by_filtered(board, sq, attacker_color, true, None)
+    }
+
+    /// 指定マスに対して指定色の駒の効きがあるか判定する(特定マスの駒を除外)．
+    fn is_attacked_by_excluding(
+        &self,
+        board: &Board,
+        sq: Square,
+        attacker_color: Color,
+        excluded_sq: Square,
+    ) -> bool {
+        self.is_attacked_by_filtered(board, sq, attacker_color, false, Some(excluded_sq))
     }
 
     /// 攻め方の王手になる手を生成する．
@@ -689,6 +634,9 @@ impl DfPnSolver {
                     let child = self.look_up(board_clone.hash);
 
                     if child.pn != 0 && child.dn != 0 {
+                        // 各子ノードに最大10万ノードの追加予算を割り当てる．
+                        // saved(= 初期ノード + max_nodes)を上限とし，
+                        // 残予算が少ない場合は自然に打ち切られる．
                         let saved = self.max_nodes;
                         self.max_nodes = self
                             .nodes_searched
@@ -719,7 +667,7 @@ impl DfPnSolver {
     /// 玉方(AND): 証明済み子ノードの中で最長抵抗を選択．
     fn extract_pv(&self, board: &mut Board) -> Vec<Move> {
         let mut board_clone = board.clone();
-        self.extract_pv_recursive(&mut board_clone, true, &mut Vec::new())
+        self.extract_pv_recursive(&mut board_clone, true, &mut HashSet::new())
     }
 
     /// PV 復元の再帰実装．
@@ -729,7 +677,7 @@ impl DfPnSolver {
         &self,
         board: &mut Board,
         or_node: bool,
-        visited: &mut Vec<u64>,
+        visited: &mut HashSet<u64>,
     ) -> Vec<Move> {
         let hash = board.hash;
 
@@ -759,9 +707,9 @@ impl DfPnSolver {
                 let child_entry = self.look_up(board.hash);
 
                 if child_entry.pn == 0 {
-                    visited.push(hash);
+                    visited.insert(hash);
                     let sub_pv = self.extract_pv_recursive(board, false, visited);
-                    visited.pop();
+                    visited.remove(&hash);
 
                     let total_len = 1 + sub_pv.len();
                     let is_better = match &best_pv {
@@ -798,9 +746,9 @@ impl DfPnSolver {
                 let child_entry = self.look_up(board.hash);
 
                 if child_entry.pn == 0 {
-                    visited.push(hash);
+                    visited.insert(hash);
                     let sub_pv = self.extract_pv_recursive(board, true, visited);
-                    visited.pop();
+                    visited.remove(&hash);
 
                     let total_len = 1 + sub_pv.len();
                     let is_capture = m.captured_piece_raw() > 0;
@@ -1006,75 +954,6 @@ mod tests {
         }
     }
 
-    /// 診断テスト: G*3b 後の AND ノードと 1二玉後の OR ノードの TT 状態を分析する．
-    ///
-    /// アサーションなしのデバッグ用テスト．通常は `--ignored` で実行する．
-    #[test]
-    #[ignore]
-    fn diagnose_pv_extraction() {
-        let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
-        let mut board = Board::empty();
-        board.set_sfen(sfen).unwrap();
-
-        let mut solver = DfPnSolver::new(31, 1_048_576, 32767);
-        let _result = solver.solve(&mut board);
-
-        // --- G*3b を実行 ---
-        let m_g3b = board.move_from_usi("G*3b").unwrap();
-        let cap0 = board.do_move(m_g3b);
-
-        eprintln!("=== AND node after G*3b ===");
-        let defenses = movegen::generate_legal_moves(&mut board);
-        for d in &defenses {
-            let cap1 = board.do_move(*d);
-            let entry = solver.look_up(board.hash);
-            eprintln!(
-                "  defense {}: pn={}, dn={}",
-                d.to_usi(), entry.pn, entry.dn
-            );
-            board.undo_move(*d, cap1);
-        }
-
-        // --- 1二玉 (2a1b) を実行 ---
-        let m_1b = board.move_from_usi("2a1b").unwrap();
-        let cap1 = board.do_move(m_1b);
-
-        eprintln!("\n=== OR node after G*3b, 2a1b (1二玉) ===");
-        let attacks = solver.generate_check_moves(&mut board);
-        eprintln!("  check moves count: {}", attacks.len());
-        for a in &attacks {
-            let cap2 = board.do_move(*a);
-            let entry = solver.look_up(board.hash);
-            eprintln!(
-                "  attack {}: pn={}, dn={}",
-                a.to_usi(), entry.pn, entry.dn
-            );
-            board.undo_move(*a, cap2);
-        }
-
-        board.undo_move(m_1b, cap1);
-
-        // --- 同玉 (2a3b) を実行 ---
-        let m_3b = board.move_from_usi("2a3b").unwrap();
-        let cap1b = board.do_move(m_3b);
-
-        eprintln!("\n=== OR node after G*3b, 2a3b (同玉) ===");
-        let attacks2 = solver.generate_check_moves(&mut board);
-        eprintln!("  check moves count: {}", attacks2.len());
-        for a in &attacks2 {
-            let cap2 = board.do_move(*a);
-            let entry = solver.look_up(board.hash);
-            eprintln!(
-                "  attack {}: pn={}, dn={}",
-                a.to_usi(), entry.pn, entry.dn
-            );
-            board.undo_move(*a, cap2);
-        }
-
-        board.undo_move(m_3b, cap1b);
-        board.undo_move(m_g3b, cap0);
-    }
-
     #[test]
     fn test_tsume_image2() {
         // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
@@ -1090,7 +969,6 @@ mod tests {
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("PV ({}): {:?}", usi_moves.len(), usi_moves);
                 assert_eq!(moves.len(), 11, "expected 11 moves, got {}: {:?}", moves.len(), usi_moves);
                 assert_eq!(
                     usi_moves,
@@ -1162,7 +1040,6 @@ mod tests {
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("Image3 PV ({}): {:?}", usi_moves.len(), usi_moves);
                 assert_eq!(
                     usi_moves.len(), 9,
                     "expected 9 moves, got {}: {:?}", usi_moves.len(), usi_moves
@@ -1245,7 +1122,6 @@ mod tests {
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("Tsume4 PV ({}): {:?}", usi_moves.len(), usi_moves);
                 assert_eq!(
                     usi_moves.len(), 11,
                     "expected 11 moves, got {}: {:?}", usi_moves.len(), usi_moves
