@@ -1,0 +1,375 @@
+use std::collections::HashMap;
+
+use crate::board::{Board, SfenError};
+use crate::movegen;
+use crate::moves::Move;
+use crate::types::{Color, Piece};
+
+/// 履歴情報．
+#[derive(Debug, Clone)]
+struct StateInfo {
+    /// この局面のZobrist hash．
+    hash: u64,
+    /// 直前の手で取った駒．
+    captured: Piece,
+    /// 直前の手．
+    last_move: Move,
+    /// この局面で手番側が王手をかけているか．
+    gives_check: bool,
+}
+
+/// 局面(Board + 履歴管理)．
+///
+/// 連続王手の千日手判定のために局面履歴を管理する．
+/// 局面ハッシュの出現回数を `HashMap` で管理し，千日手候補の早期排除を O(1) で行う．
+#[derive(Clone)]
+pub struct Position {
+    pub(crate) board: Board,
+    history: Vec<StateInfo>,
+    /// 局面ハッシュの出現回数と初出インデックス．千日手候補の早期排除用．
+    ///
+    /// 値は `(出現回数, history 内の初出インデックス)` ．
+    /// 初出インデックスにより `is_perpetual_check_move` での線形探索を回避する．
+    hash_count: HashMap<u64, (usize, usize)>,
+}
+
+impl Position {
+    /// 平手初期局面で生成する．
+    pub fn new() -> Position {
+        let board = Board::new();
+        let mut hash_count = HashMap::new();
+        // 初期局面: 出現回数1, 初出はhistory追加前なので特別扱い不要(history.len() == 0)
+        hash_count.insert(board.hash, (1, 0));
+        Position {
+            board,
+            history: Vec::new(),
+            hash_count,
+        }
+    }
+
+    /// SFEN文字列から生成する．
+    pub fn from_sfen(sfen: &str) -> Result<Position, SfenError> {
+        let mut board = Board::empty();
+        board.set_sfen(sfen)?;
+        let mut hash_count = HashMap::new();
+        hash_count.insert(board.hash, (1, 0));
+        Ok(Position {
+            board,
+            history: Vec::new(),
+            hash_count,
+        })
+    }
+
+    /// 手を実行する．
+    ///
+    /// # 前提条件
+    /// - 手番は先後交互に呼び出すこと．連続して同じ色が手を指した場合，
+    ///   連続王手の千日手判定(`is_perpetual_check_move`)のparity計算が不正になる．
+    pub fn do_move(&mut self, m: Move) {
+        let captured = self.board.do_move(m);
+
+        // 相手の玉に王手をかけているか(do_move後は手番が交代済み)
+        let gives_check = self.board.is_in_check(self.board.turn);
+
+        let history_idx = self.history.len();
+        let entry = self.hash_count.entry(self.board.hash).or_insert((0, history_idx));
+        entry.0 += 1;
+
+        self.history.push(StateInfo {
+            hash: self.board.hash,
+            captured,
+            last_move: m,
+            gives_check,
+        });
+    }
+
+    /// 手を取り消す．
+    ///
+    /// 履歴が空の場合は `None` を返す．
+    pub fn undo_move(&mut self) -> Option<Move> {
+        let state = self.history.pop()?;
+        // hash_count をデクリメント(do_move で加算した分を戻す)
+        if let Some(entry) = self.hash_count.get_mut(&state.hash) {
+            entry.0 -= 1;
+            if entry.0 == 0 {
+                self.hash_count.remove(&state.hash);
+            }
+        }
+        self.board.undo_move(state.last_move, state.captured);
+        Some(state.last_move)
+    }
+
+    /// 合法手を生成する．
+    ///
+    /// 基本的な合法手に加えて，連続王手の千日手になる手を除外する．
+    pub fn legal_moves(&mut self) -> Vec<Move> {
+        let mut moves = movegen::generate_legal_moves(&mut self.board);
+
+        // 連続王手の千日手チェック
+        // retain with &mut selfが使えないため，手動でフィルタリング
+        let mut filtered = Vec::with_capacity(moves.len());
+        for m in moves.drain(..) {
+            if !self.is_perpetual_check_move(m) {
+                filtered.push(m);
+            }
+        }
+
+        filtered
+    }
+
+    /// この手を指すと連続王手の千日手が成立するかを判定する．
+    ///
+    /// 条件:
+    /// - この手が王手である
+    /// - 手を指した後の局面hashが履歴に3回以上出現(計4回目)
+    /// - 最初の出現から現在まで，自分の全ての手が王手だった
+    fn is_perpetual_check_move(&mut self, m: Move) -> bool {
+        // 手を仮に指してhashを計算(do_move/undo_moveで元に戻す)
+        let captured = self.board.do_move(m);
+        let new_hash = self.board.hash;
+
+        // この手で王手をかけるかチェック
+        let gives_check = self.board.is_in_check(self.board.turn);
+
+        // 元に戻す
+        self.board.undo_move(m, captured);
+
+        if !gives_check {
+            return false;
+        }
+
+        // hash_count で O(1) 判定: 3回未満なら千日手不成立(この手で4回目になる)
+        let (current_count, first_idx) = match self.hash_count.get(&new_hash) {
+            Some(&(count, idx)) => (count, idx),
+            None => return false,
+        };
+        if current_count < 3 {
+            return false;
+        }
+
+        // 3回以上出現している場合のみ，連続王手の検証を行う
+        // 手番側の手は history_len と同じパリティのインデックスに配置される．
+        //
+        // 注: from_sfen で後手番開始の場合，turn.index() != history_len % 2 となるが，
+        // 手の配置順序(history 内の位置)に基づくため history_len % 2 が正しい．
+        let history_len = self.history.len();
+        let my_parity = history_len % 2;
+
+        // 最初の出現から現在まで，自分の全ての手が王手かチェック．
+        // 計算量: O(history_len - first_idx)．長期戦では線形スキャンになるが，
+        // 将棋の実戦では千日手成立までの手数が限定的であり実用上の問題は少ない．
+        for i in first_idx..history_len {
+            if i % 2 == my_parity && !self.history[i].gives_check {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// 詰み(王手されていて合法手がない状態)かどうかを判定する．
+    pub fn is_checkmate(&mut self) -> bool {
+        self.board.is_in_check(self.board.turn) && self.legal_moves().is_empty()
+    }
+
+    /// 盤面への参照を返す．
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+
+    /// SFEN文字列を返す．
+    pub fn sfen(&self) -> String {
+        self.board.sfen()
+    }
+
+    /// 現在の手番を返す．
+    pub fn turn(&self) -> Color {
+        self.board.turn
+    }
+
+    /// Zobrist hashを返す．
+    pub fn hash(&self) -> u64 {
+        self.board.hash
+    }
+}
+
+impl std::fmt::Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.board)
+    }
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Position::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_position_do_undo() {
+        let mut pos = Position::new();
+        let original_sfen = pos.sfen();
+        let original_hash = pos.hash();
+
+        let moves = pos.legal_moves();
+        assert!(!moves.is_empty());
+
+        let m = moves[0];
+        pos.do_move(m);
+        assert_ne!(pos.sfen(), original_sfen);
+
+        pos.undo_move();
+        assert_eq!(pos.sfen(), original_sfen);
+        assert_eq!(pos.hash(), original_hash);
+    }
+
+    /// USI文字列から合法手を検索するヘルパー．
+    fn find_move(pos: &mut Position, usi: &str) -> Option<Move> {
+        pos.legal_moves().into_iter().find(|m| m.to_usi() == usi)
+    }
+
+    #[test]
+    fn test_perpetual_check() {
+        // 連続王手の千日手テスト
+        // 白玉1a, 黒龍3b, 黒玉9i
+        // 龍が3b↔3aを往復して王手し続ける
+        //
+        // サイクル:
+        //   Black: 3b→3a (王手) → White: 1a→1b → Black: 3a→3b (王手) → White: 1b→1a
+        // 4サイクル目で連続王手の千日手が成立
+        let mut pos = Position::from_sfen("8k/6+R2/9/9/9/9/9/9/K8 b - 1").unwrap();
+
+        let initial_hash = pos.hash();
+
+        // 1サイクル目: 全ての手が合法
+        assert!(find_move(&mut pos, "3b3a").is_some(), "cycle 1: 3b3a should be legal");
+        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+
+        // 1サイクル後: 元の局面に戻る
+        assert_eq!(pos.hash(), initial_hash, "hash should return to initial after 1 cycle");
+
+        // 2サイクル目
+        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+
+        // 3サイクル目
+        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+
+        // 4サイクル目: 連続王手の千日手が成立 → 3b3aが合法手から除外される
+        assert!(
+            find_move(&mut pos, "3b3a").is_none(),
+            "cycle 4: 3b3a should be excluded (perpetual check)"
+        );
+
+        // 他の手はまだ合法
+        let moves = pos.legal_moves();
+        let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+        assert!(
+            !moves.is_empty(),
+            "should still have other legal moves"
+        );
+        assert!(
+            !usi_moves.contains(&"3b3a".to_string()),
+            "3b3a must not be in legal moves"
+        );
+
+        // 龍の他の移動手(王手でない手)は合法
+        assert!(
+            find_move(&mut pos, "3b3c").is_some(),
+            "non-check move 3b3c should be legal"
+        );
+    }
+
+    #[test]
+    fn test_no_perpetual_check_if_broken() {
+        // 連続王手を途中で中断した場合は千日手にならない
+        // 2サイクル後に別の手を指し，その後同じパターンに戻っても
+        // 連続王手の千日手にはならない
+        let mut pos = Position::from_sfen("8k/6+R2/9/9/9/9/9/9/K8 b - 1").unwrap();
+
+        // 2サイクル実行
+        for _ in 0..2 {
+            let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
+            let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+            let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
+            let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+        }
+
+        // 中断: 龍を別のマスに動かす(王手でない手)
+        let m = find_move(&mut pos, "3b3c").unwrap(); pos.do_move(m);
+        // 白は適当に動く
+        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+        // 龍を3bに戻す
+        let m = find_move(&mut pos, "3c3b").unwrap(); pos.do_move(m);
+        // 白も戻る
+        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+
+        // 再度サイクルを開始 → 連続王手が途切れているので千日手にならない
+        // (中断前の2回 + 中断後1回 = 3回だが，間に王手でない手がある)
+        assert!(
+            find_move(&mut pos, "3b3a").is_some(),
+            "3b3a should still be legal after breaking perpetual check"
+        );
+    }
+
+    #[test]
+    fn test_perpetual_check_white_start() {
+        // 後手番から開始する連続王手の千日手テスト
+        //
+        // 局面: 先手玉1a, 後手龍3b, 後手玉9i (後手番)
+        // 後手の龍が3b↔3aを往復して先手玉に王手し続ける
+        //
+        // これにより from_sfen で後手番開始した場合の parity 計算が
+        // 正しいことを検証する:
+        //   history_len=0 → 後手番: 後手の手は偶数インデックス(0,2,4,...)
+        //   my_parity = history_len % 2 = 0 で後手の手を正しく選択
+        let mut pos = Position::from_sfen("8K/6+r2/9/9/9/9/9/9/k8 w - 1").unwrap();
+
+        let initial_hash = pos.hash();
+
+        // 3サイクル実行
+        for cycle in 0..3 {
+            let m = find_move(&mut pos, "3b3a").unwrap_or_else(
+                || panic!("cycle {}: 3b3a should be legal", cycle + 1),
+            );
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1a1b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "3a3b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1b1a").unwrap();
+            pos.do_move(m);
+        }
+
+        // 3サイクル後: 元の局面に戻る
+        assert_eq!(
+            pos.hash(),
+            initial_hash,
+            "hash should return to initial after 3 cycles"
+        );
+
+        // 4サイクル目: 連続王手の千日手が成立 → 3b3aが合法手から除外される
+        assert!(
+            find_move(&mut pos, "3b3a").is_none(),
+            "cycle 4: 3b3a should be excluded (perpetual check, white-start game)"
+        );
+
+        // 龍の他の移動手(王手でない手)は合法
+        assert!(
+            find_move(&mut pos, "3b3c").is_some(),
+            "non-check move 3b3c should be legal"
+        );
+    }
+}

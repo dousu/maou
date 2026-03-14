@@ -1,0 +1,62 @@
+[
+  {
+    "name": "hirate",
+    "sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
+    "hcp_hex": "58a449210cd757217e8e4d212caf427814c2ab109e4d212cd75f213e8e49210c",
+    "roundtrip_sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+  },
+  {
+    "name": "after_76fu",
+    "sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
+    "hcp_hex": "59a449210cd757217e8e4d212caf427814c2ab109e4d112cd75f213e8e49210c",
+    "roundtrip_sfen": "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 1"
+  },
+  {
+    "name": "bishop_exchange",
+    "sfen": "lnsgkg1nl/1r5s1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL b Bb 5",
+    "hcp_hex": "58a449210cd756889f0345585e85f0288457213c9b2258aebf42382685307cbe",
+    "roundtrip_sfen": "lnsgkg1nl/1r5s1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL b Bb 1"
+  },
+  {
+    "name": "promoted_horse",
+    "sfen": "lnsgk2nl/5g1s1/pppppp+Bpp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL b br 7",
+    "hcp_hex": "58a449210cd756889f83cf222cde427814c2ab109e4d112c9742382685307cff",
+    "roundtrip_sfen": "lnsgk2nl/5g1s1/pppppp+Bpp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL b rb 1"
+  },
+  {
+    "name": "many_hand_black",
+    "sfen": "4k4/9/9/9/9/9/9/9/4K4 b RB4G4S4N4L18Prb 1",
+    "hcp_hex": "582400000000000000000000000000000000104208638c514a29e79cf3f97dff",
+    "roundtrip_sfen": "4k4/9/9/9/9/9/9/9/4K4 b RB4G4S4N4L18Prb 1"
+  },
+  {
+    "name": "white_turn_hand",
+    "sfen": "4k4/9/9/9/9/9/9/9/4K4 w RB4G4S4N4L18Prb 1",
+    "hcp_hex": "592400000000000000000000000000000000104208638c514a29e79cf3f97dff",
+    "roundtrip_sfen": "4k4/9/9/9/9/9/9/9/4K4 w RB4G4S4N4L18Prb 1"
+  },
+  {
+    "name": "dragon_horse_board",
+    "sfen": "4k4/9/9/4+R4/9/9/4+B4/9/4K4 b rb4g4s4n4l18p 1",
+    "hcp_hex": "582400000000e0974f0000000040922449922449c618e39c73d65aebbdf77eff",
+    "roundtrip_sfen": "4k4/9/9/4+R4/9/9/4+B4/9/4K4 b rb4g4s4n4l18p 1"
+  },
+  {
+    "name": "promoted_pieces",
+    "sfen": "lns+Sk+S1nl/1r3g1b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LN1GK1SNL b Gg 1",
+    "hcp_hex": "58a449210cd757217e0e146159df42a0105685f06c8ac0f557888f635208c3b9",
+    "roundtrip_sfen": "lns+Sk+S1nl/1r3g1b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LN1GK1SNL b Gg 1"
+  },
+  {
+    "name": "game_midplay",
+    "sfen": "lnsg1g1nl/5kr2/ppppppspp/6p2/4B4/2P3P2/PPSPPP1PP/7R1/LN1GKGSNL w b 12",
+    "hcp_hex": "599c49210c9742fc1cfeb6122c6f213c940fe15508cfa688854b211c934218be",
+    "roundtrip_sfen": "lnsg1g1nl/5kr2/ppppppspp/6p2/4B4/2P3P2/PPSPPP1PP/7R1/LN1GKGSNL w b 1"
+  },
+  {
+    "name": "game_with_captures",
+    "sfen": "lnsgk1snl/1r4gb1/p1ppppp1p/7R1/9/1P7/PpPPPPP1P/1BG6/LNS1KGSNL b 2P 13",
+    "hcp_hex": "58a449210cd7971f38b6b710160ae15108af42b029c4b35c7f88fa3826853000",
+    "roundtrip_sfen": "lnsgk1snl/1r4gb1/p1ppppp1p/7R1/9/1P7/PpPPPPP1P/1BG6/LNS1KGSNL b 2P 1"
+  }
+]
