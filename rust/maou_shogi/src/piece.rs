@@ -140,6 +140,18 @@ pub fn hand_piece_to_sfen_char(pt: PieceType) -> char {
     }
 }
 
+impl std::fmt::Display for Piece {
+    /// SFEN形式で駒を表示する(例: `P`, `+b`, 空マスは `.`)．
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = piece_to_sfen_string(*self);
+        if s.is_empty() {
+            f.write_str(".")
+        } else {
+            f.write_str(s)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
