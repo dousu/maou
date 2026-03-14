@@ -226,8 +226,8 @@ class ColoredPiece:
     オフセット計算のバグを防止する．
 
     Attributes:
-        turn: 駒の所有者（Turn.BLACK または Turn.WHITE）
-        piece_id: 駒の種類（PieceId enum）
+        turn: 駒の所有者(Turn.BLACK または Turn.WHITE)
+        piece_id: 駒の種類(PieceId enum)
 
     Examples:
         >>> cp = ColoredPiece.from_cshogi(17)  # 白歩
@@ -242,7 +242,7 @@ class ColoredPiece:
     turn: Turn
     piece_id: PieceId
 
-    # cshogi形式の定数（クラス変数として参照可能）
+    # cshogi形式の定数(クラス変数として参照可能)
     CSHOGI_WHITE_OFFSET: ClassVar[int] = CSHOGI_WHITE_OFFSET
     CSHOGI_BLACK_MIN: ClassVar[int] = CSHOGI_BLACK_MIN
     CSHOGI_BLACK_MAX: ClassVar[int] = CSHOGI_BLACK_MAX
@@ -279,7 +279,7 @@ class ColoredPiece:
             return cls(Turn.BLACK, PieceId.EMPTY)
 
         if CSHOGI_BLACK_MIN <= cshogi_piece <= CSHOGI_BLACK_MAX:
-            # 黒駒: cshogi 1-14 → PieceId 1-14（同じ）
+            # 黒駒: cshogi 1-14 → PieceId 1-14(同じ)
             return cls(Turn.BLACK, PieceId(cshogi_piece))
 
         if CSHOGI_WHITE_MIN <= cshogi_piece <= CSHOGI_WHITE_MAX:
@@ -316,7 +316,7 @@ class ColoredPiece:
         if domain_piece == 0:
             return cls(Turn.BLACK, PieceId.EMPTY)
 
-        if DOMAIN_BLACK_MIN < domain_piece <= DOMAIN_BLACK_MAX:
+        if 1 <= domain_piece <= DOMAIN_BLACK_MAX:
             # 黒駒: domain 1-14 → PieceId 1-14
             return cls(Turn.BLACK, PieceId(domain_piece))
 
@@ -480,7 +480,11 @@ def move_drop_hand_piece(move: int) -> int:
         move: Drop move integer
 
     Returns:
-        Piece type being dropped (only valid for drop moves)
+        Piece type being dropped
+
+    Note:
+        Must only be called when move_is_drop(move) is True.
+        Returns 0 (same as Pawn) for non-drop moves.
     """
     return _move_drop_hand_piece(move)
 
@@ -716,7 +720,9 @@ class Board:
         self.board.piece_planes(array)
         # Reorder channels to match PieceId ordering using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Transpose to match board_id_positions coordinate system
+        # Rust feature::piece_planes fills array in column-major order (col, row).
+        # Transpose axes (1,2) to convert to row-major (row, col) matching
+        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
         array[:] = np.transpose(array, (0, 2, 1))
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
@@ -730,7 +736,9 @@ class Board:
         self.board.piece_planes_rotate(array)
         # Reorder channels (same as to_piece_planes) using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Transpose to match board_id_positions coordinate system
+        # Rust feature::piece_planes_rotate fills array in column-major order (col, row).
+        # Transpose axes (1,2) to convert to row-major (row, col) matching
+        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
         array[:] = np.transpose(array, (0, 2, 1))
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
