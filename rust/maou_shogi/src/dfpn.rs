@@ -458,15 +458,17 @@ impl DfPnSolver {
         exclude_king: bool,
         excluded_sq: Option<Square>,
     ) -> bool {
-        let occ = board.all_occupied();
+        let mut occ = board.all_occupied();
         let att = attacker_color.index();
         let defender = attacker_color.opponent();
 
         // 除外マスのマスクを計算
+        // occ からも除外して，スライド駒のレイ計算を正確にする
         let mask = match excluded_sq {
             Some(esq) => {
                 let mut m = crate::bitboard::Bitboard::EMPTY;
                 m.set(esq);
+                occ = occ & !m;
                 !m
             }
             None => !crate::bitboard::Bitboard::EMPTY, // 全ビット1
@@ -588,6 +590,8 @@ impl DfPnSolver {
     /// 未証明の王手を追加証明する．反復的に PV を更新し収束させる．
     fn complete_or_proofs(&mut self, board: &mut Board) {
         let saved_max = self.max_nodes;
+        // 証明完了フェーズに元の max_nodes と同じ追加予算を与えるため，
+        // 全体で最大 max_nodes の約2倍のノードを消費する可能性がある．
         self.max_nodes = self.nodes_searched.saturating_add(saved_max);
 
         // 反復: PV を抽出 → PV 上の OR ノードを完成 → 再抽出
