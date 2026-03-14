@@ -12,8 +12,8 @@ const HI_MASK: u64 = (1u64 << 18) - 1;
 /// - hi: マス63-80 (18ビット)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bitboard {
-    pub lo: u64,
-    pub hi: u64,
+    pub(crate) lo: u64,
+    pub(crate) hi: u64,
 }
 
 impl Bitboard {

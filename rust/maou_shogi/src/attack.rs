@@ -15,7 +15,7 @@ static STEP_ATTACKS: std::sync::LazyLock<[[[Bitboard; 81]; PIECE_BB_SIZE]; 2]> =
     std::sync::LazyLock::new(init_step_attacks);
 
 fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
-    let mut table = [[[Bitboard::EMPTY; 81]; 15]; 2];
+    let mut table = [[[Bitboard::EMPTY; 81]; PIECE_BB_SIZE]; 2];
 
     for sq_idx in 0..81u8 {
         let sq = Square(sq_idx);

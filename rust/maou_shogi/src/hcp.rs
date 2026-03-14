@@ -594,9 +594,15 @@ pub fn from_hcp(hcp: &Hcp) -> Result<Board, HcpError> {
     for (i, &_pt) in PieceType::HAND_PIECES.iter().enumerate() {
         let max_count = PieceType::MAX_HAND_COUNT[i] as usize;
         let on_board = count_on_board(&board, PieceType::HAND_PIECES[i]);
-        if max_count >= on_board {
-            total_remaining += max_count - on_board;
-        }
+        let remaining = max_count.checked_sub(on_board).ok_or_else(|| {
+            HcpError::InvalidHandPieceCode(format!(
+                "too many {:?} on board: {} exceeds max {}",
+                PieceType::HAND_PIECES[i],
+                on_board,
+                max_count
+            ))
+        })?;
+        total_remaining += remaining;
     }
 
     for _ in 0..total_remaining {
