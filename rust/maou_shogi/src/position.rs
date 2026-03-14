@@ -154,6 +154,11 @@ impl Position {
         self.board.is_in_check(self.board.turn) && self.legal_moves().is_empty()
     }
 
+    /// 盤面への参照を返す．
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+
     /// SFEN文字列を返す．
     pub fn sfen(&self) -> String {
         self.board.sfen()

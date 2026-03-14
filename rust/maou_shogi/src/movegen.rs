@@ -75,7 +75,7 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     }
 
     // 2. 駒打ち
-    let empty_squares = !all_occ & Bitboard::ALL;
+    let empty_squares = !all_occ;
 
     for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
         if board.hand[us.index()][hand_idx] == 0 {

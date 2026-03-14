@@ -639,13 +639,10 @@ fn count_on_board(board: &Board, base_pt: PieceType) -> usize {
 ///
 /// 玉が見つからない場合は `Err` を返す(片玉局面など)．
 fn find_king(board: &Board, color: Color) -> Result<u8, HcpError> {
-    let king_piece = Piece::new(color, PieceType::King);
-    for sq in 0..81u8 {
-        if board.squares[sq as usize] == king_piece {
-            return Ok(sq);
-        }
-    }
-    Err(HcpError::KingNotFound(color))
+    board
+        .king_square(color)
+        .map(|sq| sq.0)
+        .ok_or(HcpError::KingNotFound(color))
 }
 
 #[cfg(test)]
