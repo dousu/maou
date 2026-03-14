@@ -450,22 +450,49 @@
     ]
   },
   {
-    "name": "checkmate_corner_gold_pair",
-    "sfen": "k8/GG7/9/9/9/9/9/9/8K w - 1",
+    "name": "checkmate_atama_kin",
+    "sfen": "7k1/7G1/9/9/9/9/9/9/K6R1 w - 1",
+    "description": "\u982d\u91d1: \u5f8c\u624b\u73892\u4e00\u306b\u5148\u624b\u91d12\u4e8c(\u982d\u91d1)\uff0c\u5148\u624b\u98db2\u4e5d\u3067\u91d1\u3092\u652f\u3048\u308b",
     "legal_moves_count": 0,
     "legal_moves_move16": [],
     "legal_moves_usi": []
   },
   {
-    "name": "checkmate_gold_rook",
-    "sfen": "4k4/3GG4/4R4/9/9/9/9/9/4K4 w - 1",
+    "name": "checkmate_hara_kin",
+    "sfen": "9/7Gk/9/9/9/9/9/9/K6RL w - 1",
+    "description": "\u8179\u91d1: \u5f8c\u624b\u73891\u4e8c\u306b\u5148\u624b\u91d12\u4e8c(\u6a2a\u8179)\uff0c\u5148\u624b\u98db2\u4e5d\u3068\u99991\u4e5d\u3067\u9003\u3052\u5834\u3092\u585e\u3050",
     "legal_moves_count": 0,
     "legal_moves_move16": [],
     "legal_moves_usi": []
   },
   {
-    "name": "checkmate_silver_gold",
-    "sfen": "4k4/3S1S3/4G4/9/9/9/9/9/4K4 w - 1",
+    "name": "checkmate_shiri_kin",
+    "sfen": "R6+R1/7k1/7G1/9/9/9/9/9/K8 w - 1",
+    "description": "\u5c3b\u91d1: \u5f8c\u624b\u73892\u4e8c\u3092\u5148\u624b\u9f8d2\u4e00(\u524d)\u3068\u5148\u624b\u91d12\u4e09(\u5c3b=\u5f8c)\u3067\u631f\u6483\uff0c\u5148\u624b\u98db9\u4e00\u3067\u9f8d\u3092\u652f\u3048\u308b",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
+  },
+  {
+    "name": "checkmate_tsurushi_kei",
+    "sfen": "7gk/8p/6BN1/9/9/9/9/9/K8 w - 1",
+    "description": "\u540a\u308b\u3057\u6842: \u5f8c\u624b\u73891\u4e00\u306b\u5148\u624b\u68422\u4e09\u3067\u738b\u624b\uff0c\u5f8c\u624b\u91d12\u4e00\u3068\u5f8c\u624b\u6b691\u4e8c\u304c\u81ea\u3089\u9003\u3052\u5834\u3092\u585e\u304e\uff0c\u5148\u624b\u89d23\u4e09\u304c2\u4e8c\u3092\u6291\u3048\u308b",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
+  },
+  {
+    "name": "checkmate_miyako_zume",
+    "sfen": "9/9/9/3+R1+R3/4k4/4G4/3B5/9/4K4 w - 1",
+    "description": "\u90fd\u8a70\u3081: \u5f8c\u624b\u73895\u4e94(\u76e4\u4e2d\u592e)\u306b\u5148\u624b\u91d15\u516d(\u982d\u91d1)\uff0c\u5148\u624b\u9f8d4\u56db\u30fb6\u56db\u3067\u4e0a\u65b9\u3092\u5c01\u9396\uff0c\u5148\u624b\u89d24\u4e03\u3067\u91d1\u3092\u652f\u3048\u308b",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
+  },
+  {
+    "name": "checkmate_setchin_zume",
+    "sfen": "8k/7S1/9/9/9/9/9/9/K6RL w - 1",
+    "description": "\u96ea\u96a0\u8a70\u3081: \u5f8c\u624b\u73891\u4e00(\u9685)\u306b\u5148\u624b\u92802\u4e8c\u3067\u738b\u624b\uff0c\u5148\u624b\u98db2\u4e5d\u3067\u9280\u3092\u652f\u3048\uff0c\u5148\u624b\u99991\u4e5d\u30671\u7b4b\u3092\u5c01\u9396",
     "legal_moves_count": 0,
     "legal_moves_move16": [],
     "legal_moves_usi": []

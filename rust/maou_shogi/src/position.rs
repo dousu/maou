@@ -145,6 +145,11 @@ impl Position {
         true
     }
 
+    /// 詰み(王手されていて合法手がない状態)かどうかを判定する．
+    pub fn is_checkmate(&mut self) -> bool {
+        self.board.is_in_check(self.board.turn) && self.legal_moves().is_empty()
+    }
+
     /// SFEN文字列を返す．
     pub fn sfen(&self) -> String {
         self.board.sfen()

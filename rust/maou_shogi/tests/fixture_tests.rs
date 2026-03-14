@@ -3,6 +3,7 @@ use maou_shogi::feature;
 use maou_shogi::hcp;
 use maou_shogi::movegen;
 use maou_shogi::moves::Move;
+use maou_shogi::position::Position;
 use maou_shogi::types::FEATURES_NUM;
 
 use serde::Deserialize;
@@ -168,6 +169,64 @@ fn test_legal_move_fixtures() {
             fixture.name
         );
     }
+}
+
+// === Checkmate (Famous Patterns) Fixtures ===
+
+#[test]
+fn test_checkmate_fixtures() {
+    let fixtures: Vec<LegalMoveFixture> = load_fixture("legal_move_fixtures.json");
+
+    for fixture in &fixtures {
+        if !fixture.name.starts_with("checkmate_") {
+            continue;
+        }
+
+        // Board レベル: 合法手が0であること
+        let mut board = Board::empty();
+        board
+            .set_sfen(&fixture.sfen)
+            .unwrap_or_else(|e| panic!("{}: {}", fixture.name, e));
+
+        let moves = movegen::generate_legal_moves(&mut board);
+        assert_eq!(
+            moves.len(),
+            0,
+            "{}: expected 0 legal moves but got {}",
+            fixture.name,
+            moves.len()
+        );
+
+        // 王手がかかっていること
+        assert!(
+            board.is_in_check(board.turn()),
+            "{}: expected to be in check",
+            fixture.name
+        );
+
+        // Position レベル: is_checkmate() が true を返すこと(終局判定)
+        let mut pos = Position::from_sfen(&fixture.sfen)
+            .unwrap_or_else(|e| panic!("{}: {}", fixture.name, e));
+        assert!(
+            pos.is_checkmate(),
+            "{}: Position::is_checkmate() should return true",
+            fixture.name
+        );
+    }
+
+    // 非詰み局面では is_checkmate() が false を返すこと
+    let mut pos_hirate = Position::new();
+    assert!(
+        !pos_hirate.is_checkmate(),
+        "hirate should not be checkmate"
+    );
+
+    // 王手だが逃げられる局面
+    let mut pos_check = Position::from_sfen("4k4/9/9/9/9/9/9/4r4/4K4 b - 1").unwrap();
+    assert!(
+        !pos_check.is_checkmate(),
+        "in_check with escapes should not be checkmate"
+    );
 }
 
 // === Special Rule Fixtures ===

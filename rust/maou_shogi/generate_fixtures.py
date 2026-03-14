@@ -117,18 +117,36 @@ def generate_legal_move_fixtures() -> None:
             "name": "tsume_like_defender_turn",
             "sfen": "4k4/4G4/9/9/9/9/9/9/4K4 w - 1",
         },
-        # 詰み局面(合法手0)
+        # 詰み局面 — 有名な詰みパターン(合法手0)
+        # 頭金: 玉の頭に金を打つ最も基本的な詰み
         {
-            "name": "checkmate_corner_gold_pair",
-            "sfen": "k8/GG7/9/9/9/9/9/9/8K w - 1",
+            "name": "checkmate_atama_kin",
+            "sfen": "7k1/7G1/9/9/9/9/9/9/K6R1 w - 1",
         },
+        # 腹金: 端の玉の横に金を打つ詰み
         {
-            "name": "checkmate_gold_rook",
-            "sfen": "4k4/3GG4/4R4/9/9/9/9/9/4K4 w - 1",
+            "name": "checkmate_hara_kin",
+            "sfen": "9/7Gk/9/9/9/9/9/9/K6RL w - 1",
         },
+        # 尻金: 龍(前)と金(後=尻)で玉を挟撃する詰み
         {
-            "name": "checkmate_silver_gold",
-            "sfen": "4k4/3S1S3/4G4/9/9/9/9/9/4K4 w - 1",
+            "name": "checkmate_shiri_kin",
+            "sfen": "R6+R1/7k1/7G1/9/9/9/9/9/K8 w - 1",
+        },
+        # 吊るし桂: 桂馬の遠隔王手で詰み(後手自駒が逃げ場を塞ぐ)
+        {
+            "name": "checkmate_tsurushi_kei",
+            "sfen": "7gk/8p/6BN1/9/9/9/9/9/K8 w - 1",
+        },
+        # 都詰め: 盤の中央5五で王が詰む珍しい詰み
+        {
+            "name": "checkmate_miyako_zume",
+            "sfen": "9/9/9/3+R1+R3/4k4/4G4/3B5/9/4K4 w - 1",
+        },
+        # 雪隠詰め: 隅に追い詰められた玉の詰み
+        {
+            "name": "checkmate_setchin_zume",
+            "sfen": "8k/7S1/9/9/9/9/9/9/K6RL w - 1",
         },
     ]
 
