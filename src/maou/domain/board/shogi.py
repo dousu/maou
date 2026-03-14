@@ -7,16 +7,18 @@ from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
+from maou._rust.maou_shogi import PyBoard as _PyBoard
+from maou._rust.maou_shogi import move16 as _move16
 from maou._rust.maou_shogi import (
-    PyBoard as _PyBoard,
-    move16 as _move16,
     move_drop_hand_piece as _move_drop_hand_piece,
-    move_from as _move_from,
-    move_is_drop as _move_is_drop,
-    move_is_promotion as _move_is_promotion,
-    move_to as _move_to,
-    move_to_usi as _move_to_usi,
 )
+from maou._rust.maou_shogi import move_from as _move_from
+from maou._rust.maou_shogi import move_is_drop as _move_is_drop
+from maou._rust.maou_shogi import (
+    move_is_promotion as _move_is_promotion,
+)
+from maou._rust.maou_shogi import move_to as _move_to
+from maou._rust.maou_shogi import move_to_usi as _move_to_usi
 
 if TYPE_CHECKING:
     import polars as pl
@@ -421,11 +423,16 @@ def move_to(move: int) -> int:
 def move_from(move: int) -> int:
     """Extract source square from move.
 
+    通常の指し手の場合はマス番号(0-80)を返す．
+    駒打ちの場合は move_is_drop() で判定し，
+    move_drop_hand_piece() で駒種を取得すること．
+
     Args:
         move: Move integer
 
     Returns:
-        Source square index (0-80) for normal moves
+        通常手: 移動元マス番号(0-80)
+        駒打ち: 内部エンコード値(マス番号ではない)
     """
     return _move_from(move)
 
@@ -479,6 +486,12 @@ def move_drop_hand_piece(move: int) -> int:
 
 
 class Board:
+    """将棋の盤面を表すドメインモデル．
+
+    maou_shogi (Rust PyO3) の PyBoard をラップし，
+    PieceId体系への変換やPolars DataFrame出力などのドメインロジックを提供する．
+    """
+
     _CSHOGI_TO_PIECEID: dict[int, int] = {
         # Black pieces (1-14)
         0: 0,  # EMPTY
@@ -575,6 +588,7 @@ class Board:
         # PROM_BISHOP (馬) and PROM_ROOK (龍) need no reordering
 
     def __init__(self) -> None:
+        """初期局面(平手)でBoardを生成する．"""
         self.board = _PyBoard()
 
     def __copy__(self) -> Board:
@@ -588,15 +602,38 @@ class Board:
         return new_board
 
     def set_turn(self, turn: Turn) -> None:
+        """手番を設定する．
+
+        Args:
+            turn: 設定する手番
+        """
         self.board.set_turn(turn.value)
 
     def get_turn(self) -> Turn:
+        """現在の手番を取得する．
+
+        Returns:
+            現在の手番
+        """
         return Turn(self.board.turn)
 
     def set_sfen(self, sfen: str) -> None:
+        """SFEN文字列から局面を設定する．
+
+        Args:
+            sfen: SFEN形式の局面文字列
+
+        Raises:
+            ValueError: 不正なSFEN文字列の場合
+        """
         self.board.set_sfen(sfen)
 
     def get_sfen(self) -> str:
+        """現在の局面をSFEN文字列で取得する．
+
+        Returns:
+            SFEN形式の局面文字列
+        """
         return self.board.sfen()
 
     def set_hcp(self, hcp: np.ndarray | bytes) -> None:
@@ -620,6 +657,11 @@ class Board:
         return bytes(self.board.to_hcp())
 
     def get_legal_moves(self) -> Generator[int, None, None]:
+        """現在の局面で合法手を列挙する．
+
+        Yields:
+            合法手のmove整数値(32-bit)
+        """
         for move in self.board.legal_moves():
             yield move
 
@@ -649,6 +691,14 @@ class Board:
         return self.board.move_from_usi(usi)
 
     def push_move(self, move: int) -> None:
+        """指し手を実行して局面を進める．
+
+        Args:
+            move: 実行する指し手(32-bit move整数値)
+
+        Raises:
+            ValueError: 不正な指し手の場合
+        """
         self.board.push(move)
 
     def pop_move(self) -> None:
@@ -656,6 +706,13 @@ class Board:
         self.board.pop()
 
     def to_piece_planes(self, array: np.ndarray) -> None:
+        """先手視点の駒特徴平面を配列に書き込む(in-place)．
+
+        PieceId順にチャネルを並べ替え，座標系を転置する．
+
+        Args:
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32
+        """
         self.board.piece_planes(array)
         # Reorder channels to match PieceId ordering using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
@@ -663,6 +720,13 @@ class Board:
         array[:] = np.transpose(array, (0, 2, 1))
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
+        """後手視点(180度回転)の駒特徴平面を配列に書き込む(in-place)．
+
+        PieceId順にチャネルを並べ替え，座標系を転置する．
+
+        Args:
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32
+        """
         self.board.piece_planes_rotate(array)
         # Reorder channels (same as to_piece_planes) using centralized method
         Board._reorder_piece_planes_cshogi_to_pieceid(array)
@@ -699,9 +763,19 @@ class Board:
         return self.board.pieces()
 
     def to_pretty_board(self) -> str:
+        """盤面を人間が読める文字列で返す．
+
+        Returns:
+            盤面の文字列表現
+        """
         return str(self.board)
 
     def hash(self) -> int:
+        """Zobristハッシュ値を取得する．
+
+        Returns:
+            現在の局面のZobristハッシュ値
+        """
         return self.board.zobrist_hash()
 
     def is_ok(self) -> bool:
@@ -829,17 +903,12 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get piece planes from board
-        planes = np.empty(
+        # Get piece planes from board (reorder + transpose via to_piece_planes)
+        planes = np.zeros(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
-        planes.fill(0)
-        self.board.piece_planes(planes)
-        # Reorder channels to match PieceId ordering using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(planes)
-        # Transpose to match board_id_positions coordinate system
-        planes = np.transpose(planes, (0, 2, 1))
-        planes_list = planes.tolist()  # Fast conversion
+        self.to_piece_planes(planes)
+        planes_list = planes.tolist()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(
@@ -873,17 +942,12 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get rotated piece planes from board
-        planes = np.empty(
+        # Get rotated piece planes from board (reorder + transpose via to_piece_planes_rotate)
+        planes = np.zeros(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
-        planes.fill(0)
-        self.board.piece_planes_rotate(planes)
-        # Reorder channels to match PieceId ordering using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(planes)
-        # Transpose to match get_board_id_positions_df coordinate system
-        planes = np.transpose(planes, (0, 2, 1))
-        planes_list = planes.tolist()  # Fast conversion
+        self.to_piece_planes_rotate(planes)
+        planes_list = planes.tolist()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(

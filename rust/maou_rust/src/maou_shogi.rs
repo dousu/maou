@@ -22,6 +22,9 @@ fn validate_feature_array_shape(arr: &Bound<'_, PyArray3<f32>>) -> PyResult<()> 
     Ok(())
 }
 
+/// 将棋盤面の Python バインディング．
+///
+/// SFEN / HCP による局面設定，合法手生成，特徴平面抽出などを提供する．
 #[pyclass]
 struct PyBoard {
     board: Board,
@@ -30,6 +33,7 @@ struct PyBoard {
 
 #[pymethods]
 impl PyBoard {
+    /// 初期局面 (平手) で盤面を生成する．
     #[new]
     fn new() -> Self {
         PyBoard {
@@ -38,6 +42,7 @@ impl PyBoard {
         }
     }
 
+    /// SFEN 文字列から局面を設定する．
     fn set_sfen(&mut self, sfen: &str) -> PyResult<()> {
         self.board
             .set_sfen(sfen)
@@ -46,15 +51,18 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 現在の局面を SFEN 文字列で返す．
     fn sfen(&self) -> String {
         self.board.sfen()
     }
 
+    /// 現在の手番 (0=先手, 1=後手)．
     #[getter]
     fn turn(&self) -> u8 {
         self.board.turn() as u8
     }
 
+    /// 手番を設定する (0=先手, 1=後手)．
     fn set_turn(&mut self, turn: u8) -> PyResult<()> {
         let color = Color::from_u8(turn)
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("turn must be 0 or 1"))?;
@@ -62,6 +70,7 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 32 バイトの HCP データから局面を設定する．
     fn set_hcp(&mut self, data: &[u8]) -> PyResult<()> {
         if data.len() < 32 {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -76,12 +85,14 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 局面を 32 バイトの HCP データにエンコードする．
     fn to_hcp(&self) -> PyResult<Vec<u8>> {
         let hcp = hcp::to_hcp(&self.board)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(hcp.to_vec())
     }
 
+    /// 合法手のリストを返す (各要素は 32-bit move)．
     fn legal_moves(&mut self) -> Vec<u32> {
         movegen::generate_legal_moves(&mut self.board)
             .iter()
@@ -89,6 +100,7 @@ impl PyBoard {
             .collect()
     }
 
+    /// 16-bit move から 32-bit move に変換する．
     fn move_from_move16(&self, m16: u16) -> PyResult<u32> {
         self.board
             .move_from_move16(m16)
@@ -96,6 +108,7 @@ impl PyBoard {
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("invalid move16"))
     }
 
+    /// USI 形式の文字列から 32-bit move に変換する．
     fn move_from_usi(&self, usi: &str) -> PyResult<u32> {
         self.board
             .move_from_usi(usi)
@@ -103,6 +116,7 @@ impl PyBoard {
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("invalid USI move"))
     }
 
+    /// 指し手を実行して局面を進める．
     fn push(&mut self, m: u32) -> PyResult<()> {
         if m == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -115,6 +129,7 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 直前の指し手を取り消す．
     fn pop(&mut self) -> PyResult<()> {
         let (m_raw, cap_raw) = self.undo_stack.pop().ok_or_else(|| {
             pyo3::exceptions::PyIndexError::new_err("no moves to undo")
@@ -124,6 +139,7 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 先手視点の駒特徴平面 (104x9x9) を書き込む．
     fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
         // SAFETY: arr is exclusively owned by this call; no other Python reference
@@ -136,6 +152,7 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 後手視点 (180度回転) の駒特徴平面 (104x9x9) を書き込む．
     fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
         validate_feature_array_shape(arr)?;
         // SAFETY: arr is exclusively owned by this call; no other Python reference
@@ -148,6 +165,9 @@ impl PyBoard {
         Ok(())
     }
 
+    /// 持ち駒を (先手, 後手) のタプルで返す．
+    ///
+    /// 各リストは [歩, 香, 桂, 銀, 金, 角, 飛] の順．
     fn pieces_in_hand(&self) -> (Vec<u32>, Vec<u32>) {
         let (black, white) = self.board.pieces_in_hand();
         (
@@ -156,22 +176,27 @@ impl PyBoard {
         )
     }
 
+    /// 指定マスの駒 ID を返す (0=空)．
     fn piece(&self, sq: u8) -> u32 {
         self.board.piece_at(Square::from_raw_u8(sq)) as u32
     }
 
+    /// 盤面の駒配列 (81 要素) を返す．
     fn pieces(&self) -> Vec<u32> {
         self.board.pieces().iter().map(|&x| x as u32).collect()
     }
 
+    /// Zobrist ハッシュ値を返す．
     fn zobrist_hash(&self) -> u64 {
         self.board.hash()
     }
 
+    /// 盤面が妥当かどうかを検証する．
     fn is_ok(&self) -> bool {
         self.board.is_ok()
     }
 
+    /// 人間可読な盤面表現を返す．
     fn __str__(&self) -> String {
         format!("{}", self.board)
     }
@@ -179,36 +204,45 @@ impl PyBoard {
 
 // Free functions (cshogi-compatible move utilities)
 
+/// 32-bit move を 16-bit に圧縮する．
 #[pyfunction]
 fn move16(m: u32) -> u16 {
     moves::move16(Move::from_raw_u32(m))
 }
 
+/// 指し手から移動先マス番号 (0-80) を取得する．
 #[pyfunction]
 fn move_to(m: u32) -> u8 {
     moves::move_to(Move::from_raw_u32(m))
 }
 
+/// 指し手から移動元情報を取得する．
+///
+/// 通常手: マス番号 (0-80)，駒打ち: 内部エンコード値．
 #[pyfunction]
 fn move_from(m: u32) -> u8 {
     moves::move_from(Move::from_raw_u32(m))
 }
 
+/// 指し手を USI 形式の文字列に変換する．
 #[pyfunction]
 fn move_to_usi(m: u32) -> String {
     moves::move_to_usi(Move::from_raw_u32(m))
 }
 
+/// 指し手が駒打ちかどうかを判定する．
 #[pyfunction]
 fn move_is_drop(m: u32) -> bool {
     moves::move_is_drop(Move::from_raw_u32(m))
 }
 
+/// 指し手が成りを含むかどうかを判定する．
 #[pyfunction]
 fn move_is_promotion(m: u32) -> bool {
     moves::move_is_promotion(Move::from_raw_u32(m))
 }
 
+/// 駒打ちの駒種を取得する．
 #[pyfunction]
 fn move_drop_hand_piece(m: u32) -> u8 {
     moves::move_drop_hand_piece(Move::from_raw_u32(m))
