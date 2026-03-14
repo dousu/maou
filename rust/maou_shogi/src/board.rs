@@ -9,27 +9,32 @@ use crate::zobrist::ZOBRIST;
 /// 将棋盤の状態．
 ///
 /// Mailbox (駒配列) + Bitboard のハイブリッド表現．
+///
+/// フィールドは `pub(crate)` であり，外部クレートからは
+/// アクセサメソッドを通じて参照する．直接のフィールド書き換えは
+/// Mailbox・Bitboard・Zobrist hash の整合性を崩すため，
+/// 変更には `put_piece`/`remove_piece`/`do_move`/`undo_move` を使用すること．
 #[derive(Clone)]
 pub struct Board {
     /// 81マスの駒配列(cshogi互換ID: 0-30)．
-    pub squares: [Piece; 81],
+    pub(crate) squares: [Piece; 81],
     /// 駒種×色ごとのビットボード．piece_bb[color][piece_type as usize]
     ///
     /// インデックス0は未使用(PieceTypeは1から始まるため)．
     /// `piece_bb[color][pt as usize]` で直接アクセスできるよう，
     /// サイズを PIECE_TYPES_NUM + 1 = 15 としている．
-    pub piece_bb: [[Bitboard; PIECE_BB_SIZE]; 2],
+    pub(crate) piece_bb: [[Bitboard; PIECE_BB_SIZE]; 2],
     /// 色ごとの全駒占有ビットボード．
-    pub occupied: [Bitboard; 2],
+    pub(crate) occupied: [Bitboard; 2],
     /// 持ち駒 [色][駒種7] = 個数．
     /// 順序: 歩(0), 香(1), 桂(2), 銀(3), 金(4), 角(5), 飛(6)
-    pub hand: [[u8; HAND_KINDS]; 2],
+    pub(crate) hand: [[u8; HAND_KINDS]; 2],
     /// 手番．
-    pub turn: Color,
+    pub(crate) turn: Color,
     /// 手数．
-    pub ply: u16,
+    pub(crate) ply: u16,
     /// Zobrist hash(インクリメンタル更新)．
-    pub hash: u64,
+    pub(crate) hash: u64,
 }
 
 impl Board {
@@ -412,6 +417,24 @@ impl Board {
     #[inline]
     pub fn piece_at(&self, sq: Square) -> u8 {
         self.squares[sq.index()].0
+    }
+
+    /// 手番を返す．
+    #[inline]
+    pub fn turn(&self) -> Color {
+        self.turn
+    }
+
+    /// 手数を返す．
+    #[inline]
+    pub fn ply(&self) -> u16 {
+        self.ply
+    }
+
+    /// Zobrist hashを返す．
+    #[inline]
+    pub fn hash(&self) -> u64 {
+        self.hash
     }
 
     /// 盤面が有効かどうか検証する．

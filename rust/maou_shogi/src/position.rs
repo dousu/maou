@@ -21,7 +21,7 @@ struct StateInfo {
 /// 連続王手の千日手判定のために局面履歴を管理する．
 #[derive(Clone)]
 pub struct Position {
-    pub board: Board,
+    pub(crate) board: Board,
     history: Vec<StateInfo>,
 }
 
@@ -119,10 +119,9 @@ impl Position {
 
         // 最初の出現から現在まで，自分の全ての手が王手かチェック
         //
-        // 自分の手のインデックス:
-        //   history[N-1] = 相手の直前の手
-        //   history[N-2] = 自分の直前の手
-        //   → 自分の手は i % 2 == history_len % 2 のインデックス
+        // 先手の手は偶数インデックス(0,2,4,...)，後手は奇数インデックス．
+        // ゲーム開始時 history_len=0 → 先手番 (Color::Black=0) に対応．
+        // したがって my_parity = history_len % 2 == self.board.turn.index() が成立する．
         let history_len = self.history.len();
         let my_parity = history_len % 2;
 

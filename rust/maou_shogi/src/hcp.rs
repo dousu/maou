@@ -17,6 +17,9 @@ use crate::types::{Color, Piece, PieceType, Square};
 /// HCPエンコード/デコード時のエラー．
 #[derive(Debug, thiserror::Error)]
 pub enum HcpError {
+    /// ビットライターが256ビットバッファを超過した．
+    #[error("HCP bit writer overflow at position {0}")]
+    BitWriterOverflow(usize),
     /// ビットリーダーが256ビットバッファを超過した．
     #[error("HCP bit reader overflow at position {0}")]
     BitReaderOverflow(usize),
@@ -92,20 +95,24 @@ impl BitWriter {
 
     /// 1ビット書き込む．
     #[inline]
-    fn write_bit(&mut self, bit: u8) {
-        assert!(self.pos < 256, "HCP bit writer overflow: pos {} exceeds 256-bit buffer", self.pos);
+    fn write_bit(&mut self, bit: u8) -> Result<(), HcpError> {
+        if self.pos >= 256 {
+            return Err(HcpError::BitWriterOverflow(self.pos));
+        }
         if bit != 0 {
             self.buf[self.pos / 8] |= 1 << (self.pos % 8);
         }
         self.pos += 1;
+        Ok(())
     }
 
     /// 値をnビットLSBファーストで書き込む．
     #[inline]
-    fn write_bits(&mut self, value: u32, n: usize) {
+    fn write_bits(&mut self, value: u32, n: usize) -> Result<(), HcpError> {
         for i in 0..n {
-            self.write_bit(((value >> i) & 1) as u8);
+            self.write_bit(((value >> i) & 1) as u8)?;
         }
+        Ok(())
     }
 }
 
@@ -148,10 +155,10 @@ impl<'a> BitReader<'a> {
 // ============================================================
 
 /// 盤上の駒をHuffman符号化してビットストリームに書き込む．
-fn encode_board_piece(writer: &mut BitWriter, piece: Piece) {
+fn encode_board_piece(writer: &mut BitWriter, piece: Piece) -> Result<(), HcpError> {
     if piece.is_empty() {
-        writer.write_bit(0);
-        return;
+        writer.write_bit(0)?;
+        return Ok(());
     }
 
     let color = piece.color().unwrap();
@@ -168,44 +175,44 @@ fn encode_board_piece(writer: &mut BitWriter, piece: Piece) {
     match base_pt {
         PieceType::Pawn => {
             // prefix: 1,0 (2ビット) + color + promoted = 4ビット
-            writer.write_bits(0b01, 2); // 1,0 in LSB first
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b01, 2)?; // 1,0 in LSB first
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::Lance => {
             // prefix: 1,1,0,0 (4ビット) + color + promoted = 6ビット
-            writer.write_bits(0b0011, 4);
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b0011, 4)?;
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::Knight => {
             // prefix: 1,1,1,0 (4ビット) + color + promoted = 6ビット
-            writer.write_bits(0b0111, 4);
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b0111, 4)?;
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::Silver => {
             // prefix: 1,1,0,1 (4ビット) + color + promoted = 6ビット
-            writer.write_bits(0b1011, 4);
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b1011, 4)?;
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::Gold => {
             // prefix: 1,1,1,1,0 (5ビット) + color = 6ビット (成りなし)
-            writer.write_bits(0b01111, 5);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b01111, 5)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Bishop => {
             // prefix: 1,1,1,1,1,0 (6ビット) + color + promoted = 8ビット
-            writer.write_bits(0b011111, 6);
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b011111, 6)?;
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::Rook => {
             // prefix: 1,1,1,1,1,1 (6ビット) + color + promoted = 8ビット
-            writer.write_bits(0b111111, 6);
-            writer.write_bit(color_bit);
-            writer.write_bit(is_promoted as u8);
+            writer.write_bits(0b111111, 6)?;
+            writer.write_bit(color_bit)?;
+            writer.write_bit(is_promoted as u8)?;
         }
         PieceType::King
         | PieceType::ProPawn
@@ -217,40 +224,41 @@ fn encode_board_piece(writer: &mut BitWriter, piece: Piece) {
             unreachable!("unexpected piece type in board encoding: {:?}", base_pt)
         }
     }
+    Ok(())
 }
 
 /// 持ち駒をHuffman符号化してビットストリームに書き込む．
-fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color) {
+fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color) -> Result<(), HcpError> {
     let color_bit = color as u8;
 
     match hand_type {
         PieceType::Pawn => {
-            writer.write_bits(0b00, 2);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b00, 2)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Lance => {
-            writer.write_bits(0b0001, 4);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b0001, 4)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Knight => {
-            writer.write_bits(0b0011, 4);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b0011, 4)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Silver => {
-            writer.write_bits(0b0101, 4);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b0101, 4)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Gold => {
-            writer.write_bits(0b0111, 4);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b0111, 4)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Bishop => {
-            writer.write_bits(0b011111, 6);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b011111, 6)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::Rook => {
-            writer.write_bits(0b111111, 6);
-            writer.write_bit(color_bit);
+            writer.write_bits(0b111111, 6)?;
+            writer.write_bit(color_bit)?;
         }
         PieceType::King
         | PieceType::ProPawn
@@ -262,6 +270,7 @@ fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color)
             unreachable!("invalid hand piece type: {:?}", hand_type)
         }
     }
+    Ok(())
 }
 
 /// Board を HCP (32バイト) にエンコードする．
@@ -272,22 +281,22 @@ pub fn to_hcp(board: &Board) -> Result<Hcp, HcpError> {
     let mut writer = BitWriter::new();
 
     // 1. 手番 (1ビット)
-    writer.write_bit(board.turn as u8);
+    writer.write_bit(board.turn as u8)?;
 
     // 2. 先手玉のマス番号 (7ビット)
     let bk_sq = find_king(board, Color::Black)?;
-    writer.write_bits(bk_sq as u32, 7);
+    writer.write_bits(bk_sq as u32, 7)?;
 
     // 3. 後手玉のマス番号 (7ビット)
     let wk_sq = find_king(board, Color::White)?;
-    writer.write_bits(wk_sq as u32, 7);
+    writer.write_bits(wk_sq as u32, 7)?;
 
     // 4. 盤上の駒 (sq=0..80, 玉は飛ばす)
     for sq in 0..81u8 {
         if sq == bk_sq || sq == wk_sq {
             continue;
         }
-        encode_board_piece(&mut writer, board.squares[sq as usize]);
+        encode_board_piece(&mut writer, board.squares[sq as usize])?;
     }
 
     // 5. 持ち駒
@@ -297,7 +306,7 @@ pub fn to_hcp(board: &Board) -> Result<Hcp, HcpError> {
         for (i, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
             let count = board.hand[color.index()][i];
             for _ in 0..count {
-                encode_hand_piece(&mut writer, pt, color);
+                encode_hand_piece(&mut writer, pt, color)?;
             }
         }
     }

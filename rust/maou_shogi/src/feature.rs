@@ -1,5 +1,10 @@
 use crate::board::Board;
-use crate::types::{Color, PieceType, Square, FEATURES_NUM};
+use crate::types::{Color, PIECE_TYPES_NUM, PieceType, Square, FEATURES_NUM};
+
+/// 盤上駒のチャネル数(先手14 + 後手14 = 28)．
+const BOARD_CHANNELS: usize = PIECE_TYPES_NUM * 2;
+/// 持ち駒の1色あたりのチャネル数(歩18+香4+桂4+銀4+金4+角2+飛2 = 38)．
+const HAND_CHANNELS_PER_COLOR: usize = 38;
 
 /// piece_planes (104×9×9) を生成する(先手視点)．
 ///
@@ -30,9 +35,8 @@ pub fn piece_planes(board: &Board, buf: &mut [f32]) {
     }
 
     // 持ち駒
-    let hand_channel_offset = 28; // 先手の持ち駒チャネル開始
-    fill_hand_planes(board, Color::Black, hand_channel_offset, buf);
-    fill_hand_planes(board, Color::White, hand_channel_offset + 38, buf);
+    fill_hand_planes(board, Color::Black, BOARD_CHANNELS, buf);
+    fill_hand_planes(board, Color::White, BOARD_CHANNELS + HAND_CHANNELS_PER_COLOR, buf);
 }
 
 /// piece_planes_rotate (104×9×9) を生成する(後手視点)．
@@ -60,16 +64,15 @@ pub fn piece_planes_rotate(board: &Board, buf: &mut [f32]) {
     }
 
     // 持ち駒(先後を入れ替える)
-    let hand_channel_offset = 28;
-    fill_hand_planes(board, Color::White, hand_channel_offset, buf); // 後手→先手チャネル
-    fill_hand_planes(board, Color::Black, hand_channel_offset + 38, buf); // 先手→後手チャネル
+    fill_hand_planes(board, Color::White, BOARD_CHANNELS, buf); // 後手→先手チャネル
+    fill_hand_planes(board, Color::Black, BOARD_CHANNELS + HAND_CHANNELS_PER_COLOR, buf); // 先手→後手チャネル
 }
 
 /// 盤上の駒のチャネルインデックスを返す(cshogi順)．
 fn board_piece_channel(color: Color, pt: PieceType) -> usize {
     let color_offset = match color {
         Color::Black => 0,
-        Color::White => 14,
+        Color::White => PIECE_TYPES_NUM,
     };
     let piece_offset = match pt {
         PieceType::Pawn => 0,

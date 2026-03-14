@@ -62,7 +62,7 @@ fn test_sfen_fixtures() {
         );
 
         assert_eq!(
-            board.turn as u8, fixture.turn,
+            board.turn() as u8, fixture.turn,
             "{}: turn mismatch",
             fixture.name
         );
