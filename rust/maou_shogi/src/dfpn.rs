@@ -172,9 +172,11 @@ impl DfPnSolver {
 
     /// タイムアウト指定付きでソルバーを生成する．
     pub fn with_timeout(depth: u32, max_nodes: u64, draw_ply: u32, timeout_secs: u64) -> Self {
-        // TT サイズ: max_nodes に応じて調整
-        // 最大 16M エントリ ≈ 192MB(2-way で × 2 されるため実質 384MB)，最小 64K
-        let tt_size = (max_nodes as usize).min(16_777_216).max(65_536);
+        // TT サイズ: 詰将棋の作業集合は通常数千〜数万局面のため，
+        // max_nodes に比例させず固定上限で十分．大きすぎるとアロケーション
+        // オーバーヘッドが支配的になる(5M→200ms)．
+        // 最大 512K エントリ(2-way で 1M エントリ ≈ 16MB)，最小 64K．
+        let tt_size = (max_nodes as usize).min(524_288).max(65_536);
         DfPnSolver {
             depth,
             max_nodes,
@@ -312,9 +314,13 @@ impl DfPnSolver {
             return;
         }
 
-        // 子ノードのハッシュを事前計算し，同時に短手数詰めチェックを行う．
-        // OR ノード: 1手詰め(応手 0)および 3手詰め(全応手に対し1手詰め王手が存在)
-        // AND ノード: 1手不詰(王手 0)チェック
+        // 子ノードのハッシュを事前計算し，同時に浅い探索で短手数詰め・不詰を検出する．
+        //
+        // cshogi 互換の最適化:
+        // - OR ノード: 1手詰め(応手 0) / 3手詰め(全応手に1手詰め王手あり) /
+        //   source-based init (pn = dn = 応手数)
+        // - AND ノード: 不詰(王手 0) / 1手詰め検出(孫ノード) /
+        //   source-based init (pn = 1, dn = 王手数)
         let mut children: Vec<(Move, u64)> = Vec::with_capacity(moves.len());
         for m in &moves {
             let captured = board.do_move(*m);
@@ -328,17 +334,68 @@ impl DfPnSolver {
                     if defenses.is_empty() {
                         // 1手詰め
                         self.store(child_hash, 0, INF);
+                    } else if ply + 2 < self.depth {
+                        // 3手詰めチェック: 全応手に対し1手詰め王手が存在するか
+                        let mut all_mated = true;
+                        for d in &defenses {
+                            let cap_d = board.do_move(*d);
+                            let gc_hash = board.hash;
+                            let mate = self.has_mate_in_1(board);
+                            if mate {
+                                // 孫 OR ノードを証明済みとして記録
+                                self.store(gc_hash, 0, INF);
+                            }
+                            board.undo_move(*d, cap_d);
+                            if !mate {
+                                all_mated = false;
+                                break;
+                            }
+                        }
+                        if all_mated {
+                            // 3手詰め確定
+                            self.store(child_hash, 0, INF);
+                        } else {
+                            // Source-based init: pn = dn = 応手数
+                            let n = defenses.len() as u32;
+                            self.store(child_hash, n, n);
+                        }
+                    } else {
+                        // 深さ制限近く: source-based init のみ
+                        let n = defenses.len() as u32;
+                        self.store(child_hash, n, n);
                     }
                 } else {
-                    // 子は OR ノード: 王手手が 0 なら不詰
+                    // 子は OR ノード: 王手手を生成
                     let checks = self.generate_check_moves(board);
                     if checks.is_empty() {
+                        // 不詰(王手手なし)
                         self.store(child_hash, INF, 0);
+                    } else if ply + 2 < self.depth && self.has_mate_in_1(board) {
+                        // 子 OR ノードに1手詰めが存在 → 証明済み
+                        self.store(child_hash, 0, INF);
+                    } else {
+                        // Source-based init: pn = 1, dn = 王手数
+                        self.store(child_hash, 1, checks.len() as u32);
                     }
                 }
             }
 
             board.undo_move(*m, captured);
+
+            // 即座に解決チェック: 子の証明/反証が親の解決を導く場合，
+            // MID ループに入らず早期リターンする
+            let (cpn_now, cdn_now) = self.look_up_pn_dn(child_hash);
+            if or_node && cpn_now == 0 {
+                // OR ノード: 子が証明済み → 親も証明済み
+                self.store(hash, 0, INF);
+                return;
+            }
+            if !or_node && cdn_now == 0 {
+                // AND ノード: 子が反証済み → 親も反証済み
+                self.store(hash, INF, 0);
+                return;
+            }
+
             children.push((*m, child_hash));
         }
 
@@ -425,6 +482,27 @@ impl DfPnSolver {
 
         // パスから除去
         self.path.remove(&hash);
+    }
+
+    /// 現在の局面(攻め方の手番)に1手詰めがあるか判定する．
+    ///
+    /// 王手を生成し，応手が0の王手があれば1手詰め．
+    /// 詰みの局面(応手なし AND ノード)を TT に記録する．
+    fn has_mate_in_1(&mut self, board: &mut Board) -> bool {
+        let checks = self.generate_check_moves(board);
+        for m in &checks {
+            let captured = board.do_move(*m);
+            let child_hash = board.hash;
+            let defenses = self.generate_defense_moves(board);
+            if defenses.is_empty() {
+                // 詰み局面を TT に記録(PV 復元で必要)
+                self.store(child_hash, 0, INF);
+                board.undo_move(*m, captured);
+                return true;
+            }
+            board.undo_move(*m, captured);
+        }
+        false
     }
 
     /// OR ノードの最良子ノードを選択する．
