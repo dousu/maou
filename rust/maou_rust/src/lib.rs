@@ -5,6 +5,7 @@
 //!
 //! - `maou._rust.maou_io` - Arrow IPC I/O and sparse array operations
 //! - `maou._rust.maou_index` - Search index for data visualization
+//! - `maou._rust.maou_shogi` - Shogi board, move generation, and feature extraction
 
 use pyo3::prelude::*;
 

@@ -719,7 +719,11 @@ class Board:
         self.board.push(move)
 
     def pop_move(self) -> None:
-        """直前の指し手を取り消す．"""
+        """直前の指し手を取り消す．
+
+        Raises:
+            IndexError: 取り消す指し手がない場合(コピー後の盤面を含む)
+        """
         self.board.pop()
 
     def to_piece_planes(self, array: np.ndarray) -> None:
