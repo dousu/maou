@@ -113,11 +113,15 @@ impl Position {
 
         // 同一局面hashの出現回数と最初の出現位置を単一パスで取得
         //
-        // 先手の手は偶数インデックス(0,2,4,...)，後手は奇数インデックス(通常)．
-        // ただし from_sfen で後手番開始した場合は history_len % 2 と turn が
-        // 一致しないため，turn.index() を直接使用する．
+        // 手番側の手は history_len と同じパリティのインデックスに配置される．
+        // 次の手は history[history_len] に記録されるため，手番側の過去の手は
+        // history_len, history_len-2, history_len-4, ... つまり history_len % 2
+        // と同じパリティのインデックスにある．
+        //
+        // 注: from_sfen で後手番開始の場合，turn.index() != history_len % 2 となるが，
+        // 手の配置順序(history 内の位置)に基づくため history_len % 2 が正しい．
         let history_len = self.history.len();
-        let my_parity = self.board.turn.index();
+        let my_parity = history_len % 2;
 
         let mut count = 0usize;
         let mut first_idx = None;
@@ -288,6 +292,55 @@ mod tests {
         assert!(
             find_move(&mut pos, "3b3a").is_some(),
             "3b3a should still be legal after breaking perpetual check"
+        );
+    }
+
+    #[test]
+    fn test_perpetual_check_white_start() {
+        // 後手番から開始する連続王手の千日手テスト
+        //
+        // 局面: 先手玉1a, 後手龍3b, 後手玉9i (後手番)
+        // 後手の龍が3b↔3aを往復して先手玉に王手し続ける
+        //
+        // これにより from_sfen で後手番開始した場合の parity 計算が
+        // 正しいことを検証する:
+        //   history_len=0 → 後手番: 後手の手は偶数インデックス(0,2,4,...)
+        //   my_parity = history_len % 2 = 0 で後手の手を正しく選択
+        let mut pos = Position::from_sfen("8K/6+r2/9/9/9/9/9/9/k8 w - 1").unwrap();
+
+        let initial_hash = pos.hash();
+
+        // 3サイクル実行
+        for cycle in 0..3 {
+            let m = find_move(&mut pos, "3b3a").unwrap_or_else(
+                || panic!("cycle {}: 3b3a should be legal", cycle + 1),
+            );
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1a1b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "3a3b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1b1a").unwrap();
+            pos.do_move(m);
+        }
+
+        // 3サイクル後: 元の局面に戻る
+        assert_eq!(
+            pos.hash(),
+            initial_hash,
+            "hash should return to initial after 3 cycles"
+        );
+
+        // 4サイクル目: 連続王手の千日手が成立 → 3b3aが合法手から除外される
+        assert!(
+            find_move(&mut pos, "3b3a").is_none(),
+            "cycle 4: 3b3a should be excluded (perpetual check, white-start game)"
+        );
+
+        // 龍の他の移動手(王手でない手)は合法
+        assert!(
+            find_move(&mut pos, "3b3c").is_some(),
+            "non-check move 3b3c should be legal"
         );
     }
 }
