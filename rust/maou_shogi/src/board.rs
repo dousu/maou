@@ -489,6 +489,116 @@ impl Board {
     }
 }
 
+impl std::fmt::Display for Board {
+    /// 将棋盤のAA(アスキーアート)表示．
+    ///
+    /// 先手視点で表示する．左端が9筋，右端が1筋．
+    /// 持ち駒は価値順(飛→角→金→銀→桂→香→歩)で表示する．
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        /// 駒を2文字の日本語表記に変換する．
+        fn piece_str(piece: Piece) -> &'static str {
+            if piece.is_empty() {
+                return " ・";
+            }
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            match (color, pt) {
+                (Color::Black, PieceType::Pawn) => " 歩",
+                (Color::Black, PieceType::Lance) => " 香",
+                (Color::Black, PieceType::Knight) => " 桂",
+                (Color::Black, PieceType::Silver) => " 銀",
+                (Color::Black, PieceType::Bishop) => " 角",
+                (Color::Black, PieceType::Rook) => " 飛",
+                (Color::Black, PieceType::Gold) => " 金",
+                (Color::Black, PieceType::King) => " 玉",
+                (Color::Black, PieceType::ProPawn) => " と",
+                (Color::Black, PieceType::ProLance) => " 杏",
+                (Color::Black, PieceType::ProKnight) => " 圭",
+                (Color::Black, PieceType::ProSilver) => " 全",
+                (Color::Black, PieceType::Horse) => " 馬",
+                (Color::Black, PieceType::Dragon) => " 龍",
+                (Color::White, PieceType::Pawn) => "v歩",
+                (Color::White, PieceType::Lance) => "v香",
+                (Color::White, PieceType::Knight) => "v桂",
+                (Color::White, PieceType::Silver) => "v銀",
+                (Color::White, PieceType::Bishop) => "v角",
+                (Color::White, PieceType::Rook) => "v飛",
+                (Color::White, PieceType::Gold) => "v金",
+                (Color::White, PieceType::King) => "v王",
+                (Color::White, PieceType::ProPawn) => "vと",
+                (Color::White, PieceType::ProLance) => "v杏",
+                (Color::White, PieceType::ProKnight) => "v圭",
+                (Color::White, PieceType::ProSilver) => "v全",
+                (Color::White, PieceType::Horse) => "v馬",
+                (Color::White, PieceType::Dragon) => "v龍",
+            }
+        }
+
+        // 持ち駒の表示順序: 飛(6), 角(5), 金(4), 銀(3), 桂(2), 香(1), 歩(0)
+        const HAND_ORDER: [usize; 7] = [6, 5, 4, 3, 2, 1, 0];
+        const HAND_NAMES: [&str; 7] = ["歩", "香", "桂", "銀", "金", "角", "飛"];
+
+        // 後手の持ち駒
+        write!(f, "後手の持駒：")?;
+        let mut has_white_hand = false;
+        for &i in &HAND_ORDER {
+            let count = self.hand[1][i];
+            if count > 0 {
+                has_white_hand = true;
+                write!(f, "{}", HAND_NAMES[i])?;
+                if count > 1 {
+                    write!(f, "{}", count)?;
+                }
+                write!(f, " ")?;
+            }
+        }
+        if !has_white_hand {
+            write!(f, "なし")?;
+        }
+        writeln!(f)?;
+
+        // 筋番号ヘッダー(9→1の順)
+        writeln!(f, "  ９ ８ ７ ６ ５ ４ ３ ２ １")?;
+        writeln!(f, "+--+--+--+--+--+--+--+--+--+")?;
+
+        // 盤面(row=0が一段目，row=8が九段目)
+        const DAN_NAMES: [&str; 9] = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
+        for row in 0..9u8 {
+            write!(f, "|")?;
+            // 左端が9筋(col=8)，右端が1筋(col=0)
+            for visual_col in 0..9u8 {
+                let col = 8 - visual_col;
+                let sq = Square::new(col, row);
+                let piece = self.squares[sq.index()];
+                write!(f, "{}|", piece_str(piece))?;
+            }
+            writeln!(f, "{}", DAN_NAMES[row as usize])?;
+        }
+
+        writeln!(f, "+--+--+--+--+--+--+--+--+--+")?;
+
+        // 先手の持ち駒
+        write!(f, "先手の持駒：")?;
+        let mut has_black_hand = false;
+        for &i in &HAND_ORDER {
+            let count = self.hand[0][i];
+            if count > 0 {
+                has_black_hand = true;
+                write!(f, "{}", HAND_NAMES[i])?;
+                if count > 1 {
+                    write!(f, "{}", count)?;
+                }
+                write!(f, " ")?;
+            }
+        }
+        if !has_black_hand {
+            write!(f, "なし")?;
+        }
+
+        Ok(())
+    }
+}
+
 impl Default for Board {
     fn default() -> Self {
         Board::new()
@@ -599,5 +709,36 @@ mod tests {
         let mut board = Board::empty();
         board.set_sfen("9/9/9/9/9/9/9/9/9 b G 1").unwrap();
         assert!(!board.is_ok());
+    }
+
+    #[test]
+    fn test_display_hirate() {
+        let board = Board::new();
+        let output = format!("{}", board);
+        // 先手の玉は五筋九段目
+        assert!(output.contains(" 玉"), "should contain black king");
+        // 後手の王は五筋一段目
+        assert!(output.contains("v王"), "should contain white king");
+        // 筋番号ヘッダー
+        assert!(output.contains("９ ８ ７ ６ ５ ４ ３ ２ １"));
+        // 持ち駒なし
+        assert!(output.contains("先手の持駒：なし"));
+        assert!(output.contains("後手の持駒：なし"));
+        // 先手角は八筋(左から2番目)に存在
+        assert!(output.contains(" 角"), "should contain black bishop");
+        // 後手角も存在
+        assert!(output.contains("v角"), "should contain white bishop");
+    }
+
+    #[test]
+    fn test_display_with_hand() {
+        let mut board = Board::empty();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b 2G3Pbs 1").unwrap();
+        let output = format!("{}", board);
+        // 先手: 金2歩3
+        assert!(output.contains("金2"), "should show 2 golds");
+        assert!(output.contains("歩3"), "should show 3 pawns");
+        // 後手: 角1銀1
+        assert!(output.contains("後手の持駒：角 銀"), "should show bishop and silver");
     }
 }
