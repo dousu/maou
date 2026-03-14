@@ -448,5 +448,26 @@
     "legal_moves_usi": [
       "5a5b"
     ]
+  },
+  {
+    "name": "checkmate_corner_gold_pair",
+    "sfen": "k8/GG7/9/9/9/9/9/9/8K w - 1",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
+  },
+  {
+    "name": "checkmate_gold_rook",
+    "sfen": "4k4/3GG4/4R4/9/9/9/9/9/4K4 w - 1",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
+  },
+  {
+    "name": "checkmate_silver_gold",
+    "sfen": "4k4/3S1S3/4G4/9/9/9/9/9/4K4 w - 1",
+    "legal_moves_count": 0,
+    "legal_moves_move16": [],
+    "legal_moves_usi": []
   }
 ]

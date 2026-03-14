@@ -117,6 +117,19 @@ def generate_legal_move_fixtures() -> None:
             "name": "tsume_like_defender_turn",
             "sfen": "4k4/4G4/9/9/9/9/9/9/4K4 w - 1",
         },
+        # 詰み局面(合法手0)
+        {
+            "name": "checkmate_corner_gold_pair",
+            "sfen": "k8/GG7/9/9/9/9/9/9/8K w - 1",
+        },
+        {
+            "name": "checkmate_gold_rook",
+            "sfen": "4k4/3GG4/4R4/9/9/9/9/9/4K4 w - 1",
+        },
+        {
+            "name": "checkmate_silver_gold",
+            "sfen": "4k4/3S1S3/4G4/9/9/9/9/9/4K4 w - 1",
+        },
     ]
 
     fixtures = []
