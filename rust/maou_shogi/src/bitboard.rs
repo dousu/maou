@@ -57,7 +57,12 @@ impl Bitboard {
     /// 指定マスがセットされているか．
     #[inline]
     pub fn contains(self, sq: Square) -> bool {
-        (self & Bitboard::from_square(sq)).is_not_empty()
+        let idx = sq.0 as u64;
+        if idx < 63 {
+            (self.lo >> idx) & 1 != 0
+        } else {
+            (self.hi >> (idx - 63)) & 1 != 0
+        }
     }
 
     /// マスをセットする．

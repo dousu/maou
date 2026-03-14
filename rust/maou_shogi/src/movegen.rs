@@ -157,6 +157,13 @@ fn is_legal(board: &mut Board, m: Move) -> bool {
 /// 打ち歩詰めかどうかを判定する．
 ///
 /// 歩を打って相手玉に王手 → 相手に合法手がないなら打ち歩詰め．
+///
+/// # パニック安全性
+///
+/// この関数は `do_move`/`undo_move` をネストして呼び出す．
+/// 内側の `is_in_check` でパニックが発生した場合，外側の `undo_move` も
+/// 実行されず盤面が不整合な状態になる．`Board` のメソッドは正規局面に
+/// 対してパニックしない設計のため，通常は問題にならない．
 fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
     let captured = board.do_move(pawn_drop);
 

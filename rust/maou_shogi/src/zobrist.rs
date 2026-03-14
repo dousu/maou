@@ -55,8 +55,8 @@ impl ZobristTable {
     /// 持ち駒のハッシュ値を取得する．
     #[inline]
     pub fn hand_hash(&self, color: Color, hand_index: usize, count: usize) -> u64 {
-        debug_assert!(hand_index < HAND_KINDS, "hand_index {} out of range", hand_index);
-        debug_assert!(count < MAX_HAND_STATES, "hand count {} out of range", count);
+        assert!(hand_index < HAND_KINDS, "hand_index {} out of range", hand_index);
+        assert!(count < MAX_HAND_STATES, "hand count {} out of range", count);
         self.hand[color.index()][hand_index][count]
     }
 
