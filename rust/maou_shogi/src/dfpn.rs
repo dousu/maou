@@ -625,6 +625,72 @@ mod tests {
         }
     }
 
+    /// 診断テスト: G*3b 後の AND ノードと 1二玉後の OR ノードの TT 状態を分析する．
+    #[test]
+    fn diagnose_pv_extraction() {
+        let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(31, 1_048_576, 32767);
+        let _result = solver.solve(&mut board);
+
+        // --- G*3b を実行 ---
+        let m_g3b = board.move_from_usi("G*3b").unwrap();
+        let cap0 = board.do_move(m_g3b);
+
+        eprintln!("=== AND node after G*3b ===");
+        let defenses = movegen::generate_legal_moves(&mut board);
+        for d in &defenses {
+            let cap1 = board.do_move(*d);
+            let entry = solver.look_up(board.hash);
+            eprintln!(
+                "  defense {}: pn={}, dn={}",
+                d.to_usi(), entry.pn, entry.dn
+            );
+            board.undo_move(*d, cap1);
+        }
+
+        // --- 1二玉 (2a1b) を実行 ---
+        let m_1b = board.move_from_usi("2a1b").unwrap();
+        let cap1 = board.do_move(m_1b);
+
+        eprintln!("\n=== OR node after G*3b, 2a1b (1二玉) ===");
+        let attacks = solver.generate_check_moves(&mut board);
+        eprintln!("  check moves count: {}", attacks.len());
+        for a in &attacks {
+            let cap2 = board.do_move(*a);
+            let entry = solver.look_up(board.hash);
+            eprintln!(
+                "  attack {}: pn={}, dn={}",
+                a.to_usi(), entry.pn, entry.dn
+            );
+            board.undo_move(*a, cap2);
+        }
+
+        board.undo_move(m_1b, cap1);
+
+        // --- 同玉 (2a3b) を実行 ---
+        let m_3b = board.move_from_usi("2a3b").unwrap();
+        let cap1b = board.do_move(m_3b);
+
+        eprintln!("\n=== OR node after G*3b, 2a3b (同玉) ===");
+        let attacks2 = solver.generate_check_moves(&mut board);
+        eprintln!("  check moves count: {}", attacks2.len());
+        for a in &attacks2 {
+            let cap2 = board.do_move(*a);
+            let entry = solver.look_up(board.hash);
+            eprintln!(
+                "  attack {}: pn={}, dn={}",
+                a.to_usi(), entry.pn, entry.dn
+            );
+            board.undo_move(*a, cap2);
+        }
+
+        board.undo_move(m_3b, cap1b);
+        board.undo_move(m_g3b, cap0);
+    }
+
     #[test]
     fn test_tsume_image2() {
         // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
