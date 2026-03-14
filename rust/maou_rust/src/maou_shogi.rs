@@ -4,6 +4,7 @@ use numpy::{PyArray3, PyArrayMethods};
 use pyo3::prelude::*;
 
 use maou_shogi::board::Board;
+use maou_shogi::dfpn;
 use maou_shogi::feature;
 use maou_shogi::hcp;
 use maou_shogi::movegen;
@@ -257,6 +258,30 @@ fn move_drop_hand_piece(m: u32) -> u8 {
     moves::move_drop_hand_piece(Move::from_raw_u32(m))
 }
 
+/// 詰将棋を解く(Df-Pn アルゴリズム)．
+///
+/// 返り値: 詰みの場合は手順(USI形式のリスト)，不詰の場合は None．
+///
+/// # 引数
+///
+/// - `sfen`: 局面のSFEN文字列．
+/// - `depth`: 最大探索手数(デフォルト 31)．
+/// - `nodes`: 最大ノード数(デフォルト 1,048,576)．
+/// - `draw_ply`: 引き分け手数(デフォルト 32767)．
+#[pyfunction]
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767))]
+fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32) -> PyResult<Option<Vec<String>>> {
+    let result = dfpn::solve_tsume(sfen, Some(depth), Some(nodes), Some(draw_ply))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    match result {
+        dfpn::TsumeResult::Checkmate { moves, .. } => {
+            Ok(Some(moves.iter().map(|m| m.to_usi()).collect()))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Create maou_shogi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
@@ -269,6 +294,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(move_is_drop, &m)?)?;
     m.add_function(wrap_pyfunction!(move_is_promotion, &m)?)?;
     m.add_function(wrap_pyfunction!(move_drop_hand_piece, &m)?)?;
+    m.add_function(wrap_pyfunction!(solve_tsume, &m)?)?;
 
     Ok(m)
 }

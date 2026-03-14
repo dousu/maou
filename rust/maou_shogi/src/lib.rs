@@ -1,6 +1,7 @@
 pub(crate) mod attack;
 pub(crate) mod bitboard;
 pub mod board;
+pub mod dfpn;
 pub mod feature;
 pub mod hcp;
 pub mod movegen;
