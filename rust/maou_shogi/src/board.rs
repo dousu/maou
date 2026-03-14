@@ -447,9 +447,20 @@ impl Board {
             return false;
         }
 
-        // 持ち駒の枚数上限
+        // 持ち駒の枚数上限(先後合計 + 盤上枚数 ≦ 最大枚数)
         for (i, &max) in PieceType::MAX_HAND_COUNT.iter().enumerate() {
-            if self.hand[0][i] > max || self.hand[1][i] > max {
+            let hand_total = self.hand[0][i] as u32 + self.hand[1][i] as u32;
+            let base_pt = PieceType::HAND_PIECES[i];
+            let mut on_board = (self.piece_bb[0][base_pt as usize]
+                | self.piece_bb[1][base_pt as usize])
+                .count();
+            // 成駒も盤上枚数に含める
+            if let Some(promoted) = base_pt.promoted() {
+                on_board += (self.piece_bb[0][promoted as usize]
+                    | self.piece_bb[1][promoted as usize])
+                    .count();
+            }
+            if hand_total + on_board > max as u32 {
                 return false;
             }
         }

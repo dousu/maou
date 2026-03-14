@@ -21,12 +21,12 @@ struct StateInfo {
 /// 局面(Board + 履歴管理)．
 ///
 /// 連続王手の千日手判定のために局面履歴を管理する．
-/// 局面ハッシュの出現回数を `HashMap` で管理し，千日手判定を O(1) で行う．
+/// 局面ハッシュの出現回数を `HashMap` で管理し，千日手候補の早期排除を O(1) で行う．
 #[derive(Clone)]
 pub struct Position {
     pub(crate) board: Board,
     history: Vec<StateInfo>,
-    /// 局面ハッシュの出現回数．千日手判定の O(1) 化用．
+    /// 局面ハッシュの出現回数．千日手候補の早期排除用．
     hash_count: HashMap<u64, usize>,
 }
 

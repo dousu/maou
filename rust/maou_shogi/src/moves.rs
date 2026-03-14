@@ -144,38 +144,37 @@ impl Move {
 
     /// USI文字列からMoveを生成する(16-bitレベル)．
     pub fn from_usi(usi: &str) -> Option<Move> {
-        let chars: Vec<char> = usi.chars().collect();
-        if chars.len() < 4 {
+        let b = usi.as_bytes();
+        if b.len() < 4 {
             return None;
         }
 
         // 駒打ち: "P*5e" format
-        if chars.len() >= 4 && chars[1] == '*' {
-            let pt = match chars[0] {
-                'P' => PieceType::Pawn,
-                'L' => PieceType::Lance,
-                'N' => PieceType::Knight,
-                'S' => PieceType::Silver,
-                'G' => PieceType::Gold,
-                'B' => PieceType::Bishop,
-                'R' => PieceType::Rook,
+        if b[1] == b'*' {
+            let pt = match b[0] {
+                b'P' => PieceType::Pawn,
+                b'L' => PieceType::Lance,
+                b'N' => PieceType::Knight,
+                b'S' => PieceType::Silver,
+                b'G' => PieceType::Gold,
+                b'B' => PieceType::Bishop,
+                b'R' => PieceType::Rook,
                 _ => return None,
             };
-            let to_file = chars[2].to_digit(10)? as u8;
-            let to_rank = (chars[3] as u8).checked_sub(b'a')?;
+            let to_file = b[2].checked_sub(b'0')?;
+            let to_rank = b[3].checked_sub(b'a')?;
             if to_file < 1 || to_file > 9 || to_rank > 8 {
                 return None;
             }
-            let to_col = to_file - 1;
-            let to = Square::new(to_col, to_rank);
+            let to = Square::new(to_file - 1, to_rank);
             return Some(Move::new_drop(to, pt));
         }
 
         // 通常の手: "7g7f" or "7g7f+"
-        let from_file = chars[0].to_digit(10)? as u8;
-        let from_rank = (chars[1] as u8).checked_sub(b'a')?;
-        let to_file = chars[2].to_digit(10)? as u8;
-        let to_rank = (chars[3] as u8).checked_sub(b'a')?;
+        let from_file = b[0].checked_sub(b'0')?;
+        let from_rank = b[1].checked_sub(b'a')?;
+        let to_file = b[2].checked_sub(b'0')?;
+        let to_rank = b[3].checked_sub(b'a')?;
 
         if from_file < 1 || from_file > 9 || to_file < 1 || to_file > 9 {
             return None;
@@ -184,7 +183,7 @@ impl Move {
             return None;
         }
 
-        let promote = chars.len() > 4 && chars[4] == '+';
+        let promote = b.len() > 4 && b[4] == b'+';
         let from = Square::new(from_file - 1, from_rank);
         let to = Square::new(to_file - 1, to_rank);
 
