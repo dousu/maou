@@ -105,7 +105,7 @@ fn test_move_fixtures() {
             fixture.usi
         );
         assert_eq!(
-            m.to_sq().0,
+            m.to_sq().raw_u8(),
             fixture.to_sq,
             "to_sq mismatch for USI: {}",
             fixture.usi

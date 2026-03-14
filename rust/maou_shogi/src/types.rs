@@ -199,15 +199,20 @@ impl PieceType {
 /// - 15-16: 未使用 (cshogi互換のギャップ)
 /// - 17-30: 後手の駒 (先手 + 16)
 ///
-/// 内部値 `u8` は `pub` としている．これは HCP/HCPE バイナリフォーマットや
-/// cshogi互換の配列インデックスとして直接使用するためであり，
-/// `Piece(15)` 等の未定義値の生成は呼び出し側の責任で回避する．
-/// 通常の局面生成パス (SFEN/HCP) では未定義値は生じない．
+/// 内部値は `pub(crate)` とし，外部クレートからは `raw_u8()` アクセサで取得する．
+/// 未定義値 (15, 16) の生成はクレート内部に限定されるため，
+/// 通常の局面生成パス (SFEN/HCP) では安全に使用できる．
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Piece(pub u8);
+pub struct Piece(pub(crate) u8);
 
 impl Piece {
     pub const EMPTY: Piece = Piece(0);
+
+    /// 内部値を返す(外部クレート向けアクセサ)．
+    #[inline]
+    pub fn raw_u8(self) -> u8 {
+        self.0
+    }
 
     /// cshogi互換の白駒オフセット．
     pub const WHITE_OFFSET: u8 = 16;
@@ -259,10 +264,16 @@ impl Piece {
 
 /// マス番号(0-80)．column-major: square = col * 9 + row．
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Square(pub u8);
+pub struct Square(pub(crate) u8);
 
 impl Square {
     pub const NUM: usize = 81;
+
+    /// 内部値を返す(外部クレート向けアクセサ)．
+    #[inline]
+    pub fn raw_u8(self) -> u8 {
+        self.0
+    }
 
     /// col, rowから生成する．
     #[inline]

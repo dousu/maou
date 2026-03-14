@@ -13,10 +13,16 @@ use crate::types::{PieceType, Square};
 /// - Bits 16-20: captured piece (取った駒の cshogi ID，0=取っていない)
 /// - Bits 21-24: moving piece type (動かした駒種)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Move(pub u32);
+pub struct Move(pub(crate) u32);
 
 impl Move {
     pub const NONE: Move = Move(0);
+
+    /// 内部値を返す(外部クレート向けアクセサ)．
+    #[inline]
+    pub fn raw_u32(self) -> u32 {
+        self.0
+    }
 
     // 16-bit move masks
     const TO_MASK: u32 = 0x7F; // bits 0-6
@@ -195,13 +201,13 @@ pub fn move16(m: Move) -> u16 {
 /// cshogi互換: move_to関数．
 #[inline]
 pub fn move_to(m: Move) -> u8 {
-    m.to_sq().0
+    m.to_sq().raw_u8()
 }
 
 /// cshogi互換: move_from関数．
 #[inline]
 pub fn move_from(m: Move) -> u8 {
-    m.from_sq().0
+    m.from_sq().raw_u8()
 }
 
 /// cshogi互換: move_to_usi関数．
