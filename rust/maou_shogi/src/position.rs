@@ -26,8 +26,11 @@ struct StateInfo {
 pub struct Position {
     pub(crate) board: Board,
     history: Vec<StateInfo>,
-    /// 局面ハッシュの出現回数．千日手候補の早期排除用．
-    hash_count: HashMap<u64, usize>,
+    /// 局面ハッシュの出現回数と初出インデックス．千日手候補の早期排除用．
+    ///
+    /// 値は `(出現回数, history 内の初出インデックス)` ．
+    /// 初出インデックスにより `is_perpetual_check_move` での線形探索を回避する．
+    hash_count: HashMap<u64, (usize, usize)>,
 }
 
 impl Position {
@@ -35,7 +38,8 @@ impl Position {
     pub fn new() -> Position {
         let board = Board::new();
         let mut hash_count = HashMap::new();
-        *hash_count.entry(board.hash).or_insert(0) += 1;
+        // 初期局面: 出現回数1, 初出はhistory追加前なので特別扱い不要(history.len() == 0)
+        hash_count.insert(board.hash, (1, 0));
         Position {
             board,
             history: Vec::new(),
@@ -48,7 +52,7 @@ impl Position {
         let mut board = Board::empty();
         board.set_sfen(sfen)?;
         let mut hash_count = HashMap::new();
-        *hash_count.entry(board.hash).or_insert(0) += 1;
+        hash_count.insert(board.hash, (1, 0));
         Ok(Position {
             board,
             history: Vec::new(),
@@ -67,7 +71,9 @@ impl Position {
         // 相手の玉に王手をかけているか(do_move後は手番が交代済み)
         let gives_check = self.board.is_in_check(self.board.turn);
 
-        *self.hash_count.entry(self.board.hash).or_insert(0) += 1;
+        let history_idx = self.history.len();
+        let entry = self.hash_count.entry(self.board.hash).or_insert((0, history_idx));
+        entry.0 += 1;
 
         self.history.push(StateInfo {
             hash: self.board.hash,
@@ -83,9 +89,9 @@ impl Position {
     pub fn undo_move(&mut self) -> Option<Move> {
         let state = self.history.pop()?;
         // hash_count をデクリメント(do_move で加算した分を戻す)
-        if let Some(count) = self.hash_count.get_mut(&state.hash) {
-            *count -= 1;
-            if *count == 0 {
+        if let Some(entry) = self.hash_count.get_mut(&state.hash) {
+            entry.0 -= 1;
+            if entry.0 == 0 {
                 self.hash_count.remove(&state.hash);
             }
         }
@@ -133,7 +139,10 @@ impl Position {
         }
 
         // hash_count で O(1) 判定: 3回未満なら千日手不成立(この手で4回目になる)
-        let current_count = self.hash_count.get(&new_hash).copied().unwrap_or(0);
+        let (current_count, first_idx) = match self.hash_count.get(&new_hash) {
+            Some(&(count, idx)) => (count, idx),
+            None => return false,
+        };
         if current_count < 3 {
             return false;
         }
@@ -145,12 +154,6 @@ impl Position {
         // 手の配置順序(history 内の位置)に基づくため history_len % 2 が正しい．
         let history_len = self.history.len();
         let my_parity = history_len % 2;
-
-        // 最初の出現位置を探す
-        let first_idx = match self.history.iter().position(|s| s.hash == new_hash) {
-            Some(idx) => idx,
-            None => return false,
-        };
 
         // 最初の出現から現在まで，自分の全ての手が王手かチェック
         for i in first_idx..history_len {

@@ -381,10 +381,9 @@ impl Board {
         }
 
         // 持ち駒
-        for color_idx in 0..2 {
-            let color = Color::from_u8(color_idx as u8).unwrap();
+        for color in [Color::Black, Color::White] {
             for kind in 0..7 {
-                let count = self.hand[color_idx][kind];
+                let count = self.hand[color.index()][kind];
                 if count > 0 {
                     hash ^= ZOBRIST.hand_hash(color, kind, count as usize);
                 }

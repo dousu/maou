@@ -246,12 +246,18 @@ pub fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
 }
 
 /// 馬(成角)の利きを返す．斜め走り + 前後左右1マス．
+///
+/// `color` は `step_attacks` のインデックスに必要だが，馬のステップ利き(前後左右)は
+/// 先後対称なため，実質どちらの色でも同じ結果を返す．
 #[inline]
 pub fn horse_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     bishop_attacks(sq, occupied) | step_attacks(color, PieceType::Horse, sq)
 }
 
 /// 龍(成飛)の利きを返す．前後左右走り + 斜め1マス．
+///
+/// `color` は `step_attacks` のインデックスに必要だが，龍のステップ利き(斜め1マス)は
+/// 先後対称なため，実質どちらの色でも同じ結果を返す．
 #[inline]
 pub fn dragon_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     rook_attacks(sq, occupied) | step_attacks(color, PieceType::Dragon, sq)

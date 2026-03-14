@@ -214,8 +214,10 @@ pub fn to_sfen(squares: &[Piece; 81], turn: Color, hand: &[[u8; HAND_KINDS]; 2],
 
     // 先手 → 後手の順(SFEN規則: 大文字が先)
     for &color in &[Color::Black, Color::White] {
-        for (i, &pt) in PieceType::HAND_PIECES.iter().enumerate().rev() {
-            let count = hand[color.index()][i];
+        // enumerate().rev() は元のインデックスを保持するため，
+        // hand_idx は HAND_PIECES のインデックスと一致する
+        for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate().rev() {
+            let count = hand[color.index()][hand_idx];
             if count > 0 {
                 has_hand = true;
                 if count > 1 {
