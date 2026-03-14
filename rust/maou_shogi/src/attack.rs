@@ -3,8 +3,9 @@ use crate::types::{Color, PIECE_BB_SIZE, PieceType, Square};
 
 /// 駒の利きを計算する．
 ///
-/// 飛び駒以外は事前計算テーブルから取得．
-/// 飛び駒(香,角,飛,馬,龍)は占有ビットボードを考慮して計算する．
+/// 近接駒(歩,桂,銀,金,王,成駒のステップ部分)は事前計算テーブルから取得．
+/// 飛び駒(香,角,飛,馬,龍)は事前計算レイマスクとLSB/MSBによる
+/// 遮蔽検出で計算する(ループなし)．
 
 /// 近接駒(飛び駒以外)の利きテーブル．
 /// step_attacks[color][piece_type][square]
@@ -140,69 +141,120 @@ pub fn step_attacks(color: Color, pt: PieceType, sq: Square) -> Bitboard {
     STEP_ATTACKS[color.index()][pt as usize][sq.index()]
 }
 
-/// 香車の利き(飛び駒)を計算する．
-pub fn lance_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
-    let col = sq.col() as i8;
-    let mut row = sq.row() as i8;
-    let dir: i8 = match color {
-        Color::Black => -1, // 上方向
-        Color::White => 1,  // 下方向
-    };
-    let mut bb = Bitboard::EMPTY;
-    loop {
-        row += dir;
-        if row < 0 || row >= 9 {
-            break;
-        }
-        let target = Square::new(col as u8, row as u8);
-        bb.set(target);
-        if occupied.contains(target) {
-            break; // 駒にぶつかったら止まる
+// ============================================================
+// スライド利きの事前計算
+// ============================================================
+
+/// レイ方向のインデックス．
+/// column-major (sq = col*9 + row) でのインデックス増減:
+///   正方向(LSB): S(+1), E(+9), NE(+8), SE(+10)
+///   負方向(MSB): N(-1), W(-9), NW(-10), SW(-8)
+const DIR_N: usize = 0;
+const DIR_S: usize = 1;
+const DIR_W: usize = 2;
+const DIR_E: usize = 3;
+const DIR_NW: usize = 4;
+const DIR_NE: usize = 5;
+const DIR_SW: usize = 6;
+const DIR_SE: usize = 7;
+
+/// 各方向の移動ベクトル (dcol, drow)．DIR_* インデックスと対応．
+const DIR_VECTORS: [(i8, i8); 8] = [
+    (0, -1),  // N
+    (0, 1),   // S
+    (-1, 0),  // W
+    (1, 0),   // E
+    (-1, -1), // NW
+    (1, -1),  // NE
+    (-1, 1),  // SW
+    (1, 1),   // SE
+];
+
+/// レイマスク: 各マスから各方向に伸びるレイ(起点は含まない)．
+/// RAY_MASKS[direction][square]
+static RAY_MASKS: std::sync::LazyLock<[[Bitboard; 81]; 8]> =
+    std::sync::LazyLock::new(init_ray_masks);
+
+fn init_ray_masks() -> [[Bitboard; 81]; 8] {
+    let mut table = [[Bitboard::EMPTY; 81]; 8];
+    for dir_idx in 0..8 {
+        let (dc, dr) = DIR_VECTORS[dir_idx];
+        for sq_idx in 0..81u8 {
+            let col = (sq_idx / 9) as i8;
+            let row = (sq_idx % 9) as i8;
+            let mut bb = Bitboard::EMPTY;
+            let mut c = col + dc;
+            let mut r = row + dr;
+            while c >= 0 && c < 9 && r >= 0 && r < 9 {
+                bb.set(Square::new(c as u8, r as u8));
+                c += dc;
+                r += dr;
+            }
+            table[dir_idx][sq_idx as usize] = bb;
         }
     }
-    bb
+    table
 }
 
-/// 角の利き(飛び駒)を計算する．
+/// 正方向(インデックス増加)のレイ利きを返す．最初の遮蔽駒をLSBで検出する．
+#[inline]
+fn ray_attack_positive(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
+    let ray = RAY_MASKS[dir][sq.index()];
+    let blockers = ray & occupied;
+    match blockers.lsb() {
+        Some(first) => ray ^ RAY_MASKS[dir][first.index()],
+        None => ray,
+    }
+}
+
+/// 負方向(インデックス減少)のレイ利きを返す．最初の遮蔽駒をMSBで検出する．
+#[inline]
+fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
+    let ray = RAY_MASKS[dir][sq.index()];
+    let blockers = ray & occupied;
+    match blockers.msb() {
+        Some(first) => ray ^ RAY_MASKS[dir][first.index()],
+        None => ray,
+    }
+}
+
+/// 香車の利きを返す．事前計算レイマスクとLSB/MSBによる遮蔽検出を使用．
+#[inline]
+pub fn lance_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
+    match color {
+        Color::Black => ray_attack_negative(DIR_N, sq, occupied),
+        Color::White => ray_attack_positive(DIR_S, sq, occupied),
+    }
+}
+
+/// 角の利きを返す．4方向のレイ利きを合成する．
+#[inline]
 pub fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    let dirs: [(i8, i8); 4] = [(-1, -1), (1, -1), (-1, 1), (1, 1)];
-    slider_attacks(sq, occupied, &dirs)
+    ray_attack_negative(DIR_NW, sq, occupied)
+        | ray_attack_positive(DIR_NE, sq, occupied)
+        | ray_attack_negative(DIR_SW, sq, occupied)
+        | ray_attack_positive(DIR_SE, sq, occupied)
 }
 
-/// 飛車の利き(飛び駒)を計算する．
+/// 飛車の利きを返す．4方向のレイ利きを合成する．
+#[inline]
 pub fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    let dirs: [(i8, i8); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
-    slider_attacks(sq, occupied, &dirs)
+    ray_attack_negative(DIR_N, sq, occupied)
+        | ray_attack_positive(DIR_S, sq, occupied)
+        | ray_attack_negative(DIR_W, sq, occupied)
+        | ray_attack_positive(DIR_E, sq, occupied)
 }
 
-/// 馬(成角)の利きを計算する．斜め走り + 前後左右1マス．
+/// 馬(成角)の利きを返す．斜め走り + 前後左右1マス．
+#[inline]
 pub fn horse_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     bishop_attacks(sq, occupied) | step_attacks(color, PieceType::Horse, sq)
 }
 
-/// 龍(成飛)の利きを計算する．前後左右走り + 斜め1マス．
+/// 龍(成飛)の利きを返す．前後左右走り + 斜め1マス．
+#[inline]
 pub fn dragon_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     rook_attacks(sq, occupied) | step_attacks(color, PieceType::Dragon, sq)
-}
-
-fn slider_attacks(sq: Square, occupied: Bitboard, dirs: &[(i8, i8)]) -> Bitboard {
-    let col = sq.col() as i8;
-    let row = sq.row() as i8;
-    let mut bb = Bitboard::EMPTY;
-    for &(dc, dr) in dirs {
-        let mut c = col + dc;
-        let mut r = row + dr;
-        while c >= 0 && c < 9 && r >= 0 && r < 9 {
-            let target = Square::new(c as u8, r as u8);
-            bb.set(target);
-            if occupied.contains(target) {
-                break;
-            }
-            c += dc;
-            r += dr;
-        }
-    }
-    bb
 }
 
 /// 指定した駒種・色・マスの利きを返す(占有ビットボード考慮)．
