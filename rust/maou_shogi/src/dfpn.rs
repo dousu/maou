@@ -1042,4 +1042,35 @@ mod tests {
             other => panic!("expected NoCheckmate or Unknown, got {:?}", other),
         }
     }
+
+    /// 詰将棋画像3のテストケース．
+    ///
+    /// 局面: 後手玉2三，後手飛2一，後手香1一，後手桂6四
+    ///       先手歩1三・1五，先手と1六，先手桂4四，先手金2六，先手香3六
+    /// 先手持駒: 飛
+    /// 後手持駒: 歩15，香2，桂2，銀4，金3，角2
+    #[test]
+    fn test_tsume_image3() {
+        let sfen = "7rl/9/7kP/3n1N3/8P/6LG+P/9/9/9 b R2b3g4s2n2l15p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("Image3 PV ({}): {:?}", usi_moves.len(), usi_moves);
+                // 手順を表示して確認
+                assert!(
+                    usi_moves.len() % 2 == 1,
+                    "checkmate should be odd moves, got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+            }
+            TsumeResult::NoCheckmate { nodes_searched } => {
+                eprintln!("No checkmate found (nodes: {})", nodes_searched);
+            }
+            TsumeResult::Unknown { nodes_searched } => {
+                eprintln!("Unknown (nodes: {}, may need more nodes/time)", nodes_searched);
+            }
+        }
+    }
 }
