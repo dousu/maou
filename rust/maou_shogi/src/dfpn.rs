@@ -174,14 +174,12 @@ impl DfPnSolver {
 
         let hash = board.hash;
 
-        // 終端条件: 深さ制限
-        if ply >= self.depth {
-            self.store(hash, INF, 0);
-            return;
-        }
-
-        // 終端条件: 手数制限(引き分け)
-        if board.ply() as u32 >= self.draw_ply {
+        // 終端条件: 深さ制限・手数制限
+        // pn=INF, dn=0 は「この深さでは詰みを証明できない」を意味する．
+        // depth を実際の詰め手数より大きく設定すれば正しく動作する．
+        // depth が詰め手数以下の場合は NoCheckmate(偽陰性)を返しうるが，
+        // 偽陽性(誤った詰み判定)は起こらない．
+        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
             self.store(hash, INF, 0);
             return;
         }
@@ -368,7 +366,6 @@ impl DfPnSolver {
         // 各間マスごとに合い効かず判定
         // 条件: 玉方の駒(玉除く)の効きがなく，かつ飛び駒が取った後に玉が取り返せない
         let defender = board.turn;
-        let futile_squares = attack::between_bb(checker_sq, king_sq);
         let king_step = attack::step_attacks(
             defender.opponent(),
             PieceType::King,
@@ -377,7 +374,7 @@ impl DfPnSolver {
 
         // 各間マスについて個別判定
         let mut filtered_between = crate::bitboard::Bitboard::EMPTY;
-        for sq in futile_squares {
+        for sq in between {
             // 条件1: 玉方の非玉駒が利いている → 合い効かずでない
             if self.is_attacked_by_non_king(board, sq, defender) {
                 continue;
