@@ -615,15 +615,14 @@ mod tests {
 
     #[test]
     fn test_tsume_image2() {
-        // 盤面: 5一と，2一王，1一香，2二銀，4三飛，1四角，先手持駒: 金桂
-        let sfen = "4+P2kl/7s1/5R3/8B/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
+        // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
+        // 11手詰め
+        let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
         let result = solve_tsume(sfen, Some(31), Some(1_048_576), None).unwrap();
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
-                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("Checkmate in {} moves: {:?}", moves.len(), usi_moves);
-                assert!(moves.len() % 2 == 1, "tsume must be odd number of moves");
+                assert_eq!(moves.len(), 11);
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
