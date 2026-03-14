@@ -113,11 +113,11 @@ impl Position {
 
         // 同一局面hashの出現回数と最初の出現位置を単一パスで取得
         //
-        // 先手の手は偶数インデックス(0,2,4,...)，後手は奇数インデックス．
-        // ゲーム開始時 history_len=0 → 先手番 (Color::Black=0) に対応．
-        // したがって my_parity = history_len % 2 == self.board.turn.index() が成立する．
+        // 先手の手は偶数インデックス(0,2,4,...)，後手は奇数インデックス(通常)．
+        // ただし from_sfen で後手番開始した場合は history_len % 2 と turn が
+        // 一致しないため，turn.index() を直接使用する．
         let history_len = self.history.len();
-        let my_parity = history_len % 2;
+        let my_parity = self.board.turn.index();
 
         let mut count = 0usize;
         let mut first_idx = None;

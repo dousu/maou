@@ -167,11 +167,14 @@ impl Board {
             return true;
         }
 
-        // 王
-        if (attack::step_attacks(defender, PieceType::King, sq)
-            & self.piece_bb[opp][PieceType::King as usize])
-            .is_not_empty()
-        {
+        // 王・馬(ステップ部分)・龍(ステップ部分):
+        // 王の利きは8方向で，馬のステップ(前後左右)と龍のステップ(斜め4方向)の
+        // 上位集合である．したがって王の利きパターン1回で3駒種をまとめて判定できる．
+        let king_step = attack::step_attacks(defender, PieceType::King, sq);
+        let king_horse_dragon = self.piece_bb[opp][PieceType::King as usize]
+            | self.piece_bb[opp][PieceType::Horse as usize]
+            | self.piece_bb[opp][PieceType::Dragon as usize];
+        if (king_step & king_horse_dragon).is_not_empty() {
             return true;
         }
 
@@ -184,8 +187,7 @@ impl Board {
         }
 
         // 角・馬: 対象マスから斜め方向に角or馬がいるか
-        let bishop_attacks = attack::bishop_attacks(sq, occ);
-        if (bishop_attacks
+        if (attack::bishop_attacks(sq, occ)
             & (self.piece_bb[opp][PieceType::Bishop as usize]
                 | self.piece_bb[opp][PieceType::Horse as usize]))
             .is_not_empty()
@@ -194,28 +196,9 @@ impl Board {
         }
 
         // 飛・龍: 対象マスから縦横方向に飛or龍がいるか
-        let rook_attacks = attack::rook_attacks(sq, occ);
-        if (rook_attacks
+        if (attack::rook_attacks(sq, occ)
             & (self.piece_bb[opp][PieceType::Rook as usize]
                 | self.piece_bb[opp][PieceType::Dragon as usize]))
-            .is_not_empty()
-        {
-            return true;
-        }
-
-        // 馬のステップ部分(前後左右1マス): 王と同じ判定ではカバーされない
-        // 馬は斜め走り+前後左右1マスなので，斜めは上のbishop_attacksでカバー済み
-        // 前後左右1マスは馬固有のステップ
-        if (attack::step_attacks(defender, PieceType::Horse, sq)
-            & self.piece_bb[opp][PieceType::Horse as usize])
-            .is_not_empty()
-        {
-            return true;
-        }
-
-        // 龍のステップ部分(斜め1マス): 同様に龍固有のステップ
-        if (attack::step_attacks(defender, PieceType::Dragon, sq)
-            & self.piece_bb[opp][PieceType::Dragon as usize])
             .is_not_empty()
         {
             return true;
