@@ -392,8 +392,10 @@ impl DfPnSolver {
                 return Vec::new();
             }
 
-            // 全証明済み子ノードのサブPVを比較し，最長抵抗を選ぶ
+            // 全証明済み子ノードのサブPVを比較し，最長抵抗を選ぶ．
+            // 同手数の場合は駒を取る手(captured_piece_raw > 0)を優先する(詰将棋の慣例)．
             let mut best_pv: Option<Vec<Move>> = None;
+            let mut best_is_capture = false;
 
             for m in &moves {
                 let captured = board.do_move(*m);
@@ -405,15 +407,25 @@ impl DfPnSolver {
                     visited.pop();
 
                     let total_len = 1 + sub_pv.len();
+                    let is_capture = m.captured_piece_raw() > 0;
                     let is_better = match &best_pv {
                         None => true,
-                        Some(prev) => total_len > prev.len(),
+                        Some(prev) => {
+                            if total_len > prev.len() {
+                                true
+                            } else if total_len == prev.len() && is_capture && !best_is_capture {
+                                true
+                            } else {
+                                false
+                            }
+                        }
                     };
 
                     if is_better {
                         let mut pv = vec![*m];
                         pv.extend(sub_pv);
                         best_pv = Some(pv);
+                        best_is_capture = is_capture;
                     }
                 }
 
@@ -616,13 +628,25 @@ mod tests {
     #[test]
     fn test_tsume_image2() {
         // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
-        // 11手詰め
+        // 11手詰め: 32金打，同玉，42角成，21玉，31馬，同銀，23飛成，22銀，33桂打，31玉，41と
         let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
         let result = solve_tsume(sfen, Some(31), Some(1_048_576), None).unwrap();
 
+        let expected = [
+            "G*3b", "2a3b", "2d4b+", "3b2a", "4b3a", "2b3a",
+            "4c2c+", "3a2b", "N*3c", "2a3a", "5a4a",
+        ];
+
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
-                assert_eq!(moves.len(), 11);
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(moves.len(), 11, "expected 11 moves, got {}: {:?}", moves.len(), usi_moves);
+                assert_eq!(
+                    usi_moves,
+                    expected,
+                    "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
+                    usi_moves, expected,
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
