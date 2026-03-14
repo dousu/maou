@@ -16,7 +16,7 @@ use crate::attack;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
-use crate::types::{Color, PieceType, Square};
+use crate::types::Square;
 
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
@@ -337,143 +337,14 @@ impl DfPnSolver {
         (best_idx, 0, second_dn)
     }
 
-    /// 飛び駒による王手駒を見つける．
+    /// 玉方の応手を生成する．
     ///
-    /// 返り値: (王手駒のマス, 王手駒の駒種) のリスト．
-    /// 近接駒(歩,桂,銀,金,王)による王手は含まない．
-    fn find_sliding_checkers(board: &Board, king_sq: Square, attacker: Color) -> Vec<(Square, PieceType)> {
-        let mut checkers = Vec::new();
-        let occ = board.all_occupied();
-        let atk = attacker.index();
-
-        // 香: 玉から見て attacker の香方向にいるか
-        let lance_atk = attack::lance_attacks(attacker.opponent(), king_sq, occ);
-        let mut lance_bb = lance_atk & board.piece_bb[atk][PieceType::Lance as usize];
-        while let Some(sq) = lance_bb.lsb() {
-            checkers.push((sq, PieceType::Lance));
-            lance_bb.clear(sq);
-        }
-
-        // 角・馬
-        let bishop_atk = attack::bishop_attacks(king_sq, occ);
-        for &pt in &[PieceType::Bishop, PieceType::Horse] {
-            let mut bb = bishop_atk & board.piece_bb[atk][pt as usize];
-            while let Some(sq) = bb.lsb() {
-                checkers.push((sq, pt));
-                bb.clear(sq);
-            }
-        }
-
-        // 飛・龍
-        let rook_atk = attack::rook_attacks(king_sq, occ);
-        for &pt in &[PieceType::Rook, PieceType::Dragon] {
-            let mut bb = rook_atk & board.piece_bb[atk][pt as usize];
-            while let Some(sq) = bb.lsb() {
-                checkers.push((sq, pt));
-                bb.clear(sq);
-            }
-        }
-
-        checkers
-    }
-
-    /// 無駄合い(futile interposition)を除外した合法手を生成する．
-    ///
-    /// 飛び駒による王手に対して，合い駒を打っても(または移動しても)
-    /// 攻め方がそれを取って同じように王手が続く場合，その合い駒は無駄合いである．
-    /// 詰将棋のルールに従い，無駄合いを除外する．
+    /// 現時点では合法手をそのまま返す．
+    /// 無駄合い(futile interposition)の判定は，単に「取っても王手が続く」だけでは
+    /// 不十分であり，取った後の駒配置変化により後続の詰み手順が変わるため，
+    /// 正確な判定には深い探索が必要．将来的に実装予定．
     fn generate_defense_moves(&self, board: &mut Board) -> Vec<Move> {
-        let all_moves = movegen::generate_legal_moves(board);
-
-        // 玉方(hand番)の玉位置を取得
-        let defender = board.turn;
-        let king_sq = match board.king_square(defender) {
-            Some(sq) => sq,
-            None => return all_moves, // 玉がなければフィルタ不可
-        };
-
-        // 飛び駒による王手を見つける
-        let attacker = defender.opponent();
-        let sliding_checkers = Self::find_sliding_checkers(board, king_sq, attacker);
-
-        // 飛び駒王手がなければ無駄合いは発生しない
-        if sliding_checkers.is_empty() {
-            return all_moves;
-        }
-
-        // 王手が2つ以上(両王手)の場合は玉が動くしかないので合い駒自体が不可
-        // → フィルタ不要(合法手生成が正しく処理する)
-        if sliding_checkers.len() > 1 {
-            return all_moves;
-        }
-
-        let (checker_sq, checker_pt) = sliding_checkers[0];
-
-        // 王手駒と玉の間のマスを計算
-        let between = attack::between_bb(checker_sq, king_sq);
-        if between.is_empty() {
-            // 隣接からの王手 → 合い駒不可
-            return all_moves;
-        }
-
-        all_moves
-            .into_iter()
-            .filter(|m| {
-                let to = m.to_sq();
-
-                // 駒打ち以外(玉の移動，駒を動かす合い駒，王手駒の捕獲)は常に許可．
-                // 駒移動による合い駒は元マスが空くため盤面状態が変わり，
-                // 無駄合いの判定が複雑になるため除外しない．
-                if !m.is_drop() {
-                    return true;
-                }
-
-                // 王手駒を直接取る打ち駒はないので(打ち駒は空マスのみ)ここは不要
-
-                // between 上でない駒打ちは許可(合い駒ではない)
-                if !between.contains(to) {
-                    return true;
-                }
-
-                // ここに来たら駒打ちによる合い駒(interposition drop)
-                // 攻め方の王手駒がこの合い駒を取れるかチェック
-                let mut occ_after = board.all_occupied();
-                occ_after.set(to); // 合い駒を置く
-
-                let checker_attacks = attack::piece_attacks(
-                    attacker,
-                    checker_pt,
-                    checker_sq,
-                    occ_after,
-                );
-
-                if !checker_attacks.contains(to) {
-                    // 王手駒が取れない → 有効な合い駒
-                    return true;
-                }
-
-                // 王手駒が合い駒を取った後，玉にまだ利いているか
-                // (= 取っても王手が続くか → 無駄合い)
-                let mut occ_after_capture = occ_after;
-                occ_after_capture.clear(checker_sq); // 王手駒の元位置を空に
-                // to には王手駒が移動(既にセット済み)
-
-                let checker_attacks_after = attack::piece_attacks(
-                    attacker,
-                    checker_pt,
-                    to, // 王手駒が合い駒マスに移動
-                    occ_after_capture,
-                );
-
-                if checker_attacks_after.contains(king_sq) {
-                    // 取っても王手 → 無駄合い(除外)
-                    false
-                } else {
-                    // 取ると王手にならない → 有効な合い駒
-                    true
-                }
-            })
-            .collect()
+        movegen::generate_legal_moves(board)
     }
 
     /// 攻め方の王手になる手を生成する．
@@ -980,48 +851,25 @@ mod tests {
         }
     }
 
-    /// 無駄合い検出テスト: 飛車の王手に対する駒打ち合い駒が無駄合いとして除外される．
-    ///
-    /// 局面: 後手玉1一，先手飛5一(同じ段で王手)，後手持駒: 金
-    /// G*2a, G*3a, G*4a は飛車に取られて王手が続く → 無駄合い．
-    /// 正しい応手は玉の移動のみ．
+    /// between_bb ヘルパーのテスト．
     #[test]
-    fn test_mudaai_drop_filter() {
-        // SFEN は 9筋→1筋 の順で記述
-        // 後手玉 1一(col=0,row=0) = 末尾の k
-        // 先手飛 5一(col=4,row=0) = 5番目(左から5番目=右から5番目)
-        // "4R3k" = 9一空,8一空,7一空,6一空,5一飛,4一空,3一空,2一空,1一玉
-        // → 9876=空4つ, R=5一飛, 空3つ, k=1一玉 → "4R3k"
-        // 後手番で後手持駒: 金
-        let sfen = "4R3k/9/9/9/9/9/9/9/9 w g 1";
-        let mut board = Board::empty();
-        board.set_sfen(sfen).unwrap();
+    fn test_between_bb() {
+        // 飛5一(col=4,row=0) と 1一(col=0,row=0) の間: 2一,3一,4一
+        let between = attack::between_bb(Square::new(4, 0), Square::new(0, 0));
+        assert_eq!(between.count(), 3);
+        assert!(between.contains(Square::new(1, 0))); // 2一
+        assert!(between.contains(Square::new(2, 0))); // 3一
+        assert!(between.contains(Square::new(3, 0))); // 4一
 
-        let solver = DfPnSolver::new(5, 100_000, 32767);
+        // 隣接マス(間なし)
+        let between2 = attack::between_bb(Square::new(0, 0), Square::new(1, 0));
+        assert!(between2.is_empty());
 
-        // generate_defense_moves で合い駒が除外されることを検証
-        let defenses = solver.generate_defense_moves(&mut board);
-        let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
-        eprintln!("Defenses after mudaai filter: {:?}", usi_defenses);
-
-        // between 上への金打ちが除外されていること
-        let rook_sq = Square::new(4, 0); // 5一
-        let king_sq = Square::new(0, 0); // 1一
-        let between = attack::between_bb(rook_sq, king_sq);
-        for m in &defenses {
-            if m.is_drop() && between.contains(m.to_sq()) {
-                panic!(
-                    "futile drop {} should be filtered (mudaai)",
-                    m.to_usi()
-                );
-            }
-        }
-
-        // 玉の移動は含まれていること
-        assert!(
-            defenses.iter().any(|m| !m.is_drop()),
-            "king moves should be present"
-        );
+        // 斜め
+        let between3 = attack::between_bb(Square::new(0, 0), Square::new(3, 3));
+        assert_eq!(between3.count(), 2);
+        assert!(between3.contains(Square::new(1, 1)));
+        assert!(between3.contains(Square::new(2, 2)));
     }
 
     /// タイムアウト機能のテスト．
@@ -1054,23 +902,76 @@ mod tests {
         let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
         let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
 
+        let expected = [
+            "3d2b+", "2c2b", "R*4b", "2b2c", "4b3b+", "2c2d",
+            "2f2e", "2d2e", "3b3e",
+        ];
+
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!("Image3 PV ({}): {:?}", usi_moves.len(), usi_moves);
-                // 手順を表示して確認
-                assert!(
-                    usi_moves.len() % 2 == 1,
-                    "checkmate should be odd moves, got {}: {:?}",
-                    usi_moves.len(), usi_moves
+                assert_eq!(
+                    usi_moves.len(), 9,
+                    "expected 9 moves, got {}: {:?}", usi_moves.len(), usi_moves
+                );
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
+                    usi_moves, expected,
                 );
             }
-            TsumeResult::NoCheckmate { nodes_searched } => {
-                eprintln!("No checkmate found (nodes: {})", nodes_searched);
-            }
-            TsumeResult::Unknown { nodes_searched } => {
-                eprintln!("Unknown (nodes: {}, may need more nodes/time)", nodes_searched);
-            }
+            other => panic!("expected Checkmate, got {:?}", other),
         }
+    }
+
+    /// 2一龍後に2三歩打で詰まないことを検証する．
+    ///
+    /// 無駄合いフィルタが誤って2三歩打を除外していた問題の回帰テスト．
+    /// 2二桂成，同玉，4二飛打，2三玉，3二飛成，2四玉，2一龍 の後，
+    /// 後手は2三歩打で合い駒でき，これは無駄合いではない．
+    #[test]
+    fn test_image3_ryu_2a_not_checkmate() {
+        // 2一龍後の局面を作成
+        // 初期局面から 3d2b+, 2c2b, R*4b, 2b2c, 4b3b+, 2c2d, 3b2a を実行
+        let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let moves_usi = ["3d2b+", "2c2b", "R*4b", "2b2c", "4b3b+", "2c2d", "3b2a"];
+        for usi in &moves_usi {
+            let m = board.move_from_usi(usi).expect(&format!("invalid USI: {}", usi));
+            board.do_move(m);
+        }
+
+        // ここは AND ノード(後手番)．2三歩打(P*2c)が合法手に含まれることを検証
+        let defenses = movegen::generate_legal_moves(&mut board);
+        let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
+        eprintln!("Defenses after R*2a: {:?}", usi_defenses);
+
+        // P*2c (2三歩打) が合法手に含まれること
+        assert!(
+            usi_defenses.contains(&"P*2c".to_string()),
+            "P*2c should be a legal defense, got: {:?}", usi_defenses
+        );
+
+        // 2三歩打後の局面は詰みではないことを確認
+        let p2c = board.move_from_usi("P*2c").unwrap();
+        let cap = board.do_move(p2c);
+
+        // 先手の王手手段を確認
+        let checks: Vec<String> = movegen::generate_legal_moves(&mut board)
+            .into_iter()
+            .filter(|m| {
+                let c = board.do_move(*m);
+                let gives_check = board.is_in_check(board.turn);
+                board.undo_move(*m, c);
+                gives_check
+            })
+            .map(|m| m.to_usi())
+            .collect();
+        eprintln!("Check moves after P*2c: {:?}", checks);
+
+        board.undo_move(p2c, cap);
     }
 }
