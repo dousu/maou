@@ -10,10 +10,13 @@
 //! - `draw_ply`: 引き分け手数(デフォルト 32767)．
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
+use crate::attack;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
+use crate::types::{Color, PieceType, Square};
 
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
@@ -53,30 +56,52 @@ pub struct DfPnSolver {
     max_nodes: u64,
     /// 引き分け手数．
     draw_ply: u32,
+    /// 実行時間制限．
+    timeout: Duration,
     /// 転置表．
     table: HashMap<u64, DfPnEntry>,
     /// 探索ノード数．
     nodes_searched: u64,
     /// 探索中のパス(ループ検出用)．
     path: Vec<u64>,
+    /// 探索開始時刻．
+    start_time: Instant,
+    /// タイムアウトしたかどうか．
+    timed_out: bool,
 }
 
 impl DfPnSolver {
     /// 新しいソルバーを生成する．
+    ///
+    /// `timeout_secs` で実行時間制限(秒)を指定する．0 の場合はデフォルト 30 秒．
     pub fn new(depth: u32, max_nodes: u64, draw_ply: u32) -> Self {
+        Self::with_timeout(depth, max_nodes, draw_ply, 300)
+    }
+
+    /// タイムアウト指定付きでソルバーを生成する．
+    pub fn with_timeout(depth: u32, max_nodes: u64, draw_ply: u32, timeout_secs: u64) -> Self {
         DfPnSolver {
             depth,
             max_nodes,
             draw_ply,
+            timeout: Duration::from_secs(timeout_secs),
             table: HashMap::new(),
             nodes_searched: 0,
             path: Vec::new(),
+            start_time: Instant::now(),
+            timed_out: false,
         }
     }
 
     /// デフォルトパラメータでソルバーを生成する．
     pub fn default_solver() -> Self {
         Self::new(31, 1_048_576, 32767)
+    }
+
+    /// タイムアウトしたかどうかを返す．
+    #[inline]
+    fn is_timed_out(&self) -> bool {
+        self.timed_out || self.start_time.elapsed() >= self.timeout
     }
 
     /// 転置表を参照する．
@@ -97,6 +122,8 @@ impl DfPnSolver {
         self.table.clear();
         self.nodes_searched = 0;
         self.path.clear();
+        self.start_time = Instant::now();
+        self.timed_out = false;
 
         let root_hash = board.hash;
 
@@ -106,7 +133,9 @@ impl DfPnSolver {
         let entry = self.look_up(root_hash);
 
         if entry.pn == 0 {
-            // 詰みが証明された → 手順を復元
+            // 詰みが証明された → OR ノードの未証明子ノードを追加証明
+            self.complete_or_proofs(board);
+            // 手順を復元
             let moves = self.extract_pv(board);
             TsumeResult::Checkmate {
                 moves,
@@ -134,8 +163,13 @@ impl DfPnSolver {
         ply: u32,
         or_node: bool,
     ) {
-        // ノード制限チェック
+        // ノード制限・タイムアウトチェック
         if self.nodes_searched >= self.max_nodes {
+            return;
+        }
+        // 1024 ノードごとにタイマーをチェック(毎回チェックはオーバーヘッドが大きい)
+        if self.nodes_searched & 0x3FF == 0 && self.is_timed_out() {
+            self.timed_out = true;
             return;
         }
         self.nodes_searched += 1;
@@ -164,7 +198,7 @@ impl DfPnSolver {
         let moves = if or_node {
             self.generate_check_moves(board)
         } else {
-            movegen::generate_legal_moves(board)
+            self.generate_defense_moves(board)
         };
 
         // 終端条件チェック
@@ -222,8 +256,8 @@ impl DfPnSolver {
                 break;
             }
 
-            // ノード制限チェック
-            if self.nodes_searched >= self.max_nodes {
+            // ノード制限・タイムアウトチェック
+            if self.nodes_searched >= self.max_nodes || self.timed_out {
                 break;
             }
 
@@ -303,6 +337,145 @@ impl DfPnSolver {
         (best_idx, 0, second_dn)
     }
 
+    /// 飛び駒による王手駒を見つける．
+    ///
+    /// 返り値: (王手駒のマス, 王手駒の駒種) のリスト．
+    /// 近接駒(歩,桂,銀,金,王)による王手は含まない．
+    fn find_sliding_checkers(board: &Board, king_sq: Square, attacker: Color) -> Vec<(Square, PieceType)> {
+        let mut checkers = Vec::new();
+        let occ = board.all_occupied();
+        let atk = attacker.index();
+
+        // 香: 玉から見て attacker の香方向にいるか
+        let lance_atk = attack::lance_attacks(attacker.opponent(), king_sq, occ);
+        let mut lance_bb = lance_atk & board.piece_bb[atk][PieceType::Lance as usize];
+        while let Some(sq) = lance_bb.lsb() {
+            checkers.push((sq, PieceType::Lance));
+            lance_bb.clear(sq);
+        }
+
+        // 角・馬
+        let bishop_atk = attack::bishop_attacks(king_sq, occ);
+        for &pt in &[PieceType::Bishop, PieceType::Horse] {
+            let mut bb = bishop_atk & board.piece_bb[atk][pt as usize];
+            while let Some(sq) = bb.lsb() {
+                checkers.push((sq, pt));
+                bb.clear(sq);
+            }
+        }
+
+        // 飛・龍
+        let rook_atk = attack::rook_attacks(king_sq, occ);
+        for &pt in &[PieceType::Rook, PieceType::Dragon] {
+            let mut bb = rook_atk & board.piece_bb[atk][pt as usize];
+            while let Some(sq) = bb.lsb() {
+                checkers.push((sq, pt));
+                bb.clear(sq);
+            }
+        }
+
+        checkers
+    }
+
+    /// 無駄合い(futile interposition)を除外した合法手を生成する．
+    ///
+    /// 飛び駒による王手に対して，合い駒を打っても(または移動しても)
+    /// 攻め方がそれを取って同じように王手が続く場合，その合い駒は無駄合いである．
+    /// 詰将棋のルールに従い，無駄合いを除外する．
+    fn generate_defense_moves(&self, board: &mut Board) -> Vec<Move> {
+        let all_moves = movegen::generate_legal_moves(board);
+
+        // 玉方(hand番)の玉位置を取得
+        let defender = board.turn;
+        let king_sq = match board.king_square(defender) {
+            Some(sq) => sq,
+            None => return all_moves, // 玉がなければフィルタ不可
+        };
+
+        // 飛び駒による王手を見つける
+        let attacker = defender.opponent();
+        let sliding_checkers = Self::find_sliding_checkers(board, king_sq, attacker);
+
+        // 飛び駒王手がなければ無駄合いは発生しない
+        if sliding_checkers.is_empty() {
+            return all_moves;
+        }
+
+        // 王手が2つ以上(両王手)の場合は玉が動くしかないので合い駒自体が不可
+        // → フィルタ不要(合法手生成が正しく処理する)
+        if sliding_checkers.len() > 1 {
+            return all_moves;
+        }
+
+        let (checker_sq, checker_pt) = sliding_checkers[0];
+
+        // 王手駒と玉の間のマスを計算
+        let between = attack::between_bb(checker_sq, king_sq);
+        if between.is_empty() {
+            // 隣接からの王手 → 合い駒不可
+            return all_moves;
+        }
+
+        all_moves
+            .into_iter()
+            .filter(|m| {
+                let to = m.to_sq();
+
+                // 駒打ち以外(玉の移動，駒を動かす合い駒，王手駒の捕獲)は常に許可．
+                // 駒移動による合い駒は元マスが空くため盤面状態が変わり，
+                // 無駄合いの判定が複雑になるため除外しない．
+                if !m.is_drop() {
+                    return true;
+                }
+
+                // 王手駒を直接取る打ち駒はないので(打ち駒は空マスのみ)ここは不要
+
+                // between 上でない駒打ちは許可(合い駒ではない)
+                if !between.contains(to) {
+                    return true;
+                }
+
+                // ここに来たら駒打ちによる合い駒(interposition drop)
+                // 攻め方の王手駒がこの合い駒を取れるかチェック
+                let mut occ_after = board.all_occupied();
+                occ_after.set(to); // 合い駒を置く
+
+                let checker_attacks = attack::piece_attacks(
+                    attacker,
+                    checker_pt,
+                    checker_sq,
+                    occ_after,
+                );
+
+                if !checker_attacks.contains(to) {
+                    // 王手駒が取れない → 有効な合い駒
+                    return true;
+                }
+
+                // 王手駒が合い駒を取った後，玉にまだ利いているか
+                // (= 取っても王手が続くか → 無駄合い)
+                let mut occ_after_capture = occ_after;
+                occ_after_capture.clear(checker_sq); // 王手駒の元位置を空に
+                // to には王手駒が移動(既にセット済み)
+
+                let checker_attacks_after = attack::piece_attacks(
+                    attacker,
+                    checker_pt,
+                    to, // 王手駒が合い駒マスに移動
+                    occ_after_capture,
+                );
+
+                if checker_attacks_after.contains(king_sq) {
+                    // 取っても王手 → 無駄合い(除外)
+                    false
+                } else {
+                    // 取ると王手にならない → 有効な合い駒
+                    true
+                }
+            })
+            .collect()
+    }
+
     /// 攻め方の王手になる手を生成する．
     fn generate_check_moves(&self, board: &mut Board) -> Vec<Move> {
         let all_moves = movegen::generate_legal_moves(board);
@@ -316,6 +489,80 @@ impl DfPnSolver {
                 gives_check
             })
             .collect()
+    }
+
+    /// PV パス上の OR ノードで未証明の子ノードを追加証明する．
+    ///
+    /// Df-Pn は OR ノードで1つの子ノードが証明されると他を未探索のまま残す．
+    /// PV 抽出で正確な最短詰み手数を計算するため，PV 上の OR ノードで
+    /// 未証明の王手を追加証明する．反復的に PV を更新し収束させる．
+    fn complete_or_proofs(&mut self, board: &mut Board) {
+        let saved_max = self.max_nodes;
+        self.max_nodes = self.nodes_searched.saturating_add(saved_max);
+
+        // 反復: PV を抽出 → PV 上の OR ノードを完成 → 再抽出
+        for _ in 0..5 {
+            if self.is_timed_out() {
+                break;
+            }
+            let pv = self.extract_pv(board);
+            if pv.is_empty() {
+                break;
+            }
+            let changed = self.complete_pv_or_nodes(board, &pv);
+            if !changed {
+                break; // 新たに証明された子ノードがなければ収束
+            }
+        }
+
+        self.max_nodes = saved_max;
+    }
+
+    /// PV 上の各 OR ノードで未証明子ノードの追加証明を試みる．
+    ///
+    /// クローンした盤面で PV を辿り，各 OR ノードで未証明の王手を追加証明する．
+    /// 返り値: 新たに証明された子ノードがあれば true．
+    fn complete_pv_or_nodes(&mut self, board: &mut Board, pv: &[Move]) -> bool {
+        let mut board_clone = board.clone();
+        let mut any_changed = false;
+
+        for (i, pv_move) in pv.iter().enumerate() {
+            let or_node = i % 2 == 0; // 偶数 ply = 攻め方(OR)
+            let ply = i as u32;
+
+            if or_node {
+                // OR ノード: 未証明の王手を追加証明
+                let moves = self.generate_check_moves(&mut board_clone);
+                for m in &moves {
+                    if self.nodes_searched >= self.max_nodes {
+                        break;
+                    }
+                    let captured = board_clone.do_move(*m);
+                    let child = self.look_up(board_clone.hash);
+
+                    if child.pn != 0 && child.dn != 0 {
+                        let saved = self.max_nodes;
+                        self.max_nodes = self
+                            .nodes_searched
+                            .saturating_add(100_000)
+                            .min(saved);
+                        self.mid(&mut board_clone, INF - 1, INF - 1, ply + 1, false);
+                        self.max_nodes = saved;
+
+                        if self.look_up(board_clone.hash).pn == 0 {
+                            any_changed = true;
+                        }
+                    }
+
+                    board_clone.undo_move(*m, captured);
+                }
+            }
+
+            // PV に沿って盤面を進める
+            board_clone.do_move(*pv_move);
+        }
+
+        any_changed
     }
 
     /// 詰み手順(PV)を復元する．
@@ -387,7 +634,8 @@ impl DfPnSolver {
             best_pv.unwrap_or_default()
         } else {
             // 玉方: 応手なし = 詰み(PV終端)
-            let moves = movegen::generate_legal_moves(board);
+            // 無駄合いを除外した応手を使用
+            let moves = self.generate_defense_moves(board);
             if moves.is_empty() {
                 return Vec::new();
             }
@@ -450,19 +698,32 @@ impl DfPnSolver {
 /// - `depth`: 最大探索手数(None でデフォルト 31)．
 /// - `nodes`: 最大ノード数(None でデフォルト 1,048,576)．
 /// - `draw_ply`: 引き分け手数(None でデフォルト 32767)．
+/// - `timeout_secs`: 実行時間制限(秒)(None でデフォルト 30 秒)．
 pub fn solve_tsume(
     sfen: &str,
     depth: Option<u32>,
     nodes: Option<u64>,
     draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
+    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None)
+}
+
+/// タイムアウト指定付きで詰将棋を解く便利関数．
+pub fn solve_tsume_with_timeout(
+    sfen: &str,
+    depth: Option<u32>,
+    nodes: Option<u64>,
+    draw_ply: Option<u32>,
+    timeout_secs: Option<u64>,
+) -> Result<TsumeResult, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
 
-    let mut solver = DfPnSolver::new(
+    let mut solver = DfPnSolver::with_timeout(
         depth.unwrap_or(31),
         nodes.unwrap_or(1_048_576),
         draw_ply.unwrap_or(32767),
+        timeout_secs.unwrap_or(300),
     );
 
     Ok(solver.solve(&mut board))
@@ -706,6 +967,7 @@ mod tests {
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("PV ({}): {:?}", usi_moves.len(), usi_moves);
                 assert_eq!(moves.len(), 11, "expected 11 moves, got {}: {:?}", moves.len(), usi_moves);
                 assert_eq!(
                     usi_moves,
@@ -715,6 +977,69 @@ mod tests {
                 );
             }
             other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 無駄合い検出テスト: 飛車の王手に対する駒打ち合い駒が無駄合いとして除外される．
+    ///
+    /// 局面: 後手玉1一，先手飛5一(同じ段で王手)，後手持駒: 金
+    /// G*2a, G*3a, G*4a は飛車に取られて王手が続く → 無駄合い．
+    /// 正しい応手は玉の移動のみ．
+    #[test]
+    fn test_mudaai_drop_filter() {
+        // SFEN は 9筋→1筋 の順で記述
+        // 後手玉 1一(col=0,row=0) = 末尾の k
+        // 先手飛 5一(col=4,row=0) = 5番目(左から5番目=右から5番目)
+        // "4R3k" = 9一空,8一空,7一空,6一空,5一飛,4一空,3一空,2一空,1一玉
+        // → 9876=空4つ, R=5一飛, 空3つ, k=1一玉 → "4R3k"
+        // 後手番で後手持駒: 金
+        let sfen = "4R3k/9/9/9/9/9/9/9/9 w g 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let solver = DfPnSolver::new(5, 100_000, 32767);
+
+        // generate_defense_moves で合い駒が除外されることを検証
+        let defenses = solver.generate_defense_moves(&mut board);
+        let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
+        eprintln!("Defenses after mudaai filter: {:?}", usi_defenses);
+
+        // between 上への金打ちが除外されていること
+        let rook_sq = Square::new(4, 0); // 5一
+        let king_sq = Square::new(0, 0); // 1一
+        let between = attack::between_bb(rook_sq, king_sq);
+        for m in &defenses {
+            if m.is_drop() && between.contains(m.to_sq()) {
+                panic!(
+                    "futile drop {} should be filtered (mudaai)",
+                    m.to_usi()
+                );
+            }
+        }
+
+        // 玉の移動は含まれていること
+        assert!(
+            defenses.iter().any(|m| !m.is_drop()),
+            "king moves should be present"
+        );
+    }
+
+    /// タイムアウト機能のテスト．
+    #[test]
+    fn test_timeout() {
+        // 不詰の局面を極短タイムアウトで探索 → Unknown が返る
+        let sfen = "4k4/9/9/9/9/9/9/9/9 b P 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(31, u64::MAX, 32767, 0);
+        // timeout=0 なので即タイムアウト(ただし最初の1024ノードは走る)
+        let result = solver.solve(&mut board);
+
+        // NoCheckmate か Unknown のどちらか(歩1枚では詰まない)
+        match &result {
+            TsumeResult::NoCheckmate { .. } | TsumeResult::Unknown { .. } => {}
+            other => panic!("expected NoCheckmate or Unknown, got {:?}", other),
         }
     }
 }

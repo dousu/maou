@@ -263,6 +263,47 @@ pub fn dragon_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard 
     rook_attacks(sq, occupied) | step_attacks(color, PieceType::Dragon, sq)
 }
 
+/// 2マス間のレイ上のマス(両端を含まない)を返す．
+///
+/// `sq1` と `sq2` が同一直線上(縦横斜め)にない場合は空を返す．
+pub fn between_bb(sq1: Square, sq2: Square) -> Bitboard {
+    let c1 = sq1.col() as i8;
+    let r1 = sq1.row() as i8;
+    let c2 = sq2.col() as i8;
+    let r2 = sq2.row() as i8;
+
+    let dc = (c2 - c1).signum();
+    let dr = (r2 - r1).signum();
+
+    // 同一マスまたは隣接の場合，間のマスはない
+    if dc == 0 && dr == 0 {
+        return Bitboard::EMPTY;
+    }
+
+    // 同一直線上かチェック
+    let cdiff = (c2 - c1).unsigned_abs();
+    let rdiff = (r2 - r1).unsigned_abs();
+    let on_line = (dc == 0 && rdiff > 0) // 縦
+        || (dr == 0 && cdiff > 0) // 横
+        || (cdiff == rdiff); // 斜め
+    if !on_line {
+        return Bitboard::EMPTY;
+    }
+
+    let mut bb = Bitboard::EMPTY;
+    let mut c = c1 + dc;
+    let mut r = r1 + dr;
+    while (c, r) != (c2, r2) {
+        if c < 0 || c >= 9 || r < 0 || r >= 9 {
+            return Bitboard::EMPTY;
+        }
+        bb.set(Square::new(c as u8, r as u8));
+        c += dc;
+        r += dr;
+    }
+    bb
+}
+
 /// 指定した駒種・色・マスの利きを返す(占有ビットボード考慮)．
 pub fn piece_attacks(color: Color, pt: PieceType, sq: Square, occupied: Bitboard) -> Bitboard {
     match pt {

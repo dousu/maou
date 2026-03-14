@@ -268,10 +268,11 @@ fn move_drop_hand_piece(m: u32) -> u8 {
 /// - `depth`: 最大探索手数(デフォルト 31)．
 /// - `nodes`: 最大ノード数(デフォルト 1,048,576)．
 /// - `draw_ply`: 引き分け手数(デフォルト 32767)．
+/// - `timeout_secs`: 実行時間制限(秒)(デフォルト 30)．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767))]
-fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32) -> PyResult<Option<Vec<String>>> {
-    let result = dfpn::solve_tsume(sfen, Some(depth), Some(nodes), Some(draw_ply))
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=30))]
+fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32, timeout_secs: u64) -> PyResult<Option<Vec<String>>> {
+    let result = dfpn::solve_tsume_with_timeout(sfen, Some(depth), Some(nodes), Some(draw_ply), Some(timeout_secs))
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     match result {
