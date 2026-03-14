@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -182,9 +183,18 @@ class TestFileBackedListColumns:
         path = tmp_path / "file_0.feather"
         _create_feather_file(path, [[1.0]], [[0.1]])
         accessor = FileBackedListColumns([path], [1])
-        with caplog.at_level("INFO"):
-            accessor.log_stats()
-        assert "アクセスなし" in caplog.text
+        maou_logger = logging.getLogger("maou")
+        original_propagate = maou_logger.propagate
+        maou_logger.propagate = True
+        try:
+            with caplog.at_level(
+                "INFO",
+                logger="maou.interface.lazy_list_columns",
+            ):
+                accessor.log_stats()
+            assert "アクセスなし" in caplog.text
+        finally:
+            maou_logger.propagate = original_propagate
 
     def test_log_stats_with_accesses(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -200,11 +210,20 @@ class TestFileBackedListColumns:
         accessor.get(0)  # ヒット
         accessor.get(1)  # ミス
 
-        with caplog.at_level("INFO"):
-            accessor.log_stats()
-        assert "ヒット=1" in caplog.text
-        assert "ミス=2" in caplog.text
-        assert "33.3%" in caplog.text
+        maou_logger = logging.getLogger("maou")
+        original_propagate = maou_logger.propagate
+        maou_logger.propagate = True
+        try:
+            with caplog.at_level(
+                "INFO",
+                logger="maou.interface.lazy_list_columns",
+            ):
+                accessor.log_stats()
+            assert "ヒット=1" in caplog.text
+            assert "ミス=2" in caplog.text
+            assert "33.3%" in caplog.text
+        finally:
+            maou_logger.propagate = original_propagate
 
     def test_row_count_mismatch_raises(
         self, tmp_path: Path

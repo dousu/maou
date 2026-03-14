@@ -19,9 +19,7 @@ from maou.domain.move.label import (
 
 def _board_to_hcp_bytes(board: shogi.Board) -> bytes:
     """盤面をHCPバイト列に変換する．"""
-    hcp = np.empty(32, dtype=np.uint8)
-    board.to_hcp(hcp)
-    return hcp.tobytes()
+    return board.to_hcp()
 
 
 def _create_hcpe_feather(

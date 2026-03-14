@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from maou.app.visualization.data_retrieval import DataRetriever
@@ -40,6 +41,7 @@ class TestDataRetriever:
             search_index=search_index,
             file_paths=[dummy_file],
             array_type="hcpe",
+            load_df=lambda path: pl.read_ipc(path),
         )
 
     def test_initialization(
@@ -388,6 +390,7 @@ class TestPreprocessingMockData:
             search_index=search_index,
             file_paths=[dummy_file],
             array_type="preprocessing",
+            load_df=lambda path: pl.read_ipc(path),
         )
 
     def test_mock_includes_move_win_rate(

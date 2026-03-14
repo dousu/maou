@@ -300,9 +300,7 @@ class TestConvertToSfen:
         from maou.domain.data.rust_io import load_stage2_df
 
         def board_to_hcp_bytes(board: shogi.Board) -> bytes:
-            hcp = np.empty(32, dtype=np.uint8)
-            board.to_hcp(hcp)
-            return hcp.tobytes()
+            return board.to_hcp()
 
         input_dir = tmp_path / "input"
         input_dir.mkdir()

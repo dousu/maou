@@ -434,6 +434,12 @@ impl Board {
         self.turn
     }
 
+    /// 手番を設定し，Zobrist hashを再計算する(外部クレート向け)．
+    pub fn set_turn(&mut self, color: Color) {
+        self.turn = color;
+        self.hash = self.compute_hash();
+    }
+
     /// 手数を返す．
     #[inline]
     pub fn ply(&self) -> u16 {
@@ -506,6 +512,47 @@ impl Board {
         }
 
         true
+    }
+
+    /// 16-bit move から完全な 32-bit Move を生成する．
+    ///
+    /// 盤面の状態から captured piece と moving piece type を補完する．
+    /// 不正な move16(移動元に駒がない等)の場合は `None` を返す．
+    pub fn move_from_move16(&self, move16: u16) -> Option<Move> {
+        let m16 = Move::from_move16(move16);
+        if m16.is_drop() {
+            Some(m16)
+        } else {
+            let from = m16.from_sq();
+            let to = m16.to_sq();
+            let moving_piece = self.squares[from.index()];
+            if moving_piece.is_empty() {
+                return None;
+            }
+            let moving_pt = moving_piece.piece_type()? as u8;
+            let captured = self.squares[to.index()].0;
+            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
+        }
+    }
+
+    /// USI 文字列から完全な 32-bit Move を生成する．
+    ///
+    /// 盤面の状態から captured piece と moving piece type を補完する．
+    pub fn move_from_usi(&self, usi: &str) -> Option<Move> {
+        let m16 = Move::from_usi(usi)?;
+        if m16.is_drop() {
+            Some(m16)
+        } else {
+            let from = m16.from_sq();
+            let to = m16.to_sq();
+            let moving_piece = self.squares[from.index()];
+            if moving_piece.is_empty() {
+                return None;
+            }
+            let moving_pt = moving_piece.piece_type()? as u8;
+            let captured = self.squares[to.index()].0;
+            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
+        }
     }
 }
 

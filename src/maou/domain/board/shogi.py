@@ -5,8 +5,18 @@ from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING, ClassVar
 
-import cshogi
 import numpy as np
+
+from maou._rust.maou_shogi import (
+    PyBoard as _PyBoard,
+    move16 as _move16,
+    move_drop_hand_piece as _move_drop_hand_piece,
+    move_from as _move_from,
+    move_is_drop as _move_is_drop,
+    move_is_promotion as _move_is_promotion,
+    move_to as _move_to,
+    move_to_usi as _move_to_usi,
+)
 
 if TYPE_CHECKING:
     import polars as pl
@@ -33,18 +43,6 @@ MAX_PIECES_IN_HAND: list[int] = [
 # 駒8種類，成駒6種類
 PIECE_TYPES: int = 14  # 8 unpromoted + 6 promoted piece types
 
-# Verify domain constants match cshogi (catch upstream changes)
-assert (
-    cshogi.MAX_PIECES_IN_HAND == MAX_PIECES_IN_HAND  # type: ignore
-), (
-    f"cshogi constant changed: {cshogi.MAX_PIECES_IN_HAND} != {MAX_PIECES_IN_HAND}"
-)  # type: ignore
-assert (
-    len(cshogi.PIECE_TYPES) == PIECE_TYPES  # type: ignore
-), (
-    f"cshogi constant changed: {len(cshogi.PIECE_TYPES)} != {PIECE_TYPES}"
-)  # type: ignore
-
 # MAX_PIECES_IN_HANDの構成
 # 歩18，香車4，桂馬4，銀4，金4，角2，飛車2
 
@@ -53,14 +51,14 @@ FEATURES_NUM = PIECE_TYPES * 2 + sum(MAX_PIECES_IN_HAND) * 2
 
 
 class Turn(IntEnum):
-    BLACK = cshogi.BLACK  # type: ignore
-    WHITE = cshogi.WHITE  # type: ignore
+    BLACK = 0
+    WHITE = 1
 
 
 class Result(IntEnum):
-    BLACK_WIN = cshogi.BLACK_WIN  # type: ignore
-    WHITE_WIN = cshogi.WHITE_WIN  # type: ignore
-    DRAW = cshogi.DRAW  # type: ignore
+    BLACK_WIN = 0
+    WHITE_WIN = 1
+    DRAW = 2
 
 
 class PieceId(IntEnum):
@@ -389,96 +387,95 @@ class ColoredPiece:
 def move16(move: int) -> int:
     """Convert move to 16-bit representation used in HCPE format.
 
-    This is a thin wrapper around cshogi.move16(). The 16-bit move format
-    is part of the HCPE binary specification used for efficient storage
-    in training data.
+    The 16-bit move format is part of the HCPE binary specification
+    used for efficient storage in training data.
 
     Args:
-        move: Full 32-bit move integer from cshogi
+        move: Full 32-bit move integer
 
     Returns:
         16-bit compact move representation
 
     Note:
-        If replacing cshogi, implement move16 encoding per HCPE spec:
+        16-bit encoding:
         - Bits 0-6: destination square (0-80)
         - Bits 7-13: source square or drop piece type
         - Bit 14: promotion flag
         - Bit 15: drop flag
     """
-    return cshogi.move16(move)  # type: ignore
+    return _move16(move)
 
 
 def move_to(move: int) -> int:
     """Extract destination square from move.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         Destination square index (0-80)
     """
-    return cshogi.move_to(move)  # type: ignore
+    return _move_to(move)
 
 
 def move_from(move: int) -> int:
     """Extract source square from move.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         Source square index (0-80) for normal moves
     """
-    return cshogi.move_from(move)  # type: ignore
+    return _move_from(move)
 
 
 def move_to_usi(move: int) -> str:
     """Convert move to USI (Universal Shogi Interface) string format.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         USI move string (e.g., \"7g7f\", \"P*5e\")
     """
-    return cshogi.move_to_usi(move)  # type: ignore
+    return _move_to_usi(move)
 
 
 def move_is_drop(move: int) -> bool:
     """Check if move is a drop (placing a piece from hand).
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         True if move is a drop, False otherwise
     """
-    return cshogi.move_is_drop(move)  # type: ignore
+    return _move_is_drop(move)
 
 
 def move_is_promotion(move: int) -> bool:
     """Check if move includes piece promotion.
 
     Args:
-        move: Move integer from cshogi
+        move: Move integer
 
     Returns:
         True if move promotes the piece, False otherwise
     """
-    return cshogi.move_is_promotion(move)  # type: ignore
+    return _move_is_promotion(move)
 
 
 def move_drop_hand_piece(move: int) -> int:
     """Get which hand piece type is being dropped.
 
     Args:
-        move: Drop move integer from cshogi
+        move: Drop move integer
 
     Returns:
         Piece type being dropped (only valid for drop moves)
     """
-    return cshogi.move_drop_hand_piece(move)  # type: ignore
+    return _move_drop_hand_piece(move)
 
 
 class Board:
@@ -588,7 +585,7 @@ class Board:
         ]  # PROM_ROOK (cshogi) → RYU (PieceId) - 龍
 
     def __init__(self) -> None:
-        self.board = cshogi.Board()  # type: ignore
+        self.board = _PyBoard()
 
     def __copy__(self) -> Board:
         """SFENを経由した安全なコピーを返す．
@@ -601,7 +598,7 @@ class Board:
         return new_board
 
     def set_turn(self, turn: Turn) -> None:
-        self.board.turn = turn.value
+        self.board.set_turn(turn.value)
 
     def get_turn(self) -> Turn:
         return Turn(self.board.turn)
@@ -612,14 +609,28 @@ class Board:
     def get_sfen(self) -> str:
         return self.board.sfen()
 
-    def set_hcp(self, hcp: np.ndarray) -> None:
-        self.board.set_hcp(hcp)
+    def set_hcp(self, hcp: np.ndarray | bytes) -> None:
+        """HCPデータから局面を設定する．
 
-    def to_hcp(self, array: np.ndarray) -> None:
-        self.board.to_hcp(array)
+        Args:
+            hcp: 32バイトのHCPデータ(numpy配列またはbytes)
+        """
+        if isinstance(hcp, np.ndarray):
+            data = hcp.tobytes()
+        else:
+            data = hcp
+        self.board.set_hcp(data)
+
+    def to_hcp(self) -> bytes:
+        """局面をHCPバイト列にエンコードする．
+
+        Returns:
+            32バイトのHCPデータ
+        """
+        return bytes(self.board.to_hcp())
 
     def get_legal_moves(self) -> Generator[int, None, None]:
-        for move in self.board.legal_moves:
+        for move in self.board.legal_moves():
             yield move
 
     def get_move_from_move16(self, move16: int) -> int:
@@ -674,7 +685,7 @@ class Board:
         歩，香車，桂馬，銀，金，角，飛車の順番
         例: ([0, 1, 0, 1, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0])
         """
-        return self.board.pieces_in_hand
+        return self.board.pieces_in_hand()
 
     def get_piece_at(self, square: int) -> int:
         """指定マスのcshogi駒IDを返す．
@@ -696,7 +707,7 @@ class Board:
         Returns:
             81要素のリスト(cshogi駒ID)
         """
-        return self.board.pieces
+        return self.board.pieces()
 
     def to_pretty_board(self) -> str:
         return str(self.board)
@@ -736,7 +747,7 @@ class Board:
         )
         positions = v_map(
             np.array(
-                self.board.pieces,
+                self.board.pieces(),
                 dtype=np.uint8,
             )
         ).reshape((9, 9), order="F")
@@ -799,10 +810,8 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get HCP data from cshogi board
-        hcp_array = np.empty(1, dtype=cshogi.HuffmanCodedPos)  # type: ignore
-        self.board.to_hcp(hcp_array)
-        hcp_bytes = hcp_array.tobytes()  # Convert to bytes
+        # Get HCP data from board
+        hcp_bytes = self.to_hcp()
 
         # Use pre-imported polars for performance
         return _pl.DataFrame(

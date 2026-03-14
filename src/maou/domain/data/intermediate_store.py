@@ -11,7 +11,6 @@ from collections.abc import Generator
 from pathlib import Path
 
 import duckdb
-import duckdb.typing
 import numpy as np
 import polars as pl
 import pyarrow as pa
