@@ -1,8 +1,8 @@
 """Disk-based intermediate data storage for memory-efficient preprocessing.
 
 This module provides a DuckDB-based persistent storage for intermediate
-preprocessing data with Arrow IPC integration，allowing processing of
-datasets larger than available RAM．
+preprocessing data with Arrow IPC integration, allowing processing of
+datasets larger than available RAM.
 """
 
 import logging
@@ -138,8 +138,8 @@ class IntermediateDataStore:
     """Disk-based storage for intermediate preprocessing data.
 
     Uses DuckDB for efficient Arrow-native storage and retrieval of
-    intermediate data during preprocessing，reducing memory footprint
-    significantly with zero-copy Arrow operations．
+    intermediate data during preprocessing, reducing memory footprint
+    significantly with zero-copy Arrow operations.
 
     バッチ蓄積バッファにより，複数の小さなDataFrameを結合してから
     DuckDBにupsertすることで，トランザクションオーバーヘッドを削減する．

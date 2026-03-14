@@ -732,7 +732,8 @@ class Board:
         PieceId順にチャネルを並べ替え，座標系を転置する．
 
         Args:
-            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
+                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
         """
         self.board.piece_planes(array)
         # Reorder channels to match PieceId ordering using centralized method
@@ -751,7 +752,8 @@ class Board:
         PieceId順にチャネルを並べ替え，座標系を転置する．
 
         Args:
-            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32
+            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
+                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
         """
         self.board.piece_planes_rotate(array)
         # Reorder channels (same as to_piece_planes) using centralized method

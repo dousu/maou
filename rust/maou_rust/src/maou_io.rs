@@ -6,11 +6,15 @@ use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use maou_io_core::MaouIOError;
 use pyo3::prelude::*;
 
+/// Rust バックエンドの初期化確認用メッセージを返す．
 #[pyfunction]
 fn hello() -> PyResult<String> {
     Ok("Maou I/O Rust backend initialized".to_string())
 }
 
+/// HCPE データの RecordBatch を Arrow IPC (Feather) 形式で保存する．
+///
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn save_hcpe_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
@@ -19,6 +23,9 @@ fn save_hcpe_feather(py: Python, batch: &Bound<'_, PyAny>, file_path: String) ->
     Ok(())
 }
 
+/// HCPE データの Arrow IPC (Feather) ファイルを RecordBatch として読み込む．
+///
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn load_hcpe_feather<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<'py, PyAny>> {
     let batch = py
@@ -27,6 +34,9 @@ fn load_hcpe_feather<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<
     batch.to_pyarrow(py)
 }
 
+/// 前処理データの RecordBatch を Arrow IPC (Feather) 形式で保存する．
+///
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn save_preprocessing_feather(
     py: Python,
@@ -39,6 +49,9 @@ fn save_preprocessing_feather(
     Ok(())
 }
 
+/// 前処理データの Arrow IPC (Feather) ファイルを RecordBatch として読み込む．
+///
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn load_preprocessing_feather<'py>(
     py: Python<'py>,
@@ -52,6 +65,10 @@ fn load_preprocessing_feather<'py>(
 
 // Generic feather I/O functions (for Stage1/Stage2 data)
 
+/// 汎用の RecordBatch を Arrow IPC (Feather) 形式で保存する．
+///
+/// Stage1/Stage2 データなど，HCPE・前処理以外の用途に使用する．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn save_feather_file(py: Python, batch: &Bound<'_, PyAny>, file_path: String) -> PyResult<()> {
     let batch = RecordBatch::from_pyarrow_bound(batch)?;
@@ -60,6 +77,10 @@ fn save_feather_file(py: Python, batch: &Bound<'_, PyAny>, file_path: String) ->
     Ok(())
 }
 
+/// 汎用の Arrow IPC (Feather) ファイルを RecordBatch として読み込む．
+///
+/// Stage1/Stage2 データなど，HCPE・前処理以外の用途に使用する．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn load_feather_file<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<'py, PyAny>> {
     let batch = py
@@ -70,12 +91,16 @@ fn load_feather_file<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<
 
 // Sparse array compression functions
 
+/// 密な整数配列をスパース表現(インデックス配列，値配列)に圧縮する．
+///
+/// 非ゼロ要素のみを抽出し，(indices, values) のタプルとして返す．
 #[pyfunction]
 fn compress_sparse_array_rust(dense: Vec<i32>) -> PyResult<(Vec<u16>, Vec<i32>)> {
     maou_io_core::sparse_array::compress_sparse_array(&dense)
         .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+/// スパース表現(インデックス配列，値配列)を指定サイズの密な配列に展開する．
 #[pyfunction]
 fn expand_sparse_array_rust(
     indices: Vec<u16>,
@@ -86,6 +111,7 @@ fn expand_sparse_array_rust(
         .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+/// 2つのスパース配列を要素ごとに加算し，結果をスパース表現で返す．
 #[pyfunction]
 fn add_sparse_arrays_rust(
     indices1: Vec<u16>,
@@ -97,6 +123,10 @@ fn add_sparse_arrays_rust(
         .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+/// 2つのスパース配列をラベル値と勝率値の両方について要素ごとに加算する．
+///
+/// (indices, label_values, win_values) のタプルを返す．
+/// DuckDB の UDF から呼び出され，中間データストアのマージに使用する．
 #[pyfunction]
 fn add_sparse_arrays_dual_rust(
     indices1: Vec<u16>,
@@ -117,6 +147,10 @@ fn add_sparse_arrays_dual_rust(
     .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+/// Arrow IPC (Feather) ファイルを指定行数ごとに分割する．
+///
+/// 分割されたファイルのパスのリストを返す．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn split_feather_file(
     py: Python,
@@ -128,6 +162,10 @@ fn split_feather_file(
         .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))
 }
 
+/// 複数の Arrow IPC (Feather) ファイルを結合する．
+///
+/// 結合されたファイルのパスのリストを返す．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
 #[pyfunction]
 fn merge_feather_files(
     py: Python,
@@ -147,7 +185,7 @@ fn merge_feather_files(
     .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))
 }
 
-/// Create maou_io submodule
+/// maou_io サブモジュールを作成する．
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_io")?;
 

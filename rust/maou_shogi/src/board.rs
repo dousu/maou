@@ -315,13 +315,13 @@ impl Board {
     /// # 前提条件
     ///
     /// `do_move` で実行した手に対してのみ呼ぶこと．
-    /// `do_move` を経ずに呼んだ場合の動作は未定義(debug ビルドではパニック)．
+    /// `do_move` を経ずに呼んだ場合はパニックする．
     #[inline]
     pub fn undo_move(&mut self, m: Move, captured: Piece) {
         // 手番を戻す
         self.turn = self.turn.opponent();
         self.hash ^= ZOBRIST.turn_hash();
-        debug_assert!(self.ply > 1, "undo_move called without prior do_move");
+        assert!(self.ply > 1, "undo_move called without prior do_move");
         self.ply -= 1;
 
         if m.is_drop() {
