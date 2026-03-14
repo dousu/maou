@@ -225,6 +225,11 @@ impl Board {
     }
 
     /// 駒を置く(ビットボードも更新)．
+    ///
+    /// # 前提条件
+    ///
+    /// - `sq` が空マスであること(`debug_assert` で検証)．
+    /// - `piece` が有効な色と駒種を持つこと．
     pub fn put_piece(&mut self, sq: Square, piece: Piece) {
         debug_assert!(self.squares[sq.index()].is_empty());
         let color = piece.color().unwrap();
@@ -236,6 +241,10 @@ impl Board {
     }
 
     /// 駒を除去する(ビットボードも更新)．
+    ///
+    /// # 前提条件
+    ///
+    /// - `sq` に駒が存在すること(`debug_assert` で検証)．
     pub fn remove_piece(&mut self, sq: Square) -> Piece {
         let piece = self.squares[sq.index()];
         debug_assert!(!piece.is_empty());

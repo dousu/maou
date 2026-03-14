@@ -18,8 +18,6 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
 
     for sq_idx in 0..81u8 {
         let sq = Square(sq_idx);
-        let _col = sq.col() as i8;
-        let _row = sq.row() as i8;
 
         // 各駒種の方向ベクトル (dcol, drow)
         // 先手の場合(前=row減少方向)

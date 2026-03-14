@@ -111,13 +111,7 @@ impl Position {
             return false;
         }
 
-        // 同一局面hashの出現回数(3回以上で4回目=千日手)
-        let count = self.history.iter().filter(|s| s.hash == new_hash).count();
-        if count < 3 {
-            return false;
-        }
-
-        // 最初の出現から現在まで，自分の全ての手が王手かチェック
+        // 同一局面hashの出現回数と最初の出現位置を単一パスで取得
         //
         // 先手の手は偶数インデックス(0,2,4,...)，後手は奇数インデックス．
         // ゲーム開始時 history_len=0 → 先手番 (Color::Black=0) に対応．
@@ -125,12 +119,23 @@ impl Position {
         let history_len = self.history.len();
         let my_parity = history_len % 2;
 
-        let first_idx = self
-            .history
-            .iter()
-            .position(|s| s.hash == new_hash)
-            .unwrap();
+        let mut count = 0usize;
+        let mut first_idx = None;
+        for (i, s) in self.history.iter().enumerate() {
+            if s.hash == new_hash {
+                count += 1;
+                if first_idx.is_none() {
+                    first_idx = Some(i);
+                }
+            }
+        }
 
+        if count < 3 {
+            return false;
+        }
+
+        // 最初の出現から現在まで，自分の全ての手が王手かチェック
+        let first_idx = first_idx.unwrap();
         for i in first_idx..history_len {
             if i % 2 == my_parity && !self.history[i].gives_check {
                 return false;

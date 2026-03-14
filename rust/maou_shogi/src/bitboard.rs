@@ -1,5 +1,10 @@
 use crate::types::Square;
 
+/// lo部(マス0-62)の有効ビットマスク．63ビット．
+const LO_MASK: u64 = (1u64 << 63) - 1;
+/// hi部(マス63-80)の有効ビットマスク．18ビット．
+const HI_MASK: u64 = (1u64 << 18) - 1;
+
 /// 将棋盤のビットボード表現．
 ///
 /// 81マスを2つのu64で表現する:
@@ -16,8 +21,8 @@ impl Bitboard {
 
     /// 全マスがセットされたビットボード．
     pub const ALL: Bitboard = Bitboard {
-        lo: (1u64 << 63) - 1,
-        hi: (1u64 << 18) - 1,
+        lo: LO_MASK,
+        hi: HI_MASK,
     };
 
     /// 指定マスのみセットされたビットボードを返す．
@@ -84,8 +89,13 @@ impl Bitboard {
     }
 
     /// 最下位セットビットのマスを返し，そのビットをクリアする．
+    ///
+    /// # Panics (debug)
+    ///
+    /// 空のビットボードに対して呼び出すと `debug_assert` で停止する．
     #[inline]
     pub fn pop_lsb(&mut self) -> Square {
+        debug_assert!(!self.is_empty(), "pop_lsb called on empty Bitboard");
         if self.lo != 0 {
             let idx = self.lo.trailing_zeros();
             self.lo &= self.lo - 1;
@@ -151,8 +161,8 @@ impl std::ops::Not for Bitboard {
     fn not(self) -> Bitboard {
         // 81ビットのみ有効にする
         Bitboard {
-            lo: !self.lo & ((1u64 << 63) - 1),
-            hi: !self.hi & ((1u64 << 18) - 1),
+            lo: !self.lo & (LO_MASK),
+            hi: !self.hi & (HI_MASK),
         }
     }
 }

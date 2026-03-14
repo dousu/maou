@@ -41,12 +41,13 @@ const CSHOGI_TO_DOMAIN: [u8; 31] = [
 
 /// cshogi駒ID(0-30)をdomain PieceId(0-28)に変換する．
 ///
-/// 無効なIDの場合は `None` を返す．
+/// 無効なID(範囲外およびcshogi未使用のID 15,16)の場合は `None` を返す．
 #[inline]
 pub fn cshogi_to_domain_piece_id(cshogi_piece: u8) -> Option<u8> {
-    CSHOGI_TO_DOMAIN
-        .get(cshogi_piece as usize)
-        .copied()
+    match cshogi_piece {
+        15 | 16 => None,
+        _ => CSHOGI_TO_DOMAIN.get(cshogi_piece as usize).copied(),
+    }
 }
 
 /// SFENの駒文字からPieceを生成する．
@@ -154,6 +155,8 @@ mod tests {
         assert_eq!(cshogi_to_domain_piece_id(21), Some(20)); // WBISHOP
         assert_eq!(cshogi_to_domain_piece_id(22), Some(21)); // WROOK
         assert_eq!(cshogi_to_domain_piece_id(23), Some(19)); // WGOLD
+        assert_eq!(cshogi_to_domain_piece_id(15), None); // unused
+        assert_eq!(cshogi_to_domain_piece_id(16), None); // unused
         assert_eq!(cshogi_to_domain_piece_id(31), None); // invalid
     }
 
