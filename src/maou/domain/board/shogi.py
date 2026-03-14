@@ -482,11 +482,6 @@ def move_drop_hand_piece(move: int) -> int:
     Returns:
         打つ駒の種類
 
-    Note:
-        move_is_drop(move) が True の場合のみ呼び出すこと．
-        非駒打ちの指し手では 0 を返すが，これは歩(HPAWN)と同値であり
-        区別できない．
-
     Raises:
         ValueError: move_is_drop(move) が False の場合
     """
@@ -741,7 +736,10 @@ class Board:
         # Rust feature::piece_planes fills array in column-major order (col, row).
         # Transpose axes (1,2) to convert to row-major (row, col) matching
         # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
-        array[:] = np.transpose(array, (0, 2, 1))
+        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
+        array[:] = np.ascontiguousarray(
+            np.transpose(array, (0, 2, 1))
+        )
 
     def to_piece_planes_rotate(self, array: np.ndarray) -> None:
         """後手視点(180度回転)の駒特徴平面を配列に書き込む(in-place)．
@@ -757,7 +755,10 @@ class Board:
         # Rust feature::piece_planes_rotate fills array in column-major order (col, row).
         # Transpose axes (1,2) to convert to row-major (row, col) matching
         # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
-        array[:] = np.transpose(array, (0, 2, 1))
+        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
+        array[:] = np.ascontiguousarray(
+            np.transpose(array, (0, 2, 1))
+        )
 
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
         """持ち駒を取得する．
