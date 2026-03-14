@@ -103,10 +103,16 @@ impl PyBoard {
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("invalid USI move"))
     }
 
-    fn push(&mut self, m: u32) {
+    fn push(&mut self, m: u32) -> PyResult<()> {
+        if m == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "invalid move: Move::NONE (0)",
+            ));
+        }
         let mv = Move::from_raw_u32(m);
         let captured = self.board.do_move(mv);
         self.undo_stack.push((m, captured.raw_u8()));
+        Ok(())
     }
 
     fn pop(&mut self) -> PyResult<()> {

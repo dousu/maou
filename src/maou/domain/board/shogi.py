@@ -562,12 +562,7 @@ class Board:
             4
         ]  # BISHOP (cshogi) → KA (PieceId) - 角
         array[6] = temp[5]  # ROOK (cshogi) → HI (PieceId) - 飛
-        array[12] = temp[
-            12
-        ]  # PROM_BISHOP (cshogi) → UMA (PieceId) - 馬
-        array[13] = temp[
-            13
-        ]  # PROM_ROOK (cshogi) → RYU (PieceId) - 龍
+        # PROM_BISHOP (馬) and PROM_ROOK (龍) need no reordering
 
         # White pieces reordering (same pattern, offset +14)
         array[18] = temp[20]  # GOLD (cshogi) → KI (PieceId)
@@ -577,12 +572,7 @@ class Board:
         array[20] = temp[
             19
         ]  # ROOK (cshogi) → HI (PieceId) - 飛
-        array[26] = temp[
-            26
-        ]  # PROM_BISHOP (cshogi) → UMA (PieceId) - 馬
-        array[27] = temp[
-            27
-        ]  # PROM_ROOK (cshogi) → RYU (PieceId) - 龍
+        # PROM_BISHOP (馬) and PROM_ROOK (龍) need no reordering
 
     def __init__(self) -> None:
         self.board = _PyBoard()
@@ -655,7 +645,6 @@ class Board:
 
         Raises:
             ValueError: 不正なUSI文字列の場合
-            RuntimeError: cshogiの内部エラー(不正な局面での変換など)
         """
         return self.board.move_from_usi(usi)
 
@@ -840,7 +829,7 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get piece planes from cshogi board
+        # Get piece planes from board
         planes = np.empty(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
@@ -884,7 +873,7 @@ class Board:
                 "polars is not installed. Install with: uv add polars"
             )
 
-        # Get rotated piece planes from cshogi board
+        # Get rotated piece planes from board
         planes = np.empty(
             (FEATURES_NUM, 9, 9), dtype=np.float32
         )
