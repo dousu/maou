@@ -34,7 +34,7 @@ pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
 }
 
 /// 疑似合法手を生成する(自玉の王手放置チェックなし)．
-fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
+pub(crate) fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     let mut moves = Vec::with_capacity(256);
     let us = board.turn;
     let our_occ = board.occupied[us.index()];
@@ -172,7 +172,7 @@ fn is_legal(board: &mut Board, m: Move) -> bool {
 /// 内側の `is_in_check` でパニックが発生した場合，外側の `undo_move` も
 /// 実行されず盤面が不整合な状態になる．`Board` のメソッドは正規局面に
 /// 対してパニックしない設計のため，通常は問題にならない．
-fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
+pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
     let captured = board.do_move(pawn_drop);
 
     // 相手(手番交代後の現在手番)の合法手があるかチェック
@@ -196,7 +196,7 @@ fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
 }
 
 /// 強制成りが必要かどうか(行き所がなくなるため)．
-fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
+pub(crate) fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
     match (color, pt) {
         (Color::Black, PieceType::Pawn | PieceType::Lance) => to.row() == 0,
         (Color::White, PieceType::Pawn | PieceType::Lance) => to.row() == 8,

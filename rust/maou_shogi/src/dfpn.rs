@@ -9,10 +9,11 @@
 //! - `nodes`: 最大ノード数(デフォルト 1,048,576 = 2^20)．計算時間・メモリ制限用．
 //! - `draw_ply`: 引き分け手数(デフォルト 32767)．
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crate::attack;
+use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
@@ -35,16 +36,107 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
-/// Df-Pn 探索のエントリ．
+/// 固定サイズ転置表のエントリ．
+///
+/// - key: Zobrist ハッシュの全 64 ビット(衝突検証用)
+/// - pn, dn: 証明数・反証数
 #[derive(Debug, Clone, Copy)]
 struct DfPnEntry {
+    key: u64,
     pn: u32,
     dn: u32,
 }
 
-impl Default for DfPnEntry {
-    fn default() -> Self {
-        DfPnEntry { pn: 1, dn: 1 }
+/// 固定サイズの転置表(2-way set associative)．
+///
+/// HashMap の代わりに固定長 Vec を使用し，キャッシュ効率を最大化する．
+/// 各スロットに 2 エントリを格納し，衝突時は pn=0(証明済み)を優先保持，
+/// それ以外は上書き．
+struct TranspositionTable {
+    /// 各スロットに 2 エントリ(偶数=slot0, 奇数=slot1)
+    entries: Vec<DfPnEntry>,
+    mask: u64,
+}
+
+impl TranspositionTable {
+    /// 指定サイズ(2のべき乗に切り上げ)で転置表を生成する．
+    fn new(min_size: usize) -> Self {
+        let size = min_size.max(1024).next_power_of_two();
+        let empty = DfPnEntry {
+            key: 0,
+            pn: 0,
+            dn: 0,
+        };
+        TranspositionTable {
+            entries: vec![empty; size * 2], // 2-way
+            mask: (size - 1) as u64,
+        }
+    }
+
+    /// 転置表を参照する．未登録なら pn=1, dn=1 を返す．
+    #[inline]
+    fn look_up(&self, hash: u64) -> (u32, u32) {
+        let base = ((hash & self.mask) as usize) * 2;
+        let e0 = &self.entries[base];
+        if e0.key == hash && (e0.pn | e0.dn) != 0 {
+            return (e0.pn, e0.dn);
+        }
+        let e1 = &self.entries[base + 1];
+        if e1.key == hash && (e1.pn | e1.dn) != 0 {
+            return (e1.pn, e1.dn);
+        }
+        (1, 1) // デフォルト: 未探索
+    }
+
+    /// 転置表を更新する．
+    ///
+    /// 置換戦略: 空スロット > 非証明済みエントリ > slot1 を上書き．
+    /// pn=0(証明済み)のエントリは可能な限り保持する．
+    #[inline]
+    fn store(&mut self, hash: u64, pn: u32, dn: u32) {
+        let base = ((hash & self.mask) as usize) * 2;
+        let new_entry = DfPnEntry { key: hash, pn, dn };
+
+        // 同一ハッシュの既存エントリを更新
+        if self.entries[base].key == hash {
+            self.entries[base] = new_entry;
+            return;
+        }
+        if self.entries[base + 1].key == hash {
+            self.entries[base + 1] = new_entry;
+            return;
+        }
+
+        // 空スロットに格納
+        if (self.entries[base].pn | self.entries[base].dn) == 0 {
+            self.entries[base] = new_entry;
+            return;
+        }
+        if (self.entries[base + 1].pn | self.entries[base + 1].dn) == 0 {
+            self.entries[base + 1] = new_entry;
+            return;
+        }
+
+        // 証明済み(pn=0)でない方を上書き
+        if self.entries[base].pn != 0 {
+            self.entries[base] = new_entry;
+        } else if self.entries[base + 1].pn != 0 {
+            self.entries[base + 1] = new_entry;
+        } else {
+            // 両方証明済み → slot1 を上書き
+            self.entries[base + 1] = new_entry;
+        }
+    }
+
+    /// 全エントリをクリアする．
+    fn clear(&mut self) {
+        for entry in self.entries.iter_mut() {
+            *entry = DfPnEntry {
+                key: 0,
+                pn: 0,
+                dn: 0,
+            };
+        }
     }
 }
 
@@ -58,10 +150,12 @@ pub struct DfPnSolver {
     draw_ply: u32,
     /// 実行時間制限．
     timeout: Duration,
-    /// 転置表．
-    table: HashMap<u64, DfPnEntry>,
+    /// 転置表(固定サイズ)．
+    table: TranspositionTable,
     /// 探索ノード数．
     nodes_searched: u64,
+    /// 探索中の最大ply(デバッグ用)．
+    max_ply: u32,
     /// 探索中のパス(ループ検出用)．
     path: HashSet<u64>,
     /// 探索開始時刻．
@@ -78,13 +172,17 @@ impl DfPnSolver {
 
     /// タイムアウト指定付きでソルバーを生成する．
     pub fn with_timeout(depth: u32, max_nodes: u64, draw_ply: u32, timeout_secs: u64) -> Self {
+        // TT サイズ: max_nodes に応じて調整
+        // 最大 16M エントリ ≈ 192MB(2-way で × 2 されるため実質 384MB)，最小 64K
+        let tt_size = (max_nodes as usize).min(16_777_216).max(65_536);
         DfPnSolver {
             depth,
             max_nodes,
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
-            table: HashMap::with_capacity(max_nodes.min(1_048_576) as usize),
+            table: TranspositionTable::new(tt_size),
             nodes_searched: 0,
+            max_ply: 0,
             path: HashSet::new(),
             start_time: Instant::now(),
             timed_out: false,
@@ -103,43 +201,49 @@ impl DfPnSolver {
     }
 
     /// 転置表を参照する．
-    fn look_up(&self, hash: u64) -> DfPnEntry {
-        self.table.get(&hash).copied().unwrap_or_default()
+    #[inline]
+    fn look_up_pn_dn(&self, hash: u64) -> (u32, u32) {
+        self.table.look_up(hash)
     }
 
     /// 転置表を更新する．
+    #[inline]
     fn store(&mut self, hash: u64, pn: u32, dn: u32) {
-        self.table.insert(hash, DfPnEntry { pn, dn });
+        self.table.store(hash, pn, dn);
     }
 
-    /// 詰将棋を解く．
+    /// 詰将棋を解く(反復深化 Df-Pn)．
     ///
     /// `board` は攻め方の手番から開始する局面．
     /// 片玉局面(攻め方に玉がない)を想定するが，両玉でも動作する．
+    ///
+    /// 反復深化により，短い手順から順に探索する．
+    /// 深い行き止まりに無駄なノードを費やすことを防ぎ，
+    /// 浅い詰み手順を優先的に発見する．
     pub fn solve(&mut self, board: &mut Board) -> TsumeResult {
         self.table.clear();
         self.nodes_searched = 0;
+        self.max_ply = 0;
         self.path.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
 
         let root_hash = board.hash;
 
-        // ルートノードの Df-Pn 探索
+        // 単一パス Df-Pn: 反復深化なしで全深さを一度に探索．
+        // 証明数・反証数が自然に探索を最も有望な手順に誘導する．
         self.mid(board, INF - 1, INF - 1, 0, true);
 
-        let entry = self.look_up(root_hash);
+        let (root_pn, root_dn) = self.look_up_pn_dn(root_hash);
 
-        if entry.pn == 0 {
-            // 詰みが証明された → OR ノードの未証明子ノードを追加証明
+        if root_pn == 0 {
             self.complete_or_proofs(board);
-            // 手順を復元
             let moves = self.extract_pv(board);
             TsumeResult::Checkmate {
                 moves,
                 nodes_searched: self.nodes_searched,
             }
-        } else if entry.dn == 0 {
+        } else if root_dn == 0 {
             TsumeResult::NoCheckmate {
                 nodes_searched: self.nodes_searched,
             }
@@ -171,21 +275,20 @@ impl DfPnSolver {
             return;
         }
         self.nodes_searched += 1;
+        if ply > self.max_ply {
+            self.max_ply = ply;
+        }
 
         let hash = board.hash;
 
-        // 終端条件: 深さ制限・手数制限
-        // pn=INF, dn=0 は「この深さでは詰みを証明できない」を意味する．
-        // depth を実際の詰め手数より大きく設定すれば正しく動作する．
-        // depth が詰め手数以下の場合は NoCheckmate(偽陰性)を返しうるが，
-        // 偽陽性(誤った詰み判定)は起こらない．
-        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
-            self.store(hash, INF, 0);
+        // ループ検出: 現在の探索パス上に同一局面があれば千日手
+        // TT には書き込まず即座に返す(GHI 対策)
+        if self.path.contains(&hash) {
             return;
         }
 
-        // ループ検出
-        if self.path.contains(&hash) {
+        // 終端条件: 深さ制限・手数制限
+        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
             self.store(hash, INF, 0);
             return;
         }
@@ -209,38 +312,70 @@ impl DfPnSolver {
             return;
         }
 
+        // 子ノードのハッシュを事前計算し，同時に短手数詰めチェックを行う．
+        // OR ノード: 1手詰め(応手 0)および 3手詰め(全応手に対し1手詰め王手が存在)
+        // AND ノード: 1手不詰(王手 0)チェック
+        let mut children: Vec<(Move, u64)> = Vec::with_capacity(moves.len());
+        for m in &moves {
+            let captured = board.do_move(*m);
+            let child_hash = board.hash;
+
+            let (cpn, cdn) = self.look_up_pn_dn(child_hash);
+            if cpn == 1 && cdn == 1 {
+                if or_node {
+                    // 子は AND ノード: 応手を生成
+                    let defenses = self.generate_defense_moves(board);
+                    if defenses.is_empty() {
+                        // 1手詰め
+                        self.store(child_hash, 0, INF);
+                    }
+                } else {
+                    // 子は OR ノード: 王手手が 0 なら不詰
+                    let checks = self.generate_check_moves(board);
+                    if checks.is_empty() {
+                        self.store(child_hash, INF, 0);
+                    }
+                }
+            }
+
+            board.undo_move(*m, captured);
+            children.push((*m, child_hash));
+        }
+
+        // パスに追加
         self.path.insert(hash);
 
         // MID ループ
         loop {
-            // 各子ノードの pn/dn を収集
-            let child_entries: Vec<DfPnEntry> = moves
+            // 各子ノードの pn/dn を収集(パス上の子はループとして扱う)
+            let child_pn_dn: Vec<(u32, u32)> = children
                 .iter()
-                .map(|m| {
-                    let captured = board.do_move(*m);
-                    let child_hash = board.hash;
-                    board.undo_move(*m, captured);
-                    self.look_up(child_hash)
+                .map(|&(_, child_hash)| {
+                    if self.path.contains(&child_hash) {
+                        (INF, 0)
+                    } else {
+                        self.look_up_pn_dn(child_hash)
+                    }
                 })
                 .collect();
 
             // OR ノード: pn = min(children.pn), dn = sum(children.dn)
             // AND ノード: pn = sum(children.pn), dn = min(children.dn)
             let (current_pn, current_dn) = if or_node {
-                let min_pn = child_entries.iter().map(|e| e.pn).min().unwrap_or(INF);
-                let sum_dn = child_entries
+                let min_pn = child_pn_dn.iter().map(|e| e.0).min().unwrap_or(INF);
+                let sum_dn = child_pn_dn
                     .iter()
-                    .map(|e| e.dn as u64)
+                    .map(|e| e.1 as u64)
                     .sum::<u64>()
                     .min(INF as u64) as u32;
                 (min_pn, sum_dn)
             } else {
-                let sum_pn = child_entries
+                let sum_pn = child_pn_dn
                     .iter()
-                    .map(|e| e.pn as u64)
+                    .map(|e| e.0 as u64)
                     .sum::<u64>()
                     .min(INF as u64) as u32;
-                let min_dn = child_entries.iter().map(|e| e.dn).min().unwrap_or(INF);
+                let min_dn = child_pn_dn.iter().map(|e| e.1).min().unwrap_or(INF);
                 (sum_pn, min_dn)
             };
 
@@ -259,20 +394,20 @@ impl DfPnSolver {
 
             // 最良の子ノードを選択し，閾値を計算
             let (best_idx, child_pn_th, child_dn_th) = if or_node {
-                let (idx, second_pn) = self.select_best_or(&child_entries);
+                let (idx, second_pn) = self.select_best_or(&child_pn_dn);
                 let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
-                    .saturating_add(child_entries[idx].dn)
+                    .saturating_add(child_pn_dn[idx].1)
                     .min(INF - 1);
                 let child_pn_th = pn_threshold
                     .min(second_pn.saturating_add(1))
                     .min(INF - 1);
                 (idx, child_pn_th, child_dn_th)
             } else {
-                let (idx, second_dn) = self.select_best_and(&child_entries);
+                let (idx, second_dn) = self.select_best_and(&child_pn_dn);
                 let child_pn_th = pn_threshold
                     .saturating_sub(current_pn)
-                    .saturating_add(child_entries[idx].pn)
+                    .saturating_add(child_pn_dn[idx].0)
                     .min(INF - 1);
                 let child_dn_th = dn_threshold
                     .min(second_dn.saturating_add(1))
@@ -281,30 +416,32 @@ impl DfPnSolver {
             };
 
             // 子ノードを探索
-            let m = moves[best_idx];
+            let (m, _) = children[best_idx];
             let captured = board.do_move(m);
             self.mid(board, child_pn_th, child_dn_th, ply + 1, !or_node);
             board.undo_move(m, captured);
+
         }
 
+        // パスから除去
         self.path.remove(&hash);
     }
 
     /// OR ノードの最良子ノードを選択する．
     ///
     /// 返り値: (最良インデックス, 2番目に小さい pn)
-    fn select_best_or(&self, entries: &[DfPnEntry]) -> (usize, u32) {
+    fn select_best_or(&self, entries: &[(u32, u32)]) -> (usize, u32) {
         let mut best_idx = 0;
         let mut best_pn = INF;
         let mut second_pn = INF;
 
-        for (i, e) in entries.iter().enumerate() {
-            if e.pn < best_pn {
+        for (i, &(pn, _dn)) in entries.iter().enumerate() {
+            if pn < best_pn {
                 second_pn = best_pn;
-                best_pn = e.pn;
+                best_pn = pn;
                 best_idx = i;
-            } else if e.pn < second_pn {
-                second_pn = e.pn;
+            } else if pn < second_pn {
+                second_pn = pn;
             }
         }
 
@@ -314,104 +451,319 @@ impl DfPnSolver {
     /// AND ノードの最良子ノードを選択する．
     ///
     /// 返り値: (最良インデックス, 2番目に小さい dn)
-    fn select_best_and(&self, entries: &[DfPnEntry]) -> (usize, u32) {
+    fn select_best_and(&self, entries: &[(u32, u32)]) -> (usize, u32) {
         let mut best_idx = 0;
         let mut best_dn = INF;
         let mut second_dn = INF;
 
-        for (i, e) in entries.iter().enumerate() {
-            if e.dn < best_dn {
+        for (i, &(_pn, dn)) in entries.iter().enumerate() {
+            if dn < best_dn {
                 second_dn = best_dn;
-                best_dn = e.dn;
+                best_dn = dn;
                 best_idx = i;
-            } else if e.dn < second_dn {
-                second_dn = e.dn;
+            } else if dn < second_dn {
+                second_dn = dn;
             }
         }
 
         (best_idx, second_dn)
     }
 
-    /// 玉方の応手を生成する(合い効かずを除外)．
+    /// 玉方の王手回避手を生成する(合い効かずを除外)．
     ///
-    /// 飛び駒(飛/龍/角/馬/香)による王手に対して，合い駒が効かない場合を検出する．
-    /// 合い効かず条件:
-    /// 1. 飛び駒と玉の間のマスに玉方の駒(玉除く)の効きがない
-    /// 2. 飛び駒が合い駒を取った後，玉がその駒を取り返せない
-    ///    (取り返せる = 取った位置が玉に隣接かつ攻め方の他の駒が利いていない)
+    /// 全合法手生成の代わりに回避手のみを直接生成する:
+    /// 1. 玉の移動(攻め方に利かれていないマスへ)
+    /// 2. 王手駒の捕獲(ピンされていない駒による)
+    /// 3. 合い駒(飛び駒の王手の場合，間のマスへ移動または打つ)
+    ///
+    /// 合い効かず(futile interposition)もフィルタする．
     fn generate_defense_moves(&self, board: &mut Board) -> Vec<Move> {
-        let moves = movegen::generate_legal_moves(board);
+        let defender = board.turn;
+        let attacker = defender.opponent();
 
-        // 玉の位置を取得
-        let king_sq = match board.king_square(board.turn) {
+        let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
-            None => return moves,
+            None => return movegen::generate_legal_moves(board),
         };
 
-        // 飛び駒による王手駒を特定
-        let attacker = board.turn.opponent();
-        let checker_sq = self.find_sliding_checker(board, king_sq, attacker);
-
-        let checker_sq = match checker_sq {
-            Some(sq) => sq,
-            None => return moves, // 飛び駒の王手でない or 両王手
-        };
-
-        // 間のマスを計算
-        let between = attack::between_bb(checker_sq, king_sq);
-        if between.is_empty() {
-            return moves; // 隣接する王手(合い駒不可)
+        // 王手している駒を特定
+        let checkers = self.find_checkers(board, king_sq, attacker);
+        if checkers.is_empty() {
+            // 王手されていない(通常ありえないが安全策)
+            return movegen::generate_legal_moves(board);
         }
 
-        // 各間マスごとに合い効かず判定
-        // 条件: 玉方の駒(玉除く)の効きがなく，かつ飛び駒が取った後に玉が取り返せない
-        let defender = board.turn;
+        let all_occ = board.all_occupied();
+        let our_occ = board.occupied[defender.index()];
+        let mut moves = Vec::with_capacity(32);
+
+        // --- 1. 玉の移動 ---
+        let king_attacks = attack::step_attacks(defender, PieceType::King, king_sq);
+        let king_targets = king_attacks & !our_occ;
+        for to in king_targets {
+            let captured_piece = board.squares[to.index()];
+            let captured_raw = captured_piece.0;
+            let m = Move::new_move(king_sq, to, false, captured_raw, PieceType::King as u8);
+            // 移動先が安全か(攻め方に利かれていないか)チェック
+            let captured = board.do_move(m);
+            let safe = !board.is_in_check(defender);
+            board.undo_move(m, captured);
+            if safe {
+                moves.push(m);
+            }
+        }
+
+        // 両王手の場合，玉移動のみ可能
+        if checkers.count() > 1 {
+            return moves;
+        }
+
+        // 単一の王手駒
+        let checker_sq = checkers.lsb().unwrap();
+
+        // --- 2. 王手駒の捕獲(玉以外の駒で) ---
+        self.generate_capture_checker(
+            board, &mut moves, checker_sq, king_sq, defender, all_occ, our_occ,
+        );
+
+        // --- 3. 合い駒(飛び駒の王手の場合) ---
+        let sliding_checker = self.find_sliding_checker(board, king_sq, attacker);
+        if sliding_checker.is_some() {
+            let between = attack::between_bb(checker_sq, king_sq);
+            if between.is_not_empty() {
+                // 合い効かずマスを計算
+                let futile = self.compute_futile_squares(
+                    board, &between, king_sq, checker_sq, defender, attacker,
+                );
+                // 間のマスへの合い駒
+                self.generate_interpositions(
+                    board, &mut moves, &between, &futile, king_sq, defender, all_occ, our_occ,
+                );
+            }
+        }
+
+        moves
+    }
+
+    /// 全ての王手駒を検出する．
+    fn find_checkers(&self, board: &Board, king_sq: Square, attacker: Color) -> Bitboard {
+        let occ = board.all_occupied();
+        let att = attacker.index();
+        let defender = attacker.opponent();
+
+        let mut checkers = Bitboard::EMPTY;
+
+        // 歩
+        checkers = checkers
+            | (attack::step_attacks(defender, PieceType::Pawn, king_sq)
+                & board.piece_bb[att][PieceType::Pawn as usize]);
+        // 桂
+        checkers = checkers
+            | (attack::step_attacks(defender, PieceType::Knight, king_sq)
+                & board.piece_bb[att][PieceType::Knight as usize]);
+        // 銀
+        checkers = checkers
+            | (attack::step_attacks(defender, PieceType::Silver, king_sq)
+                & board.piece_bb[att][PieceType::Silver as usize]);
+        // 金 + 成駒
+        let gold_like = board.piece_bb[att][PieceType::Gold as usize]
+            | board.piece_bb[att][PieceType::ProPawn as usize]
+            | board.piece_bb[att][PieceType::ProLance as usize]
+            | board.piece_bb[att][PieceType::ProKnight as usize]
+            | board.piece_bb[att][PieceType::ProSilver as usize];
+        checkers = checkers
+            | (attack::step_attacks(defender, PieceType::Gold, king_sq) & gold_like);
+        // 馬・龍(ステップ部分)
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+        checkers = checkers
+            | (king_step
+                & (board.piece_bb[att][PieceType::Horse as usize]
+                    | board.piece_bb[att][PieceType::Dragon as usize]));
+        // 香
+        checkers = checkers
+            | (attack::lance_attacks(defender, king_sq, occ)
+                & board.piece_bb[att][PieceType::Lance as usize]);
+        // 角・馬
+        checkers = checkers
+            | (attack::bishop_attacks(king_sq, occ)
+                & (board.piece_bb[att][PieceType::Bishop as usize]
+                    | board.piece_bb[att][PieceType::Horse as usize]));
+        // 飛・龍
+        checkers = checkers
+            | (attack::rook_attacks(king_sq, occ)
+                & (board.piece_bb[att][PieceType::Rook as usize]
+                    | board.piece_bb[att][PieceType::Dragon as usize]));
+
+        checkers
+    }
+
+    /// 王手駒を玉以外の駒で捕獲する手を生成する．
+    fn generate_capture_checker(
+        &self,
+        board: &mut Board,
+        moves: &mut Vec<Move>,
+        checker_sq: Square,
+        king_sq: Square,
+        defender: Color,
+        all_occ: Bitboard,
+        our_occ: Bitboard,
+    ) {
+        // 玉以外の自駒で checker_sq に利いている駒を探す
+        let mut our_bb = our_occ;
+        while our_bb.is_not_empty() {
+            let from = our_bb.pop_lsb();
+            if from == king_sq {
+                continue; // 玉は上で処理済み
+            }
+            let piece = board.squares[from.index()];
+            let pt = piece.piece_type().unwrap();
+            let attacks = attack::piece_attacks(defender, pt, from, all_occ);
+            if !attacks.contains(checker_sq) {
+                continue;
+            }
+
+            let captured_raw = board.squares[checker_sq.index()].0;
+            let in_promo_zone =
+                checker_sq.is_promotion_zone(defender) || from.is_promotion_zone(defender);
+
+            if pt.can_promote() && in_promo_zone {
+                let m = Move::new_move(from, checker_sq, true, captured_raw, pt as u8);
+                if self.is_evasion_legal(board, m, defender) {
+                    moves.push(m);
+                }
+                if !movegen::must_promote(defender, pt, checker_sq) {
+                    let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
+                    if self.is_evasion_legal(board, m, defender) {
+                        moves.push(m);
+                    }
+                }
+            } else if !movegen::must_promote(defender, pt, checker_sq) {
+                let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
+                if self.is_evasion_legal(board, m, defender) {
+                    moves.push(m);
+                }
+            }
+        }
+    }
+
+    /// 合い効かずマスを計算する．
+    fn compute_futile_squares(
+        &self,
+        board: &Board,
+        between: &Bitboard,
+        king_sq: Square,
+        checker_sq: Square,
+        defender: Color,
+        attacker: Color,
+    ) -> Bitboard {
         let king_step = attack::step_attacks(
             defender.opponent(),
             PieceType::King,
             king_sq,
         );
+        let mut futile = Bitboard::EMPTY;
 
-        // 各間マスについて個別判定
-        let mut filtered_between = crate::bitboard::Bitboard::EMPTY;
-        for sq in between {
-            // 条件1: 玉方の非玉駒が利いている → 合い効かずでない
+        for sq in *between {
             if self.is_attacked_by_non_king(board, sq, defender) {
                 continue;
             }
+            if king_step.contains(sq)
+                && !self.is_attacked_by_excluding(board, sq, attacker, checker_sq)
+            {
+                continue;
+            }
+            futile.set(sq);
+        }
+        futile
+    }
 
-            // 条件2: 飛び駒が取った後，玉が取り返せるか？
-            // 取った位置が玉に隣接，かつ攻め方の他の駒がその位置に利いていない場合，
-            // 玉が取り返せる → 合い効かずでない
-            if king_step.contains(sq) {
-                // 飛び駒がこのマスに移動した後，攻め方の他の駒が利いているかを
-                // 近似的に判定: 現在の局面で攻め方(飛び駒自身を除く)が利いているか
-                // 飛び駒は移動するため除外が必要だが，is_attacked_by で近似
-                // (飛び駒自身の利きも含まれるが，移動元からの利きは消える)
-                //
-                // より正確な判定: 飛び駒を除外した攻め方利きを計算
-                if !self.is_attacked_by_excluding(board, sq, attacker, checker_sq) {
-                    continue; // 攻め方の他の駒が利いていない → 玉が取り返せる
+    /// 間のマスへの合い駒手を生成する(移動・打ち)．
+    fn generate_interpositions(
+        &self,
+        board: &mut Board,
+        moves: &mut Vec<Move>,
+        between: &Bitboard,
+        futile: &Bitboard,
+        king_sq: Square,
+        defender: Color,
+        all_occ: Bitboard,
+        our_occ: Bitboard,
+    ) {
+        for to in *between {
+            // --- 駒移動による合い駒 ---
+            let mut our_bb = our_occ;
+            while our_bb.is_not_empty() {
+                let from = our_bb.pop_lsb();
+                if from == king_sq {
+                    continue;
+                }
+                let piece = board.squares[from.index()];
+                let pt = piece.piece_type().unwrap();
+                let attacks = attack::piece_attacks(defender, pt, from, all_occ);
+                if !attacks.contains(to) {
+                    continue;
+                }
+                let captured_raw = board.squares[to.index()].0;
+                let in_promo_zone =
+                    to.is_promotion_zone(defender) || from.is_promotion_zone(defender);
+
+                if pt.can_promote() && in_promo_zone {
+                    let m = Move::new_move(from, to, true, captured_raw, pt as u8);
+                    if self.is_evasion_legal(board, m, defender) {
+                        moves.push(m);
+                    }
+                    if !movegen::must_promote(defender, pt, to) {
+                        let m = Move::new_move(from, to, false, captured_raw, pt as u8);
+                        if self.is_evasion_legal(board, m, defender) {
+                            moves.push(m);
+                        }
+                    }
+                } else if !movegen::must_promote(defender, pt, to) {
+                    let m = Move::new_move(from, to, false, captured_raw, pt as u8);
+                    if self.is_evasion_legal(board, m, defender) {
+                        moves.push(m);
+                    }
                 }
             }
 
-            filtered_between.set(sq);
-        }
-
-        if filtered_between.is_empty() {
-            return moves;
-        }
-
-        // 合い効かずマスへの合い駒打ちを除外
-        moves
-            .into_iter()
-            .filter(|m| {
-                if !m.is_drop() {
-                    return true; // 駒移動は常に有効
+            // --- 駒打ちによる合い駒(合い効かずでないマスのみ) ---
+            if futile.contains(to) {
+                continue;
+            }
+            for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
+                if board.hand[defender.index()][hand_idx] == 0 {
+                    continue;
                 }
-                !filtered_between.contains(m.to_sq())
-            })
-            .collect()
+                // 行き所のない駒チェック
+                if movegen::must_promote(defender, pt, to) {
+                    continue;
+                }
+                // 二歩チェック
+                if pt == PieceType::Pawn {
+                    let our_pawns =
+                        board.piece_bb[defender.index()][PieceType::Pawn as usize];
+                    let col = to.col();
+                    if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
+                        continue;
+                    }
+                }
+                let m = Move::new_drop(to, pt);
+                // 打ち歩詰めチェック
+                if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
+                    continue;
+                }
+                moves.push(m);
+            }
+        }
+    }
+
+    /// 回避手の合法性チェック(ピンの確認)．
+    #[inline]
+    fn is_evasion_legal(&self, board: &mut Board, m: Move, defender: Color) -> bool {
+        let captured = board.do_move(m);
+        let in_check = board.is_in_check(defender);
+        board.undo_move(m, captured);
+        !in_check
     }
 
     /// 飛び駒で王手している駒のマスを返す(単一の場合のみ)．
@@ -569,18 +921,271 @@ impl DfPnSolver {
     }
 
     /// 攻め方の王手になる手を生成する．
+    ///
+    /// 最適化: 玉方の玉に王手がかかる手のみを直接生成する．
+    /// 全合法手を生成してからフィルタする方式と比べ，生成候補を大幅に削減する．
     fn generate_check_moves(&self, board: &mut Board) -> Vec<Move> {
-        let all_moves = movegen::generate_legal_moves(board);
+        let us = board.turn;
+        let them = us.opponent();
+        let has_own_king = board.king_square(us).is_some();
 
-        all_moves
-            .into_iter()
-            .filter(|m| {
-                let captured = board.do_move(*m);
-                let gives_check = board.is_in_check(board.turn);
-                board.undo_move(*m, captured);
-                gives_check
-            })
-            .collect()
+        let king_sq = match board.king_square(them) {
+            Some(sq) => sq,
+            None => return Vec::new(),
+        };
+
+        let our_occ = board.occupied[us.index()];
+        let all_occ = board.all_occupied();
+        let empty = !all_occ;
+
+        // 各駒種について「このマスに置くと玉に王手がかかる」ターゲットを事前計算
+        // step_attacks(them, pt, king_sq) は「玉から見た逆利き」= 王手元になれるマス
+
+        let mut moves = Vec::with_capacity(64);
+
+        // --- 1. 駒打ち: ターゲットマスのみに打つ ---
+        for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
+            if board.hand[us.index()][hand_idx] == 0 {
+                continue;
+            }
+
+            // この駒種で王手になるマスを計算
+            let check_targets = match pt {
+                PieceType::Lance => attack::lance_attacks(them, king_sq, all_occ),
+                PieceType::Bishop => attack::bishop_attacks(king_sq, all_occ),
+                PieceType::Rook => attack::rook_attacks(king_sq, all_occ),
+                _ => attack::step_attacks(them, pt, king_sq),
+            };
+            let mut drop_targets = check_targets & empty;
+
+            // 二歩チェック
+            if pt == PieceType::Pawn {
+                let our_pawns = board.piece_bb[us.index()][PieceType::Pawn as usize];
+                for col in 0..9u8 {
+                    let file = Bitboard::file_mask(col);
+                    if (our_pawns & file).is_not_empty() {
+                        drop_targets &= !file;
+                    }
+                }
+            }
+
+            // 行き所のない駒の制限
+            match pt {
+                PieceType::Pawn | PieceType::Lance => {
+                    let forbidden = match us {
+                        Color::Black => Bitboard::rank_mask(0),
+                        Color::White => Bitboard::rank_mask(8),
+                    };
+                    drop_targets &= !forbidden;
+                }
+                PieceType::Knight => {
+                    let forbidden = match us {
+                        Color::Black => Bitboard::rank_mask(0) | Bitboard::rank_mask(1),
+                        Color::White => Bitboard::rank_mask(7) | Bitboard::rank_mask(8),
+                    };
+                    drop_targets &= !forbidden;
+                }
+                _ => {}
+            }
+
+            for to in drop_targets {
+                let m = Move::new_drop(to, pt);
+                // 打ち歩詰めチェック
+                if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
+                    continue;
+                }
+                // 駒打ちは自玉への王手放置にならない(片玉でも両玉でも)
+                moves.push(m);
+            }
+        }
+
+        // --- 2. 盤上の駒の移動 ---
+        // 直接王手: 移動先から玉に利きがある手
+        // 開き王手: 駒が移動することで背後のスライド駒から玉に利きが通る手
+
+        // 開き王手の候補を事前計算:
+        // 玉からのレイ上にいる自駒で，その間に他の駒がない場合，
+        // そこから移動すると開き王手になりうる
+        let discoverers = self.compute_discoverers(board, us, king_sq);
+
+        let mut our_bb = our_occ;
+        while our_bb.is_not_empty() {
+            let from = our_bb.pop_lsb();
+            let piece = board.squares[from.index()];
+            let pt = piece.piece_type().unwrap();
+            let attacks = attack::piece_attacks(us, pt, from, all_occ);
+            let targets = attacks & !our_occ;
+
+            let is_discoverer = discoverers.contains(from);
+
+            for to in targets {
+                let captured_piece = board.squares[to.index()];
+                let captured_raw = captured_piece.0;
+                let in_promo_zone = to.is_promotion_zone(us) || from.is_promotion_zone(us);
+
+                // 成り先の駒種での王手チェック
+                if pt.can_promote() && in_promo_zone {
+                    let promoted_pt = pt.promoted().unwrap();
+                    let gives_direct = self.attacks_square(us, promoted_pt, to, all_occ, king_sq);
+                    if gives_direct || is_discoverer {
+                        let m = Move::new_move(from, to, true, captured_raw, pt as u8);
+                        if self.is_legal_quick(board, m, has_own_king) {
+                            moves.push(m);
+                        }
+                    }
+
+                    // 不成
+                    if !movegen::must_promote(us, pt, to) {
+                        let gives_direct =
+                            self.attacks_square(us, pt, to, all_occ, king_sq);
+                        if gives_direct || is_discoverer {
+                            let m = Move::new_move(from, to, false, captured_raw, pt as u8);
+                            if self.is_legal_quick(board, m, has_own_king) {
+                                moves.push(m);
+                            }
+                        }
+                    }
+                } else if !movegen::must_promote(us, pt, to) {
+                    let gives_direct = self.attacks_square(us, pt, to, all_occ, king_sq);
+                    if gives_direct || is_discoverer {
+                        let m = Move::new_move(from, to, false, captured_raw, pt as u8);
+                        if self.is_legal_quick(board, m, has_own_king) {
+                            moves.push(m);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 手順序: 成り駒 > 駒取り > その他(DFPN の同 pn 時の tie-break に効く)
+        moves.sort_by_key(|m| {
+            let promo = m.is_promotion();
+            let capture = m.captured_piece_raw() > 0;
+            match (promo, capture) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }
+        });
+
+        moves
+    }
+
+    /// 指定マスに置いた駒が玉のマスに利いているか判定する．
+    #[inline]
+    fn attacks_square(
+        &self,
+        color: Color,
+        pt: PieceType,
+        from: Square,
+        occ: Bitboard,
+        target: Square,
+    ) -> bool {
+        attack::piece_attacks(color, pt, from, occ).contains(target)
+    }
+
+    /// 開き王手の元になりうる自駒を計算する．
+    ///
+    /// 玉からの飛び利きレイ上にいる自駒で，玉との間に他の駒がない場合，
+    /// その駒はレイ方向以外への移動で開き王手になる．
+    fn compute_discoverers(&self, board: &Board, us: Color, king_sq: Square) -> Bitboard {
+        let all_occ = board.all_occupied();
+        let our_occ = board.occupied[us.index()];
+        let mut discoverers = Bitboard::EMPTY;
+
+        // 飛車・龍のレイ(十字方向)
+        let our_rook_like = board.piece_bb[us.index()][PieceType::Rook as usize]
+            | board.piece_bb[us.index()][PieceType::Dragon as usize];
+        if our_rook_like.is_not_empty() {
+            // レイ上の最近接駒が自駒で，その先に飛・龍がある場合
+            for dir_attacks in [
+                attack::rook_attacks(king_sq, all_occ),
+            ] {
+                let nearest = dir_attacks & all_occ;
+                for sq in nearest {
+                    if !our_occ.contains(sq) {
+                        continue;
+                    }
+                    // この駒の先に飛・龍があるか
+                    let beyond_occ = all_occ & {
+                        let mut tmp = Bitboard::EMPTY;
+                        tmp.set(sq);
+                        !tmp
+                    };
+                    let beyond = attack::rook_attacks(king_sq, beyond_occ) & !attack::rook_attacks(king_sq, all_occ);
+                    if (beyond & our_rook_like).is_not_empty() {
+                        discoverers.set(sq);
+                    }
+                }
+            }
+        }
+
+        // 角・馬のレイ(斜め方向)
+        let our_bishop_like = board.piece_bb[us.index()][PieceType::Bishop as usize]
+            | board.piece_bb[us.index()][PieceType::Horse as usize];
+        if our_bishop_like.is_not_empty() {
+            for dir_attacks in [
+                attack::bishop_attacks(king_sq, all_occ),
+            ] {
+                let nearest = dir_attacks & all_occ;
+                for sq in nearest {
+                    if !our_occ.contains(sq) {
+                        continue;
+                    }
+                    let beyond_occ = all_occ & {
+                        let mut tmp = Bitboard::EMPTY;
+                        tmp.set(sq);
+                        !tmp
+                    };
+                    let beyond = attack::bishop_attacks(king_sq, beyond_occ) & !attack::bishop_attacks(king_sq, all_occ);
+                    if (beyond & our_bishop_like).is_not_empty() {
+                        discoverers.set(sq);
+                    }
+                }
+            }
+        }
+
+        // 香のレイ(縦方向: 玉から見て香の利く方向)
+        let our_lance = board.piece_bb[us.index()][PieceType::Lance as usize];
+        if our_lance.is_not_empty() {
+            // 香は前方のみ攻撃する飛び駒．
+            // 玉から見て，攻め方の香の前方にある自駒が開き王手元
+            let lance_ray = attack::lance_attacks(us.opponent(), king_sq, all_occ);
+            let nearest = lance_ray & all_occ;
+            for sq in nearest {
+                if !our_occ.contains(sq) {
+                    continue;
+                }
+                let beyond_occ = all_occ & {
+                    let mut tmp = Bitboard::EMPTY;
+                    tmp.set(sq);
+                    !tmp
+                };
+                let beyond = attack::lance_attacks(us.opponent(), king_sq, beyond_occ)
+                    & !attack::lance_attacks(us.opponent(), king_sq, all_occ);
+                if (beyond & our_lance).is_not_empty() {
+                    discoverers.set(sq);
+                }
+            }
+        }
+
+        discoverers
+    }
+
+    /// 合法性の簡易チェック(自玉の王手放置のみ)．
+    ///
+    /// 片玉の場合(自玉なし)は常に合法．
+    #[inline]
+    fn is_legal_quick(&self, board: &mut Board, m: Move, has_own_king: bool) -> bool {
+        if !has_own_king {
+            return true;
+        }
+        let us = board.turn;
+        let captured = board.do_move(m);
+        let in_check = board.is_in_check(us);
+        board.undo_move(m, captured);
+        !in_check
     }
 
     /// PV パス上の OR ノードで未証明の子ノードを追加証明する．
@@ -632,9 +1237,9 @@ impl DfPnSolver {
                         break;
                     }
                     let captured = board_clone.do_move(*m);
-                    let child = self.look_up(board_clone.hash);
+                    let (cpn, cdn) = self.look_up_pn_dn(board_clone.hash);
 
-                    if child.pn != 0 && child.dn != 0 {
+                    if cpn != 0 && cdn != 0 {
                         // 各子ノードに最大10万ノードの追加予算を割り当てる．
                         // saved(= 初期ノード + max_nodes)を上限とし，
                         // 残予算が少ない場合は自然に打ち切られる．
@@ -646,7 +1251,7 @@ impl DfPnSolver {
                         self.mid(&mut board_clone, INF - 1, INF - 1, ply + 1, false);
                         self.max_nodes = saved;
 
-                        if self.look_up(board_clone.hash).pn == 0 {
+                        if self.look_up_pn_dn(board_clone.hash).0 == 0 {
                             any_changed = true;
                         }
                     }
@@ -687,11 +1292,11 @@ impl DfPnSolver {
             return Vec::new();
         }
 
-        let entry = self.look_up(hash);
+        let (node_pn, _node_dn) = self.look_up_pn_dn(hash);
 
         if or_node {
             // 攻め方: pn == 0 でなければ未証明
-            if entry.pn != 0 {
+            if node_pn != 0 {
                 return Vec::new();
             }
 
@@ -705,9 +1310,9 @@ impl DfPnSolver {
 
             for m in &moves {
                 let captured = board.do_move(*m);
-                let child_entry = self.look_up(board.hash);
+                let (child_pn, _child_dn) = self.look_up_pn_dn(board.hash);
 
-                if child_entry.pn == 0 {
+                if child_pn == 0 {
                     visited.insert(hash);
                     let sub_pv = self.extract_pv_recursive(board, false, visited);
                     visited.remove(&hash);
@@ -744,9 +1349,9 @@ impl DfPnSolver {
 
             for m in &moves {
                 let captured = board.do_move(*m);
-                let child_entry = self.look_up(board.hash);
+                let (child_pn, _child_dn) = self.look_up_pn_dn(board.hash);
 
-                if child_entry.pn == 0 {
+                if child_pn == 0 {
                     visited.insert(hash);
                     let sub_pv = self.extract_pv_recursive(board, true, visited);
                     visited.remove(&hash);
@@ -1077,7 +1682,7 @@ mod tests {
         // ここは AND ノード(後手番)．2三歩打(P*2c)が合法手に含まれることを検証
         let defenses = movegen::generate_legal_moves(&mut board);
         let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
-        eprintln!("Defenses after R*2a: {:?}", usi_defenses);
+        // debug: defenses
 
         // P*2c (2三歩打) が合法手に含まれること
         assert!(
@@ -1090,7 +1695,7 @@ mod tests {
         let cap = board.do_move(p2c);
 
         // 先手の王手手段を確認
-        let checks: Vec<String> = movegen::generate_legal_moves(&mut board)
+        let _checks: Vec<String> = movegen::generate_legal_moves(&mut board)
             .into_iter()
             .filter(|m| {
                 let c = board.do_move(*m);
@@ -1100,7 +1705,6 @@ mod tests {
             })
             .map(|m| m.to_usi())
             .collect();
-        eprintln!("Check moves after P*2c: {:?}", checks);
 
         board.undo_move(p2c, cap);
     }
@@ -1134,6 +1738,213 @@ mod tests {
                 );
             }
             other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// generate_check_moves の結果を brute-force と比較する．
+    #[test]
+    fn test_check_moves_completeness() {
+        use std::collections::BTreeSet;
+        let test_positions = [
+            // 17手詰めの初期局面(OR node)
+            "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",
+            // image2
+            "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
+            // image3
+            "l1k6/9/1pB6/9/9/9/9/9/9 b RGrb4g4s4n3l16p 1",
+            // 9te kosaka
+            "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
+        ];
+
+        let solver = DfPnSolver::default_solver();
+        for sfen in &test_positions {
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
+
+            // Brute-force: 全合法手 → フィルタ
+            let brute_checks: BTreeSet<String> = movegen::generate_legal_moves(&mut board)
+                .into_iter()
+                .filter(|m| {
+                    let c = board.do_move(*m);
+                    let gives_check = board.is_in_check(board.turn);
+                    board.undo_move(*m, c);
+                    gives_check
+                })
+                .map(|m| m.to_usi())
+                .collect();
+
+            let optimized_checks: BTreeSet<String> = solver
+                .generate_check_moves(&mut board)
+                .iter()
+                .map(|m| m.to_usi())
+                .collect();
+
+            let missing: BTreeSet<_> = brute_checks.difference(&optimized_checks).collect();
+            let extra: BTreeSet<_> = optimized_checks.difference(&brute_checks).collect();
+
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "check moves mismatch for sfen: {}\n  missing: {:?}\n  extra: {:?}\n  brute: {:?}\n  opt: {:?}",
+                sfen, missing, extra, brute_checks, optimized_checks
+            );
+        }
+    }
+
+    /// generate_defense_moves と generate_legal_moves の結果を比較する．
+    ///
+    /// 王手がかかっている局面で，回避手生成(evasion)が
+    /// 全合法手のサブセットであり，かつ全合法手を漏れなく含むことを検証する．
+    #[test]
+    fn test_defense_moves_completeness() {
+        use std::collections::BTreeSet;
+        // テスト局面: 攻め方が王手した直後の局面をいくつか用意
+        let test_positions = [
+            // S*4a で王手 → 玉方の応手
+            "9/3S1Pk2/9/8R/8B/9/9/9/9 w rb4g2s4n4l17p 2",
+            // 飛車で王手(スライディング)
+            "9/5Pk2/9/5R3/8B/9/9/9/9 w 2Srb4g2s4n4l17p 2",
+            // 角で王手
+            "9/5Pk2/9/8R/5B3/9/9/9/9 w 2Srb4g2s4n4l17p 2",
+            // test_tsume_image3 の中間局面(R*2a 後)
+            "l1k6/R8/1pB6/9/9/9/9/9/9 w rb4g4s4n3l16p 2",
+        ];
+
+        let solver = DfPnSolver::default_solver();
+
+        for sfen in &test_positions {
+            let mut board = Board::new();
+            if board.set_sfen(sfen).is_err() {
+                continue;
+            }
+
+            // まず王手されているか確認
+            if !board.is_in_check(board.turn) {
+                continue;
+            }
+
+            let defense_moves: BTreeSet<String> = solver
+                .generate_defense_moves(&mut board)
+                .iter()
+                .map(|m| m.to_usi())
+                .collect();
+
+            let legal_moves: BTreeSet<String> = movegen::generate_legal_moves(&mut board)
+                .iter()
+                .map(|m| m.to_usi())
+                .collect();
+
+            // defense_moves は legal_moves のサブセットであること
+            let extra: BTreeSet<_> = defense_moves.difference(&legal_moves).collect();
+            assert!(
+                extra.is_empty(),
+                "defense has extra moves not in legal: {:?}\nsfen: {}",
+                extra, sfen
+            );
+
+            // legal_moves は defense_moves のサブセットであること(漏れがない)
+            let missing: BTreeSet<_> = legal_moves.difference(&defense_moves).collect();
+            assert!(
+                missing.is_empty(),
+                "defense is missing legal moves: {:?}\nsfen: {}\ndefense: {:?}\nlegal: {:?}",
+                missing, sfen, defense_moves, legal_moves
+            );
+        }
+    }
+
+    /// 17手詰め局面の solve() テスト．
+    #[test]
+    fn test_17te_solve() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched,
+            } => {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!(
+                    "17te: CHECKMATE in {} moves, {} nodes: {}",
+                    pv.len(),
+                    nodes_searched,
+                    pv.join(" ")
+                );
+            }
+            other => panic!("expected Checkmate for 17te, got {:?}", other),
+        }
+    }
+
+    /// brute-force 詰み判定(DFPN との結果比較用)．
+    #[test]
+    #[ignore] // 5M ノードを使う重いテスト．明示的に `cargo test -- --ignored` で実行．
+    fn test_17te_bruteforce() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let solver = DfPnSolver::default_solver();
+
+        // 深さ制限付き brute-force
+        fn is_checkmate(
+            board: &mut Board,
+            solver: &DfPnSolver,
+            depth: u32,
+            or_node: bool,
+            nodes: &mut u64,
+        ) -> bool {
+            if depth == 0 {
+                return false;
+            }
+            *nodes += 1;
+            if *nodes > 5_000_000 {
+                return false; // 打ち切り
+            }
+
+            let moves = if or_node {
+                solver.generate_check_moves(board)
+            } else {
+                movegen::generate_legal_moves(board)
+            };
+
+            if moves.is_empty() {
+                return !or_node; // OR: 王手なし=不詰, AND: 応手なし=詰み
+            }
+
+            if or_node {
+                // OR: いずれかの子が詰みなら true
+                for m in &moves {
+                    let captured = board.do_move(*m);
+                    let result = is_checkmate(board, solver, depth - 1, false, nodes);
+                    board.undo_move(*m, captured);
+                    if result {
+                        return true;
+                    }
+                }
+                false
+            } else {
+                // AND: 全ての子が詰みなら true
+                for m in &moves {
+                    let captured = board.do_move(*m);
+                    let result = is_checkmate(board, solver, depth - 1, true, nodes);
+                    board.undo_move(*m, captured);
+                    if !result {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+
+        for depth in (1..=21).step_by(2) {
+            let mut nodes = 0u64;
+            let result = is_checkmate(&mut board, &solver, depth, true, &mut nodes);
+            if result {
+                break;
+            }
         }
     }
 }

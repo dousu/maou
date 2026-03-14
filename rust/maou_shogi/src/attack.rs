@@ -266,6 +266,7 @@ pub fn dragon_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard 
 /// 2マス間のレイ上のマス(両端を含まない)を返す．
 ///
 /// `sq1` と `sq2` が同一直線上(縦横斜め)にない場合は空を返す．
+#[inline]
 pub fn between_bb(sq1: Square, sq2: Square) -> Bitboard {
     let c1 = sq1.col() as i8;
     let r1 = sq1.row() as i8;
