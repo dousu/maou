@@ -347,6 +347,12 @@ impl TranspositionTable {
         // 新規エントリを追加(同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
         if entries.len() < MAX_TT_ENTRIES_PER_POSITION {
             entries.push(DfPnEntry { hand, pn, dn });
+        } else {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "TT: MAX_TT_ENTRIES_PER_POSITION ({}) reached, entry dropped (hand={:?}, pn={}, dn={})",
+                MAX_TT_ENTRIES_PER_POSITION, hand, pn, dn
+            );
         }
     }
 
@@ -1742,7 +1748,7 @@ impl DfPnSolver {
 
         // 手順序: 成り駒 > 駒取り > その他(初期展開順序として tie-break に寄与)
         // 同 pn 時の主たる tie-break は MID ループ内で dn 比較により行う
-        moves.sort_by_key(|m| {
+        moves.sort_unstable_by_key(|m| {
             let promo = m.is_promotion();
             let capture = m.captured_piece_raw() > 0;
             match (promo, capture) {
@@ -1879,19 +1885,30 @@ impl DfPnSolver {
     /// 玉方(AND): 証明済み子ノードの中で最長抵抗を選択．
     fn extract_pv(&self, board: &mut Board) -> Vec<Move> {
         let mut board_clone = board.clone();
-        self.extract_pv_recursive(&mut board_clone, true, &mut FxHashSet::default())
+        self.extract_pv_recursive(
+            &mut board_clone,
+            true,
+            &mut FxHashSet::default(),
+            0,
+        )
     }
 
     /// PV 復元の再帰実装．
     ///
     /// 各ノードで全候補手のサブPVを生成し，攻め方は最短，玉方は最長を選ぶ．
     /// ループ検出にはフルハッシュ，TT 参照には位置キー＋持ち駒を使用する．
+    /// `ply` は現在の再帰深度で，`self.depth * 2` を超えると打ち切る．
     fn extract_pv_recursive(
         &self,
         board: &mut Board,
         or_node: bool,
         visited: &mut FxHashSet<u64>,
+        ply: u32,
     ) -> Vec<Move> {
+        // スタックオーバーフロー防止: 探索手数の2倍を再帰深度の上限とする
+        if ply >= self.depth * 2 {
+            return Vec::new();
+        }
         let full_hash = board.hash;
 
         // ループ検出(フルハッシュ)
@@ -1921,7 +1938,7 @@ impl DfPnSolver {
                     visited.insert(full_hash);
                     let sub_pv =
                         self.extract_pv_recursive(
-                            board, false, visited,
+                            board, false, visited, ply + 1,
                         );
                     visited.remove(&full_hash);
 
@@ -1961,7 +1978,7 @@ impl DfPnSolver {
                     visited.insert(full_hash);
                     let sub_pv =
                         self.extract_pv_recursive(
-                            board, true, visited,
+                            board, true, visited, ply + 1,
                         );
                     visited.remove(&full_hash);
 
