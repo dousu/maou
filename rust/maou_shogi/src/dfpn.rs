@@ -2528,4 +2528,39 @@ mod tests {
             }
         }
     }
+
+    /// 29手詰め(tsume6)．重いため ignore．
+    #[test]
+    #[ignore] // 29手詰め．明示的に `cargo test -- --ignored` で実行．
+    fn test_tsume_6_29te() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched,
+            } => {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!(
+                    "tsume6: CHECKMATE in {} moves, {} nodes: {}",
+                    pv.len(),
+                    nodes_searched,
+                    pv.join(" ")
+                );
+                assert_eq!(
+                    pv.len(),
+                    29,
+                    "expected 29-move checkmate, got {} moves: {}",
+                    pv.len(),
+                    pv.join(" ")
+                );
+            }
+            other => panic!("expected Checkmate for tsume6, got {:?}", other),
+        }
+    }
 }
