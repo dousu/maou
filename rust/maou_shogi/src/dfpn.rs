@@ -2071,7 +2071,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tsume_image2() {
+    fn test_tsume_2() {
         // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
         // 11手詰め: 32金打，同玉，42角成，21玉，31馬，同銀，23飛成，22銀，33桂打，31玉，41と
         let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
@@ -2270,7 +2270,7 @@ mod tests {
         let test_positions = [
             // 17手詰めの初期局面(OR node)
             "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",
-            // image2
+            // tsume2
             "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
             // image3
             "l1k6/9/1pB6/9/9/9/9/9/9 b RGrb4g4s4n3l16p 1",

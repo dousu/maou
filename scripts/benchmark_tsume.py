@@ -14,7 +14,7 @@ PROBLEMS = {
         "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1",
         31,
     ),
-    "image2_11te": (
+    "tsume2_11te": (
         "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
         31,
     ),
