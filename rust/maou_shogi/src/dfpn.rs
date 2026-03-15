@@ -39,6 +39,128 @@ fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
 
+/// プロファイリング計測マクロ．
+///
+/// `profile` feature が有効な場合のみ計測し，結果をフィールドに加算する．
+#[cfg(feature = "profile")]
+macro_rules! profile_timed {
+    ($self:expr, $ns_field:ident, $count_field:ident, $body:expr) => {{
+        let _t = Instant::now();
+        let _r = $body;
+        let _elapsed = _t.elapsed().as_nanos() as u64;
+        $self.profile_stats.$ns_field += _elapsed;
+        $self.profile_stats.$count_field += 1;
+        _r
+    }};
+}
+
+/// プロファイリング無効時は素通し．
+#[cfg(not(feature = "profile"))]
+macro_rules! profile_timed {
+    ($self:expr, $ns_field:ident, $count_field:ident, $body:expr) => {
+        $body
+    };
+}
+
+/// プロファイリング統計情報．
+///
+/// `profile` feature が有効な場合に収集される．
+/// 各フィールドは `mid()` 内の主要操作の累積時間(ナノ秒)と呼び出し回数を保持する．
+#[cfg(feature = "profile")]
+#[derive(Debug, Clone, Default)]
+pub struct ProfileStats {
+    /// position_key() の累積時間(ナノ秒)．
+    pub position_key_ns: u64,
+    /// position_key() の呼び出し回数．
+    pub position_key_count: u64,
+    /// ループ検出(path.contains)の累積時間(ナノ秒)．
+    pub loop_detect_ns: u64,
+    /// ループ検出の呼び出し回数．
+    pub loop_detect_count: u64,
+    /// TT 参照(look_up_pn_dn)の累積時間(ナノ秒)．
+    pub tt_lookup_ns: u64,
+    /// TT 参照の呼び出し回数．
+    pub tt_lookup_count: u64,
+    /// TT 格納(store)の累積時間(ナノ秒)．
+    pub tt_store_ns: u64,
+    /// TT 格納の呼び出し回数．
+    pub tt_store_count: u64,
+    /// 王手生成(generate_check_moves)の累積時間(ナノ秒)．
+    pub movegen_check_ns: u64,
+    /// 王手生成の呼び出し回数．
+    pub movegen_check_count: u64,
+    /// 応手生成(generate_defense_moves)の累積時間(ナノ秒)．
+    pub movegen_defense_ns: u64,
+    /// 応手生成の呼び出し回数．
+    pub movegen_defense_count: u64,
+    /// do_move の累積時間(ナノ秒)．
+    pub do_move_ns: u64,
+    /// do_move の呼び出し回数．
+    pub do_move_count: u64,
+    /// undo_move の累積時間(ナノ秒)．
+    pub undo_move_ns: u64,
+    /// undo_move の呼び出し回数．
+    pub undo_move_count: u64,
+    /// 子ノード初期化フェーズの累積時間(ナノ秒)．
+    pub child_init_ns: u64,
+    /// 子ノード初期化の呼び出し回数．
+    pub child_init_count: u64,
+    /// メインループの pn/dn 収集の累積時間(ナノ秒)．
+    pub main_loop_collect_ns: u64,
+    /// メインループの pn/dn 収集回数．
+    pub main_loop_collect_count: u64,
+}
+
+#[cfg(feature = "profile")]
+impl std::fmt::Display for ProfileStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let total_ns = self.position_key_ns
+            + self.loop_detect_ns
+            + self.tt_lookup_ns
+            + self.tt_store_ns
+            + self.movegen_check_ns
+            + self.movegen_defense_ns
+            + self.do_move_ns
+            + self.undo_move_ns
+            + self.child_init_ns
+            + self.main_loop_collect_ns;
+        let total_us = total_ns as f64 / 1000.0;
+
+        writeln!(f, "=== DFPN Profile Stats ===")?;
+        writeln!(f, "{:<25} {:>12} {:>10} {:>10} {:>6}",
+            "Operation", "Total(µs)", "Count", "Avg(ns)", "%")?;
+        writeln!(f, "{}", "-".repeat(65))?;
+
+        let items: Vec<(&str, u64, u64)> = vec![
+            ("position_key", self.position_key_ns, self.position_key_count),
+            ("loop_detect", self.loop_detect_ns, self.loop_detect_count),
+            ("tt_lookup", self.tt_lookup_ns, self.tt_lookup_count),
+            ("tt_store", self.tt_store_ns, self.tt_store_count),
+            ("movegen_check", self.movegen_check_ns, self.movegen_check_count),
+            ("movegen_defense", self.movegen_defense_ns, self.movegen_defense_count),
+            ("do_move", self.do_move_ns, self.do_move_count),
+            ("undo_move", self.undo_move_ns, self.undo_move_count),
+            ("child_init", self.child_init_ns, self.child_init_count),
+            ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
+        ];
+
+        for (name, ns, count) in &items {
+            let us = *ns as f64 / 1000.0;
+            let avg_ns = if *count > 0 { *ns / *count } else { 0 };
+            let pct = if total_ns > 0 {
+                *ns as f64 / total_ns as f64 * 100.0
+            } else {
+                0.0
+            };
+            writeln!(f, "{:<25} {:>12.1} {:>10} {:>10} {:>5.1}%",
+                name, us, count, avg_ns, pct)?;
+        }
+        writeln!(f, "{}", "-".repeat(65))?;
+        writeln!(f, "{:<25} {:>12.1}", "Total measured", total_us)?;
+        Ok(())
+    }
+}
+
 /// 同一盤面ハッシュあたりの TT エントリ上限．
 /// 異なる持ち駒構成が大量に登録されることを防ぐ．
 const MAX_TT_ENTRIES_PER_POSITION: usize = 64;
@@ -330,6 +452,9 @@ pub struct DfPnSolver {
     /// 全 OR ノードの未証明子を追加証明し，最短手順を保証する．
     /// false の場合，最初に見つかった詰み手順をそのまま返す．
     find_shortest: bool,
+    /// プロファイリング統計情報(`profile` feature 有効時のみ)．
+    #[cfg(feature = "profile")]
+    pub profile_stats: ProfileStats,
 }
 
 impl DfPnSolver {
@@ -353,6 +478,8 @@ impl DfPnSolver {
             start_time: Instant::now(),
             timed_out: false,
             attacker: Color::Black,
+            #[cfg(feature = "profile")]
+            profile_stats: ProfileStats::default(),
         }
     }
 
@@ -434,6 +561,10 @@ impl DfPnSolver {
         self.start_time = Instant::now();
         self.timed_out = false;
         self.attacker = board.turn;
+        #[cfg(feature = "profile")]
+        {
+            self.profile_stats = ProfileStats::default();
+        }
 
         // 単一パス Df-Pn: 反復深化なしで全深さを一度に探索．
         // 証明数・反証数が自然に探索を最も有望な手順に誘導する．
@@ -530,18 +661,21 @@ impl DfPnSolver {
         }
 
         let full_hash = board.hash;
-        let pos_key = position_key(board);
+        let pos_key = profile_timed!(self, position_key_ns, position_key_count,
+            position_key(board));
         let att_hand = board.hand[self.attacker.index()];
 
         // ループ検出: フルハッシュで判定(持ち駒込みの完全一致)
-        if self.path.contains(&full_hash) {
+        let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
+            self.path.contains(&full_hash));
+        if in_path {
             return;
         }
 
         // TT 参照: 既に閾値を超えている/証明済み/反証済みなら
         // 手生成をスキップして早期 return
-        let (tt_pn, tt_dn) =
-            self.look_up_pn_dn(pos_key, &att_hand);
+        let (tt_pn, tt_dn) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
+            self.look_up_pn_dn(pos_key, &att_hand));
         if tt_pn == 0 || tt_dn == 0 {
             return;
         }
@@ -562,9 +696,11 @@ impl DfPnSolver {
 
         // 合法手生成
         let moves = if or_node {
-            self.generate_check_moves(board)
+            profile_timed!(self, movegen_check_ns, movegen_check_count,
+                self.generate_check_moves(board))
         } else {
-            self.generate_defense_moves(board)
+            profile_timed!(self, movegen_defense_ns, movegen_defense_count,
+                self.generate_defense_moves(board))
         };
 
         // 終端条件チェック
@@ -594,6 +730,8 @@ impl DfPnSolver {
         > = ArrayVec::new();
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        #[cfg(feature = "profile")]
+        let _child_init_start = Instant::now();
         for m in &moves {
             let captured = board.do_move(*m);
             let child_full_hash = board.hash;
@@ -747,11 +885,20 @@ impl DfPnSolver {
             return;
         }
 
+        #[cfg(feature = "profile")]
+        {
+            self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
+            self.profile_stats.child_init_count += 1;
+        }
+
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
+            #[cfg(feature = "profile")]
+            let _collect_start = Instant::now();
+
             // 各子ノードの pn/dn を収集し，証明/反証を検出
             let mut current_pn: u32;
             let mut current_dn: u32;
@@ -937,10 +1084,15 @@ impl DfPnSolver {
                 }
             }
 
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.main_loop_collect_ns += _collect_start.elapsed().as_nanos() as u64;
+                self.profile_stats.main_loop_collect_count += 1;
+            }
+
             // 転置表を更新
-            self.store(
-                pos_key, att_hand, current_pn, current_dn,
-            );
+            profile_timed!(self, tt_store_ns, tt_store_count,
+                self.store(pos_key, att_hand, current_pn, current_dn));
 
             // 閾値チェック
             if current_pn >= pn_threshold
@@ -979,7 +1131,8 @@ impl DfPnSolver {
 
             // 子ノードを探索
             let (m, _, _, _) = children[best_idx];
-            let captured = board.do_move(m);
+            let captured = profile_timed!(self, do_move_ns, do_move_count,
+                board.do_move(m));
             self.mid(
                 board,
                 child_pn_th,
@@ -987,7 +1140,8 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
-            board.undo_move(m, captured);
+            profile_timed!(self, undo_move_ns, undo_move_count,
+                board.undo_move(m, captured));
         }
 
         // パスから除去
@@ -2783,6 +2937,62 @@ mod tests {
         match &result {
             TsumeResult::NoCheckmate { .. } => {}
             other => panic!("expected NoCheckmate, got {:?}", other),
+        }
+    }
+
+    /// プロファイリング計測テスト．
+    ///
+    /// `cargo test -p maou_shogi --features profile test_profile_solve -- --nocapture`
+    /// で実行し，各操作の時間内訳を表示する．
+    #[test]
+    #[cfg(feature = "profile")]
+    fn test_profile_solve() {
+        // テストケース1: 小阪昇作 9手詰
+        let sfen_9te = "ln1gkg1nl/6+P2/2sppps2/2p3p1p/p8/P1P1P3P/2NP1PP2/3s1KSR1/L1+b2G1NL w R2Pbgp 78";
+        // テストケース2: 飛車打からの9手詰(持ち駒多め)
+        let sfen_r9 = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
+        // テストケース3: 角と金の合駒がある問題(探索量中)
+        let sfen_interpose = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
+        // テストケース4: ノード数を稼ぐため上限 100万ノードで不詰判定
+        let sfen_no_mate = "8k/9/7+B1/9/9/9/9/9/9 b rb4g4s4n4l18p 1";
+
+        let cases: Vec<(&str, &str, u32, u64)> = vec![
+            ("9手詰(小阪昇)", sfen_9te, 31, 2_000_000),
+            ("9手詰(飛車打)", sfen_r9, 31, 2_000_000),
+            ("合駒あり", sfen_interpose, 31, 2_000_000),
+            ("不詰(馬のみ)", sfen_no_mate, 31, 1_000_000),
+        ];
+
+        for (name, sfen, depth, nodes) in &cases {
+            let mut board = Board::empty();
+            board.set_sfen(sfen).unwrap();
+
+            let mut solver = DfPnSolver::with_timeout(*depth, *nodes, 32767, 60);
+            solver.set_find_shortest(false);
+
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut board);
+            let wall_time = start.elapsed();
+
+            let nodes_searched = match &result {
+                TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
+                TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
+                TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
+                TsumeResult::Unknown { nodes_searched } => *nodes_searched,
+            };
+            let nps = if wall_time.as_secs_f64() > 0.0 {
+                nodes_searched as f64 / wall_time.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            println!("\n===== {} =====", name);
+            println!("Result: {:?}", std::mem::discriminant(&result));
+            println!("Nodes: {}, Wall: {:.3}ms, NPS: {:.0}",
+                nodes_searched,
+                wall_time.as_secs_f64() * 1000.0,
+                nps);
+            println!("{}", solver.profile_stats);
         }
     }
 }
