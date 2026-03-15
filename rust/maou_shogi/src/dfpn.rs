@@ -2577,6 +2577,28 @@ mod tests {
         );
     }
 
+    /// 打歩詰めしかなく不詰のケース．
+    ///
+    /// 局面: 後手玉1一，後手桂2一，先手金1三
+    /// 先手持駒: 歩
+    /// 後手持駒: 飛二，角二，金三，銀四，桂三，香四，歩十七
+    ///
+    /// 1二歩打(P*1b)は王手だが打歩詰めの反則(玉が逃げられない)．
+    /// 他に有効な王手がないため不詰．
+    #[test]
+    fn test_no_checkmate_uchifuzume_only() {
+        let sfen = "7nk/9/8G/9/9/9/9/9/9 b P2r2b3g4s3n4l17p 1";
+        let result = solve_tsume(sfen, Some(31), Some(100_000), None).unwrap();
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {}
+            other => panic!(
+                "expected NoCheckmate (only move is uchifuzume), got {:?}",
+                other
+            ),
+        }
+    }
+
     /// 金の移動合いで不詰になるケース．
     ///
     /// 局面: 後手玉1一，後手金2一，後手歩1二，後手銀1三，
