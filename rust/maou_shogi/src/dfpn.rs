@@ -23,9 +23,18 @@ use crate::types::{Color, PieceType, Square};
 use crate::zobrist::ZOBRIST;
 
 /// 王手手/応手の最大数．
-/// 将棋の合法手上限は593だが，詰将棋では王手・応手ともに
-/// これより十分少ないため 320 で十分．
-const MAX_MOVES: usize = 320;
+/// 将棋の合法手上限は593であり，長手数の詰将棋では
+/// 持ち駒が多い局面で320を超えるケースが存在するため，
+/// 合法手上限に合わせる．
+const MAX_MOVES: usize = 593;
+
+/// `ArrayVec::try_push` のラッパー．
+/// デバッグビルドでは容量超過時にパニックし，リリースビルドでは無音で破棄する．
+#[inline(always)]
+fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
+    let result = buf.try_push(val);
+    debug_assert!(result.is_ok(), "move buffer overflow: capacity {N} exceeded");
+}
 
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
@@ -96,6 +105,11 @@ pub enum TsumeResult {
         moves: Vec<Move>,
         nodes_searched: u64,
     },
+    /// 詰みは証明済みだが PV (手順)の復元に失敗した場合．
+    ///
+    /// TT エントリ上限 (`MAX_TT_ENTRIES_PER_POSITION`) 等により，
+    /// 詰み証明後に手順を復元できないケースで返される．
+    CheckmateNoPv { nodes_searched: u64 },
     /// 不詰の場合．
     NoCheckmate { nodes_searched: u64 },
     /// 探索制限に達した場合(nodes上限 or depth上限)．
@@ -344,6 +358,14 @@ impl DfPnSolver {
         Self::new(31, 1_048_576, 32767)
     }
 
+    /// 最短手数探索の有無を設定する．
+    ///
+    /// `false` にすると最初に見つかった詰み手順をそのまま返す(高速化)．
+    pub fn set_find_shortest(&mut self, v: bool) -> &mut Self {
+        self.find_shortest = v;
+        self
+    }
+
     /// タイムアウトしたかどうかを返す．
     #[inline]
     fn is_timed_out(&self) -> bool {
@@ -426,10 +448,7 @@ impl DfPnSolver {
                 if moves.is_empty() {
                     // TT エントリ上限 (MAX_TT_ENTRIES_PER_POSITION) 等により
                     // 詰みは証明済みだが PV 復元不可．
-                    // 空の手順で Checkmate を返すと呼び出し側でパニックするため
-                    // Unknown として返す．
-                    // NOTE: 将来的には CheckmateNoPv バリアントの追加を検討．
-                    return TsumeResult::Unknown {
+                    return TsumeResult::CheckmateNoPv {
                         nodes_searched: self.nodes_searched,
                     };
                 }
@@ -684,7 +703,9 @@ impl DfPnSolver {
                 self.store(pos_key, child_dp, INF, 0);
                 return;
             }
-            if or_node && cdn_now == 0 {
+            // ここに到達するのは or_node == true のみ
+            // (AND ノードは上の !or_node && cdn_now == 0 で return 済み)
+            if cdn_now == 0 {
                 // OR: この子は反証済み → 反証駒を蓄積
                 let child_dp = self
                     .table
@@ -698,7 +719,7 @@ impl DfPnSolver {
                 continue;
             }
 
-            let _ = children.try_push((
+            push_move(&mut children, (
                 *m,
                 child_full_hash,
                 child_pk,
@@ -1238,7 +1259,7 @@ impl DfPnSolver {
                 let legal = movegen::generate_legal_moves(board);
                 let mut out = ArrayVec::new();
                 for m in legal {
-                    let _ = out.try_push(m);
+                    push_move(&mut out, m);
                 }
                 return out;
             }
@@ -1251,7 +1272,7 @@ impl DfPnSolver {
             let legal = movegen::generate_legal_moves(board);
             let mut out = ArrayVec::new();
             for m in legal {
-                let _ = out.try_push(m);
+                push_move(&mut out, m);
             }
             return out;
         }
@@ -1272,7 +1293,7 @@ impl DfPnSolver {
             let safe = !board.is_in_check(defender);
             board.undo_move(m, captured);
             if safe {
-                let _ = moves.try_push(m);
+                push_move(&mut moves, m);
             }
         }
 
@@ -1340,18 +1361,18 @@ impl DfPnSolver {
             if pt.can_promote() && in_promo_zone {
                 let m = Move::new_move(from, checker_sq, true, captured_raw, pt as u8);
                 if self.is_evasion_legal(board, m, defender) {
-                    let _ = moves.try_push(m);
+                    push_move(moves, m);
                 }
                 if !movegen::must_promote(defender, pt, checker_sq) {
                     let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        let _ = moves.try_push(m);
+                        push_move(moves, m);
                     }
                 }
             } else if !movegen::must_promote(defender, pt, checker_sq) {
                 let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
                 if self.is_evasion_legal(board, m, defender) {
-                    let _ = moves.try_push(m);
+                    push_move(moves, m);
                 }
             }
         }
@@ -1421,18 +1442,18 @@ impl DfPnSolver {
                 if pt.can_promote() && in_promo_zone {
                     let m = Move::new_move(from, to, true, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        let _ = moves.try_push(m);
+                        push_move(moves, m);
                     }
                     if !movegen::must_promote(defender, pt, to) {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                         if self.is_evasion_legal(board, m, defender) {
-                            let _ = moves.try_push(m);
+                            push_move(moves, m);
                         }
                     }
                 } else if !movegen::must_promote(defender, pt, to) {
                     let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        let _ = moves.try_push(m);
+                        push_move(moves, m);
                     }
                 }
             }
@@ -1463,7 +1484,7 @@ impl DfPnSolver {
                 if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
                     continue;
                 }
-                let _ = moves.try_push(m);
+                push_move(moves, m);
             }
         }
     }
@@ -1590,7 +1611,7 @@ impl DfPnSolver {
                     continue;
                 }
                 // 駒打ちは自玉への王手放置にならない(片玉でも両玉でも)
-                let _ = moves.try_push(m);
+                push_move(&mut moves, m);
             }
         }
 
@@ -1625,7 +1646,7 @@ impl DfPnSolver {
                     if gives_direct || is_discoverer {
                         let m = Move::new_move(from, to, true, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
-                            let _ = moves.try_push(m);
+                            push_move(&mut moves, m);
                         }
                     }
 
@@ -1636,7 +1657,7 @@ impl DfPnSolver {
                         if gives_direct || is_discoverer {
                             let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                             if self.is_legal_quick(board, m, has_own_king) {
-                                let _ = moves.try_push(m);
+                                push_move(&mut moves, m);
                             }
                         }
                     }
@@ -1645,7 +1666,7 @@ impl DfPnSolver {
                     if gives_direct || is_discoverer {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
-                            let _ = moves.try_push(m);
+                            push_move(&mut moves, m);
                         }
                     }
                 }
@@ -1956,7 +1977,7 @@ pub fn solve_tsume_with_timeout(
         draw_ply.unwrap_or(32767),
         timeout_secs.unwrap_or(300),
     );
-    solver.find_shortest = find_shortest.unwrap_or(true);
+    solver.set_find_shortest(find_shortest.unwrap_or(true));
 
     Ok(solver.solve(&mut board))
 }
@@ -2278,6 +2299,26 @@ mod tests {
                     "moves 8-9 mismatch:\n  got:      {:?}\n  expected: {:?}",
                     &usi_moves[7..9], &common_suffix,
                 );
+                // 最終2手(10-11手目)は9手目の馬の位置に応じて複数パターンが正解．
+                // パターン1: 1b1a → 3d2b+ (玉が1a に逃げ，桂成で詰み)
+                // パターン2: 4b3a → 3c3a+ 等 (玉が3筋に逃げ，馬で詰み)
+                // ここでは組み合わせの整合性を検証する．
+                let valid_endings: &[(&str, &[&str])] = &[
+                    ("1b1a", &["3d2b+"]),
+                    ("4b3a", &["3c3a+", "S*3b", "S*4a"]),
+                    ("4b3b", &["3c3b+", "S*4b"]),
+                    ("4b3c", &["3c3c+"]),
+                ];
+                let move_10 = usi_moves[9].as_str();
+                let move_11 = usi_moves[10].as_str();
+                let matched = valid_endings.iter().any(|(m10, m11s)| {
+                    *m10 == move_10 && m11s.contains(&move_11)
+                });
+                assert!(
+                    matched,
+                    "moves 10-11 ({}, {}) not in valid patterns: {:?}",
+                    move_10, move_11, valid_endings,
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
@@ -2506,7 +2547,7 @@ mod tests {
                 let legal = movegen::generate_legal_moves(board);
                 let mut out = ArrayVec::new();
                 for m in legal {
-                    let _ = out.try_push(m);
+                    push_move(&mut out, m);
                 }
                 out
             };

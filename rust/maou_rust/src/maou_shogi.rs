@@ -260,8 +260,8 @@ fn move_drop_hand_piece(m: u32) -> u8 {
 
 /// 詰将棋の探索結果．
 ///
-/// - `status`: `"checkmate"` / `"no_checkmate"` / `"unknown"` のいずれか．
-/// - `moves`: 詰みの場合は手順(USI形式のリスト)．不詰・不明の場合は空リスト．
+/// - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"` のいずれか．
+/// - `moves`: 詰みの場合は手順(USI形式のリスト)．それ以外は空リスト．
 /// - `nodes_searched`: 探索ノード数．
 #[pyclass(frozen)]
 struct TsumeResult {
@@ -290,14 +290,14 @@ impl TsumeResult {
     }
 
     fn __bool__(&self) -> bool {
-        self.status == "checkmate"
+        self.status == "checkmate" || self.status == "checkmate_no_pv"
     }
 }
 
 /// 詰将棋を解く(Df-Pn アルゴリズム)．
 ///
 /// 返り値: `TsumeResult` オブジェクト．
-///   - `status`: `"checkmate"` / `"no_checkmate"` / `"unknown"`
+///   - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"`
 ///   - `moves`: 詰みの場合は手順(USI形式のリスト)
 ///   - `nodes_searched`: 探索ノード数
 ///
@@ -322,6 +322,13 @@ fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32, timeout_secs: 
             Ok(TsumeResult {
                 status: "checkmate".to_string(),
                 moves: moves.iter().map(|m| m.to_usi()).collect(),
+                nodes_searched,
+            })
+        }
+        dfpn::TsumeResult::CheckmateNoPv { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "checkmate_no_pv".to_string(),
+                moves: Vec::new(),
                 nodes_searched,
             })
         }

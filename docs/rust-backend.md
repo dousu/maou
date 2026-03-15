@@ -370,10 +370,10 @@ result = solve_tsume(
 )
 
 # TsumeResult のプロパティ
-result.status          # "checkmate" | "no_checkmate" | "unknown"
+result.status          # "checkmate" | "checkmate_no_pv" | "no_checkmate" | "unknown"
 result.moves           # 詰み手順 (USI 形式の文字列リスト)
 result.nodes_searched  # 探索ノード数
-bool(result)           # status == "checkmate" のとき True
+bool(result)           # status が "checkmate" or "checkmate_no_pv" のとき True
 ```
 
 #### Rust API
@@ -396,11 +396,12 @@ let result = solve_tsume_with_timeout(
 
 // ソルバーを直接構築
 let mut solver = DfPnSolver::with_timeout(31, 1_048_576, 32767, 300);
-solver.find_shortest = false;  // 最短探索を無効化 (高速化)
+solver.set_find_shortest(false);  // 最短探索を無効化 (高速化)
 let result = solver.solve(&mut board);
 
 match result {
-    TsumeResult::Checkmate { moves, nodes_searched } => { /* 詰み */ }
+    TsumeResult::Checkmate { moves, nodes_searched }  => { /* 詰み (手順あり) */ }
+    TsumeResult::CheckmateNoPv { nodes_searched }     => { /* 詰み (PV 復元不可) */ }
     TsumeResult::NoCheckmate { nodes_searched }       => { /* 不詰 */ }
     TsumeResult::Unknown { nodes_searched }            => { /* 探索打ち切り */ }
 }
