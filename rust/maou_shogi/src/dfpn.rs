@@ -782,52 +782,44 @@ impl DfPnSolver {
                             INF,
                         );
                     } else if ply + 2 < self.depth {
-                        // 3手詰めチェック: 応手を生成して確認
-                        // 応手が少ない局面のみチェックすることで，
-                        // 枝刈り効果が高い局面に限定して計算コストを抑える．
-                        // 閾値 4 は実験的に決定: 応手が多い局面では
-                        // 全応手の 1手詰め判定コストが Df-Pn の自然な探索を上回る．
+                        // 3手詰めチェック: 応手を生成して全応手に1手詰め判定を実行．
+                        // 応手数の制限なし: ビットボードベースの mate_move_in_1ply は
+                        // 十分に高速であり，応手数が多い局面でも Df-Pn の再帰呼び出しより
+                        // 低コストで3手詰めを検出できる．
                         #[cfg(feature = "profile")]
                         let _mate3_start = Instant::now();
                         let defenses =
                             self.generate_defense_moves(board);
-                        if defenses.len() <= 4 {
-                            let mut all_mated = true;
-                            for d in &defenses {
-                                let cap_d = board.do_move(*d);
-                                // 逆王手の応手は不詰として扱い，
-                                // 1手詰め判定をスキップする(cshogi と同様)．
-                                // 逆王手がかかると攻め方は王手回避が必要で，
-                                // 1手で詰ませることは不可能なため．
-                                let mate = if board.is_in_check(
-                                    board.turn.opponent(),
-                                ) {
-                                    false
-                                } else {
-                                    self.has_mate_in_1(board)
-                                };
-                                if mate {
-                                    self.store_board(
-                                        board, 0, INF,
-                                    );
-                                }
-                                board.undo_move(*d, cap_d);
-                                if !mate {
-                                    all_mated = false;
-                                    break;
-                                }
-                            }
-                            if all_mated {
-                                self.store(
-                                    child_pk, child_hand, 0,
-                                    INF,
-                                );
+                        let mut all_mated = true;
+                        for d in &defenses {
+                            let cap_d = board.do_move(*d);
+                            // 逆王手の応手は不詰として扱い，
+                            // 1手詰め判定をスキップする(cshogi と同様)．
+                            // 逆王手がかかると攻め方は王手回避が必要で，
+                            // 1手で詰ませることは不可能なため．
+                            let mate = if board.is_in_check(
+                                board.turn.opponent(),
+                            ) {
+                                false
                             } else {
-                                let n = defenses.len() as u32;
-                                self.store(
-                                    child_pk, child_hand, n, n,
+                                self.has_mate_in_1(board)
+                            };
+                            if mate {
+                                self.store_board(
+                                    board, 0, INF,
                                 );
                             }
+                            board.undo_move(*d, cap_d);
+                            if !mate {
+                                all_mated = false;
+                                break;
+                            }
+                        }
+                        if all_mated {
+                            self.store(
+                                child_pk, child_hand, 0,
+                                INF,
+                            );
                         } else {
                             let n = defenses.len() as u32;
                             self.store(
@@ -1022,7 +1014,10 @@ impl DfPnSolver {
                         }
                     }
 
-                    if cpn < current_pn {
+                    if cpn < current_pn
+                        || (cpn == current_pn
+                            && cdn < best_pn_dn.1)
+                    {
                         second_best = current_pn;
                         current_pn = cpn;
                         best_idx = i;
@@ -1107,7 +1102,10 @@ impl DfPnSolver {
                         .saturating_add(cpn as u64)
                         .min(INF as u64)
                         as u32;
-                    if cdn < current_dn {
+                    if cdn < current_dn
+                        || (cdn == current_dn
+                            && cpn < best_pn_dn.0)
+                    {
                         second_best = current_dn;
                         current_dn = cdn;
                         best_idx = i;
@@ -1742,7 +1740,8 @@ impl DfPnSolver {
             }
         }
 
-        // 手順序: 成り駒 > 駒取り > その他(DFPN の同 pn 時の tie-break に効く)
+        // 手順序: 成り駒 > 駒取り > その他(初期展開順序として tie-break に寄与)
+        // 同 pn 時の主たる tie-break は MID ループ内で dn 比較により行う
         moves.sort_by_key(|m| {
             let promo = m.is_promotion();
             let capture = m.captured_piece_raw() > 0;
