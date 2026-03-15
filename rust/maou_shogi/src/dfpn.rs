@@ -402,11 +402,30 @@ impl DfPnSolver {
         let (root_pn, root_dn) = self.look_up_board(board);
 
         if root_pn == 0 {
-            // PV 抽出を先に試行し，失敗時のみ追加証明を実行
+            // PV 抽出を先に試行
             let moves = self.extract_pv(board);
-            let moves = if moves.is_empty() {
+            if moves.is_empty() {
+                // PV 抽出失敗: 追加証明して再抽出
                 self.complete_or_proofs(board);
-                self.extract_pv(board)
+                let moves = self.extract_pv(board);
+                return TsumeResult::Checkmate {
+                    moves,
+                    nodes_searched: self.nodes_searched,
+                };
+            }
+            // 最短手数探索: PV 長を depth 上限にして
+            // 全 OR ノードの未証明子を追加証明する．
+            // 同じ長さ以下の代替手順のみ探索されるため効率的．
+            let saved_depth = self.depth;
+            self.depth = moves.len() as u32;
+            self.complete_or_proofs(board);
+            self.depth = saved_depth;
+            let final_moves = self.extract_pv(board);
+            // 追加証明で短い手順が見つかればそちらを採用
+            let moves = if !final_moves.is_empty()
+                && final_moves.len() <= moves.len()
+            {
+                final_moves
             } else {
                 moves
             };
@@ -1049,7 +1068,7 @@ impl DfPnSolver {
         // 3. 合い駒(飛び駒王手の場合)
         let sliding_checker =
             self.find_sliding_checker(board, king_sq, attacker);
-        if let Some(_) = sliding_checker {
+        if sliding_checker.is_some() {
             let between =
                 attack::between_bb(checker_sq, king_sq);
             if between.is_not_empty() {
@@ -1498,8 +1517,11 @@ impl DfPnSolver {
             | (attack::bishop_attacks(king_sq, occ)
                 & (board.piece_bb[att][PieceType::Bishop as usize]
                     | board.piece_bb[att][PieceType::Horse as usize]));
+        // 香は防御側(玉方)の前方に利く:
+        // lance_attacks(defender, king_sq, occ) で玉の前方レイを取得
+        let defender = attacker.opponent();
         checkers = checkers
-            | (attack::lance_attacks(board.turn, king_sq, occ)
+            | (attack::lance_attacks(defender, king_sq, occ)
                 & board.piece_bb[att][PieceType::Lance as usize]);
 
         // 単一の飛び駒のみ対象
@@ -1802,85 +1824,92 @@ impl DfPnSolver {
 
     /// 開き王手の元になりうる自駒を計算する．
     ///
-    /// 玉からの飛び利きレイ上にいる自駒で，玉との間に他の駒がない場合，
-    /// その駒はレイ方向以外への移動で開き王手になる．
-    fn compute_discoverers(&self, board: &Board, us: Color, king_sq: Square) -> Bitboard {
+    /// 自陣の飛び駒(飛・龍・角・馬・香)と玉の間に自駒が1枚だけある場合，
+    /// その駒を移動すると開き王手になる．
+    ///
+    /// between_bb ベースで各飛び駒ごとに判定し，
+    /// 方向の混同による誤判定を防ぐ．
+    fn compute_discoverers(
+        &self,
+        board: &Board,
+        us: Color,
+        king_sq: Square,
+    ) -> Bitboard {
         let all_occ = board.all_occupied();
         let our_occ = board.occupied[us.index()];
         let mut discoverers = Bitboard::EMPTY;
 
-        // 飛車・龍のレイ(十字方向)
-        let our_rook_like = board.piece_bb[us.index()][PieceType::Rook as usize]
-            | board.piece_bb[us.index()][PieceType::Dragon as usize];
-        if our_rook_like.is_not_empty() {
-            // レイ上の最近接駒が自駒で，その先に飛・龍がある場合
-            for dir_attacks in [
-                attack::rook_attacks(king_sq, all_occ),
-            ] {
-                let nearest = dir_attacks & all_occ;
-                for sq in nearest {
-                    if !our_occ.contains(sq) {
-                        continue;
-                    }
-                    // この駒の先に飛・龍があるか
-                    let beyond_occ = all_occ & {
-                        let mut tmp = Bitboard::EMPTY;
-                        tmp.set(sq);
-                        !tmp
-                    };
-                    let beyond = attack::rook_attacks(king_sq, beyond_occ) & !attack::rook_attacks(king_sq, all_occ);
-                    if (beyond & our_rook_like).is_not_empty() {
-                        discoverers.set(sq);
-                    }
+        // 飛車・龍: 同一段 or 同一筋に玉がある場合
+        let our_rook_like =
+            board.piece_bb[us.index()][PieceType::Rook as usize]
+                | board.piece_bb[us.index()]
+                    [PieceType::Dragon as usize];
+        for slider_sq in our_rook_like {
+            // 同一段 or 同一筋でないと飛び利きが通らない
+            if slider_sq.row() != king_sq.row()
+                && slider_sq.col() != king_sq.col()
+            {
+                continue;
+            }
+            let between =
+                attack::between_bb(king_sq, slider_sq);
+            let blockers = between & all_occ;
+            if blockers.count() == 1 {
+                let blocker = blockers.lsb().unwrap();
+                if our_occ.contains(blocker) {
+                    discoverers.set(blocker);
                 }
             }
         }
 
-        // 角・馬のレイ(斜め方向)
-        let our_bishop_like = board.piece_bb[us.index()][PieceType::Bishop as usize]
-            | board.piece_bb[us.index()][PieceType::Horse as usize];
-        if our_bishop_like.is_not_empty() {
-            for dir_attacks in [
-                attack::bishop_attacks(king_sq, all_occ),
-            ] {
-                let nearest = dir_attacks & all_occ;
-                for sq in nearest {
-                    if !our_occ.contains(sq) {
-                        continue;
-                    }
-                    let beyond_occ = all_occ & {
-                        let mut tmp = Bitboard::EMPTY;
-                        tmp.set(sq);
-                        !tmp
-                    };
-                    let beyond = attack::bishop_attacks(king_sq, beyond_occ) & !attack::bishop_attacks(king_sq, all_occ);
-                    if (beyond & our_bishop_like).is_not_empty() {
-                        discoverers.set(sq);
-                    }
+        // 角・馬: 同一対角線に玉がある場合
+        let our_bishop_like =
+            board.piece_bb[us.index()][PieceType::Bishop as usize]
+                | board.piece_bb[us.index()]
+                    [PieceType::Horse as usize];
+        for slider_sq in our_bishop_like {
+            let dr = (slider_sq.row() as i8)
+                - (king_sq.row() as i8);
+            let dc = (slider_sq.col() as i8)
+                - (king_sq.col() as i8);
+            if dr.abs() != dc.abs() {
+                continue; // 対角線上にない
+            }
+            let between =
+                attack::between_bb(king_sq, slider_sq);
+            let blockers = between & all_occ;
+            if blockers.count() == 1 {
+                let blocker = blockers.lsb().unwrap();
+                if our_occ.contains(blocker) {
+                    discoverers.set(blocker);
                 }
             }
         }
 
-        // 香のレイ(縦方向: 玉から見て香の利く方向)
-        let our_lance = board.piece_bb[us.index()][PieceType::Lance as usize];
-        if our_lance.is_not_empty() {
-            // 香は前方のみ攻撃する飛び駒．
-            // 玉から見て，攻め方の香の前方にある自駒が開き王手元
-            let lance_ray = attack::lance_attacks(us.opponent(), king_sq, all_occ);
-            let nearest = lance_ray & all_occ;
-            for sq in nearest {
-                if !our_occ.contains(sq) {
-                    continue;
-                }
-                let beyond_occ = all_occ & {
-                    let mut tmp = Bitboard::EMPTY;
-                    tmp.set(sq);
-                    !tmp
-                };
-                let beyond = attack::lance_attacks(us.opponent(), king_sq, beyond_occ)
-                    & !attack::lance_attacks(us.opponent(), king_sq, all_occ);
-                if (beyond & our_lance).is_not_empty() {
-                    discoverers.set(sq);
+        // 香: 前方にのみ攻撃する飛び駒
+        let our_lance =
+            board.piece_bb[us.index()][PieceType::Lance as usize];
+        for lance_sq in our_lance {
+            // 同一筋でないと利きが通らない
+            if lance_sq.col() != king_sq.col() {
+                continue;
+            }
+            // 香の攻撃方向に玉があるか確認
+            // Black の香は上方向(row 減少)，White の香は下方向(row 増加)
+            let lance_forward = match us {
+                Color::Black => lance_sq.row() > king_sq.row(),
+                Color::White => lance_sq.row() < king_sq.row(),
+            };
+            if !lance_forward {
+                continue;
+            }
+            let between =
+                attack::between_bb(king_sq, lance_sq);
+            let blockers = between & all_occ;
+            if blockers.count() == 1 {
+                let blocker = blockers.lsb().unwrap();
+                if our_occ.contains(blocker) {
+                    discoverers.set(blocker);
                 }
             }
         }
@@ -2055,6 +2084,8 @@ impl DfPnSolver {
 
             best_pv.unwrap_or_default()
         } else {
+            // AND ノード: 呼び出し側の OR ノードで child_pn == 0 を
+            // 確認した後のみ再帰するため，この局面は証明済みのはず．
             let moves = self.generate_defense_moves(board);
             if moves.is_empty() {
                 return Vec::new();
