@@ -21,20 +21,111 @@ use crate::types::{Color, PieceType, Square};
 /// ただし内部の `do_move`/`undo_move` 間で panic が発生した場合，
 /// Board が不整合な中間状態のままになる可能性がある．
 pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
+    let us = board.turn;
+    let king_sq = board.king_square(us);
+
+    // 玉がない場合(片玉の詰将棋)はフォールバック
+    let king_sq = match king_sq {
+        Some(sq) => sq,
+        None => return generate_legal_moves_fallback(board),
+    };
+
+    let them = us.opponent();
+
+    // ピンされた駒のビットボードを計算
+    let pinned = board.compute_pinned(us, king_sq);
+
+    // 玉の危険マスを計算(玉を除去した占有で攻撃判定)
+    let king_danger = board.compute_king_danger(us, king_sq);
+
+    // 王手されているか判定
+    let checkers = board.compute_checkers_at(king_sq, them);
+    let in_check = checkers.is_not_empty();
+    let double_check = checkers.count() > 1;
+
     let pseudo_moves = generate_pseudo_legal_moves(board);
     let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
 
     for m in pseudo_moves {
-        if is_legal(board, m) {
+        if m.is_drop() {
+            // 駒打ち: 自玉を開ける可能性なし
+            // ただし王手中は合い駒のみ(両王手中は打てない)
+            if double_check {
+                continue;
+            }
+            if in_check {
+                // 王手駒と玉の間にのみ打てる
+                let checker_sq = checkers.lsb().unwrap();
+                let between = attack::between_bb(checker_sq, king_sq);
+                if !between.contains(m.to_sq()) {
+                    continue;
+                }
+            }
+            // 打ち歩詰めチェック
+            if m.drop_piece_type() == Some(PieceType::Pawn) {
+                let to = m.to_sq();
+                if let Some(opp_king) = board.king_square(them) {
+                    let pawn_attack = attack::step_attacks(us, PieceType::Pawn, to);
+                    if pawn_attack.contains(opp_king) && is_pawn_drop_mate(board, m) {
+                        continue;
+                    }
+                }
+            }
             legal_moves.push(m);
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+
+            if from == king_sq {
+                // 玉の移動: 危険マスに移動しない
+                if !king_danger.contains(to) {
+                    legal_moves.push(m);
+                }
+            } else if double_check {
+                // 両王手: 玉の移動以外は不可
+                continue;
+            } else if in_check {
+                // 単一王手: ピンされた駒は動けない
+                if pinned.contains(from) {
+                    continue;
+                }
+                // 王手駒の捕獲または合い駒のみ
+                let checker_sq = checkers.lsb().unwrap();
+                let valid_targets = attack::between_bb(checker_sq, king_sq);
+                if to != checker_sq && !valid_targets.contains(to) {
+                    continue;
+                }
+                legal_moves.push(m);
+            } else if pinned.contains(from) {
+                // ピンされた駒: 玉とピン元を結ぶ直線上でのみ移動可能
+                let line = attack::line_through(king_sq, from);
+                if line.contains(to) {
+                    legal_moves.push(m);
+                }
+            } else {
+                // ピンなし・王手なし: 常に合法
+                legal_moves.push(m);
+            }
         }
     }
 
     legal_moves
 }
 
+/// 玉がない局面用のフォールバック(従来の do_move/undo_move 方式)．
+fn generate_legal_moves_fallback(board: &mut Board) -> Vec<Move> {
+    let pseudo_moves = generate_pseudo_legal_moves(board);
+    let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
+    for m in pseudo_moves {
+        if is_legal(board, m) {
+            legal_moves.push(m);
+        }
+    }
+    legal_moves
+}
+
 /// 疑似合法手を生成する(自玉の王手放置チェックなし)．
-fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
+pub(crate) fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     let mut moves = Vec::with_capacity(256);
     let us = board.turn;
     let our_occ = board.occupied[us.index()];
@@ -172,7 +263,7 @@ fn is_legal(board: &mut Board, m: Move) -> bool {
 /// 内側の `is_in_check` でパニックが発生した場合，外側の `undo_move` も
 /// 実行されず盤面が不整合な状態になる．`Board` のメソッドは正規局面に
 /// 対してパニックしない設計のため，通常は問題にならない．
-fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
+pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
     let captured = board.do_move(pawn_drop);
 
     // 相手(手番交代後の現在手番)の合法手があるかチェック
@@ -196,7 +287,7 @@ fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
 }
 
 /// 強制成りが必要かどうか(行き所がなくなるため)．
-fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
+pub(crate) fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
     match (color, pt) {
         (Color::Black, PieceType::Pawn | PieceType::Lance) => to.row() == 0,
         (Color::White, PieceType::Pawn | PieceType::Lance) => to.row() == 8,

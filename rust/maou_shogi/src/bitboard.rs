@@ -10,6 +10,7 @@ const HI_MASK: u64 = (1u64 << 18) - 1;
 /// 81マスを2つのu64で表現する:
 /// - lo: マス0-62 (63ビット)
 /// - hi: マス63-80 (18ビット)
+///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bitboard {
     pub(crate) lo: u64,
@@ -26,32 +27,23 @@ impl Bitboard {
     };
 
     /// 指定マスのみセットされたビットボードを返す．
+    ///
+    /// 事前計算済みルックアップテーブルを使用し，分岐を排除する．
     #[inline]
     pub fn from_square(sq: Square) -> Bitboard {
-        let idx = sq.0 as u64;
-        if idx < 63 {
-            Bitboard {
-                lo: 1u64 << idx,
-                hi: 0,
-            }
-        } else {
-            Bitboard {
-                lo: 0,
-                hi: 1u64 << (idx - 63),
-            }
-        }
+        SQUARE_BB[sq.0 as usize]
     }
 
     /// 空かどうか．
     #[inline]
     pub fn is_empty(self) -> bool {
-        self.lo == 0 && self.hi == 0
+        (self.lo | self.hi) == 0
     }
 
     /// 空でないかどうか．
     #[inline]
     pub fn is_not_empty(self) -> bool {
-        !self.is_empty()
+        (self.lo | self.hi) != 0
     }
 
     /// 指定マスがセットされているか．
@@ -166,6 +158,46 @@ impl Bitboard {
         debug_assert!(row < 9);
         RANK_MASKS[row as usize]
     }
+
+    /// ビットが立っている筋すべてをマスクしたビットボードを返す．
+    ///
+    /// 例: 歩のビットボードを渡すと，歩が存在する筋全体がセットされた
+    /// ビットボードが返る(二歩チェックに使用)．
+    #[inline]
+    pub fn occupied_files(self) -> Bitboard {
+        let mut result_lo = 0u64;
+        let mut result_hi = 0u64;
+        let mut col = 0u8;
+        while col < 7 {
+            // col 0-6: 各筋9ビットが lo に収まる (col*9 .. col*9+8, max = 62)
+            let shift = col as u64 * 9;
+            let file_bits = (self.lo >> shift) & 0x1FF;
+            if file_bits != 0 {
+                result_lo |= 0x1FFu64 << shift;
+            }
+            col += 1;
+        }
+        // col 7: bits 63-71 → lo に bit63, hi に bits 0-7
+        {
+            let lo_bit = self.lo >> 63; // 1 bit
+            let hi_bits = self.hi & 0xFF; // 8 bits
+            if lo_bit != 0 || hi_bits != 0 {
+                result_lo |= 1u64 << 63;
+                result_hi |= 0xFFu64;
+            }
+        }
+        // col 8: bits 72-80 → hi bits 9-17
+        {
+            let hi_bits = (self.hi >> 9) & 0x1FF;
+            if hi_bits != 0 {
+                result_hi |= 0x1FFu64 << 9;
+            }
+        }
+        Bitboard {
+            lo: result_lo,
+            hi: result_hi,
+        }
+    }
 }
 
 impl std::ops::BitAnd for Bitboard {
@@ -260,6 +292,22 @@ impl Iterator for BitboardIter {
 // 事前計算済みマスクテーブル
 // ============================================================
 
+/// 各マスに対応するビットボード．`from_square(sq)` で使用．
+const SQUARE_BB: [Bitboard; 81] = {
+    let mut table = [Bitboard::EMPTY; 81];
+    let mut i = 0u8;
+    while i < 81 {
+        let idx = i as u64;
+        if idx < 63 {
+            table[i as usize] = Bitboard { lo: 1u64 << idx, hi: 0 };
+        } else {
+            table[i as usize] = Bitboard { lo: 0, hi: 1u64 << (idx - 63) };
+        }
+        i += 1;
+    }
+    table
+};
+
 /// 筋(col)ごとのビットボードマスク．`file_mask(col)` で使用．
 const FILE_MASKS: [Bitboard; 9] = {
     let mut masks = [Bitboard::EMPTY; 9];
@@ -325,6 +373,17 @@ mod tests {
     }
 
     #[test]
+    fn test_from_square_all() {
+        // 全81マスでルックアップテーブルが正しいことを検証
+        for i in 0..81u8 {
+            let sq = Square(i);
+            let bb = Bitboard::from_square(sq);
+            assert!(bb.contains(sq), "from_square failed for sq={}", i);
+            assert_eq!(bb.count(), 1, "count != 1 for sq={}", i);
+        }
+    }
+
+    #[test]
     fn test_set_clear() {
         let mut bb = Bitboard::EMPTY;
         bb.set(Square(10));
@@ -368,4 +427,5 @@ mod tests {
         let squares: Vec<Square> = bb.into_iter().collect();
         assert_eq!(squares, vec![Square(0), Square(40), Square(80)]);
     }
+
 }

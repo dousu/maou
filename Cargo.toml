@@ -22,6 +22,8 @@ arrow = { version = "58.0", features = ["ipc", "ipc_compression"] }
 arrow-pyarrow = { version = "58.0" }
 numpy = { version = "0.28" }
 thiserror = "2.0"
+rustc-hash = "2.1"
+arrayvec = "0.7"
 tempfile = "3.26"
 
 # Build profile optimizations for memory-constrained environments
