@@ -8,25 +8,26 @@ from cshogi import DfPn
 
 from maou._rust.maou_shogi import solve_tsume
 
+# 攻め方の玉を9九に配置(cshogiは片玉SFENの合法手生成にバグがあるため)
 PROBLEMS = {
     "kosaka_9te": (
-        "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
+        "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1",
         31,
     ),
     "image2_11te": (
-        "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
+        "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
         31,
     ),
     "17te": (
-        "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",
+        "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1",
         31,
     ),
     "image3_7te": (
-        "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1",
+        "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/K8 b R2b3g4s2n2l15p 1",
         31,
     ),
     "tsume4_5te": (
-        "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1",
+        "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1",
         31,
     ),
 }
