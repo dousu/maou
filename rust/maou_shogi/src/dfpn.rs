@@ -1242,6 +1242,11 @@ impl DfPnSolver {
     }
 
     /// 間のマスへの合い駒手を生成する(移動・打ち)．
+    ///
+    /// ループ順序: 合い駒先(between, 最大8マス)を外ループ，自駒を内ループとする．
+    /// 駒を外ループにして利き計算を1回にする方式もベンチマーク(benchmark_tsume.py)で
+    /// 計測したが，between が最大8マスと小さいため有意差なし．
+    /// 現在の順序は駒打ちループとの統合が自然で可読性が高い．
     fn generate_interpositions(
         &self,
         board: &mut Board,
@@ -1260,10 +1265,6 @@ impl DfPnSolver {
         );
         let attacker = defender.opponent();
 
-        // 注: 合い駒先(between)を外ループ，自駒を内ループにしているため，
-        // 各駒の利き計算が |between| 回(最大8回)繰り返される．
-        // 駒を外ループにすると利き計算は1回で済むが，無駄合いフィルタと
-        // 駒打ちループが to 依存であるため，ループ統合の利点が薄い．
         for to in *between {
             // --- 駒移動による合い駒 ---
             let mut our_bb = our_occ;

@@ -292,13 +292,25 @@ impl TsumeResult {
     /// `status == "checkmate"` のとき `True`．
     ///
     /// `checkmate_no_pv` は手順 (`moves`) が空のため `False` を返す．
-    /// 詰み証明の有無を判定するには `status` を直接比較すること:
-    /// ```python
-    /// if result.status in ("checkmate", "checkmate_no_pv"):
-    ///     ...
-    /// ```
+    /// 手順の有無に関わらず詰みが証明されたかを判定するには
+    /// `is_proven` プロパティを使用すること．
     fn __bool__(&self) -> bool {
         self.status == "checkmate"
+    }
+
+    /// 詰みが証明されたかどうかを返す．
+    ///
+    /// `status` が `"checkmate"` または `"checkmate_no_pv"` のとき `True`．
+    /// `__bool__` と異なり，PV 復元に失敗した場合でも `True` を返す．
+    ///
+    /// ```python
+    /// result = solve_tsume(sfen)
+    /// if result.is_proven:
+    ///     print("詰みが証明された")
+    /// ```
+    #[getter]
+    fn is_proven(&self) -> bool {
+        self.status == "checkmate" || self.status == "checkmate_no_pv"
     }
 }
 
