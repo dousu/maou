@@ -105,6 +105,18 @@ pub struct ProfileStats {
     pub child_init_ns: u64,
     /// 子ノード初期化の呼び出し回数．
     pub child_init_count: u64,
+    /// 子ノード初期化内の1手詰め判定の累積時間(ナノ秒)．
+    pub mate1_ns: u64,
+    /// 1手詰め判定の呼び出し回数．
+    pub mate1_count: u64,
+    /// 子ノード初期化内の3手詰め判定の累積時間(ナノ秒)．
+    pub mate3_ns: u64,
+    /// 3手詰め判定の呼び出し回数．
+    pub mate3_count: u64,
+    /// 子ノード初期化内の do_move/undo_move の累積時間(ナノ秒)．
+    pub child_init_domove_ns: u64,
+    /// 子ノード初期化内の do_move/undo_move の呼び出し回数．
+    pub child_init_domove_count: u64,
     /// メインループの pn/dn 収集の累積時間(ナノ秒)．
     pub main_loop_collect_ns: u64,
     /// メインループの pn/dn 収集回数．
@@ -141,6 +153,9 @@ impl std::fmt::Display for ProfileStats {
             ("do_move", self.do_move_ns, self.do_move_count),
             ("undo_move", self.undo_move_ns, self.undo_move_count),
             ("child_init", self.child_init_ns, self.child_init_count),
+            ("  mate1", self.mate1_ns, self.mate1_count),
+            ("  mate3", self.mate3_ns, self.mate3_count),
+            ("  child_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
             ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
         ];
 
@@ -733,17 +748,32 @@ impl DfPnSolver {
         #[cfg(feature = "profile")]
         let _child_init_start = Instant::now();
         for m in &moves {
+            #[cfg(feature = "profile")]
+            let _domove_start = Instant::now();
             let captured = board.do_move(*m);
             let child_full_hash = board.hash;
             let child_pk = position_key(board);
             let child_hand = board.hand[self.attacker.index()];
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.child_init_domove_ns += _domove_start.elapsed().as_nanos() as u64;
+                self.profile_stats.child_init_domove_count += 1;
+            }
 
             let (cpn, cdn) =
                 self.look_up_pn_dn(child_pk, &child_hand);
             if cpn == 1 && cdn == 1 {
                 if or_node {
                     // 1手詰め判定: has_any_defense で高速判定
-                    if !self.has_any_defense(board) {
+                    #[cfg(feature = "profile")]
+                    let _mate1_start = Instant::now();
+                    let has_defense = self.has_any_defense(board);
+                    #[cfg(feature = "profile")]
+                    {
+                        self.profile_stats.mate1_ns += _mate1_start.elapsed().as_nanos() as u64;
+                        self.profile_stats.mate1_count += 1;
+                    }
+                    if !has_defense {
                         // 応手なし → 詰み(証明駒 = 空)
                         self.store(
                             child_pk,
@@ -757,14 +787,25 @@ impl DfPnSolver {
                         // 枝刈り効果が高い局面に限定して計算コストを抑える．
                         // 閾値 4 は実験的に決定: 応手が多い局面では
                         // 全応手の 1手詰め判定コストが Df-Pn の自然な探索を上回る．
+                        #[cfg(feature = "profile")]
+                        let _mate3_start = Instant::now();
                         let defenses =
                             self.generate_defense_moves(board);
                         if defenses.len() <= 4 {
                             let mut all_mated = true;
                             for d in &defenses {
                                 let cap_d = board.do_move(*d);
-                                let mate =
-                                    self.has_mate_in_1(board);
+                                // 逆王手の応手は不詰として扱い，
+                                // 1手詰め判定をスキップする(cshogi と同様)．
+                                // 逆王手がかかると攻め方は王手回避が必要で，
+                                // 1手で詰ませることは不可能なため．
+                                let mate = if board.is_in_check(
+                                    board.turn.opponent(),
+                                ) {
+                                    false
+                                } else {
+                                    self.has_mate_in_1(board)
+                                };
                                 if mate {
                                     self.store_board(
                                         board, 0, INF,
@@ -792,6 +833,11 @@ impl DfPnSolver {
                             self.store(
                                 child_pk, child_hand, n, n,
                             );
+                        }
+                        #[cfg(feature = "profile")]
+                        {
+                            self.profile_stats.mate3_ns += _mate3_start.elapsed().as_nanos() as u64;
+                            self.profile_stats.mate3_count += 1;
                         }
                     } else {
                         // 深い位置では応手数を初期値として設定
@@ -825,7 +871,14 @@ impl DfPnSolver {
                 }
             }
 
+            #[cfg(feature = "profile")]
+            let _undomove_start = Instant::now();
             board.undo_move(*m, captured);
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.child_init_domove_ns += _undomove_start.elapsed().as_nanos() as u64;
+                self.profile_stats.child_init_domove_count += 1;
+            }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
             let (cpn_now, cdn_now) =
