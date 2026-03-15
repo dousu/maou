@@ -544,6 +544,502 @@ impl Board {
         false
     }
 
+    // ============================================================
+    // ビットボードベースの1手詰め判定 (mateMoveIn1Ply 相当)
+    // ============================================================
+
+    /// ビットボード演算のみで1手詰めを判定する(do_move/undo_move 不要)．
+    ///
+    /// cshogi の `mateMoveIn1Ply()` に相当する高速版．
+    /// 与えられた王手手リストから，詰みになる手があれば返す．
+    ///
+    /// # アルゴリズム
+    ///
+    /// 各王手手について以下を確認:
+    /// 1. 玉に逃げ場がないか(ビットボード利き計算)
+    /// 2. 王手駒を取り返せないか(ピン判定含む)
+    /// 3. 合い駒が効かないか(飛び駒の王手のみ)
+    pub fn mate_move_in_1ply(
+        &self,
+        checks: &[Move],
+        attacker: Color,
+    ) -> Option<Move> {
+        let defender = attacker.opponent();
+        let king_sq = self.king_square(defender)?;
+        let all_occ = self.all_occupied();
+        let att_idx = attacker.index();
+        let def_idx = defender.index();
+        let att_occ = self.occupied[att_idx];
+        let def_occ = self.occupied[def_idx];
+        let king_bb = Bitboard::from_square(king_sq);
+
+        // 玉の移動先候補(ステップ利き)
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+
+        // 攻め方と玉の間にいる守備駒(ピン候補) - 王手駒の捕獲可否判定に使用
+        let pinned = self.compute_pinned(defender, king_sq);
+
+        for &m in checks {
+            if self.is_checkmate_after_bb(
+                m, attacker, defender, king_sq, king_bb, king_step,
+                all_occ, att_occ, def_occ, att_idx, def_idx, &pinned,
+            ) {
+                return Some(m);
+            }
+        }
+        None
+    }
+
+    /// 指定した王手手を指した後に詰みになるかビットボードで判定する．
+    ///
+    /// 盤面を変更せず，ビットボード演算のみで判定する．
+    #[allow(clippy::too_many_arguments)]
+    fn is_checkmate_after_bb(
+        &self,
+        m: Move,
+        attacker: Color,
+        defender: Color,
+        king_sq: Square,
+        king_bb: Bitboard,
+        king_step: Bitboard,
+        all_occ: Bitboard,
+        _att_occ: Bitboard,
+        def_occ: Bitboard,
+        att_idx: usize,
+        def_idx: usize,
+        pinned: &Bitboard,
+    ) -> bool {
+        let to_sq = m.to_sq();
+        let to_bb = Bitboard::from_square(to_sq);
+
+        // 王手後の駒種と移動元を取得
+        let (from_opt, checker_pt) = if m.is_drop() {
+            (None, m.drop_piece_type().unwrap())
+        } else {
+            let from = m.from_sq();
+            let raw_pt = unsafe {
+                // moving_piece_type_raw は有効な PieceType 値を保証
+                std::mem::transmute::<u8, PieceType>(m.moving_piece_type_raw())
+            };
+            let pt = if m.is_promotion() {
+                raw_pt.promoted().unwrap()
+            } else {
+                raw_pt
+            };
+            (Some(from), pt)
+        };
+
+        // === 王手後の占有ビットボードを計算 ===
+        let occ_after = match from_opt {
+            Some(from) => (all_occ & !Bitboard::from_square(from)) | to_bb,
+            None => all_occ | to_bb,
+        };
+        // 守備側の占有(駒取りの場合は to_sq が除去される)
+        let def_occ_after = def_occ & !to_bb;
+
+        // === 1. 玉の逃げ場チェック ===
+        // 玉を除去した占有(X-ray: 飛び駒が玉を貫通)
+        let occ_no_king = occ_after & !king_bb;
+
+        // 玉の移動先候補: 味方駒がいないマス
+        let king_targets = king_step & !def_occ_after;
+
+        // 王手駒の利きを計算(玉を除いた占有で)
+        let checker_attacks = attack::piece_attacks(attacker, checker_pt, to_sq, occ_no_king);
+
+        // 各逃げ先が安全かチェック
+        for esc_sq in king_targets {
+            if esc_sq == to_sq {
+                // 玉が王手駒を取る場合: 王手駒を除去した状態でチェック
+                let occ_esc = occ_no_king & !to_bb;
+                if !self.is_sq_attacked_after_move(
+                    esc_sq, attacker, occ_esc, att_idx, def_idx,
+                    from_opt, to_sq, true,
+                ) {
+                    return false; // 玉が王手駒を取って逃げられる
+                }
+            } else if checker_attacks.contains(esc_sq) {
+                // 王手駒の利きに入っている → 逃げられない(他の駒も確認不要)
+                continue;
+            } else {
+                // 他の攻め方駒の利きがあるか確認
+                if !self.is_sq_attacked_after_move(
+                    esc_sq, attacker, occ_no_king, att_idx, def_idx,
+                    from_opt, to_sq, false,
+                ) {
+                    return false; // 安全な逃げ場がある
+                }
+            }
+        }
+
+        // === 2. 王手駒の捕獲チェック(玉以外) ===
+        // ピンされていない守備駒で王手駒を取れるか
+        if self.can_capture_checker_bb(
+            to_sq, king_sq, defender, occ_after, def_occ, def_idx, pinned,
+        ) {
+            return false;
+        }
+
+        // === 3. 合い駒チェック(飛び駒の王手のみ) ===
+        if Self::is_sliding_piece(checker_pt) {
+            let between = attack::between_bb(to_sq, king_sq);
+            if between.is_not_empty()
+                && self.can_interpose_bb(
+                    &between, king_sq, defender, occ_after, def_occ,
+                    def_idx, att_idx, pinned, from_opt,
+                )
+            {
+                return false;
+            }
+        }
+
+        true // 詰み!
+    }
+
+    /// 飛び駒かどうか判定する．
+    #[inline]
+    fn is_sliding_piece(pt: PieceType) -> bool {
+        matches!(
+            pt,
+            PieceType::Lance
+                | PieceType::Bishop
+                | PieceType::Rook
+                | PieceType::Horse
+                | PieceType::Dragon
+        )
+    }
+
+    /// 王手後の盤面で，指定マスが攻め方に利かれているか判定する．
+    ///
+    /// `occ` は調整済みの占有ビットボード(玉除去済み等)．
+    /// `from_opt` は移動した駒の元位置(その位置の駒は除外)．
+    /// `exclude_to` が true の場合，to_sq の駒も除外する(玉が to_sq に移動して
+    /// 王手駒を取る場合)．
+    #[allow(clippy::too_many_arguments)]
+    fn is_sq_attacked_after_move(
+        &self,
+        sq: Square,
+        attacker: Color,
+        occ: Bitboard,
+        att_idx: usize,
+        _def_idx: usize,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        exclude_to: bool,
+    ) -> bool {
+        let defender = attacker.opponent();
+
+        // from_sq にいた駒は移動済みなので除外するマスク
+        let exclude_mask = match from_opt {
+            Some(from) => !Bitboard::from_square(from),
+            None => Bitboard::ALL,
+        };
+        // to_sq の駒も除外する場合(玉が王手駒を取る)
+        let exclude_mask = if exclude_to {
+            exclude_mask & !Bitboard::from_square(to_sq)
+        } else {
+            exclude_mask
+        };
+
+        // to_sq にいる移動後の駒は exclude_to でなければ攻撃に参加する
+        // → piece_bb にはまだ反映されていないので，
+        //   exclude_to でない場合は to_sq の駒の利きを別途チェック
+        // ただし piece_bb ベースの判定では from_opt の駒も残っているため，
+        // exclude_mask で除外する
+
+        // 歩
+        if (attack::step_attacks(defender, PieceType::Pawn, sq)
+            & self.piece_bb[att_idx][PieceType::Pawn as usize]
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 桂
+        if (attack::step_attacks(defender, PieceType::Knight, sq)
+            & self.piece_bb[att_idx][PieceType::Knight as usize]
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 銀
+        if (attack::step_attacks(defender, PieceType::Silver, sq)
+            & self.piece_bb[att_idx][PieceType::Silver as usize]
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 金 + 成駒
+        let gold_movers = (self.piece_bb[att_idx][PieceType::Gold as usize]
+            | self.piece_bb[att_idx][PieceType::ProPawn as usize]
+            | self.piece_bb[att_idx][PieceType::ProLance as usize]
+            | self.piece_bb[att_idx][PieceType::ProKnight as usize]
+            | self.piece_bb[att_idx][PieceType::ProSilver as usize])
+            & exclude_mask;
+        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
+            return true;
+        }
+        // 王・馬・龍(ステップ部分)
+        let king_step = attack::step_attacks(defender, PieceType::King, sq);
+        let step_pieces = (self.piece_bb[att_idx][PieceType::King as usize]
+            | self.piece_bb[att_idx][PieceType::Horse as usize]
+            | self.piece_bb[att_idx][PieceType::Dragon as usize])
+            & exclude_mask;
+        if (king_step & step_pieces).is_not_empty() {
+            return true;
+        }
+        // 香
+        if (attack::lance_attacks(defender, sq, occ)
+            & self.piece_bb[att_idx][PieceType::Lance as usize]
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 角・馬(スライド部分)
+        if (attack::bishop_attacks(sq, occ)
+            & (self.piece_bb[att_idx][PieceType::Bishop as usize]
+                | self.piece_bb[att_idx][PieceType::Horse as usize])
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 飛・龍(スライド部分)
+        if (attack::rook_attacks(sq, occ)
+            & (self.piece_bb[att_idx][PieceType::Rook as usize]
+                | self.piece_bb[att_idx][PieceType::Dragon as usize])
+            & exclude_mask)
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        false
+    }
+
+    /// 王手駒を玉以外の守備駒で取れるか(ビットボード判定)．
+    ///
+    /// ピンされた駒は取り返しに使えない(取ると玉が素抜かれる)．
+    #[allow(clippy::too_many_arguments)]
+    fn can_capture_checker_bb(
+        &self,
+        checker_sq: Square,
+        _king_sq: Square,
+        defender: Color,
+        occ: Bitboard,
+        _def_occ: Bitboard,
+        def_idx: usize,
+        pinned: &Bitboard,
+    ) -> bool {
+        let attacker = defender.opponent();
+
+        // 歩
+        if (attack::step_attacks(attacker, PieceType::Pawn, checker_sq)
+            & self.piece_bb[def_idx][PieceType::Pawn as usize]
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 桂
+        if (attack::step_attacks(attacker, PieceType::Knight, checker_sq)
+            & self.piece_bb[def_idx][PieceType::Knight as usize]
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 銀
+        if (attack::step_attacks(attacker, PieceType::Silver, checker_sq)
+            & self.piece_bb[def_idx][PieceType::Silver as usize]
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 金 + 成駒
+        let gold_movers = (self.piece_bb[def_idx][PieceType::Gold as usize]
+            | self.piece_bb[def_idx][PieceType::ProPawn as usize]
+            | self.piece_bb[def_idx][PieceType::ProLance as usize]
+            | self.piece_bb[def_idx][PieceType::ProKnight as usize]
+            | self.piece_bb[def_idx][PieceType::ProSilver as usize])
+            & !*pinned;
+        if (attack::step_attacks(attacker, PieceType::Gold, checker_sq) & gold_movers)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 馬・龍(ステップ部分) - 玉は除外(玉での取り返しは逃げ場チェックで処理済み)
+        let step_pieces = (self.piece_bb[def_idx][PieceType::Horse as usize]
+            | self.piece_bb[def_idx][PieceType::Dragon as usize])
+            & !*pinned;
+        let king_step = attack::step_attacks(attacker, PieceType::King, checker_sq);
+        if (king_step & step_pieces).is_not_empty() {
+            return true;
+        }
+        // 香
+        if (attack::lance_attacks(attacker, checker_sq, occ)
+            & self.piece_bb[def_idx][PieceType::Lance as usize]
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 角・馬(スライド)
+        if (attack::bishop_attacks(checker_sq, occ)
+            & (self.piece_bb[def_idx][PieceType::Bishop as usize]
+                | self.piece_bb[def_idx][PieceType::Horse as usize])
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+        // 飛・龍(スライド)
+        if (attack::rook_attacks(checker_sq, occ)
+            & (self.piece_bb[def_idx][PieceType::Rook as usize]
+                | self.piece_bb[def_idx][PieceType::Dragon as usize])
+            & !*pinned)
+            .is_not_empty()
+        {
+            return true;
+        }
+
+        false
+    }
+
+    /// 飛び駒の王手に対して合い駒できるか(ビットボード判定)．
+    ///
+    /// between のマスに守備駒を移動または打てるか確認する．
+    /// ピンされた駒は合い駒に使えない．
+    #[allow(clippy::too_many_arguments)]
+    fn can_interpose_bb(
+        &self,
+        between: &Bitboard,
+        king_sq: Square,
+        defender: Color,
+        occ: Bitboard,
+        _def_occ: Bitboard,
+        def_idx: usize,
+        _att_idx: usize,
+        pinned: &Bitboard,
+        _checker_from: Option<Square>,
+    ) -> bool {
+        let attacker = defender.opponent();
+
+        for to in *between {
+            // --- 駒打ちによる合い駒 ---
+            if !occ.contains(to) {
+                // 空きマスなら持ち駒を打てる可能性
+                for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
+                    if self.hand[defender.index()][hand_idx] == 0 {
+                        continue;
+                    }
+                    // 行き所のない駒チェック
+                    match (defender, pt) {
+                        (Color::Black, PieceType::Pawn | PieceType::Lance) if to.row() == 0 => {
+                            continue
+                        }
+                        (Color::White, PieceType::Pawn | PieceType::Lance) if to.row() == 8 => {
+                            continue
+                        }
+                        (Color::Black, PieceType::Knight) if to.row() <= 1 => continue,
+                        (Color::White, PieceType::Knight) if to.row() >= 7 => continue,
+                        _ => {}
+                    }
+                    // 二歩チェック
+                    if pt == PieceType::Pawn {
+                        let our_pawns =
+                            self.piece_bb[defender.index()][PieceType::Pawn as usize];
+                        let file = Bitboard::file_mask(to.col());
+                        if (our_pawns & file).is_not_empty() {
+                            continue;
+                        }
+                    }
+                    return true; // 合い駒が打てる
+                }
+            }
+
+            // --- 駒移動による合い駒 ---
+            // 各守備駒が to に移動できるか(ピンされていない駒のみ)
+            // 歩
+            if (attack::step_attacks(attacker, PieceType::Pawn, to)
+                & self.piece_bb[def_idx][PieceType::Pawn as usize]
+                & !*pinned)
+                .is_not_empty()
+            {
+                return true;
+            }
+            // 桂
+            if (attack::step_attacks(attacker, PieceType::Knight, to)
+                & self.piece_bb[def_idx][PieceType::Knight as usize]
+                & !*pinned)
+                .is_not_empty()
+            {
+                return true;
+            }
+            // 銀
+            if (attack::step_attacks(attacker, PieceType::Silver, to)
+                & self.piece_bb[def_idx][PieceType::Silver as usize]
+                & !*pinned)
+                .is_not_empty()
+            {
+                return true;
+            }
+            // 金 + 成駒
+            let gold_movers = (self.piece_bb[def_idx][PieceType::Gold as usize]
+                | self.piece_bb[def_idx][PieceType::ProPawn as usize]
+                | self.piece_bb[def_idx][PieceType::ProLance as usize]
+                | self.piece_bb[def_idx][PieceType::ProKnight as usize]
+                | self.piece_bb[def_idx][PieceType::ProSilver as usize])
+                & !*pinned;
+            if (attack::step_attacks(attacker, PieceType::Gold, to) & gold_movers).is_not_empty() {
+                return true;
+            }
+            // 馬・龍(ステップ部分) - 玉は除外
+            let step_pieces = (self.piece_bb[def_idx][PieceType::Horse as usize]
+                | self.piece_bb[def_idx][PieceType::Dragon as usize])
+                & !*pinned
+                & !Bitboard::from_square(king_sq);
+            let king_step_to = attack::step_attacks(attacker, PieceType::King, to);
+            if (king_step_to & step_pieces).is_not_empty() {
+                return true;
+            }
+            // 香
+            if (attack::lance_attacks(attacker, to, occ)
+                & self.piece_bb[def_idx][PieceType::Lance as usize]
+                & !*pinned)
+                .is_not_empty()
+            {
+                return true;
+            }
+            // 角・馬(スライド)
+            if (attack::bishop_attacks(to, occ)
+                & (self.piece_bb[def_idx][PieceType::Bishop as usize]
+                    | self.piece_bb[def_idx][PieceType::Horse as usize])
+                & !*pinned
+                & !Bitboard::from_square(king_sq))
+                .is_not_empty()
+            {
+                return true;
+            }
+            // 飛・龍(スライド)
+            if (attack::rook_attacks(to, occ)
+                & (self.piece_bb[def_idx][PieceType::Rook as usize]
+                    | self.piece_bb[def_idx][PieceType::Dragon as usize])
+                & !*pinned
+                & !Bitboard::from_square(king_sq))
+                .is_not_empty()
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// 駒を置く(ビットボードも更新)．
     ///
     /// # 前提条件

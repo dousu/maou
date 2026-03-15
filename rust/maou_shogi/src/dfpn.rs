@@ -1203,30 +1203,30 @@ impl DfPnSolver {
 
     /// 現在の局面(攻め方の手番)に1手詰めがあるか判定する．
     ///
-    /// 王手を生成し，応手が0の王手があれば1手詰め．
-    /// 詰みの局面(応手なし AND ノード)を TT に記録する．
+    /// ビットボードベースの高速判定を使用し，詰みの手が見つかった場合のみ
+    /// do_move で TT にエントリを記録する．
     fn has_mate_in_1(&mut self, board: &mut Board) -> bool {
         let checks = self.generate_check_moves(board);
         self.has_mate_in_1_with(board, &checks)
     }
 
     /// 既に生成済みの王手リストを使って1手詰め判定する．
+    ///
+    /// ビットボード演算のみで詰み判定を行い，do_move/undo_move の
+    /// オーバーヘッドを回避する(cshogi の mateMoveIn1Ply 相当)．
     fn has_mate_in_1_with(
         &mut self,
         board: &mut Board,
         checks: &ArrayVec<Move, MAX_MOVES>,
     ) -> bool {
-        for m in checks {
-            let captured = board.do_move(*m);
-            let has_defense = self.has_any_defense(board);
-            if !has_defense {
-                // 詰み局面を TT に記録(証明駒 = 空)
-                let pk = position_key(board);
-                self.store(pk, [0; HAND_KINDS], 0, INF);
-                board.undo_move(*m, captured);
-                return true;
-            }
-            board.undo_move(*m, captured);
+        let us = board.turn;
+        if let Some(mate_move) = board.mate_move_in_1ply(checks.as_slice(), us) {
+            // 詰み局面を TT に記録するために do_move が必要
+            let captured = board.do_move(mate_move);
+            let pk = position_key(board);
+            self.store(pk, [0; HAND_KINDS], 0, INF);
+            board.undo_move(mate_move, captured);
+            return true;
         }
         false
     }
