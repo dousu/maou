@@ -96,6 +96,12 @@ impl Move {
         self.from_field() >= SQ_SIZE
     }
 
+    /// 移動する駒種を返す(盤上の駒の移動手のみ有効)．
+    #[inline]
+    pub fn moving_piece_type_raw(self) -> u8 {
+        ((self.0 >> Self::MOVING_PIECE_SHIFT) & 0x1F) as u8
+    }
+
     /// 成りかどうか．
     #[inline]
     pub fn is_promotion(self) -> bool {

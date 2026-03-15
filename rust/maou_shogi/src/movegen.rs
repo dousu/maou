@@ -21,16 +21,262 @@ use crate::types::{Color, PieceType, Square};
 /// ただし内部の `do_move`/`undo_move` 間で panic が発生した場合，
 /// Board が不整合な中間状態のままになる可能性がある．
 pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
+    let us = board.turn;
+    let king_sq = board.king_square(us);
+
+    // 玉がない場合(片玉の詰将棋)はフォールバック
+    let king_sq = match king_sq {
+        Some(sq) => sq,
+        None => return generate_legal_moves_fallback(board),
+    };
+
+    let them = us.opponent();
+    let all_occ = board.all_occupied();
+
+    // ピンされた駒のビットボードを計算
+    let pinned = compute_pinned(board, us, king_sq, all_occ);
+
+    // 玉の危険マスを計算(玉を除去した占有で攻撃判定)
+    let king_danger = compute_king_danger(board, us, king_sq);
+
+    // 王手されているか判定
+    let checkers = compute_checkers(board, king_sq, them, all_occ);
+    let in_check = checkers.is_not_empty();
+    let double_check = checkers.count() > 1;
+
     let pseudo_moves = generate_pseudo_legal_moves(board);
     let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
 
+    for m in pseudo_moves {
+        if m.is_drop() {
+            // 駒打ち: 自玉を開ける可能性なし
+            // ただし王手中は合い駒のみ(両王手中は打てない)
+            if double_check {
+                continue;
+            }
+            if in_check {
+                // 王手駒と玉の間にのみ打てる
+                let checker_sq = checkers.lsb().unwrap();
+                let between = attack::between_bb(checker_sq, king_sq);
+                if !between.contains(m.to_sq()) {
+                    continue;
+                }
+            }
+            // 打ち歩詰めチェック
+            if m.drop_piece_type() == Some(PieceType::Pawn) {
+                let to = m.to_sq();
+                if let Some(opp_king) = board.king_square(them) {
+                    let pawn_attack = attack::step_attacks(us, PieceType::Pawn, to);
+                    if pawn_attack.contains(opp_king) && is_pawn_drop_mate(board, m) {
+                        continue;
+                    }
+                }
+            }
+            legal_moves.push(m);
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+
+            if from == king_sq {
+                // 玉の移動: 危険マスに移動しない
+                if !king_danger.contains(to) {
+                    legal_moves.push(m);
+                }
+            } else if double_check {
+                // 両王手: 玉の移動以外は不可
+                continue;
+            } else if in_check {
+                // 単一王手: ピンされた駒は動けない
+                if pinned.contains(from) {
+                    continue;
+                }
+                // 王手駒の捕獲または合い駒のみ
+                let checker_sq = checkers.lsb().unwrap();
+                let valid_targets = attack::between_bb(checker_sq, king_sq);
+                if to != checker_sq && !valid_targets.contains(to) {
+                    continue;
+                }
+                legal_moves.push(m);
+            } else if pinned.contains(from) {
+                // ピンされた駒: 玉とピン元を結ぶ直線上でのみ移動可能
+                let line = attack::line_through(king_sq, from);
+                if line.contains(to) {
+                    legal_moves.push(m);
+                }
+            } else {
+                // ピンなし・王手なし: 常に合法
+                legal_moves.push(m);
+            }
+        }
+    }
+
+    legal_moves
+}
+
+/// 玉がない局面用のフォールバック(従来の do_move/undo_move 方式)．
+fn generate_legal_moves_fallback(board: &mut Board) -> Vec<Move> {
+    let pseudo_moves = generate_pseudo_legal_moves(board);
+    let mut legal_moves = Vec::with_capacity(pseudo_moves.len());
     for m in pseudo_moves {
         if is_legal(board, m) {
             legal_moves.push(m);
         }
     }
-
     legal_moves
+}
+
+/// 自玉にピンされている自駒のビットボードを返す．
+///
+/// 自玉と相手の飛び駒の間に自駒が1枚だけある場合，その駒はピンされている．
+fn compute_pinned(board: &Board, us: Color, king_sq: Square, all_occ: Bitboard) -> Bitboard {
+    let them = us.opponent();
+    let our_occ = board.occupied[us.index()];
+    let mut pinned = Bitboard::EMPTY;
+
+    // 飛・龍によるピン(縦横)
+    let rook_like = board.piece_bb[them.index()][PieceType::Rook as usize]
+        | board.piece_bb[them.index()][PieceType::Dragon as usize];
+    let rook_xray = attack::rook_attacks(king_sq, Bitboard::EMPTY); // 遮蔽なしの利き
+    let rook_pinners = rook_xray & rook_like;
+    for pinner_sq in rook_pinners {
+        let between = attack::between_bb(king_sq, pinner_sq);
+        let blockers = between & all_occ;
+        if blockers.count() == 1 {
+            let blocker = blockers & our_occ;
+            pinned |= blocker;
+        }
+    }
+
+    // 角・馬によるピン(斜め)
+    let bishop_like = board.piece_bb[them.index()][PieceType::Bishop as usize]
+        | board.piece_bb[them.index()][PieceType::Horse as usize];
+    let bishop_xray = attack::bishop_attacks(king_sq, Bitboard::EMPTY);
+    let bishop_pinners = bishop_xray & bishop_like;
+    for pinner_sq in bishop_pinners {
+        let between = attack::between_bb(king_sq, pinner_sq);
+        let blockers = between & all_occ;
+        if blockers.count() == 1 {
+            let blocker = blockers & our_occ;
+            pinned |= blocker;
+        }
+    }
+
+    // 香によるピン(先手の香は下向き=後手玉への攻撃，後手の香は上向き=先手玉への攻撃)
+    let enemy_lance = board.piece_bb[them.index()][PieceType::Lance as usize];
+    // 玉から見て相手の香が利いてくる方向のレイ
+    let lance_xray = attack::lance_attacks(us, king_sq, Bitboard::EMPTY);
+    let lance_pinners = lance_xray & enemy_lance;
+    for pinner_sq in lance_pinners {
+        let between = attack::between_bb(king_sq, pinner_sq);
+        let blockers = between & all_occ;
+        if blockers.count() == 1 {
+            let blocker = blockers & our_occ;
+            pinned |= blocker;
+        }
+    }
+
+    pinned
+}
+
+/// 玉の危険マスを計算する(相手の利きがあるマス)．
+///
+/// 玉を盤面から除去した状態で相手の利きを計算する(X-ray対策)．
+fn compute_king_danger(board: &Board, us: Color, king_sq: Square) -> Bitboard {
+    let them = us.opponent();
+
+    // 玉を除去した占有ビットボード(X-ray: 飛び駒が玉を貫通する)
+    let mut occ_no_king = board.all_occupied();
+    occ_no_king.clear(king_sq);
+
+    let opp = them.index();
+    let mut danger = Bitboard::EMPTY;
+
+    // 歩
+    for sq in board.piece_bb[opp][PieceType::Pawn as usize] {
+        danger |= attack::step_attacks(them, PieceType::Pawn, sq);
+    }
+    // 桂
+    for sq in board.piece_bb[opp][PieceType::Knight as usize] {
+        danger |= attack::step_attacks(them, PieceType::Knight, sq);
+    }
+    // 銀
+    for sq in board.piece_bb[opp][PieceType::Silver as usize] {
+        danger |= attack::step_attacks(them, PieceType::Silver, sq);
+    }
+    // 金 + 成駒
+    let gold_movers = board.piece_bb[opp][PieceType::Gold as usize]
+        | board.piece_bb[opp][PieceType::ProPawn as usize]
+        | board.piece_bb[opp][PieceType::ProLance as usize]
+        | board.piece_bb[opp][PieceType::ProKnight as usize]
+        | board.piece_bb[opp][PieceType::ProSilver as usize];
+    for sq in gold_movers {
+        danger |= attack::step_attacks(them, PieceType::Gold, sq);
+    }
+    // 王
+    for sq in board.piece_bb[opp][PieceType::King as usize] {
+        danger |= attack::step_attacks(them, PieceType::King, sq);
+    }
+    // 香
+    for sq in board.piece_bb[opp][PieceType::Lance as usize] {
+        danger |= attack::lance_attacks(them, sq, occ_no_king);
+    }
+    // 角
+    for sq in board.piece_bb[opp][PieceType::Bishop as usize] {
+        danger |= attack::bishop_attacks(sq, occ_no_king);
+    }
+    // 馬
+    for sq in board.piece_bb[opp][PieceType::Horse as usize] {
+        danger |= attack::horse_attacks(them, sq, occ_no_king);
+    }
+    // 飛
+    for sq in board.piece_bb[opp][PieceType::Rook as usize] {
+        danger |= attack::rook_attacks(sq, occ_no_king);
+    }
+    // 龍
+    for sq in board.piece_bb[opp][PieceType::Dragon as usize] {
+        danger |= attack::dragon_attacks(them, sq, occ_no_king);
+    }
+
+    danger
+}
+
+/// 自玉に王手している相手駒のビットボードを返す．
+fn compute_checkers(board: &Board, king_sq: Square, them: Color, occ: Bitboard) -> Bitboard {
+    let opp = them.index();
+    let us = them.opponent();
+    let mut checkers = Bitboard::EMPTY;
+
+    // ステップ駒
+    checkers |= attack::step_attacks(us, PieceType::Pawn, king_sq)
+        & board.piece_bb[opp][PieceType::Pawn as usize];
+    checkers |= attack::step_attacks(us, PieceType::Knight, king_sq)
+        & board.piece_bb[opp][PieceType::Knight as usize];
+    checkers |= attack::step_attacks(us, PieceType::Silver, king_sq)
+        & board.piece_bb[opp][PieceType::Silver as usize];
+
+    let gold_movers = board.piece_bb[opp][PieceType::Gold as usize]
+        | board.piece_bb[opp][PieceType::ProPawn as usize]
+        | board.piece_bb[opp][PieceType::ProLance as usize]
+        | board.piece_bb[opp][PieceType::ProKnight as usize]
+        | board.piece_bb[opp][PieceType::ProSilver as usize];
+    checkers |= attack::step_attacks(us, PieceType::Gold, king_sq) & gold_movers;
+
+    let king_step = attack::step_attacks(us, PieceType::King, king_sq);
+    checkers |= king_step
+        & (board.piece_bb[opp][PieceType::Horse as usize]
+            | board.piece_bb[opp][PieceType::Dragon as usize]);
+
+    // 飛び駒
+    checkers |= attack::lance_attacks(us, king_sq, occ)
+        & board.piece_bb[opp][PieceType::Lance as usize];
+    checkers |= attack::bishop_attacks(king_sq, occ)
+        & (board.piece_bb[opp][PieceType::Bishop as usize]
+            | board.piece_bb[opp][PieceType::Horse as usize]);
+    checkers |= attack::rook_attacks(king_sq, occ)
+        & (board.piece_bb[opp][PieceType::Rook as usize]
+            | board.piece_bb[opp][PieceType::Dragon as usize]);
+
+    checkers
 }
 
 /// 疑似合法手を生成する(自玉の王手放置チェックなし)．

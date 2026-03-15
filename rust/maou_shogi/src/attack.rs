@@ -305,6 +305,55 @@ pub fn between_bb(sq1: Square, sq2: Square) -> Bitboard {
     bb
 }
 
+/// 2マスを通る直線(縦横斜め)上の全マスを返す(両端含む)．
+///
+/// 同一直線上にない場合は空を返す．
+/// ピン判定で使用: ピンされた駒がこの直線上でのみ移動可能．
+#[inline]
+pub fn line_through(sq1: Square, sq2: Square) -> Bitboard {
+    let c1 = sq1.col() as i8;
+    let r1 = sq1.row() as i8;
+    let c2 = sq2.col() as i8;
+    let r2 = sq2.row() as i8;
+
+    let dc = c2 - c1;
+    let dr = r2 - r1;
+
+    if dc == 0 && dr == 0 {
+        return Bitboard::EMPTY;
+    }
+
+    let adc = dc.unsigned_abs();
+    let adr = dr.unsigned_abs();
+
+    // 方向インデックスの決定
+    let dir = if dc == 0 {
+        DIR_N // 縦 (N/S は同じライン)
+    } else if dr == 0 {
+        DIR_W // 横 (W/E は同じライン)
+    } else if adc == adr {
+        if (dc > 0) == (dr > 0) { DIR_SE } else { DIR_NE }
+    } else {
+        return Bitboard::EMPTY; // 同一直線上にない
+    };
+
+    // sq1 から両方向のレイ + sq1 自身
+    let opposite = match dir {
+        DIR_N => DIR_S,
+        DIR_S => DIR_N,
+        DIR_W => DIR_E,
+        DIR_E => DIR_W,
+        DIR_NW => DIR_SE,
+        DIR_NE => DIR_SW,
+        DIR_SW => DIR_NE,
+        DIR_SE => DIR_NW,
+        _ => unreachable!(),
+    };
+    let mut line = RAY_MASKS[dir][sq1.index()] | RAY_MASKS[opposite][sq1.index()];
+    line.set(sq1);
+    line
+}
+
 /// 指定した駒種・色・マスの利きを返す(占有ビットボード考慮)．
 pub fn piece_attacks(color: Color, pt: PieceType, sq: Square, occupied: Bitboard) -> Bitboard {
     match pt {
