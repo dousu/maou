@@ -1832,7 +1832,11 @@ impl DfPnSolver {
 
                     if cpn != 0 && cdn != 0 {
                         let saved = self.max_nodes;
-                        // 1子あたり 1024 ノード上限
+                        // 1子あたり 1024 ノード上限．
+                        // PV 沿いの各未証明子に対する追加証明の予算．
+                        // 長手数の詰将棋では不十分な場合があり，
+                        // CheckmateNoPv が返る可能性がある．
+                        // complete_or_proofs の予算(1024〜8192)とは独立．
                         self.max_nodes = self
                             .nodes_searched
                             .saturating_add(1024)
@@ -1883,7 +1887,7 @@ impl DfPnSolver {
         ply: u32,
     ) -> Vec<Move> {
         // スタックオーバーフロー防止: 探索手数の2倍を再帰深度の上限とする
-        if ply >= self.depth * 2 {
+        if ply >= self.depth.saturating_mul(2) {
             return Vec::new();
         }
         let full_hash = board.hash;

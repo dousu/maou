@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "maou_rust"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "maou_shogi"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "arrayvec",
  "rustc-hash",
