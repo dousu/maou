@@ -439,7 +439,9 @@ impl DfPnSolver {
             // PV 抽出を先に試行
             let moves = self.extract_pv(board);
             if moves.is_empty() {
-                // PV 抽出失敗: 追加証明して再抽出
+                // PV 抽出失敗: TT 上書きにより手順が断片化している．
+                // find_shortest の値に関わらず，PV 復元のために追加証明が必要．
+                // (L457 の find_shortest 用 complete_or_proofs とは目的が異なる)
                 self.complete_or_proofs(board);
                 let moves = self.extract_pv(board);
                 if moves.is_empty() {
@@ -1193,7 +1195,20 @@ impl DfPnSolver {
         }
     }
 
-    /// 合い効かずマスを計算する．
+    /// 合い効かずマス(駒打ち用)を計算する．
+    ///
+    /// 駒を打った場合に必ず無駄になるマスを判定する:
+    /// - 守備側(玉を除く)がそのマスに利いていれば，ひもがついているため無駄合いではない
+    /// - 玉の隣接マスで，攻め方がチェッカー以外から利かせていなければ，
+    ///   玉が取り返せるため無駄合いではない
+    /// - それ以外は無駄合い(チェッカーに取られて再び同筋の王手になる)
+    ///
+    /// 注: 攻め方のチェッカー以外の駒が合い駒マスに利いているかの追加チェックは
+    /// 行っていない．チェッカー(飛び駒)が between マス全体に利いているため，
+    /// 守備側がひもをつけていなければチェッカーに取られて無駄合いになる．
+    /// 攻め方の他駒の利きは取り合いの深さに影響するが，
+    /// 詰将棋では駒の価値ではなく詰みの有無が問題であり，
+    /// 現状のロジックで合法手の見落としは発生しない(枝刈り漏れのみ)．
     fn compute_futile_squares(
         &self,
         board: &Board,
@@ -1211,9 +1226,11 @@ impl DfPnSolver {
         let mut futile = Bitboard::EMPTY;
 
         for sq in *between {
+            // 守備側(玉除く)がひもをつけている → 取り返せるので無駄合いではない
             if board.is_attacked_by_excluding(sq, defender, true, None) {
                 continue;
             }
+            // 玉の隣接マスかつ攻め方の他駒が利いていない → 玉が取り返せる
             if king_step.contains(sq)
                 && !board.is_attacked_by_excluding(sq, attacker, false, Some(checker_sq))
             {
@@ -1236,6 +1253,13 @@ impl DfPnSolver {
         all_occ: Bitboard,
         our_occ: Bitboard,
     ) {
+        let king_step = attack::step_attacks(
+            defender.opponent(),
+            PieceType::King,
+            king_sq,
+        );
+        let attacker = defender.opponent();
+
         for to in *between {
             // --- 駒移動による合い駒 ---
             let mut our_bb = our_occ;
@@ -1250,6 +1274,23 @@ impl DfPnSolver {
                 if !attacks.contains(to) {
                     continue;
                 }
+
+                // 駒移動による合い駒の無駄合いフィルタ:
+                // futile マスへの移動でも，以下の場合は無駄合いではない:
+                // (a) 移動後の駒にひもがついている(from を除いた守備側の利き)
+                // (b) 移動元が玉の隣接マスで，空いた後に攻め方から利かれず
+                //     玉の逃げ道が新たに生まれる
+                if futile.contains(to) {
+                    let has_support = board.is_attacked_by_excluding(
+                        to, defender, true, Some(from),
+                    );
+                    let opens_escape = king_step.contains(from)
+                        && !board.is_attacked_by_excluding(from, attacker, false, None);
+                    if !has_support && !opens_escape {
+                        continue;
+                    }
+                }
+
                 let captured_raw = board.squares[to.index()].0;
                 let in_promo_zone =
                     to.is_promotion_zone(defender) || from.is_promotion_zone(defender);
