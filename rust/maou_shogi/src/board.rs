@@ -26,6 +26,11 @@ pub struct Board {
     pub(crate) piece_bb: [[Bitboard; PIECE_BB_SIZE]; 2],
     /// 色ごとの全駒占有ビットボード．
     pub(crate) occupied: [Bitboard; 2],
+    /// 全駒占有ビットボード(キャッシュ)．
+    ///
+    /// `occupied[0] | occupied[1]` を事前計算し保持する．
+    /// `all_occupied()` の呼び出しコストを排除する．
+    pub(crate) all_occ: Bitboard,
     /// 持ち駒 [色][駒種7] = 個数．
     /// 順序: 歩(0), 香(1), 桂(2), 銀(3), 金(4), 角(5), 飛(6)
     pub(crate) hand: [[u8; HAND_KINDS]; 2],
@@ -33,8 +38,13 @@ pub struct Board {
     pub(crate) turn: Color,
     /// 手数．
     pub(crate) ply: u16,
-    /// Zobrist hash(インクリメンタル更新)．
+    /// Zobrist hash(インクリメンタル更新)．盤面+持ち駒+手番を含む完全ハッシュ．
     pub(crate) hash: u64,
+    /// 盤面のみの Zobrist hash(持ち駒を除外)．
+    ///
+    /// `hash` から持ち駒成分を除いたもの．position_key() を O(1) にするために
+    /// インクリメンタルに維持する．盤上の駒配置と手番のみを反映する．
+    pub(crate) board_hash: u64,
 }
 
 impl Board {
@@ -51,10 +61,12 @@ impl Board {
             squares: [Piece::EMPTY; 81],
             piece_bb: [[Bitboard::EMPTY; PIECE_BB_SIZE]; 2],
             occupied: [Bitboard::EMPTY; 2],
+            all_occ: Bitboard::EMPTY,
             hand: [[0u8; HAND_KINDS]; 2],
             turn: Color::Black,
             ply: 1,
             hash: 0,
+            board_hash: 0,
         }
     }
 
@@ -70,6 +82,7 @@ impl Board {
         // ビットボードを再構築
         self.piece_bb = [[Bitboard::EMPTY; PIECE_BB_SIZE]; 2];
         self.occupied = [Bitboard::EMPTY; 2];
+        self.all_occ = Bitboard::EMPTY;
 
         for sq_idx in 0..81u8 {
             let piece = self.squares[sq_idx as usize];
@@ -78,11 +91,13 @@ impl Board {
                 let pt = piece.piece_type().unwrap();
                 self.piece_bb[color.index()][pt as usize].set(Square(sq_idx));
                 self.occupied[color.index()].set(Square(sq_idx));
+                self.all_occ.set(Square(sq_idx));
             }
         }
 
         // Zobrist hashを計算
         self.hash = self.compute_hash();
+        self.board_hash = self.compute_board_hash();
 
         Ok(())
     }
@@ -95,7 +110,7 @@ impl Board {
     /// 全駒の占有ビットボードを返す．
     #[inline]
     pub fn all_occupied(&self) -> Bitboard {
-        self.occupied[0] | self.occupied[1]
+        self.all_occ
     }
 
     /// 指定した色の玉のマスを返す．
@@ -1049,12 +1064,17 @@ impl Board {
     #[inline]
     pub fn put_piece(&mut self, sq: Square, piece: Piece) {
         debug_assert!(self.squares[sq.index()].is_empty());
-        let color = piece.color().unwrap();
-        let pt = piece.piece_type().unwrap();
+        debug_assert!(!piece.is_empty());
+        // Safety: piece が空でないことは debug_assert で検証済み
+        let ci = unsafe { piece.color_index_unchecked() };
+        let pt = unsafe { piece.piece_type_raw_unchecked() };
         self.squares[sq.index()] = piece;
-        self.piece_bb[color.index()][pt as usize].set(sq);
-        self.occupied[color.index()].set(sq);
-        self.hash ^= ZOBRIST.board_hash(color, pt, sq);
+        self.piece_bb[ci][pt as usize].set(sq);
+        self.occupied[ci].set(sq);
+        self.all_occ.set(sq);
+        let z = ZOBRIST.board_hash_raw(ci, pt as usize, sq);
+        self.hash ^= z;
+        self.board_hash ^= z;
     }
 
     /// 駒を除去する(ビットボードも更新)．
@@ -1066,12 +1086,16 @@ impl Board {
     pub fn remove_piece(&mut self, sq: Square) -> Piece {
         let piece = self.squares[sq.index()];
         debug_assert!(!piece.is_empty());
-        let color = piece.color().unwrap();
-        let pt = piece.piece_type().unwrap();
+        // Safety: piece が空でないことは debug_assert で検証済み
+        let ci = unsafe { piece.color_index_unchecked() };
+        let pt = unsafe { piece.piece_type_raw_unchecked() };
         self.squares[sq.index()] = Piece::EMPTY;
-        self.piece_bb[color.index()][pt as usize].clear(sq);
-        self.occupied[color.index()].clear(sq);
-        self.hash ^= ZOBRIST.board_hash(color, pt, sq);
+        self.piece_bb[ci][pt as usize].clear(sq);
+        self.occupied[ci].clear(sq);
+        self.all_occ.clear(sq);
+        let z = ZOBRIST.board_hash_raw(ci, pt as usize, sq);
+        self.hash ^= z;
+        self.board_hash ^= z;
         piece
     }
 
@@ -1136,7 +1160,9 @@ impl Board {
         }
 
         // 手番を交代
-        self.hash ^= ZOBRIST.turn_hash();
+        let turn_z = ZOBRIST.turn_hash();
+        self.hash ^= turn_z;
+        self.board_hash ^= turn_z;
         self.turn = self.turn.opponent();
         self.ply += 1;
 
@@ -1153,8 +1179,10 @@ impl Board {
     pub fn undo_move(&mut self, m: Move, captured: Piece) {
         // 手番を戻す
         self.turn = self.turn.opponent();
-        self.hash ^= ZOBRIST.turn_hash();
-        assert!(self.ply > 1, "undo_move called without prior do_move");
+        let turn_z = ZOBRIST.turn_hash();
+        self.hash ^= turn_z;
+        self.board_hash ^= turn_z;
+        debug_assert!(self.ply > 1, "undo_move called without prior do_move");
         self.ply -= 1;
 
         if m.is_drop() {
@@ -1209,6 +1237,23 @@ impl Board {
 
     /// 盤面全体からZobrist hashを計算する(初期化用)．
     pub fn compute_hash(&self) -> u64 {
+        let mut hash = self.compute_board_hash();
+
+        // 持ち駒
+        for color in [Color::Black, Color::White] {
+            for kind in 0..7 {
+                let count = self.hand[color.index()][kind];
+                if count > 0 {
+                    hash ^= ZOBRIST.hand_hash(color, kind, count as usize);
+                }
+            }
+        }
+
+        hash
+    }
+
+    /// 盤面のみのZobrist hashを計算する(持ち駒を除外，初期化用)．
+    pub fn compute_board_hash(&self) -> u64 {
         let mut hash = 0u64;
 
         // 盤上の駒
@@ -1218,16 +1263,6 @@ impl Board {
                 let color = piece.color().unwrap();
                 let pt = piece.piece_type().unwrap();
                 hash ^= ZOBRIST.board_hash(color, pt, Square(sq_idx));
-            }
-        }
-
-        // 持ち駒
-        for color in [Color::Black, Color::White] {
-            for kind in 0..7 {
-                let count = self.hand[color.index()][kind];
-                if count > 0 {
-                    hash ^= ZOBRIST.hand_hash(color, kind, count as usize);
-                }
             }
         }
 
@@ -1271,6 +1306,7 @@ impl Board {
     pub fn set_turn(&mut self, color: Color) {
         self.turn = color;
         self.hash = self.compute_hash();
+        self.board_hash = self.compute_board_hash();
     }
 
     /// 手数を返す．
@@ -1321,6 +1357,12 @@ impl Board {
 
         // Zobristハッシュの整合性
         if self.hash != self.compute_hash() {
+            return false;
+        }
+        if self.board_hash != self.compute_board_hash() {
+            return false;
+        }
+        if self.all_occ != (self.occupied[0] | self.occupied[1]) {
             return false;
         }
 

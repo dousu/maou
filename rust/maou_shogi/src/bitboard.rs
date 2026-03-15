@@ -10,6 +10,7 @@ const HI_MASK: u64 = (1u64 << 18) - 1;
 /// 81マスを2つのu64で表現する:
 /// - lo: マス0-62 (63ビット)
 /// - hi: マス63-80 (18ビット)
+///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bitboard {
     pub(crate) lo: u64,
@@ -26,32 +27,23 @@ impl Bitboard {
     };
 
     /// 指定マスのみセットされたビットボードを返す．
+    ///
+    /// 事前計算済みルックアップテーブルを使用し，分岐を排除する．
     #[inline]
     pub fn from_square(sq: Square) -> Bitboard {
-        let idx = sq.0 as u64;
-        if idx < 63 {
-            Bitboard {
-                lo: 1u64 << idx,
-                hi: 0,
-            }
-        } else {
-            Bitboard {
-                lo: 0,
-                hi: 1u64 << (idx - 63),
-            }
-        }
+        SQUARE_BB[sq.0 as usize]
     }
 
     /// 空かどうか．
     #[inline]
     pub fn is_empty(self) -> bool {
-        self.lo == 0 && self.hi == 0
+        (self.lo | self.hi) == 0
     }
 
     /// 空でないかどうか．
     #[inline]
     pub fn is_not_empty(self) -> bool {
-        !self.is_empty()
+        (self.lo | self.hi) != 0
     }
 
     /// 指定マスがセットされているか．
@@ -300,6 +292,22 @@ impl Iterator for BitboardIter {
 // 事前計算済みマスクテーブル
 // ============================================================
 
+/// 各マスに対応するビットボード．`from_square(sq)` で使用．
+const SQUARE_BB: [Bitboard; 81] = {
+    let mut table = [Bitboard::EMPTY; 81];
+    let mut i = 0u8;
+    while i < 81 {
+        let idx = i as u64;
+        if idx < 63 {
+            table[i as usize] = Bitboard { lo: 1u64 << idx, hi: 0 };
+        } else {
+            table[i as usize] = Bitboard { lo: 0, hi: 1u64 << (idx - 63) };
+        }
+        i += 1;
+    }
+    table
+};
+
 /// 筋(col)ごとのビットボードマスク．`file_mask(col)` で使用．
 const FILE_MASKS: [Bitboard; 9] = {
     let mut masks = [Bitboard::EMPTY; 9];
@@ -365,6 +373,17 @@ mod tests {
     }
 
     #[test]
+    fn test_from_square_all() {
+        // 全81マスでルックアップテーブルが正しいことを検証
+        for i in 0..81u8 {
+            let sq = Square(i);
+            let bb = Bitboard::from_square(sq);
+            assert!(bb.contains(sq), "from_square failed for sq={}", i);
+            assert_eq!(bb.count(), 1, "count != 1 for sq={}", i);
+        }
+    }
+
+    #[test]
     fn test_set_clear() {
         let mut bb = Bitboard::EMPTY;
         bb.set(Square(10));
@@ -408,4 +427,5 @@ mod tests {
         let squares: Vec<Square> = bb.into_iter().collect();
         assert_eq!(squares, vec![Square(0), Square(40), Square(80)]);
     }
+
 }

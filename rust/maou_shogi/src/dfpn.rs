@@ -20,7 +20,6 @@ use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, PieceType, Square, HAND_KINDS};
-use crate::zobrist::ZOBRIST;
 
 /// 王手手/応手の最大数．
 /// 将棋の合法手上限は593であり，長手数の詰将棋では
@@ -194,36 +193,14 @@ fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
         && a[6] >= b[6]
 }
 
-/// 盤面のみのハッシュ(持ち駒を除外)を計算する．
+/// 盤面のみのハッシュ(持ち駒を除外)を返す．
 ///
-/// board.hash から持ち駒の Zobrist ハッシュ成分を XOR で除去する．
+/// Board が `board_hash` をインクリメンタルに維持しているため O(1)．
 /// 証明駒/反証駒による TT 参照で，同一盤面・異なる持ち駒の
 /// エントリを同一スロットに集約するために使用する．
-///
-/// NOTE: 7要素 × 2色のループを手動アンロールしている．
-/// ホットパスのため，ループのオーバーヘッドを排除して性能を優先する．
 #[inline(always)]
 fn position_key(board: &Board) -> u64 {
-    let mut h = board.hash;
-    // Black hand
-    let bh = &board.hand[0];
-    if bh[0] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 0, bh[0] as usize); }
-    if bh[1] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 1, bh[1] as usize); }
-    if bh[2] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 2, bh[2] as usize); }
-    if bh[3] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 3, bh[3] as usize); }
-    if bh[4] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 4, bh[4] as usize); }
-    if bh[5] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 5, bh[5] as usize); }
-    if bh[6] > 0 { h ^= ZOBRIST.hand_hash(Color::Black, 6, bh[6] as usize); }
-    // White hand
-    let wh = &board.hand[1];
-    if wh[0] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 0, wh[0] as usize); }
-    if wh[1] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 1, wh[1] as usize); }
-    if wh[2] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 2, wh[2] as usize); }
-    if wh[3] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 3, wh[3] as usize); }
-    if wh[4] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 4, wh[4] as usize); }
-    if wh[5] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 5, wh[5] as usize); }
-    if wh[6] > 0 { h ^= ZOBRIST.hand_hash(Color::White, 6, wh[6] as usize); }
-    h
+    board.board_hash
 }
 
 /// 詰将棋の探索結果．
@@ -789,36 +766,37 @@ impl DfPnSolver {
                         );
                     } else if ply + 2 < self.depth {
                         // 3手詰めチェック: 応手を生成して全応手に1手詰め判定を実行．
-                        // 応手数の制限なし: ビットボードベースの mate_move_in_1ply は
-                        // 十分に高速であり，応手数が多い局面でも Df-Pn の再帰呼び出しより
-                        // 低コストで3手詰めを検出できる．
+                        // 応手数が多い場合(> 8)はコスト対効果が低下するためスキップ．
                         #[cfg(feature = "profile")]
                         let _mate3_start = Instant::now();
                         let defenses =
                             self.generate_defense_moves(board);
-                        let mut all_mated = true;
-                        for d in &defenses {
-                            let cap_d = board.do_move(*d);
-                            // 逆王手の応手は不詰として扱い，
-                            // 1手詰め判定をスキップする(cshogi と同様)．
-                            // 逆王手がかかると攻め方は王手回避が必要で，
-                            // 1手で詰ませることは不可能なため．
-                            let mate = if board.is_in_check(
-                                board.turn.opponent(),
-                            ) {
-                                false
-                            } else {
-                                self.has_mate_in_1(board)
-                            };
-                            if mate {
-                                self.store_board(
-                                    board, 0, INF,
-                                );
-                            }
-                            board.undo_move(*d, cap_d);
-                            if !mate {
-                                all_mated = false;
-                                break;
+                        let num_defenses = defenses.len();
+                        let mut all_mated = num_defenses <= 8;
+                        if all_mated {
+                            for d in &defenses {
+                                let cap_d = board.do_move(*d);
+                                // 逆王手の応手は不詰として扱い，
+                                // 1手詰め判定をスキップする(cshogi と同様)．
+                                // 逆王手がかかると攻め方は王手回避が必要で，
+                                // 1手で詰ませることは不可能なため．
+                                let mate = if board.is_in_check(
+                                    board.turn.opponent(),
+                                ) {
+                                    false
+                                } else {
+                                    self.has_mate_in_1(board)
+                                };
+                                if mate {
+                                    self.store_board(
+                                        board, 0, INF,
+                                    );
+                                }
+                                board.undo_move(*d, cap_d);
+                                if !mate {
+                                    all_mated = false;
+                                    break;
+                                }
                             }
                         }
                         if all_mated {
@@ -827,7 +805,7 @@ impl DfPnSolver {
                                 INF,
                             );
                         } else {
-                            let n = defenses.len() as u32;
+                            let n = num_defenses as u32;
                             self.store(
                                 child_pk, child_hand, n, n,
                             );
