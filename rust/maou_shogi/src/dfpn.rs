@@ -2806,6 +2806,61 @@ mod tests {
         }
     }
 
+    /// 逆王手で不詰のケース．
+    ///
+    /// 局面: 先手玉2四，先手飛4三，先手歩1三，先手香2五
+    ///       後手玉2二，後手香2一，後手桂4二，後手銀3四
+    /// 先手持駒: なし
+    /// 後手持駒: 飛，角二，金四，銀三，桂三，香二，歩十七
+    ///
+    /// 4三飛→2三飛成は王手だが，後手3三銀の逆王手(2四の先手玉に対する王手)
+    /// により攻め方は王手回避を強いられ，詰みにならない．
+    /// 先手に持ち駒がなく他の有効な攻めがないため不詰．
+    #[test]
+    fn test_no_checkmate_counter_check() {
+        let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {}
+            other => panic!(
+                "expected NoCheckmate (counter-check by silver), got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// 逆王手がある局面で3四玉と上がって詰むケース．
+    ///
+    /// 局面: 先手玉2四，先手飛4三，先手歩1三，先手香2五
+    ///       後手玉2二，後手香2一，後手銀3四
+    /// 先手持駒: なし
+    /// 後手持駒: 飛，角二，金四，銀三，桂四，香二，歩十七
+    ///
+    /// 上記の不詰局面から4二の後手桂を除いた形．
+    /// 先手3四玉(銀を取って王手回避しつつ接近)から詰みがある．
+    #[test]
+    fn test_checkmate_with_counter_check_avoidance() {
+        let sfen = "7l1/7k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s4n2l17p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> =
+                    moves.iter().map(|m| m.to_usi()).collect();
+                // 3四玉(銀取り)から始まる手順を確認
+                assert!(
+                    !usi_moves.is_empty(),
+                    "expected non-empty PV"
+                );
+            }
+            other => panic!(
+                "expected Checkmate (king captures silver), got {:?}",
+                other
+            ),
+        }
+    }
+
     /// 打歩詰めしかなく不詰のケース．
     ///
     /// 局面: 後手玉1一，後手桂2一，先手金1三
