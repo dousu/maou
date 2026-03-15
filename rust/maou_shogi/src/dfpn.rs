@@ -964,7 +964,7 @@ impl DfPnSolver {
         };
 
         let checkers =
-            self.find_checkers(board, king_sq, attacker);
+            board.compute_checkers_at(king_sq, attacker);
         if checkers.is_empty() {
             return true; // 王手なし → 回避不要
         }
@@ -1206,7 +1206,7 @@ impl DfPnSolver {
         };
 
         // 王手している駒を特定
-        let checkers = self.find_checkers(board, king_sq, attacker);
+        let checkers = board.compute_checkers_at(king_sq, attacker);
         if checkers.is_empty() {
             // 王手されていない(通常ありえないが安全策)
             let legal = movegen::generate_legal_moves(board);
@@ -1267,58 +1267,6 @@ impl DfPnSolver {
         }
 
         moves
-    }
-
-    /// 全ての王手駒を検出する．
-    fn find_checkers(&self, board: &Board, king_sq: Square, attacker: Color) -> Bitboard {
-        let occ = board.all_occupied();
-        let att = attacker.index();
-        let defender = attacker.opponent();
-
-        let mut checkers = Bitboard::EMPTY;
-
-        // 歩
-        checkers = checkers
-            | (attack::step_attacks(defender, PieceType::Pawn, king_sq)
-                & board.piece_bb[att][PieceType::Pawn as usize]);
-        // 桂
-        checkers = checkers
-            | (attack::step_attacks(defender, PieceType::Knight, king_sq)
-                & board.piece_bb[att][PieceType::Knight as usize]);
-        // 銀
-        checkers = checkers
-            | (attack::step_attacks(defender, PieceType::Silver, king_sq)
-                & board.piece_bb[att][PieceType::Silver as usize]);
-        // 金 + 成駒
-        let gold_like = board.piece_bb[att][PieceType::Gold as usize]
-            | board.piece_bb[att][PieceType::ProPawn as usize]
-            | board.piece_bb[att][PieceType::ProLance as usize]
-            | board.piece_bb[att][PieceType::ProKnight as usize]
-            | board.piece_bb[att][PieceType::ProSilver as usize];
-        checkers = checkers
-            | (attack::step_attacks(defender, PieceType::Gold, king_sq) & gold_like);
-        // 馬・龍(ステップ部分)
-        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
-        checkers = checkers
-            | (king_step
-                & (board.piece_bb[att][PieceType::Horse as usize]
-                    | board.piece_bb[att][PieceType::Dragon as usize]));
-        // 香
-        checkers = checkers
-            | (attack::lance_attacks(defender, king_sq, occ)
-                & board.piece_bb[att][PieceType::Lance as usize]);
-        // 角・馬
-        checkers = checkers
-            | (attack::bishop_attacks(king_sq, occ)
-                & (board.piece_bb[att][PieceType::Bishop as usize]
-                    | board.piece_bb[att][PieceType::Horse as usize]));
-        // 飛・龍
-        checkers = checkers
-            | (attack::rook_attacks(king_sq, occ)
-                & (board.piece_bb[att][PieceType::Rook as usize]
-                    | board.piece_bb[att][PieceType::Dragon as usize]));
-
-        checkers
     }
 
     /// 王手駒を玉以外の駒で捕獲する手を生成する．
@@ -1388,11 +1336,11 @@ impl DfPnSolver {
         let mut futile = Bitboard::EMPTY;
 
         for sq in *between {
-            if self.is_attacked_by_non_king(board, sq, defender) {
+            if board.is_attacked_by_excluding(sq, defender, true, None) {
                 continue;
             }
             if king_step.contains(sq)
-                && !self.is_attacked_by_excluding(board, sq, attacker, checker_sq)
+                && !board.is_attacked_by_excluding(sq, attacker, false, Some(checker_sq))
             {
                 continue;
             }
@@ -1527,125 +1475,6 @@ impl DfPnSolver {
 
     /// 指定マスに対して指定色の駒の効きがあるか判定する(除外条件付き)．
     ///
-    /// - `exclude_king`: 玉の効きを除外する(合い効かず: 玉はライン上に移動できないため)
-    /// - `excluded_sq`: 特定マスの駒を除外する(飛び駒の移動元を除外するため)
-    fn is_attacked_by_filtered(
-        &self,
-        board: &Board,
-        sq: Square,
-        attacker_color: Color,
-        exclude_king: bool,
-        excluded_sq: Option<Square>,
-    ) -> bool {
-        let mut occ = board.all_occupied();
-        let att = attacker_color.index();
-        let defender = attacker_color.opponent();
-
-        // 除外マスのマスクを計算
-        // occ からも除外して，スライド駒のレイ計算を正確にする
-        let mask = match excluded_sq {
-            Some(esq) => {
-                let mut m = crate::bitboard::Bitboard::EMPTY;
-                m.set(esq);
-                occ = occ & !m;
-                !m
-            }
-            None => !crate::bitboard::Bitboard::EMPTY, // 全ビット1
-        };
-
-        // 歩
-        if (attack::step_attacks(defender, PieceType::Pawn, sq)
-            & board.piece_bb[att][PieceType::Pawn as usize]
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 桂
-        if (attack::step_attacks(defender, PieceType::Knight, sq)
-            & board.piece_bb[att][PieceType::Knight as usize]
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 銀
-        if (attack::step_attacks(defender, PieceType::Silver, sq)
-            & board.piece_bb[att][PieceType::Silver as usize]
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 金 + 成駒
-        let gold_movers = (board.piece_bb[att][PieceType::Gold as usize]
-            | board.piece_bb[att][PieceType::ProPawn as usize]
-            | board.piece_bb[att][PieceType::ProLance as usize]
-            | board.piece_bb[att][PieceType::ProKnight as usize]
-            | board.piece_bb[att][PieceType::ProSilver as usize])
-            & mask;
-        if (attack::step_attacks(defender, PieceType::Gold, sq) & gold_movers).is_not_empty() {
-            return true;
-        }
-        // 玉・馬・龍(ステップ部分)
-        let king_step = attack::step_attacks(defender, PieceType::King, sq);
-        let mut step_pieces = board.piece_bb[att][PieceType::Horse as usize]
-            | board.piece_bb[att][PieceType::Dragon as usize];
-        if !exclude_king {
-            step_pieces = step_pieces | board.piece_bb[att][PieceType::King as usize];
-        }
-        if (king_step & step_pieces & mask).is_not_empty() {
-            return true;
-        }
-        // 香
-        if (attack::lance_attacks(defender, sq, occ)
-            & board.piece_bb[att][PieceType::Lance as usize]
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 角・馬(スライド部分)
-        if (attack::bishop_attacks(sq, occ)
-            & (board.piece_bb[att][PieceType::Bishop as usize]
-                | board.piece_bb[att][PieceType::Horse as usize])
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        // 飛・龍(スライド部分)
-        if (attack::rook_attacks(sq, occ)
-            & (board.piece_bb[att][PieceType::Rook as usize]
-                | board.piece_bb[att][PieceType::Dragon as usize])
-            & mask)
-            .is_not_empty()
-        {
-            return true;
-        }
-        false
-    }
-
-    /// 指定マスに対して指定色の玉以外の駒の効きがあるか判定する．
-    fn is_attacked_by_non_king(
-        &self,
-        board: &Board,
-        sq: Square,
-        attacker_color: Color,
-    ) -> bool {
-        self.is_attacked_by_filtered(board, sq, attacker_color, true, None)
-    }
-
-    /// 指定マスに対して指定色の駒の効きがあるか判定する(特定マスの駒を除外)．
-    fn is_attacked_by_excluding(
-        &self,
-        board: &Board,
-        sq: Square,
-        attacker_color: Color,
-        excluded_sq: Square,
-    ) -> bool {
-        self.is_attacked_by_filtered(board, sq, attacker_color, false, Some(excluded_sq))
-    }
 
     /// 攻め方の王手になる手を生成する．
     ///
@@ -1736,7 +1565,7 @@ impl DfPnSolver {
         // 開き王手の候補を事前計算:
         // 玉からのレイ上にいる自駒で，その間に他の駒がない場合，
         // そこから移動すると開き王手になりうる
-        let discoverers = self.compute_discoverers(board, us, king_sq);
+        let discoverers = board.compute_discoverers(us, king_sq);
 
         let mut our_bb = our_occ;
         while our_bb.is_not_empty() {
@@ -1816,100 +1645,6 @@ impl DfPnSolver {
     }
 
     /// 開き王手の元になりうる自駒を計算する．
-    ///
-    /// 自陣の飛び駒(飛・龍・角・馬・香)と玉の間に自駒が1枚だけある場合，
-    /// その駒を移動すると開き王手になる．
-    ///
-    /// between_bb ベースで各飛び駒ごとに判定し，
-    /// 方向の混同による誤判定を防ぐ．
-    fn compute_discoverers(
-        &self,
-        board: &Board,
-        us: Color,
-        king_sq: Square,
-    ) -> Bitboard {
-        let all_occ = board.all_occupied();
-        let our_occ = board.occupied[us.index()];
-        let mut discoverers = Bitboard::EMPTY;
-
-        // 飛車・龍: 同一段 or 同一筋に玉がある場合
-        let our_rook_like =
-            board.piece_bb[us.index()][PieceType::Rook as usize]
-                | board.piece_bb[us.index()]
-                    [PieceType::Dragon as usize];
-        for slider_sq in our_rook_like {
-            // 同一段 or 同一筋でないと飛び利きが通らない
-            if slider_sq.row() != king_sq.row()
-                && slider_sq.col() != king_sq.col()
-            {
-                continue;
-            }
-            let between =
-                attack::between_bb(king_sq, slider_sq);
-            let blockers = between & all_occ;
-            if blockers.count() == 1 {
-                let blocker = blockers.lsb().unwrap();
-                if our_occ.contains(blocker) {
-                    discoverers.set(blocker);
-                }
-            }
-        }
-
-        // 角・馬: 同一対角線に玉がある場合
-        let our_bishop_like =
-            board.piece_bb[us.index()][PieceType::Bishop as usize]
-                | board.piece_bb[us.index()]
-                    [PieceType::Horse as usize];
-        for slider_sq in our_bishop_like {
-            let dr = (slider_sq.row() as i8)
-                - (king_sq.row() as i8);
-            let dc = (slider_sq.col() as i8)
-                - (king_sq.col() as i8);
-            if dr.abs() != dc.abs() {
-                continue; // 対角線上にない
-            }
-            let between =
-                attack::between_bb(king_sq, slider_sq);
-            let blockers = between & all_occ;
-            if blockers.count() == 1 {
-                let blocker = blockers.lsb().unwrap();
-                if our_occ.contains(blocker) {
-                    discoverers.set(blocker);
-                }
-            }
-        }
-
-        // 香: 前方にのみ攻撃する飛び駒
-        let our_lance =
-            board.piece_bb[us.index()][PieceType::Lance as usize];
-        for lance_sq in our_lance {
-            // 同一筋でないと利きが通らない
-            if lance_sq.col() != king_sq.col() {
-                continue;
-            }
-            // 香の攻撃方向に玉があるか確認
-            // Black の香は上方向(row 減少)，White の香は下方向(row 増加)
-            let lance_forward = match us {
-                Color::Black => lance_sq.row() > king_sq.row(),
-                Color::White => lance_sq.row() < king_sq.row(),
-            };
-            if !lance_forward {
-                continue;
-            }
-            let between =
-                attack::between_bb(king_sq, lance_sq);
-            let blockers = between & all_occ;
-            if blockers.count() == 1 {
-                let blocker = blockers.lsb().unwrap();
-                if our_occ.contains(blocker) {
-                    discoverers.set(blocker);
-                }
-            }
-        }
-
-        discoverers
-    }
-
     /// 合法性の簡易チェック(自玉の王手放置のみ)．
     ///
     /// 片玉の場合(自玉なし)は常に合法．
