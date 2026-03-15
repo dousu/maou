@@ -2104,6 +2104,15 @@ mod tests {
         let p2c = board.move_from_usi("P*2c").unwrap();
         let cap = board.do_move(p2c);
 
+        // 先手番(攻め方)から探索して詰みがないことを検証
+        let mut solver = DfPnSolver::new(15, 100_000, 32767);
+        let result = solver.solve(&mut board);
+        assert!(
+            !matches!(result, TsumeResult::Checkmate { .. }),
+            "P*2c 後の局面は詰みではないはず: {:?}",
+            result
+        );
+
         board.undo_move(p2c, cap);
     }
 
