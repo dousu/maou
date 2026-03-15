@@ -19,7 +19,7 @@ use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
-use crate::types::{Color, PieceType, Square};
+use crate::types::{Color, PieceType, Square, HAND_KINDS};
 use crate::zobrist::ZOBRIST;
 
 /// 王手手/応手の最大数．
@@ -39,23 +39,15 @@ fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
 
-/// 持ち駒の種類数(歩・香・桂・銀・金・角・飛)．
-const HAND_KINDS_TT: usize = 7;
-
 /// 同一盤面ハッシュあたりの TT エントリ上限．
 /// 異なる持ち駒構成が大量に登録されることを防ぐ．
 const MAX_TT_ENTRIES_PER_POSITION: usize = 64;
-
-/// 反証駒の最大値(任意の持ち駒で不詰の場合に使用)．
-/// 各駒種の最大枚数: 歩18，香4，桂4，銀4，金4，角2，飛2．
-const MAX_DISPROOF: [u8; HAND_KINDS_TT] =
-    [18, 4, 4, 4, 4, 2, 2];
 
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
 ///
 /// 証明駒の優越判定に使用: 持ち駒が多い方が有利(攻め方)．
 #[inline(always)]
-fn hand_gte(a: &[u8; HAND_KINDS_TT], b: &[u8; HAND_KINDS_TT]) -> bool {
+fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
     a[0] >= b[0]
         && a[1] >= b[1]
         && a[2] >= b[2]
@@ -122,7 +114,7 @@ pub enum TsumeResult {
 /// - pn, dn: 証明数・反証数
 #[derive(Debug, Clone, Copy)]
 struct DfPnEntry {
-    hand: [u8; HAND_KINDS_TT],
+    hand: [u8; HAND_KINDS],
     pn: u32,
     dn: u32,
 }
@@ -161,7 +153,7 @@ impl TranspositionTable {
     fn look_up(
         &self,
         pos_key: u64,
-        hand: &[u8; HAND_KINDS_TT],
+        hand: &[u8; HAND_KINDS],
     ) -> (u32, u32) {
         let entries = match self.tt.get(&pos_key) {
             Some(e) => e,
@@ -193,7 +185,7 @@ impl TranspositionTable {
     fn store(
         &mut self,
         pos_key: u64,
-        hand: [u8; HAND_KINDS_TT],
+        hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
     ) {
@@ -223,8 +215,8 @@ impl TranspositionTable {
     fn get_proof_hand(
         &self,
         pos_key: u64,
-        hand: &[u8; HAND_KINDS_TT],
-    ) -> [u8; HAND_KINDS_TT] {
+        hand: &[u8; HAND_KINDS],
+    ) -> [u8; HAND_KINDS] {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
                 if e.pn == 0 && hand_gte(hand, &e.hand) {
@@ -243,8 +235,8 @@ impl TranspositionTable {
     fn get_disproof_hand(
         &self,
         pos_key: u64,
-        hand: &[u8; HAND_KINDS_TT],
-    ) -> [u8; HAND_KINDS_TT] {
+        hand: &[u8; HAND_KINDS],
+    ) -> [u8; HAND_KINDS] {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
                 if e.dn == 0 && hand_gte(&e.hand, hand) {
@@ -261,16 +253,21 @@ impl TranspositionTable {
     }
 }
 
-/// OR ノードの証明駒を子ノードの証明駒から計算する．
+/// OR ノードの証明駒/反証駒を子ノードの駒情報から計算する．
 ///
-/// - 駒打ち: 子の証明駒 + 打った駒種1枚
-/// - 駒取り: 子の証明駒 - 取った駒種1枚(0 以下にならない)
-/// - それ以外: 子の証明駒をそのまま使用
+/// 指し手による持ち駒の入出を補正する汎用関数．
+/// 証明駒・反証駒の両方に同じロジックが適用できる:
+/// 駒打ちは持ち駒を消費し，駒取りは持ち駒を増やすため，
+/// 親ノード視点では打った駒を加算，取った駒を減算する．
+///
+/// - 駒打ち: 子の駒 + 打った駒種1枚(持ち駒を消費するため)
+/// - 駒取り: 子の駒 - 取った駒種1枚(持ち駒が増えるため)
+/// - それ以外: 子の駒をそのまま使用
 #[inline]
 fn adjust_or_proof(
     m: Move,
-    child_proof: &[u8; HAND_KINDS_TT],
-) -> [u8; HAND_KINDS_TT] {
+    child_proof: &[u8; HAND_KINDS],
+) -> [u8; HAND_KINDS] {
     let mut ph = *child_proof;
     if m.is_drop() {
         if let Some(pt) = m.drop_piece_type() {
@@ -377,7 +374,7 @@ impl DfPnSolver {
     fn look_up_pn_dn(
         &self,
         pos_key: u64,
-        hand: &[u8; HAND_KINDS_TT],
+        hand: &[u8; HAND_KINDS],
     ) -> (u32, u32) {
         self.table.look_up(pos_key, hand)
     }
@@ -387,7 +384,7 @@ impl DfPnSolver {
     fn store(
         &mut self,
         pos_key: u64,
-        hand: [u8; HAND_KINDS_TT],
+        hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
     ) {
@@ -545,7 +542,7 @@ impl DfPnSolver {
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
             // 実際の持ち駒で不詰を記録する．
-            // MAX_DISPROOF で保存すると，任意の持ち駒で不詰と扱われ，
+            // PieceType::MAX_HAND_COUNT で保存すると，任意の持ち駒で不詰と扱われ，
             // 同じ局面が浅い ply で到達されたときも不詰として誤判定される．
             // att_hand を使うことで，持ち駒が異なる経路からの
             // 再到達時に TT ヒットせず，正しく再探索される．
@@ -565,13 +562,13 @@ impl DfPnSolver {
             if or_node {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
-                // MAX_DISPROOF ではなく実際の持ち駒を使用する．
+                // PieceType::MAX_HAND_COUNT ではなく実際の持ち駒を使用する．
                 self.store(pos_key, att_hand, INF, 0);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
                     pos_key,
-                    [0; HAND_KINDS_TT],
+                    [0; HAND_KINDS],
                     0,
                     INF,
                 );
@@ -582,11 +579,11 @@ impl DfPnSolver {
         // 子ノード情報を事前計算:
         // (Move, full_hash, pos_key, attacker_hand)
         let mut children: ArrayVec<
-            (Move, u64, u64, [u8; HAND_KINDS_TT]),
+            (Move, u64, u64, [u8; HAND_KINDS]),
             MAX_MOVES,
         > = ArrayVec::new();
         // OR ノードの反証駒(init ループ中に蓄積)
-        let mut init_or_disproof = MAX_DISPROOF;
+        let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
         for m in &moves {
             let captured = board.do_move(*m);
             let child_full_hash = board.hash;
@@ -602,7 +599,7 @@ impl DfPnSolver {
                         // 応手なし → 詰み(証明駒 = 空)
                         self.store(
                             child_pk,
-                            [0; HAND_KINDS_TT],
+                            [0; HAND_KINDS],
                             0,
                             INF,
                         );
@@ -693,7 +690,7 @@ impl DfPnSolver {
                 let mut proof =
                     adjust_or_proof(*m, &child_ph);
                 // 証明駒を現在の持ち駒で上限クリップ
-                for k in 0..HAND_KINDS_TT {
+                for k in 0..HAND_KINDS {
                     proof[k] = proof[k].min(att_hand[k]);
                 }
                 self.store(pos_key, proof, 0, INF);
@@ -717,7 +714,7 @@ impl DfPnSolver {
                     .get_disproof_hand(child_pk, &child_hand);
                 let adj =
                     adjust_or_proof(*m, &child_dp);
-                for k in 0..HAND_KINDS_TT {
+                for k in 0..HAND_KINDS {
                     init_or_disproof[k] =
                         init_or_disproof[k].min(adj[k]);
                 }
@@ -786,7 +783,7 @@ impl DfPnSolver {
                             &child_ph,
                         );
                         // 証明駒を現在の持ち駒で上限クリップ
-                        for k in 0..HAND_KINDS_TT {
+                        for k in 0..HAND_KINDS {
                             proof[k] =
                                 proof[k].min(att_hand[k]);
                         }
@@ -798,6 +795,7 @@ impl DfPnSolver {
                     }
 
                     // 反証済みの子: 反証駒を蓄積
+                    // adjust_or_proof は証明駒/反証駒共通の駒入出補正関数
                     if cdn == 0 {
                         let child_dp = self
                             .table
@@ -808,7 +806,7 @@ impl DfPnSolver {
                             children[i].0,
                             &child_dp,
                         );
-                        for k in 0..HAND_KINDS_TT {
+                        for k in 0..HAND_KINDS {
                             or_disproof[k] =
                                 or_disproof[k].min(adj[k]);
                         }
@@ -849,7 +847,7 @@ impl DfPnSolver {
                 second_best = INF; // 2番目に小さい dn
                 let mut all_proved = true;
                 let mut and_proof =
-                    [0u8; HAND_KINDS_TT]; // 証明駒の和集合(max)
+                    [0u8; HAND_KINDS]; // 証明駒の和集合(max)
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -885,7 +883,7 @@ impl DfPnSolver {
                             .get_proof_hand(
                                 child_pk, child_hand,
                             );
-                        for k in 0..HAND_KINDS_TT {
+                        for k in 0..HAND_KINDS {
                             if child_ph[k] > and_proof[k]
                             {
                                 and_proof[k] = child_ph[k];
@@ -917,7 +915,7 @@ impl DfPnSolver {
                 // 全子が証明済み → AND ノード証明
                 if all_proved && current_pn == 0 {
                     // 証明駒を現在の持ち駒で制限
-                    for k in 0..HAND_KINDS_TT {
+                    for k in 0..HAND_KINDS {
                         and_proof[k] =
                             and_proof[k].min(att_hand[k]);
                     }
@@ -1007,7 +1005,7 @@ impl DfPnSolver {
             if !has_defense {
                 // 詰み局面を TT に記録(証明駒 = 空)
                 let pk = position_key(board);
-                self.store(pk, [0; HAND_KINDS_TT], 0, INF);
+                self.store(pk, [0; HAND_KINDS], 0, INF);
                 board.undo_move(*m, captured);
                 return true;
             }
@@ -2602,7 +2600,7 @@ mod tests {
     /// 29手詰め(tsume6)．
     ///
     /// 深さ制限時の TT 保存バグの回帰テスト．
-    /// MAX_DISPROOF で保存すると不詰として誤判定されていた．
+    /// PieceType::MAX_HAND_COUNT で保存すると不詰として誤判定されていた．
     #[test]
     #[ignore] // 50M ノード / 300 秒タイムアウトの重いテスト
     fn test_tsume_6_29te() {
