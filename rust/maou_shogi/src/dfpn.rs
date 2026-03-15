@@ -177,7 +177,7 @@ impl TranspositionTable {
         dn: u32,
     ) {
         let entries =
-            self.tt.entry(pos_key).or_insert_with(Vec::new);
+            self.tt.entry(pos_key).or_default();
 
         // 同一持ち駒の既存エントリを更新
         for e in entries.iter_mut() {
@@ -416,6 +416,14 @@ impl DfPnSolver {
                 // PV 抽出失敗: 追加証明して再抽出
                 self.complete_or_proofs(board);
                 let moves = self.extract_pv(board);
+                if moves.is_empty() {
+                    // TT エントリ上限等により PV 復元不可．
+                    // 空の手順で Checkmate を返すと呼び出し側でパニックするため
+                    // Unknown として返す．
+                    return TsumeResult::Unknown {
+                        nodes_searched: self.nodes_searched,
+                    };
+                }
                 return TsumeResult::Checkmate {
                     moves,
                     nodes_searched: self.nodes_searched,
