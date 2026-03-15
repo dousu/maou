@@ -121,7 +121,7 @@ struct TranspositionTable {
 
 impl TranspositionTable {
     /// 転置表を生成する．
-    fn new(_min_size: usize) -> Self {
+    fn new() -> Self {
         TranspositionTable {
             tt: FxHashMap::with_capacity_and_hasher(
                 65536,
@@ -308,13 +308,12 @@ impl DfPnSolver {
 
     /// タイムアウト指定付きでソルバーを生成する．
     pub fn with_timeout(depth: u32, max_nodes: u64, draw_ply: u32, timeout_secs: u64) -> Self {
-        let tt_size = 0; // HashMap ベースのため未使用
         DfPnSolver {
             depth,
             max_nodes,
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
-            table: TranspositionTable::new(tt_size),
+            table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
             path: FxHashSet::default(),
@@ -660,7 +659,7 @@ impl DfPnSolver {
                 continue;
             }
 
-            children.push((
+            let _ = children.try_push((
                 *m,
                 child_full_hash,
                 child_pk,
@@ -1200,10 +1199,7 @@ impl DfPnSolver {
                 let legal = movegen::generate_legal_moves(board);
                 let mut out = ArrayVec::new();
                 for m in legal {
-                    if out.is_full() {
-                        break;
-                    }
-                    out.push(m);
+                    let _ = out.try_push(m);
                 }
                 return out;
             }
@@ -1216,10 +1212,7 @@ impl DfPnSolver {
             let legal = movegen::generate_legal_moves(board);
             let mut out = ArrayVec::new();
             for m in legal {
-                if out.is_full() {
-                    break;
-                }
-                out.push(m);
+                let _ = out.try_push(m);
             }
             return out;
         }
@@ -1240,7 +1233,7 @@ impl DfPnSolver {
             let safe = !board.is_in_check(defender);
             board.undo_move(m, captured);
             if safe {
-                moves.push(m);
+                let _ = moves.try_push(m);
             }
         }
 
@@ -1360,18 +1353,18 @@ impl DfPnSolver {
             if pt.can_promote() && in_promo_zone {
                 let m = Move::new_move(from, checker_sq, true, captured_raw, pt as u8);
                 if self.is_evasion_legal(board, m, defender) {
-                    moves.push(m);
+                    let _ = moves.try_push(m);
                 }
                 if !movegen::must_promote(defender, pt, checker_sq) {
                     let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        moves.push(m);
+                        let _ = moves.try_push(m);
                     }
                 }
             } else if !movegen::must_promote(defender, pt, checker_sq) {
                 let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
                 if self.is_evasion_legal(board, m, defender) {
-                    moves.push(m);
+                    let _ = moves.try_push(m);
                 }
             }
         }
@@ -1441,18 +1434,18 @@ impl DfPnSolver {
                 if pt.can_promote() && in_promo_zone {
                     let m = Move::new_move(from, to, true, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        moves.push(m);
+                        let _ = moves.try_push(m);
                     }
                     if !movegen::must_promote(defender, pt, to) {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                         if self.is_evasion_legal(board, m, defender) {
-                            moves.push(m);
+                            let _ = moves.try_push(m);
                         }
                     }
                 } else if !movegen::must_promote(defender, pt, to) {
                     let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                     if self.is_evasion_legal(board, m, defender) {
-                        moves.push(m);
+                        let _ = moves.try_push(m);
                     }
                 }
             }
@@ -1483,7 +1476,7 @@ impl DfPnSolver {
                 if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
                     continue;
                 }
-                moves.push(m);
+                let _ = moves.try_push(m);
             }
         }
     }
@@ -1732,7 +1725,7 @@ impl DfPnSolver {
                     continue;
                 }
                 // 駒打ちは自玉への王手放置にならない(片玉でも両玉でも)
-                moves.push(m);
+                let _ = moves.try_push(m);
             }
         }
 
@@ -1767,7 +1760,7 @@ impl DfPnSolver {
                     if gives_direct || is_discoverer {
                         let m = Move::new_move(from, to, true, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
-                            moves.push(m);
+                            let _ = moves.try_push(m);
                         }
                     }
 
@@ -1778,7 +1771,7 @@ impl DfPnSolver {
                         if gives_direct || is_discoverer {
                             let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                             if self.is_legal_quick(board, m, has_own_king) {
-                                moves.push(m);
+                                let _ = moves.try_push(m);
                             }
                         }
                     }
@@ -1787,7 +1780,7 @@ impl DfPnSolver {
                     if gives_direct || is_discoverer {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
-                            moves.push(m);
+                            let _ = moves.try_push(m);
                         }
                     }
                 }
@@ -1947,6 +1940,9 @@ impl DfPnSolver {
             );
 
         // 反復: PV を抽出 → PV 上の OR ノードを完成 → 再抽出
+        // 2回固定: 1回目で新たに証明された子が PV を短縮する可能性があるため
+        // 2回目を実行する．changed == false で早期終了するため，
+        // 収束済みの場合は追加コストなし．
         for _ in 0..2 {
             if self.is_timed_out()
                 || self.nodes_searched >= self.max_nodes
@@ -2147,13 +2143,14 @@ impl DfPnSolver {
 
 /// 詰将棋を解く便利関数．
 ///
+/// タイムアウトを指定する場合は [`solve_tsume_with_timeout`] を使用する．
+///
 /// # 引数
 ///
 /// - `sfen`: 局面のSFEN文字列．
 /// - `depth`: 最大探索手数(None でデフォルト 31)．
 /// - `nodes`: 最大ノード数(None でデフォルト 1,048,576)．
 /// - `draw_ply`: 引き分け手数(None でデフォルト 32767)．
-/// - `timeout_secs`: 実行時間制限(秒)(None でデフォルト 300 秒)．
 pub fn solve_tsume(
     sfen: &str,
     depth: Option<u32>,
@@ -2675,8 +2672,7 @@ mod tests {
                 let legal = movegen::generate_legal_moves(board);
                 let mut out = ArrayVec::new();
                 for m in legal {
-                    if out.is_full() { break; }
-                    out.push(m);
+                    let _ = out.try_push(m);
                 }
                 out
             };
