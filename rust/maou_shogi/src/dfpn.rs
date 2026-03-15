@@ -2577,6 +2577,28 @@ mod tests {
         );
     }
 
+    /// 馬の往復で千日手となり不詰のケース．
+    ///
+    /// 局面: 後手玉1二，先手馬3二，先手金3一，先手歩3五・2五，後手歩1三
+    /// 先手持駒: なし
+    /// 後手持駒: 飛二，角，金三，銀四，桂四，香四，歩十五
+    ///
+    /// 2一馬，2三玉，3二馬，1二玉 の繰り返しで千日手(連続王手の千日手)．
+    /// 攻め方に持ち駒がなく打開手段がないため不詰．
+    #[test]
+    fn test_no_checkmate_perpetual_check() {
+        let sfen = "6G2/6+B1k/8p/9/6PP1/9/9/9/9 b 2rb3g4s4n4l15p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {}
+            other => panic!(
+                "expected NoCheckmate (perpetual check by horse), got {:?}",
+                other
+            ),
+        }
+    }
+
     /// 打歩詰めしかなく不詰のケース．
     ///
     /// 局面: 後手玉1一，後手桂2一，先手金1三
