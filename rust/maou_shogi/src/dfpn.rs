@@ -2571,4 +2571,72 @@ mod tests {
             other => panic!("expected Checkmate for tsume6, got {:?}", other),
         }
     }
+
+    /// 後手番1手詰め．
+    ///
+    /// 先手攻め test_tsume_1te の盤面を180度回転+色反転した局面．
+    /// 先手玉9九(K)，後手金8七(g)，後手持ち駒:金．
+    /// 正解: g*9h(9八金打)で詰み．
+    #[test]
+    fn test_tsume_1te_gote() {
+        // 先手玉 9i, 後手金 8g, 後手持ち駒: g
+        let sfen = "9/9/9/9/9/9/1g7/9/K8 w g 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(3, 100_000, 32767);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 1, "should be 1-move checkmate, got: {:?}",
+                    moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 後手番3手詰め．
+    ///
+    /// 先手攻め test_tsume_3te の盤面を180度回転+色反転した局面．
+    /// 先手玉9九(K)，後手飛7七(r)，後手持ち駒:金．
+    /// 正解: 7g9g+(9七飛成)，9i8a(8一玉)，g*8b(8二金打) まで3手詰．
+    #[test]
+    fn test_tsume_3te_gote() {
+        // 先手玉 9i, 後手飛 7g, 後手持ち駒: g
+        // (test_tsume_3te: 8k/9/6R2/9/.../9 b G 1 の反転)
+        let sfen = "9/9/9/9/9/9/2r6/9/K8 w g 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    usi_moves.len(), 3,
+                    "expected 3 moves, got {}: {:?}", usi_moves.len(), usi_moves
+                );
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 後手番不詰のケース．
+    #[test]
+    fn test_no_checkmate_gote() {
+        // 先手玉5九，後手持ち駒: 歩 → 歩では詰まない
+        let sfen = "9/9/9/9/9/9/9/9/4K4 w p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(5, 100_000, 32767);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {}
+            other => panic!("expected NoCheckmate, got {:?}", other),
+        }
+    }
 }
