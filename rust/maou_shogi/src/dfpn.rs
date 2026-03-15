@@ -839,7 +839,7 @@ impl DfPnSolver {
                 if current_dn == 0 {
                     self.store(
                         pos_key, or_disproof,
-                        current_pn, current_dn,
+                        INF, 0,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1260,6 +1260,10 @@ impl DfPnSolver {
         );
         let attacker = defender.opponent();
 
+        // 注: 合い駒先(between)を外ループ，自駒を内ループにしているため，
+        // 各駒の利き計算が |between| 回(最大8回)繰り返される．
+        // 駒を外ループにすると利き計算は1回で済むが，無駄合いフィルタと
+        // 駒打ちループが to 依存であるため，ループ統合の利点が薄い．
         for to in *between {
             // --- 駒移動による合い駒 ---
             let mut our_bb = our_occ;
