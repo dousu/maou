@@ -311,7 +311,8 @@ rust/
         ├── moves.rs        # Move エンコーディング
         ├── types.rs        # PieceType, Square 等
         ├── feature.rs      # 特徴量抽出 (104×9×9)
-        └── hcp.rs          # HuffmanCodedPos
+        ├── hcp.rs          # HuffmanCodedPos
+        └── dfpn.rs         # 詰将棋ソルバー (Df-Pn アルゴリズム)
 ```
 
 ## maou_shogi モジュール
@@ -347,6 +348,93 @@ rust/
 | `move_to_usi(m)` | USI 文字列変換 |
 | `move_is_drop(m)` / `move_is_promotion(m)` | 打ち・成り判定 |
 | `move_drop_hand_piece(m)` | 打ち駒の種類取得 |
+| `solve_tsume(sfen, ...)` | 詰将棋ソルバー (後述) |
+
+### 詰将棋ソルバー (Df-Pn)
+
+`solve_tsume` は Depth-First Proof-Number (Df-Pn) アルゴリズムによる詰将棋ソルバーである．
+先手番・後手番いずれの詰将棋にも対応し，デフォルトで最短手数の詰み手順を返す．
+
+#### Python API
+
+```python
+from maou._rust.maou_shogi import solve_tsume
+
+result = solve_tsume(
+    sfen,                    # SFEN 局面文字列
+    depth=31,                # 最大探索深さ (手数)
+    nodes=1_048_576,         # 最大探索ノード数
+    draw_ply=32767,          # 千日手判定閾値 (手数)
+    timeout_secs=300,        # タイムアウト (秒)
+    find_shortest=True,      # 最短手数探索の有無
+)
+
+# TsumeResult のプロパティ
+result.status          # "checkmate" | "no_checkmate" | "unknown"
+result.moves           # 詰み手順 (USI 形式の文字列リスト)
+result.nodes_searched  # 探索ノード数
+bool(result)           # status == "checkmate" のとき True
+```
+
+#### Rust API
+
+```rust
+use maou_shogi::dfpn::{solve_tsume, solve_tsume_with_timeout, DfPnSolver, TsumeResult};
+
+// 便利関数 (デフォルトパラメータ)
+let result = solve_tsume(sfen, None, None, None)?;
+
+// タイムアウト・最短探索を細かく指定
+let result = solve_tsume_with_timeout(
+    sfen,
+    Some(31),       // depth
+    Some(5_000_000), // nodes
+    None,            // draw_ply (default: 32767)
+    Some(60),        // timeout_secs
+    Some(true),      // find_shortest
+)?;
+
+// ソルバーを直接構築
+let mut solver = DfPnSolver::with_timeout(31, 1_048_576, 32767, 300);
+solver.find_shortest = false;  // 最短探索を無効化 (高速化)
+let result = solver.solve(&mut board);
+
+match result {
+    TsumeResult::Checkmate { moves, nodes_searched } => { /* 詰み */ }
+    TsumeResult::NoCheckmate { nodes_searched }       => { /* 不詰 */ }
+    TsumeResult::Unknown { nodes_searched }            => { /* 探索打ち切り */ }
+}
+```
+
+#### パラメータガイド
+
+| パラメータ | デフォルト | 説明 |
+|-----------|----------|------|
+| `depth` | 31 | 最大探索深さ．長手数の詰将棋には引き上げが必要 |
+| `nodes` | 1,048,576 (2^20) | 探索ノード数上限．メモリ使用量に比例 |
+| `draw_ply` | 32,767 | 千日手判定手数．通常は変更不要 |
+| `timeout_secs` | 300 | 時間制限 (秒) |
+| `find_shortest` | `true` | `false` にすると最初に見つかった詰み手順を返す (高速だが最短とは限らない) |
+
+#### 主要な最適化手法
+
+- **持ち駒の優越関係 (Hand Dominance)**: TT キーに盤面のみのハッシュ(持ち駒を除外)を使用し，
+  同一盤面・異なる持ち駒の局面を統合して探索する．攻め方の持ち駒が多いほど有利な性質を利用し，
+  証明駒 (proof pieces) / 反証駒 (disproof pieces) の概念で TT ヒット率を向上させる
+- **単一パス探索**: 反復深化を使わず，証明数・反証数が自然に最も有望な手順に探索を誘導する
+- **最短手数探索**: `find_shortest=true` 時，初回の詰み発見後に PV 長を上限として
+  `complete_or_proofs` で全 OR ノードの未証明子を追加探索し，最短手順を保証する
+- **TT エントリ管理**: 各盤面ハッシュにつき最大 64 エントリの持ち駒パターンを保持
+
+#### テスト実績
+
+| 問題 | 手数 | 探索ノード数 | 備考 |
+|------|------|-------------|------|
+| 1手詰め | 1 | ~10 | 先手・後手両対応 |
+| 3手詰め | 3 | ~100 | 飛車活用・金打ち等 |
+| 9手詰め | 9 | ~1,000 | 中規模問題 |
+| 17手詰め | 17 | ~100,000 | `find_shortest` の効果検証 |
+| 29手詰め | 29 | ~50,000 | TT 保存バグの回帰テスト |
 
 ### cshogi 互換性に関する設計判断
 
