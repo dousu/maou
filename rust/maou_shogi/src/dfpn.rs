@@ -511,6 +511,8 @@ impl DfPnSolver {
         }
         // 1024 ノードごとにタイマーをチェック
         if self.nodes_searched & 0x3FF == 0 && self.is_timed_out() {
+            // elapsed >= timeout で初検出時にフラグをキャッシュし，
+            // 以降の is_timed_out() でシステムコールを省略する．
             self.timed_out = true;
             return;
         }
@@ -1018,228 +1020,12 @@ impl DfPnSolver {
     ///
     /// generate_defense_moves と同じロジックだが，
     /// 最初の合法手が見つかった時点で即座に true を返す．
+    /// 王手回避手が1つでも存在するか判定する．
+    ///
+    /// `generate_defense_moves_inner` を early-exit モードで呼び出し，
+    /// 最初の合法手が見つかった時点で早期リターンする．
     fn has_any_defense(&self, board: &mut Board) -> bool {
-        let defender = board.turn;
-        let attacker = defender.opponent();
-
-        let king_sq = match board.king_square(defender) {
-            Some(sq) => sq,
-            None => return !movegen::generate_legal_moves(board).is_empty(),
-        };
-
-        let checkers =
-            board.compute_checkers_at(king_sq, attacker);
-        if checkers.is_empty() {
-            return true; // 王手なし → 回避不要
-        }
-
-        let all_occ = board.all_occupied();
-        let our_occ = board.occupied[defender.index()];
-
-        // 1. 玉の移動
-        let king_attacks = attack::step_attacks(
-            defender,
-            PieceType::King,
-            king_sq,
-        );
-        let king_targets = king_attacks & !our_occ;
-        for to in king_targets {
-            let captured_piece = board.squares[to.index()];
-            let captured_raw = captured_piece.0;
-            let m = Move::new_move(
-                king_sq,
-                to,
-                false,
-                captured_raw,
-                PieceType::King as u8,
-            );
-            let captured = board.do_move(m);
-            let safe = !board.is_in_check(defender);
-            board.undo_move(m, captured);
-            if safe {
-                return true;
-            }
-        }
-
-        // 両王手 → 玉移動のみ
-        if checkers.count() > 1 {
-            return false;
-        }
-
-        let checker_sq = checkers.lsb().unwrap();
-
-        // 2. 王手駒の捕獲(玉以外)
-        let mut our_bb = our_occ;
-        while our_bb.is_not_empty() {
-            let from = our_bb.pop_lsb();
-            if from == king_sq {
-                continue;
-            }
-            let piece = board.squares[from.index()];
-            let pt = piece.piece_type().unwrap();
-            let attacks =
-                attack::piece_attacks(defender, pt, from, all_occ);
-            if !attacks.contains(checker_sq) {
-                continue;
-            }
-            let captured_raw =
-                board.squares[checker_sq.index()].0;
-            let in_promo_zone = checker_sq
-                .is_promotion_zone(defender)
-                || from.is_promotion_zone(defender);
-
-            if pt.can_promote() && in_promo_zone {
-                let m = Move::new_move(
-                    from,
-                    checker_sq,
-                    true,
-                    captured_raw,
-                    pt as u8,
-                );
-                if self.is_evasion_legal(board, m, defender) {
-                    return true;
-                }
-                if !movegen::must_promote(defender, pt, checker_sq)
-                {
-                    let m = Move::new_move(
-                        from,
-                        checker_sq,
-                        false,
-                        captured_raw,
-                        pt as u8,
-                    );
-                    if self.is_evasion_legal(board, m, defender) {
-                        return true;
-                    }
-                }
-            } else if !movegen::must_promote(
-                defender, pt, checker_sq,
-            ) {
-                let m = Move::new_move(
-                    from,
-                    checker_sq,
-                    false,
-                    captured_raw,
-                    pt as u8,
-                );
-                if self.is_evasion_legal(board, m, defender) {
-                    return true;
-                }
-            }
-        }
-
-        // 3. 合い駒(飛び駒王手の場合)
-        let sliding_checker =
-            self.find_sliding_checker(board, king_sq, attacker);
-        if sliding_checker.is_some() {
-            let between =
-                attack::between_bb(checker_sq, king_sq);
-            if between.is_not_empty() {
-                let futile = self.compute_futile_squares(
-                    board, &between, king_sq, checker_sq,
-                    defender, attacker,
-                );
-                // 間のマスへの移動・打ち
-                for to in between {
-                    // 駒移動
-                    let mut our_bb2 = our_occ;
-                    while our_bb2.is_not_empty() {
-                        let from = our_bb2.pop_lsb();
-                        if from == king_sq {
-                            continue;
-                        }
-                        let piece =
-                            board.squares[from.index()];
-                        let pt =
-                            piece.piece_type().unwrap();
-                        let attacks = attack::piece_attacks(
-                            defender, pt, from, all_occ,
-                        );
-                        if !attacks.contains(to) {
-                            continue;
-                        }
-                        let captured_raw =
-                            board.squares[to.index()].0;
-                        let in_promo_zone = to
-                            .is_promotion_zone(defender)
-                            || from
-                                .is_promotion_zone(defender);
-                        if pt.can_promote() && in_promo_zone {
-                            let m = Move::new_move(
-                                from,
-                                to,
-                                true,
-                                captured_raw,
-                                pt as u8,
-                            );
-                            if self.is_evasion_legal(
-                                board, m, defender,
-                            ) {
-                                return true;
-                            }
-                        }
-                        if !movegen::must_promote(
-                            defender, pt, to,
-                        ) {
-                            let m = Move::new_move(
-                                from,
-                                to,
-                                false,
-                                captured_raw,
-                                pt as u8,
-                            );
-                            if self.is_evasion_legal(
-                                board, m, defender,
-                            ) {
-                                return true;
-                            }
-                        }
-                    }
-                    // 駒打ち(合い効かずでないマスのみ)
-                    if !futile.contains(to) {
-                        for (hand_idx, &pt) in PieceType::HAND_PIECES
-                            .iter()
-                            .enumerate()
-                        {
-                            if board.hand[defender.index()]
-                                [hand_idx]
-                                == 0
-                            {
-                                continue;
-                            }
-                            if movegen::must_promote(
-                                defender, pt, to,
-                            ) {
-                                continue;
-                            }
-                            if pt == PieceType::Pawn {
-                                let our_pawns = board.piece_bb
-                                    [defender.index()]
-                                    [PieceType::Pawn as usize];
-                                let col = to.col();
-                                if (our_pawns
-                                    & Bitboard::file_mask(col))
-                                .is_not_empty()
-                                {
-                                    continue;
-                                }
-                            }
-                            let m = Move::new_drop(to, pt);
-                            if pt == PieceType::Pawn
-                                && movegen::is_pawn_drop_mate(
-                                    board, m,
-                                )
-                            {
-                                continue;
-                            }
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        false
+        !self.generate_defense_moves_inner(board, true).is_empty()
     }
 
     /// 玉方の王手回避手を生成する(合い効かずを除外)．
@@ -1254,6 +1040,19 @@ impl DfPnSolver {
         &self,
         board: &mut Board,
     ) -> ArrayVec<Move, MAX_MOVES> {
+        self.generate_defense_moves_inner(board, false)
+    }
+
+    /// 王手回避手の内部実装．
+    ///
+    /// `early_exit == true` の場合，最初の合法手が見つかった時点で即座にリターンする．
+    /// `has_any_defense` と `generate_defense_moves` の両方がこの関数を共有し，
+    /// ロジックの重複を排除する．
+    fn generate_defense_moves_inner(
+        &self,
+        board: &mut Board,
+        early_exit: bool,
+    ) -> ArrayVec<Move, MAX_MOVES> {
         let defender = board.turn;
         let attacker = defender.opponent();
 
@@ -1264,6 +1063,9 @@ impl DfPnSolver {
                 let mut out = ArrayVec::new();
                 for m in legal {
                     push_move(&mut out, m);
+                    if early_exit {
+                        return out;
+                    }
                 }
                 return out;
             }
@@ -1277,6 +1079,9 @@ impl DfPnSolver {
             let mut out = ArrayVec::new();
             for m in legal {
                 push_move(&mut out, m);
+                if early_exit {
+                    return out;
+                }
             }
             return out;
         }
@@ -1298,6 +1103,9 @@ impl DfPnSolver {
             board.undo_move(m, captured);
             if safe {
                 push_move(&mut moves, m);
+                if early_exit {
+                    return moves;
+                }
             }
         }
 
@@ -1313,6 +1121,9 @@ impl DfPnSolver {
         self.generate_capture_checker(
             board, &mut moves, checker_sq, king_sq, defender, all_occ, our_occ,
         );
+        if early_exit && !moves.is_empty() {
+            return moves;
+        }
 
         // --- 3. 合い駒(飛び駒の王手の場合) ---
         let sliding_checker = self.find_sliding_checker(board, king_sq, attacker);
@@ -2252,18 +2063,6 @@ mod tests {
         let p2c = board.move_from_usi("P*2c").unwrap();
         let cap = board.do_move(p2c);
 
-        // 先手の王手手段を確認
-        let _checks: Vec<String> = movegen::generate_legal_moves(&mut board)
-            .into_iter()
-            .filter(|m| {
-                let c = board.do_move(*m);
-                let gives_check = board.is_in_check(board.turn);
-                board.undo_move(*m, c);
-                gives_check
-            })
-            .map(|m| m.to_usi())
-            .collect();
-
         board.undo_move(p2c, cap);
     }
 
@@ -2454,15 +2253,9 @@ mod tests {
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched,
+                nodes_searched: _,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!(
-                    "tsume5: CHECKMATE in {} moves, {} nodes: {}",
-                    pv.len(),
-                    nodes_searched,
-                    pv.join(" ")
-                );
                 assert_eq!(
                     pv.len(),
                     17,
@@ -2489,15 +2282,9 @@ mod tests {
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched,
+                nodes_searched: _,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!(
-                    "tsume5 (no shortest): {} moves, {} nodes: {}",
-                    pv.len(),
-                    nodes_searched,
-                    pv.join(" ")
-                );
                 // find_shortest = false でも詰みは見つかる(手数は最短とは限らない)
                 assert!(!pv.is_empty(), "should find checkmate");
             }
@@ -2513,10 +2300,6 @@ mod tests {
 
         if let TsumeResult::Checkmate { nodes_searched: n2, .. } = &result2 {
             if let TsumeResult::Checkmate { nodes_searched: n1, .. } = &result {
-                eprintln!(
-                    "tsume5: find_shortest=false {} nodes, find_shortest=true {} nodes (saved {})",
-                    n1, n2, n2 - n1
-                );
                 assert!(n1 <= n2, "find_shortest=false should use <= nodes");
             }
         }
@@ -2614,15 +2397,9 @@ mod tests {
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched,
+                nodes_searched: _,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!(
-                    "tsume6: CHECKMATE in {} moves, {} nodes: {}",
-                    pv.len(),
-                    nodes_searched,
-                    pv.join(" ")
-                );
                 assert_eq!(
                     pv.len(),
                     29,

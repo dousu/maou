@@ -321,8 +321,22 @@ impl TsumeResult {
 ///   返される手順が最短とは限らない．
 #[pyfunction]
 #[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true))]
-fn solve_tsume(sfen: &str, depth: u32, nodes: u64, draw_ply: u32, timeout_secs: u64, find_shortest: bool) -> PyResult<TsumeResult> {
-    let result = dfpn::solve_tsume_with_timeout(sfen, Some(depth), Some(nodes), Some(draw_ply), Some(timeout_secs), Some(find_shortest))
+fn solve_tsume(
+    sfen: &str,
+    depth: u32,
+    nodes: u64,
+    draw_ply: u32,
+    timeout_secs: u64,
+    find_shortest: bool,
+) -> PyResult<TsumeResult> {
+    let result = dfpn::solve_tsume_with_timeout(
+        sfen,
+        Some(depth),
+        Some(nodes),
+        Some(draw_ply),
+        Some(timeout_secs),
+        Some(find_shortest),
+    )
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     match result {
