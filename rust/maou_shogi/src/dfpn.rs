@@ -33,6 +33,10 @@ const INF: u32 = u32::MAX;
 /// 持ち駒の種類数(歩・香・桂・銀・金・角・飛)．
 const HAND_KINDS_TT: usize = 7;
 
+/// 同一盤面ハッシュあたりの TT エントリ上限．
+/// 異なる持ち駒構成が大量に登録されることを防ぐ．
+const MAX_TT_ENTRIES_PER_POSITION: usize = 64;
+
 /// 反証駒の最大値(任意の持ち駒で不詰の場合に使用)．
 /// 各駒種の最大枚数: 歩18，香4，桂4，銀4，金4，角2，飛2．
 const MAX_DISPROOF: [u8; HAND_KINDS_TT] =
@@ -57,6 +61,9 @@ fn hand_gte(a: &[u8; HAND_KINDS_TT], b: &[u8; HAND_KINDS_TT]) -> bool {
 /// board.hash から持ち駒の Zobrist ハッシュ成分を XOR で除去する．
 /// 証明駒/反証駒による TT 参照で，同一盤面・異なる持ち駒の
 /// エントリを同一スロットに集約するために使用する．
+///
+/// NOTE: 7要素 × 2色のループを手動アンロールしている．
+/// ホットパスのため，ループのオーバーヘッドを排除して性能を優先する．
 #[inline(always)]
 fn position_key(board: &Board) -> u64 {
     let mut h = board.hash;
@@ -188,8 +195,8 @@ impl TranspositionTable {
             }
         }
 
-        // 新規エントリを追加(上限64: 同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
-        if entries.len() < 64 {
+        // 新規エントリを追加(同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
+        if entries.len() < MAX_TT_ENTRIES_PER_POSITION {
             entries.push(DfPnEntry { hand, pn, dn });
         }
     }
@@ -417,9 +424,11 @@ impl DfPnSolver {
                 self.complete_or_proofs(board);
                 let moves = self.extract_pv(board);
                 if moves.is_empty() {
-                    // TT エントリ上限等により PV 復元不可．
+                    // TT エントリ上限 (MAX_TT_ENTRIES_PER_POSITION) 等により
+                    // 詰みは証明済みだが PV 復元不可．
                     // 空の手順で Checkmate を返すと呼び出し側でパニックするため
                     // Unknown として返す．
+                    // NOTE: 将来的には CheckmateNoPv バリアントの追加を検討．
                     return TsumeResult::Unknown {
                         nodes_searched: self.nodes_searched,
                     };
@@ -1502,9 +1511,6 @@ impl DfPnSolver {
             None
         }
     }
-
-    /// 指定マスに対して指定色の駒の効きがあるか判定する(除外条件付き)．
-    ///
 
     /// 攻め方の王手になる手を生成する．
     ///
