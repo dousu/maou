@@ -195,6 +195,12 @@ impl TranspositionTable {
         // 同一持ち駒の既存エントリを更新
         for e in entries.iter_mut() {
             if e.hand == hand {
+                // 証明済みエントリ(pn=0)を非証明値で上書きしない．
+                // complete_or_proofs 中の mid() が転置により同じ局面に到達し，
+                // 深さ制限で(INF, 0)を書き込むと証明済みエントリが破壊される．
+                if e.pn == 0 && pn != 0 {
+                    return;
+                }
                 e.pn = pn;
                 e.dn = dn;
                 return;
@@ -2508,6 +2514,154 @@ mod tests {
                     usi_moves.len(), 3,
                     "expected 3 moves, got {}: {:?}", usi_moves.len(), usi_moves
                 );
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 金の移動合いで不詰になるケース．
+    ///
+    /// 局面: 後手玉1一，後手金2一，後手歩1二，後手銀1三，
+    ///       先手歩4三・2四
+    /// 先手持駒: 角，桂
+    /// 後手持駒: 飛二，角，金三，銀三，桂三，香四，歩十五
+    ///
+    /// 角打ちに対して金の移動合い(2一金→1二等)が有効で詰まない．
+    #[test]
+    fn test_no_checkmate_gold_interposition() {
+        let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BN2rb3g3s3n4l15p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {}
+            other => panic!(
+                "expected NoCheckmate (gold interposition defense), got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// 先手持駒に銀を追加した局面で9手詰めになることのテスト．
+    ///
+    /// 上記 test_no_checkmate_gold_interposition と同じ盤面だが，
+    /// 先手持駒に銀が追加(角，銀，桂)され後手の銀が1枚減っている．
+    /// 銀の追加により9手詰めが生じる(金の移動合いが最長抵抗)．
+    #[test]
+    fn test_tsume_9te_with_silver() {
+        let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    usi_moves.len(), 9,
+                    "expected 9-move checkmate, got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+                // 初手: 3三角打
+                assert_eq!(usi_moves[0], "B*3c", "move 1: B*3c(3三角打)");
+                // 2手目: 金の移動合い(最長抵抗)
+                assert_eq!(usi_moves[1], "2a2b", "move 2: g(2a→2b)(金の移動合い)");
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 金の移動合い(2一金→2二)が回避手に含まれることを検証する．
+    ///
+    /// B*3c(3三角打)に対して，2一の金を2二に移動して合い駒する手が
+    /// 回避手として生成されていることを確認する．
+    /// この手が漏れていると不正に短手数で詰みと判定される．
+    #[test]
+    fn test_gold_interposition_is_legal_defense() {
+        let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        // B*3c(3三角打) で王手
+        let b3c = board.move_from_usi("B*3c").unwrap();
+        board.do_move(b3c);
+
+        // 後手番: 回避手を生成
+        let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+        let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
+
+        // 金の移動合い 2a2b(2一金→2二) が含まれること
+        assert!(
+            usi_defenses.contains(&"2a2b".to_string()),
+            "g(2a→2b) gold interposition should be a legal defense, got: {:?}",
+            usi_defenses
+        );
+
+        // 銀の移動合い 1c2b(1三銀→2二) も含まれること
+        assert!(
+            usi_defenses.contains(&"1c2b".to_string()),
+            "s(1c→2b) silver interposition should be a legal defense, got: {:?}",
+            usi_defenses
+        );
+    }
+
+    /// 金の移動合い後もソルバーが正しく詰みを検出することを検証する．
+    ///
+    /// B*3c(3三角打)後の金移動合い(2a→2b)に対して，
+    /// 先手が銀を持っている場合に7手で詰ませられることを確認する．
+    /// 全体としては B*3c, g(2a→2b) + 7手 = 9手詰め．
+    #[test]
+    fn test_after_gold_interposition_with_silver() {
+        let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        // B*3c → g(2a→2b) を実行
+        let b3c = board.move_from_usi("B*3c").unwrap();
+        board.do_move(b3c);
+        let g2b = board.move_from_usi("2a2b").unwrap();
+        board.do_move(g2b);
+
+        // この局面から先手が詰ませられるか
+        let mut solver = DfPnSolver::new(31, 2_000_000, 32767);
+        let result = solver.solve(&mut board);
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    usi_moves.len(), 7,
+                    "after gold interposition, expected 7 more moves, got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+            }
+            other => panic!(
+                "expected Checkmate after gold interposition, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
+    ///
+    /// complete_or_proofs 中の mid() が転置により証明済み TT エントリを
+    /// 上書きしていたバグの回帰テスト．find_shortest=true(デフォルト)で
+    /// PV が最長抵抗を正しく反映することを確認する．
+    #[test]
+    fn test_pv_follows_longest_defense() {
+        let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
+        let result = solve_tsume_with_timeout(
+            sfen, Some(31), Some(2_000_000), None, None,
+            Some(true), // find_shortest = true
+        ).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    usi_moves.len(), 9,
+                    "PV should be 9 moves (longest defense via gold interposition), got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+                assert_eq!(usi_moves[0], "B*3c", "move 1: B*3c(3三角打)");
+                assert_eq!(usi_moves[1], "2a2b", "move 2: g(2a→2b)(金の移動合い=最長抵抗)");
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
