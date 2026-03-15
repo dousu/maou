@@ -188,8 +188,10 @@ impl TranspositionTable {
             }
         }
 
-        // 新規エントリを追加
-        entries.push(DfPnEntry { hand, pn, dn });
+        // 新規エントリを追加(上限64: 同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
+        if entries.len() < 64 {
+            entries.push(DfPnEntry { hand, pn, dn });
+        }
     }
 
     /// 証明済みエントリの証明駒(登録時の持ち駒)を返す．
@@ -1738,8 +1740,8 @@ impl DfPnSolver {
                 }
             }
 
-            // PV に沿って盤面を進める
-            let _ = board_clone.do_move(*pv_move);
+            // PV に沿って盤面を進める(前進専用: undo_move は不要)
+            let _captured = board_clone.do_move(*pv_move);
         }
 
         any_changed
@@ -2368,6 +2370,13 @@ mod tests {
                     "17te: CHECKMATE in {} moves, {} nodes: {}",
                     pv.len(),
                     nodes_searched,
+                    pv.join(" ")
+                );
+                assert_eq!(
+                    pv.len(),
+                    17,
+                    "expected 17-move checkmate, got {} moves: {}",
+                    pv.len(),
                     pv.join(" ")
                 );
             }
