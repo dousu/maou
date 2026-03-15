@@ -2144,7 +2144,7 @@ mod tests {
     /// 先手持駒: 飛
     /// 後手持駒: 歩15，香2，桂2，銀4，金3，角2
     #[test]
-    fn test_tsume_image3() {
+    fn test_tsume_3() {
         let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
         let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
 
@@ -2176,7 +2176,7 @@ mod tests {
     /// 2二桂成，同玉，4二飛打，2三玉，3二飛成，2四玉，2一龍 の後，
     /// 後手は2三歩打で合い駒でき，これは無駄合いではない．
     #[test]
-    fn test_image3_ryu_2a_not_checkmate() {
+    fn test_tsume_3_ryu_2a_not_checkmate() {
         // 2一龍後の局面を作成
         // 初期局面から 3d2b+, 2c2b, R*4b, 2b2c, 4b3b+, 2c2d, 3b2a を実行
         let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
@@ -2272,7 +2272,7 @@ mod tests {
             "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",
             // tsume2
             "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
-            // image3
+            // tsume3
             "l1k6/9/1pB6/9/9/9/9/9/9 b RGrb4g4s4n3l16p 1",
             // 9te (tsume1)
             "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
@@ -2327,7 +2327,7 @@ mod tests {
             "9/5Pk2/9/5R3/8B/9/9/9/9 w 2Srb4g2s4n4l17p 2",
             // 角で王手
             "9/5Pk2/9/8R/5B3/9/9/9/9 w 2Srb4g2s4n4l17p 2",
-            // test_tsume_image3 の中間局面(R*2a 後)
+            // test_tsume_3 の中間局面(R*2a 後)
             "l1k6/R8/1pB6/9/9/9/9/9/9 w rb4g4s4n3l16p 2",
         ];
 

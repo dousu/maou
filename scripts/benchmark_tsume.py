@@ -22,7 +22,7 @@ PROBLEMS = {
         "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1",
         31,
     ),
-    "image3_7te": (
+    "tsume3_7te": (
         "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/K8 b R2b3g4s2n2l15p 1",
         31,
     ),
