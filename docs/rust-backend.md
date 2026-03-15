@@ -373,7 +373,7 @@ result = solve_tsume(
 result.status          # "checkmate" | "checkmate_no_pv" | "no_checkmate" | "unknown"
 result.moves           # 詰み手順 (USI 形式の文字列リスト)
 result.nodes_searched  # 探索ノード数
-bool(result)           # status が "checkmate" or "checkmate_no_pv" のとき True
+bool(result)           # status == "checkmate" のとき True (checkmate_no_pv は False)
 ```
 
 #### Rust API

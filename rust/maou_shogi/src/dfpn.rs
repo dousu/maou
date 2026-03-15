@@ -608,6 +608,10 @@ impl DfPnSolver {
                         );
                     } else if ply + 2 < self.depth {
                         // 3手詰めチェック: 応手を生成して確認
+                        // 応手が少ない局面のみチェックすることで，
+                        // 枝刈り効果が高い局面に限定して計算コストを抑える．
+                        // 閾値 4 は実験的に決定: 応手が多い局面では
+                        // 全応手の 1手詰め判定コストが Df-Pn の自然な探索を上回る．
                         let defenses =
                             self.generate_defense_moves(board);
                         if defenses.len() <= 4 {
@@ -703,8 +707,9 @@ impl DfPnSolver {
                 self.store(pos_key, child_dp, INF, 0);
                 return;
             }
-            // ここに到達するのは or_node == true のみ
-            // (AND ノードは上の !or_node && cdn_now == 0 で return 済み)
+            // cdn_now == 0 ブロックに入るのは or_node == true のみ．
+            // AND ノードは cdn_now == 0 のとき上で return 済み，
+            // AND かつ cdn_now != 0 のときはここを通過して children に追加される．
             if cdn_now == 0 {
                 // OR: この子は反証済み → 反証駒を蓄積
                 let child_dp = self
@@ -754,7 +759,8 @@ impl DfPnSolver {
                 current_dn = 0;
                 second_best = INF; // 2番目に小さい pn
                 // 反証駒の交差(全子の反証駒の min)
-                let mut or_disproof = MAX_DISPROOF;
+                // init フェーズで反証済みの子から蓄積した init_or_disproof を引き継ぐ
+                let mut or_disproof = init_or_disproof;
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -1724,11 +1730,14 @@ impl DfPnSolver {
     /// 未証明の王手を追加証明する．反復的に PV を更新し収束させる．
     fn complete_or_proofs(&mut self, board: &mut Board) {
         let saved_max = self.max_nodes;
-        // 証明完了フェーズは主探索の半分を上限とする．
+        // 証明完了フェーズのノード予算:
+        //   主探索ノード数と 8192 の小さい方を追加予算とする．
+        //   ただし短手数の詰将棋 (少ノードで解けた場合) でも PV 復元に
+        //   十分なノードを確保するため，最低 1024 ノードを保証する．
         let mid_nodes = self.nodes_searched;
         self.max_nodes =
             self.nodes_searched.saturating_add(
-                mid_nodes.min(8192),
+                mid_nodes.min(8192).max(1024),
             );
 
         // 反復: PV を抽出 → PV 上の OR ノードを完成 → 再抽出
@@ -2476,7 +2485,7 @@ mod tests {
         board.set_sfen(sfen).unwrap();
 
         let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
-        solver.find_shortest = false;
+        solver.set_find_shortest(false);
         let result = solver.solve(&mut board);
 
         match &result {
@@ -2501,7 +2510,7 @@ mod tests {
         let mut board2 = Board::new();
         board2.set_sfen(sfen).unwrap();
         let mut solver2 = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
-        solver2.find_shortest = true;
+        solver2.set_find_shortest(true);
         let result2 = solver2.solve(&mut board2);
 
         if let TsumeResult::Checkmate { nodes_searched: n2, .. } = &result2 {

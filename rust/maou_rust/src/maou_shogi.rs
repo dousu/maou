@@ -289,8 +289,16 @@ impl TsumeResult {
         }
     }
 
+    /// `status == "checkmate"` のとき `True`．
+    ///
+    /// `checkmate_no_pv` は手順 (`moves`) が空のため `False` を返す．
+    /// 詰み証明の有無を判定するには `status` を直接比較すること:
+    /// ```python
+    /// if result.status in ("checkmate", "checkmate_no_pv"):
+    ///     ...
+    /// ```
     fn __bool__(&self) -> bool {
-        self.status == "checkmate" || self.status == "checkmate_no_pv"
+        self.status == "checkmate"
     }
 }
 
