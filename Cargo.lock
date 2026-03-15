@@ -1669,6 +1669,8 @@ dependencies = [
 name = "maou_shogi"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
+ "rustc-hash",
  "serde",
  "serde_json",
  "thiserror",

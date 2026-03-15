@@ -9,6 +9,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 thiserror = { workspace = true }
+rustc-hash = { workspace = true }
+arrayvec = { workspace = true }
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }
