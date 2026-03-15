@@ -2519,6 +2519,64 @@ mod tests {
         }
     }
 
+    /// 打歩詰め回避のため飛不成が正解のケース(7手詰め)．
+    ///
+    /// 局面: 先手飛4一，先手桂3三・2六，先手歩3四，
+    ///       後手玉2二，後手歩3二・2五
+    /// 先手持駒: 桂，歩二
+    /// 後手持駒: 飛，角二，金四，銀四，桂，香四，歩十三
+    ///
+    /// 2一飛成(4a2a+)は龍の利きにより打歩詰めの反則が生じるため不詰．
+    /// 2一飛不成(4a2a)なら飛車のまま利きが制限され，7手で詰みが成立する．
+    #[test]
+    fn test_tsume_uchifuzume_rook_no_promote() {
+        let sfen = "5R3/6pk1/6N2/6P2/7p1/7N1/9/9/9 b N2Pr2b4g4sn4l13p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    usi_moves.len(), 7,
+                    "expected 7-move checkmate, got {}: {:?}",
+                    usi_moves.len(), usi_moves
+                );
+                // 初手は飛車不成(4a2a)でなければならない
+                assert_eq!(
+                    usi_moves[0], "4a2a",
+                    "move 1 must be 4a2a (rook WITHOUT promotion), got: {}",
+                    usi_moves[0]
+                );
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// 2一飛成(龍)だと打歩詰めにより詰みがないことの検証．
+    ///
+    /// 上記 test_tsume_uchifuzume_rook_no_promote の局面で
+    /// 4a2a+(飛成)を指した後の局面は，龍の利きにより
+    /// 打歩詰めの反則が避けられず詰まない．
+    #[test]
+    fn test_uchifuzume_promoted_rook_fails() {
+        let sfen = "5R3/6pk1/6N2/6P2/7p1/7N1/9/9/9 b N2Pr2b4g4sn4l13p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        // 4a2a+(飛成=龍)を指す
+        let promote_move = board.move_from_usi("4a2a+").unwrap();
+        board.do_move(promote_move);
+
+        // 龍の局面からは詰まないことを検証
+        let mut solver = DfPnSolver::new(31, 2_000_000, 32767);
+        let result = solver.solve(&mut board);
+        assert!(
+            !matches!(result, TsumeResult::Checkmate { .. }),
+            "4a2a+ (promoted rook) should NOT lead to checkmate due to uchifuzume, got: {:?}",
+            result
+        );
+    }
+
     /// 金の移動合いで不詰になるケース．
     ///
     /// 局面: 後手玉1一，後手金2一，後手歩1二，後手銀1三，
