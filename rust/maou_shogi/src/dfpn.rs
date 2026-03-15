@@ -1435,15 +1435,10 @@ impl DfPnSolver {
             };
             let mut drop_targets = check_targets & empty;
 
-            // 二歩チェック
+            // 二歩チェック: 歩が存在する筋を一括マスクして除外
             if pt == PieceType::Pawn {
                 let our_pawns = board.piece_bb[us.index()][PieceType::Pawn as usize];
-                for col in 0..9u8 {
-                    let file = Bitboard::file_mask(col);
-                    if (our_pawns & file).is_not_empty() {
-                        drop_targets &= !file;
-                    }
-                }
+                drop_targets &= !our_pawns.occupied_files();
             }
 
             // 行き所のない駒の制限

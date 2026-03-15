@@ -166,6 +166,46 @@ impl Bitboard {
         debug_assert!(row < 9);
         RANK_MASKS[row as usize]
     }
+
+    /// ビットが立っている筋すべてをマスクしたビットボードを返す．
+    ///
+    /// 例: 歩のビットボードを渡すと，歩が存在する筋全体がセットされた
+    /// ビットボードが返る(二歩チェックに使用)．
+    #[inline]
+    pub fn occupied_files(self) -> Bitboard {
+        let mut result_lo = 0u64;
+        let mut result_hi = 0u64;
+        let mut col = 0u8;
+        while col < 7 {
+            // col 0-6: 各筋9ビットが lo に収まる (col*9 .. col*9+8, max = 62)
+            let shift = col as u64 * 9;
+            let file_bits = (self.lo >> shift) & 0x1FF;
+            if file_bits != 0 {
+                result_lo |= 0x1FFu64 << shift;
+            }
+            col += 1;
+        }
+        // col 7: bits 63-71 → lo に bit63, hi に bits 0-7
+        {
+            let lo_bit = self.lo >> 63; // 1 bit
+            let hi_bits = self.hi & 0xFF; // 8 bits
+            if lo_bit != 0 || hi_bits != 0 {
+                result_lo |= 1u64 << 63;
+                result_hi |= 0xFFu64;
+            }
+        }
+        // col 8: bits 72-80 → hi bits 9-17
+        {
+            let hi_bits = (self.hi >> 9) & 0x1FF;
+            if hi_bits != 0 {
+                result_hi |= 0x1FFu64 << 9;
+            }
+        }
+        Bitboard {
+            lo: result_lo,
+            hi: result_hi,
+        }
+    }
 }
 
 impl std::ops::BitAnd for Bitboard {
