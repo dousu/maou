@@ -1,7 +1,7 @@
 //! Df-Pn (Depth-First Proof-Number Search) による詰将棋ソルバー．
 //!
-//! cshogi と同じ Df-Pn アルゴリズムを採用し，攻め方(先手)が玉方(後手)を
-//! 詰ませる最善手順を求める．
+//! cshogi と同じ Df-Pn アルゴリズムを採用し，攻め方が玉方を
+//! 詰ませる最善手順を求める．先手・後手どちらが攻め方でも動作する．
 //!
 //! # 引数
 //!
@@ -508,8 +508,12 @@ impl DfPnSolver {
 
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
-            // 反証駒 = MAX(任意の持ち駒で不詰)
-            self.store(pos_key, MAX_DISPROOF, INF, 0);
+            // 実際の持ち駒で不詰を記録する．
+            // MAX_DISPROOF で保存すると，任意の持ち駒で不詰と扱われ，
+            // 同じ局面が浅い ply で到達されたときも不詰として誤判定される．
+            // att_hand を使うことで，持ち駒が異なる経路からの
+            // 再到達時に TT ヒットせず，正しく再探索される．
+            self.store(pos_key, att_hand, INF, 0);
             return;
         }
 
@@ -523,8 +527,10 @@ impl DfPnSolver {
         // 終端条件チェック
         if moves.is_empty() {
             if or_node {
-                // 王手手段なし → 不詰(反証駒 = MAX)
-                self.store(pos_key, MAX_DISPROOF, INF, 0);
+                // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
+                // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
+                // MAX_DISPROOF ではなく実際の持ち駒を使用する．
+                self.store(pos_key, att_hand, INF, 0);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
@@ -613,9 +619,9 @@ impl DfPnSolver {
                     let checks =
                         self.generate_check_moves(board);
                     if checks.is_empty() {
-                        // 攻め方に王手がない → 反証駒 = MAX
+                        // 攻め方に王手がない → 反証駒 = 現在の持ち駒
                         self.store(
-                            child_pk, MAX_DISPROOF, INF, 0,
+                            child_pk, child_hand, INF, 0,
                         );
                     } else if ply + 2 < self.depth
                         && self.has_mate_in_1_with(
@@ -2529,9 +2535,11 @@ mod tests {
         }
     }
 
-    /// 29手詰め(tsume6)．重いため ignore．
+    /// 29手詰め(tsume6)．
+    ///
+    /// 深さ制限時の TT 保存バグの回帰テスト．
+    /// MAX_DISPROOF で保存すると不詰として誤判定されていた．
     #[test]
-    #[ignore] // 29手詰め．明示的に `cargo test -- --ignored` で実行．
     fn test_tsume_6_29te() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         let mut board = Board::new();

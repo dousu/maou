@@ -30,6 +30,10 @@ PROBLEMS = {
         "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1",
         31,
     ),
+    "tsume6_29te": (
+        "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",
+        31,
+    ),
 }
 
 
