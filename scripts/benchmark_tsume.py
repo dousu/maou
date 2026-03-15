@@ -10,7 +10,7 @@ from maou._rust.maou_shogi import solve_tsume
 
 # 攻め方の玉を9九に配置(cshogiは片玉SFENの合法手生成にバグがあるため)
 PROBLEMS = {
-    "kosaka_9te": (
+    "tsume1_9te": (
         "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1",
         31,
     ),
@@ -59,12 +59,25 @@ def main() -> None:
     print("-" * len(header))
 
     for name, (sfen, depth) in PROBLEMS.items():
-        # --- maou ---
+        # --- maou (find_shortest=true, default) ---
         t0 = time.perf_counter()
         result = solve_tsume(sfen, depth=depth, nodes=max_nodes)
         maou_ms = (time.perf_counter() - t0) * 1000
         maou_nodes = result.nodes_searched
         maou_n_moves = len(result.moves) if result.status == "checkmate" else 0
+
+        # --- maou (find_shortest=false) ---
+        t0 = time.perf_counter()
+        result_fast = solve_tsume(
+            sfen, depth=depth, nodes=max_nodes, find_shortest=False
+        )
+        maou_fast_ms = (time.perf_counter() - t0) * 1000
+        maou_fast_nodes = result_fast.nodes_searched
+        maou_fast_n_moves = (
+            len(result_fast.moves)
+            if result_fast.status == "checkmate"
+            else 0
+        )
 
         # --- cshogi ---
         dfpn = DfPn()
@@ -91,9 +104,21 @@ def main() -> None:
             f" {maou_nodes:>8} {cshogi_nodes:>8}"
             f" {maou_n_moves:>5} {cshogi_n_moves:>5}"
         )
+        ratio_fast = (
+            maou_fast_ms / cshogi_ms if cshogi_ms > 0 else float("inf")
+        )
+        print(
+            f"  (no shortest) {maou_fast_ms:>9.2f} {'':>9} {ratio_fast:>6.1f}x"
+            f" {fmt_nps(maou_fast_nodes, maou_fast_ms):>10}"
+            f" {'':>10}"
+            f" {maou_fast_nodes:>8} {'':>8}"
+            f" {maou_fast_n_moves:>5}"
+        )
 
         if result.status == "checkmate":
             print(f"  maou  : {' '.join(result.moves)}")
+        if result_fast.status == "checkmate" and result_fast.moves != result.moves:
+            print(f"  maou-f: {' '.join(result_fast.moves)}")
         if found:
             print(f"  cshogi: {' '.join(cshogi_moves_list)}")
         print()

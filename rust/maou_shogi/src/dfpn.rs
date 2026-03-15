@@ -300,6 +300,12 @@ pub struct DfPnSolver {
     timed_out: bool,
     /// 攻め方の手番色(solve 時に設定)．
     attacker: Color,
+    /// 最短手数探索を行うかどうか(デフォルト: true)．
+    ///
+    /// true の場合，`solve()` は `complete_or_proofs()` を呼び出して
+    /// 全 OR ノードの未証明子を追加証明し，最短手順を保証する．
+    /// false の場合，最初に見つかった詰み手順をそのまま返す．
+    find_shortest: bool,
 }
 
 impl DfPnSolver {
@@ -315,6 +321,7 @@ impl DfPnSolver {
             max_nodes,
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
+            find_shortest: true,
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -414,25 +421,32 @@ impl DfPnSolver {
                     nodes_searched: self.nodes_searched,
                 };
             }
-            // 最短手数探索: PV 長を depth 上限にして
-            // 全 OR ノードの未証明子を追加証明する．
-            // 同じ長さ以下の代替手順のみ探索されるため効率的．
-            let saved_depth = self.depth;
-            self.depth = moves.len() as u32;
-            self.complete_or_proofs(board);
-            self.depth = saved_depth;
-            let final_moves = self.extract_pv(board);
-            // 追加証明で短い手順が見つかればそちらを採用
-            let moves = if !final_moves.is_empty()
-                && final_moves.len() <= moves.len()
-            {
-                final_moves
+            if self.find_shortest {
+                // 最短手数探索: PV 長を depth 上限にして
+                // 全 OR ノードの未証明子を追加証明する．
+                // 同じ長さ以下の代替手順のみ探索されるため効率的．
+                let saved_depth = self.depth;
+                self.depth = moves.len() as u32;
+                self.complete_or_proofs(board);
+                self.depth = saved_depth;
+                let final_moves = self.extract_pv(board);
+                // 追加証明で短い手順が見つかればそちらを採用
+                let moves = if !final_moves.is_empty()
+                    && final_moves.len() <= moves.len()
+                {
+                    final_moves
+                } else {
+                    moves
+                };
+                TsumeResult::Checkmate {
+                    moves,
+                    nodes_searched: self.nodes_searched,
+                }
             } else {
-                moves
-            };
-            TsumeResult::Checkmate {
-                moves,
-                nodes_searched: self.nodes_searched,
+                TsumeResult::Checkmate {
+                    moves,
+                    nodes_searched: self.nodes_searched,
+                }
             }
         } else if root_dn == 0 {
             TsumeResult::NoCheckmate {
@@ -1894,16 +1908,24 @@ pub fn solve_tsume(
     nodes: Option<u64>,
     draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
-    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None)
+    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None)
 }
 
 /// タイムアウト指定付きで詰将棋を解く便利関数．
+///
+/// # 引数
+///
+/// - `find_shortest`: 最短手数探索を行うか(None でデフォルト true)．
+///   false にすると `complete_or_proofs()` による追加探索をスキップし，
+///   最初に見つかった詰み手順をそのまま返す．ノード数は削減されるが，
+///   返される手順が最短とは限らない．
 pub fn solve_tsume_with_timeout(
     sfen: &str,
     depth: Option<u32>,
     nodes: Option<u64>,
     draw_ply: Option<u32>,
     timeout_secs: Option<u64>,
+    find_shortest: Option<bool>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
@@ -1914,6 +1936,7 @@ pub fn solve_tsume_with_timeout(
         draw_ply.unwrap_or(32767),
         timeout_secs.unwrap_or(300),
     );
+    solver.find_shortest = find_shortest.unwrap_or(true);
 
     Ok(solver.solve(&mut board))
 }
@@ -1930,7 +1953,7 @@ mod tests {
     ///
     /// 正解手順: 1三角成，同玉，2三飛打，1二玉，1三歩打，1一玉，2一飛成，同玉，1二歩成
     #[test]
-    fn test_tsume_9te_kosaka() {
+    fn test_tsume_9te() {
         let sfen = "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1";
         let mut board = Board::empty();
         board.set_sfen(sfen).unwrap();
@@ -2251,7 +2274,7 @@ mod tests {
             "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
             // image3
             "l1k6/9/1pB6/9/9/9/9/9/9 b RGrb4g4s4n3l16p 1",
-            // 9te kosaka
+            // 9te (tsume1)
             "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
         ];
 
@@ -2381,6 +2404,53 @@ mod tests {
                 );
             }
             other => panic!("expected Checkmate for 17te, got {:?}", other),
+        }
+    }
+
+    /// `find_shortest = false` で最短手数探索をスキップできることを確認．
+    #[test]
+    fn test_17te_solve_no_shortest() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+        solver.find_shortest = false;
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched,
+            } => {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!(
+                    "17te (no shortest): {} moves, {} nodes: {}",
+                    pv.len(),
+                    nodes_searched,
+                    pv.join(" ")
+                );
+                // 詰みは見つかるが，最短とは限らない
+                assert!(pv.len() >= 17, "should find checkmate");
+            }
+            other => panic!("expected Checkmate for 17te, got {:?}", other),
+        }
+
+        // find_shortest = true との比較
+        let mut board2 = Board::new();
+        board2.set_sfen(sfen).unwrap();
+        let mut solver2 = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+        solver2.find_shortest = true;
+        let result2 = solver2.solve(&mut board2);
+
+        if let TsumeResult::Checkmate { nodes_searched: n2, .. } = &result2 {
+            if let TsumeResult::Checkmate { nodes_searched: n1, .. } = &result {
+                eprintln!(
+                    "17te: find_shortest=false {} nodes, find_shortest=true {} nodes (saved {})",
+                    n1, n2, n2 - n1
+                );
+                assert!(n1 <= n2, "find_shortest=false should use <= nodes");
+            }
         }
     }
 
