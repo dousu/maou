@@ -2375,7 +2375,7 @@ mod tests {
 
     /// 17手詰め局面の solve() テスト．
     #[test]
-    fn test_17te_solve() {
+    fn test_tsume_5() {
         let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
@@ -2390,7 +2390,7 @@ mod tests {
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!(
-                    "17te: CHECKMATE in {} moves, {} nodes: {}",
+                    "tsume5: CHECKMATE in {} moves, {} nodes: {}",
                     pv.len(),
                     nodes_searched,
                     pv.join(" ")
@@ -2403,13 +2403,13 @@ mod tests {
                     pv.join(" ")
                 );
             }
-            other => panic!("expected Checkmate for 17te, got {:?}", other),
+            other => panic!("expected Checkmate for tsume5, got {:?}", other),
         }
     }
 
     /// `find_shortest = false` で最短手数探索をスキップできることを確認．
     #[test]
-    fn test_17te_solve_no_shortest() {
+    fn test_tsume_5_no_shortest() {
         let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
@@ -2425,7 +2425,7 @@ mod tests {
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!(
-                    "17te (no shortest): {} moves, {} nodes: {}",
+                    "tsume5 (no shortest): {} moves, {} nodes: {}",
                     pv.len(),
                     nodes_searched,
                     pv.join(" ")
@@ -2433,7 +2433,7 @@ mod tests {
                 // 詰みは見つかるが，最短とは限らない
                 assert!(pv.len() >= 17, "should find checkmate");
             }
-            other => panic!("expected Checkmate for 17te, got {:?}", other),
+            other => panic!("expected Checkmate for tsume5, got {:?}", other),
         }
 
         // find_shortest = true との比較
@@ -2446,7 +2446,7 @@ mod tests {
         if let TsumeResult::Checkmate { nodes_searched: n2, .. } = &result2 {
             if let TsumeResult::Checkmate { nodes_searched: n1, .. } = &result {
                 eprintln!(
-                    "17te: find_shortest=false {} nodes, find_shortest=true {} nodes (saved {})",
+                    "tsume5: find_shortest=false {} nodes, find_shortest=true {} nodes (saved {})",
                     n1, n2, n2 - n1
                 );
                 assert!(n1 <= n2, "find_shortest=false should use <= nodes");
@@ -2457,7 +2457,7 @@ mod tests {
     /// brute-force 詰み判定(DFPN との結果比較用)．
     #[test]
     #[ignore] // 5M ノードを使う重いテスト．明示的に `cargo test -- --ignored` で実行．
-    fn test_17te_bruteforce() {
+    fn test_tsume_5_bruteforce() {
         let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();

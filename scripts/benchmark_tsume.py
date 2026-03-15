@@ -18,7 +18,7 @@ PROBLEMS = {
         "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
         31,
     ),
-    "17te": (
+    "tsume5_17te": (
         "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1",
         31,
     ),
