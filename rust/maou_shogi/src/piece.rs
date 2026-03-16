@@ -5,6 +5,7 @@ use crate::types::{Color, Piece, PieceType};
 /// cshogi: 歩(1),香(2),桂(3),銀(4),角(5),飛(6),金(7),王(8) ...
 /// domain: 歩(1),香(2),桂(3),銀(4),金(5),角(6),飛(7),王(8) ...
 /// 角・飛・金の順序が異なる．
+#[allow(dead_code)]
 const CSHOGI_TO_DOMAIN: [u8; 31] = [
     0,  // 0: EMPTY
     1,  // 1: BPAWN → FU
@@ -42,6 +43,7 @@ const CSHOGI_TO_DOMAIN: [u8; 31] = [
 /// cshogi駒ID(0-30)をdomain PieceId(0-28)に変換する．
 ///
 /// 無効なID(範囲外およびcshogi未使用のID 15,16)の場合は `None` を返す．
+#[allow(dead_code)]
 #[inline]
 pub fn cshogi_to_domain_piece_id(cshogi_piece: u8) -> Option<u8> {
     match cshogi_piece {

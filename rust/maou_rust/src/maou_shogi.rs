@@ -4,6 +4,7 @@ use numpy::{PyArray3, PyArrayMethods};
 use pyo3::prelude::*;
 
 use maou_shogi::board::Board;
+use maou_shogi::dfpn;
 use maou_shogi::feature;
 use maou_shogi::hcp;
 use maou_shogi::movegen;
@@ -257,11 +258,146 @@ fn move_drop_hand_piece(m: u32) -> u8 {
     moves::move_drop_hand_piece(Move::from_raw_u32(m))
 }
 
+/// 詰将棋の探索結果．
+///
+/// - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"` のいずれか．
+/// - `moves`: 詰みの場合は手順(USI形式のリスト)．それ以外は空リスト．
+/// - `nodes_searched`: 探索ノード数．
+#[pyclass(frozen)]
+struct TsumeResult {
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    moves: Vec<String>,
+    #[pyo3(get)]
+    nodes_searched: u64,
+}
+
+#[pymethods]
+impl TsumeResult {
+    fn __repr__(&self) -> String {
+        if self.status == "checkmate" {
+            format!(
+                "TsumeResult(status='checkmate', moves={:?}, nodes_searched={})",
+                self.moves, self.nodes_searched
+            )
+        } else {
+            format!(
+                "TsumeResult(status='{}', nodes_searched={})",
+                self.status, self.nodes_searched
+            )
+        }
+    }
+
+    /// `status == "checkmate"` のとき `True`．
+    ///
+    /// `checkmate_no_pv` は手順 (`moves`) が空のため `False` を返す．
+    /// 手順の有無に関わらず詰みが証明されたかを判定するには
+    /// `is_proven` プロパティを使用すること．
+    fn __bool__(&self) -> bool {
+        self.status == "checkmate"
+    }
+
+    /// 詰みが証明されたかどうかを返す．
+    ///
+    /// `status` が `"checkmate"` または `"checkmate_no_pv"` のとき `True`．
+    /// `__bool__` と異なり，PV 復元に失敗した場合でも `True` を返す．
+    ///
+    /// ```python
+    /// result = solve_tsume(sfen)
+    /// if result.is_proven:
+    ///     print("詰みが証明された")
+    /// ```
+    #[getter]
+    fn is_proven(&self) -> bool {
+        self.status == "checkmate" || self.status == "checkmate_no_pv"
+    }
+}
+
+/// 詰将棋を解く(Df-Pn アルゴリズム)．
+///
+/// 返り値: `TsumeResult` オブジェクト．
+///   - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"`
+///   - `moves`: 詰みの場合は手順(USI形式のリスト)
+///   - `nodes_searched`: 探索ノード数
+///
+/// # 引数
+///
+/// - `sfen` (str): 局面のSFEN文字列．
+/// - `depth` (int, optional): 最大探索手数(デフォルト 31)．範囲: 1〜数百程度．
+/// - `nodes` (int, optional): 最大ノード数(デフォルト 1,048,576 = 2^20)．
+///   u64 範囲(0〜2^64-1)．推奨: 100,000〜100,000,000．
+/// - `draw_ply` (int, optional): 引き分け手数(デフォルト 32767)．
+/// - `timeout_secs` (int, optional): 実行時間制限(秒)(デフォルト 300)．
+/// - `find_shortest` (bool, optional): 最短手数探索を行うか(デフォルト true)．
+///   false にすると追加探索をスキップし高速化するが，
+///   返される手順が最短とは限らない．
+/// - `pv_nodes_per_child` (int, optional): PV 復元時の1子あたりノード予算(デフォルト 1024)．
+///   長手数の詰将棋で `checkmate_no_pv` が返る場合に増やすと効果的．
+#[pyfunction]
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024))]
+fn solve_tsume(
+    py: Python<'_>,
+    sfen: &str,
+    depth: u32,
+    nodes: u64,
+    draw_ply: u32,
+    timeout_secs: u64,
+    find_shortest: bool,
+    pv_nodes_per_child: u64,
+) -> PyResult<TsumeResult> {
+    let sfen_owned = sfen.to_owned();
+    let result = py.detach(move || {
+        dfpn::solve_tsume_with_timeout(
+            &sfen_owned,
+            Some(depth),
+            Some(nodes),
+            Some(draw_ply),
+            Some(timeout_secs),
+            Some(find_shortest),
+            Some(pv_nodes_per_child),
+        )
+    })
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    match result {
+        dfpn::TsumeResult::Checkmate { moves, nodes_searched } => {
+            Ok(TsumeResult {
+                status: "checkmate".to_string(),
+                moves: moves.iter().map(|m| m.to_usi()).collect(),
+                nodes_searched,
+            })
+        }
+        dfpn::TsumeResult::CheckmateNoPv { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "checkmate_no_pv".to_string(),
+                moves: Vec::new(),
+                nodes_searched,
+            })
+        }
+        dfpn::TsumeResult::NoCheckmate { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "no_checkmate".to_string(),
+                moves: Vec::new(),
+                nodes_searched,
+            })
+        }
+        dfpn::TsumeResult::Unknown { nodes_searched } => {
+            Ok(TsumeResult {
+                status: "unknown".to_string(),
+                moves: Vec::new(),
+                nodes_searched,
+            })
+        }
+    }
+}
+
 /// Create maou_shogi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
 
     m.add_class::<PyBoard>()?;
+    m.add_class::<TsumeResult>()?;
     m.add_function(wrap_pyfunction!(move16, &m)?)?;
     m.add_function(wrap_pyfunction!(move_to, &m)?)?;
     m.add_function(wrap_pyfunction!(move_from, &m)?)?;
@@ -269,6 +405,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(move_is_drop, &m)?)?;
     m.add_function(wrap_pyfunction!(move_is_promotion, &m)?)?;
     m.add_function(wrap_pyfunction!(move_drop_hand_piece, &m)?)?;
+    m.add_function(wrap_pyfunction!(solve_tsume, &m)?)?;
 
     Ok(m)
 }

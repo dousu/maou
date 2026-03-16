@@ -4,8 +4,8 @@ use crate::types::{Color, PIECE_BB_SIZE, PieceType, Square};
 /// 駒の利きを計算する．
 ///
 /// 近接駒(歩,桂,銀,金,王,成駒のステップ部分)は事前計算テーブルから取得．
-/// 飛び駒(香,角,飛,馬,龍)は事前計算レイマスクとLSB/MSBによる
-/// 遮蔽検出で計算する(ループなし)．
+/// 飛び駒(香,角,飛,馬,龍)はPEXTベースのルックアップテーブルで計算する．
+/// BMI2非対応環境ではソフトウェアPEXTにフォールバックする．
 
 /// 近接駒(飛び駒以外)の利きテーブル．
 /// step_attacks[color][piece_type][square]
@@ -142,13 +142,10 @@ pub fn step_attacks(color: Color, pt: PieceType, sq: Square) -> Bitboard {
 }
 
 // ============================================================
-// スライド利きの事前計算
+// レイマスク(初期化・line_through用)
 // ============================================================
 
 /// レイ方向のインデックス．
-/// column-major (sq = col*9 + row) でのインデックス増減:
-///   正方向(LSB): S(+1), E(+9), NE(+8), SE(+10)
-///   負方向(MSB): N(-1), W(-9), NW(-10), SW(-8)
 const DIR_N: usize = 0;
 const DIR_S: usize = 1;
 const DIR_W: usize = 2;
@@ -158,7 +155,7 @@ const DIR_NE: usize = 5;
 const DIR_SW: usize = 6;
 const DIR_SE: usize = 7;
 
-/// 各方向の移動ベクトル (dcol, drow)．DIR_* インデックスと対応．
+/// 各方向の移動ベクトル (dcol, drow)．
 const DIR_VECTORS: [(i8, i8); 8] = [
     (0, -1),  // N
     (0, 1),   // S
@@ -171,7 +168,6 @@ const DIR_VECTORS: [(i8, i8); 8] = [
 ];
 
 /// レイマスク: 各マスから各方向に伸びるレイ(起点は含まない)．
-/// RAY_MASKS[direction][square]
 static RAY_MASKS: std::sync::LazyLock<[[Bitboard; 81]; 8]> =
     std::sync::LazyLock::new(init_ray_masks);
 
@@ -196,8 +192,7 @@ fn init_ray_masks() -> [[Bitboard; 81]; 8] {
     table
 }
 
-/// 正方向(インデックス増加)のレイ利きを返す．最初の遮蔽駒をLSBで検出する．
-#[inline]
+/// レイ利き(正方向): テーブル初期化時に使用．
 fn ray_attack_positive(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     let ray = RAY_MASKS[dir][sq.index()];
     let blockers = ray & occupied;
@@ -207,8 +202,7 @@ fn ray_attack_positive(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     }
 }
 
-/// 負方向(インデックス減少)のレイ利きを返す．最初の遮蔽駒をMSBで検出する．
-#[inline]
+/// レイ利き(負方向): テーブル初期化時に使用．
 fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     let ray = RAY_MASKS[dir][sq.index()];
     let blockers = ray & occupied;
@@ -218,49 +212,377 @@ fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     }
 }
 
-/// 香車の利きを返す．事前計算レイマスクとLSB/MSBによる遮蔽検出を使用．
-#[inline]
-pub fn lance_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
-    match color {
-        Color::Black => ray_attack_negative(DIR_N, sq, occupied),
-        Color::White => ray_attack_positive(DIR_S, sq, occupied),
+// ============================================================
+// PEXT ベースのスライド利きテーブル
+// ============================================================
+
+/// Parallel Bit Extract．BMI2対応時はハードウェア命令を使用．
+#[inline(always)]
+fn pext(src: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        unsafe { std::arch::x86_64::_pext_u64(src, mask) }
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        // ソフトウェアフォールバック
+        let mut result = 0u64;
+        let mut bit = 0u32;
+        let mut m = mask;
+        while m != 0 {
+            let lsb = m & m.wrapping_neg();
+            if src & lsb != 0 {
+                result |= 1u64 << bit;
+            }
+            m &= m - 1;
+            bit += 1;
+        }
+        result
     }
 }
 
-/// 角の利きを返す．4方向のレイ利きを合成する．
-#[inline]
-pub fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    ray_attack_negative(DIR_NW, sq, occupied)
-        | ray_attack_positive(DIR_NE, sq, occupied)
-        | ray_attack_negative(DIR_SW, sq, occupied)
-        | ray_attack_positive(DIR_SE, sq, occupied)
+/// PEXTエントリ: 各マス用の占有マスクとテーブルオフセット．
+struct PextEntry {
+    mask_lo: u64,
+    mask_hi: u64,
+    lo_popcount: u32,
+    offset: u32,
 }
 
-/// 飛車の利きを返す．4方向のレイ利きを合成する．
+/// PEXTベースの利きテーブル．
+struct PextTable {
+    entries: [PextEntry; 81],
+    attacks: Vec<Bitboard>,
+}
+
+impl PextTable {
+    #[inline(always)]
+    fn lookup(&self, sq: Square, occ: Bitboard) -> Bitboard {
+        let e = unsafe { self.entries.get_unchecked(sq.index()) };
+        let lo_idx = pext(occ.lo, e.mask_lo) as usize;
+        let hi_idx = pext(occ.hi, e.mask_hi) as usize;
+        let idx = lo_idx | (hi_idx << e.lo_popcount);
+        unsafe { *self.attacks.get_unchecked(e.offset as usize + idx) }
+    }
+}
+
+/// PEXTテーブルを初期化する．
+fn init_pext_table(
+    mask_fn: impl Fn(Square) -> Bitboard,
+    attack_fn: impl Fn(Square, Bitboard) -> Bitboard,
+) -> PextTable {
+    let dummy = PextEntry { mask_lo: 0, mask_hi: 0, lo_popcount: 0, offset: 0 };
+    // Safety: PextEntry is Copy-like (all primitives)
+    let mut entries: [PextEntry; 81] = unsafe { std::mem::zeroed() };
+    let _ = dummy; // suppress unused
+    let mut attacks = Vec::new();
+
+    for sq_idx in 0..81u8 {
+        let sq = Square(sq_idx);
+        let mask = mask_fn(sq);
+        let mask_squares: Vec<Square> = mask.into_iter().collect();
+        let n = mask_squares.len();
+        debug_assert!(n <= 14, "PEXT mask too large: {} bits for sq={}", n, sq_idx);
+
+        entries[sq_idx as usize] = PextEntry {
+            mask_lo: mask.lo,
+            mask_hi: mask.hi,
+            lo_popcount: mask.lo.count_ones(),
+            offset: attacks.len() as u32,
+        };
+
+        let size = 1usize << n;
+        for idx in 0..size {
+            let mut occ = Bitboard::EMPTY;
+            for bit in 0..n {
+                if idx & (1 << bit) != 0 {
+                    occ.set(mask_squares[bit]);
+                }
+            }
+            attacks.push(attack_fn(sq, occ));
+        }
+    }
+
+    PextTable { entries, attacks }
+}
+
+// --- マスク関数 ---
+
+/// 先手香車: 北方向(row減少)，辺を除く内部マス．
+fn lance_black_mask(sq: Square) -> Bitboard {
+    let col = sq.col();
+    let row = sq.row();
+    let mut mask = Bitboard::EMPTY;
+    // row 1..row-1 (row 0 = 辺は除外)
+    for r in 1..row {
+        mask.set(Square::new(col, r));
+    }
+    mask
+}
+
+/// 後手香車: 南方向(row増加)，辺を除く内部マス．
+fn lance_white_mask(sq: Square) -> Bitboard {
+    let col = sq.col();
+    let row = sq.row();
+    let mut mask = Bitboard::EMPTY;
+    // row+1..7 (row 8 = 辺は除外)
+    for r in (row + 1)..8 {
+        mask.set(Square::new(col, r));
+    }
+    mask
+}
+
+/// 飛車筋(縦)方向のマスク: row 1..7 のうち自マスを除く．
+fn rook_file_mask(sq: Square) -> Bitboard {
+    let col = sq.col();
+    let row = sq.row();
+    let mut mask = Bitboard::EMPTY;
+    for r in 1..8u8 {
+        if r != row {
+            mask.set(Square::new(col, r));
+        }
+    }
+    mask
+}
+
+/// 飛車段(横)方向のマスク: col 1..7 のうち自マスを除く．
+fn rook_rank_mask(sq: Square) -> Bitboard {
+    let col = sq.col();
+    let row = sq.row();
+    let mut mask = Bitboard::EMPTY;
+    for c in 1..8u8 {
+        if c != col {
+            mask.set(Square::new(c, row));
+        }
+    }
+    mask
+}
+
+/// 角の NW-SE 対角線マスク: 辺を除く内部マス(自マス除外)．
+fn bishop_diag1_mask(sq: Square) -> Bitboard {
+    let col = sq.col() as i8;
+    let row = sq.row() as i8;
+    let mut mask = Bitboard::EMPTY;
+    // NW 方向
+    let (mut c, mut r) = (col - 1, row - 1);
+    while c > 0 && r > 0 {
+        mask.set(Square::new(c as u8, r as u8));
+        c -= 1;
+        r -= 1;
+    }
+    // SE 方向
+    let (mut c, mut r) = (col + 1, row + 1);
+    while c < 8 && r < 8 {
+        mask.set(Square::new(c as u8, r as u8));
+        c += 1;
+        r += 1;
+    }
+    mask
+}
+
+/// 角の NE-SW 対角線マスク: 辺を除く内部マス(自マス除外)．
+fn bishop_diag2_mask(sq: Square) -> Bitboard {
+    let col = sq.col() as i8;
+    let row = sq.row() as i8;
+    let mut mask = Bitboard::EMPTY;
+    // NE 方向
+    let (mut c, mut r) = (col + 1, row - 1);
+    while c < 8 && r > 0 {
+        mask.set(Square::new(c as u8, r as u8));
+        c += 1;
+        r -= 1;
+    }
+    // SW 方向
+    let (mut c, mut r) = (col - 1, row + 1);
+    while c > 0 && r < 8 {
+        mask.set(Square::new(c as u8, r as u8));
+        c -= 1;
+        r += 1;
+    }
+    mask
+}
+
+// --- 利き計算関数(初期化用) ---
+
+fn compute_lance_black(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_negative(DIR_N, sq, occ)
+}
+
+fn compute_lance_white(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_positive(DIR_S, sq, occ)
+}
+
+fn compute_rook_file(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_negative(DIR_N, sq, occ) | ray_attack_positive(DIR_S, sq, occ)
+}
+
+fn compute_rook_rank(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_negative(DIR_W, sq, occ) | ray_attack_positive(DIR_E, sq, occ)
+}
+
+fn compute_bishop_diag1(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_negative(DIR_NW, sq, occ) | ray_attack_positive(DIR_SE, sq, occ)
+}
+
+fn compute_bishop_diag2(sq: Square, occ: Bitboard) -> Bitboard {
+    ray_attack_positive(DIR_NE, sq, occ) | ray_attack_negative(DIR_SW, sq, occ)
+}
+
+// --- グローバルテーブル ---
+
+use std::sync::LazyLock;
+
+static PEXT_LANCE_BLACK: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(lance_black_mask, compute_lance_black));
+static PEXT_LANCE_WHITE: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(lance_white_mask, compute_lance_white));
+static PEXT_ROOK_FILE: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(rook_file_mask, compute_rook_file));
+static PEXT_ROOK_RANK: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(rook_rank_mask, compute_rook_rank));
+static PEXT_BISHOP_DIAG1: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(bishop_diag1_mask, compute_bishop_diag1));
+static PEXT_BISHOP_DIAG2: LazyLock<PextTable> =
+    LazyLock::new(|| init_pext_table(bishop_diag2_mask, compute_bishop_diag2));
+
+/// 事前計算済み between_bb テーブル: [sq1][sq2]．
+static BETWEEN_TABLE: LazyLock<[[Bitboard; 81]; 81]> = LazyLock::new(init_between_table);
+
+fn init_between_table() -> [[Bitboard; 81]; 81] {
+    let mut table = [[Bitboard::EMPTY; 81]; 81];
+    for i in 0..81u8 {
+        for j in 0..81u8 {
+            table[i as usize][j as usize] = compute_between_bb(Square(i), Square(j));
+        }
+    }
+    table
+}
+
+/// between_bb のループ版(テーブル初期化用)．
+fn compute_between_bb(sq1: Square, sq2: Square) -> Bitboard {
+    let c1 = sq1.col() as i8;
+    let r1 = sq1.row() as i8;
+    let c2 = sq2.col() as i8;
+    let r2 = sq2.row() as i8;
+
+    let dc = (c2 - c1).signum();
+    let dr = (r2 - r1).signum();
+
+    if dc == 0 && dr == 0 {
+        return Bitboard::EMPTY;
+    }
+
+    let cdiff = (c2 - c1).unsigned_abs();
+    let rdiff = (r2 - r1).unsigned_abs();
+    let on_line = (dc == 0 && rdiff > 0) || (dr == 0 && cdiff > 0) || (cdiff == rdiff);
+    if !on_line {
+        return Bitboard::EMPTY;
+    }
+
+    let mut bb = Bitboard::EMPTY;
+    let mut c = c1 + dc;
+    let mut r = r1 + dr;
+    while (c, r) != (c2, r2) {
+        if c < 0 || c >= 9 || r < 0 || r >= 9 {
+            return Bitboard::EMPTY;
+        }
+        bb.set(Square::new(c as u8, r as u8));
+        c += dc;
+        r += dr;
+    }
+    bb
+}
+
+// ============================================================
+// 公開 API
+// ============================================================
+
+/// 香車の利きを返す．PEXTベースのルックアップテーブルを使用．
+#[inline]
+pub fn lance_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
+    match color {
+        Color::Black => PEXT_LANCE_BLACK.lookup(sq, occupied),
+        Color::White => PEXT_LANCE_WHITE.lookup(sq, occupied),
+    }
+}
+
+/// 角の利きを返す．2つの対角線のPEXTテーブルを合成．
+#[inline]
+pub fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
+    PEXT_BISHOP_DIAG1.lookup(sq, occupied) | PEXT_BISHOP_DIAG2.lookup(sq, occupied)
+}
+
+/// 飛車の利きを返す．筋・段のPEXTテーブルを合成．
 #[inline]
 pub fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    ray_attack_negative(DIR_N, sq, occupied)
-        | ray_attack_positive(DIR_S, sq, occupied)
-        | ray_attack_negative(DIR_W, sq, occupied)
-        | ray_attack_positive(DIR_E, sq, occupied)
+    PEXT_ROOK_FILE.lookup(sq, occupied) | PEXT_ROOK_RANK.lookup(sq, occupied)
 }
 
 /// 馬(成角)の利きを返す．斜め走り + 前後左右1マス．
-///
-/// `color` は `step_attacks` のインデックスに必要だが，馬のステップ利き(前後左右)は
-/// 先後対称なため，実質どちらの色でも同じ結果を返す．
 #[inline]
 pub fn horse_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     bishop_attacks(sq, occupied) | step_attacks(color, PieceType::Horse, sq)
 }
 
 /// 龍(成飛)の利きを返す．前後左右走り + 斜め1マス．
-///
-/// `color` は `step_attacks` のインデックスに必要だが，龍のステップ利き(斜め1マス)は
-/// 先後対称なため，実質どちらの色でも同じ結果を返す．
 #[inline]
 pub fn dragon_attacks(color: Color, sq: Square, occupied: Bitboard) -> Bitboard {
     rook_attacks(sq, occupied) | step_attacks(color, PieceType::Dragon, sq)
+}
+
+/// 2マス間のレイ上のマス(両端を含まない)を返す．
+///
+/// 事前計算済みテーブルからO(1)で取得する．
+#[inline]
+pub fn between_bb(sq1: Square, sq2: Square) -> Bitboard {
+    BETWEEN_TABLE[sq1.index()][sq2.index()]
+}
+
+/// 2マスを通る直線(縦横斜め)上の全マスを返す(両端含む)．
+///
+/// 同一直線上にない場合は空を返す．
+/// ピン判定で使用: ピンされた駒がこの直線上でのみ移動可能．
+#[inline]
+pub fn line_through(sq1: Square, sq2: Square) -> Bitboard {
+    let c1 = sq1.col() as i8;
+    let r1 = sq1.row() as i8;
+    let c2 = sq2.col() as i8;
+    let r2 = sq2.row() as i8;
+
+    let dc = c2 - c1;
+    let dr = r2 - r1;
+
+    if dc == 0 && dr == 0 {
+        return Bitboard::EMPTY;
+    }
+
+    let adc = dc.unsigned_abs();
+    let adr = dr.unsigned_abs();
+
+    let dir = if dc == 0 {
+        DIR_N
+    } else if dr == 0 {
+        DIR_W
+    } else if adc == adr {
+        if (dc > 0) == (dr > 0) { DIR_SE } else { DIR_NE }
+    } else {
+        return Bitboard::EMPTY;
+    };
+
+    let opposite = match dir {
+        DIR_N => DIR_S,
+        DIR_S => DIR_N,
+        DIR_W => DIR_E,
+        DIR_E => DIR_W,
+        DIR_NW => DIR_SE,
+        DIR_NE => DIR_SW,
+        DIR_SW => DIR_NE,
+        DIR_SE => DIR_NW,
+        _ => unreachable!(),
+    };
+    let mut line = RAY_MASKS[dir][sq1.index()] | RAY_MASKS[opposite][sq1.index()];
+    line.set(sq1);
+    line
 }
 
 /// 指定した駒種・色・マスの利きを返す(占有ビットボード考慮)．
@@ -281,12 +603,10 @@ mod tests {
 
     #[test]
     fn test_pawn_attacks() {
-        // 先手の歩(5五 = col4,row4)の利き → 5四(col4,row3)
         let att = step_attacks(Color::Black, PieceType::Pawn, Square::new(4, 4));
         assert_eq!(att.count(), 1);
         assert!(att.contains(Square::new(4, 3)));
 
-        // 後手の歩の利き → 5六(col4,row5)
         let att = step_attacks(Color::White, PieceType::Pawn, Square::new(4, 4));
         assert_eq!(att.count(), 1);
         assert!(att.contains(Square::new(4, 5)));
@@ -294,7 +614,6 @@ mod tests {
 
     #[test]
     fn test_knight_attacks() {
-        // 先手の桂(5五 = col4,row4)の利き → (col3,row2) and (col5,row2)
         let att = step_attacks(Color::Black, PieceType::Knight, Square::new(4, 4));
         assert_eq!(att.count(), 2);
         assert!(att.contains(Square::new(3, 2)));
@@ -303,34 +622,141 @@ mod tests {
 
     #[test]
     fn test_king_attacks() {
-        // 中央の王(5五)の利き → 8方向
         let att = step_attacks(Color::Black, PieceType::King, Square::new(4, 4));
         assert_eq!(att.count(), 8);
 
-        // 角の王(1一 = col0,row0)の利き → 3方向
         let att = step_attacks(Color::Black, PieceType::King, Square::new(0, 0));
         assert_eq!(att.count(), 3);
     }
 
     #[test]
     fn test_rook_attacks() {
-        // 空盤で飛車(5五)の利き → 上下左右合わせて 8+8-2=16マス (自分のマスを含まない)
         let att = rook_attacks(Square::new(4, 4), Bitboard::EMPTY);
-        // col4: row 0-3, 5-8 = 8マス + row4: col 0-3, 5-8 = 8マス = 16
         assert_eq!(att.count(), 16);
     }
 
     #[test]
     fn test_lance_attacks() {
-        // 先手の香(5九 = col4,row8)，空盤 → 上方向に8マス
         let att = lance_attacks(Color::Black, Square::new(4, 8), Bitboard::EMPTY);
         assert_eq!(att.count(), 8);
 
-        // 障害物があると止まる
         let mut occ = Bitboard::EMPTY;
-        occ.set(Square::new(4, 5)); // 5六に駒
+        occ.set(Square::new(4, 5));
         let att = lance_attacks(Color::Black, Square::new(4, 8), occ);
-        assert_eq!(att.count(), 3); // row 7, 6, 5
-        assert!(att.contains(Square::new(4, 5))); // 障害物のマスも含む
+        assert_eq!(att.count(), 3);
+        assert!(att.contains(Square::new(4, 5)));
+    }
+
+    /// PEXTテーブルがレイベースの計算と一致することを全マス・全占有パターンで検証．
+    #[test]
+    fn test_pext_lance_vs_ray() {
+        for sq_idx in 0..81u8 {
+            let sq = Square(sq_idx);
+            // いくつかの代表的な占有パターンで検証
+            for pattern in 0..16u64 {
+                let mut occ = Bitboard::EMPTY;
+                let col = sq.col();
+                for r in 0..9u8 {
+                    if pattern & (1 << (r % 4)) != 0 && r != sq.row() {
+                        occ.set(Square::new(col, r));
+                    }
+                }
+                let pext_b = PEXT_LANCE_BLACK.lookup(sq, occ);
+                let ray_b = ray_attack_negative(DIR_N, sq, occ);
+                assert_eq!(pext_b, ray_b, "lance black mismatch at sq={}, occ={:?}", sq_idx, occ);
+
+                let pext_w = PEXT_LANCE_WHITE.lookup(sq, occ);
+                let ray_w = ray_attack_positive(DIR_S, sq, occ);
+                assert_eq!(pext_w, ray_w, "lance white mismatch at sq={}", sq_idx);
+            }
+        }
+    }
+
+    /// PEXTテーブルがレイベースの計算と一致することを飛車で検証．
+    #[test]
+    fn test_pext_rook_vs_ray() {
+        for sq_idx in 0..81u8 {
+            let sq = Square(sq_idx);
+            for pattern in 0..32u64 {
+                let mut occ = Bitboard::EMPTY;
+                // 筋方向
+                let col = sq.col();
+                for r in 0..9u8 {
+                    if pattern & (1 << (r % 5)) != 0 && r != sq.row() {
+                        occ.set(Square::new(col, r));
+                    }
+                }
+                // 段方向
+                let row = sq.row();
+                for c in 0..9u8 {
+                    if pattern & (1 << ((c + 2) % 5)) != 0 && c != sq.col() {
+                        occ.set(Square::new(c, row));
+                    }
+                }
+                let pext_r = rook_attacks(sq, occ);
+                let ray_r = ray_attack_negative(DIR_N, sq, occ)
+                    | ray_attack_positive(DIR_S, sq, occ)
+                    | ray_attack_negative(DIR_W, sq, occ)
+                    | ray_attack_positive(DIR_E, sq, occ);
+                assert_eq!(pext_r, ray_r, "rook mismatch at sq={}", sq_idx);
+            }
+        }
+    }
+
+    /// PEXTテーブルがレイベースの計算と一致することを角で検証．
+    #[test]
+    fn test_pext_bishop_vs_ray() {
+        for sq_idx in 0..81u8 {
+            let sq = Square(sq_idx);
+            for pattern in 0..16u64 {
+                let mut occ = Bitboard::EMPTY;
+                // 対角線上にいくつかの駒を配置
+                let col = sq.col() as i8;
+                let row = sq.row() as i8;
+                for d in 1..9i8 {
+                    let bit = (pattern >> (d as u64 % 4)) & 1;
+                    if bit != 0 {
+                        let nc = col + d;
+                        let nr = row + d;
+                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                            occ.set(Square::new(nc as u8, nr as u8));
+                        }
+                        let nc = col - d;
+                        let nr = row - d;
+                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                            occ.set(Square::new(nc as u8, nr as u8));
+                        }
+                        let nc = col + d;
+                        let nr = row - d;
+                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                            occ.set(Square::new(nc as u8, nr as u8));
+                        }
+                        let nc = col - d;
+                        let nr = row + d;
+                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                            occ.set(Square::new(nc as u8, nr as u8));
+                        }
+                    }
+                }
+                let pext_b = bishop_attacks(sq, occ);
+                let ray_b = ray_attack_negative(DIR_NW, sq, occ)
+                    | ray_attack_positive(DIR_NE, sq, occ)
+                    | ray_attack_negative(DIR_SW, sq, occ)
+                    | ray_attack_positive(DIR_SE, sq, occ);
+                assert_eq!(pext_b, ray_b, "bishop mismatch at sq={}", sq_idx);
+            }
+        }
+    }
+
+    /// between_bbテーブルの検証．
+    #[test]
+    fn test_between_bb_table() {
+        for i in 0..81u8 {
+            for j in 0..81u8 {
+                let tbl = between_bb(Square(i), Square(j));
+                let computed = compute_between_bb(Square(i), Square(j));
+                assert_eq!(tbl, computed, "between_bb mismatch: sq1={}, sq2={}", i, j);
+            }
+        }
     }
 }

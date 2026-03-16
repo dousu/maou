@@ -52,6 +52,13 @@ impl ZobristTable {
         self.board[piece_idx][sq.index()]
     }
 
+    /// 盤上の駒のハッシュ値を取得する(生インデックス版，ホットパス用)．
+    #[inline(always)]
+    pub fn board_hash_raw(&self, color_index: usize, piece_type_raw: usize, sq: Square) -> u64 {
+        let piece_idx = color_index * PIECE_TYPES_NUM + (piece_type_raw - 1);
+        self.board[piece_idx][sq.index()]
+    }
+
     /// 持ち駒のハッシュ値を取得する．
     #[inline]
     pub fn hand_hash(&self, color: Color, hand_index: usize, count: usize) -> u64 {

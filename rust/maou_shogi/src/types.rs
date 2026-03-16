@@ -318,6 +318,33 @@ impl Piece {
         };
         PieceType::from_u8(base)
     }
+
+    /// 色のインデックスを直接返す(ホットパス用)．
+    ///
+    /// # Safety
+    ///
+    /// `self` が空マス(0)でないこと．
+    /// 呼び出し元で空マスチェック済みの場合にのみ使用する．
+    #[inline(always)]
+    pub(crate) unsafe fn color_index_unchecked(self) -> usize {
+        // 1-14 → 0 (Black), 17-30 → 1 (White)
+        (self.0 >= 17) as usize
+    }
+
+    /// 駒種のu8値を直接返す(ホットパス用)．
+    ///
+    /// # Safety
+    ///
+    /// `self` が空マス(0)でないこと．
+    /// 返り値は PieceType の有効範囲(1-14)であること．
+    #[inline(always)]
+    pub(crate) unsafe fn piece_type_raw_unchecked(self) -> u8 {
+        if self.0 >= 17 {
+            self.0 - Self::WHITE_OFFSET
+        } else {
+            self.0
+        }
+    }
 }
 
 /// マス番号(0-80)．column-major: square = col * 9 + row．
