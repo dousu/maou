@@ -303,10 +303,11 @@ impl TranspositionTable {
         // 同一持ち駒の既存エントリを更新
         for e in entries.iter_mut() {
             if e.hand == hand {
-                // 証明済みエントリ(pn=0)を非証明値で上書きしない．
+                // 証明済み(pn=0)・反証済み(dn=0)エントリを上書きしない．
                 // complete_or_proofs 中の mid() が転置により同じ局面に到達し，
                 // 深さ制限で(INF, 0)を書き込むと証明済みエントリが破壊される．
-                if e.pn == 0 && pn != 0 {
+                // 反証済みエントリも同様に保護する．
+                if (e.pn == 0 && pn != 0) || (e.dn == 0 && dn != 0) {
                     return;
                 }
                 e.pn = pn;
@@ -373,7 +374,7 @@ impl TranspositionTable {
     }
 }
 
-/// OR ノードの証明駒/反証駒を子ノードの駒情報から計算する．
+/// 指し手に応じて子ノードの持ち駒情報を親ノード視点に変換する．
 ///
 /// 指し手による持ち駒の入出を補正する汎用関数．
 /// 証明駒・反証駒の両方に同じロジックが適用できる:
@@ -384,7 +385,7 @@ impl TranspositionTable {
 /// - 駒取り: 子の駒 - 取った駒種1枚(持ち駒が増えるため)
 /// - それ以外: 子の駒をそのまま使用
 #[inline]
-fn adjust_or_proof(
+fn adjust_hand_for_move(
     m: Move,
     child_proof: &[u8; HAND_KINDS],
 ) -> [u8; HAND_KINDS] {
@@ -876,7 +877,7 @@ impl DfPnSolver {
                     .table
                     .get_proof_hand(child_pk, &child_hand);
                 let mut proof =
-                    adjust_or_proof(*m, &child_ph);
+                    adjust_hand_for_move(*m, &child_ph);
                 // 証明駒を現在の持ち駒で上限クリップ
                 for k in 0..HAND_KINDS {
                     proof[k] = proof[k].min(att_hand[k]);
@@ -901,7 +902,7 @@ impl DfPnSolver {
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
                 let adj =
-                    adjust_or_proof(*m, &child_dp);
+                    adjust_hand_for_move(*m, &child_dp);
                 for k in 0..HAND_KINDS {
                     init_or_disproof[k] =
                         init_or_disproof[k].min(adj[k]);
@@ -975,7 +976,7 @@ impl DfPnSolver {
                             .get_proof_hand(
                                 child_pk, child_hand,
                             );
-                        let mut proof = adjust_or_proof(
+                        let mut proof = adjust_hand_for_move(
                             children[i].0,
                             &child_ph,
                         );
@@ -992,14 +993,14 @@ impl DfPnSolver {
                     }
 
                     // 反証済みの子: 反証駒を蓄積
-                    // adjust_or_proof は証明駒/反証駒共通の駒入出補正関数
+                    // adjust_hand_for_move は証明駒/反証駒共通の駒入出補正関数
                     if cdn == 0 {
                         let child_dp = self
                             .table
                             .get_disproof_hand(
                                 child_pk, child_hand,
                             );
-                        let adj = adjust_or_proof(
+                        let adj = adjust_hand_for_move(
                             children[i].0,
                             &child_dp,
                         );
@@ -1789,6 +1790,14 @@ impl DfPnSolver {
     /// Df-Pn は OR ノードで1つの子ノードが証明されると他を未探索のまま残す．
     /// PV 抽出で正確な最短詰み手数を計算するため，PV 上の OR ノードで
     /// 未証明の王手を追加証明する．反復的に PV を更新し収束させる．
+    ///
+    /// # 制限事項
+    ///
+    /// - 反復回数は2回固定．長手数(29手詰め等)で PV 上の未証明子が多い場合，
+    ///   2回の反復では PV が収束せず `CheckmateNoPv` になることがある．
+    ///   この場合 `pv_nodes_per_child` を増やしても改善されない．
+    /// - `extract_pv_recursive` の深度制限(`depth * 2`)により PV 復元が
+    ///   打ち切られるケースでも `CheckmateNoPv` になる(後述)．
     fn complete_or_proofs(&mut self, board: &mut Board) {
         let saved_max = self.max_nodes;
         // 証明完了フェーズのノード予算:
@@ -1893,10 +1902,16 @@ impl DfPnSolver {
     /// 各ノードで全候補手のサブPVを生成し，攻め方は最短，玉方は最長を選ぶ．
     /// ループ検出にはフルハッシュ，TT 参照には位置キー＋持ち駒を使用する．
     ///
+    /// # 深度制限
+    ///
     /// 再帰深度は `self.depth * 2` で打ち切る．OR/AND が交互に呼ばれるため，
     /// depth=31 なら最大62手の PV を復元できる．理論上，AND ノードで
     /// 複数の応手候補を評価する際に ply が詰み手数の2倍を超えうるが，
     /// TT に証明済みエントリがあれば即座に返るため，実用上は十分な深さである．
+    ///
+    /// ただし `complete_pv_or_nodes` で新たに証明された子が PV を変化させた場合，
+    /// AND ノードの応手評価で ply が急増し，深度制限に達して空リストが返ることがある．
+    /// この場合 `pv_nodes_per_child` を増やしても改善されず，`depth` の増加が必要．
     fn extract_pv_recursive(
         &self,
         board: &mut Board,
