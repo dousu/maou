@@ -1706,11 +1706,16 @@ impl DfPnSolver {
                 let captured_raw = captured_piece.0;
                 let in_promo_zone = to.is_promotion_zone(us) || from.is_promotion_zone(us);
 
+                // 開き王手の判定: to が from→king_sq のライン上にある場合，
+                // 移動後も飛び駒の利きを遮断するため開き王手にならない
+                let gives_discovered = is_discoverer
+                    && !attack::line_through(from, king_sq).contains(to);
+
                 // 成り先の駒種での王手チェック
                 if pt.can_promote() && in_promo_zone {
                     let promoted_pt = pt.promoted().unwrap();
                     let gives_direct = self.attacks_square(us, promoted_pt, to, all_occ, king_sq);
-                    if gives_direct || is_discoverer {
+                    if gives_direct || gives_discovered {
                         let m = Move::new_move(from, to, true, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
                             push_move(&mut moves, m);
@@ -1721,7 +1726,7 @@ impl DfPnSolver {
                     if !movegen::must_promote(us, pt, to) {
                         let gives_direct =
                             self.attacks_square(us, pt, to, all_occ, king_sq);
-                        if gives_direct || is_discoverer {
+                        if gives_direct || gives_discovered {
                             let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                             if self.is_legal_quick(board, m, has_own_king) {
                                 push_move(&mut moves, m);
@@ -1730,7 +1735,7 @@ impl DfPnSolver {
                     }
                 } else if !movegen::must_promote(us, pt, to) {
                     let gives_direct = self.attacks_square(us, pt, to, all_occ, king_sq);
-                    if gives_direct || is_discoverer {
+                    if gives_direct || gives_discovered {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
                         if self.is_legal_quick(board, m, has_own_king) {
                             push_move(&mut moves, m);
