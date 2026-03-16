@@ -444,6 +444,11 @@ pub struct DfPnSolver {
     /// 全 OR ノードの未証明子を追加証明し，最短手順を保証する．
     /// false の場合，最初に見つかった詰み手順をそのまま返す．
     find_shortest: bool,
+    /// PV 復元フェーズで未証明子1つあたりに割り当てるノード予算(デフォルト: 1024)．
+    ///
+    /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
+    /// この値を増やすことで PV 復元の成功率が向上する．
+    pv_nodes_per_child: u64,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
@@ -463,6 +468,7 @@ impl DfPnSolver {
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
             find_shortest: true,
+            pv_nodes_per_child: 1024,
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -485,6 +491,15 @@ impl DfPnSolver {
     /// `false` にすると最初に見つかった詰み手順をそのまま返す(高速化)．
     pub fn set_find_shortest(&mut self, v: bool) -> &mut Self {
         self.find_shortest = v;
+        self
+    }
+
+    /// PV 復元フェーズの1子あたりノード予算を設定する．
+    ///
+    /// デフォルトは 1024．長手数(17手以上)の詰将棋で
+    /// `CheckmateNoPv` が返る場合に増やすと効果的．
+    pub fn set_pv_nodes_per_child(&mut self, v: u64) -> &mut Self {
+        self.pv_nodes_per_child = v;
         self
     }
 
@@ -1777,13 +1792,14 @@ impl DfPnSolver {
     fn complete_or_proofs(&mut self, board: &mut Board) {
         let saved_max = self.max_nodes;
         // 証明完了フェーズのノード予算:
-        //   主探索ノード数と 8192 の小さい方を追加予算とする．
+        //   主探索ノード数と pv_nodes_per_child*8 の小さい方を追加予算とする．
         //   ただし短手数の詰将棋 (少ノードで解けた場合) でも PV 復元に
-        //   十分なノードを確保するため，最低 1024 ノードを保証する．
+        //   十分なノードを確保するため，最低 pv_nodes_per_child ノードを保証する．
         let mid_nodes = self.nodes_searched;
+        let budget_cap = self.pv_nodes_per_child.saturating_mul(8);
         self.max_nodes =
             self.nodes_searched.saturating_add(
-                mid_nodes.min(8192).max(1024),
+                mid_nodes.min(budget_cap).max(self.pv_nodes_per_child),
             );
 
         // 反復: PV を抽出 → PV 上の OR ノードを完成 → 再抽出
@@ -1833,14 +1849,11 @@ impl DfPnSolver {
 
                     if cpn != 0 && cdn != 0 {
                         let saved = self.max_nodes;
-                        // 1子あたり 1024 ノード上限．
+                        // 1子あたり pv_nodes_per_child ノード上限．
                         // PV 沿いの各未証明子に対する追加証明の予算．
-                        // 長手数の詰将棋では不十分な場合があり，
-                        // CheckmateNoPv が返る可能性がある．
-                        // complete_or_proofs の予算(1024〜8192)とは独立．
                         self.max_nodes = self
                             .nodes_searched
-                            .saturating_add(1024)
+                            .saturating_add(self.pv_nodes_per_child)
                             .min(saved);
                         self.mid(&mut board_clone, INF - 1, INF - 1, ply + 1, false);
                         self.max_nodes = saved;
@@ -2023,7 +2036,7 @@ pub fn solve_tsume(
     nodes: Option<u64>,
     draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
-    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None)
+    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None)
 }
 
 /// タイムアウト指定付きで詰将棋を解く便利関数．
@@ -2033,7 +2046,8 @@ pub fn solve_tsume(
 /// 詰みが証明された場合でも，PV 復元フェーズ(`complete_pv_or_nodes`)の
 /// ノード予算が不足すると [`TsumeResult::CheckmateNoPv`] が返ることがある．
 /// 特に長手数(17手以上)の詰将棋では，PV 沿いの各未証明子に対する
-/// 追加証明の1子あたり予算(1024 ノード)が不足しやすい．
+/// 追加証明の1子あたり予算(デフォルト 1024 ノード)が不足しやすい．
+/// `pv_nodes_per_child` を増やすことで改善できる．
 ///
 /// # 引数
 ///
@@ -2041,6 +2055,8 @@ pub fn solve_tsume(
 ///   false にすると `complete_or_proofs()` による追加探索をスキップし，
 ///   最初に見つかった詰み手順をそのまま返す．ノード数は削減されるが，
 ///   返される手順が最短とは限らない．
+/// - `pv_nodes_per_child`: PV 復元時の1子あたりノード予算(None でデフォルト 1024)．
+///   長手数の詰将棋で `CheckmateNoPv` が返る場合に増やすと効果的．
 pub fn solve_tsume_with_timeout(
     sfen: &str,
     depth: Option<u32>,
@@ -2048,6 +2064,7 @@ pub fn solve_tsume_with_timeout(
     draw_ply: Option<u32>,
     timeout_secs: Option<u64>,
     find_shortest: Option<bool>,
+    pv_nodes_per_child: Option<u64>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
@@ -2059,6 +2076,9 @@ pub fn solve_tsume_with_timeout(
         timeout_secs.unwrap_or(300),
     );
     solver.set_find_shortest(find_shortest.unwrap_or(true));
+    if let Some(budget) = pv_nodes_per_child {
+        solver.set_pv_nodes_per_child(budget);
+    }
 
     Ok(solver.solve(&mut board))
 }
@@ -2721,7 +2741,7 @@ mod tests {
         let mut board = Board::empty();
         board.set_sfen(sfen).unwrap();
 
-        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None).unwrap();
+        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None).unwrap();
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
@@ -3062,6 +3082,7 @@ mod tests {
         let result = solve_tsume_with_timeout(
             sfen, Some(31), Some(2_000_000), None, None,
             Some(true), // find_shortest = true
+            None,
         ).unwrap();
 
         match &result {

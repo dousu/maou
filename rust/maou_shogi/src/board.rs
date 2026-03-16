@@ -632,10 +632,8 @@ impl Board {
             (None, m.drop_piece_type().unwrap())
         } else {
             let from = m.from_sq();
-            let raw_pt = unsafe {
-                // moving_piece_type_raw は有効な PieceType 値を保証
-                std::mem::transmute::<u8, PieceType>(m.moving_piece_type_raw())
-            };
+            let raw_pt = PieceType::from_u8(m.moving_piece_type_raw())
+                .expect("Move contains invalid PieceType");
             let pt = if m.is_promotion() {
                 raw_pt.promoted().unwrap()
             } else {

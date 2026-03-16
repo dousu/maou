@@ -332,8 +332,10 @@ impl TsumeResult {
 /// - `find_shortest` (bool, optional): 最短手数探索を行うか(デフォルト true)．
 ///   false にすると追加探索をスキップし高速化するが，
 ///   返される手順が最短とは限らない．
+/// - `pv_nodes_per_child` (int, optional): PV 復元時の1子あたりノード予算(デフォルト 1024)．
+///   長手数の詰将棋で `checkmate_no_pv` が返る場合に増やすと効果的．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true))]
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024))]
 fn solve_tsume(
     py: Python<'_>,
     sfen: &str,
@@ -342,6 +344,7 @@ fn solve_tsume(
     draw_ply: u32,
     timeout_secs: u64,
     find_shortest: bool,
+    pv_nodes_per_child: u64,
 ) -> PyResult<TsumeResult> {
     let sfen_owned = sfen.to_owned();
     let result = py.detach(move || {
@@ -352,6 +355,7 @@ fn solve_tsume(
             Some(draw_ply),
             Some(timeout_secs),
             Some(find_shortest),
+            Some(pv_nodes_per_child),
         )
     })
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
