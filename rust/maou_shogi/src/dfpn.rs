@@ -3001,6 +3001,45 @@ mod tests {
         }
     }
 
+    /// 39手詰めの高難度テスト(6九への合駒が必要)．
+    ///
+    /// 後手の合駒選択が鍵となる局面．6九に合駒を打つ必要があるが，
+    /// 歩・桂・香は打てない(二歩・行き所のない駒)ため，
+    /// 金・銀・飛・角のみが候補となる．
+    /// 後手の最善応手(最長抵抗)でのみ39手詰めとなる．
+    #[test]
+    #[ignore] // 現状のソルバーでは 500M ノード / 10 分でも解けない超重量テスト
+    fn test_tsume_39te_aigoma() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver =
+            DfPnSolver::with_timeout(63, 500_000_000, 32767, 600);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched: _,
+            } => {
+                let pv: Vec<String> =
+                    moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    pv.len(),
+                    39,
+                    "expected 39-move checkmate, got {} moves: {}",
+                    pv.len(),
+                    pv.join(" ")
+                );
+            }
+            other => panic!(
+                "expected Checkmate for 39te aigoma, got {:?}",
+                other
+            ),
+        }
+    }
+
     /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
     ///
     /// complete_or_proofs 中の mid() が転置により証明済み TT エントリを
