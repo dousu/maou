@@ -1995,12 +1995,10 @@ impl DfPnSolver {
     ///   玉が取り返せるため無駄合いではない
     /// - それ以外は無駄合い(チェッカーに取られて再び同筋の王手になる)
     ///
-    /// 注: 攻め方のチェッカー以外の駒が合い駒マスに利いているかの追加チェックは
-    /// 行っていない．チェッカー(飛び駒)が between マス全体に利いているため，
-    /// 守備側がひもをつけていなければチェッカーに取られて無駄合いになる．
-    /// 攻め方の他駒の利きは取り合いの深さに影響するが，
-    /// 詰将棋では駒の価値ではなく詰みの有無が問題であり，
-    /// 現状のロジックで合法手の見落としは発生しない(枝刈り漏れのみ)．
+    /// ただし中合い(ちゅうあい)チェーン防御を考慮する:
+    /// マス X が上記基準で無駄合いでも，X と玉の間に非無駄合いマスが存在すれば，
+    /// X への駒打ちは「捨て合い→チェッカー前進→…→非無駄合いマスでブロック」
+    /// のチェーン防御の起点となり得るため，無駄合いとは判定しない．
     fn compute_futile_squares(
         &self,
         board: &Board,
@@ -2030,6 +2028,36 @@ impl DfPnSolver {
             }
             futile.set(sq);
         }
+
+        // 中合いチェーン伝搬: 玉側から走査し，非無駄合いマスを発見したら
+        // それより遠い(チェッカー側の)無駄合いマスをすべて解除する．
+        // 理由: チェッカーが合い駒を取って前進するたびに between が縮小し，
+        // 最終的に非無駄合いマスに到達するため，手前の合い駒も有効な防御となる．
+        if futile.is_not_empty() && futile != *between {
+            // checker→king 方向ベクトル
+            let dc = (king_sq.col() as i32 - checker_sq.col() as i32).signum();
+            let dr = (king_sq.row() as i32 - checker_sq.row() as i32).signum();
+            // king→checker 方向に走査(dc,dr を反転)
+            let step_c = -dc;
+            let step_r = -dr;
+            let mut c = king_sq.col() as i32 + step_c;
+            let mut r = king_sq.row() as i32 + step_r;
+            let mut has_non_futile = false;
+            while c >= 0 && c < 9 && r >= 0 && r < 9 {
+                let sq = Square::new(c as u8, r as u8);
+                if !between.contains(sq) {
+                    break;
+                }
+                if !futile.contains(sq) {
+                    has_non_futile = true;
+                } else if has_non_futile {
+                    futile.clear(sq);
+                }
+                c += step_c;
+                r += step_r;
+            }
+        }
+
         futile
     }
 
@@ -3766,5 +3794,77 @@ mod tests {
                 budget, wall_ms, nodes_searched, nps,
                 sm.static_mate_count, hit_pct, status);
         }
+    }
+
+    /// 中合い(ちゅうあい)によって不詰みになる局面のテスト．
+    ///
+    /// 飛び駒の王手に対して持ち駒を間に打つ中合いが有効で，
+    /// 詰みが成立しないことを検証する．
+    #[test]
+    fn test_chuai_no_checkmate() {
+        // 中合いによって詰まない局面
+        let sfen = "9/3+N1P3/2+R3p2/8k/8N/5+B3/4S4/1R1p5/9 b NPb4g3sn4l14p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        assert!(
+            !matches!(result, TsumeResult::Checkmate { .. }),
+            "中合いにより不詰みのはず: {:?}",
+            result
+        );
+    }
+
+    /// 8h8d 王手後の AND ノードで中合い(P*7d)が回避手に含まれることを確認．
+    ///
+    /// 合い効かずフィルタが P*7d を誤って除外していないかの診断テスト．
+    #[test]
+    fn test_chuai_defense_includes_pawn_drop() {
+        let sfen = "9/3+N1P3/2+R3p2/8k/8N/5+B3/4S4/1R1p5/9 b NPb4g3sn4l14p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        // 攻め方: 8h8d (飛車8八→8四)
+        let m = board.move_from_usi("8h8d").unwrap();
+        board.do_move(m);
+
+        // AND ノード: 後手の回避手を生成
+        let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+        let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
+
+        // 全合法手と比較
+        let legal = movegen::generate_legal_moves(&mut board);
+        let usi_legal: Vec<String> = legal.iter().map(|m| m.to_usi()).collect();
+
+        // P*7d が合法手に含まれること
+        assert!(
+            usi_legal.contains(&"P*7d".to_string()),
+            "P*7d should be a legal move, got: {:?}", usi_legal
+        );
+
+        // P*7d が回避手にも含まれること(合い効かずで除外されていないこと)
+        assert!(
+            usi_defenses.contains(&"P*7d".to_string()),
+            "P*7d should be in defense moves (中合い), but was filtered out.\n\
+             defense moves: {:?}\n\
+             legal moves: {:?}",
+            usi_defenses, usi_legal
+        );
+    }
+
+    /// 中合い発生後の局面が不詰みであることを確認するテスト．
+    ///
+    /// 上記 `test_chuai_no_checkmate` の局面で中合いが行われた後の
+    /// 状態を直接与え，攻め方から探索しても詰みがないことを検証する．
+    #[test]
+    fn test_chuai_position_after_block() {
+        // 中合いが発生した後の局面(不詰み)
+        let sfen = "9/3+N1P3/2+R3p2/1Rp5k/8N/5+B3/4S4/3p5/9 b NPb4g3sn4l13p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+
+        assert!(
+            !matches!(result, TsumeResult::Checkmate { .. }),
+            "中合い後の局面は不詰みのはず: {:?}",
+            result
+        );
     }
 }
