@@ -118,6 +118,12 @@ pub struct ProfileStats {
     pub main_loop_collect_ns: u64,
     /// メインループの pn/dn 収集回数．
     pub main_loop_collect_count: u64,
+    /// TT エントリ溢れ(置換)の発生回数．
+    pub tt_overflow_count: u64,
+    /// TT エントリ溢れで置換対象が見つからなかった回数．
+    pub tt_overflow_no_victim_count: u64,
+    /// TT エントリ数の最大値(1局面あたり)．
+    pub tt_max_entries_per_position: usize,
 }
 
 #[cfg(feature = "profile")]
@@ -174,13 +180,22 @@ impl std::fmt::Display for ProfileStats {
                 self.static_mate_count,
                 self.static_mate_hits as f64 / self.static_mate_count as f64 * 100.0)?;
         }
+        if self.tt_overflow_count > 0 || self.tt_max_entries_per_position > 0 {
+            writeln!(f, "  tt_overflow: {} (no_victim: {}), max_entries/pos: {}",
+                self.tt_overflow_count,
+                self.tt_overflow_no_victim_count,
+                self.tt_max_entries_per_position)?;
+        }
         Ok(())
     }
 }
 
 /// 同一盤面ハッシュあたりの TT エントリ上限．
-/// 異なる持ち駒構成が大量に登録されることを防ぐ．
-const MAX_TT_ENTRIES_PER_POSITION: usize = 64;
+///
+/// 支配関係(パレートフロンティア)による圧縮により，証明・反証エントリは
+/// 互いに比較不能な持ち駒構成のみ保持される．そのため上限に達することは
+/// 稀であり，主に中間エントリの蓄積を制限する安全弁として機能する．
+const MAX_TT_ENTRIES_PER_POSITION: usize = 16;
 
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
 ///
@@ -249,6 +264,15 @@ struct DfPnEntry {
 /// - 反証済み(dn=0): 登録時の持ち駒 >= 現在の持ち駒 → 再利用
 struct TranspositionTable {
     tt: FxHashMap<u64, Vec<DfPnEntry>>,
+    /// TT エントリ溢れ(置換)の発生回数．
+    #[cfg(feature = "profile")]
+    overflow_count: u64,
+    /// TT エントリ溢れで置換対象が見つからなかった回数(全て証明/反証済み)．
+    #[cfg(feature = "profile")]
+    overflow_no_victim_count: u64,
+    /// 1局面あたりのエントリ数の最大値．
+    #[cfg(feature = "profile")]
+    max_entries_per_position: usize,
 }
 
 impl TranspositionTable {
@@ -259,6 +283,12 @@ impl TranspositionTable {
                 65536,
                 Default::default(),
             ),
+            #[cfg(feature = "profile")]
+            overflow_count: 0,
+            #[cfg(feature = "profile")]
+            overflow_no_victim_count: 0,
+            #[cfg(feature = "profile")]
+            max_entries_per_position: 0,
         }
     }
 
@@ -310,7 +340,15 @@ impl TranspositionTable {
         exact_match.unwrap_or((1, 1))
     }
 
-    /// 転置表を更新する．
+    /// 転置表を更新する(支配関係によるパレートフロンティア維持)．
+    ///
+    /// 証明済み・反証済みエントリは持ち駒の半順序(`hand_gte`)に基づく
+    /// 支配関係を利用し，冗長なエントリを自動的に除去する:
+    ///
+    /// - **証明(pn=0)**: 持ち駒が少ないほど強い証明(パレート最小集合を保持)．
+    ///   `hand_new ≤ hand_existing` なら既存は不要．
+    /// - **反証(dn=0)**: 持ち駒が多いほど強い反証(パレート最大集合を保持)．
+    ///   `hand_new ≥ hand_existing` かつ `remaining_new ≥ remaining_existing` なら既存は不要．
     ///
     /// # 引数
     ///
@@ -328,16 +366,66 @@ impl TranspositionTable {
         let entries =
             self.tt.entry(pos_key).or_default();
 
+        // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
+        for e in entries.iter() {
+            // 証明済みエントリが支配: hand ≥ e.hand → 新エントリの持ち駒で詰み確定
+            if e.pn == 0 && hand_gte(&hand, &e.hand) {
+                return;
+            }
+            // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
+            if e.dn == 0
+                && hand_gte(&e.hand, &hand)
+                && e.remaining >= remaining
+            {
+                return;
+            }
+        }
+
+        if pn == 0 {
+            // === 証明済みエントリの挿入 ===
+            // パレートフロンティア(最小持ち駒集合)を維持:
+            // 新証明に支配される既存エントリを除去する．
+            // - 証明済み: e.hand ≥ hand → より多い持ち駒での証明は冗長
+            // - 中間: e.hand ≥ hand → lookup 時に新証明がヒットするため不要
+            entries.retain(|e| {
+                // 反証済みは保護(証明と反証は異なる持ち駒領域で共存しうる)
+                if e.dn == 0 {
+                    return true;
+                }
+                !hand_gte(&e.hand, &hand)
+            });
+            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            return;
+        }
+
+        if dn == 0 {
+            // === 反証済みエントリの挿入 ===
+            // パレートフロンティア(最大持ち駒 × 最大remaining 集合)を維持:
+            // 新反証に支配される既存エントリを除去する．
+            entries.retain(|e| {
+                // 証明済みは保護
+                if e.pn == 0 {
+                    return true;
+                }
+                if e.dn == 0 {
+                    // 反証: e.hand ≤ hand かつ e.remaining ≤ remaining → 冗長
+                    return !(hand_gte(&hand, &e.hand)
+                        && remaining >= e.remaining);
+                }
+                // 中間エントリは保護(remaining の不一致で必要になりうる)
+                true
+            });
+            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            return;
+        }
+
+        // === 中間エントリ(pn > 0, dn > 0)の挿入 ===
+
         // 同一持ち駒の既存エントリを更新
         for e in entries.iter_mut() {
             if e.hand == hand {
-                // 証明済み(pn=0)エントリは常に保護する．
-                if e.pn == 0 && pn != 0 {
-                    return;
-                }
-                // 反証済み(dn=0)エントリは，より深い探索でのみ上書き可能．
-                // remaining > e.remaining の場合，既存の反証はより浅い探索の結果
-                // であり，深い探索で詰みが見つかる可能性がある．
+                // 証明済み(pn=0)は上の共通チェックで return 済み
+                // 反証済み(dn=0)はより深い探索でのみ上書き可能
                 if e.dn == 0 && remaining <= e.remaining {
                     return;
                 }
@@ -348,7 +436,7 @@ impl TranspositionTable {
             }
         }
 
-        // 新規エントリを追加(同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
+        // 新規エントリを追加
         if entries.len() < MAX_TT_ENTRIES_PER_POSITION {
             entries.push(DfPnEntry {
                 hand,
@@ -356,17 +444,23 @@ impl TranspositionTable {
                 dn,
                 remaining,
             });
+            #[cfg(feature = "profile")]
+            {
+                if entries.len() > self.max_entries_per_position {
+                    self.max_entries_per_position = entries.len();
+                }
+            }
         } else {
+            #[cfg(feature = "profile")]
+            { self.overflow_count += 1; }
             // 上限到達時: 証明/反証済みエントリを保護しつつ，
             // 「最も未解決な」(|pn - dn| が最小の)エントリを置換する．
             let mut worst_idx: Option<usize> = None;
             let mut worst_score: u64 = u64::MAX;
             for (i, e) in entries.iter().enumerate() {
-                // 証明済み(pn=0)・反証済み(dn=0)は保護
                 if e.pn == 0 || e.dn == 0 {
                     continue;
                 }
-                // |pn - dn| が小さいほど不確定(置換優先度が高い)
                 let score = if e.pn > e.dn {
                     (e.pn - e.dn) as u64
                 } else {
@@ -379,6 +473,9 @@ impl TranspositionTable {
             }
             if let Some(idx) = worst_idx {
                 entries[idx] = DfPnEntry { hand, pn, dn, remaining };
+            } else {
+                #[cfg(feature = "profile")]
+                { self.overflow_no_victim_count += 1; }
             }
         }
     }
@@ -426,6 +523,14 @@ impl TranspositionTable {
     /// 全エントリをクリアする．
     fn clear(&mut self) {
         self.tt.clear();
+    }
+
+    /// プロファイル統計をリセットする．
+    #[cfg(feature = "profile")]
+    fn reset_profile(&mut self) {
+        self.overflow_count = 0;
+        self.overflow_no_victim_count = 0;
+        self.max_entries_per_position = 0;
     }
 }
 
@@ -576,6 +681,18 @@ impl DfPnSolver {
         self
     }
 
+    /// TT のプロファイル統計を `profile_stats` に転記する．
+    ///
+    /// `solve()` 完了後に呼ぶことで，TT エントリ溢れ統計を確認できる．
+    #[cfg(feature = "profile")]
+    pub fn sync_tt_profile(&mut self) {
+        self.profile_stats.tt_overflow_count = self.table.overflow_count;
+        self.profile_stats.tt_overflow_no_victim_count =
+            self.table.overflow_no_victim_count;
+        self.profile_stats.tt_max_entries_per_position =
+            self.table.max_entries_per_position;
+    }
+
     /// タイムアウトしたかどうかを返す．
     #[inline]
     fn is_timed_out(&self) -> bool {
@@ -652,6 +769,7 @@ impl DfPnSolver {
         #[cfg(feature = "profile")]
         {
             self.profile_stats = ProfileStats::default();
+            self.table.reset_profile();
         }
 
         // 単一パス Df-Pn: 反復深化なしで全深さを一度に探索．
@@ -3583,6 +3701,7 @@ mod tests {
                 let start = std::time::Instant::now();
                 let result = solver.solve(&mut board);
                 let wall_time = start.elapsed();
+                solver.sync_tt_profile();
 
                 let nodes_searched = match &result {
                     TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
@@ -3597,9 +3716,10 @@ mod tests {
                     sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
                 } else { 0.0 };
 
-                println!("{:<20} {:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>7.1}%",
+                println!("{:<20} {:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>7.1}%  overflow:{} max_e:{}",
                     name, budget, wall_ms, nodes_searched, nps,
-                    sm.static_mate_count, hit_pct);
+                    sm.static_mate_count, hit_pct,
+                    sm.tt_overflow_count, sm.tt_max_entries_per_position);
             }
         }
     }
