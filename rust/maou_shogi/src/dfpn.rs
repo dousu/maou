@@ -104,14 +104,12 @@ pub struct ProfileStats {
     pub child_init_ns: u64,
     /// 子ノード初期化の呼び出し回数．
     pub child_init_count: u64,
-    /// 子ノード初期化内の1手詰め判定の累積時間(ナノ秒)．
-    pub mate1_ns: u64,
-    /// 1手詰め判定の呼び出し回数．
-    pub mate1_count: u64,
-    /// 子ノード初期化内の3手詰め判定の累積時間(ナノ秒)．
-    pub mate3_ns: u64,
-    /// 3手詰め判定の呼び出し回数．
-    pub mate3_count: u64,
+    /// 子ノード初期化内の静的詰め探索(予算制)の累積時間(ナノ秒)．
+    pub static_mate_ns: u64,
+    /// 静的詰め探索の呼び出し回数．
+    pub static_mate_count: u64,
+    /// 静的詰め探索で詰みを検出した回数．
+    pub static_mate_hits: u64,
     /// 子ノード初期化内の do_move/undo_move の累積時間(ナノ秒)．
     pub child_init_domove_ns: u64,
     /// 子ノード初期化内の do_move/undo_move の呼び出し回数．
@@ -120,6 +118,12 @@ pub struct ProfileStats {
     pub main_loop_collect_ns: u64,
     /// メインループの pn/dn 収集回数．
     pub main_loop_collect_count: u64,
+    /// TT エントリ溢れ(置換)の発生回数．
+    pub tt_overflow_count: u64,
+    /// TT エントリ溢れで置換対象が見つからなかった回数．
+    pub tt_overflow_no_victim_count: u64,
+    /// TT エントリ数の最大値(1局面あたり)．
+    pub tt_max_entries_per_position: usize,
 }
 
 #[cfg(feature = "profile")]
@@ -152,8 +156,7 @@ impl std::fmt::Display for ProfileStats {
             ("do_move", self.do_move_ns, self.do_move_count),
             ("undo_move", self.undo_move_ns, self.undo_move_count),
             ("child_init", self.child_init_ns, self.child_init_count),
-            ("  mate1", self.mate1_ns, self.mate1_count),
-            ("  mate3", self.mate3_ns, self.mate3_count),
+            ("  static_mate", self.static_mate_ns, self.static_mate_count),
             ("  child_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
             ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
         ];
@@ -171,13 +174,28 @@ impl std::fmt::Display for ProfileStats {
         }
         writeln!(f, "{}", "-".repeat(65))?;
         writeln!(f, "{:<25} {:>12.1}", "Total measured", total_us)?;
+        if self.static_mate_count > 0 {
+            writeln!(f, "  static_mate hits: {} / {} ({:.1}%)",
+                self.static_mate_hits,
+                self.static_mate_count,
+                self.static_mate_hits as f64 / self.static_mate_count as f64 * 100.0)?;
+        }
+        if self.tt_overflow_count > 0 || self.tt_max_entries_per_position > 0 {
+            writeln!(f, "  tt_overflow: {} (no_victim: {}), max_entries/pos: {}",
+                self.tt_overflow_count,
+                self.tt_overflow_no_victim_count,
+                self.tt_max_entries_per_position)?;
+        }
         Ok(())
     }
 }
 
 /// 同一盤面ハッシュあたりの TT エントリ上限．
-/// 異なる持ち駒構成が大量に登録されることを防ぐ．
-const MAX_TT_ENTRIES_PER_POSITION: usize = 64;
+///
+/// 支配関係(パレートフロンティア)による圧縮により，証明・反証エントリは
+/// 互いに比較不能な持ち駒構成のみ保持される．そのため上限に達することは
+/// 稀であり，主に中間エントリの蓄積を制限する安全弁として機能する．
+const MAX_TT_ENTRIES_PER_POSITION: usize = 16;
 
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
 ///
@@ -216,15 +234,23 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
+/// 深さ制限なし(真の証明/反証)を示す定数．
+const REMAINING_INFINITE: u16 = u16::MAX;
+
 /// 転置表のエントリ(証明駒/反証駒対応)．
 ///
 /// - hand: 登録時の攻め方の持ち駒(証明駒/反証駒として使用)
 /// - pn, dn: 証明数・反証数
+/// - remaining: 登録時の残り探索深さ(`depth - ply`)．
+///   `REMAINING_INFINITE` は深さ制限なし(真の証明/反証)を示す．
+///   深さ制限による不詰(`dn=0`)は `remaining` が有限値となり，
+///   より深い探索で再評価可能になる．
 #[derive(Debug, Clone, Copy)]
 struct DfPnEntry {
     hand: [u8; HAND_KINDS],
     pn: u32,
     dn: u32,
+    remaining: u16,
 }
 
 /// HashMap ベースの転置表(証明駒/反証駒対応)．
@@ -238,6 +264,15 @@ struct DfPnEntry {
 /// - 反証済み(dn=0): 登録時の持ち駒 >= 現在の持ち駒 → 再利用
 struct TranspositionTable {
     tt: FxHashMap<u64, Vec<DfPnEntry>>,
+    /// TT エントリ溢れ(置換)の発生回数．
+    #[cfg(feature = "profile")]
+    overflow_count: u64,
+    /// TT エントリ溢れで置換対象が見つからなかった回数(全て証明/反証済み)．
+    #[cfg(feature = "profile")]
+    overflow_no_victim_count: u64,
+    /// 1局面あたりのエントリ数の最大値．
+    #[cfg(feature = "profile")]
+    max_entries_per_position: usize,
 }
 
 impl TranspositionTable {
@@ -248,20 +283,32 @@ impl TranspositionTable {
                 65536,
                 Default::default(),
             ),
+            #[cfg(feature = "profile")]
+            overflow_count: 0,
+            #[cfg(feature = "profile")]
+            overflow_no_victim_count: 0,
+            #[cfg(feature = "profile")]
+            max_entries_per_position: 0,
         }
     }
 
     /// 転置表を参照する(証明駒/反証駒の優越関係を利用)．
     ///
     /// 1. 証明済みエントリ: 現在の持ち駒 >= 登録時 → (0, dn) を返す
-    /// 2. 反証済みエントリ: 登録時の持ち駒 >= 現在 → (pn, 0) を返す
+    /// 2. 反証済みエントリ: 登録時の持ち駒 >= 現在 かつ 十分な探索深さ → (pn, 0) を返す
     /// 3. 持ち駒完全一致: そのまま返す
     /// 4. 該当なし: (1, 1) を返す
+    ///
+    /// # 引数
+    ///
+    /// - `remaining`: 呼び出し元の残り探索深さ．反証済みエントリの有効性判定に使用．
+    ///   `0` を指定すると全ての反証済みエントリを受け入れる(事後クエリ用)．
     #[inline(always)]
     fn look_up(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
+        remaining: u16,
     ) -> (u32, u32) {
         let entries = match self.tt.get(&pos_key) {
             Some(e) => e,
@@ -271,12 +318,17 @@ impl TranspositionTable {
         let mut exact_match: Option<(u32, u32)> = None;
 
         for e in entries {
-            // 証明済み: 持ち駒が多い(以上)なら再利用
+            // 証明済み: 持ち駒が多い(以上)なら再利用(深さ不問)
             if e.pn == 0 && hand_gte(hand, &e.hand) {
                 return (0, e.dn);
             }
-            // 反証済み: 持ち駒が少ない(以下)なら再利用
-            if e.dn == 0 && hand_gte(&e.hand, hand) {
+            // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
+            // e.remaining < remaining の場合，より深い探索で詰みが
+            // 見つかる可能性があるため再利用しない．
+            if e.dn == 0
+                && hand_gte(&e.hand, hand)
+                && e.remaining >= remaining
+            {
                 return (e.pn, 0);
             }
             // 完全一致
@@ -288,7 +340,20 @@ impl TranspositionTable {
         exact_match.unwrap_or((1, 1))
     }
 
-    /// 転置表を更新する．
+    /// 転置表を更新する(支配関係によるパレートフロンティア維持)．
+    ///
+    /// 証明済み・反証済みエントリは持ち駒の半順序(`hand_gte`)に基づく
+    /// 支配関係を利用し，冗長なエントリを自動的に除去する:
+    ///
+    /// - **証明(pn=0)**: 持ち駒が少ないほど強い証明(パレート最小集合を保持)．
+    ///   `hand_new ≤ hand_existing` なら既存は不要．
+    /// - **反証(dn=0)**: 持ち駒が多いほど強い反証(パレート最大集合を保持)．
+    ///   `hand_new ≥ hand_existing` かつ `remaining_new ≥ remaining_existing` なら既存は不要．
+    ///
+    /// # 引数
+    ///
+    /// - `remaining`: 登録時の残り探索深さ．
+    ///   `REMAINING_INFINITE` は深さ制限なし(真の証明/反証)を示す．
     #[inline(always)]
     fn store(
         &mut self,
@@ -296,35 +361,122 @@ impl TranspositionTable {
         hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
         let entries =
             self.tt.entry(pos_key).or_default();
 
-        // 同一持ち駒の既存エントリを更新
-        for e in entries.iter_mut() {
-            if e.hand == hand {
-                // 証明済み(pn=0)・反証済み(dn=0)エントリを上書きしない．
-                // complete_or_proofs 中の mid() が転置により同じ局面に到達し，
-                // 深さ制限で(INF, 0)を書き込むと証明済みエントリが破壊される．
-                // 反証済みエントリも同様に保護する．
-                if (e.pn == 0 && pn != 0) || (e.dn == 0 && dn != 0) {
-                    return;
-                }
-                e.pn = pn;
-                e.dn = dn;
+        // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
+        for e in entries.iter() {
+            // 証明済みエントリが支配: hand ≥ e.hand → 新エントリの持ち駒で詰み確定
+            if e.pn == 0 && hand_gte(&hand, &e.hand) {
+                return;
+            }
+            // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
+            if e.dn == 0
+                && hand_gte(&e.hand, &hand)
+                && e.remaining >= remaining
+            {
                 return;
             }
         }
 
-        // 新規エントリを追加(同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
+        if pn == 0 {
+            // === 証明済みエントリの挿入 ===
+            // パレートフロンティア(最小持ち駒集合)を維持:
+            // 新証明に支配される既存エントリを除去する．
+            // - 証明済み: e.hand ≥ hand → より多い持ち駒での証明は冗長
+            // - 中間: e.hand ≥ hand → lookup 時に新証明がヒットするため不要
+            entries.retain(|e| {
+                // 反証済みは保護(証明と反証は異なる持ち駒領域で共存しうる)
+                if e.dn == 0 {
+                    return true;
+                }
+                !hand_gte(&e.hand, &hand)
+            });
+            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            return;
+        }
+
+        if dn == 0 {
+            // === 反証済みエントリの挿入 ===
+            // パレートフロンティア(最大持ち駒 × 最大remaining 集合)を維持:
+            // 新反証に支配される既存エントリを除去する．
+            entries.retain(|e| {
+                // 証明済みは保護
+                if e.pn == 0 {
+                    return true;
+                }
+                if e.dn == 0 {
+                    // 反証: e.hand ≤ hand かつ e.remaining ≤ remaining → 冗長
+                    return !(hand_gte(&hand, &e.hand)
+                        && remaining >= e.remaining);
+                }
+                // 中間エントリは保護(remaining の不一致で必要になりうる)
+                true
+            });
+            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            return;
+        }
+
+        // === 中間エントリ(pn > 0, dn > 0)の挿入 ===
+
+        // 同一持ち駒の既存エントリを更新
+        for e in entries.iter_mut() {
+            if e.hand == hand {
+                // 証明済み(pn=0)は上の共通チェックで return 済み
+                // 反証済み(dn=0)はより深い探索でのみ上書き可能
+                if e.dn == 0 && remaining <= e.remaining {
+                    return;
+                }
+                e.pn = pn;
+                e.dn = dn;
+                e.remaining = remaining;
+                return;
+            }
+        }
+
+        // 新規エントリを追加
         if entries.len() < MAX_TT_ENTRIES_PER_POSITION {
-            entries.push(DfPnEntry { hand, pn, dn });
+            entries.push(DfPnEntry {
+                hand,
+                pn,
+                dn,
+                remaining,
+            });
+            #[cfg(feature = "profile")]
+            {
+                if entries.len() > self.max_entries_per_position {
+                    self.max_entries_per_position = entries.len();
+                }
+            }
         } else {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "TT: MAX_TT_ENTRIES_PER_POSITION ({}) reached, entry dropped (hand={:?}, pn={}, dn={})",
-                MAX_TT_ENTRIES_PER_POSITION, hand, pn, dn
-            );
+            #[cfg(feature = "profile")]
+            { self.overflow_count += 1; }
+            // 上限到達時: 証明/反証済みエントリを保護しつつ，
+            // 「最も未解決な」(|pn - dn| が最小の)エントリを置換する．
+            let mut worst_idx: Option<usize> = None;
+            let mut worst_score: u64 = u64::MAX;
+            for (i, e) in entries.iter().enumerate() {
+                if e.pn == 0 || e.dn == 0 {
+                    continue;
+                }
+                let score = if e.pn > e.dn {
+                    (e.pn - e.dn) as u64
+                } else {
+                    (e.dn - e.pn) as u64
+                };
+                if score < worst_score {
+                    worst_score = score;
+                    worst_idx = Some(i);
+                }
+            }
+            if let Some(idx) = worst_idx {
+                entries[idx] = DfPnEntry { hand, pn, dn, remaining };
+            } else {
+                #[cfg(feature = "profile")]
+                { self.overflow_no_victim_count += 1; }
+            }
         }
     }
 
@@ -371,6 +523,14 @@ impl TranspositionTable {
     /// 全エントリをクリアする．
     fn clear(&mut self) {
         self.tt.clear();
+    }
+
+    /// プロファイル統計をリセットする．
+    #[cfg(feature = "profile")]
+    fn reset_profile(&mut self) {
+        self.overflow_count = 0;
+        self.overflow_no_victim_count = 0;
+        self.max_entries_per_position = 0;
     }
 }
 
@@ -450,6 +610,13 @@ pub struct DfPnSolver {
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
     /// この値を増やすことで PV 復元の成功率が向上する．
     pv_nodes_per_child: u64,
+    /// 静的詰め探索の1子あたりのノード予算．
+    ///
+    /// 子ノード初期化時に，Df-Pn のオーバーヘッドなしで
+    /// 再帰的に N 手詰めを検出する．予算を使い切ると探索を打ち切る．
+    /// 0 にすると静的詰め探索を無効化し，インライン1手・3手詰め判定のみ行う．
+    /// デフォルトは 0(無効)．
+    mate_budget: u32,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
@@ -470,6 +637,7 @@ impl DfPnSolver {
             timeout: Duration::from_secs(timeout_secs),
             find_shortest: true,
             pv_nodes_per_child: 1024,
+            mate_budget: 0,
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -504,6 +672,27 @@ impl DfPnSolver {
         self
     }
 
+    /// 静的詰め探索のノード予算を設定する．
+    ///
+    /// 0 にすると静的詰め探索を無効化し，インライン1手・3手詰め判定のみ行う．
+    /// デフォルトは 0(無効)．
+    pub fn set_mate_budget(&mut self, v: u32) -> &mut Self {
+        self.mate_budget = v;
+        self
+    }
+
+    /// TT のプロファイル統計を `profile_stats` に転記する．
+    ///
+    /// `solve()` 完了後に呼ぶことで，TT エントリ溢れ統計を確認できる．
+    #[cfg(feature = "profile")]
+    pub fn sync_tt_profile(&mut self) {
+        self.profile_stats.tt_overflow_count = self.table.overflow_count;
+        self.profile_stats.tt_overflow_no_victim_count =
+            self.table.overflow_no_victim_count;
+        self.profile_stats.tt_max_entries_per_position =
+            self.table.max_entries_per_position;
+    }
+
     /// タイムアウトしたかどうかを返す．
     #[inline]
     fn is_timed_out(&self) -> bool {
@@ -511,13 +700,16 @@ impl DfPnSolver {
     }
 
     /// 転置表を参照する(位置キー＋持ち駒指定)．
+    ///
+    /// `remaining` は反証済みエントリの有効性判定に使用する．
     #[inline]
     fn look_up_pn_dn(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
+        remaining: u16,
     ) -> (u32, u32) {
-        self.table.look_up(pos_key, hand)
+        self.table.look_up(pos_key, hand, remaining)
     }
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
@@ -528,16 +720,20 @@ impl DfPnSolver {
         hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
-        self.table.store(pos_key, hand, pn, dn);
+        self.table.store(pos_key, hand, pn, dn, remaining);
     }
 
-    /// 転置表を参照する(盤面から自動計算)．
+    /// 転置表を参照する(盤面から自動計算，事後クエリ用)．
+    ///
+    /// `remaining = 0` で全エントリを受け入れる．
+    /// PV 抽出や結果確認など，探索外での参照に使用する．
     #[inline]
     fn look_up_board(&self, board: &Board) -> (u32, u32) {
         let pk = position_key(board);
         let hand = &board.hand[self.attacker.index()];
-        self.table.look_up(pk, hand)
+        self.table.look_up(pk, hand, 0)
     }
 
     /// 転置表を更新する(盤面から自動計算)．
@@ -547,10 +743,11 @@ impl DfPnSolver {
         board: &Board,
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
-        self.table.store(pk, hand, pn, dn);
+        self.table.store(pk, hand, pn, dn, remaining);
     }
 
     /// 詰将棋を解く(反復深化 Df-Pn)．
@@ -572,6 +769,7 @@ impl DfPnSolver {
         #[cfg(feature = "profile")]
         {
             self.profile_stats = ProfileStats::default();
+            self.table.reset_profile();
         }
 
         // 単一パス Df-Pn: 反復深化なしで全深さを一度に探索．
@@ -683,10 +881,13 @@ impl DfPnSolver {
             return;
         }
 
+        // 残り探索深さ
+        let remaining = self.depth.saturating_sub(ply) as u16;
+
         // TT 参照: 既に閾値を超えている/証明済み/反証済みなら
         // 手生成をスキップして早期 return
         let (tt_pn, tt_dn) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
-            self.look_up_pn_dn(pos_key, &att_hand));
+            self.look_up_pn_dn(pos_key, &att_hand, remaining));
         if tt_pn == 0 || tt_dn == 0 {
             return;
         }
@@ -697,11 +898,12 @@ impl DfPnSolver {
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
             // 実際の持ち駒で不詰を記録する．
+            // remaining = 0 で記録し，より深い探索での上書きを許可する．
             // PieceType::MAX_HAND_COUNT で保存すると，任意の持ち駒で不詰と扱われ，
             // 同じ局面が浅い ply で到達されたときも不詰として誤判定される．
             // att_hand を使うことで，持ち駒が異なる経路からの
             // 再到達時に TT ヒットせず，正しく再探索される．
-            self.store(pos_key, att_hand, INF, 0);
+            self.store(pos_key, att_hand, INF, 0, 0);
             return;
         }
 
@@ -720,7 +922,8 @@ impl DfPnSolver {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
                 // PieceType::MAX_HAND_COUNT ではなく実際の持ち駒を使用する．
-                self.store(pos_key, att_hand, INF, 0);
+                // 真の終端条件なので REMAINING_INFINITE を使用する．
+                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
@@ -728,6 +931,7 @@ impl DfPnSolver {
                     [0; HAND_KINDS],
                     0,
                     INF,
+                    REMAINING_INFINITE,
                 );
             }
             return;
@@ -756,105 +960,193 @@ impl DfPnSolver {
                 self.profile_stats.child_init_domove_count += 1;
             }
 
+            let child_remaining = remaining.saturating_sub(1);
             let (cpn, cdn) =
-                self.look_up_pn_dn(child_pk, &child_hand);
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if cpn == 1 && cdn == 1 {
+                #[cfg(feature = "profile")]
+                let _static_mate_start = Instant::now();
+                #[cfg(feature = "profile")]
+                let mut _sm_hit = false;
+
                 if or_node {
-                    // 1手詰め判定: has_any_defense で高速判定
-                    #[cfg(feature = "profile")]
-                    let _mate1_start = Instant::now();
-                    let has_defense = self.has_any_defense(board);
-                    #[cfg(feature = "profile")]
+                    // OR ノードの子(AND 局面): 静的詰め判定
+                    // remaining が budget に対して大きすぎる場合は呼び出しを
+                    // スキップする(Exhausted になるだけで NPS を浪費するため)．
+                    //
+                    // 閾値 budget * 2 + 1 の根拠: static_mate は TT ヒット時に
+                    // budget を消費しないため，DFPN 本体が蓄積した TT エントリを
+                    // 活用すれば budget の約2倍の深さまで到達しうる．
+                    // +1 は奇数手詰め(攻方始動)との端数調整．
+                    if self.mate_budget > 0 && remaining >= 3
+                        && u32::from(child_remaining) <= self.mate_budget.saturating_mul(2).saturating_add(1)
                     {
-                        self.profile_stats.mate1_ns += _mate1_start.elapsed().as_nanos() as u64;
-                        self.profile_stats.mate1_count += 1;
-                    }
-                    if !has_defense {
-                        // 応手なし → 詰み(証明駒 = 空)
-                        self.store(
-                            child_pk,
-                            [0; HAND_KINDS],
-                            0,
-                            INF,
-                        );
-                    } else if ply + 2 < self.depth {
-                        // 3手詰めチェック: 応手を生成して全応手に1手詰め判定を実行．
-                        // 応手数の制限なし: ビットボードベースの mate_move_in_1ply は
-                        // 十分に高速であり，応手数が多い局面でも Df-Pn の再帰呼び出しより
-                        // 低コストで3手詰めを検出できる．
-                        #[cfg(feature = "profile")]
-                        let _mate3_start = Instant::now();
-                        let defenses =
-                            self.generate_defense_moves(board);
-                        let mut all_mated = true;
-                        for d in &defenses {
-                            let cap_d = board.do_move(*d);
-                            // 逆王手の応手は不詰として扱い，
-                            // 1手詰め判定をスキップする(cshogi と同様)．
-                            // 逆王手がかかると攻め方は王手回避が必要で，
-                            // 1手で詰ませることは不可能なため．
-                            let mate = if board.is_in_check(
-                                board.turn.opponent(),
-                            ) {
-                                false
-                            } else {
-                                self.has_mate_in_1(board)
-                            };
-                            if mate {
-                                self.store_board(
-                                    board, 0, INF,
-                                );
+                        // 予算制静的詰め探索(1手〜N手を統一的に扱う)
+                        let mut budget = self.mate_budget;
+                        match self.static_mate_and(
+                            board, child_remaining as u32, &mut budget,
+                        ) {
+                            StaticMateResult::Checkmate(_) => {
+                                #[cfg(feature = "profile")]
+                                { _sm_hit = true; }
+                                // TT は static_mate_and 内で記録済み
                             }
-                            board.undo_move(*d, cap_d);
-                            if !mate {
-                                all_mated = false;
-                                break;
+                            StaticMateResult::NoCheckmate => {
+                                // 確定的に不詰: 応手数で初期 pn/dn を設定
+                                // (static_mate_and 内で TT に不詰記録済みだが，
+                                //  応手数に基づく初期値も記録する)
+                                // 注: static_mate_and 内でも generate_defense_moves
+                                // を実行済みだが，初期 pn/dn 設定のため再計算が必要．
+                                let defenses = self.generate_defense_moves(board);
+                                let n = defenses.len() as u32;
+                                if n == 0 {
+                                    self.store(child_pk, [0; HAND_KINDS], 0, INF,
+                                        REMAINING_INFINITE);
+                                    #[cfg(feature = "profile")]
+                                    { _sm_hit = true; }
+                                } else {
+                                    self.store(child_pk, child_hand, n, n,
+                                        child_remaining);
+                                }
                             }
-                        }
-                        if all_mated {
-                            self.store(
-                                child_pk, child_hand, 0,
-                                INF,
-                            );
-                        } else {
-                            let n = defenses.len() as u32;
-                            self.store(
-                                child_pk, child_hand, n, n,
-                            );
-                        }
-                        #[cfg(feature = "profile")]
-                        {
-                            self.profile_stats.mate3_ns += _mate3_start.elapsed().as_nanos() as u64;
-                            self.profile_stats.mate3_count += 1;
+                            StaticMateResult::Exhausted => {
+                                // 予算切れ: 応手数で初期 pn/dn を設定．
+                                // n=1 だと (1,1) になり再度 static_mate が
+                                // トリガーされるため dn を最低2にする．
+                                // 注: static_mate_and 内でも generate_defense_moves
+                                // を実行済みだが，初期 pn/dn 設定のため再計算が必要．
+                                let defenses = self.generate_defense_moves(board);
+                                let n = defenses.len() as u32;
+                                if n == 0 {
+                                    self.store(child_pk, [0; HAND_KINDS], 0, INF,
+                                        REMAINING_INFINITE);
+                                    #[cfg(feature = "profile")]
+                                    { _sm_hit = true; }
+                                } else {
+                                    self.store(child_pk, child_hand, n, n.max(2),
+                                        child_remaining);
+                                }
+                            }
                         }
                     } else {
-                        // 深い位置では応手数を初期値として設定
-                        // 正確な数は不要なのでデフォルト値を使用
-                        self.store(
-                            child_pk, child_hand, 1, 1,
-                        );
+                        // budget=0: インライン1手・3手詰め判定
+                        let defenses = self.generate_defense_moves(board);
+                        if defenses.is_empty() {
+                            // 応手なし → 即詰み確定(budget=0 パスでの検出)
+                            self.store(child_pk, [0; HAND_KINDS], 0, INF,
+                                REMAINING_INFINITE);
+                            #[cfg(feature = "profile")]
+                            { _sm_hit = true; }
+                        } else if ply + 2 < self.depth {
+                            // 3手詰め: 全応手に1手詰め判定
+                            let mut all_mated = true;
+                            for d in &defenses {
+                                let cap_d = board.do_move(*d);
+                                let mate = if board.is_in_check(
+                                    board.turn.opponent(),
+                                ) {
+                                    false
+                                } else {
+                                    let checks = self.generate_check_moves(board);
+                                    if !checks.is_empty() {
+                                        self.has_mate_in_1_with(board, &checks)
+                                    } else {
+                                        false
+                                    }
+                                };
+                                if mate {
+                                    self.store_board(board, 0, INF,
+                                        REMAINING_INFINITE);
+                                }
+                                board.undo_move(*d, cap_d);
+                                if !mate {
+                                    all_mated = false;
+                                    break;
+                                }
+                            }
+                            let n = defenses.len() as u32;
+                            if all_mated {
+                                self.store(child_pk, child_hand, 0, INF,
+                                    REMAINING_INFINITE);
+                                #[cfg(feature = "profile")]
+                                { _sm_hit = true; }
+                            } else {
+                                self.store(child_pk, child_hand, n, n,
+                                    child_remaining);
+                            }
+                        } else {
+                            self.store(child_pk, child_hand, 1, 1,
+                                child_remaining);
+                        }
                     }
                 } else {
-                    let checks =
-                        self.generate_check_moves(board);
-                    if checks.is_empty() {
-                        // 攻め方に王手がない → 反証駒 = 現在の持ち駒
-                        self.store(
-                            child_pk, child_hand, INF, 0,
-                        );
-                    } else if ply + 2 < self.depth
-                        && self.has_mate_in_1_with(
-                            board, &checks,
-                        )
+                    // AND ノードの子(OR 局面): 静的詰め判定
+                    // 閾値の根拠は OR 側と同一(budget * 2 + 1)．
+                    if self.mate_budget > 0 && remaining >= 3
+                        && u32::from(child_remaining) <= self.mate_budget.saturating_mul(2).saturating_add(1)
                     {
-                        self.store(child_pk, child_hand, 0, INF);
+                        let mut budget = self.mate_budget;
+                        match self.static_mate_or(
+                            board, child_remaining as u32, &mut budget,
+                        ) {
+                            StaticMateResult::Checkmate(_) => {
+                                #[cfg(feature = "profile")]
+                                { _sm_hit = true; }
+                                // TT は static_mate_or 内で記録済み
+                            }
+                            StaticMateResult::NoCheckmate => {
+                                // 確定的に不詰: 王手数で初期化
+                                let checks = self.generate_check_moves(board);
+                                if checks.is_empty() {
+                                    self.store(child_pk, child_hand, INF, 0,
+                                        REMAINING_INFINITE);
+                                } else {
+                                    self.store(child_pk, child_hand, 1,
+                                        checks.len() as u32, child_remaining);
+                                }
+                            }
+                            StaticMateResult::Exhausted => {
+                                // 予算切れ: 王手数で初期化．
+                                // checks=1 だと (1,1) になり再度 static_mate が
+                                // トリガーされるため dn を最低2にする．
+                                let checks = self.generate_check_moves(board);
+                                if checks.is_empty() {
+                                    self.store(child_pk, child_hand, INF, 0,
+                                        REMAINING_INFINITE);
+                                } else {
+                                    let dn = (checks.len() as u32).max(2);
+                                    self.store(child_pk, child_hand, 1,
+                                        dn, child_remaining);
+                                }
+                            }
+                        }
                     } else {
-                        self.store(
-                            child_pk,
-                            child_hand,
-                            1,
-                            checks.len() as u32,
-                        );
+                        // budget=0: インライン王手なし/1手詰め判定
+                        let checks = self.generate_check_moves(board);
+                        if checks.is_empty() {
+                            self.store(child_pk, child_hand, INF, 0,
+                                REMAINING_INFINITE);
+                        } else if ply + 2 < self.depth
+                            && self.has_mate_in_1_with(board, &checks)
+                        {
+                            self.store(child_pk, child_hand, 0, INF,
+                                REMAINING_INFINITE);
+                            #[cfg(feature = "profile")]
+                            { _sm_hit = true; }
+                        } else {
+                            self.store(child_pk, child_hand, 1,
+                                checks.len() as u32, child_remaining);
+                        }
+                    }
+                }
+
+                #[cfg(feature = "profile")]
+                {
+                    let elapsed = _static_mate_start.elapsed().as_nanos() as u64;
+                    self.profile_stats.static_mate_ns += elapsed;
+                    self.profile_stats.static_mate_count += 1;
+                    if _sm_hit {
+                        self.profile_stats.static_mate_hits += 1;
                     }
                 }
             }
@@ -870,7 +1162,7 @@ impl DfPnSolver {
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
             let (cpn_now, cdn_now) =
-                self.look_up_pn_dn(child_pk, &child_hand);
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if or_node && cpn_now == 0 {
                 // OR 証明: 子の証明駒から親の証明駒を計算
                 let child_ph = self
@@ -882,7 +1174,8 @@ impl DfPnSolver {
                 for k in 0..HAND_KINDS {
                     proof[k] = proof[k].min(att_hand[k]);
                 }
-                self.store(pos_key, proof, 0, INF);
+                self.store(pos_key, proof, 0, INF,
+                    REMAINING_INFINITE);
                 return;
             }
             if !or_node && cdn_now == 0 {
@@ -890,7 +1183,8 @@ impl DfPnSolver {
                 let child_dp = self
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
-                self.store(pos_key, child_dp, INF, 0);
+                self.store(pos_key, child_dp, INF, 0,
+                    REMAINING_INFINITE);
                 return;
             }
             // cdn_now == 0 ブロックに入るのは or_node == true のみ．
@@ -922,6 +1216,7 @@ impl DfPnSolver {
         if or_node && children.is_empty() {
             self.store(
                 pos_key, init_or_disproof, INF, 0,
+                remaining,
             );
             return;
         }
@@ -934,6 +1229,79 @@ impl DfPnSolver {
 
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
+
+        // --- 単一子最適化 ---
+        // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
+        // 親の閾値をそのまま渡して直接再帰する．
+        // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
+        // ケースが詰将棋で頻出する．
+        if children.len() == 1 {
+            let (m, child_fh, child_pk, ref child_hand) = children[0];
+            loop {
+                // ノード制限・タイムアウトチェック
+                if self.nodes_searched >= self.max_nodes || self.timed_out {
+                    break;
+                }
+
+                // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
+                let (cpn, cdn) = if self.path.contains(&child_fh) {
+                    (INF, 0)
+                } else {
+                    self.look_up_pn_dn(
+                        child_pk, child_hand,
+                        remaining.saturating_sub(1),
+                    )
+                };
+                if cpn >= pn_threshold || cdn >= dn_threshold {
+                    self.store(pos_key, att_hand, cpn, cdn, remaining);
+                    break;
+                }
+                if cpn == 0 || cdn == 0 {
+                    // 子の証明/反証 → 親に伝播
+                    if or_node {
+                        if cpn == 0 {
+                            let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                            let mut proof = adjust_hand_for_move(m, &child_ph);
+                            for k in 0..HAND_KINDS {
+                                proof[k] = proof[k].min(att_hand[k]);
+                            }
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                        } else {
+                            // cdn == 0: 唯一の子が反証 → OR 反証
+                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
+                            let adj = adjust_hand_for_move(m, &child_dp);
+                            let mut dp = init_or_disproof;
+                            for k in 0..HAND_KINDS {
+                                dp[k] = dp[k].min(adj[k]);
+                            }
+                            self.store(pos_key, dp, INF, 0, remaining);
+                        }
+                    } else {
+                        if cdn == 0 {
+                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
+                            self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE);
+                        } else {
+                            // cpn == 0: 唯一の子が証明 → AND 証明
+                            let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                            let mut proof = [0u8; HAND_KINDS];
+                            for k in 0..HAND_KINDS {
+                                proof[k] = child_ph[k].min(att_hand[k]);
+                            }
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                        }
+                    }
+                    break;
+                }
+
+                let captured = profile_timed!(self, do_move_ns, do_move_count,
+                    board.do_move(m));
+                self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
+                profile_timed!(self, undo_move_ns, undo_move_count,
+                    board.undo_move(m, captured));
+            }
+            self.path.remove(&full_hash);
+            return;
+        }
 
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
@@ -966,6 +1334,7 @@ impl DfPnSolver {
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
+                                remaining.saturating_sub(1),
                             )
                         };
 
@@ -987,6 +1356,7 @@ impl DfPnSolver {
                         }
                         self.store(
                             pos_key, proof, 0, INF,
+                            REMAINING_INFINITE,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1037,6 +1407,7 @@ impl DfPnSolver {
                     self.store(
                         pos_key, or_disproof,
                         INF, 0,
+                        remaining,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1059,6 +1430,7 @@ impl DfPnSolver {
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
+                                remaining.saturating_sub(1),
                             )
                         };
 
@@ -1072,6 +1444,7 @@ impl DfPnSolver {
                             );
                         self.store(
                             pos_key, child_dp, INF, 0,
+                            REMAINING_INFINITE,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1129,6 +1502,7 @@ impl DfPnSolver {
                     }
                     self.store(
                         pos_key, and_proof, 0, INF,
+                        REMAINING_INFINITE,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1143,7 +1517,7 @@ impl DfPnSolver {
 
             // 転置表を更新
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store(pos_key, att_hand, current_pn, current_dn));
+                self.store(pos_key, att_hand, current_pn, current_dn, remaining));
 
             // 閾値チェック
             if current_pn >= pn_threshold
@@ -1159,14 +1533,18 @@ impl DfPnSolver {
                 break;
             }
 
-            // 閾値計算
+            // 閾値計算(df-pn+ 式: ε = second_best / 4 + 1)
+            // 標準 df-pn の second_best + 1 では，best child の pn/dn が
+            // 僅かに増加しただけで親に戻りスラッシングが発生する．
+            // ε を加算して best child により多くの探索予算を与え，振動を抑制する．
             let (child_pn_th, child_dn_th) = if or_node {
                 let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
                     .min(INF - 1);
+                let epsilon = (second_best / 16).min(256) + 1;
                 let child_pn_th = pn_threshold
-                    .min(second_best.saturating_add(1))
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
@@ -1174,8 +1552,9 @@ impl DfPnSolver {
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
+                let epsilon = (second_best / 16).min(256) + 1;
                 let child_dn_th = dn_threshold
-                    .min(second_best.saturating_add(1))
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             };
@@ -1199,15 +1578,6 @@ impl DfPnSolver {
         self.path.remove(&full_hash);
     }
 
-    /// 現在の局面(攻め方の手番)に1手詰めがあるか判定する．
-    ///
-    /// ビットボードベースの高速判定を使用し，詰みの手が見つかった場合のみ
-    /// do_move で TT にエントリを記録する．
-    fn has_mate_in_1(&mut self, board: &mut Board) -> bool {
-        let checks = self.generate_check_moves(board);
-        self.has_mate_in_1_with(board, &checks)
-    }
-
     /// 既に生成済みの王手リストを使って1手詰め判定する．
     ///
     /// ビットボード演算のみで詰み判定を行い，do_move/undo_move の
@@ -1222,23 +1592,234 @@ impl DfPnSolver {
             // 詰み局面を TT に記録するために do_move が必要
             let captured = board.do_move(mate_move);
             let pk = position_key(board);
-            self.store(pk, [0; HAND_KINDS], 0, INF);
+            self.store(pk, [0; HAND_KINDS], 0, INF,
+                REMAINING_INFINITE);
             board.undo_move(mate_move, captured);
             return true;
         }
         false
     }
+}
 
-    /// 玉方に1つでも王手回避手があるか高速判定する．
+/// 予算制の静的詰め探索の結果．
+///
+/// 「確定的な不詰」と「予算切れ」を区別することで，
+/// AND ノード側で安全に不詰を TT にキャッシュできる．
+enum StaticMateResult {
+    /// 詰み検出．最小証明駒を返す．
+    Checkmate([u8; HAND_KINDS]),
+    /// 探索範囲内で確定的に不詰．
+    NoCheckmate,
+    /// 予算切れにより結論が出ていない．
+    Exhausted,
+}
+
+impl DfPnSolver {
+    /// 予算制の静的詰め探索(OR ノード側)．
     ///
-    /// generate_defense_moves と同じロジックだが，
-    /// 最初の合法手が見つかった時点で即座に true を返す．
-    /// 王手回避手が1つでも存在するか判定する．
+    /// Df-Pn の閾値・パス管理なしで，純粋な再帰探索により
+    /// N 手詰めを検出する．`budget` を消費しながら可能な限り深く探索し，
+    /// 予算を使い切ると `Exhausted` を返す．
     ///
-    /// `generate_defense_moves_inner` を early-exit モードで呼び出し，
-    /// 最初の合法手が見つかった時点で早期リターンする．
-    fn has_any_defense(&self, board: &mut Board) -> bool {
-        !self.generate_defense_moves_inner(board, true).is_empty()
+    /// # 戻り値
+    /// - `Checkmate(proof_hand)`: 詰み検出．最小証明駒を返す
+    /// - `NoCheckmate`: 探索範囲内で確定的に不詰
+    /// - `Exhausted`: 予算切れにより結論が出ていない
+    fn static_mate_or(
+        &mut self,
+        board: &mut Board,
+        remaining: u32,
+        budget: &mut u32,
+    ) -> StaticMateResult {
+        if remaining == 0 {
+            return StaticMateResult::Exhausted;
+        }
+
+        let pos_key = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let rem16 = remaining as u16;
+        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        // TT に証明/反証エントリがある場合は budget を消費せず即返却．
+        // budget は「新規に探索するノード数」の制限として機能させる．
+        if tt_pn == 0 {
+            return StaticMateResult::Checkmate(
+                self.table.get_proof_hand(pos_key, &att_hand),
+            );
+        }
+        if tt_dn == 0 {
+            return StaticMateResult::NoCheckmate;
+        }
+
+        // TT miss: ここで初めて budget を消費
+        if *budget == 0 {
+            return StaticMateResult::Exhausted;
+        }
+        *budget = budget.saturating_sub(1);
+
+        let checks = self.generate_check_moves(board);
+        if checks.is_empty() {
+            self.table.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
+            return StaticMateResult::NoCheckmate;
+        }
+
+        // 1手詰め判定
+        let us = board.turn;
+        if let Some(mate_move) = board.mate_move_in_1ply(checks.as_slice(), us) {
+            let captured = board.do_move(mate_move);
+            let child_pk = position_key(board);
+            self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
+            board.undo_move(mate_move, captured);
+            let mut proof = adjust_hand_for_move(mate_move, &[0; HAND_KINDS]);
+            for k in 0..HAND_KINDS {
+                proof[k] = proof[k].min(att_hand[k]);
+            }
+            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+            return StaticMateResult::Checkmate(proof);
+        }
+        if remaining <= 1 {
+            return StaticMateResult::NoCheckmate;
+        }
+
+        // 3手以上: 各王手について全応手を再帰的にチェック
+        //
+        // NOTE: OR ノードでは loop-end での不詰 TT 記録を行わない．
+        // OR は全子(全王手)を確認する必要があるため，各 child_init で
+        // 蓄積された AND 不詰 TT エントリが連鎖的に再利用され，
+        // remaining が不正にエスカレートする問題が発生する．
+        // AND 側は逃れ手1つで確定するためこの問題は生じない．
+        let mut has_exhausted = false;
+        for m in &checks {
+            let captured = board.do_move(*m);
+            let child_result = self.static_mate_and(board, remaining - 1, budget);
+            board.undo_move(*m, captured);
+            match child_result {
+                StaticMateResult::Checkmate(child_proof) => {
+                    let mut proof = adjust_hand_for_move(*m, &child_proof);
+                    for k in 0..HAND_KINDS {
+                        proof[k] = proof[k].min(att_hand[k]);
+                    }
+                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                    return StaticMateResult::Checkmate(proof);
+                }
+                StaticMateResult::NoCheckmate => {
+                    // この王手は確定的に不成立 → 次の王手を試す
+                }
+                StaticMateResult::Exhausted => {
+                    has_exhausted = true;
+                    if *budget == 0 {
+                        return StaticMateResult::Exhausted;
+                    }
+                }
+            }
+        }
+        // 全王手を試行済み:
+        // - Exhausted な子が1つでもあれば結論未確定
+        // - 全子が NoCheckmate なら確定的に不詰
+        if has_exhausted {
+            StaticMateResult::Exhausted
+        } else {
+            StaticMateResult::NoCheckmate
+        }
+    }
+
+    /// 予算制の静的詰め探索(AND ノード側)．
+    ///
+    /// # 戻り値
+    /// - `Checkmate(proof_hand)`: 全応手に対して詰み検出．最小証明駒を返す
+    /// - `NoCheckmate`: いずれかの応手で確定的に不詰
+    /// - `Exhausted`: 予算切れにより結論が出ていない
+    fn static_mate_and(
+        &mut self,
+        board: &mut Board,
+        remaining: u32,
+        budget: &mut u32,
+    ) -> StaticMateResult {
+        if remaining == 0 {
+            return StaticMateResult::Exhausted;
+        }
+
+        let pos_key = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let rem16 = remaining as u16;
+        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        // TT に証明/反証エントリがある場合は budget を消費せず即返却．
+        if tt_pn == 0 {
+            return StaticMateResult::Checkmate(
+                self.table.get_proof_hand(pos_key, &att_hand),
+            );
+        }
+        if tt_dn == 0 {
+            return StaticMateResult::NoCheckmate;
+        }
+
+        // TT miss: ここで初めて budget を消費
+        if *budget == 0 {
+            return StaticMateResult::Exhausted;
+        }
+        *budget = budget.saturating_sub(1);
+
+        let defenses = self.generate_defense_moves(board);
+        if defenses.is_empty() {
+            self.table.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
+            return StaticMateResult::Checkmate([0; HAND_KINDS]);
+        }
+        if remaining < 2 {
+            // 応手はあるが残り深さ不足で再帰不可 → 予算切れ扱い
+            return StaticMateResult::Exhausted;
+        }
+
+        // 全応手に詰みがあるか確認(証明駒は要素ごと max)
+        let mut and_proof = [0u8; HAND_KINDS];
+        let mut any_legal = false;
+        for d in &defenses {
+            let cap_d = board.do_move(*d);
+            if board.is_in_check(board.turn.opponent()) {
+                // 応手後に玉方が王手されている(非合法手) → スキップ
+                // 全応手が非合法ならループ末尾の Checkmate パスに到達する
+                board.undo_move(*d, cap_d);
+                continue;
+            }
+            any_legal = true;
+            let child_result = self.static_mate_or(board, remaining - 1, budget);
+            board.undo_move(*d, cap_d);
+            match child_result {
+                StaticMateResult::Checkmate(child_proof) => {
+                    // 防御手は玉方の手なので攻方持ち駒は不変 → 調整不要
+                    for k in 0..HAND_KINDS {
+                        and_proof[k] = and_proof[k].max(child_proof[k]);
+                    }
+                }
+                StaticMateResult::NoCheckmate => {
+                    // 子が確定的に不詰 → AND ノードの不詰を TT に記録
+                    // NoCheckmate は「予算切れ」と区別された確定結果のため，
+                    // OR 側と異なり budget_before ガードは不要:
+                    //   AND は逃れ手を1つ見つけた時点で不詰が確定し，
+                    //   OR のように全子を巡回して結果を合成する必要がない
+                    self.table.store(pos_key, att_hand, INF, 0, rem16);
+                    return StaticMateResult::NoCheckmate;
+                }
+                StaticMateResult::Exhausted => {
+                    // 予算切れ → 結論なしで即座にリターン
+                    return StaticMateResult::Exhausted;
+                }
+            }
+        }
+        // 全応手に対して詰み → 証明駒を現在の持ち駒でクリップ
+        //
+        // defenses が非空にもかかわらず全手が is_in_check でスキップされた場合も
+        // ここに到達する．その場合 and_proof = [0; HAND_KINDS] のまま Checkmate
+        // を返す(合法応手なし = 詰み)．generate_defense_moves は合法手のみを
+        // 返すべきなので，これは movegen のバグを示唆する．
+        debug_assert!(
+            defenses.is_empty() || any_legal,
+            "static_mate_and: 全防御手が非合法 — generate_defense_moves のバグの可能性 (pos_key={:#x})",
+            pos_key,
+        );
+        for k in 0..HAND_KINDS {
+            and_proof[k] = and_proof[k].min(att_hand[k]);
+        }
+        self.table.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE);
+        StaticMateResult::Checkmate(and_proof)
     }
 
     /// 玉方の王手回避手を生成する(合い効かずを除外)．
@@ -1745,17 +2326,26 @@ impl DfPnSolver {
             }
         }
 
-        // 手順序: 成り駒 > 駒取り > その他(初期展開順序として tie-break に寄与)
-        // 同 pn 時の主たる tie-break は MID ループ内で dn 比較により行う
+        // 手順序: 成+取 > 成 > 取 > その他，同カテゴリ内は玉との距離でタイブレーク
+        // 近接王手を優先し，詰みに至る手を早期発見する．
+        // 距離はチェビシェフ距離(0-8)を使用し，カテゴリ(0-3) * 16 + 距離 で
+        // 単一キーにエンコードする．
+        let king_col = king_sq.col() as i8;
+        let king_row = king_sq.row() as i8;
         moves.sort_unstable_by_key(|m| {
             let promo = m.is_promotion();
             let capture = m.captured_piece_raw() > 0;
-            match (promo, capture) {
+            let category: u8 = match (promo, capture) {
                 (true, true) => 0,
                 (true, false) => 1,
                 (false, true) => 2,
                 (false, false) => 3,
-            }
+            };
+            let to = m.to_sq();
+            let dc = (to.col() as i8 - king_col).unsigned_abs();
+            let dr = (to.row() as i8 - king_row).unsigned_abs();
+            let dist = dc.max(dr); // チェビシェフ距離(0-8)
+            (category as u16) * 16 + dist as u16
         });
 
         moves
@@ -2056,7 +2646,7 @@ pub fn solve_tsume(
     nodes: Option<u64>,
     draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
-    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None)
+    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None, None)
 }
 
 /// タイムアウト指定付きで詰将棋を解く便利関数．
@@ -2077,6 +2667,9 @@ pub fn solve_tsume(
 ///   返される手順が最短とは限らない．
 /// - `pv_nodes_per_child`: PV 復元時の1子あたりノード予算(None でデフォルト 1024)．
 ///   長手数の詰将棋で `CheckmateNoPv` が返る場合に増やすと効果的．
+/// - `mate_budget`: 静的詰め探索(`static_mate`)の1子あたりノード予算(None でデフォルト 0)．
+///   0 の場合は静的詰め探索を無効化する．値を増やすとノード削減効果が高まるが，
+///   1ノードあたりの計算コストが増加する．
 pub fn solve_tsume_with_timeout(
     sfen: &str,
     depth: Option<u32>,
@@ -2085,6 +2678,7 @@ pub fn solve_tsume_with_timeout(
     timeout_secs: Option<u64>,
     find_shortest: Option<bool>,
     pv_nodes_per_child: Option<u64>,
+    mate_budget: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
@@ -2098,6 +2692,9 @@ pub fn solve_tsume_with_timeout(
     solver.set_find_shortest(find_shortest.unwrap_or(true));
     if let Some(budget) = pv_nodes_per_child {
         solver.set_pv_nodes_per_child(budget);
+    }
+    if let Some(mb) = mate_budget {
+        solver.set_mate_budget(mb);
     }
 
     Ok(solver.solve(&mut board))
@@ -2617,81 +3214,6 @@ mod tests {
         }
     }
 
-    /// brute-force 詰み判定(DFPN との結果比較用)．
-    #[test]
-    #[ignore] // 5M ノードを使う重いテスト．明示的に `cargo test -- --ignored` で実行．
-    fn test_tsume_5_bruteforce() {
-        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
-        let mut board = Board::new();
-        board.set_sfen(sfen).unwrap();
-
-        let solver = DfPnSolver::default_solver();
-
-        // 深さ制限付き brute-force
-        fn is_checkmate(
-            board: &mut Board,
-            solver: &DfPnSolver,
-            depth: u32,
-            or_node: bool,
-            nodes: &mut u64,
-        ) -> bool {
-            if depth == 0 {
-                return false;
-            }
-            *nodes += 1;
-            if *nodes > 5_000_000 {
-                return false; // 打ち切り
-            }
-
-            let moves: ArrayVec<Move, MAX_MOVES> = if or_node {
-                solver.generate_check_moves(board)
-            } else {
-                let legal = movegen::generate_legal_moves(board);
-                let mut out = ArrayVec::new();
-                for m in legal {
-                    push_move(&mut out, m);
-                }
-                out
-            };
-
-            if moves.is_empty() {
-                return !or_node; // OR: 王手なし=不詰, AND: 応手なし=詰み
-            }
-
-            if or_node {
-                // OR: いずれかの子が詰みなら true
-                for m in &moves {
-                    let captured = board.do_move(*m);
-                    let result = is_checkmate(board, solver, depth - 1, false, nodes);
-                    board.undo_move(*m, captured);
-                    if result {
-                        return true;
-                    }
-                }
-                false
-            } else {
-                // AND: 全ての子が詰みなら true
-                for m in &moves {
-                    let captured = board.do_move(*m);
-                    let result = is_checkmate(board, solver, depth - 1, true, nodes);
-                    board.undo_move(*m, captured);
-                    if !result {
-                        return false;
-                    }
-                }
-                true
-            }
-        }
-
-        for depth in (1..=21).step_by(2) {
-            let mut nodes = 0u64;
-            let result = is_checkmate(&mut board, &solver, depth, true, &mut nodes);
-            if result {
-                break;
-            }
-        }
-    }
-
     /// 29手詰め(tsume6)．
     ///
     /// 深さ制限時の TT 保存バグの回帰テスト．
@@ -2761,7 +3283,7 @@ mod tests {
         let mut board = Board::empty();
         board.set_sfen(sfen).unwrap();
 
-        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None).unwrap();
+        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None, None).unwrap();
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
@@ -3059,14 +3581,14 @@ mod tests {
     /// 金・銀・飛・角のみが候補となる．
     /// 後手の最善応手(最長抵抗)でのみ39手詰めとなる．
     #[test]
-    #[ignore] // 現状のソルバーでは 500M ノード / 10 分でも解けない超重量テスト
+    #[ignore] // 約42万ノード / 5秒で解ける重量テスト．明示的に `cargo test -- --ignored` で実行．
     fn test_tsume_39te_aigoma() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
         let mut solver =
-            DfPnSolver::with_timeout(63, 500_000_000, 32767, 600);
+            DfPnSolver::with_timeout(63, 10_000_000, 32767, 30);
         let result = solver.solve(&mut board);
 
         match &result {
@@ -3102,7 +3624,7 @@ mod tests {
         let result = solve_tsume_with_timeout(
             sfen, Some(31), Some(2_000_000), None, None,
             Some(true), // find_shortest = true
-            None,
+            None, None,
         ).unwrap();
 
         match &result {
@@ -3144,32 +3666,84 @@ mod tests {
     #[test]
     #[cfg(feature = "profile")]
     fn test_profile_solve() {
-        // テストケース1: 小阪昇作 9手詰
-        let sfen_9te = "ln1gkg1nl/6+P2/2sppps2/2p3p1p/p8/P1P1P3P/2NP1PP2/3s1KSR1/L1+b2G1NL w R2Pbgp 78";
-        // テストケース2: 飛車打からの9手詰(持ち駒多め)
-        let sfen_r9 = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
-        // テストケース3: 角と金の合駒がある問題(探索量中)
-        let sfen_interpose = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
-        // テストケース4: ノード数を稼ぐため上限 100万ノードで不詰判定
-        let sfen_no_mate = "8k/9/7+B1/9/9/9/9/9/9 b rb4g4s4n4l18p 1";
-
-        let cases: Vec<(&str, &str, u32, u64)> = vec![
-            ("9手詰(小阪昇)", sfen_9te, 31, 2_000_000),
-            ("9手詰(飛車打)", sfen_r9, 31, 2_000_000),
-            ("合駒あり", sfen_interpose, 31, 2_000_000),
-            ("不詰(馬のみ)", sfen_no_mate, 31, 1_000_000),
+        let cases: Vec<(&str, &str, u32, u64, u32)> = vec![
+            // (name, sfen, depth, max_nodes, timeout_sec)
+            ("9手詰(9te)", "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1", 31, 10_000_000, 60),
+            ("11手詰(tsume2)", "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1", 31, 10_000_000, 60),
+            ("17手詰(tsume5)", "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1", 31, 10_000_000, 120),
+            ("7手詰(tsume3)", "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/K8 b R2b3g4s2n2l15p 1", 31, 10_000_000, 60),
+            ("5手詰(tsume4)", "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1", 31, 10_000_000, 60),
+            ("9手詰(合駒)", "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1", 31, 2_000_000, 60),
+            ("29手詰(tsume6)", "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1", 31, 50_000_000, 300),
         ];
 
-        for (name, sfen, depth, nodes) in &cases {
-            let mut board = Board::empty();
+        let budgets = [0u32, 16, 256];
+
+        println!("\n{:<20} {:>6} {:>10} {:>10} {:>10} {:>8} {:>8}",
+            "Problem", "Budget", "Wall(ms)", "Nodes", "NPS",
+            "SM_call", "SM_hit%");
+        println!("{}", "-".repeat(90));
+
+        for (name, sfen, depth, nodes, timeout) in &cases {
+            for &budget in &budgets {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(*depth, *nodes, 32767, *timeout as u64);
+                solver.set_mate_budget(budget);
+
+                let start = std::time::Instant::now();
+                let result = solver.solve(&mut board);
+                let wall_time = start.elapsed();
+                solver.sync_tt_profile();
+
+                let nodes_searched = match &result {
+                    TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
+                    TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
+                    TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
+                    TsumeResult::Unknown { nodes_searched } => *nodes_searched,
+                };
+                let wall_ms = wall_time.as_secs_f64() * 1000.0;
+                let nps = if wall_ms > 0.0 { nodes_searched as f64 / (wall_ms / 1000.0) } else { 0.0 };
+                let sm = &solver.profile_stats;
+                let hit_pct = if sm.static_mate_count > 0 {
+                    sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
+                } else { 0.0 };
+
+                println!("{:<20} {:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>7.1}%  overflow:{} max_e:{}",
+                    name, budget, wall_ms, nodes_searched, nps,
+                    sm.static_mate_count, hit_pct,
+                    sm.tt_overflow_count, sm.tt_max_entries_per_position);
+            }
+        }
+    }
+
+    /// 39手詰めベンチマーク(budget 別比較)．
+    ///
+    /// `cargo test -p maou_shogi --features profile --release bench_39te -- --nocapture --ignored`
+    #[test]
+    #[ignore]
+    #[cfg(feature = "profile")]
+    fn bench_39te_budgets() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let budgets = [0u32, 8, 16, 32, 64];
+
+        println!("\n39手詰め(合駒) budget comparison");
+        println!("{:>6} {:>10} {:>10} {:>10} {:>8} {:>7}",
+            "Budget", "Wall(ms)", "Nodes", "NPS", "SM_call", "SM_hit%");
+        println!("{}", "-".repeat(65));
+
+        for &budget in &budgets {
+            let mut board = Board::new();
             board.set_sfen(sfen).unwrap();
 
-            let mut solver = DfPnSolver::with_timeout(*depth, *nodes, 32767, 60);
-            solver.set_find_shortest(false);
+            let mut solver = DfPnSolver::with_timeout(63, 10_000_000, 32767, 120);
+            solver.set_mate_budget(budget);
 
             let start = std::time::Instant::now();
             let result = solver.solve(&mut board);
             let wall_time = start.elapsed();
+            solver.sync_tt_profile();
 
             let nodes_searched = match &result {
                 TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
@@ -3177,19 +3751,20 @@ mod tests {
                 TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
                 TsumeResult::Unknown { nodes_searched } => *nodes_searched,
             };
-            let nps = if wall_time.as_secs_f64() > 0.0 {
-                nodes_searched as f64 / wall_time.as_secs_f64()
-            } else {
-                0.0
+            let wall_ms = wall_time.as_secs_f64() * 1000.0;
+            let nps = if wall_ms > 0.0 { nodes_searched as f64 / (wall_ms / 1000.0) } else { 0.0 };
+            let sm = &solver.profile_stats;
+            let hit_pct = if sm.static_mate_count > 0 {
+                sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
+            } else { 0.0 };
+            let status = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("mate in {}", moves.len()),
+                _ => "NOT SOLVED".to_string(),
             };
 
-            println!("\n===== {} =====", name);
-            println!("Result: {:?}", std::mem::discriminant(&result));
-            println!("Nodes: {}, Wall: {:.3}ms, NPS: {:.0}",
-                nodes_searched,
-                wall_time.as_secs_f64() * 1000.0,
-                nps);
-            println!("{}", solver.profile_stats);
+            println!("{:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>6.1}%  {}",
+                budget, wall_ms, nodes_searched, nps,
+                sm.static_mate_count, hit_pct, status);
         }
     }
 }
