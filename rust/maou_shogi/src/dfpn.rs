@@ -971,7 +971,11 @@ impl DfPnSolver {
 
                 if or_node {
                     // OR ノードの子(AND 局面): 静的詰め判定
-                    if self.mate_budget > 0 && remaining >= 3 {
+                    // remaining が budget に対して大きすぎる場合は呼び出しを
+                    // スキップする(Exhausted になるだけで NPS を浪費するため)．
+                    if self.mate_budget > 0 && remaining >= 3
+                        && u32::from(child_remaining) <= self.mate_budget * 2 + 1
+                    {
                         // 予算制静的詰め探索(1手〜N手を統一的に扱う)
                         let mut budget = self.mate_budget;
                         match self.static_mate_and(
@@ -982,20 +986,35 @@ impl DfPnSolver {
                                 { _sm_hit = true; }
                                 // TT は static_mate_and 内で記録済み
                             }
-                            StaticMateResult::NoCheckmate
-                            | StaticMateResult::Exhausted => {
-                                // 詰み不検出: 応手数で初期 pn/dn を設定
+                            StaticMateResult::NoCheckmate => {
+                                // 確定的に不詰: 応手数で初期 pn/dn を設定
+                                // (static_mate_and 内で TT に不詰記録済みだが，
+                                //  応手数に基づく初期値も記録する)
                                 let defenses = self.generate_defense_moves(board);
                                 let n = defenses.len() as u32;
                                 if n == 0 {
-                                    // 応手なし → 即詰み確定(静的詰め探索のヒットではなく
-                                    // 合法応手が存在しないことによる確定)
                                     self.store(child_pk, [0; HAND_KINDS], 0, INF,
                                         REMAINING_INFINITE);
                                     #[cfg(feature = "profile")]
                                     { _sm_hit = true; }
                                 } else {
                                     self.store(child_pk, child_hand, n, n,
+                                        child_remaining);
+                                }
+                            }
+                            StaticMateResult::Exhausted => {
+                                // 予算切れ: 応手数で初期 pn/dn を設定．
+                                // n=1 だと (1,1) になり再度 static_mate が
+                                // トリガーされるため dn を最低2にする．
+                                let defenses = self.generate_defense_moves(board);
+                                let n = defenses.len() as u32;
+                                if n == 0 {
+                                    self.store(child_pk, [0; HAND_KINDS], 0, INF,
+                                        REMAINING_INFINITE);
+                                    #[cfg(feature = "profile")]
+                                    { _sm_hit = true; }
+                                } else {
+                                    self.store(child_pk, child_hand, n, n.max(2),
                                         child_remaining);
                                 }
                             }
@@ -1053,7 +1072,9 @@ impl DfPnSolver {
                     }
                 } else {
                     // AND ノードの子(OR 局面): 静的詰め判定
-                    if self.mate_budget > 0 && remaining >= 3 {
+                    if self.mate_budget > 0 && remaining >= 3
+                        && u32::from(child_remaining) <= self.mate_budget * 2 + 1
+                    {
                         let mut budget = self.mate_budget;
                         match self.static_mate_or(
                             board, child_remaining as u32, &mut budget,
@@ -1063,9 +1084,8 @@ impl DfPnSolver {
                                 { _sm_hit = true; }
                                 // TT は static_mate_or 内で記録済み
                             }
-                            StaticMateResult::NoCheckmate
-                            | StaticMateResult::Exhausted => {
-                                // 不詰または予算切れ: 王手数で初期化
+                            StaticMateResult::NoCheckmate => {
+                                // 確定的に不詰: 王手数で初期化
                                 let checks = self.generate_check_moves(board);
                                 if checks.is_empty() {
                                     self.store(child_pk, child_hand, INF, 0,
@@ -1073,6 +1093,20 @@ impl DfPnSolver {
                                 } else {
                                     self.store(child_pk, child_hand, 1,
                                         checks.len() as u32, child_remaining);
+                                }
+                            }
+                            StaticMateResult::Exhausted => {
+                                // 予算切れ: 王手数で初期化．
+                                // checks=1 だと (1,1) になり再度 static_mate が
+                                // トリガーされるため dn を最低2にする．
+                                let checks = self.generate_check_moves(board);
+                                if checks.is_empty() {
+                                    self.store(child_pk, child_hand, INF, 0,
+                                        REMAINING_INFINITE);
+                                } else {
+                                    let dn = (checks.len() as u32).max(2);
+                                    self.store(child_pk, child_hand, 1,
+                                        dn, child_remaining);
                                 }
                             }
                         }
