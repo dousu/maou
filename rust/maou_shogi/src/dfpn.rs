@@ -3707,4 +3707,54 @@ mod tests {
             }
         }
     }
+
+    /// 39手詰めベンチマーク(budget 別比較)．
+    ///
+    /// `cargo test -p maou_shogi --features profile --release bench_39te -- --nocapture --ignored`
+    #[test]
+    #[ignore]
+    #[cfg(feature = "profile")]
+    fn bench_39te_budgets() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let budgets = [0u32, 8, 16, 32, 64];
+
+        println!("\n39手詰め(合駒) budget comparison");
+        println!("{:>6} {:>10} {:>10} {:>10} {:>8} {:>7}",
+            "Budget", "Wall(ms)", "Nodes", "NPS", "SM_call", "SM_hit%");
+        println!("{}", "-".repeat(65));
+
+        for &budget in &budgets {
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
+
+            let mut solver = DfPnSolver::with_timeout(63, 10_000_000, 32767, 120);
+            solver.set_mate_budget(budget);
+
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut board);
+            let wall_time = start.elapsed();
+            solver.sync_tt_profile();
+
+            let nodes_searched = match &result {
+                TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
+                TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
+                TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
+                TsumeResult::Unknown { nodes_searched } => *nodes_searched,
+            };
+            let wall_ms = wall_time.as_secs_f64() * 1000.0;
+            let nps = if wall_ms > 0.0 { nodes_searched as f64 / (wall_ms / 1000.0) } else { 0.0 };
+            let sm = &solver.profile_stats;
+            let hit_pct = if sm.static_mate_count > 0 {
+                sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
+            } else { 0.0 };
+            let status = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("mate in {}", moves.len()),
+                _ => "NOT SOLVED".to_string(),
+            };
+
+            println!("{:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>6.1}%  {}",
+                budget, wall_ms, nodes_searched, nps,
+                sm.static_mate_count, hit_pct, status);
+        }
+    }
 }
