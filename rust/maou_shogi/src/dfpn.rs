@@ -781,13 +781,9 @@ impl DfPnSolver {
                 self.look_up_pn_dn(child_pk, &child_hand);
             if cpn == 1 && cdn == 1 {
                 if or_node {
-                    // 予算制の静的詰め探索で1手詰め〜N手詰めを統一的に検出．
+                    // 1手詰め判定 + 3手詰め判定
                     #[cfg(feature = "profile")]
                     let _static_mate_start = Instant::now();
-                    let remaining = self.depth.saturating_sub(ply + 1);
-                    let mut budget = self.mate_budget;
-                    #[cfg(feature = "profile")]
-                    let budget_before = budget;
 
                     // 応手なし判定(1手詰め)
                     let has_defense = self.has_any_defense(board);
@@ -799,8 +795,8 @@ impl DfPnSolver {
                             0,
                             INF,
                         );
-                    } else if remaining >= 2 {
-                        // 3手詰めチェック + 予算制の深い探索
+                    } else if ply + 2 < self.depth {
+                        // 3手詰めチェック
                         let defenses =
                             self.generate_defense_moves(board);
 
@@ -837,36 +833,6 @@ impl DfPnSolver {
                                 child_pk, child_hand, 0,
                                 INF,
                             );
-                        } else if remaining >= 4 && budget > 0 {
-                            // Phase 2: 予算制の深い詰め探索(5手以上)
-                            // TT に直接 pn=0 を記録しない(proof hand が不正確なため)が，
-                            // 再帰内部の has_mate_in_1_with が中間局面を TT にシードする．
-                            let mut all_deep_mated = true;
-                            for d in &defenses {
-                                let cap_d = board.do_move(*d);
-                                let mate_r = if board.is_in_check(
-                                    board.turn.opponent(),
-                                ) {
-                                    0
-                                } else {
-                                    self.static_mate_or(
-                                        board,
-                                        remaining - 1,
-                                        &mut budget,
-                                    )
-                                };
-                                board.undo_move(*d, cap_d);
-                                if mate_r == 0 {
-                                    all_deep_mated = false;
-                                    break;
-                                }
-                            }
-                            // 全応手が深い詰みでも pn=0 とせず，
-                            // pn=1 のヒントとして DF-PN に証明を委ねる．
-                            let pn = if all_deep_mated { 1 } else { n };
-                            self.store(
-                                child_pk, child_hand, pn, n,
-                            );
                         } else {
                             self.store(
                                 child_pk, child_hand, n, n,
@@ -882,19 +848,14 @@ impl DfPnSolver {
                         let elapsed = _static_mate_start.elapsed().as_nanos() as u64;
                         self.profile_stats.static_mate_ns += elapsed;
                         self.profile_stats.static_mate_count += 1;
-                        self.profile_stats.static_mate_nodes += (budget_before - budget) as u64;
                         if !has_defense {
                             self.profile_stats.static_mate_hits += 1;
                         }
                     }
                 } else {
-                    // AND ノードの子(OR ノード): 予算制の静的詰め探索
+                    // AND ノードの子(OR ノード): 王手なし/1手詰め判定
                     #[cfg(feature = "profile")]
                     let _static_mate_start = Instant::now();
-                    let remaining = self.depth.saturating_sub(ply + 1);
-                    let mut budget = self.mate_budget;
-                    #[cfg(feature = "profile")]
-                    let budget_before = budget;
                     let checks =
                         self.generate_check_moves(board);
                     if checks.is_empty() {
@@ -902,41 +863,12 @@ impl DfPnSolver {
                         self.store(
                             child_pk, child_hand, INF, 0,
                         );
-                    } else if remaining >= 2
+                    } else if ply + 2 < self.depth
                         && self.has_mate_in_1_with(
                             board, &checks,
                         )
                     {
                         self.store(child_pk, child_hand, 0, INF);
-                    } else if remaining >= 3 && budget > 0 {
-                        // 予算制の深い詰め探索(3手以上)
-                        let mut found_mate = false;
-                        for m in &checks {
-                            let captured = board.do_move(*m);
-                            let (mate_r, _) = self.static_mate_and(
-                                board,
-                                remaining - 1,
-                                &mut budget,
-                            );
-                            board.undo_move(*m, captured);
-                            if mate_r > 0 {
-                                found_mate = true;
-                                break;
-                            }
-                            if budget == 0 {
-                                break;
-                            }
-                        }
-                        if found_mate {
-                            // 深い詰み: TT には記録しない
-                            // DF-PN が改めて正しい proof hand で探索する
-                        }
-                        self.store(
-                            child_pk,
-                            child_hand,
-                            1,
-                            checks.len() as u32,
-                        );
                     } else {
                         self.store(
                             child_pk,
@@ -950,7 +882,6 @@ impl DfPnSolver {
                         let elapsed = _static_mate_start.elapsed().as_nanos() as u64;
                         self.profile_stats.static_mate_ns += elapsed;
                         self.profile_stats.static_mate_count += 1;
-                        self.profile_stats.static_mate_nodes += (budget_before - budget) as u64;
                     }
                 }
             }
@@ -1324,16 +1255,13 @@ impl DfPnSolver {
     ///
     /// # 引数
     /// - `board`: 攻め方の手番(OR ノード)．
-    /// - `remaining`: 残り探索手数(depth - ply)．奇数で呼ばれる．
+    /// - `remaining`: 残り探索手数(depth - ply)．
     /// - `budget`: 残りノード予算(可変参照)．0 になったら打ち切り．
     ///
     /// # 戻り値
-    /// - `true`: 詰みを検出(TT にも記録済み)．
-    /// - `false`: 詰みが見つからなかった(予算切れまたは不詰)．
-    /// # 戻り値
     /// - 0: 詰み検出なし
-    /// - 1: 1手〜3手の詰み(TT 記録済み)
-    /// - 2: 5手以上の詰み(TT 未記録)
+    /// - 1: 詰み検出(TT 記録なし)
+    #[allow(dead_code)]
     fn static_mate_or(
         &mut self,
         board: &mut Board,
@@ -1350,9 +1278,9 @@ impl DfPnSolver {
             return 0;
         }
 
-        // ビットボードベースの高速1手詰め判定を最初に試行．
-        // has_mate_in_1_with は詰み局面(leaf)を TT に記録する．
-        if self.has_mate_in_1_with(board, &checks) {
+        // ビットボードベースの高速1手詰め判定(TT 記録なし)．
+        let us = board.turn;
+        if board.mate_move_in_1ply(checks.as_slice(), us).is_some() {
             return 1;
         }
         if remaining <= 1 {
@@ -1362,10 +1290,10 @@ impl DfPnSolver {
         // remaining >= 3: 各王手について全応手を再帰的にチェック
         for m in &checks {
             let captured = board.do_move(*m);
-            let (mate_result, _) = self.static_mate_and(board, remaining - 1, budget);
+            let mate_result = self.static_mate_and(board, remaining - 1, budget);
             board.undo_move(*m, captured);
             if mate_result > 0 {
-                return if mate_result == 1 { 1 } else { 2 };
+                return 1;
             }
             if *budget == 0 {
                 return 0;
@@ -1374,81 +1302,46 @@ impl DfPnSolver {
         0
     }
 
-    /// 予算制の静的詰め探索(AND ノード側，入口)．
+    /// 予算制の静的詰め探索(AND ノード側)．
     ///
-    /// 3手詰め(応手 → 1手詰め)を先に検出し，TT に記録する(PV 復元用)．
-    /// 3手詰めが見つからなければ，予算の残りで深い詰みを探索する(TT 記録なし)．
+    /// TT への記録は一切行わない．DF-PN が正しい proof hand で
+    /// 改めて探索するため，予算制探索はヒント判定のみを担う．
     ///
     /// # 戻り値
-    /// - `(1, _)`: 3手以内の詰み検出(TT 記録済み)
-    /// - `(2, _)`: 5手以上の詰み検出(TT 未記録)
-    /// - `(0, n)`: 詰み検出なし．`n` は応手数(初期 pn/dn に使用)
+    /// - 0: 詰み検出なし
+    /// - 1: 全応手に対して詰みを検出
     fn static_mate_and(
         &mut self,
         board: &mut Board,
         remaining: u32,
         budget: &mut u32,
-    ) -> (u8, u32) {
+    ) -> u8 {
         if *budget == 0 || remaining == 0 {
-            return (0, 1);
+            return 0;
         }
         *budget = budget.saturating_sub(1);
 
         let defenses = self.generate_defense_moves(board);
-        let n_defenses = defenses.len() as u32;
         if defenses.is_empty() {
-            // 応手なし = 詰み(証明駒 = 空)．
-            let pk = position_key(board);
-            self.store(pk, [0; HAND_KINDS], 0, INF);
-            return (1, 0);
+            return 1;
+        }
+        if remaining < 2 {
+            return 0;
         }
 
-        // フェーズ1: 3手詰め検出(全応手に1手詰め判定，TT 記録あり)
-        if remaining >= 2 {
-            let mut all_mated_3 = true;
-            for d in &defenses {
-                let cap_d = board.do_move(*d);
-                let mate = if board.is_in_check(board.turn.opponent()) {
-                    false
-                } else {
-                    let checks = self.generate_check_moves(board);
-                    if !checks.is_empty() {
-                        self.has_mate_in_1_with(board, &checks)
-                    } else {
-                        false
-                    }
-                };
-                if mate {
-                    self.store_board(board, 0, INF);
-                }
-                board.undo_move(*d, cap_d);
-                if !mate {
-                    all_mated_3 = false;
-                    break;
-                }
-            }
-            if all_mated_3 {
-                return (1, n_defenses);
-            }
-        }
-
-        // フェーズ2: 予算制の深い詰め探索(5手以上，TT 記録なし)
-        if remaining < 4 || *budget == 0 {
-            return (0, n_defenses);
-        }
         for d in &defenses {
             let cap_d = board.do_move(*d);
-            let mate_r = if board.is_in_check(board.turn.opponent()) {
+            let mate = if board.is_in_check(board.turn.opponent()) {
                 0
             } else {
                 self.static_mate_or(board, remaining - 1, budget)
             };
             board.undo_move(*d, cap_d);
-            if mate_r == 0 {
-                return (0, n_defenses);
+            if mate == 0 {
+                return 0;
             }
         }
-        (2, n_defenses)
+        1
     }
 
     /// 玉方に1つでも王手回避手があるか高速判定する．
