@@ -1561,6 +1561,9 @@ impl DfPnSolver {
                         and_proof[k] = and_proof[k].max(child_proof[k]);
                     }
                 }
+                // 不詰は TT に記録しない: static_mate_or の戻り値が
+                // 「確定的な不詰」と「予算切れ」を区別しないため，
+                // AND 側で安全にキャッシュできない
                 None => return None,
             }
         }
