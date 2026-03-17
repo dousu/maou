@@ -979,7 +979,7 @@ impl DfPnSolver {
                     // 活用すれば budget の約2倍の深さまで到達しうる．
                     // +1 は奇数手詰め(攻方始動)との端数調整．
                     if self.mate_budget > 0 && remaining >= 3
-                        && u32::from(child_remaining) <= self.mate_budget * 2 + 1
+                        && u32::from(child_remaining) <= self.mate_budget.saturating_mul(2).saturating_add(1)
                     {
                         // 予算制静的詰め探索(1手〜N手を統一的に扱う)
                         let mut budget = self.mate_budget;
@@ -1083,7 +1083,7 @@ impl DfPnSolver {
                     // AND ノードの子(OR 局面): 静的詰め判定
                     // 閾値の根拠は OR 側と同一(budget * 2 + 1)．
                     if self.mate_budget > 0 && remaining >= 3
-                        && u32::from(child_remaining) <= self.mate_budget * 2 + 1
+                        && u32::from(child_remaining) <= self.mate_budget.saturating_mul(2).saturating_add(1)
                     {
                         let mut budget = self.mate_budget;
                         match self.static_mate_or(
