@@ -5,10 +5,11 @@ on:
     types: [opened, synchronize, ready_for_review, reopened]
     paths:
       - "src/**/*.py"
-      - "src/**/*.rs"
+      - "rust/src/**/*.rs"
       - "tests/**/*.py"
       - "pyproject.toml"
       - "Cargo.toml"
+      - "rust/**/Cargo.toml"
 
 jobs:
   claude-review:
