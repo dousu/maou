@@ -108,8 +108,6 @@ pub struct ProfileStats {
     pub static_mate_ns: u64,
     /// 静的詰め探索の呼び出し回数．
     pub static_mate_count: u64,
-    /// 静的詰め探索で消費されたノード数の合計．
-    pub static_mate_nodes: u64,
     /// 静的詰め探索で詰みを検出した回数．
     pub static_mate_hits: u64,
     /// 子ノード初期化内の do_move/undo_move の累積時間(ナノ秒)．
@@ -171,9 +169,9 @@ impl std::fmt::Display for ProfileStats {
         writeln!(f, "{}", "-".repeat(65))?;
         writeln!(f, "{:<25} {:>12.1}", "Total measured", total_us)?;
         if self.static_mate_count > 0 {
-            writeln!(f, "  static_mate nodes: {}, hits: {} ({:.1}%)",
-                self.static_mate_nodes,
+            writeln!(f, "  static_mate hits: {} / {} ({:.1}%)",
                 self.static_mate_hits,
+                self.static_mate_count,
                 self.static_mate_hits as f64 / self.static_mate_count as f64 * 100.0)?;
         }
         Ok(())
@@ -507,12 +505,6 @@ pub struct DfPnSolver {
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
     /// この値を増やすことで PV 復元の成功率が向上する．
     pv_nodes_per_child: u64,
-    /// 静的詰め探索の1回あたりのノード予算(デフォルト: 256)．
-    ///
-    /// 子ノード初期化時に，DF-PN のオーバーヘッドなしで
-    /// 再帰的に N 手詰めを検出する．予算を使い切ると探索を打ち切る．
-    /// 0 にすると静的詰め探索を無効化し，1手詰め判定のみ行う．
-    mate_budget: u32,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
@@ -533,7 +525,6 @@ impl DfPnSolver {
             timeout: Duration::from_secs(timeout_secs),
             find_shortest: true,
             pv_nodes_per_child: 1024,
-            mate_budget: 0,
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -565,15 +556,6 @@ impl DfPnSolver {
     /// `CheckmateNoPv` が返る場合に増やすと効果的．
     pub fn set_pv_nodes_per_child(&mut self, v: u64) -> &mut Self {
         self.pv_nodes_per_child = v;
-        self
-    }
-
-    /// 静的詰め探索のノード予算を設定する．
-    ///
-    /// 0 にすると静的詰め探索を無効化し，1手詰め判定のみ行う．
-    /// デフォルトは 256．
-    pub fn set_mate_budget(&mut self, v: u32) -> &mut Self {
-        self.mate_budget = v;
         self
     }
 
@@ -852,9 +834,10 @@ impl DfPnSolver {
                     #[cfg(feature = "profile")]
                     let _static_mate_start = Instant::now();
 
-                    // 応手なし判定(1手詰め)
-                    let has_defense = self.has_any_defense(board);
-                    if !has_defense {
+                    // 応手生成(1手詰め判定 + 3手詰めチェック共用)
+                    let defenses =
+                        self.generate_defense_moves(board);
+                    if defenses.is_empty() {
                         // 応手なし → 詰み(証明駒 = 空)
                         self.store(
                             child_pk,
@@ -864,9 +847,6 @@ impl DfPnSolver {
                             REMAINING_INFINITE,
                         );
                     } else if ply + 2 < self.depth {
-                        // 3手詰めチェック
-                        let defenses =
-                            self.generate_defense_moves(board);
 
                         // Phase 1: 3手詰め(全応手に1手詰め判定)
                         let mut all_mated = true;
@@ -1409,145 +1389,6 @@ impl DfPnSolver {
         false
     }
 
-    /// 予算制の静的詰め探索(OR ノード側)．
-    ///
-    /// DF-PN の閾値・パス管理なしで，純粋な再帰探索により
-    /// N 手詰めを検出する．`budget` を消費しながら可能な限り深く探索し，
-    /// 予算を使い切ると「不明」を返す．
-    ///
-    /// TT を参照して既に証明/反証済みの局面をスキップし，
-    /// 詰み検出時は TT に記録して DF-PN 本探索で再利用する．
-    ///
-    /// # 引数
-    /// - `board`: 攻め方の手番(OR ノード)．
-    /// - `remaining`: 残り探索手数(depth - ply)．
-    /// - `budget`: 残りノード予算(可変参照)．0 になったら打ち切り．
-    ///
-    /// # 戻り値
-    /// - 0: 詰み検出なし
-    /// - 1: 詰み検出
-    #[allow(dead_code)]
-    fn static_mate_or(
-        &mut self,
-        board: &mut Board,
-        remaining: u32,
-        budget: &mut u32,
-    ) -> u8 {
-        if *budget == 0 || remaining == 0 {
-            return 0;
-        }
-        *budget = budget.saturating_sub(1);
-
-        // TT 参照: 証明/反証済みならスキップ
-        let pos_key = position_key(board);
-        let att_hand = board.hand[self.attacker.index()];
-        let rem16 = remaining as u16;
-        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
-        if tt_pn == 0 {
-            return 1;
-        }
-        if tt_dn == 0 {
-            return 0;
-        }
-
-        let checks = self.generate_check_moves(board);
-        if checks.is_empty() {
-            // 王手手段なし → 不詰を TT に記録
-            self.table.store(pos_key, att_hand, INF, 0,
-                REMAINING_INFINITE);
-            return 0;
-        }
-
-        // ビットボードベースの高速1手詰め判定．
-        let us = board.turn;
-        if board.mate_move_in_1ply(checks.as_slice(), us).is_some() {
-            return 1;
-        }
-        if remaining <= 1 {
-            return 0;
-        }
-
-        // remaining >= 3: 各王手について全応手を再帰的にチェック
-        for m in &checks {
-            let captured = board.do_move(*m);
-            let mate_result = self.static_mate_and(board, remaining - 1, budget);
-            board.undo_move(*m, captured);
-            if mate_result > 0 {
-                // 詰み検出: 現在の持ち駒で TT に記録
-                // (証明駒は最小ではないが，Df-Pn が後で最適化する)
-                self.table.store(pos_key, att_hand, 0, INF,
-                    REMAINING_INFINITE);
-                return 1;
-            }
-            if *budget == 0 {
-                return 0;
-            }
-        }
-        // 全王手で詰まず: 探索範囲内の不詰を記録
-        self.table.store(pos_key, att_hand, INF, 0, rem16);
-        0
-    }
-
-    /// 予算制の静的詰め探索(AND ノード側)．
-    ///
-    /// TT を参照して既に証明/反証済みの局面をスキップし，
-    /// 結果を TT に記録する．
-    ///
-    /// # 戻り値
-    /// - 0: 詰み検出なし
-    /// - 1: 全応手に対して詰みを検出
-    fn static_mate_and(
-        &mut self,
-        board: &mut Board,
-        remaining: u32,
-        budget: &mut u32,
-    ) -> u8 {
-        if *budget == 0 || remaining == 0 {
-            return 0;
-        }
-        *budget = budget.saturating_sub(1);
-
-        // TT 参照: 証明/反証済みならスキップ
-        let pos_key = position_key(board);
-        let att_hand = board.hand[self.attacker.index()];
-        let rem16 = remaining as u16;
-        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
-        if tt_pn == 0 {
-            return 1;
-        }
-        if tt_dn == 0 {
-            return 0;
-        }
-
-        let defenses = self.generate_defense_moves(board);
-        if defenses.is_empty() {
-            // 応手なし → 詰み(証明駒 = 空)
-            self.table.store(pos_key, [0; HAND_KINDS], 0, INF,
-                REMAINING_INFINITE);
-            return 1;
-        }
-        if remaining < 2 {
-            return 0;
-        }
-
-        for d in &defenses {
-            let cap_d = board.do_move(*d);
-            let mate = if board.is_in_check(board.turn.opponent()) {
-                0
-            } else {
-                self.static_mate_or(board, remaining - 1, budget)
-            };
-            board.undo_move(*d, cap_d);
-            if mate == 0 {
-                return 0;
-            }
-        }
-        // 全応手に対して詰み → TT に記録
-        self.table.store(pos_key, att_hand, 0, INF,
-            REMAINING_INFINITE);
-        1
-    }
-
     /// 玉方に1つでも王手回避手があるか高速判定する．
     ///
     /// generate_defense_moves と同じロジックだが，
@@ -1556,7 +1397,6 @@ impl DfPnSolver {
     ///
     /// `generate_defense_moves_inner` を early-exit モードで呼び出し，
     /// 最初の合法手が見つかった時点で早期リターンする．
-    #[allow(dead_code)]
     fn has_any_defense(&self, board: &mut Board) -> bool {
         !self.generate_defense_moves_inner(board, true).is_empty()
     }
@@ -3484,43 +3324,37 @@ mod tests {
             ("29手詰(tsume6)", "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1", 31, 50_000_000, 300),
         ];
 
-        let budgets = [0u32, 16, 256];
-
-        println!("\n{:<20} {:>6} {:>10} {:>10} {:>10} {:>8} {:>8} {:>8}",
-            "Problem", "Budget", "Wall(ms)", "Nodes", "NPS",
-            "SM_call", "SM_node", "SM_hit%");
-        println!("{}", "-".repeat(100));
+        println!("\n{:<20} {:>10} {:>10} {:>10} {:>8} {:>8}",
+            "Problem", "Wall(ms)", "Nodes", "NPS",
+            "SM_call", "SM_hit%");
+        println!("{}", "-".repeat(80));
 
         for (name, sfen, depth, nodes, timeout) in &cases {
-            for &budget in &budgets {
-                let mut board = Board::new();
-                board.set_sfen(sfen).unwrap();
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
 
-                let mut solver = DfPnSolver::with_timeout(*depth, *nodes, 32767, *timeout as u64);
-                // find_shortest=true(デフォルト)で計測
-                solver.set_mate_budget(budget);
+            let solver = DfPnSolver::with_timeout(*depth, *nodes, 32767, *timeout as u64);
 
-                let start = std::time::Instant::now();
-                let result = solver.solve(&mut board);
-                let wall_time = start.elapsed();
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut board);
+            let wall_time = start.elapsed();
 
-                let nodes_searched = match &result {
-                    TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
-                    TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
-                    TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
-                    TsumeResult::Unknown { nodes_searched } => *nodes_searched,
-                };
-                let wall_ms = wall_time.as_secs_f64() * 1000.0;
-                let nps = if wall_ms > 0.0 { nodes_searched as f64 / (wall_ms / 1000.0) } else { 0.0 };
-                let sm = &solver.profile_stats;
-                let hit_pct = if sm.static_mate_count > 0 {
-                    sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
-                } else { 0.0 };
+            let nodes_searched = match &result {
+                TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
+                TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
+                TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
+                TsumeResult::Unknown { nodes_searched } => *nodes_searched,
+            };
+            let wall_ms = wall_time.as_secs_f64() * 1000.0;
+            let nps = if wall_ms > 0.0 { nodes_searched as f64 / (wall_ms / 1000.0) } else { 0.0 };
+            let sm = &solver.profile_stats;
+            let hit_pct = if sm.static_mate_count > 0 {
+                sm.static_mate_hits as f64 / sm.static_mate_count as f64 * 100.0
+            } else { 0.0 };
 
-                println!("{:<20} {:>6} {:>10.1} {:>10} {:>10.0} {:>8} {:>8} {:>7.1}%",
-                    name, budget, wall_ms, nodes_searched, nps,
-                    sm.static_mate_count, sm.static_mate_nodes, hit_pct);
-            }
+            println!("{:<20} {:>10.1} {:>10} {:>10.0} {:>8} {:>7.1}%",
+                name, wall_ms, nodes_searched, nps,
+                sm.static_mate_count, hit_pct);
         }
     }
 }
