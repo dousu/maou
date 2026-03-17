@@ -1924,13 +1924,13 @@ impl DfPnSolver {
         if sliding_checker.is_some() {
             let between = attack::between_bb(checker_sq, king_sq);
             if between.is_not_empty() {
-                // 合い効かずマスを計算
-                let futile = self.compute_futile_squares(
+                // 合い効かず・チェーンマスを計算
+                let (futile, chain) = self.compute_futile_and_chain_squares(
                     board, &between, king_sq, checker_sq, defender, attacker,
                 );
                 // 間のマスへの合い駒
                 self.generate_interpositions(
-                    board, &mut moves, &between, &futile, king_sq, defender, all_occ, our_occ,
+                    board, &mut moves, &between, &futile, &chain, king_sq, defender, all_occ, our_occ,
                 );
             }
         }
@@ -1987,19 +1987,28 @@ impl DfPnSolver {
         }
     }
 
-    /// 合い効かずマス(駒打ち用)を計算する．
+    /// 合い効かずマスとチェーンマス(駒打ち用)を計算する．
     ///
-    /// 駒を打った場合に必ず無駄になるマスを判定する:
+    /// 戻り値 `(futile, chain)`:
+    /// - `futile`: 完全に無駄なマス(駒打ちスキップ)
+    /// - `chain`: 中合いチェーン防御マス(代表駒のみドロップ生成)
+    ///
+    /// 各マスの判定基準:
     /// - 守備側(玉を除く)がそのマスに利いていれば，ひもがついているため無駄合いではない
     /// - 玉の隣接マスで，攻め方がチェッカー以外から利かせていなければ，
     ///   玉が取り返せるため無駄合いではない
-    /// - それ以外は無駄合い(チェッカーに取られて再び同筋の王手になる)
+    /// - それ以外は個別には無駄合い(チェッカーに取られて再び同筋の王手になる)
     ///
-    /// ただし中合い(ちゅうあい)チェーン防御を考慮する:
+    /// ただし中合いチェーン防御を考慮する:
     /// マス X が上記基準で無駄合いでも，X と玉の間に非無駄合いマスが存在すれば，
     /// X への駒打ちは「捨て合い→チェッカー前進→…→非無駄合いマスでブロック」
-    /// のチェーン防御の起点となり得るため，無駄合いとは判定しない．
-    fn compute_futile_squares(
+    /// のチェーン防御の起点となり得る．このようなマスは `chain` に分類し，
+    /// 最弱の駒(歩)のみをドロップ候補とする．
+    ///
+    /// 歩を代表とする根拠: 中合いで打った駒はチェッカーに取られるため，
+    /// 攻め方に渡す駒が弱いほど守備側に有利(包含関係)．
+    /// 歩の中合いで不詰みなら他の駒種でも不詰み，歩で詰みなら他も詰み．
+    fn compute_futile_and_chain_squares(
         &self,
         board: &Board,
         between: &Bitboard,
@@ -2007,7 +2016,7 @@ impl DfPnSolver {
         checker_sq: Square,
         defender: Color,
         attacker: Color,
-    ) -> Bitboard {
+    ) -> (Bitboard, Bitboard) {
         let king_step = attack::step_attacks(
             defender.opponent(),
             PieceType::King,
@@ -2029,15 +2038,12 @@ impl DfPnSolver {
             futile.set(sq);
         }
 
-        // 中合いチェーン伝搬: 玉側から走査し，非無駄合いマスを発見したら
-        // それより遠い(チェッカー側の)無駄合いマスをすべて解除する．
-        // 理由: チェッカーが合い駒を取って前進するたびに between が縮小し，
-        // 最終的に非無駄合いマスに到達するため，手前の合い駒も有効な防御となる．
+        // 中合いチェーン伝搬: 玉側からチェッカー方向へ走査し，
+        // 非無駄合いマスより遠い(チェッカー側の)無駄合いマスを chain に移す．
+        let mut chain = Bitboard::EMPTY;
         if futile.is_not_empty() && futile != *between {
-            // checker→king 方向ベクトル
             let dc = (king_sq.col() as i32 - checker_sq.col() as i32).signum();
             let dr = (king_sq.row() as i32 - checker_sq.row() as i32).signum();
-            // king→checker 方向に走査(dc,dr を反転)
             let step_c = -dc;
             let step_r = -dr;
             let mut c = king_sq.col() as i32 + step_c;
@@ -2052,27 +2058,35 @@ impl DfPnSolver {
                     has_non_futile = true;
                 } else if has_non_futile {
                     futile.clear(sq);
+                    chain.set(sq);
                 }
                 c += step_c;
                 r += step_r;
             }
         }
 
-        futile
+        (futile, chain)
     }
 
     /// 間のマスへの合い駒手を生成する(移動・打ち)．
     ///
-    /// ループ順序: 合い駒先(between, 最大8マス)を外ループ，自駒を内ループとする．
-    /// 駒を外ループにして利き計算を1回にする方式もベンチマーク(benchmark_tsume.py)で
-    /// 計測したが，between が最大8マスと小さいため有意差なし．
-    /// 現在の順序は駒打ちループとの統合が自然で可読性が高い．
+    /// `futile`: 完全に無駄なマス(駒打ちスキップ)．
+    /// `chain`: チェーン防御マス(代表駒のみドロップ生成)．
+    ///
+    /// chain マスでは包含関係を利用し，3カテゴリの代表駒のみ生成する:
+    /// - 前方利き系: 歩(代表) ⊇ {歩,香,銀,金,飛}
+    /// - 斜め利き系: 角(代表) — 前方に利かないため歩とは異なる包含
+    /// - 跳躍系: 桂(代表) — 打てない段があり独立
+    ///
+    /// 中合いで打った駒はチェッカーに取られるため，攻め方に渡す駒が弱いほど
+    /// 守備側に有利(包含関係)．各カテゴリ内では最弱の駒が代表となる．
     fn generate_interpositions(
         &self,
         board: &mut Board,
         moves: &mut ArrayVec<Move, MAX_MOVES>,
         between: &Bitboard,
         futile: &Bitboard,
+        chain: &Bitboard,
         king_sq: Square,
         defender: Color,
         all_occ: Bitboard,
@@ -2084,6 +2098,8 @@ impl DfPnSolver {
             king_sq,
         );
         let attacker = defender.opponent();
+        // futile | chain = 駒移動の無駄合いフィルタ対象
+        let futile_or_chain = *futile | *chain;
 
         for to in *between {
             // --- 駒移動による合い駒 ---
@@ -2101,11 +2117,11 @@ impl DfPnSolver {
                 }
 
                 // 駒移動による合い駒の無駄合いフィルタ:
-                // futile マスへの移動でも，以下の場合は無駄合いではない:
+                // futile/chain マスへの移動でも，以下の場合は無駄合いではない:
                 // (a) 移動後の駒にひもがついている(from を除いた守備側の利き)
                 // (b) 移動元が玉の隣接マスで，空いた後に攻め方から利かれず
                 //     玉の逃げ道が新たに生まれる
-                if futile.contains(to) {
+                if futile_or_chain.contains(to) {
                     let has_support = board.is_attacked_by_excluding(
                         to, defender, true, Some(from),
                     );
@@ -2139,34 +2155,103 @@ impl DfPnSolver {
                 }
             }
 
-            // --- 駒打ちによる合い駒(合い効かずでないマスのみ) ---
+            // --- 駒打ちによる合い駒 ---
             if futile.contains(to) {
+                // 完全無駄合い: スキップ
                 continue;
             }
-            for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
-                if board.hand[defender.index()][hand_idx] == 0 {
-                    continue;
-                }
-                // 行き所のない駒チェック
-                if movegen::must_promote(defender, pt, to) {
-                    continue;
-                }
-                // 二歩チェック
-                if pt == PieceType::Pawn {
-                    let our_pawns =
-                        board.piece_bb[defender.index()][PieceType::Pawn as usize];
-                    let col = to.col();
-                    if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
+            let is_chain = chain.contains(to);
+            if is_chain {
+                // chain マス: 3カテゴリの代表駒のみ生成
+                self.generate_chain_drops(board, moves, to, defender);
+            } else {
+                // 通常マス: 全駒種を生成
+                for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
+                    if board.hand[defender.index()][hand_idx] == 0 {
                         continue;
                     }
+                    if movegen::must_promote(defender, pt, to) {
+                        continue;
+                    }
+                    if pt == PieceType::Pawn {
+                        let our_pawns =
+                            board.piece_bb[defender.index()][PieceType::Pawn as usize];
+                        let col = to.col();
+                        if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
+                            continue;
+                        }
+                    }
+                    let m = Move::new_drop(to, pt);
+                    if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
+                        continue;
+                    }
+                    push_move(moves, m);
+                }
+            }
+        }
+    }
+
+    /// チェーンマスへの代表駒ドロップを生成する．
+    ///
+    /// 3カテゴリの代表駒を試す:
+    /// 1. 前方利き系: 歩→香→銀→金→飛(最弱の合法駒1つ)
+    /// 2. 斜め利き系: 角
+    /// 3. 跳躍系: 桂
+    fn generate_chain_drops(
+        &self,
+        board: &mut Board,
+        moves: &mut ArrayVec<Move, MAX_MOVES>,
+        to: Square,
+        defender: Color,
+    ) {
+        let di = defender.index();
+
+        // カテゴリ1: 前方利き系(歩,香,銀,金,飛) — 最弱の合法駒1つ
+        const FORWARD_PIECES: [(usize, PieceType); 5] = [
+            (0, PieceType::Pawn),   // hand_idx=0
+            (1, PieceType::Lance),  // hand_idx=1
+            (3, PieceType::Silver), // hand_idx=3
+            (4, PieceType::Gold),   // hand_idx=4
+            (6, PieceType::Rook),   // hand_idx=6
+        ];
+        for &(hand_idx, pt) in &FORWARD_PIECES {
+            if board.hand[di][hand_idx] == 0 {
+                continue;
+            }
+            if movegen::must_promote(defender, pt, to) {
+                continue;
+            }
+            if pt == PieceType::Pawn {
+                let our_pawns = board.piece_bb[di][PieceType::Pawn as usize];
+                let col = to.col();
+                if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
+                    continue; // 二歩
                 }
                 let m = Move::new_drop(to, pt);
-                // 打ち歩詰めチェック
-                if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
-                    continue;
+                if movegen::is_pawn_drop_mate(board, m) {
+                    continue; // 打ち歩詰め
                 }
                 push_move(moves, m);
+            } else {
+                push_move(moves, Move::new_drop(to, pt));
             }
+            break; // カテゴリ内最弱で代表
+        }
+
+        // カテゴリ2: 角
+        let bishop_idx = 5; // HAND_PIECES[5] = Bishop
+        if board.hand[di][bishop_idx] > 0
+            && !movegen::must_promote(defender, PieceType::Bishop, to)
+        {
+            push_move(moves, Move::new_drop(to, PieceType::Bishop));
+        }
+
+        // カテゴリ3: 桂
+        let knight_idx = 2; // HAND_PIECES[2] = Knight
+        if board.hand[di][knight_idx] > 0
+            && !movegen::must_promote(defender, PieceType::Knight, to)
+        {
+            push_move(moves, Move::new_drop(to, PieceType::Knight));
         }
     }
 
@@ -3867,4 +3952,5 @@ mod tests {
             result
         );
     }
+
 }
