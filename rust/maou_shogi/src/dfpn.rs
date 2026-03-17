@@ -1539,11 +1539,18 @@ impl DfPnSolver {
         if all_definitive && *budget == budget_before {
             // 予算を消費せず(TT ヒットのみで)全王手が確定的に不成立
             // → 不詰を TT に記録し NoCheckmate を返す
+            //
+            // budget_before ガードが必要な理由(AND 側には不要):
+            //   OR は全子を確認するため，予算消費中に子の NoCheckmate が
+            //   「checks empty → store → TT hit」の連鎖で複数の child_init に
+            //   またがりエスカレートしうる．budget 未消費なら全結果が既存 TT
+            //   エントリに裏打ちされており安全．
+            //   AND は逃れ手を1つ見つければ十分なので連鎖が生じない．
             self.table.store(pos_key, att_hand, INF, 0, rem16);
             StaticMateResult::NoCheckmate
         } else {
             // 予算を消費した場合や一部が Exhausted の場合は，
-            // 結論が TT に裏打ちされていないため Exhausted として扱う
+            // 結論を TT に記録せず Exhausted として扱う
             StaticMateResult::Exhausted
         }
     }
@@ -1591,12 +1598,13 @@ impl DfPnSolver {
         let mut and_proof = [0u8; HAND_KINDS];
         for d in &defenses {
             let cap_d = board.do_move(*d);
-            let child_result = if board.is_in_check(board.turn.opponent()) {
-                // 応手後に玉方が王手されている(非合法手)
-                StaticMateResult::Exhausted
-            } else {
-                self.static_mate_or(board, remaining - 1, budget)
-            };
+            if board.is_in_check(board.turn.opponent()) {
+                // 応手後に玉方が王手されている(非合法手) → スキップ
+                // 全応手が非合法ならループ末尾の Checkmate パスに到達する
+                board.undo_move(*d, cap_d);
+                continue;
+            }
+            let child_result = self.static_mate_or(board, remaining - 1, budget);
             board.undo_move(*d, cap_d);
             match child_result {
                 StaticMateResult::Checkmate(child_proof) => {
@@ -1608,7 +1616,9 @@ impl DfPnSolver {
                 StaticMateResult::NoCheckmate => {
                     // 子が確定的に不詰 → AND ノードの不詰を TT に記録
                     // NoCheckmate は「予算切れ」と区別された確定結果のため，
-                    // OR 側と異なり budget_before ガードは不要
+                    // OR 側と異なり budget_before ガードは不要:
+                    //   AND は逃れ手を1つ見つけた時点で不詰が確定し，
+                    //   OR のように全子を巡回して結果を合成する必要がない
                     self.table.store(pos_key, att_hand, INF, 0, rem16);
                     return StaticMateResult::NoCheckmate;
                 }
@@ -1624,19 +1634,6 @@ impl DfPnSolver {
         }
         self.table.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE);
         StaticMateResult::Checkmate(and_proof)
-    }
-
-    /// 玉方に1つでも王手回避手があるか高速判定する．
-    ///
-    /// generate_defense_moves と同じロジックだが，
-    /// 最初の合法手が見つかった時点で即座に true を返す．
-    /// 王手回避手が1つでも存在するか判定する．
-    ///
-    /// `generate_defense_moves_inner` を early-exit モードで呼び出し，
-    /// 最初の合法手が見つかった時点で早期リターンする．
-    #[allow(dead_code)]
-    fn has_any_defense(&self, board: &mut Board) -> bool {
-        !self.generate_defense_moves_inner(board, true).is_empty()
     }
 
     /// 玉方の王手回避手を生成する(合い効かずを除外)．

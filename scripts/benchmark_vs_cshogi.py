@@ -35,7 +35,7 @@ N_WARMUP = 1_000
 # Helpers
 # ---------------------------------------------------------------------------
 def _timeit(fn: Callable[[], object], n: int, warmup: int = N_WARMUP) -> float:
-    """Run *fn* n times after warmup，return average microseconds."""
+    """Run *fn* n times after warmup, return average microseconds."""
     for _ in range(warmup):
         fn()
     t0 = time.perf_counter()
