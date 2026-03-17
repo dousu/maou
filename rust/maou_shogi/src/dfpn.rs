@@ -1713,6 +1713,7 @@ impl DfPnSolver {
 
         // 全応手に詰みがあるか確認(証明駒は要素ごと max)
         let mut and_proof = [0u8; HAND_KINDS];
+        let mut any_legal = false;
         for d in &defenses {
             let cap_d = board.do_move(*d);
             if board.is_in_check(board.turn.opponent()) {
@@ -1721,6 +1722,7 @@ impl DfPnSolver {
                 board.undo_move(*d, cap_d);
                 continue;
             }
+            any_legal = true;
             let child_result = self.static_mate_or(board, remaining - 1, budget);
             board.undo_move(*d, cap_d);
             match child_result {
@@ -1747,19 +1749,12 @@ impl DfPnSolver {
         }
         // 全応手に対して詰み → 証明駒を現在の持ち駒でクリップ
         //
-        // 注: defenses が非空にもかかわらず全手が is_in_check で
-        // スキップされた場合もここに到達する．その場合 and_proof = [0; HAND_KINDS]
-        // となり，「詰み済み」として正しく処理される(合法応手がない = 詰み)．
-        // ただし movegen が非合法手のみを返すのは想定外のため debug_assert で検出する．
+        // defenses が非空にもかかわらず全手が is_in_check でスキップされた場合も
+        // ここに到達する．その場合 and_proof = [0; HAND_KINDS] のまま Checkmate
+        // を返す(合法応手なし = 詰み)．generate_defense_moves は合法手のみを
+        // 返すべきなので，これは movegen のバグを示唆する．
         debug_assert!(
-            defenses.is_empty()
-                || defenses.iter().any(|d| {
-                    let cap = board.do_move(*d);
-                    let legal =
-                        !board.is_in_check(board.turn.opponent());
-                    board.undo_move(*d, cap);
-                    legal
-                }),
+            defenses.is_empty() || any_legal,
             "static_mate_and: 全防御手が非合法 — generate_defense_moves のバグの可能性 (pos_key={:#x})",
             pos_key,
         );
