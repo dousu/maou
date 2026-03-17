@@ -1508,8 +1508,12 @@ impl DfPnSolver {
         }
 
         // 3手以上: 各王手について全応手を再帰的にチェック
-        let budget_before = *budget;
-        let mut all_definitive = true;
+        //
+        // NOTE: OR ノードでは loop-end での不詰 TT 記録を行わない．
+        // OR は全子(全王手)を確認する必要があるため，各 child_init で
+        // 蓄積された AND 不詰 TT エントリが連鎖的に再利用され，
+        // remaining が不正にエスカレートする問題が発生する．
+        // AND 側は逃れ手1つで確定するためこの問題は生じない．
         for m in &checks {
             let captured = board.do_move(*m);
             let child_result = self.static_mate_and(board, remaining - 1, budget);
@@ -1527,32 +1531,13 @@ impl DfPnSolver {
                     // この王手は確定的に不成立 → 次の王手を試す
                 }
                 StaticMateResult::Exhausted => {
-                    // 予算切れ → この王手の結論は不明
-                    all_definitive = false;
                     if *budget == 0 {
                         return StaticMateResult::Exhausted;
                     }
                 }
             }
         }
-        // 全王手で詰まず
-        if all_definitive && *budget == budget_before {
-            // 予算を消費せず(TT ヒットのみで)全王手が確定的に不成立
-            // → 不詰を TT に記録し NoCheckmate を返す
-            //
-            // budget_before ガードが必要な理由(AND 側には不要):
-            //   OR は全子を確認するため，予算消費中に子の NoCheckmate が
-            //   「checks empty → store → TT hit」の連鎖で複数の child_init に
-            //   またがりエスカレートしうる．budget 未消費なら全結果が既存 TT
-            //   エントリに裏打ちされており安全．
-            //   AND は逃れ手を1つ見つければ十分なので連鎖が生じない．
-            self.table.store(pos_key, att_hand, INF, 0, rem16);
-            StaticMateResult::NoCheckmate
-        } else {
-            // 予算を消費した場合や一部が Exhausted の場合は，
-            // 結論を TT に記録せず Exhausted として扱う
-            StaticMateResult::Exhausted
-        }
+        StaticMateResult::Exhausted
     }
 
     /// 予算制の静的詰め探索(AND ノード側)．
