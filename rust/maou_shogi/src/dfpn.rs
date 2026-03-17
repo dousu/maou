@@ -856,25 +856,28 @@ impl DfPnSolver {
                     if self.mate_budget > 0 && remaining >= 3 {
                         // 予算制静的詰め探索(1手〜N手を統一的に扱う)
                         let mut budget = self.mate_budget;
-                        if let Some(_proof) = self.static_mate_and(
+                        match self.static_mate_and(
                             board, child_remaining as u32, &mut budget,
                         ) {
-                            #[cfg(feature = "profile")]
-                            { _sm_hit = true; }
-                            // TT は static_mate_and 内で記録済み
-                        } else {
-                            // 詰み不検出: 応手数で初期 pn/dn を設定
-                            let defenses = self.generate_defense_moves(board);
-                            let n = defenses.len() as u32;
-                            if n == 0 {
-                                // 予算切れ前に応手なし確認済みのはずだが安全策
-                                self.store(child_pk, [0; HAND_KINDS], 0, INF,
-                                    REMAINING_INFINITE);
+                            StaticMateResult::Checkmate(_) => {
                                 #[cfg(feature = "profile")]
                                 { _sm_hit = true; }
-                            } else {
-                                self.store(child_pk, child_hand, n, n,
-                                    child_remaining);
+                                // TT は static_mate_and 内で記録済み
+                            }
+                            StaticMateResult::NoCheckmate
+                            | StaticMateResult::Exhausted => {
+                                // 詰み不検出: 応手数で初期 pn/dn を設定
+                                let defenses = self.generate_defense_moves(board);
+                                let n = defenses.len() as u32;
+                                if n == 0 {
+                                    self.store(child_pk, [0; HAND_KINDS], 0, INF,
+                                        REMAINING_INFINITE);
+                                    #[cfg(feature = "profile")]
+                                    { _sm_hit = true; }
+                                } else {
+                                    self.store(child_pk, child_hand, n, n,
+                                        child_remaining);
+                                }
                             }
                         }
                     } else {
@@ -931,20 +934,25 @@ impl DfPnSolver {
                     // AND ノードの子(OR 局面): 静的詰め判定
                     if self.mate_budget > 0 && remaining >= 3 {
                         let mut budget = self.mate_budget;
-                        if let Some(_proof) = self.static_mate_or(
+                        match self.static_mate_or(
                             board, child_remaining as u32, &mut budget,
                         ) {
-                            #[cfg(feature = "profile")]
-                            { _sm_hit = true; }
-                        } else {
-                            // 不詰または予算切れ: 王手数で初期化
-                            let checks = self.generate_check_moves(board);
-                            if checks.is_empty() {
-                                self.store(child_pk, child_hand, INF, 0,
-                                    REMAINING_INFINITE);
-                            } else {
-                                self.store(child_pk, child_hand, 1,
-                                    checks.len() as u32, child_remaining);
+                            StaticMateResult::Checkmate(_) => {
+                                #[cfg(feature = "profile")]
+                                { _sm_hit = true; }
+                                // TT は static_mate_or 内で記録済み
+                            }
+                            StaticMateResult::NoCheckmate
+                            | StaticMateResult::Exhausted => {
+                                // 不詰または予算切れ: 王手数で初期化
+                                let checks = self.generate_check_moves(board);
+                                if checks.is_empty() {
+                                    self.store(child_pk, child_hand, INF, 0,
+                                        REMAINING_INFINITE);
+                                } else {
+                                    self.store(child_pk, child_hand, 1,
+                                        checks.len() as u32, child_remaining);
+                                }
                             }
                         }
                     } else {
@@ -1425,24 +1433,40 @@ impl DfPnSolver {
         }
         false
     }
+}
 
+/// 予算制の静的詰め探索の結果．
+///
+/// 「確定的な不詰」と「予算切れ」を区別することで，
+/// AND ノード側で安全に不詰を TT にキャッシュできる．
+enum StaticMateResult {
+    /// 詰み検出．最小証明駒を返す．
+    Checkmate([u8; HAND_KINDS]),
+    /// 探索範囲内で確定的に不詰．
+    NoCheckmate,
+    /// 予算切れにより結論が出ていない．
+    Exhausted,
+}
+
+impl DfPnSolver {
     /// 予算制の静的詰め探索(OR ノード側)．
     ///
     /// Df-Pn の閾値・パス管理なしで，純粋な再帰探索により
     /// N 手詰めを検出する．`budget` を消費しながら可能な限り深く探索し，
-    /// 予算を使い切ると `None` を返す．
+    /// 予算を使い切ると `Exhausted` を返す．
     ///
     /// # 戻り値
-    /// - `Some(proof_hand)`: 詰み検出。最小証明駒を返す
-    /// - `None`: 詰み検出なし(予算切れまたは不詰)
+    /// - `Checkmate(proof_hand)`: 詰み検出．最小証明駒を返す
+    /// - `NoCheckmate`: 探索範囲内で確定的に不詰
+    /// - `Exhausted`: 予算切れにより結論が出ていない
     fn static_mate_or(
         &mut self,
         board: &mut Board,
         remaining: u32,
         budget: &mut u32,
-    ) -> Option<[u8; HAND_KINDS]> {
+    ) -> StaticMateResult {
         if *budget == 0 || remaining == 0 {
-            return None;
+            return StaticMateResult::Exhausted;
         }
         *budget = budget.saturating_sub(1);
 
@@ -1451,16 +1475,18 @@ impl DfPnSolver {
         let rem16 = remaining as u16;
         let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
         if tt_pn == 0 {
-            return Some(self.table.get_proof_hand(pos_key, &att_hand));
+            return StaticMateResult::Checkmate(
+                self.table.get_proof_hand(pos_key, &att_hand),
+            );
         }
         if tt_dn == 0 {
-            return None;
+            return StaticMateResult::NoCheckmate;
         }
 
         let checks = self.generate_check_moves(board);
         if checks.is_empty() {
             self.table.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
-            return None;
+            return StaticMateResult::NoCheckmate;
         }
 
         // 1手詰め判定
@@ -1475,51 +1501,67 @@ impl DfPnSolver {
                 proof[k] = proof[k].min(att_hand[k]);
             }
             self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
-            return Some(proof);
+            return StaticMateResult::Checkmate(proof);
         }
         if remaining <= 1 {
-            return None;
+            return StaticMateResult::NoCheckmate;
         }
 
         // 3手以上: 各王手について全応手を再帰的にチェック
         let budget_before = *budget;
+        let mut all_definitive = true;
         for m in &checks {
             let captured = board.do_move(*m);
             let child_result = self.static_mate_and(board, remaining - 1, budget);
             board.undo_move(*m, captured);
-            if let Some(child_proof) = child_result {
-                let mut proof = adjust_hand_for_move(*m, &child_proof);
-                for k in 0..HAND_KINDS {
-                    proof[k] = proof[k].min(att_hand[k]);
+            match child_result {
+                StaticMateResult::Checkmate(child_proof) => {
+                    let mut proof = adjust_hand_for_move(*m, &child_proof);
+                    for k in 0..HAND_KINDS {
+                        proof[k] = proof[k].min(att_hand[k]);
+                    }
+                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                    return StaticMateResult::Checkmate(proof);
                 }
-                self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
-                return Some(proof);
-            }
-            if *budget == 0 {
-                return None;
+                StaticMateResult::NoCheckmate => {
+                    // この王手は確定的に不成立 → 次の王手を試す
+                }
+                StaticMateResult::Exhausted => {
+                    // 予算切れ → この王手の結論は不明
+                    all_definitive = false;
+                    if *budget == 0 {
+                        return StaticMateResult::Exhausted;
+                    }
+                }
             }
         }
-        // 全王手で詰まず: 予算を消費していない(TT ヒットのみ)場合のみ不詰を記録
-        // 予算を消費した場合は探索打ち切りの可能性があるため記録しない
-        if *budget == budget_before {
+        // 全王手で詰まず
+        if all_definitive && *budget == budget_before {
+            // 予算を消費せず(TT ヒットのみで)全王手が確定的に不成立
+            // → 不詰を TT に記録し NoCheckmate を返す
             self.table.store(pos_key, att_hand, INF, 0, rem16);
+            StaticMateResult::NoCheckmate
+        } else {
+            // 予算を消費した場合や一部が Exhausted の場合は，
+            // 結論が TT に裏打ちされていないため Exhausted として扱う
+            StaticMateResult::Exhausted
         }
-        None
     }
 
     /// 予算制の静的詰め探索(AND ノード側)．
     ///
     /// # 戻り値
-    /// - `Some(proof_hand)`: 全応手に対して詰み検出。最小証明駒を返す
-    /// - `None`: 詰み検出なし
+    /// - `Checkmate(proof_hand)`: 全応手に対して詰み検出．最小証明駒を返す
+    /// - `NoCheckmate`: いずれかの応手で確定的に不詰
+    /// - `Exhausted`: 予算切れにより結論が出ていない
     fn static_mate_and(
         &mut self,
         board: &mut Board,
         remaining: u32,
         budget: &mut u32,
-    ) -> Option<[u8; HAND_KINDS]> {
+    ) -> StaticMateResult {
         if *budget == 0 || remaining == 0 {
-            return None;
+            return StaticMateResult::Exhausted;
         }
         *budget = budget.saturating_sub(1);
 
@@ -1528,19 +1570,21 @@ impl DfPnSolver {
         let rem16 = remaining as u16;
         let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
         if tt_pn == 0 {
-            return Some(self.table.get_proof_hand(pos_key, &att_hand));
+            return StaticMateResult::Checkmate(
+                self.table.get_proof_hand(pos_key, &att_hand),
+            );
         }
         if tt_dn == 0 {
-            return None;
+            return StaticMateResult::NoCheckmate;
         }
 
         let defenses = self.generate_defense_moves(board);
         if defenses.is_empty() {
             self.table.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
-            return Some([0; HAND_KINDS]);
+            return StaticMateResult::Checkmate([0; HAND_KINDS]);
         }
         if remaining < 2 {
-            return None;
+            return StaticMateResult::NoCheckmate;
         }
 
         // 全応手に詰みがあるか確認(証明駒は要素ごと max)
@@ -1548,23 +1592,30 @@ impl DfPnSolver {
         for d in &defenses {
             let cap_d = board.do_move(*d);
             let child_result = if board.is_in_check(board.turn.opponent()) {
-                // 応手後に玉方が王手されている(非合法手) → 詰み扱いしない
-                None
+                // 応手後に玉方が王手されている(非合法手)
+                StaticMateResult::Exhausted
             } else {
                 self.static_mate_or(board, remaining - 1, budget)
             };
             board.undo_move(*d, cap_d);
             match child_result {
-                Some(child_proof) => {
+                StaticMateResult::Checkmate(child_proof) => {
                     // 防御手は玉方の手なので攻方持ち駒は不変 → 調整不要
                     for k in 0..HAND_KINDS {
                         and_proof[k] = and_proof[k].max(child_proof[k]);
                     }
                 }
-                // 不詰は TT に記録しない: static_mate_or の戻り値が
-                // 「確定的な不詰」と「予算切れ」を区別しないため，
-                // AND 側で安全にキャッシュできない
-                None => return None,
+                StaticMateResult::NoCheckmate => {
+                    // 子が確定的に不詰 → AND ノードの不詰を TT に記録
+                    // NoCheckmate は「予算切れ」と区別された確定結果のため，
+                    // OR 側と異なり budget_before ガードは不要
+                    self.table.store(pos_key, att_hand, INF, 0, rem16);
+                    return StaticMateResult::NoCheckmate;
+                }
+                StaticMateResult::Exhausted => {
+                    // 予算切れ → 結論なしで即座にリターン
+                    return StaticMateResult::Exhausted;
+                }
             }
         }
         // 全応手に対して詰み → 証明駒を現在の持ち駒でクリップ
@@ -1572,7 +1623,7 @@ impl DfPnSolver {
             and_proof[k] = and_proof[k].min(att_hand[k]);
         }
         self.table.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE);
-        Some(and_proof)
+        StaticMateResult::Checkmate(and_proof)
     }
 
     /// 玉方に1つでも王手回避手があるか高速判定する．
