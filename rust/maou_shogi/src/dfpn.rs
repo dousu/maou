@@ -359,11 +359,29 @@ impl TranspositionTable {
                 remaining,
             });
         } else {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "TT: MAX_TT_ENTRIES_PER_POSITION ({}) reached, entry dropped (hand={:?}, pn={}, dn={})",
-                MAX_TT_ENTRIES_PER_POSITION, hand, pn, dn
-            );
+            // 上限到達時: 証明/反証済みエントリを保護しつつ，
+            // 「最も未解決な」(|pn - dn| が最小の)エントリを置換する．
+            let mut worst_idx: Option<usize> = None;
+            let mut worst_score: u64 = u64::MAX;
+            for (i, e) in entries.iter().enumerate() {
+                // 証明済み(pn=0)・反証済み(dn=0)は保護
+                if e.pn == 0 || e.dn == 0 {
+                    continue;
+                }
+                // |pn - dn| が小さいほど不確定(置換優先度が高い)
+                let score = if e.pn > e.dn {
+                    (e.pn - e.dn) as u64
+                } else {
+                    (e.dn - e.pn) as u64
+                };
+                if score < worst_score {
+                    worst_score = score;
+                    worst_idx = Some(i);
+                }
+            }
+            if let Some(idx) = worst_idx {
+                entries[idx] = DfPnEntry { hand, pn, dn, remaining };
+            }
         }
     }
 
@@ -1022,6 +1040,78 @@ impl DfPnSolver {
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
+        // --- 1応手最適化 ---
+        // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
+        // 親の閾値をそのまま渡して直接再帰する．
+        // 詰将棋では王手に対する合法応手が1手のみのケースが頻出する．
+        if children.len() == 1 {
+            let (m, child_fh, child_pk, ref child_hand) = children[0];
+            loop {
+                // ノード制限・タイムアウトチェック
+                if self.nodes_searched >= self.max_nodes || self.timed_out {
+                    break;
+                }
+
+                // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
+                let (cpn, cdn) = if self.path.contains(&child_fh) {
+                    (INF, 0)
+                } else {
+                    self.look_up_pn_dn(
+                        child_pk, child_hand,
+                        remaining.saturating_sub(1),
+                    )
+                };
+                if cpn >= pn_threshold || cdn >= dn_threshold {
+                    self.store(pos_key, att_hand, cpn, cdn, remaining);
+                    break;
+                }
+                if cpn == 0 || cdn == 0 {
+                    // 子の証明/反証 → 親に伝播
+                    if or_node {
+                        if cpn == 0 {
+                            let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                            let mut proof = adjust_hand_for_move(m, &child_ph);
+                            for k in 0..HAND_KINDS {
+                                proof[k] = proof[k].min(att_hand[k]);
+                            }
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                        } else {
+                            // cdn == 0: 唯一の子が反証 → OR 反証
+                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
+                            let adj = adjust_hand_for_move(m, &child_dp);
+                            let mut dp = init_or_disproof;
+                            for k in 0..HAND_KINDS {
+                                dp[k] = dp[k].min(adj[k]);
+                            }
+                            self.store(pos_key, dp, INF, 0, remaining);
+                        }
+                    } else {
+                        if cdn == 0 {
+                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
+                            self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE);
+                        } else {
+                            // cpn == 0: 唯一の子が証明 → AND 証明
+                            let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                            let mut proof = [0u8; HAND_KINDS];
+                            for k in 0..HAND_KINDS {
+                                proof[k] = child_ph[k].min(att_hand[k]);
+                            }
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                        }
+                    }
+                    break;
+                }
+
+                let captured = profile_timed!(self, do_move_ns, do_move_count,
+                    board.do_move(m));
+                self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
+                profile_timed!(self, undo_move_ns, undo_move_count,
+                    board.undo_move(m, captured));
+            }
+            self.path.remove(&full_hash);
+            return;
+        }
+
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
             #[cfg(feature = "profile")]
@@ -1252,14 +1342,18 @@ impl DfPnSolver {
                 break;
             }
 
-            // 閾値計算
+            // 閾値計算(df-pn+ 式: ε = second_best / 4 + 1)
+            // 標準 df-pn の second_best + 1 では，best child の pn/dn が
+            // 僅かに増加しただけで親に戻りスラッシングが発生する．
+            // ε を加算して best child により多くの探索予算を与え，振動を抑制する．
             let (child_pn_th, child_dn_th) = if or_node {
                 let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
                     .min(INF - 1);
+                let epsilon = (second_best / 16).min(256) + 1;
                 let child_pn_th = pn_threshold
-                    .min(second_best.saturating_add(1))
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
@@ -1267,8 +1361,9 @@ impl DfPnSolver {
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
+                let epsilon = (second_best / 16).min(256) + 1;
                 let child_dn_th = dn_threshold
-                    .min(second_best.saturating_add(1))
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             };
@@ -1970,17 +2065,26 @@ impl DfPnSolver {
             }
         }
 
-        // 手順序: 成り駒 > 駒取り > その他(初期展開順序として tie-break に寄与)
-        // 同 pn 時の主たる tie-break は MID ループ内で dn 比較により行う
+        // 手順序: 成+取 > 成 > 取 > その他，同カテゴリ内は玉との距離でタイブレーク
+        // 近接王手を優先し，詰みに至る手を早期発見する．
+        // 距離はチェビシェフ距離(0-8)を使用し，カテゴリ(0-3) * 16 + 距離 で
+        // 単一キーにエンコードする．
+        let king_col = king_sq.col() as i8;
+        let king_row = king_sq.row() as i8;
         moves.sort_unstable_by_key(|m| {
             let promo = m.is_promotion();
             let capture = m.captured_piece_raw() > 0;
-            match (promo, capture) {
+            let category: u8 = match (promo, capture) {
                 (true, true) => 0,
                 (true, false) => 1,
                 (false, true) => 2,
                 (false, false) => 3,
-            }
+            };
+            let to = m.to_sq();
+            let dc = (to.col() as i8 - king_col).unsigned_abs();
+            let dr = (to.row() as i8 - king_row).unsigned_abs();
+            let dist = dc.max(dr); // チェビシェフ距離(0-8)
+            (category as u16) * 16 + dist as u16
         });
 
         moves
