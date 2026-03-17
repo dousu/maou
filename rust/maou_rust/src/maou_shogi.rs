@@ -334,8 +334,11 @@ impl TsumeResult {
 ///   返される手順が最短とは限らない．
 /// - `pv_nodes_per_child` (int, optional): PV 復元時の1子あたりノード予算(デフォルト 1024)．
 ///   長手数の詰将棋で `checkmate_no_pv` が返る場合に増やすと効果的．
+/// - `mate_budget` (int, optional): 静的詰め探索の1子あたりノード予算(デフォルト 0 = 無効)．
+///   0 より大きい値を設定すると，子ノード初期化時に Df-Pn のオーバーヘッドなしで
+///   再帰的に N 手詰めを検出する．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024))]
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024, mate_budget=0))]
 fn solve_tsume(
     py: Python<'_>,
     sfen: &str,
@@ -345,6 +348,7 @@ fn solve_tsume(
     timeout_secs: u64,
     find_shortest: bool,
     pv_nodes_per_child: u64,
+    mate_budget: u32,
 ) -> PyResult<TsumeResult> {
     let sfen_owned = sfen.to_owned();
     let result = py.detach(move || {
@@ -356,6 +360,7 @@ fn solve_tsume(
             Some(timeout_secs),
             Some(find_shortest),
             Some(pv_nodes_per_child),
+            Some(mate_budget),
         )
     })
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
