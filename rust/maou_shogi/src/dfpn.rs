@@ -610,7 +610,7 @@ pub struct DfPnSolver {
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
     /// この値を増やすことで PV 復元の成功率が向上する．
     pv_nodes_per_child: u64,
-    /// 静的詰め探索の1回あたりのノード予算．
+    /// 静的詰め探索の1子あたりのノード予算．
     ///
     /// 子ノード初期化時に，Df-Pn のオーバーヘッドなしで
     /// 再帰的に N 手詰めを検出する．予算を使い切ると探索を打ち切る．
@@ -1746,6 +1746,23 @@ impl DfPnSolver {
             }
         }
         // 全応手に対して詰み → 証明駒を現在の持ち駒でクリップ
+        //
+        // 注: defenses が非空にもかかわらず全手が is_in_check で
+        // スキップされた場合もここに到達する．その場合 and_proof = [0; HAND_KINDS]
+        // となり，「詰み済み」として正しく処理される(合法応手がない = 詰み)．
+        // ただし movegen が非合法手のみを返すのは想定外のため debug_assert で検出する．
+        debug_assert!(
+            defenses.is_empty()
+                || defenses.iter().any(|d| {
+                    let cap = board.do_move(*d);
+                    let legal =
+                        !board.is_in_check(board.turn.opponent());
+                    board.undo_move(*d, cap);
+                    legal
+                }),
+            "static_mate_and: 全防御手が非合法 — generate_defense_moves のバグの可能性 (pos_key={:#x})",
+            pos_key,
+        );
         for k in 0..HAND_KINDS {
             and_proof[k] = and_proof[k].min(att_hand[k]);
         }
@@ -2598,7 +2615,7 @@ pub fn solve_tsume(
 ///   返される手順が最短とは限らない．
 /// - `pv_nodes_per_child`: PV 復元時の1子あたりノード予算(None でデフォルト 1024)．
 ///   長手数の詰将棋で `CheckmateNoPv` が返る場合に増やすと効果的．
-/// - `mate_budget`: 静的詰め探索(`static_mate`)の1回あたりノード予算(None でデフォルト 0)．
+/// - `mate_budget`: 静的詰め探索(`static_mate`)の1子あたりノード予算(None でデフォルト 0)．
 ///   0 の場合は静的詰め探索を無効化する．値を増やすとノード削減効果が高まるが，
 ///   1ノードあたりの計算コストが増加する．
 pub fn solve_tsume_with_timeout(
