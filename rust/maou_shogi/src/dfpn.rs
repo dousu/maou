@@ -221,15 +221,23 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
+/// 深さ制限なし(真の証明/反証)を示す定数．
+const REMAINING_INFINITE: u16 = u16::MAX;
+
 /// 転置表のエントリ(証明駒/反証駒対応)．
 ///
 /// - hand: 登録時の攻め方の持ち駒(証明駒/反証駒として使用)
 /// - pn, dn: 証明数・反証数
+/// - remaining: 登録時の残り探索深さ(`depth - ply`)．
+///   `REMAINING_INFINITE` は深さ制限なし(真の証明/反証)を示す．
+///   深さ制限による不詰(`dn=0`)は `remaining` が有限値となり，
+///   より深い探索で再評価可能になる．
 #[derive(Debug, Clone, Copy)]
 struct DfPnEntry {
     hand: [u8; HAND_KINDS],
     pn: u32,
     dn: u32,
+    remaining: u16,
 }
 
 /// HashMap ベースの転置表(証明駒/反証駒対応)．
@@ -259,14 +267,20 @@ impl TranspositionTable {
     /// 転置表を参照する(証明駒/反証駒の優越関係を利用)．
     ///
     /// 1. 証明済みエントリ: 現在の持ち駒 >= 登録時 → (0, dn) を返す
-    /// 2. 反証済みエントリ: 登録時の持ち駒 >= 現在 → (pn, 0) を返す
+    /// 2. 反証済みエントリ: 登録時の持ち駒 >= 現在 かつ 十分な探索深さ → (pn, 0) を返す
     /// 3. 持ち駒完全一致: そのまま返す
     /// 4. 該当なし: (1, 1) を返す
+    ///
+    /// # 引数
+    ///
+    /// - `remaining`: 呼び出し元の残り探索深さ．反証済みエントリの有効性判定に使用．
+    ///   `0` を指定すると全ての反証済みエントリを受け入れる(事後クエリ用)．
     #[inline(always)]
     fn look_up(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
+        remaining: u16,
     ) -> (u32, u32) {
         let entries = match self.tt.get(&pos_key) {
             Some(e) => e,
@@ -276,12 +290,17 @@ impl TranspositionTable {
         let mut exact_match: Option<(u32, u32)> = None;
 
         for e in entries {
-            // 証明済み: 持ち駒が多い(以上)なら再利用
+            // 証明済み: 持ち駒が多い(以上)なら再利用(深さ不問)
             if e.pn == 0 && hand_gte(hand, &e.hand) {
                 return (0, e.dn);
             }
-            // 反証済み: 持ち駒が少ない(以下)なら再利用
-            if e.dn == 0 && hand_gte(&e.hand, hand) {
+            // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
+            // e.remaining < remaining の場合，より深い探索で詰みが
+            // 見つかる可能性があるため再利用しない．
+            if e.dn == 0
+                && hand_gte(&e.hand, hand)
+                && e.remaining >= remaining
+            {
                 return (e.pn, 0);
             }
             // 完全一致
@@ -294,6 +313,11 @@ impl TranspositionTable {
     }
 
     /// 転置表を更新する．
+    ///
+    /// # 引数
+    ///
+    /// - `remaining`: 登録時の残り探索深さ．
+    ///   `REMAINING_INFINITE` は深さ制限なし(真の証明/反証)を示す．
     #[inline(always)]
     fn store(
         &mut self,
@@ -301,6 +325,7 @@ impl TranspositionTable {
         hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
         let entries =
             self.tt.entry(pos_key).or_default();
@@ -308,22 +333,31 @@ impl TranspositionTable {
         // 同一持ち駒の既存エントリを更新
         for e in entries.iter_mut() {
             if e.hand == hand {
-                // 証明済み(pn=0)・反証済み(dn=0)エントリを上書きしない．
-                // complete_or_proofs 中の mid() が転置により同じ局面に到達し，
-                // 深さ制限で(INF, 0)を書き込むと証明済みエントリが破壊される．
-                // 反証済みエントリも同様に保護する．
-                if (e.pn == 0 && pn != 0) || (e.dn == 0 && dn != 0) {
+                // 証明済み(pn=0)エントリは常に保護する．
+                if e.pn == 0 && pn != 0 {
+                    return;
+                }
+                // 反証済み(dn=0)エントリは，より深い探索でのみ上書き可能．
+                // remaining > e.remaining の場合，既存の反証はより浅い探索の結果
+                // であり，深い探索で詰みが見つかる可能性がある．
+                if e.dn == 0 && remaining <= e.remaining {
                     return;
                 }
                 e.pn = pn;
                 e.dn = dn;
+                e.remaining = remaining;
                 return;
             }
         }
 
         // 新規エントリを追加(同一盤面で異なる持ち駒が大量に登録されることを防ぐ)
         if entries.len() < MAX_TT_ENTRIES_PER_POSITION {
-            entries.push(DfPnEntry { hand, pn, dn });
+            entries.push(DfPnEntry {
+                hand,
+                pn,
+                dn,
+                remaining,
+            });
         } else {
             #[cfg(debug_assertions)]
             eprintln!(
@@ -532,13 +566,16 @@ impl DfPnSolver {
     }
 
     /// 転置表を参照する(位置キー＋持ち駒指定)．
+    ///
+    /// `remaining` は反証済みエントリの有効性判定に使用する．
     #[inline]
     fn look_up_pn_dn(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
+        remaining: u16,
     ) -> (u32, u32) {
-        self.table.look_up(pos_key, hand)
+        self.table.look_up(pos_key, hand, remaining)
     }
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
@@ -549,16 +586,20 @@ impl DfPnSolver {
         hand: [u8; HAND_KINDS],
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
-        self.table.store(pos_key, hand, pn, dn);
+        self.table.store(pos_key, hand, pn, dn, remaining);
     }
 
-    /// 転置表を参照する(盤面から自動計算)．
+    /// 転置表を参照する(盤面から自動計算，事後クエリ用)．
+    ///
+    /// `remaining = 0` で全エントリを受け入れる．
+    /// PV 抽出や結果確認など，探索外での参照に使用する．
     #[inline]
     fn look_up_board(&self, board: &Board) -> (u32, u32) {
         let pk = position_key(board);
         let hand = &board.hand[self.attacker.index()];
-        self.table.look_up(pk, hand)
+        self.table.look_up(pk, hand, 0)
     }
 
     /// 転置表を更新する(盤面から自動計算)．
@@ -568,10 +609,11 @@ impl DfPnSolver {
         board: &Board,
         pn: u32,
         dn: u32,
+        remaining: u16,
     ) {
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
-        self.table.store(pk, hand, pn, dn);
+        self.table.store(pk, hand, pn, dn, remaining);
     }
 
     /// 詰将棋を解く(反復深化 Df-Pn)．
@@ -704,10 +746,13 @@ impl DfPnSolver {
             return;
         }
 
+        // 残り探索深さ
+        let remaining = self.depth.saturating_sub(ply) as u16;
+
         // TT 参照: 既に閾値を超えている/証明済み/反証済みなら
         // 手生成をスキップして早期 return
         let (tt_pn, tt_dn) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
-            self.look_up_pn_dn(pos_key, &att_hand));
+            self.look_up_pn_dn(pos_key, &att_hand, remaining));
         if tt_pn == 0 || tt_dn == 0 {
             return;
         }
@@ -718,11 +763,12 @@ impl DfPnSolver {
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
             // 実際の持ち駒で不詰を記録する．
+            // remaining = 0 で記録し，より深い探索での上書きを許可する．
             // PieceType::MAX_HAND_COUNT で保存すると，任意の持ち駒で不詰と扱われ，
             // 同じ局面が浅い ply で到達されたときも不詰として誤判定される．
             // att_hand を使うことで，持ち駒が異なる経路からの
             // 再到達時に TT ヒットせず，正しく再探索される．
-            self.store(pos_key, att_hand, INF, 0);
+            self.store(pos_key, att_hand, INF, 0, 0);
             return;
         }
 
@@ -741,7 +787,8 @@ impl DfPnSolver {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
                 // PieceType::MAX_HAND_COUNT ではなく実際の持ち駒を使用する．
-                self.store(pos_key, att_hand, INF, 0);
+                // 真の終端条件なので REMAINING_INFINITE を使用する．
+                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
@@ -749,6 +796,7 @@ impl DfPnSolver {
                     [0; HAND_KINDS],
                     0,
                     INF,
+                    REMAINING_INFINITE,
                 );
             }
             return;
@@ -777,8 +825,9 @@ impl DfPnSolver {
                 self.profile_stats.child_init_domove_count += 1;
             }
 
+            let child_remaining = remaining.saturating_sub(1);
             let (cpn, cdn) =
-                self.look_up_pn_dn(child_pk, &child_hand);
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if cpn == 1 && cdn == 1 {
                 if or_node {
                     // 1手詰め判定 + 3手詰め判定
@@ -794,6 +843,7 @@ impl DfPnSolver {
                             [0; HAND_KINDS],
                             0,
                             INF,
+                            REMAINING_INFINITE,
                         );
                     } else if ply + 2 < self.depth {
                         // 3手詰めチェック
@@ -819,6 +869,7 @@ impl DfPnSolver {
                             if mate {
                                 self.store_board(
                                     board, 0, INF,
+                                    REMAINING_INFINITE,
                                 );
                             }
                             board.undo_move(*d, cap_d);
@@ -832,15 +883,18 @@ impl DfPnSolver {
                             self.store(
                                 child_pk, child_hand, 0,
                                 INF,
+                                REMAINING_INFINITE,
                             );
                         } else {
                             self.store(
                                 child_pk, child_hand, n, n,
+                                child_remaining,
                             );
                         }
                     } else {
                         self.store(
                             child_pk, child_hand, 1, 1,
+                            child_remaining,
                         );
                     }
                     #[cfg(feature = "profile")]
@@ -862,19 +916,22 @@ impl DfPnSolver {
                         // 攻め方に王手がない → 反証駒 = 現在の持ち駒
                         self.store(
                             child_pk, child_hand, INF, 0,
+                            REMAINING_INFINITE,
                         );
                     } else if ply + 2 < self.depth
                         && self.has_mate_in_1_with(
                             board, &checks,
                         )
                     {
-                        self.store(child_pk, child_hand, 0, INF);
+                        self.store(child_pk, child_hand, 0, INF,
+                            REMAINING_INFINITE);
                     } else {
                         self.store(
                             child_pk,
                             child_hand,
                             1,
                             checks.len() as u32,
+                            child_remaining,
                         );
                     }
                     #[cfg(feature = "profile")]
@@ -897,7 +954,7 @@ impl DfPnSolver {
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
             let (cpn_now, cdn_now) =
-                self.look_up_pn_dn(child_pk, &child_hand);
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if or_node && cpn_now == 0 {
                 // OR 証明: 子の証明駒から親の証明駒を計算
                 let child_ph = self
@@ -909,7 +966,8 @@ impl DfPnSolver {
                 for k in 0..HAND_KINDS {
                     proof[k] = proof[k].min(att_hand[k]);
                 }
-                self.store(pos_key, proof, 0, INF);
+                self.store(pos_key, proof, 0, INF,
+                    REMAINING_INFINITE);
                 return;
             }
             if !or_node && cdn_now == 0 {
@@ -917,7 +975,8 @@ impl DfPnSolver {
                 let child_dp = self
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
-                self.store(pos_key, child_dp, INF, 0);
+                self.store(pos_key, child_dp, INF, 0,
+                    REMAINING_INFINITE);
                 return;
             }
             // cdn_now == 0 ブロックに入るのは or_node == true のみ．
@@ -949,6 +1008,7 @@ impl DfPnSolver {
         if or_node && children.is_empty() {
             self.store(
                 pos_key, init_or_disproof, INF, 0,
+                remaining,
             );
             return;
         }
@@ -993,6 +1053,7 @@ impl DfPnSolver {
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
+                                remaining.saturating_sub(1),
                             )
                         };
 
@@ -1014,6 +1075,7 @@ impl DfPnSolver {
                         }
                         self.store(
                             pos_key, proof, 0, INF,
+                            REMAINING_INFINITE,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1064,6 +1126,7 @@ impl DfPnSolver {
                     self.store(
                         pos_key, or_disproof,
                         INF, 0,
+                        remaining,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1086,6 +1149,7 @@ impl DfPnSolver {
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
+                                remaining.saturating_sub(1),
                             )
                         };
 
@@ -1099,6 +1163,7 @@ impl DfPnSolver {
                             );
                         self.store(
                             pos_key, child_dp, INF, 0,
+                            REMAINING_INFINITE,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1156,6 +1221,7 @@ impl DfPnSolver {
                     }
                     self.store(
                         pos_key, and_proof, 0, INF,
+                        REMAINING_INFINITE,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1170,7 +1236,7 @@ impl DfPnSolver {
 
             // 転置表を更新
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store(pos_key, att_hand, current_pn, current_dn));
+                self.store(pos_key, att_hand, current_pn, current_dn, remaining));
 
             // 閾値チェック
             if current_pn >= pn_threshold
@@ -1240,7 +1306,8 @@ impl DfPnSolver {
             // 詰み局面を TT に記録するために do_move が必要
             let captured = board.do_move(mate_move);
             let pk = position_key(board);
-            self.store(pk, [0; HAND_KINDS], 0, INF);
+            self.store(pk, [0; HAND_KINDS], 0, INF,
+                REMAINING_INFINITE);
             board.undo_move(mate_move, captured);
             return true;
         }
@@ -1249,9 +1316,12 @@ impl DfPnSolver {
 
     /// 予算制の静的詰め探索(OR ノード側)．
     ///
-    /// DF-PN の TT・閾値・パス管理なしで，純粋な再帰探索により
+    /// DF-PN の閾値・パス管理なしで，純粋な再帰探索により
     /// N 手詰めを検出する．`budget` を消費しながら可能な限り深く探索し，
     /// 予算を使い切ると「不明」を返す．
+    ///
+    /// TT を参照して既に証明/反証済みの局面をスキップし，
+    /// 詰み検出時は TT に記録して DF-PN 本探索で再利用する．
     ///
     /// # 引数
     /// - `board`: 攻め方の手番(OR ノード)．
@@ -1260,7 +1330,7 @@ impl DfPnSolver {
     ///
     /// # 戻り値
     /// - 0: 詰み検出なし
-    /// - 1: 詰み検出(TT 記録なし)
+    /// - 1: 詰み検出
     #[allow(dead_code)]
     fn static_mate_or(
         &mut self,
@@ -1273,12 +1343,27 @@ impl DfPnSolver {
         }
         *budget = budget.saturating_sub(1);
 
-        let checks = self.generate_check_moves(board);
-        if checks.is_empty() {
+        // TT 参照: 証明/反証済みならスキップ
+        let pos_key = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let rem16 = remaining as u16;
+        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        if tt_pn == 0 {
+            return 1;
+        }
+        if tt_dn == 0 {
             return 0;
         }
 
-        // ビットボードベースの高速1手詰め判定(TT 記録なし)．
+        let checks = self.generate_check_moves(board);
+        if checks.is_empty() {
+            // 王手手段なし → 不詰を TT に記録
+            self.table.store(pos_key, att_hand, INF, 0,
+                REMAINING_INFINITE);
+            return 0;
+        }
+
+        // ビットボードベースの高速1手詰め判定．
         let us = board.turn;
         if board.mate_move_in_1ply(checks.as_slice(), us).is_some() {
             return 1;
@@ -1293,19 +1378,25 @@ impl DfPnSolver {
             let mate_result = self.static_mate_and(board, remaining - 1, budget);
             board.undo_move(*m, captured);
             if mate_result > 0 {
+                // 詰み検出: 現在の持ち駒で TT に記録
+                // (証明駒は最小ではないが，Df-Pn が後で最適化する)
+                self.table.store(pos_key, att_hand, 0, INF,
+                    REMAINING_INFINITE);
                 return 1;
             }
             if *budget == 0 {
                 return 0;
             }
         }
+        // 全王手で詰まず: 探索範囲内の不詰を記録
+        self.table.store(pos_key, att_hand, INF, 0, rem16);
         0
     }
 
     /// 予算制の静的詰め探索(AND ノード側)．
     ///
-    /// TT への記録は一切行わない．DF-PN が正しい proof hand で
-    /// 改めて探索するため，予算制探索はヒント判定のみを担う．
+    /// TT を参照して既に証明/反証済みの局面をスキップし，
+    /// 結果を TT に記録する．
     ///
     /// # 戻り値
     /// - 0: 詰み検出なし
@@ -1321,8 +1412,23 @@ impl DfPnSolver {
         }
         *budget = budget.saturating_sub(1);
 
+        // TT 参照: 証明/反証済みならスキップ
+        let pos_key = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let rem16 = remaining as u16;
+        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        if tt_pn == 0 {
+            return 1;
+        }
+        if tt_dn == 0 {
+            return 0;
+        }
+
         let defenses = self.generate_defense_moves(board);
         if defenses.is_empty() {
+            // 応手なし → 詰み(証明駒 = 空)
+            self.table.store(pos_key, [0; HAND_KINDS], 0, INF,
+                REMAINING_INFINITE);
             return 1;
         }
         if remaining < 2 {
@@ -1341,6 +1447,9 @@ impl DfPnSolver {
                 return 0;
             }
         }
+        // 全応手に対して詰み → TT に記録
+        self.table.store(pos_key, att_hand, 0, INF,
+            REMAINING_INFINITE);
         1
     }
 
