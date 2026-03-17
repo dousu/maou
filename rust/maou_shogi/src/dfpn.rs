@@ -1515,6 +1515,7 @@ impl DfPnSolver {
         // 蓄積された AND 不詰 TT エントリが連鎖的に再利用され，
         // remaining が不正にエスカレートする問題が発生する．
         // AND 側は逃れ手1つで確定するためこの問題は生じない．
+        let mut has_exhausted = false;
         for m in &checks {
             let captured = board.do_move(*m);
             let child_result = self.static_mate_and(board, remaining - 1, budget);
@@ -1532,13 +1533,21 @@ impl DfPnSolver {
                     // この王手は確定的に不成立 → 次の王手を試す
                 }
                 StaticMateResult::Exhausted => {
+                    has_exhausted = true;
                     if *budget == 0 {
                         return StaticMateResult::Exhausted;
                     }
                 }
             }
         }
-        StaticMateResult::Exhausted
+        // 全王手を試行済み:
+        // - Exhausted な子が1つでもあれば結論未確定
+        // - 全子が NoCheckmate なら確定的に不詰
+        if has_exhausted {
+            StaticMateResult::Exhausted
+        } else {
+            StaticMateResult::NoCheckmate
+        }
     }
 
     /// 予算制の静的詰め探索(AND ノード側)．
@@ -1577,7 +1586,8 @@ impl DfPnSolver {
             return StaticMateResult::Checkmate([0; HAND_KINDS]);
         }
         if remaining < 2 {
-            return StaticMateResult::NoCheckmate;
+            // 応手はあるが残り深さ不足で再帰不可 → 予算切れ扱い
+            return StaticMateResult::Exhausted;
         }
 
         // 全応手に詰みがあるか確認(証明駒は要素ごと max)
