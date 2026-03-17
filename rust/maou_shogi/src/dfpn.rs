@@ -1065,10 +1065,11 @@ impl DfPnSolver {
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
-        // --- 1応手最適化 ---
+        // --- 単一子最適化 ---
         // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
         // 親の閾値をそのまま渡して直接再帰する．
-        // 詰将棋では王手に対する合法応手が1手のみのケースが頻出する．
+        // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
+        // ケースが詰将棋で頻出する．
         if children.len() == 1 {
             let (m, child_fh, child_pk, ref child_hand) = children[0];
             loop {
