@@ -261,7 +261,16 @@ def bench_tsume() -> None:
     print("-" * len(header))
 
     for name, (sfen, depth) in TSUME_PROBLEMS.items():
-        # maou
+        # maou (find_shortest=False — cshogi相当)
+        t0 = time.perf_counter()
+        result_fast = solve_tsume(
+            sfen, depth=depth, nodes=max_nodes, find_shortest=False
+        )
+        maou_fast_ms = (time.perf_counter() - t0) * 1000
+        mf_nodes = result_fast.nodes_searched
+        mf_pv = len(result_fast.moves) if result_fast.status == "checkmate" else 0
+
+        # maou (find_shortest=True — 最短手数探索)
         t0 = time.perf_counter()
         result = solve_tsume(sfen, depth=depth, nodes=max_nodes)
         maou_ms = (time.perf_counter() - t0) * 1000
@@ -284,20 +293,31 @@ def bench_tsume() -> None:
                 c_pv_list.append(cshogi.move_to_usi(m))
         c_pv = len(c_pv_list)
 
-        ratio = _ratio_str(maou_ms, cshogi_ms)
+        # maou (find_shortest=False) vs cshogi
+        ratio_fast = _ratio_str(maou_fast_ms, cshogi_ms)
         print(
-            f"{name:<14}{maou_ms:>9.1f}{cshogi_ms:>11.1f}{ratio:>7}"
-            f"{_fmt_nps(m_nodes, maou_ms):>10}"
+            f"{name:<14}{maou_fast_ms:>9.1f}{cshogi_ms:>11.1f}{ratio_fast:>7}"
+            f"{_fmt_nps(mf_nodes, maou_fast_ms):>10}"
             f"{_fmt_nps(c_nodes, cshogi_ms):>10}"
-            f"{m_nodes:>9}{c_nodes:>9}"
-            f"{m_pv:>5}{c_pv:>5}"
+            f"{mf_nodes:>9}{c_nodes:>9}"
+            f"{mf_pv:>5}{c_pv:>5}"
+        )
+        # maou (find_shortest=True) — 参考
+        ratio_full = _ratio_str(maou_ms, cshogi_ms)
+        print(
+            f"  (shortest)  {maou_ms:>9.1f}{'':>11}{ratio_full:>7}"
+            f"{_fmt_nps(m_nodes, maou_ms):>10}{'':>10}"
+            f"{m_nodes:>9}{'':>9}"
+            f"{m_pv:>5}"
         )
 
         # Show PV
-        if result.status == "checkmate":
-            print(f"  maou  : {' '.join(result.moves)}")
+        if result_fast.status == "checkmate":
+            print(f"  maou(fast): {' '.join(result_fast.moves)}")
+        if result.status == "checkmate" and result.moves != result_fast.moves:
+            print(f"  maou(short): {' '.join(result.moves)}")
         if found:
-            print(f"  cshogi: {' '.join(c_pv_list)}")
+            print(f"  cshogi    : {' '.join(c_pv_list)}")
 
 
 # ---------------------------------------------------------------------------
