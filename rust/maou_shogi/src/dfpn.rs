@@ -973,6 +973,11 @@ impl DfPnSolver {
                     // OR ノードの子(AND 局面): 静的詰め判定
                     // remaining が budget に対して大きすぎる場合は呼び出しを
                     // スキップする(Exhausted になるだけで NPS を浪費するため)．
+                    //
+                    // 閾値 budget * 2 + 1 の根拠: static_mate は TT ヒット時に
+                    // budget を消費しないため，DFPN 本体が蓄積した TT エントリを
+                    // 活用すれば budget の約2倍の深さまで到達しうる．
+                    // +1 は奇数手詰め(攻方始動)との端数調整．
                     if self.mate_budget > 0 && remaining >= 3
                         && u32::from(child_remaining) <= self.mate_budget * 2 + 1
                     {
@@ -990,6 +995,8 @@ impl DfPnSolver {
                                 // 確定的に不詰: 応手数で初期 pn/dn を設定
                                 // (static_mate_and 内で TT に不詰記録済みだが，
                                 //  応手数に基づく初期値も記録する)
+                                // 注: static_mate_and 内でも generate_defense_moves
+                                // を実行済みだが，初期 pn/dn 設定のため再計算が必要．
                                 let defenses = self.generate_defense_moves(board);
                                 let n = defenses.len() as u32;
                                 if n == 0 {
@@ -1006,6 +1013,8 @@ impl DfPnSolver {
                                 // 予算切れ: 応手数で初期 pn/dn を設定．
                                 // n=1 だと (1,1) になり再度 static_mate が
                                 // トリガーされるため dn を最低2にする．
+                                // 注: static_mate_and 内でも generate_defense_moves
+                                // を実行済みだが，初期 pn/dn 設定のため再計算が必要．
                                 let defenses = self.generate_defense_moves(board);
                                 let n = defenses.len() as u32;
                                 if n == 0 {
@@ -1072,6 +1081,7 @@ impl DfPnSolver {
                     }
                 } else {
                     // AND ノードの子(OR 局面): 静的詰め判定
+                    // 閾値の根拠は OR 側と同一(budget * 2 + 1)．
                     if self.mate_budget > 0 && remaining >= 3
                         && u32::from(child_remaining) <= self.mate_budget * 2 + 1
                     {
