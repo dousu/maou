@@ -1587,15 +1587,16 @@ impl DfPnSolver {
         remaining: u32,
         budget: &mut u32,
     ) -> StaticMateResult {
-        if *budget == 0 || remaining == 0 {
+        if remaining == 0 {
             return StaticMateResult::Exhausted;
         }
-        *budget = budget.saturating_sub(1);
 
         let pos_key = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
         let rem16 = remaining as u16;
         let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        // TT に証明/反証エントリがある場合は budget を消費せず即返却．
+        // budget は「新規に探索するノード数」の制限として機能させる．
         if tt_pn == 0 {
             return StaticMateResult::Checkmate(
                 self.table.get_proof_hand(pos_key, &att_hand),
@@ -1604,6 +1605,12 @@ impl DfPnSolver {
         if tt_dn == 0 {
             return StaticMateResult::NoCheckmate;
         }
+
+        // TT miss: ここで初めて budget を消費
+        if *budget == 0 {
+            return StaticMateResult::Exhausted;
+        }
+        *budget = budget.saturating_sub(1);
 
         let checks = self.generate_check_moves(board);
         if checks.is_empty() {
@@ -1683,15 +1690,15 @@ impl DfPnSolver {
         remaining: u32,
         budget: &mut u32,
     ) -> StaticMateResult {
-        if *budget == 0 || remaining == 0 {
+        if remaining == 0 {
             return StaticMateResult::Exhausted;
         }
-        *budget = budget.saturating_sub(1);
 
         let pos_key = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
         let rem16 = remaining as u16;
         let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        // TT に証明/反証エントリがある場合は budget を消費せず即返却．
         if tt_pn == 0 {
             return StaticMateResult::Checkmate(
                 self.table.get_proof_hand(pos_key, &att_hand),
@@ -1700,6 +1707,12 @@ impl DfPnSolver {
         if tt_dn == 0 {
             return StaticMateResult::NoCheckmate;
         }
+
+        // TT miss: ここで初めて budget を消費
+        if *budget == 0 {
+            return StaticMateResult::Exhausted;
+        }
+        *budget = budget.saturating_sub(1);
 
         let defenses = self.generate_defense_moves(board);
         if defenses.is_empty() {
