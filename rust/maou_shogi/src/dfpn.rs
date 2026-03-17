@@ -870,6 +870,8 @@ impl DfPnSolver {
                                 let defenses = self.generate_defense_moves(board);
                                 let n = defenses.len() as u32;
                                 if n == 0 {
+                                    // 応手なし → 即詰み確定(静的詰め探索のヒットではなく
+                                    // 合法応手が存在しないことによる確定)
                                     self.store(child_pk, [0; HAND_KINDS], 0, INF,
                                         REMAINING_INFINITE);
                                     #[cfg(feature = "profile")]
@@ -884,6 +886,7 @@ impl DfPnSolver {
                         // budget=0: インライン1手・3手詰め判定
                         let defenses = self.generate_defense_moves(board);
                         if defenses.is_empty() {
+                            // 応手なし → 即詰み確定(budget=0 パスでの検出)
                             self.store(child_pk, [0; HAND_KINDS], 0, INF,
                                 REMAINING_INFINITE);
                             #[cfg(feature = "profile")]
@@ -2477,6 +2480,9 @@ pub fn solve_tsume(
 ///   返される手順が最短とは限らない．
 /// - `pv_nodes_per_child`: PV 復元時の1子あたりノード予算(None でデフォルト 1024)．
 ///   長手数の詰将棋で `CheckmateNoPv` が返る場合に増やすと効果的．
+/// - `mate_budget`: 静的詰め探索(`static_mate`)の1回あたりノード予算(None でデフォルト 0)．
+///   0 の場合は静的詰め探索を無効化する．値を増やすとノード削減効果が高まるが，
+///   1ノードあたりの計算コストが増加する．
 pub fn solve_tsume_with_timeout(
     sfen: &str,
     depth: Option<u32>,
