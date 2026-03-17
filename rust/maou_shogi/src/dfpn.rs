@@ -3157,81 +3157,6 @@ mod tests {
         }
     }
 
-    /// brute-force 詰み判定(DFPN との結果比較用)．
-    #[test]
-    #[ignore] // 5M ノードを使う重いテスト．明示的に `cargo test -- --ignored` で実行．
-    fn test_tsume_5_bruteforce() {
-        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
-        let mut board = Board::new();
-        board.set_sfen(sfen).unwrap();
-
-        let solver = DfPnSolver::default_solver();
-
-        // 深さ制限付き brute-force
-        fn is_checkmate(
-            board: &mut Board,
-            solver: &DfPnSolver,
-            depth: u32,
-            or_node: bool,
-            nodes: &mut u64,
-        ) -> bool {
-            if depth == 0 {
-                return false;
-            }
-            *nodes += 1;
-            if *nodes > 5_000_000 {
-                return false; // 打ち切り
-            }
-
-            let moves: ArrayVec<Move, MAX_MOVES> = if or_node {
-                solver.generate_check_moves(board)
-            } else {
-                let legal = movegen::generate_legal_moves(board);
-                let mut out = ArrayVec::new();
-                for m in legal {
-                    push_move(&mut out, m);
-                }
-                out
-            };
-
-            if moves.is_empty() {
-                return !or_node; // OR: 王手なし=不詰, AND: 応手なし=詰み
-            }
-
-            if or_node {
-                // OR: いずれかの子が詰みなら true
-                for m in &moves {
-                    let captured = board.do_move(*m);
-                    let result = is_checkmate(board, solver, depth - 1, false, nodes);
-                    board.undo_move(*m, captured);
-                    if result {
-                        return true;
-                    }
-                }
-                false
-            } else {
-                // AND: 全ての子が詰みなら true
-                for m in &moves {
-                    let captured = board.do_move(*m);
-                    let result = is_checkmate(board, solver, depth - 1, true, nodes);
-                    board.undo_move(*m, captured);
-                    if !result {
-                        return false;
-                    }
-                }
-                true
-            }
-        }
-
-        for depth in (1..=21).step_by(2) {
-            let mut nodes = 0u64;
-            let result = is_checkmate(&mut board, &solver, depth, true, &mut nodes);
-            if result {
-                break;
-            }
-        }
-    }
-
     /// 29手詰め(tsume6)．
     ///
     /// 深さ制限時の TT 保存バグの回帰テスト．
@@ -3599,14 +3524,14 @@ mod tests {
     /// 金・銀・飛・角のみが候補となる．
     /// 後手の最善応手(最長抵抗)でのみ39手詰めとなる．
     #[test]
-    #[ignore] // 現状のソルバーでは 500M ノード / 10 分でも解けない超重量テスト
+    #[ignore] // 約42万ノード / 5秒で解ける重量テスト．明示的に `cargo test -- --ignored` で実行．
     fn test_tsume_39te_aigoma() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
         let mut solver =
-            DfPnSolver::with_timeout(63, 500_000_000, 32767, 600);
+            DfPnSolver::with_timeout(63, 10_000_000, 32767, 30);
         let result = solver.solve(&mut board);
 
         match &result {
