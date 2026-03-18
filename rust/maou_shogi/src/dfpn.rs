@@ -38,6 +38,14 @@ fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
 
+/// AND ノードで合駒(drop)を後回しにするための dn バイアス．
+///
+/// AND ノード(玉方手番)で王の移動・駒取りなどの非合駒応手を先に
+/// 展開すると，それらの証明エントリが転置表に蓄積される．
+/// その後に合駒の分岐を探索する際，攻め方が合駒を取った後の
+/// 局面が既に証明済みになっていることが多く，高速に証明できる．
+const INTERPOSE_DN_BIAS: u32 = INF / 2;
+
 /// プロファイリング計測マクロ．
 ///
 /// `profile` feature が有効な場合のみ計測し，結果をフィールドに加算する．
@@ -331,8 +339,14 @@ impl TranspositionTable {
             {
                 return (e.pn, 0);
             }
-            // 完全一致
-            if exact_match.is_none() && e.hand == *hand {
+            // 完全一致(pn=0/dn=0 は上で個別に処理済みなのでスキップ)
+            // dn=0 かつ remaining 不足のエントリを拾うと，深さ制限による
+            // 仮の不詰み判定が深い探索に漏洩するバグを防ぐ．
+            if exact_match.is_none()
+                && e.hand == *hand
+                && e.pn != 0
+                && e.dn != 0
+            {
                 exact_match = Some((e.pn, e.dn));
             }
         }
@@ -523,6 +537,18 @@ impl TranspositionTable {
     /// 全エントリをクリアする．
     fn clear(&mut self) {
         self.tt.clear();
+    }
+
+    /// 証明済み(pn=0)エントリのみ保持し，他を全て除去する．
+    ///
+    /// 反復深化 df-pn で使用: 浅い深さの中間エントリや
+    /// 深さ制限による仮反証エントリを除去しつつ，
+    /// 確定した証明エントリは再利用する．
+    fn retain_proofs(&mut self) {
+        self.tt.retain(|_key, entries| {
+            entries.retain(|e| e.pn == 0);
+            !entries.is_empty()
+        });
     }
 
     /// プロファイル統計をリセットする．
@@ -772,9 +798,74 @@ impl DfPnSolver {
             self.table.reset_profile();
         }
 
-        // 単一パス Df-Pn: 反復深化なしで全深さを一度に探索．
-        // 証明数・反証数が自然に探索を最も有望な手順に誘導する．
-        self.mid(board, INF - 1, INF - 1, 0, true);
+        let target_depth = self.depth;
+
+        // 反復深化 df-pn: 浅い深さから段階的に深くし，TT を温める．
+        //
+        // 浅い探索で証明されたサブツリー(pn=0)は深い探索で TT ヒットし，
+        // AND ノードの子ノード証明を加速する．各イテレーション後，
+        // 証明エントリのみ保持し，深さ制限による仮反証や中間エントリは
+        // 除去する(retain_proofs)．これにより浅い探索のゴミが
+        // 深い探索を汚染することを防ぐ．
+        //
+        // depth ≤ 15 では反復のオーバーヘッドが効果を上回るため省略．
+        // 各反復のノード予算は全体の 1/(残り反復数) を配分する．
+        // 開始深さ: target_depth - 12 (PV 上の最深ボトルネックに到達可能)
+        if target_depth > 15 {
+            let start_depth = target_depth.saturating_sub(12).max(7);
+            let mut d = start_depth;
+            while d < target_depth {
+                self.depth = d;
+                self.path.clear();
+
+                // 各反復のノード予算
+                let remaining_iters =
+                    ((target_depth - d) / 2 + 1) as u64;
+                let iter_budget = (self.max_nodes
+                    .saturating_sub(self.nodes_searched))
+                    / remaining_iters.max(1);
+                let iter_limit = self.nodes_searched + iter_budget;
+                let saved_max = self.max_nodes;
+                self.max_nodes = iter_limit;
+
+                self.mid(board, INF - 1, INF - 1, 0, true);
+
+                self.max_nodes = saved_max;
+
+                // 証明/反証をチェック(target_depth の remaining で評価)
+                let root_pk = position_key(board);
+                let root_hand = &board.hand[self.attacker.index()];
+                let (root_pn, root_dn) = self.table.look_up(
+                    root_pk, root_hand, target_depth as u16,
+                );
+                if root_pn == 0 || root_dn == 0 {
+                    break;
+                }
+                if self.nodes_searched >= saved_max || self.timed_out {
+                    break;
+                }
+
+                // 証明エントリのみ保持し，中間・仮反証エントリを除去
+                self.table.retain_proofs();
+
+                d += 2;
+            }
+
+            // 最終パスの準備
+            self.depth = target_depth;
+        }
+
+        // メインパス: target_depth で残りノード予算を使用
+        self.path.clear();
+        {
+            let (root_pn, root_dn) = self.look_up_board(board);
+            if root_pn != 0 && root_dn != 0
+                && self.nodes_searched < self.max_nodes
+                && !self.timed_out
+            {
+                self.mid(board, INF - 1, INF - 1, 0, true);
+            }
+        }
 
         let (root_pn, root_dn) = self.look_up_board(board);
 
@@ -1416,12 +1507,17 @@ impl DfPnSolver {
                 // AND ノード: sum(pn), min(dn)
                 current_pn = 0;
                 current_dn = INF;
-                second_best = INF; // 2番目に小さい dn
+                second_best = INF; // 2番目に小さい dn(選択用，バイアス込み)
                 let mut all_proved = true;
                 let mut and_proof =
                     [0u8; HAND_KINDS]; // 証明駒の和集合(max)
+                // 合駒後回し最適化: 王移動・駒取りなどの非合駒応手を
+                // 先に展開し，証明エントリを転置表に蓄積させる．
+                // 合駒分岐は攻め方が取った後の局面が既に証明済みに
+                // なっていることが多く，高速に証明できる．
+                let mut best_effective_dn: u32 = INF;
 
-                for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
+                for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
                     let (cpn, cdn) =
@@ -1475,16 +1571,26 @@ impl DfPnSolver {
                         .saturating_add(cpn as u64)
                         .min(INF as u64)
                         as u32;
-                    if cdn < current_dn
-                        || (cdn == current_dn
+                    // TT 保存用: 真の min(dn)
+                    if cdn < current_dn {
+                        current_dn = cdn;
+                    }
+                    // 子ノード選択用: 合駒(drop)にバイアスを加算
+                    let effective_cdn = if m.is_drop() {
+                        cdn.saturating_add(INTERPOSE_DN_BIAS)
+                    } else {
+                        cdn
+                    };
+                    if effective_cdn < best_effective_dn
+                        || (effective_cdn == best_effective_dn
                             && cpn < best_pn_dn.0)
                     {
-                        second_best = current_dn;
-                        current_dn = cdn;
+                        second_best = best_effective_dn;
+                        best_effective_dn = effective_cdn;
                         best_idx = i;
                         best_pn_dn = (cpn, cdn);
-                    } else if cdn < second_best {
-                        second_best = cdn;
+                    } else if effective_cdn < second_best {
+                        second_best = effective_cdn;
                     }
                 }
 
@@ -3953,4 +4059,427 @@ mod tests {
         );
     }
 
+    /// 39手詰め正解 PV 上の各局面における分岐数・手生成数を診断する．
+    ///
+    /// PV を1手ずつ進めながら，各局面で:
+    /// - OR ノード(攻め方): generate_check_moves の手数
+    /// - AND ノード(守備方): generate_defense_moves の手数
+    /// を出力し，探索がどこでノードを浪費しているかを特定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_pv_trace() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", // 1. ６二成桂
+            "5b4c", // 2. ４三玉
+            "8b9c", // 3. ９三龍
+            "4c3d", // 4. ３四玉
+            "1b2c", // 5. ２三銀
+            "3d2c", // 6. 同玉
+            "N*1e", // 7. １五桂打
+            "2c3b", // 8. ３二玉
+            "N*2d", // 9. ２四桂打
+            "3b2b", // 10. ２二玉
+            "2d1b+", // 11. １二桂成
+            "2b3b", // 12. ３二玉
+            "1b2b", // 13. ２二成桂
+            "3b2b", // 14. 同玉
+            "4f1c", // 15. １三馬
+            "2b1c", // 16. 同玉
+            "9c3c", // 17. ３三龍
+            "1c1d", // 18. １四玉
+            "3c2c", // 19. ２三龍
+            "1d1e", // 20. １五玉
+            "P*1f", // 21. １六歩打
+            "1e1f", // 22. 同玉
+            "P*1g", // 23. １七歩打
+            "1f1g", // 24. 同玉
+            "5g6f", // 25. ６六銀
+            "1g1h", // 26. １八玉
+            "2c2g", // 27. ２七龍
+            "1h1i", // 28. １九玉
+            "8g8i", // 29. ８九飛
+            "S*6i", // 30. ６九銀打
+            "8i6i", // 31. 同飛
+            "6h6i+", // 32. 同歩成
+            "S*2h", // 33. ２八銀打
+            "1i2i", // 34. ２九玉
+            "2h3g", // 35. ３七銀
+            "2i3i", // 36. ３九玉
+            "2g2h", // 37. ２八龍
+            "3i4i", // 38. ４九玉
+            "2h4h", // 39. ４八龍
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let solver = DfPnSolver::default_solver();
+
+        eprintln!("\n{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} {}",
+            "Ply", "Node", "Moves", "Drops", "Total", "PV Move", "Sample moves (first 10)");
+        eprintln!("{}", "-".repeat(90));
+
+        for (i, &usi) in pv_usi.iter().enumerate() {
+            let ply = i + 1;
+            let is_or = (ply % 2) == 1; // 奇数手=攻め方(OR), 偶数手=守備方(AND)
+
+            let moves = if is_or {
+                solver.generate_check_moves(&mut board)
+            } else {
+                solver.generate_defense_moves(&mut board)
+            };
+
+            // ドロップ手のカウント
+            let drop_count = moves.iter().filter(|m| m.is_drop()).count();
+            let move_count = moves.len() - drop_count;
+
+            // 正解手が手リストに含まれているか確認
+            let expected_move = board.move_from_usi(usi)
+                .unwrap_or_else(|| panic!("Invalid USI at ply {}: {}", ply, usi));
+            let found = moves.iter().any(|m| *m == expected_move);
+
+            // サンプル表示(ply 4 は全手, それ以外は先頭10手)
+            let limit = if ply == 4 { moves.len() } else { 10 };
+            let sample: Vec<String> = moves.iter().take(limit).map(|m| m.to_usi()).collect();
+
+            let node_type = if is_or { "OR" } else { "AND" };
+            let mark = if !found { " *** MISSING ***" } else { "" };
+
+            eprintln!("{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} [{}]{}",
+                ply, node_type, move_count, drop_count, moves.len(),
+                usi, sample.join(", "), mark);
+
+            // 手を適用して次の局面へ
+            board.do_move(expected_move);
+        }
+
+        // 最終局面が詰みかチェック
+        let final_defenses = solver.generate_defense_moves(&mut board);
+        eprintln!("\n最終局面(39手目後)の回避手数: {}", final_defenses.len());
+        if final_defenses.is_empty() {
+            eprintln!("→ 詰み!");
+        } else {
+            let sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
+            eprintln!("→ 回避手あり: [{}]", sample.join(", "));
+        }
+    }
+
+    /// Ply 4 の AND ノードにおける各子ノードの探索難易度を診断する．
+    ///
+    /// 各回避手を適用した局面に対して小予算ソルブを実行し，
+    /// 消費ノード数・結果を比較する．AND ノードでは 1 つの不詰み子
+    /// が見つかれば十分なので，簡単な子が先に試されるべき．
+    #[test]
+    #[ignore]
+    fn test_ply4_child_node_difficulty() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_setup = ["7b6b", "5b4c", "8b9c"]; // 3手進めて ply 4 の局面へ
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // ply 4: 後手番(AND ノード)
+        assert_eq!(board.turn, Color::White);
+
+        let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+
+        eprintln!("\nPly 4 子ノード難易度診断 (budget=100,000 nodes, depth=37)");
+        eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}",
+            "#", "Move", "Type", "Nodes", "Result", "PV len");
+        eprintln!("{}", "-".repeat(65));
+
+        for (i, &defense) in defenses.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(defense);
+
+            // 攻め方視点でソルブ (残り depth=37, budget=100K)
+            let mut child_solver = DfPnSolver::new(37, 100_000, 32767);
+            child_solver.set_find_shortest(false);
+            let result = child_solver.solve(&mut child_board);
+
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, pv_len) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched: _ } =>
+                    (format!("MATE"), moves.len()),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    (format!("MATE(nopv)"), 0),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    (format!("NO_MATE"), 0),
+                TsumeResult::Unknown { nodes_searched } =>
+                    (format!("UNKNOWN"), 0),
+            };
+            let nodes = match &result {
+                TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
+                TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
+                TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
+                TsumeResult::Unknown { nodes_searched, .. } => *nodes_searched,
+            };
+
+            let is_correct = defense.to_usi() == "4c3d";
+            let marker = if is_correct { " ← CORRECT" } else { "" };
+
+            eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}{}",
+                i + 1, defense.to_usi(), move_type, nodes, result_str, pv_len, marker);
+        }
+    }
+
+    /// PV 上の各サブ問題(守備方の手後 = 攻め方番)を個別ソルブし，
+    /// どの深さからソルブ困難になるかを特定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_subproblem_solve() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        eprintln!("\n{:>5} {:>8} {:>10} {:>10} {:>8}",
+            "After", "Remain", "Nodes", "Time(ms)", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        for (i, &usi) in pv_usi.iter().enumerate() {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+
+            // 偶数手後(偶数 i) = 攻め方の手後 → 守備方番
+            // 奇数手後(奇数 i) = 守備方の手後 → 攻め方番 = OR サブ問題
+            if i % 2 == 1 {
+                let remaining = 39 - (i + 1);
+                let mut solver = DfPnSolver::new(
+                    (remaining + 2) as u32, 2_000_000, 32767,
+                );
+                solver.set_find_shortest(false);
+                let start = Instant::now();
+                let mut test_board = board.clone();
+                let result = solver.solve(&mut test_board);
+                let elapsed = start.elapsed();
+
+                let (status, nodes) = match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } =>
+                        (format!("MATE({})", moves.len()), *nodes_searched),
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        ("MATE(nopv)".into(), *nodes_searched),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        ("NO_MATE".into(), *nodes_searched),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        ("UNKNOWN".into(), *nodes_searched),
+                };
+
+                eprintln!("{:>5} {:>8} {:>10} {:>10.1} {:>8}",
+                    format!("ply{}", i + 1), remaining, nodes,
+                    elapsed.as_secs_f64() * 1000.0, status);
+            }
+        }
+    }
+
+    /// ply 2, 4, 6 の AND ノード子ノード難易度を診断する．
+    #[test]
+    #[ignore]
+    fn test_early_and_node_child_difficulty() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b",
+        ];
+
+        // ply 2, 4, 6 のサブ問題を診断
+        for &target_ply in &[2usize, 4, 6] {
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
+            for i in 0..(target_ply - 1) {
+                let m = board.move_from_usi(pv_usi[i]).unwrap();
+                board.do_move(m);
+            }
+            // target_ply-1 手目まで進めた局面(AND ノード)
+            let solver = DfPnSolver::default_solver();
+            let defenses = solver.generate_defense_moves(&mut board);
+
+            eprintln!("\n=== Ply {} AND ノード: {} 子 ===", target_ply, defenses.len());
+            let remaining = 39 - target_ply;
+
+            for (j, &defense) in defenses.iter().enumerate() {
+                let mut child_board = board.clone();
+                child_board.do_move(defense);
+                let mut child_solver = DfPnSolver::new(
+                    (remaining + 2) as u32, 500_000, 32767,
+                );
+                child_solver.set_find_shortest(false);
+                let start = Instant::now();
+                let result = child_solver.solve(&mut child_board);
+                let elapsed = start.elapsed();
+
+                let (status, nodes) = match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } =>
+                        (format!("MATE({})", moves.len()), *nodes_searched),
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        ("MATE(nopv)".into(), *nodes_searched),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        ("NO_MATE".into(), *nodes_searched),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        ("UNKNOWN".into(), *nodes_searched),
+                };
+
+                let is_correct = defense.to_usi() == pv_usi[target_ply - 1];
+                let marker = if is_correct { " ← PV" } else { "" };
+                let move_type = if defense.is_drop() { "drop" } else { "move" };
+
+                eprintln!("  {:>2}. {:>8} {:>5} {:>8} {:>8.1}ms {}{}",
+                    j + 1, defense.to_usi(), move_type, nodes,
+                    elapsed.as_secs_f64() * 1000.0, status, marker);
+            }
+        }
+    }
+
+    /// Ply 4 の合駒マスに対する futile/chain 判定を直接検証する．
+    #[test]
+    #[ignore]
+    fn test_ply4_futile_analysis() {
+        let sq_name = |sq: Square| -> String {
+            let file = sq.col() + 1; // col=0→1筋
+            let rank = (b'a' + sq.row()) as char;
+            format!("{}{}", file, rank)
+        };
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_setup = ["7b6b", "5b4c", "8b9c"];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let defender = board.turn; // White
+        let attacker = defender.opponent(); // Black
+        let king_sq = board.king_square(defender).unwrap();
+
+        // 王手駒を特定
+        let checkers = board.compute_checkers_at(king_sq, attacker);
+        let checker_sq = checkers.lsb().unwrap();
+
+        eprintln!("\n=== Ply 4 futile 分析 ===");
+        eprintln!("King: {} (col={}, row={})", sq_name(king_sq), king_sq.col(), king_sq.row());
+        eprintln!("Checker: {} (col={}, row={})", sq_name(checker_sq), checker_sq.col(), checker_sq.row());
+
+        let king_step = attack::step_attacks(
+            defender.opponent(), PieceType::King, king_sq,
+        );
+        eprintln!("King step squares: {:?}",
+            king_step.into_iter().map(|sq| sq_name(sq)).collect::<Vec<_>>());
+
+        let between = attack::between_bb(checker_sq, king_sq);
+        eprintln!("Between squares: {:?}",
+            between.into_iter().map(|sq| sq_name(sq)).collect::<Vec<_>>());
+
+        let solver = DfPnSolver::default_solver();
+        let (futile, chain) = solver.compute_futile_and_chain_squares(
+            &board, &between, king_sq, checker_sq, defender, attacker,
+        );
+
+        eprintln!("Futile squares: {:?}",
+            futile.into_iter().map(|sq| sq_name(sq)).collect::<Vec<_>>());
+        eprintln!("Chain squares: {:?}",
+            chain.into_iter().map(|sq| sq_name(sq)).collect::<Vec<_>>());
+
+        for sq in between {
+            let in_king_step = king_step.contains(sq);
+            let def_support = board.is_attacked_by_excluding(sq, defender, true, None);
+            let att_attack = board.is_attacked_by_excluding(sq, attacker, false, Some(checker_sq));
+            let is_futile = futile.contains(sq);
+            let is_chain = chain.contains(sq);
+
+            eprintln!("  {} : king_adj={}, def_support={}, att_attack={} → futile={}, chain={}",
+                sq_name(sq), in_king_step, def_support, att_attack, is_futile, is_chain);
+        }
+    }
+
+    /// 39手詰め局面が反復深化 df-pn で解けるかの検証テスト．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_full_solve() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let start = Instant::now();
+        let result = solve_tsume_with_timeout(
+            sfen, Some(41), Some(200_000_000), None, Some(600),
+            Some(false), None, None,
+        ).unwrap();
+        let elapsed = start.elapsed();
+
+        let (status, nodes, pv_len) = match &result {
+            TsumeResult::Checkmate { moves, nodes_searched } =>
+                ("MATE", *nodes_searched, moves.len()),
+            TsumeResult::CheckmateNoPv { nodes_searched } =>
+                ("MATE(nopv)", *nodes_searched, 0),
+            TsumeResult::NoCheckmate { nodes_searched } =>
+                ("NO_MATE", *nodes_searched, 0),
+            TsumeResult::Unknown { nodes_searched } =>
+                ("UNKNOWN", *nodes_searched, 0),
+        };
+
+        eprintln!("\n39手詰め全体ソルブ: {} nodes, {:.1}s, pv={}, {}",
+            nodes, elapsed.as_secs_f64(), pv_len, status);
+
+        if let TsumeResult::Checkmate { moves, .. } = &result {
+            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+            eprintln!("PV: {}", usi_moves.join(" "));
+        }
+    }
+
+    /// ルート OR ノードの各子(攻め方の初手)を個別にソルブして
+    /// 正解手以外がどれだけ難しいかを調べる．
+    #[test]
+    #[ignore]
+    fn test_root_or_children() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let solver = DfPnSolver::default_solver();
+        let checks = solver.generate_check_moves(&mut board);
+
+        eprintln!("\n=== Root OR ノード: {} 子(王手) ===", checks.len());
+
+        for (j, &check) in checks.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(check);
+
+            let mut child_solver = DfPnSolver::new(40, 5_000_000, 32767);
+            child_solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = child_solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let (status, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            let is_correct = check.to_usi() == "7b6b";
+            let marker = if is_correct { " ← PV" } else { "" };
+            let move_type = if check.is_drop() { "drop" } else { "move" };
+
+            eprintln!("  {:>2}. {:>8} {:>5} {:>10} {:>8.1}ms {}{}",
+                j + 1, check.to_usi(), move_type, nodes,
+                elapsed.as_secs_f64() * 1000.0, status, marker);
+        }
+    }
 }
