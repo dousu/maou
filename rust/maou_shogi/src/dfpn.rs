@@ -1067,16 +1067,20 @@ impl DfPnSolver {
         }
 
         // 合法手生成
-        let moves = if or_node {
-            profile_timed!(self, movegen_check_ns, movegen_check_count,
-                self.generate_check_moves(board))
+        // AND ノード(守備側)では合駒を遅延展開するため，主要手と合駒に分割する．
+        // 主要手(玉移動・捕獲)がすべて証明されてから合駒を展開することで，
+        // 主要手で不詰が見つかった場合に合駒の初期化コストを回避する．
+        let (moves, mut deferred_interpose) = if or_node {
+            let checks = profile_timed!(self, movegen_check_ns, movegen_check_count,
+                self.generate_check_moves(board));
+            (checks, ArrayVec::<Move, MAX_MOVES>::new())
         } else {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
-                self.generate_defense_moves(board))
+                self.generate_defense_moves_split(board))
         };
 
-        // 終端条件チェック
-        if moves.is_empty() {
+        // 終端条件チェック(主要手 + 遅延合駒の合計で判定)
+        if moves.is_empty() && deferred_interpose.is_empty() {
             if or_node {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
@@ -1096,12 +1100,23 @@ impl DfPnSolver {
             return;
         }
 
+        // 主要手が空で合駒がある場合，合駒を即座に主要手に移す
+        // (遅延展開の意味がないため)
+        let moves = if moves.is_empty() && !deferred_interpose.is_empty() {
+            let interpose = std::mem::take(&mut deferred_interpose);
+            interpose
+        } else {
+            moves
+        };
+
         // 子ノード情報を事前計算:
         // (Move, full_hash, pos_key, attacker_hand)
         let mut children: ArrayVec<
             (Move, u64, u64, [u8; HAND_KINDS]),
             MAX_MOVES,
         > = ArrayVec::new();
+        // 合駒遅延展開済みフラグ
+        let mut interpose_expanded = deferred_interpose.is_empty();
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
         #[cfg(feature = "profile")]
@@ -1394,7 +1409,7 @@ impl DfPnSolver {
         // 親の閾値をそのまま渡して直接再帰する．
         // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
         // ケースが詰将棋で頻出する．
-        if children.len() == 1 {
+        if children.len() == 1 && interpose_expanded {
             let (m, child_fh, child_pk, ref child_hand) = children[0];
             loop {
                 // ノード制限・タイムアウトチェック
@@ -1667,9 +1682,89 @@ impl DfPnSolver {
                     return;
                 }
 
-                // 全子が証明済み → AND ノード証明
+                // 全子が証明済み → AND ノード証明(合駒展開済みの場合のみ)
                 if all_proved && current_pn == 0 {
-                    // 証明駒を現在の持ち駒で制限
+                    if !interpose_expanded {
+                        // 主要手はすべて証明済みだが，遅延合駒がまだ未展開．
+                        // 合駒を展開して children に追加する．
+                        interpose_expanded = true;
+                        let deferred = std::mem::take(&mut deferred_interpose);
+                        for m in &deferred {
+                            let captured = board.do_move(*m);
+                            let child_fh = board.hash;
+                            let child_pk = position_key(board);
+                            let child_hand = board.hand[self.attacker.index()];
+                            let child_remaining = remaining.saturating_sub(1);
+
+                            // TT 参照: 既に証明/反証済みの可能性
+                            let (cpn, cdn) =
+                                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+
+                            if cpn == 0 {
+                                // 既に証明済み: 証明駒蓄積のみ
+                                let child_ph = self.table.get_proof_hand(child_pk, &child_hand);
+                                for k in 0..HAND_KINDS {
+                                    if child_ph[k] > and_proof[k] {
+                                        and_proof[k] = child_ph[k];
+                                    }
+                                }
+                                board.undo_move(*m, captured);
+                                continue;
+                            }
+                            if cdn == 0 && !self.path.contains(&child_fh) {
+                                // 反証済み → AND ノード反証
+                                let child_dp = self.table.get_disproof_hand(child_pk, &child_hand);
+                                self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE);
+                                board.undo_move(*m, captured);
+                                self.path.remove(&full_hash);
+                                return;
+                            }
+
+                            // 未解決: 子ノードを初期化して children に追加
+                            if cpn == 1 && cdn == 1 {
+                                // OR 側の子(AND 局面): 簡易初期化
+                                let defenses = self.generate_defense_moves(board);
+                                if defenses.is_empty() {
+                                    self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
+                                    let child_ph = self.table.get_proof_hand(child_pk, &child_hand);
+                                    for k in 0..HAND_KINDS {
+                                        if child_ph[k] > and_proof[k] {
+                                            and_proof[k] = child_ph[k];
+                                        }
+                                    }
+                                    board.undo_move(*m, captured);
+                                    continue;
+                                }
+                                let n = defenses.len() as u32;
+                                self.store(child_pk, child_hand, n, n, child_remaining);
+                            }
+
+                            board.undo_move(*m, captured);
+
+                            if !self.path.contains(&child_fh) {
+                                children.push((*m, child_fh, child_pk, child_hand));
+                            }
+                        }
+
+                        // 展開後もすべて証明済みなら AND ノード証明
+                        if children.iter().all(|(_, fh, pk, hand)| {
+                            if self.path.contains(fh) { return false; }
+                            let (cpn, _) = self.look_up_pn_dn(*pk, hand, remaining.saturating_sub(1));
+                            cpn == 0
+                        }) {
+                            for k in 0..HAND_KINDS {
+                                and_proof[k] = and_proof[k].min(att_hand[k]);
+                            }
+                            self.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE);
+                            self.path.remove(&full_hash);
+                            return;
+                        }
+
+                        // 合駒展開後，pn/dn を再集計するためループ先頭へ
+                        continue;
+                    }
+
+                    // 合駒展開済み: 全子が証明済み → AND ノード証明
                     for k in 0..HAND_KINDS {
                         and_proof[k] =
                             and_proof[k].min(att_hand[k]);
@@ -2027,6 +2122,91 @@ impl DfPnSolver {
         board: &mut Board,
     ) -> ArrayVec<Move, MAX_MOVES> {
         self.generate_defense_moves_inner(board, false)
+    }
+
+    /// 王手回避手を「主要手(玉移動・捕獲)」と「合駒」に分割して生成する．
+    ///
+    /// 戻り値: `(primary_moves, interpose_moves)`
+    /// - `primary_moves`: 玉の移動 + 王手駒の捕獲
+    /// - `interpose_moves`: 合い駒(移動・打ち)
+    ///
+    /// 遅延合駒展開(delayed interposition expansion)で使用する．
+    fn generate_defense_moves_split(
+        &self,
+        board: &mut Board,
+    ) -> (ArrayVec<Move, MAX_MOVES>, ArrayVec<Move, MAX_MOVES>) {
+        let defender = board.turn;
+        let attacker = defender.opponent();
+
+        let king_sq = match board.king_square(defender) {
+            Some(sq) => sq,
+            None => {
+                let legal = movegen::generate_legal_moves(board);
+                let mut out = ArrayVec::new();
+                for m in legal {
+                    push_move(&mut out, m);
+                }
+                return (out, ArrayVec::new());
+            }
+        };
+
+        let checkers = board.compute_checkers_at(king_sq, attacker);
+        if checkers.is_empty() {
+            let legal = movegen::generate_legal_moves(board);
+            let mut out = ArrayVec::new();
+            for m in legal {
+                push_move(&mut out, m);
+            }
+            return (out, ArrayVec::new());
+        }
+
+        let all_occ = board.all_occupied();
+        let our_occ = board.occupied[defender.index()];
+        let mut primary = ArrayVec::<Move, MAX_MOVES>::new();
+
+        // --- 1. 玉の移動 ---
+        let king_attacks = attack::step_attacks(defender, PieceType::King, king_sq);
+        let king_targets = king_attacks & !our_occ;
+        for to in king_targets {
+            let captured_piece = board.squares[to.index()];
+            let captured_raw = captured_piece.0;
+            let m = Move::new_move(king_sq, to, false, captured_raw, PieceType::King as u8);
+            let captured = board.do_move(m);
+            let safe = !board.is_in_check(defender);
+            board.undo_move(m, captured);
+            if safe {
+                push_move(&mut primary, m);
+            }
+        }
+
+        if checkers.count() > 1 {
+            return (primary, ArrayVec::new());
+        }
+
+        let checker_sq = checkers.lsb().unwrap();
+
+        // --- 2. 王手駒の捕獲 ---
+        self.generate_capture_checker(
+            board, &mut primary, checker_sq, king_sq, defender, all_occ, our_occ,
+        );
+
+        // --- 3. 合い駒 ---
+        let mut interpose = ArrayVec::<Move, MAX_MOVES>::new();
+        let sliding_checker = self.find_sliding_checker(board, king_sq, attacker);
+        if sliding_checker.is_some() {
+            let between = attack::between_bb(checker_sq, king_sq);
+            if between.is_not_empty() {
+                let (futile, chain) = self.compute_futile_and_chain_squares(
+                    board, &between, king_sq, checker_sq, defender, attacker,
+                );
+                self.generate_interpositions(
+                    board, &mut interpose, &between, &futile, &chain,
+                    king_sq, defender, all_occ, our_occ,
+                );
+            }
+        }
+
+        (primary, interpose)
     }
 
     /// 王手回避手の内部実装．
