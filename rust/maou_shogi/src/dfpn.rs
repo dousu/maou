@@ -562,6 +562,43 @@ impl TranspositionTable {
         });
     }
 
+    /// TT のポジション数を返す．
+    fn len(&self) -> usize {
+        self.tt.len()
+    }
+
+    /// TT ガベージコレクション: メモリ使用量を抑制する．
+    ///
+    /// 2段階の GC を実行する:
+    /// 1. 中間エントリ(pn>0 かつ dn>0)のうち，remaining が閾値以下のものを除去
+    /// 2. それでも閾値を超える場合，全中間エントリを除去(retain_proofs 相当)
+    ///
+    /// 証明済み(pn=0)と確定反証(dn=0, remaining=∞)は常に保持する．
+    fn gc(&mut self, target_size: usize) {
+        if self.tt.len() <= target_size {
+            return;
+        }
+
+        // Phase 1: remaining が小さい中間エントリを除去
+        // (浅い探索の仮結果は再計算可能)
+        let median_remaining = 8u16;
+        self.tt.retain(|_key, entries| {
+            entries.retain(|e| {
+                e.pn == 0
+                    || e.dn == 0
+                    || e.remaining > median_remaining
+            });
+            !entries.is_empty()
+        });
+
+        if self.tt.len() <= target_size {
+            return;
+        }
+
+        // Phase 2: 全中間エントリを除去(確定結果のみ保持)
+        self.retain_proofs();
+    }
+
     /// プロファイル統計をリセットする．
     #[cfg(feature = "profile")]
     fn reset_profile(&mut self) {
@@ -654,6 +691,14 @@ pub struct DfPnSolver {
     /// 0 にすると静的詰め探索を無効化し，インライン1手・3手詰め判定のみ行う．
     /// デフォルトは 0(無効)．
     mate_budget: u32,
+    /// TT GC 閾値: TT のポジション数がこの値を超えると GC を実行する．
+    ///
+    /// 0 にすると GC を無効化する．
+    /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
+    /// 推奨値: 探索ノード数の 1/5〜1/2 程度(例: 100M ノードなら 20M〜50M)．
+    tt_gc_threshold: usize,
+    /// 次に TT GC チェックを行うノード数．
+    next_gc_check: u64,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
@@ -675,6 +720,8 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             mate_budget: 0,
+            tt_gc_threshold: 0,
+            next_gc_check: 0,
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -715,6 +762,15 @@ impl DfPnSolver {
     /// デフォルトは 0(無効)．
     pub fn set_mate_budget(&mut self, v: u32) -> &mut Self {
         self.mate_budget = v;
+        self
+    }
+
+    /// TT GC 閾値を設定する．
+    ///
+    /// TT のポジション数がこの値を超えると GC を実行する．
+    /// 0 にすると GC を無効化する．デフォルトは 2,000,000．
+    pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
+        self.tt_gc_threshold = v;
         self
     }
 
@@ -802,6 +858,7 @@ impl DfPnSolver {
         self.path.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
+        self.next_gc_check = 100_000;
         self.attacker = board.turn;
         #[cfg(feature = "profile")]
         {
@@ -1648,6 +1705,17 @@ impl DfPnSolver {
                 || self.timed_out
             {
                 break;
+            }
+
+            // TT GC: 定期的にサイズチェックし，閾値超過時に GC 実行
+            if self.tt_gc_threshold > 0
+                && self.nodes_searched >= self.next_gc_check
+            {
+                self.next_gc_check =
+                    self.nodes_searched + 100_000;
+                if self.table.len() > self.tt_gc_threshold {
+                    self.table.gc(self.tt_gc_threshold * 3 / 4);
+                }
             }
 
             // 閾値計算(1+ε トリック, Pawlewicz & Lew 2007)
@@ -2883,7 +2951,7 @@ pub fn solve_tsume(
     nodes: Option<u64>,
     draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
-    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None, None)
+    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None, None, None)
 }
 
 /// タイムアウト指定付きで詰将棋を解く便利関数．
@@ -2916,6 +2984,7 @@ pub fn solve_tsume_with_timeout(
     find_shortest: Option<bool>,
     pv_nodes_per_child: Option<u64>,
     mate_budget: Option<u32>,
+    tt_gc_threshold: Option<usize>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
@@ -2932,6 +3001,9 @@ pub fn solve_tsume_with_timeout(
     }
     if let Some(mb) = mate_budget {
         solver.set_mate_budget(mb);
+    }
+    if let Some(gc) = tt_gc_threshold {
+        solver.set_tt_gc_threshold(gc);
     }
 
     Ok(solver.solve(&mut board))
@@ -3520,7 +3592,7 @@ mod tests {
         let mut board = Board::empty();
         board.set_sfen(sfen).unwrap();
 
-        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None, None).unwrap();
+        let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None, None, None).unwrap();
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
@@ -3861,7 +3933,7 @@ mod tests {
         let result = solve_tsume_with_timeout(
             sfen, Some(31), Some(2_000_000), None, None,
             Some(true), // find_shortest = true
-            None, None,
+            None, None, None,
         ).unwrap();
 
         match &result {
@@ -4432,7 +4504,7 @@ mod tests {
         let start = Instant::now();
         let result = solve_tsume_with_timeout(
             sfen, Some(41), Some(200_000_000), None, Some(600),
-            Some(false), None, None,
+            Some(false), None, None, None,
         ).unwrap();
         let elapsed = start.elapsed();
 

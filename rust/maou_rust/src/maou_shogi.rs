@@ -337,8 +337,11 @@ impl TsumeResult {
 /// - `mate_budget` (int, optional): 静的詰め探索の1子あたりノード予算(デフォルト 0 = 無効)．
 ///   0 より大きい値を設定すると，子ノード初期化時に Df-Pn のオーバーヘッドなしで
 ///   再帰的に N 手詰めを検出する．
+/// - `tt_gc_threshold` (int, optional): TT GC 閾値(デフォルト 0 = 無効)．
+///   TT のポジション数がこの値を超えると GC を実行し，メモリ使用量を抑制する．
+///   超長手数問題で OOM を防ぐ場合に設定する．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024, mate_budget=0))]
+#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024, mate_budget=0, tt_gc_threshold=0))]
 fn solve_tsume(
     py: Python<'_>,
     sfen: &str,
@@ -349,6 +352,7 @@ fn solve_tsume(
     find_shortest: bool,
     pv_nodes_per_child: u64,
     mate_budget: u32,
+    tt_gc_threshold: usize,
 ) -> PyResult<TsumeResult> {
     let sfen_owned = sfen.to_owned();
     let result = py.detach(move || {
@@ -361,6 +365,7 @@ fn solve_tsume(
             Some(find_shortest),
             Some(pv_nodes_per_child),
             Some(mate_budget),
+            Some(tt_gc_threshold),
         )
     })
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
