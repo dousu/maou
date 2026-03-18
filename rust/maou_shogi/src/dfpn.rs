@@ -539,14 +539,25 @@ impl TranspositionTable {
         self.tt.clear();
     }
 
-    /// 証明済み(pn=0)エントリのみ保持し，他を全て除去する．
+    /// 確定済みエントリ(証明・確定反証)を保持し，中間エントリを除去する．
     ///
     /// 反復深化 df-pn で使用: 浅い深さの中間エントリや
     /// 深さ制限による仮反証エントリを除去しつつ，
-    /// 確定した証明エントリは再利用する．
+    /// 確定した証明・反証エントリは再利用する．
+    ///
+    /// 保持条件:
+    /// - pn=0(証明済み): 深さに関係なく有効
+    /// - dn=0 かつ remaining=REMAINING_INFINITE(確定反証): 真の不詰
+    ///
+    /// 深さ制限による仮反証(remaining が有限値)は除去する．
+    /// これにより深い探索で再評価可能になる．
     fn retain_proofs(&mut self) {
         self.tt.retain(|_key, entries| {
-            entries.retain(|e| e.pn == 0);
+            entries.retain(|e| {
+                e.pn == 0
+                    || (e.dn == 0
+                        && e.remaining == REMAINING_INFINITE)
+            });
             !entries.is_empty()
         });
     }
@@ -1639,16 +1650,23 @@ impl DfPnSolver {
                 break;
             }
 
-            // 閾値計算(df-pn+ 式: ε = second_best / 4 + 1)
+            // 閾値計算(1+ε トリック, Pawlewicz & Lew 2007)
+            //
             // 標準 df-pn の second_best + 1 では，best child の pn/dn が
             // 僅かに増加しただけで親に戻りスラッシングが発生する．
-            // ε を加算して best child により多くの探索予算を与え，振動を抑制する．
+            // 乗算型 ε を使用し，pn/dn に比例した余裕を与える:
+            //   threshold = second_best + second_best/16 + 1
+            //             ≈ ceil(second_best * 17/16)
+            //
+            // 論文の推奨する 1+ε 乗算方式の近似実装．
+            // pn が小さい時は +1 が支配的(細かい制御)，
+            // pn が大きい時は second_best/16 が支配的(深い探索を許容)．
             let (child_pn_th, child_dn_th) = if or_node {
                 let child_dn_th = dn_threshold
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
                     .min(INF - 1);
-                let epsilon = (second_best / 16).min(256) + 1;
+                let epsilon = second_best / 16 + 1;
                 let child_pn_th = pn_threshold
                     .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
@@ -1658,7 +1676,7 @@ impl DfPnSolver {
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
-                let epsilon = (second_best / 16).min(256) + 1;
+                let epsilon = second_best / 16 + 1;
                 let child_dn_th = dn_threshold
                     .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
