@@ -1023,6 +1023,13 @@ pub struct DfPnSolver {
     in_pre_solve: bool,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
+    /// Killer Move テーブル(OR ノード用)．
+    ///
+    /// ply ごとに最大 2 つの killer move(Move16)を保持する．
+    /// 閾値超過でカットオフを引き起こした手を記録し，
+    /// 同じ ply の他の局面でも優先的に探索する．
+    /// TT Best Move とは異なり局面に依存しない手順ヒントを提供する．
+    killer_table: Vec<[u16; 2]>,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
@@ -1048,6 +1055,7 @@ impl DfPnSolver {
             in_pre_solve: false,
             tt_gc_threshold: 0,
             next_gc_check: 0,
+            killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
@@ -1180,6 +1188,37 @@ impl DfPnSolver {
         self.table.look_up_best_move(pos_key, hand)
     }
 
+    /// Killer Move を記録する．
+    ///
+    /// 同じ手が既にスロット 0 にあれば何もしない．
+    /// そうでなければスロット 1 ← スロット 0，スロット 0 ← 新手の順でシフトする．
+    #[inline]
+    fn record_killer(&mut self, ply: u32, move16: u16) {
+        if move16 == 0 {
+            return;
+        }
+        let p = ply as usize;
+        if p >= self.killer_table.len() {
+            self.killer_table.resize(p + 1, [0u16; 2]);
+        }
+        if self.killer_table[p][0] == move16 {
+            return;
+        }
+        self.killer_table[p][1] = self.killer_table[p][0];
+        self.killer_table[p][0] = move16;
+    }
+
+    /// 指定 ply の Killer Move を取得する．
+    #[inline]
+    fn get_killers(&self, ply: u32) -> [u16; 2] {
+        let p = ply as usize;
+        if p < self.killer_table.len() {
+            self.killer_table[p]
+        } else {
+            [0u16; 2]
+        }
+    }
+
     /// 経路依存フラグ付きで転置表を更新する(GHI 対策)．
     #[inline]
     fn store_path_dep(
@@ -1250,6 +1289,7 @@ impl DfPnSolver {
         self.nodes_searched = 0;
         self.max_ply = 0;
         self.path.clear();
+        self.killer_table.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
         self.next_gc_check = 100_000;
@@ -1430,16 +1470,36 @@ impl DfPnSolver {
                 self.generate_defense_moves(board))
         };
 
-        // Dynamic Move Ordering: TT Best Move を先頭に移動
+        // Dynamic Move Ordering: TT Best Move + Killer Moves
         // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
         // NOTE: OR ノードでのみ適用．AND ノードでは全子の証明が必要なため
         // 手順序の影響は OR より小さく，ソートの安定性を優先する．
         if or_node {
+            let mut next_slot = 0usize; // 次に挿入する位置
+
+            // 1. TT Best Move を先頭に移動
             let tt_best = self.look_up_best_move(pos_key, &att_hand);
             if tt_best != 0 {
                 if let Some(idx) = moves.iter().position(|m| m.to_move16() == tt_best) {
-                    if idx > 0 {
-                        moves.swap(0, idx);
+                    if idx > next_slot {
+                        moves.swap(next_slot, idx);
+                    }
+                    next_slot += 1;
+                }
+            }
+
+            // 2. Killer Moves を TT Best Move の直後に配置
+            let killers = self.get_killers(ply);
+            for &km16 in &killers {
+                if km16 != 0 && km16 != tt_best {
+                    if let Some(idx) = moves[next_slot..].iter()
+                        .position(|m| m.to_move16() == km16)
+                    {
+                        let actual_idx = next_slot + idx;
+                        if actual_idx > next_slot {
+                            moves.swap(next_slot, actual_idx);
+                        }
+                        next_slot += 1;
                     }
                 }
             }
@@ -2025,6 +2085,8 @@ impl DfPnSolver {
 
                     if cpn == 0 {
                         // 子が証明済み → OR ノード証明
+                        // Killer Move 記録: 証明を達成した王手は強力なヒント
+                        self.record_killer(ply, children[i].0.to_move16());
                         let child_ph = self
                             .table
                             .get_proof_hand(
@@ -2309,6 +2371,12 @@ impl DfPnSolver {
             if current_pn >= eff_pn_th
                 || current_dn >= eff_dn_th
             {
+                // Killer Move 記録: OR ノードで pn 閾値超過時，
+                // 最善子(最も有望な王手)を killer として保存する．
+                // 同じ ply の別の局面でも同じ手が有効な可能性が高い．
+                if or_node {
+                    self.record_killer(ply, best_move16);
+                }
                 break;
             }
 

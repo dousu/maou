@@ -245,10 +245,12 @@ alpha-beta 探索では killer move heuristic と history heuristic が
 先に試すことで探索木の早期枝刈りが期待できる．
 TT Best Move 保存(§3.4)との併用が前提となる．
 
-**maou_shogi:** ✅ 実装済み(v0.16.0)．TT Best Move(§3.4)を利用した動的手順改善．
-OR ノードで手生成後，TT に保存された最善手を先頭にスワップする．
-静的手順(成+取 > 成 > 取 > その他 × チェビシェフ距離)の上に TT ヒントを重ねる．
-Killer move heuristic は将来の拡張として残す．
+**maou_shogi:** ✅ 実装済み(v0.16.0, v0.18.3 で Killer Move 追加)．
+TT Best Move(§3.4)を利用した動的手順改善に加え，
+Killer Move Heuristic を OR ノードに導入(v0.18.3)．
+手順の優先度: TT Best Move > Killer Move(2スロット/ply) > 静的手順．
+Killer Move は OR ノードの証明達成時および閾値超過時に記録し，
+同一 ply の別の局面でも優先的に探索する．
 
 ### 8. 反復深化(Iterative Deepening)
 
