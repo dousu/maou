@@ -144,15 +144,18 @@ fn depth_biased_dn(base: u32, ply: u32) -> u32 {
     base.max(bias)
 }
 
-/// SNDA (Kishimoto 2010) の保守的ソースグループ集約．
+/// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
 ///
 /// `(source, value)` ペアのリストと通常の sum を受け取り，
 /// 同一 source グループの重複分を控除する．
 ///
-/// 完全な max 集約は過度に値を削減するリスクがあるため，
-/// 保守的に「重複グループの最小値 × (メンバー数 - 1)」のみ控除する．
-/// これは DAG 合流で共有されるリーフが各メンバーの値に
-/// 少なくとも min(value) 分だけ含まれるという仮定に基づく．
+/// 積極的 max 集約方式: 同一 source グループ内で最大値のみを残し，
+/// 残りを全て控除する(`deduction = sum(group) - max(group)`)．
+/// DAG 合流で共有されるリーフの重複カウントを排除し，
+/// 過大評価をより正確に補正する．
+///
+/// TCA(過小評価対策)が実装済みのため，積極的方式による
+/// 過小評価リスクは TCA の閾値拡張で緩和される．
 ///
 /// `source == 0` のペアは独立ノード(TT ミス)としてスキップする．
 #[inline]
@@ -167,18 +170,19 @@ fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
             continue;
         }
         let start = i;
-        let mut group_min = pairs[i].1;
+        let mut group_max = pairs[i].1;
+        let mut group_sum: u64 = pairs[i].1 as u64;
         i += 1;
         while i < pairs.len() && pairs[i].0 == source {
-            group_min = group_min.min(pairs[i].1);
+            group_max = group_max.max(pairs[i].1);
+            group_sum += pairs[i].1 as u64;
             i += 1;
         }
-        let group_size = (i - start) as u64;
+        let group_size = i - start;
         if group_size > 1 {
-            // 共有リーフの最小寄与分 × 重複数を控除
-            deduction = deduction.saturating_add(
-                group_min as u64 * (group_size - 1),
-            );
+            // 積極的 max 集約: グループ合計から最大値を引いた分を控除
+            deduction =
+                deduction.saturating_add(group_sum - group_max as u64);
         }
     }
     (raw_sum as u64).saturating_sub(deduction).max(1) as u32
@@ -397,6 +401,12 @@ struct DfPnEntry {
     pn: u32,
     dn: u32,
     remaining: u16,
+    /// GHI (Graph History Interaction) 対策フラグ．
+    /// ループ検出に由来する反証は経路依存(path-dependent)であり，
+    /// 異なる探索経路では無効になる可能性がある．
+    /// `true` の場合，`remaining` が有限値に制限され，
+    /// より深い探索で自動的に再評価される．
+    path_dependent: bool,
     /// SNDA (Kishimoto 2010) のソースノードハッシュ．
     /// この pn/dn の値を決定したリーフノードの局面ハッシュ．
     /// DAG 合流による pn/dn の過大評価を検出するために使用する．
@@ -523,6 +533,40 @@ impl TranspositionTable {
         remaining: u16,
         source: u64,
     ) {
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false);
+    }
+
+    /// 経路依存フラグ付きで転置表を更新する．
+    ///
+    /// `path_dependent = true` の反証エントリは，ループ検出に由来し
+    /// 異なる探索経路では無効になる可能性がある．
+    /// `remaining` を有限値に制限して保存することで，
+    /// より深い探索で自動的に再評価される．
+    #[inline(always)]
+    fn store_path_dep(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u64,
+        path_dependent: bool,
+    ) {
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, path_dependent);
+    }
+
+    #[inline(always)]
+    fn store_impl(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u64,
+        path_dependent: bool,
+    ) {
         let entries =
             self.tt.entry(pos_key).or_default();
 
@@ -533,7 +577,9 @@ impl TranspositionTable {
                 return;
             }
             // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
+            // GHI: 経路依存の反証は経路非依存の反証に支配されない
             if e.dn == 0
+                && !e.path_dependent
                 && hand_gte(&e.hand, &hand)
                 && e.remaining >= remaining
             {
@@ -554,7 +600,7 @@ impl TranspositionTable {
                 }
                 !hand_gte(&e.hand, &hand)
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining, source });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, path_dependent: false, source });
             return;
         }
 
@@ -562,12 +608,17 @@ impl TranspositionTable {
             // === 反証済みエントリの挿入 ===
             // パレートフロンティア(最大持ち駒 × 最大remaining 集合)を維持:
             // 新反証に支配される既存エントリを除去する．
+            // GHI: 経路非依存の反証は経路依存の反証を支配して置換できる
             entries.retain(|e| {
                 // 証明済みは保護
                 if e.pn == 0 {
                     return true;
                 }
                 if e.dn == 0 {
+                    if !path_dependent && e.path_dependent {
+                        // 経路非依存の新反証は経路依存の既存反証を置換
+                        return false;
+                    }
                     // 反証: e.hand ≤ hand かつ e.remaining ≤ remaining → 冗長
                     return !(hand_gte(&hand, &e.hand)
                         && remaining >= e.remaining);
@@ -575,7 +626,7 @@ impl TranspositionTable {
                 // 中間エントリは保護(remaining の不一致で必要になりうる)
                 true
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining, source });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, path_dependent, source });
             return;
         }
 
@@ -593,6 +644,7 @@ impl TranspositionTable {
                 e.dn = dn;
                 e.remaining = remaining;
                 e.source = source;
+                e.path_dependent = false;
                 return;
             }
         }
@@ -604,6 +656,7 @@ impl TranspositionTable {
                 pn,
                 dn,
                 remaining,
+                path_dependent: false,
                 source,
             });
             #[cfg(feature = "profile")]
@@ -634,7 +687,7 @@ impl TranspositionTable {
                 }
             }
             if let Some(idx) = worst_idx {
-                entries[idx] = DfPnEntry { hand, pn, dn, remaining, source };
+                entries[idx] = DfPnEntry { hand, pn, dn, remaining, path_dependent: false, source };
             } else {
                 #[cfg(feature = "profile")]
                 { self.overflow_no_victim_count += 1; }
@@ -755,7 +808,11 @@ impl TranspositionTable {
         for (pos_key, entries) in &other.tt {
             for e in entries {
                 if e.pn == 0 || e.dn == 0 {
-                    self.store(*pos_key, e.hand, e.pn, e.dn, e.remaining, e.source);
+                    // GHI: 経路依存フラグを保持してマージ
+                    self.store_path_dep(
+                        *pos_key, e.hand, e.pn, e.dn,
+                        e.remaining, e.source, e.path_dependent,
+                    );
                 }
             }
         }
@@ -1003,6 +1060,21 @@ impl DfPnSolver {
         source: u64,
     ) {
         self.table.store(pos_key, hand, pn, dn, remaining, source);
+    }
+
+    /// 経路依存フラグ付きで転置表を更新する(GHI 対策)．
+    #[inline]
+    fn store_path_dep(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u64,
+        path_dependent: bool,
+    ) {
+        self.table.store_path_dep(pos_key, hand, pn, dn, remaining, source, path_dependent);
     }
 
     /// 転置表を参照する(盤面から自動計算，事後クエリ用)．
@@ -1683,7 +1755,8 @@ impl DfPnSolver {
                 }
 
                 // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
-                let (cpn, cdn, _csrc) = if self.path.contains(&child_fh) {
+                let is_loop_child = self.path.contains(&child_fh);
+                let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
                 } else {
                     self.look_up_pn_dn(
@@ -1718,7 +1791,15 @@ impl DfPnSolver {
                     } else {
                         if cdn == 0 {
                             let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
-                            self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
+                            // GHI 対策: ループ子による反証は経路依存
+                            if is_loop_child {
+                                self.store_path_dep(
+                                    pos_key, child_dp, INF, 0,
+                                    remaining, 0, true,
+                                );
+                            } else {
+                                self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
+                            }
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
                             let child_ph = self.table.get_proof_hand(child_pk, child_hand);
@@ -1895,8 +1976,9 @@ impl DfPnSolver {
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
+                    let is_loop_child = self.path.contains(&child_fh);
                     let (cpn, cdn, csrc) =
-                        if self.path.contains(&child_fh) {
+                        if is_loop_child {
                             (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
@@ -1913,20 +1995,30 @@ impl DfPnSolver {
                             .get_disproof_hand(
                                 child_pk, child_hand,
                             );
-                        self.store(
-                            pos_key, child_dp, INF, 0,
-                            REMAINING_INFINITE, csrc,
-                        );
+                        // GHI 対策: ループ子による反証は経路依存(path-dependent)．
+                        // REMAINING_INFINITE ではなく有限 remaining で保存し，
+                        // 異なる経路のより深い探索で再評価可能にする．
+                        if is_loop_child {
+                            self.store_path_dep(
+                                pos_key, child_dp, INF, 0,
+                                remaining, csrc, true,
+                            );
+                        } else {
+                            self.store(
+                                pos_key, child_dp, INF, 0,
+                                REMAINING_INFINITE, csrc,
+                            );
+                        }
                         proved_or_disproved = true;
                         break;
                     }
 
                     if cpn == 0 {
-                        // 子が証明済み → 証明駒を蓄積(要素ごとの max)．
+                        // VPN (Virtual Proof Number, Saito et al. 2006):
+                        // 証明済み子(cpn=0)は AND ノードの pn 合計・子選択から除外する．
+                        // 証明駒のみ蓄積し，残りの未証明子に探索リソースを集中させる．
                         // AND ノードでは全子が詰む必要があるため，
                         // 証明駒は各子の証明駒の要素ごと最大値となる．
-                        // 最も多くの持ち駒を要求する子に合わせることで，
-                        // どの応手に対しても詰みを保証できる．
                         let child_ph = self
                             .table
                             .get_proof_hand(
@@ -1938,9 +2030,12 @@ impl DfPnSolver {
                                 and_proof[k] = child_ph[k];
                             }
                         }
-                    } else {
-                        all_proved = false;
+                        // VPN: 証明済み子は pn=0 で sum に影響しないため，
+                        // child 選択ループもスキップして効率化する．
+                        continue;
                     }
+
+                    all_proved = false;
 
                     current_pn = (current_pn as u64)
                         .saturating_add(cpn as u64)
@@ -1951,7 +2046,7 @@ impl DfPnSolver {
                         current_dn = cdn;
                     }
                     // SNDA ペア収集(source=0 は独立ノード)
-                    if csrc != 0 && cpn > 0 {
+                    if csrc != 0 {
                         snda_pairs.push((csrc, cpn));
                     }
                     // 子ノード選択用: 合駒(drop)にバイアスを加算
