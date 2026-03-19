@@ -401,6 +401,11 @@ struct DfPnEntry {
     pn: u32,
     dn: u32,
     remaining: u16,
+    /// TT Best Move: この局面で最も有望だった手の Move16 エンコーディング．
+    /// 0 は「ベストムーブなし」を示す．
+    /// 動的手順改善(Dynamic Move Ordering)で TT ヒット時に
+    /// この手を先頭に移動させて探索効率を向上させる．
+    best_move: u16,
     /// GHI (Graph History Interaction) 対策フラグ．
     /// ループ検出に由来する反証は経路依存(path-dependent)であり，
     /// 異なる探索経路では無効になる可能性がある．
@@ -480,14 +485,19 @@ impl TranspositionTable {
 
         let mut exact_match: Option<(u32, u32, u64)> = None;
 
+        // 証明(pn=0)を反証(dn=0)より常に優先する．
+        // IDS の浅い反復で仮反証が保存された後，深い反復で同一局面が
+        // 証明されると証明と反証が共存しうる(retain_proofs で除去されるが
+        // 同一反復内では共存する可能性がある)．
+        // 単一パスでの early return では entries の格納順に依存して
+        // 反証が先に返される場合があるため，証明を先にスキャンする．
         for e in entries {
-            // 証明済み: 持ち駒が多い(以上)なら再利用(深さ不問)
             if e.pn == 0 && hand_gte(hand, &e.hand) {
                 return (0, e.dn, e.source);
             }
+        }
+        for e in entries {
             // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
-            // e.remaining < remaining の場合，より深い探索で詰みが
-            // 見つかる可能性があるため再利用しない．
             if e.dn == 0
                 && hand_gte(&e.hand, hand)
                 && e.remaining >= remaining
@@ -495,8 +505,6 @@ impl TranspositionTable {
                 return (e.pn, 0, e.source);
             }
             // 完全一致(pn=0/dn=0 は上で個別に処理済みなのでスキップ)
-            // dn=0 かつ remaining 不足のエントリを拾うと，深さ制限による
-            // 仮の不詰み判定が深い探索に漏洩するバグを防ぐ．
             if exact_match.is_none()
                 && e.hand == *hand
                 && e.pn != 0
@@ -507,6 +515,28 @@ impl TranspositionTable {
         }
 
         exact_match.unwrap_or((1, 1, 0))
+    }
+
+    /// TT Best Move を参照する．
+    ///
+    /// 指定局面の完全一致エントリからベストムーブ(Move16)を返す．
+    /// 該当なし，または best_move 未記録の場合は `0` を返す．
+    #[inline(always)]
+    fn look_up_best_move(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> u16 {
+        let entries = match self.tt.get(&pos_key) {
+            Some(e) => e,
+            None => return 0,
+        };
+        for e in entries {
+            if e.hand == *hand && e.best_move != 0 {
+                return e.best_move;
+            }
+        }
+        0
     }
 
     /// 転置表を更新する(支配関係によるパレートフロンティア維持)．
@@ -533,7 +563,25 @@ impl TranspositionTable {
         remaining: u16,
         source: u64,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, false);
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, 0);
+    }
+
+    /// ベストムーブ付きで転置表を更新する．
+    ///
+    /// MID ループの中間結果保存時に，最善子ノードの手を記録する．
+    /// 次回同一局面に到達した際の手順改善(Dynamic Move Ordering)に使用する．
+    #[inline(always)]
+    fn store_with_best_move(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u64,
+        best_move: u16,
+    ) {
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, best_move);
     }
 
     /// 経路依存フラグ付きで転置表を更新する．
@@ -553,7 +601,7 @@ impl TranspositionTable {
         source: u64,
         path_dependent: bool,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, path_dependent);
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, path_dependent, 0);
     }
 
     #[inline(always)]
@@ -566,6 +614,7 @@ impl TranspositionTable {
         remaining: u16,
         source: u64,
         path_dependent: bool,
+        best_move: u16,
     ) {
         let entries =
             self.tt.entry(pos_key).or_default();
@@ -600,7 +649,7 @@ impl TranspositionTable {
                 }
                 !hand_gte(&e.hand, &hand)
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining, path_dependent: false, source });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
             return;
         }
 
@@ -626,7 +675,7 @@ impl TranspositionTable {
                 // 中間エントリは保護(remaining の不一致で必要になりうる)
                 true
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining, path_dependent, source });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source });
             return;
         }
 
@@ -645,6 +694,9 @@ impl TranspositionTable {
                 e.remaining = remaining;
                 e.source = source;
                 e.path_dependent = false;
+                if best_move != 0 {
+                    e.best_move = best_move;
+                }
                 return;
             }
         }
@@ -656,6 +708,7 @@ impl TranspositionTable {
                 pn,
                 dn,
                 remaining,
+                best_move,
                 path_dependent: false,
                 source,
             });
@@ -687,7 +740,7 @@ impl TranspositionTable {
                 }
             }
             if let Some(idx) = worst_idx {
-                entries[idx] = DfPnEntry { hand, pn, dn, remaining, path_dependent: false, source };
+                entries[idx] = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source };
             } else {
                 #[cfg(feature = "profile")]
                 { self.overflow_no_victim_count += 1; }
@@ -761,6 +814,7 @@ impl TranspositionTable {
             !entries.is_empty()
         });
     }
+
 
     /// TT のポジション数を返す．
     fn len(&self) -> usize {
@@ -1062,6 +1116,31 @@ impl DfPnSolver {
         self.table.store(pos_key, hand, pn, dn, remaining, source);
     }
 
+    /// ベストムーブ付きで転置表を更新する．
+    #[inline]
+    fn store_with_best_move(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u64,
+        best_move: u16,
+    ) {
+        self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
+    }
+
+    /// TT Best Move を参照する(位置キー＋持ち駒指定)．
+    #[inline]
+    fn look_up_best_move(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> u16 {
+        self.table.look_up_best_move(pos_key, hand)
+    }
+
     /// 経路依存フラグ付きで転置表を更新する(GHI 対策)．
     #[inline]
     fn store_path_dep(
@@ -1141,17 +1220,77 @@ impl DfPnSolver {
             self.table.reset_profile();
         }
 
-        // メインパス
-        self.path.clear();
-        {
-            let (root_pn, root_dn) = self.look_up_board(board);
-            if root_pn != 0 && root_dn != 0
-                && self.nodes_searched < self.max_nodes
-                && !self.timed_out
-            {
-                self.mid(board, INF - 1, INF - 1, 0, true);
+        // IDS-dfpn (Iterative Deepening Df-Pn):
+        // 偶数ステップ(2, 4, 6, ..., depth)で反復深化する．
+        // 詰将棋の解は奇数手(N)だが，終端局面(詰み)の判定に
+        // ply = N(AND ノード，応手なし)まで到達する必要があるため，
+        // 深さ制限は N+1(偶数)以上が必要．
+        // 最終反復は必ず saved_depth で実行し，完全な証明/反証を保証する．
+        // 浅い反復で蓄積された TT エントリ(証明・ベストムーブ)が
+        // 深い探索の枝刈りと手順改善に寄与する．
+        let pk = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let saved_depth = self.depth;
+        // IDS 深さ列: 2, 4, 6, ..., saved_depth(最終は必ず saved_depth)
+        // 初期深さ: 2 から開始し，倍増ステップで加速する．
+        // 浅い反復の証明蓄積と TT Best Move を活用しつつ，
+        // retain_proofs によるノード消費を最小限に抑える．
+        let mut ids_depth: u32 = 2;
+        let total_max_nodes = self.max_nodes;
+        loop {
+            // saved_depth を超えないようにクランプ
+            if ids_depth > saved_depth {
+                ids_depth = saved_depth;
             }
+            self.depth = ids_depth;
+            self.path.clear();
+            let remaining = ids_depth as u16;
+            let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn == 0 {
+                break; // 証明済み
+            }
+            // 浅い反復にはノード予算を制限し，最終反復にノードを温存する．
+            // 最終反復(ids_depth >= saved_depth)ではフル予算を使用する．
+            if ids_depth < saved_depth {
+                // 浅い反復の予算: total の 1/16(最低 1024 ノード)
+                let budget = (total_max_nodes / 16).max(1024);
+                self.max_nodes = self.nodes_searched.saturating_add(budget);
+            } else {
+                self.max_nodes = total_max_nodes;
+            }
+            {
+                let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                if root_pn != 0 && root_dn != 0
+                    && self.nodes_searched < self.max_nodes
+                    && !self.timed_out
+                {
+                    self.mid(board, INF - 1, INF - 1, 0, true);
+                }
+            }
+            // 探索後のルートチェック
+            let (root_pn2, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn2 == 0 {
+                break; // 証明済み
+            }
+            if self.nodes_searched >= total_max_nodes || self.timed_out {
+                break;
+            }
+            if ids_depth >= saved_depth {
+                break; // 全深さ探索完了
+            }
+            // 証明エントリのみ保持し，仮反証と中間エントリを除去する．
+            // 中間エントリの pn/dn は浅い深さ制限に依存しており，
+            // 深い探索で誤った判定の原因になるため除去が必要．
+            // 証明は深さに依存しない不変量なので安全に引き継げる．
+            self.table.retain_proofs();
+            // 倍増ステップで浅い段階を素早く通過する．
+            // 各反復で retain_proofs を実行するため，
+            // 反復回数が少ないほどノード効率が高い．
+            // 2 → 4 → 8 → 16 → 32 → saved_depth(5回以内で完了)．
+            ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
         }
+        self.depth = saved_depth;
+        self.max_nodes = total_max_nodes;
 
         let (root_pn, root_dn) = self.look_up_board(board);
 
@@ -1285,13 +1424,28 @@ impl DfPnSolver {
         }
 
         // 合法手生成
-        let moves = if or_node {
+        let mut moves = if or_node {
             profile_timed!(self, movegen_check_ns, movegen_check_count,
                 self.generate_check_moves(board))
         } else {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
                 self.generate_defense_moves(board))
         };
+
+        // Dynamic Move Ordering: TT Best Move を先頭に移動
+        // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
+        // NOTE: OR ノードでのみ適用．AND ノードでは全子の証明が必要なため
+        // 手順序の影響は OR より小さく，ソートの安定性を優先する．
+        if or_node {
+            let tt_best = self.look_up_best_move(pos_key, &att_hand);
+            if tt_best != 0 {
+                if let Some(idx) = moves.iter().position(|m| m.to_move16() == tt_best) {
+                    if idx > 0 {
+                        moves.swap(0, idx);
+                    }
+                }
+            }
+        }
 
         // 終端条件チェック
         if moves.is_empty() {
@@ -2109,9 +2263,10 @@ impl DfPnSolver {
                 self.profile_stats.main_loop_collect_count += 1;
             }
 
-            // 転置表を更新
+            // 転置表を更新(TT Best Move: 最善子の手を記録)
+            let best_move16 = children[best_idx].0.to_move16();
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store(pos_key, att_hand, current_pn, current_dn, remaining, best_source));
+                self.store_with_best_move(pos_key, att_hand, current_pn, current_dn, remaining, best_source, best_move16));
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //
