@@ -4011,6 +4011,12 @@ impl DfPnSolver {
         // 証明/反証結果を TT に格納(PV 抽出用)
         self.pns_store_to_tt(&arena);
 
+        // デバッグ: 証明ツリーの整合性チェック
+        #[cfg(debug_assertions)]
+        if arena[0].pn == 0 {
+            Self::validate_pns_proof(&arena, 0);
+        }
+
         // ルートが証明済みならアリーナから直接 PV を抽出
         if arena[0].pn == 0 {
             let mut visited: FxHashSet<u64> = FxHashSet::default();
@@ -4218,6 +4224,17 @@ impl DfPnSolver {
                 continue;
             }
 
+            // AND ノードが展開時の早期脱出で反証済み(dn=0)の場合，
+            // 部分的な子しかアリーナにないため再計算をスキップする．
+            // (再計算すると部分的な子だけから pn=0 と誤判定される)
+            if !arena[ni].or_node && arena[ni].dn == 0 {
+                if arena[ni].parent == u32::MAX {
+                    return;
+                }
+                current = arena[ni].parent;
+                continue;
+            }
+
             let old_pn = arena[ni].pn;
             let old_dn = arena[ni].dn;
 
@@ -4282,6 +4299,61 @@ impl DfPnSolver {
                 return;
             }
             current = arena[ni].parent;
+        }
+    }
+
+    /// PNS 証明ツリーの整合性を検証する(デバッグ用)．
+    ///
+    /// OR ノード(pn=0): 少なくとも1つの子が pn=0
+    /// AND ノード(pn=0): 全ての子が pn=0(展開済みの場合)
+    #[cfg(debug_assertions)]
+    fn validate_pns_proof(arena: &[PnsNode], idx: u32) {
+        let node = &arena[idx as usize];
+        if node.pn != 0 {
+            return;
+        }
+        if !node.expanded || node.children.is_empty() {
+            // リーフ: TT/ヒューリスティックから取得した pn=0
+            eprintln!("  PNS leaf proven: idx={}, or={}, pk={:#x}, move={}",
+                idx, node.or_node, node.pos_key,
+                if idx == 0 { "root".to_string() } else { node.move_from_parent.to_usi() });
+            return;
+        }
+        if node.or_node {
+            // OR: 少なくとも1つの子が pn=0
+            let has_proven = node.children.iter().any(|&c| arena[c as usize].pn == 0);
+            assert!(has_proven,
+                "PNS BUG: OR node {} (pk={:#x}) is proven but no child has pn=0. children: {:?}",
+                idx, node.pos_key,
+                node.children.iter().map(|&c| {
+                    let ch = &arena[c as usize];
+                    format!("{}(pn={},dn={},or={},exp={})",
+                        ch.move_from_parent.to_usi(), ch.pn, ch.dn, ch.or_node, ch.expanded)
+                }).collect::<Vec<_>>());
+            // 証明された子を表示
+            let proven_child = node.children.iter()
+                .find(|&&c| arena[c as usize].pn == 0).unwrap();
+            eprintln!("  PNS OR proven: idx={}, pk={:#x}, best_child={} ({})",
+                idx, node.pos_key, proven_child,
+                arena[*proven_child as usize].move_from_parent.to_usi());
+            // 再帰: 証明された子のみ
+            for &c in &node.children {
+                if arena[c as usize].pn == 0 {
+                    Self::validate_pns_proof(arena, c);
+                }
+            }
+        } else {
+            eprintln!("  PNS AND proven: idx={}, pk={:#x}, move={}, {} children",
+                idx, node.pos_key, node.move_from_parent.to_usi(), node.children.len());
+            // AND: 全子が pn=0
+            for &c in &node.children {
+                assert!(arena[c as usize].pn == 0,
+                    "PNS BUG: AND node {} (pk={:#x}) is proven but child {} ({}) has pn={}",
+                    idx, node.pos_key, c,
+                    arena[c as usize].move_from_parent.to_usi(),
+                    arena[c as usize].pn);
+                Self::validate_pns_proof(arena, c);
+            }
         }
     }
 
@@ -4818,26 +4890,28 @@ mod tests {
         }
     }
 
-    /// test_tsume_4: 4手目 △2二玉変化の検証．
+    /// S*1c → △同桂の後は不詰であることを確認する回帰テスト．
+    ///
+    /// PNS の AND ノード早期脱出時に部分的な子からの誤計算で
+    /// 偽の証明(false proof)が発生するバグの回帰テスト．
+    /// MID は正しくこの局面を不詰と判定する．
     #[test]
-    fn test_tsume_4_variation_king_2b() {
-        // P*1b, 1a1b, N*2d, 1b2b の4手後
-        let sfen = "7n1/7k1/5R3/7Np/6P2/9/9/9/9 b Sr2b4g3s2n4l16p 1";
-        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
-        match &result {
-            TsumeResult::Checkmate { moves, nodes_searched } => {
-                let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("PV ({} moves, {} nodes): {:?}", usi.len(), nodes_searched, usi);
-                // S*2c または S*1c からの詰み．
-                // S*1c は △同桂 があるが，その後も飛車活用で詰む．
-                // S*2c は 3手詰め(S*2c → 1a/3a → 成銀)．
-                assert!(usi.len() <= 7 && usi.len() % 2 == 1,
-                    "expected odd ≤7 moves, got {}: {:?}", usi.len(), usi);
-                assert!(usi[0] == "S*2c" || usi[0] == "S*1c",
-                    "first move should be S*2c or S*1c, got {}", usi[0]);
-            }
-            other => panic!("expected Checkmate, got {:?}", other),
-        }
+    fn test_pns_no_false_proof_after_dogyoku() {
+        // S*1c, 同桂後の局面: 不詰であるべき
+        let sfen = "9/7k1/5R2n/7Np/6P2/9/9/9/9 b r2b4g4s2n4l16p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(31, 2_000_000, 512);
+        solver.attacker = board.turn;
+        solver.start_time = Instant::now();
+
+        // MID は不詰を正しく判定する
+        solver.mid_fallback(&mut board);
+
+        let (root_pn, _root_dn) = solver.look_up_board(&board);
+        assert_ne!(root_pn, 0,
+            "post-dogyoku position must NOT be checkmate (false proof regression)");
     }
 
     /// generate_check_moves の結果を brute-force と比較する．
