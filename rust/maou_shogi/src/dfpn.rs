@@ -1363,8 +1363,9 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let nc = checks.len() as u32;
+                                    let pn = self.heuristic_or_pn(board, nc);
                                     let dn = depth_biased_dn(nc, ply + 1);
-                                    self.store(child_pk, child_hand, 1,
+                                    self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
                                 }
                             }
@@ -1381,8 +1382,9 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let nc = checks.len() as u32;
+                                    let pn = self.heuristic_or_pn(board, nc);
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
-                                    self.store(child_pk, child_hand, 1,
+                                    self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
                                 }
                             }
@@ -1409,8 +1411,9 @@ impl DfPnSolver {
                             { _sm_hit = true; }
                         } else {
                             let nc = checks.len() as u32;
+                            let pn = self.heuristic_or_pn(board, nc);
                             let dn = depth_biased_dn(nc, ply + 1);
-                            self.store(child_pk, child_hand, 1,
+                            self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
                         }
                     }
@@ -2044,6 +2047,54 @@ impl DfPnSolver {
         } else {
             num_defenses
         }
+    }
+
+    /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
+    ///
+    /// 標準 df-pn では OR ノードの初期 pn=1 だが，これでは全ての
+    /// OR ノードが等しく「1手で詰む可能性がある」と見積もられる．
+    /// 実際は玉の逃げ場が多い局面ほど詰みにくく，追い詰めに多くの手を要する．
+    ///
+    /// AND 親ノードの sum(pn) に直接影響し，閾値配分の精度を向上させる．
+    fn heuristic_or_pn(&self, board: &Board, num_checks: u32) -> u32 {
+        if num_checks == 0 {
+            return INF; // 王手なし → 不詰(呼び出し側で処理済みのはず)
+        }
+
+        let attacker = board.turn;
+        let defender = attacker.opponent();
+        let king_sq = match board.king_square(defender) {
+            Some(sq) => sq,
+            None => return 1,
+        };
+
+        // 玉の安全な逃げ場をカウント(攻め方から利きがないマス)
+        let king_moves = attack::step_attacks(defender, PieceType::King, king_sq);
+        let def_occ = board.occupied[defender.index()];
+        let king_targets = king_moves & !def_occ;
+        let mut safe_escapes = 0u32;
+        for to in king_targets {
+            if !board.is_attacked_by(to, attacker) {
+                safe_escapes += 1;
+            }
+        }
+
+        // 王手数が少なく逃げ場が多い → 追い詰めが困難
+        // 王手数が多く逃げ場がない → 包囲完成に近い
+        if num_checks <= 2 && safe_escapes >= 3 {
+            // 王手が少なく逃げ場が多い → 詰みにくい
+            return 2 + safe_escapes / 2;
+        }
+        if safe_escapes == 0 {
+            // 逃げ場なし → 詰みやすい(合駒のみで防御)
+            return 1;
+        }
+        if safe_escapes >= 4 {
+            // 逃げ場が非常に多い → 追い詰めに手数を要する
+            return 1 + safe_escapes / 3;
+        }
+        // 標準的な局面
+        1
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．
