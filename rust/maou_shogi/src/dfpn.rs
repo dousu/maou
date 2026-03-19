@@ -55,6 +55,64 @@ const INTERPOSE_DN_BIAS: u32 = INF / 2;
 /// - 初期 pn 計算で drop を割引く
 const LAZY_INTERPOSE_THRESHOLD: u32 = 8;
 
+/// DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック．
+///
+/// 標準 df-pn+ はノード(局面)の特徴で初期 pn/dn を設定するが，
+/// DFPN-E は**エッジ(手)**の特徴に基づくコストを加算する．
+/// 展開済みノードではエッジコストをゼロに戻すため，
+/// 実質的には初期 pn への加算として機能する．
+///
+/// 詰将棋での手の質:
+/// - OR ノードの王手: 成+取 > 取/成 > 近い静か手 > 遠い静か手
+/// - AND ノードの応手: 合駒(攻め方有利) < 駒取り < 玉の逃げ
+
+/// OR ノード(攻め方の王手)のエッジコストを計算する(DFPN-E)．
+///
+/// 有力な王手ほどコストが低く(pn に加算される量が少ない)，
+/// ソルバーがその手を優先的に深く探索する．
+///
+/// - 成+取王手: 0 (最有力)
+/// - 成王手/取王手: 0
+/// - 近い静か王手(距離≤2): 1
+/// - 遠い静か王手(距離≥3): 2
+#[inline]
+fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
+    let promo = m.is_promotion();
+    let capture = m.captured_piece_raw() > 0;
+    if promo || capture {
+        return 0;
+    }
+    // 静かな王手: 玉との距離でコスト決定
+    let to = m.to_sq();
+    let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
+    let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
+    let dist = dc.max(dr);
+    if dist <= 2 { 1 } else { 2 }
+}
+
+/// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
+///
+/// 攻め方にとって有利な応手(=詰ませやすい応手)ほどコストが低く，
+/// ソルバーがその応手の子ツリーを優先的に探索する．
+///
+/// - 合駒(drop): 0 (攻め方が取って攻撃続行可能)
+/// - 駒取り(応手で攻め駒を取る): 2 (攻め方の戦力が減り危険)
+/// - 玉の逃げ(非合駒・非取り): 1
+#[inline]
+fn edge_cost_and(m: Move) -> u32 {
+    if m.is_drop() {
+        // 合駒: 攻め方が取って持ち駒に加えられるため有利
+        return 0;
+    }
+    let capture = m.captured_piece_raw() > 0;
+    if capture {
+        // 駒取り: 攻め駒を除去するため攻め方にとって不利
+        return 2;
+    }
+    // 玉の逃げ・駒移動合い
+    1
+}
+
 /// Deep df-pn の深さ係数 R (Song Zhang et al. 2017)．
 ///
 /// 深い位置ほど初期 dn を高く設定し，探索のスラッシングを抑制する．
@@ -1191,6 +1249,12 @@ impl DfPnSolver {
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
+        let defender_king_sq = if or_node {
+            board.king_square(board.turn.opponent())
+        } else {
+            None
+        };
         #[cfg(feature = "profile")]
         let _child_init_start = Instant::now();
         for m in &moves {
@@ -1252,7 +1316,11 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let n = defenses.len() as u32;
-                                    let pn = self.heuristic_and_pn(board, n);
+                                    let mut pn = self.heuristic_and_pn(board, n);
+                                    // DFPN-E: エッジコスト加算
+                                    if let Some(ksq) = defender_king_sq {
+                                        pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                                    }
                                     let dn = depth_biased_dn(n, ply + 1);
                                     self.store(child_pk, child_hand, pn, dn,
                                         child_remaining, child_pk);
@@ -1273,7 +1341,11 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let n = defenses.len() as u32;
-                                    let pn = self.heuristic_and_pn(board, n);
+                                    let mut pn = self.heuristic_and_pn(board, n);
+                                    // DFPN-E: エッジコスト加算
+                                    if let Some(ksq) = defender_king_sq {
+                                        pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                                    }
                                     let dn = depth_biased_dn(n, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn, dn,
                                         child_remaining, child_pk);
@@ -1323,15 +1395,24 @@ impl DfPnSolver {
                                 { _sm_hit = true; }
                             } else {
                                 let n = defenses.len() as u32;
-                                let pn = self.heuristic_and_pn(board, n);
+                                let mut pn = self.heuristic_and_pn(board, n);
+                                // DFPN-E: エッジコスト加算
+                                if let Some(ksq) = defender_king_sq {
+                                    pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                                }
                                 let dn = depth_biased_dn(n, ply + 1);
                                 self.store(child_pk, child_hand, pn, dn,
                                     child_remaining, child_pk);
                             }
                         } else {
                             // depth 制限超過: 応手生成なし → deep df-pn のみ適用
+                            let mut pn = 1u32;
+                            // DFPN-E: エッジコスト加算
+                            if let Some(ksq) = defender_king_sq {
+                                pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                            }
                             let dn = depth_biased_dn(1, ply + 1);
-                            self.store(child_pk, child_hand, 1, dn,
+                            self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk);
                         }
                     }
@@ -1363,7 +1444,8 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let nc = checks.len() as u32;
-                                    let pn = self.heuristic_or_pn(board, nc);
+                                    let pn = self.heuristic_or_pn(board, nc)
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1382,7 +1464,8 @@ impl DfPnSolver {
                                     { _sm_hit = true; }
                                 } else {
                                     let nc = checks.len() as u32;
-                                    let pn = self.heuristic_or_pn(board, nc);
+                                    let pn = self.heuristic_or_pn(board, nc)
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1411,7 +1494,8 @@ impl DfPnSolver {
                             { _sm_hit = true; }
                         } else {
                             let nc = checks.len() as u32;
-                            let pn = self.heuristic_or_pn(board, nc);
+                            let pn = self.heuristic_or_pn(board, nc)
+                                .saturating_add(edge_cost_and(*m));
                             let dn = depth_biased_dn(nc, ply + 1);
                             self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
