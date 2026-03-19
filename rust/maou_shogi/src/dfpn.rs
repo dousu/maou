@@ -73,6 +73,46 @@ fn depth_biased_dn(base: u32, ply: u32) -> u32 {
     base.max(bias)
 }
 
+/// SNDA (Kishimoto 2010) の保守的ソースグループ集約．
+///
+/// `(source, value)` ペアのリストと通常の sum を受け取り，
+/// 同一 source グループの重複分を控除する．
+///
+/// 完全な max 集約は過度に値を削減するリスクがあるため，
+/// 保守的に「重複グループの最小値 × (メンバー数 - 1)」のみ控除する．
+/// これは DAG 合流で共有されるリーフが各メンバーの値に
+/// 少なくとも min(value) 分だけ含まれるという仮定に基づく．
+///
+/// `source == 0` のペアは独立ノード(TT ミス)としてスキップする．
+#[inline]
+fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
+    pairs.sort_unstable_by_key(|&(s, _)| s);
+    let mut deduction: u64 = 0;
+    let mut i = 0;
+    while i < pairs.len() {
+        let source = pairs[i].0;
+        if source == 0 {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut group_min = pairs[i].1;
+        i += 1;
+        while i < pairs.len() && pairs[i].0 == source {
+            group_min = group_min.min(pairs[i].1);
+            i += 1;
+        }
+        let group_size = (i - start) as u64;
+        if group_size > 1 {
+            // 共有リーフの最小寄与分 × 重複数を控除
+            deduction = deduction.saturating_add(
+                group_min as u64 * (group_size - 1),
+            );
+        }
+    }
+    (raw_sum as u64).saturating_sub(deduction).max(1) as u32
+}
+
 /// プロファイリング計測マクロ．
 ///
 /// `profile` feature が有効な場合のみ計測し，結果をフィールドに加算する．
@@ -286,6 +326,10 @@ struct DfPnEntry {
     pn: u32,
     dn: u32,
     remaining: u16,
+    /// SNDA (Kishimoto 2010) のソースノードハッシュ．
+    /// この pn/dn の値を決定したリーフノードの局面ハッシュ．
+    /// DAG 合流による pn/dn の過大評価を検出するために使用する．
+    source: u64,
 }
 
 /// HashMap ベースの転置表(証明駒/反証駒対応)．
@@ -338,24 +382,27 @@ impl TranspositionTable {
     ///
     /// - `remaining`: 呼び出し元の残り探索深さ．反証済みエントリの有効性判定に使用．
     ///   `0` を指定すると全ての反証済みエントリを受け入れる(事後クエリ用)．
+    /// 返り値: `(pn, dn, source)`.
+    /// `source` は SNDA 用のソースノードハッシュ．
+    /// TT ミス時は `source = 0`(独立ノード: SNDA グルーピング対象外)．
     #[inline(always)]
     fn look_up(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
-    ) -> (u32, u32) {
+    ) -> (u32, u32, u64) {
         let entries = match self.tt.get(&pos_key) {
             Some(e) => e,
-            None => return (1, 1),
+            None => return (1, 1, 0),
         };
 
-        let mut exact_match: Option<(u32, u32)> = None;
+        let mut exact_match: Option<(u32, u32, u64)> = None;
 
         for e in entries {
             // 証明済み: 持ち駒が多い(以上)なら再利用(深さ不問)
             if e.pn == 0 && hand_gte(hand, &e.hand) {
-                return (0, e.dn);
+                return (0, e.dn, e.source);
             }
             // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
             // e.remaining < remaining の場合，より深い探索で詰みが
@@ -364,7 +411,7 @@ impl TranspositionTable {
                 && hand_gte(&e.hand, hand)
                 && e.remaining >= remaining
             {
-                return (e.pn, 0);
+                return (e.pn, 0, e.source);
             }
             // 完全一致(pn=0/dn=0 は上で個別に処理済みなのでスキップ)
             // dn=0 かつ remaining 不足のエントリを拾うと，深さ制限による
@@ -374,11 +421,11 @@ impl TranspositionTable {
                 && e.pn != 0
                 && e.dn != 0
             {
-                exact_match = Some((e.pn, e.dn));
+                exact_match = Some((e.pn, e.dn, e.source));
             }
         }
 
-        exact_match.unwrap_or((1, 1))
+        exact_match.unwrap_or((1, 1, 0))
     }
 
     /// 転置表を更新する(支配関係によるパレートフロンティア維持)．
@@ -403,6 +450,7 @@ impl TranspositionTable {
         pn: u32,
         dn: u32,
         remaining: u16,
+        source: u64,
     ) {
         let entries =
             self.tt.entry(pos_key).or_default();
@@ -435,7 +483,7 @@ impl TranspositionTable {
                 }
                 !hand_gte(&e.hand, &hand)
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, source });
             return;
         }
 
@@ -456,7 +504,7 @@ impl TranspositionTable {
                 // 中間エントリは保護(remaining の不一致で必要になりうる)
                 true
             });
-            entries.push(DfPnEntry { hand, pn, dn, remaining });
+            entries.push(DfPnEntry { hand, pn, dn, remaining, source });
             return;
         }
 
@@ -473,6 +521,7 @@ impl TranspositionTable {
                 e.pn = pn;
                 e.dn = dn;
                 e.remaining = remaining;
+                e.source = source;
                 return;
             }
         }
@@ -484,6 +533,7 @@ impl TranspositionTable {
                 pn,
                 dn,
                 remaining,
+                source,
             });
             #[cfg(feature = "profile")]
             {
@@ -513,7 +563,7 @@ impl TranspositionTable {
                 }
             }
             if let Some(idx) = worst_idx {
-                entries[idx] = DfPnEntry { hand, pn, dn, remaining };
+                entries[idx] = DfPnEntry { hand, pn, dn, remaining, source };
             } else {
                 #[cfg(feature = "profile")]
                 { self.overflow_no_victim_count += 1; }
@@ -634,7 +684,7 @@ impl TranspositionTable {
         for (pos_key, entries) in &other.tt {
             for e in entries {
                 if e.pn == 0 || e.dn == 0 {
-                    self.store(*pos_key, e.hand, e.pn, e.dn, e.remaining);
+                    self.store(*pos_key, e.hand, e.pn, e.dn, e.remaining, e.source);
                 }
             }
         }
@@ -866,7 +916,7 @@ impl DfPnSolver {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
-    ) -> (u32, u32) {
+    ) -> (u32, u32, u64) {
         self.table.look_up(pos_key, hand, remaining)
     }
 
@@ -879,8 +929,9 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
+        source: u64,
     ) {
-        self.table.store(pos_key, hand, pn, dn, remaining);
+        self.table.store(pos_key, hand, pn, dn, remaining, source);
     }
 
     /// 転置表を参照する(盤面から自動計算，事後クエリ用)．
@@ -891,7 +942,8 @@ impl DfPnSolver {
     fn look_up_board(&self, board: &Board) -> (u32, u32) {
         let pk = position_key(board);
         let hand = &board.hand[self.attacker.index()];
-        self.table.look_up(pk, hand, 0)
+        let (pn, dn, _source) = self.table.look_up(pk, hand, 0);
+        (pn, dn)
     }
 
     /// 転置表を更新する(盤面から自動計算)．
@@ -902,10 +954,11 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
+        source: u64,
     ) {
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
-        self.table.store(pk, hand, pn, dn, remaining);
+        self.table.store(pk, hand, pn, dn, remaining, source);
     }
 
     /// 証明駒/反証駒を指定して TT に格納する．
@@ -916,9 +969,10 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
+        source: u64,
     ) {
         let pk = position_key(board);
-        self.table.store(pk, *hand, pn, dn, remaining);
+        self.table.store(pk, *hand, pn, dn, remaining, source);
     }
 
     /// 詰将棋を解く(反復深化 Df-Pn)．
@@ -1066,7 +1120,7 @@ impl DfPnSolver {
 
         // TT 参照: 既に閾値を超えている/証明済み/反証済みなら
         // 手生成をスキップして早期 return
-        let (tt_pn, tt_dn) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
+        let (tt_pn, tt_dn, _) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
             self.look_up_pn_dn(pos_key, &att_hand, remaining));
         if tt_pn == 0 || tt_dn == 0 {
             return;
@@ -1083,7 +1137,7 @@ impl DfPnSolver {
             // 同じ局面が浅い ply で到達されたときも不詰として誤判定される．
             // att_hand を使うことで，持ち駒が異なる経路からの
             // 再到達時に TT ヒットせず，正しく再探索される．
-            self.store(pos_key, att_hand, INF, 0, 0);
+            self.store(pos_key, att_hand, INF, 0, 0, pos_key);
             return;
         }
 
@@ -1103,7 +1157,7 @@ impl DfPnSolver {
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
                 // PieceType::MAX_HAND_COUNT ではなく実際の持ち駒を使用する．
                 // 真の終端条件なので REMAINING_INFINITE を使用する．
-                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
+                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
@@ -1112,6 +1166,7 @@ impl DfPnSolver {
                     0,
                     INF,
                     REMAINING_INFINITE,
+                    pos_key,
                 );
             }
             return;
@@ -1152,7 +1207,7 @@ impl DfPnSolver {
             }
 
             let child_remaining = remaining.saturating_sub(1);
-            let (cpn, cdn) =
+            let (cpn, cdn, _csrc) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if cpn == 1 && cdn == 1 {
                 #[cfg(feature = "profile")]
@@ -1192,7 +1247,7 @@ impl DfPnSolver {
                                 let n = defenses.len() as u32;
                                 if n == 0 {
                                     self.store(child_pk, [0; HAND_KINDS], 0, INF,
-                                        REMAINING_INFINITE);
+                                        REMAINING_INFINITE, child_pk);
                                     #[cfg(feature = "profile")]
                                     { _sm_hit = true; }
                                 } else {
@@ -1200,7 +1255,7 @@ impl DfPnSolver {
                                     let pn = self.heuristic_and_pn(board, n);
                                     let dn = depth_biased_dn(n, ply + 1);
                                     self.store(child_pk, child_hand, pn, dn,
-                                        child_remaining);
+                                        child_remaining, child_pk);
                                 }
                             }
                             StaticMateResult::Exhausted => {
@@ -1213,7 +1268,7 @@ impl DfPnSolver {
                                 let n = defenses.len() as u32;
                                 if n == 0 {
                                     self.store(child_pk, [0; HAND_KINDS], 0, INF,
-                                        REMAINING_INFINITE);
+                                        REMAINING_INFINITE, child_pk);
                                     #[cfg(feature = "profile")]
                                     { _sm_hit = true; }
                                 } else {
@@ -1221,7 +1276,7 @@ impl DfPnSolver {
                                     let pn = self.heuristic_and_pn(board, n);
                                     let dn = depth_biased_dn(n, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn, dn,
-                                        child_remaining);
+                                        child_remaining, child_pk);
                                 }
                             }
                         }
@@ -1231,7 +1286,7 @@ impl DfPnSolver {
                         if defenses.is_empty() {
                             // 応手なし → 即詰み確定(budget=0 パスでの検出)
                             self.store(child_pk, [0; HAND_KINDS], 0, INF,
-                                REMAINING_INFINITE);
+                                REMAINING_INFINITE, child_pk);
                             #[cfg(feature = "profile")]
                             { _sm_hit = true; }
                         } else if ply + 2 < self.depth {
@@ -1253,7 +1308,7 @@ impl DfPnSolver {
                                 };
                                 if mate {
                                     self.store_board(board, 0, INF,
-                                        REMAINING_INFINITE);
+                                        REMAINING_INFINITE, child_pk);
                                 }
                                 board.undo_move(*d, cap_d);
                                 if !mate {
@@ -1263,7 +1318,7 @@ impl DfPnSolver {
                             }
                             if all_mated {
                                 self.store(child_pk, child_hand, 0, INF,
-                                    REMAINING_INFINITE);
+                                    REMAINING_INFINITE, child_pk);
                                 #[cfg(feature = "profile")]
                                 { _sm_hit = true; }
                             } else {
@@ -1271,13 +1326,13 @@ impl DfPnSolver {
                                 let pn = self.heuristic_and_pn(board, n);
                                 let dn = depth_biased_dn(n, ply + 1);
                                 self.store(child_pk, child_hand, pn, dn,
-                                    child_remaining);
+                                    child_remaining, child_pk);
                             }
                         } else {
                             // depth 制限超過: 応手生成なし → deep df-pn のみ適用
                             let dn = depth_biased_dn(1, ply + 1);
                             self.store(child_pk, child_hand, 1, dn,
-                                child_remaining);
+                                child_remaining, child_pk);
                         }
                     }
                 } else {
@@ -1300,7 +1355,7 @@ impl DfPnSolver {
                                 let checks = self.generate_check_moves(board);
                                 if checks.is_empty() {
                                     self.store(child_pk, child_hand, INF, 0,
-                                        REMAINING_INFINITE);
+                                        REMAINING_INFINITE, child_pk);
                                 } else if self.try_capture_tt_proof(
                                     board, &checks, child_remaining)
                                 {
@@ -1310,7 +1365,7 @@ impl DfPnSolver {
                                     let nc = checks.len() as u32;
                                     let dn = depth_biased_dn(nc, ply + 1);
                                     self.store(child_pk, child_hand, 1,
-                                        dn, child_remaining);
+                                        dn, child_remaining, child_pk);
                                 }
                             }
                             StaticMateResult::Exhausted => {
@@ -1318,7 +1373,7 @@ impl DfPnSolver {
                                 let checks = self.generate_check_moves(board);
                                 if checks.is_empty() {
                                     self.store(child_pk, child_hand, INF, 0,
-                                        REMAINING_INFINITE);
+                                        REMAINING_INFINITE, child_pk);
                                 } else if self.try_capture_tt_proof(
                                     board, &checks, child_remaining)
                                 {
@@ -1328,7 +1383,7 @@ impl DfPnSolver {
                                     let nc = checks.len() as u32;
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
                                     self.store(child_pk, child_hand, 1,
-                                        dn, child_remaining);
+                                        dn, child_remaining, child_pk);
                                 }
                             }
                         }
@@ -1337,12 +1392,12 @@ impl DfPnSolver {
                         let checks = self.generate_check_moves(board);
                         if checks.is_empty() {
                             self.store(child_pk, child_hand, INF, 0,
-                                REMAINING_INFINITE);
+                                REMAINING_INFINITE, child_pk);
                         } else if ply + 2 < self.depth
                             && self.has_mate_in_1_with(board, &checks)
                         {
                             self.store(child_pk, child_hand, 0, INF,
-                                REMAINING_INFINITE);
+                                REMAINING_INFINITE, child_pk);
                             #[cfg(feature = "profile")]
                             { _sm_hit = true; }
                         } else if ply + 2 < self.depth
@@ -1356,7 +1411,7 @@ impl DfPnSolver {
                             let nc = checks.len() as u32;
                             let dn = depth_biased_dn(nc, ply + 1);
                             self.store(child_pk, child_hand, 1,
-                                dn, child_remaining);
+                                dn, child_remaining, child_pk);
                         }
                     }
                 }
@@ -1382,7 +1437,7 @@ impl DfPnSolver {
             }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
-            let (cpn_now, cdn_now) =
+            let (cpn_now, cdn_now, _) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if or_node && cpn_now == 0 {
                 // OR 証明: 子の証明駒から親の証明駒を計算
@@ -1396,7 +1451,7 @@ impl DfPnSolver {
                     proof[k] = proof[k].min(att_hand[k]);
                 }
                 self.store(pos_key, proof, 0, INF,
-                    REMAINING_INFINITE);
+                    REMAINING_INFINITE, pos_key);
                 return;
             }
             if !or_node && cdn_now == 0 {
@@ -1405,7 +1460,7 @@ impl DfPnSolver {
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
                 self.store(pos_key, child_dp, INF, 0,
-                    REMAINING_INFINITE);
+                    REMAINING_INFINITE, pos_key);
                 return;
             }
             // cdn_now == 0 ブロックに入るのは or_node == true のみ．
@@ -1447,7 +1502,7 @@ impl DfPnSolver {
         if or_node && children.is_empty() {
             self.store(
                 pos_key, init_or_disproof, INF, 0,
-                remaining,
+                remaining, pos_key,
             );
             return;
         }
@@ -1483,7 +1538,7 @@ impl DfPnSolver {
                 ply, remaining,
             ) {
                 PreSolveResult::Disproved(dp) => {
-                    self.store(pos_key, dp, INF, 0, REMAINING_INFINITE);
+                    self.store(pos_key, dp, INF, 0, REMAINING_INFINITE, pos_key);
                     self.path.remove(&full_hash);
                     return;
                 }
@@ -1492,7 +1547,7 @@ impl DfPnSolver {
                     for k in 0..HAND_KINDS {
                         p[k] = p[k].min(att_hand[k]);
                     }
-                    self.store(pos_key, p, 0, INF, REMAINING_INFINITE);
+                    self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key);
                     self.path.remove(&full_hash);
                     return;
                 }
@@ -1528,8 +1583,8 @@ impl DfPnSolver {
                 }
 
                 // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
-                let (cpn, cdn) = if self.path.contains(&child_fh) {
-                    (INF, 0)
+                let (cpn, cdn, _csrc) = if self.path.contains(&child_fh) {
+                    (INF, 0, 0)
                 } else {
                     self.look_up_pn_dn(
                         child_pk, child_hand,
@@ -1537,7 +1592,7 @@ impl DfPnSolver {
                     )
                 };
                 if cpn >= pn_threshold || cdn >= dn_threshold {
-                    self.store(pos_key, att_hand, cpn, cdn, remaining);
+                    self.store(pos_key, att_hand, cpn, cdn, remaining, pos_key);
                     break;
                 }
                 if cpn == 0 || cdn == 0 {
@@ -1549,7 +1604,7 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = proof[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
                         } else {
                             // cdn == 0: 唯一の子が反証 → OR 反証
                             let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
@@ -1558,12 +1613,12 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 dp[k] = dp[k].min(adj[k]);
                             }
-                            self.store(pos_key, dp, INF, 0, remaining);
+                            self.store(pos_key, dp, INF, 0, remaining, pos_key);
                         }
                     } else {
                         if cdn == 0 {
                             let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
-                            self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE);
+                            self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
                             let child_ph = self.table.get_proof_hand(child_pk, child_hand);
@@ -1571,7 +1626,7 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = child_ph[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
                         }
                     }
                     break;
@@ -1587,6 +1642,9 @@ impl DfPnSolver {
             return;
         }
 
+        // SNDA 用の (source, value) ペアバッファ(ループ外で確保し再利用)
+        let mut snda_pairs: Vec<(u64, u32)> = Vec::new();
+
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
             #[cfg(feature = "profile")]
@@ -1600,6 +1658,9 @@ impl DfPnSolver {
             let mut best_pn_dn: (u32, u32) = (INF, 0);
             let mut proved_or_disproved = false;
 
+            // SNDA 用: best child の source を追跡
+            let mut best_source: u64 = 0;
+
             if or_node {
                 // OR ノード: min(pn), sum(dn)
                 current_pn = INF;
@@ -1608,13 +1669,16 @@ impl DfPnSolver {
                 // 反証駒の交差(全子の反証駒の min)
                 // init フェーズで反証済みの子から蓄積した init_or_disproof を引き継ぐ
                 let mut or_disproof = init_or_disproof;
+                // SNDA: (source, dn) ペアを収集し，同一 source の子は
+                // sum の代わりに max で集約して過大評価を補正する
+                snda_pairs.clear();
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
-                    let (cpn, cdn) =
+                    let (cpn, cdn, csrc) =
                         if self.path.contains(&child_fh) {
-                            (INF, 0)
+                            (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
@@ -1640,7 +1704,7 @@ impl DfPnSolver {
                         }
                         self.store(
                             pos_key, proof, 0, INF,
-                            REMAINING_INFINITE,
+                            REMAINING_INFINITE, csrc,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1672,13 +1736,19 @@ impl DfPnSolver {
                         current_pn = cpn;
                         best_idx = i;
                         best_pn_dn = (cpn, cdn);
+                        best_source = csrc;
                     } else if cpn < second_best {
                         second_best = cpn;
                     }
+                    // SNDA: sum 計算は後段で行う
                     current_dn = (current_dn as u64)
                         .saturating_add(cdn as u64)
                         .min(INF as u64)
                         as u32;
+                    // SNDA ペア収集(source=0 は独立ノード → グルーピング対象外)
+                    if csrc != 0 && cdn > 0 {
+                        snda_pairs.push((csrc, cdn));
+                    }
                 }
 
                 if proved_or_disproved {
@@ -1691,10 +1761,16 @@ impl DfPnSolver {
                     self.store(
                         pos_key, or_disproof,
                         INF, 0,
-                        remaining,
+                        remaining, pos_key,
                     );
                     self.path.remove(&full_hash);
                     return;
+                }
+
+                // SNDA 補正: 同一 source の子は DAG 合流の可能性
+                // 重複グループの最小値分を控除して過大評価を補正
+                if snda_pairs.len() >= 2 {
+                    current_dn = snda_dedup(&mut snda_pairs, current_dn);
                 }
             } else {
                 // AND ノード: sum(pn), min(dn)
@@ -1709,13 +1785,15 @@ impl DfPnSolver {
                 // 合駒分岐は攻め方が取った後の局面が既に証明済みに
                 // なっていることが多く，高速に証明できる．
                 let mut best_effective_dn: u32 = INF;
+                // SNDA: (source, pn) ペアを収集
+                snda_pairs.clear();
 
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
-                    let (cpn, cdn) =
+                    let (cpn, cdn, csrc) =
                         if self.path.contains(&child_fh) {
-                            (INF, 0)
+                            (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
                                 child_pk, child_hand,
@@ -1733,7 +1811,7 @@ impl DfPnSolver {
                             );
                         self.store(
                             pos_key, child_dp, INF, 0,
-                            REMAINING_INFINITE,
+                            REMAINING_INFINITE, csrc,
                         );
                         proved_or_disproved = true;
                         break;
@@ -1768,6 +1846,10 @@ impl DfPnSolver {
                     if cdn < current_dn {
                         current_dn = cdn;
                     }
+                    // SNDA ペア収集(source=0 は独立ノード)
+                    if csrc != 0 && cpn > 0 {
+                        snda_pairs.push((csrc, cpn));
+                    }
                     // 子ノード選択用: 合駒(drop)にバイアスを加算
                     let effective_cdn = if m.is_drop() {
                         cdn.saturating_add(INTERPOSE_DN_BIAS)
@@ -1782,6 +1864,7 @@ impl DfPnSolver {
                         best_effective_dn = effective_cdn;
                         best_idx = i;
                         best_pn_dn = (cpn, cdn);
+                        best_source = csrc;
                     } else if effective_cdn < second_best {
                         second_best = effective_cdn;
                     }
@@ -1790,6 +1873,12 @@ impl DfPnSolver {
                 if proved_or_disproved {
                     self.path.remove(&full_hash);
                     return;
+                }
+
+                // SNDA 補正: 同一 source の子は DAG 合流の可能性
+                // 重複グループの最小値分を控除して過大評価を補正
+                if snda_pairs.len() >= 2 {
+                    current_pn = snda_dedup(&mut snda_pairs, current_pn);
                 }
 
                 // 全子が証明済み
@@ -1808,7 +1897,7 @@ impl DfPnSolver {
                     }
                     self.store(
                         pos_key, and_proof, 0, INF,
-                        REMAINING_INFINITE,
+                        REMAINING_INFINITE, pos_key,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -1823,7 +1912,7 @@ impl DfPnSolver {
 
             // 転置表を更新
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store(pos_key, att_hand, current_pn, current_dn, remaining));
+                self.store(pos_key, att_hand, current_pn, current_dn, remaining, best_source));
 
             // 閾値チェック
             if current_pn >= pn_threshold
@@ -1983,7 +2072,7 @@ impl DfPnSolver {
             let captured = board.do_move(*check);
             let cap_pk = position_key(board);
             let cap_hand = board.hand[self.attacker.index()];
-            let (cap_pn, _) = self.look_up_pn_dn(
+            let (cap_pn, _, _) = self.look_up_pn_dn(
                 cap_pk, &cap_hand, capture_remaining,
             );
             if cap_pn == 0 {
@@ -1991,7 +2080,7 @@ impl DfPnSolver {
                 // 証明駒は取り後の証明駒を調整して使用
                 let cap_proof = self.table.get_proof_hand(cap_pk, &cap_hand);
                 let proof = adjust_hand_for_move(*check, &cap_proof);
-                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE);
+                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE, cap_pk);
                 board.undo_move(*check, captured);
                 return true;
             }
@@ -2013,7 +2102,7 @@ impl DfPnSolver {
             let captured = board.do_move(mate_move);
             let pk = position_key(board);
             self.store(pk, [0; HAND_KINDS], 0, INF,
-                REMAINING_INFINITE);
+                REMAINING_INFINITE, pk);
             board.undo_move(mate_move, captured);
             return true;
         }
@@ -2069,7 +2158,7 @@ impl DfPnSolver {
             let child_remaining = remaining.saturating_sub(1);
 
             // TT で既に証明/反証済みなら即処理
-            let (cpn, cdn) = self.look_up_pn_dn(
+            let (cpn, cdn, _csrc) = self.look_up_pn_dn(
                 child_pk, child_hand, child_remaining,
             );
             if cpn == 0 {
@@ -2105,7 +2194,7 @@ impl DfPnSolver {
             self.max_nodes = saved_max_nodes;
 
             // 結果確認
-            let (cpn, cdn) = self.look_up_pn_dn(
+            let (cpn, cdn, _csrc) = self.look_up_pn_dn(
                 child_pk, child_hand, child_remaining,
             );
             if cpn == 0 {
@@ -2200,7 +2289,7 @@ impl DfPnSolver {
         let pos_key = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
         let rem16 = remaining as u16;
-        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        let (tt_pn, tt_dn, _) = self.table.look_up(pos_key, &att_hand, rem16);
         // TT に証明/反証エントリがある場合は budget を消費せず即返却．
         // budget は「新規に探索するノード数」の制限として機能させる．
         if tt_pn == 0 {
@@ -2220,7 +2309,7 @@ impl DfPnSolver {
 
         let checks = self.generate_check_moves(board);
         if checks.is_empty() {
-            self.table.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE);
+            self.table.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key);
             return StaticMateResult::NoCheckmate;
         }
 
@@ -2229,13 +2318,13 @@ impl DfPnSolver {
         if let Some(mate_move) = board.mate_move_in_1ply(checks.as_slice(), us) {
             let captured = board.do_move(mate_move);
             let child_pk = position_key(board);
-            self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
+            self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, child_pk);
             board.undo_move(mate_move, captured);
             let mut proof = adjust_hand_for_move(mate_move, &[0; HAND_KINDS]);
             for k in 0..HAND_KINDS {
                 proof[k] = proof[k].min(att_hand[k]);
             }
-            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
             return StaticMateResult::Checkmate(proof);
         }
         if remaining <= 1 {
@@ -2260,7 +2349,7 @@ impl DfPnSolver {
                     for k in 0..HAND_KINDS {
                         proof[k] = proof[k].min(att_hand[k]);
                     }
-                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE);
+                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
                     return StaticMateResult::Checkmate(proof);
                 }
                 StaticMateResult::NoCheckmate => {
@@ -2303,7 +2392,7 @@ impl DfPnSolver {
         let pos_key = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
         let rem16 = remaining as u16;
-        let (tt_pn, tt_dn) = self.table.look_up(pos_key, &att_hand, rem16);
+        let (tt_pn, tt_dn, _) = self.table.look_up(pos_key, &att_hand, rem16);
         // TT に証明/反証エントリがある場合は budget を消費せず即返却．
         if tt_pn == 0 {
             return StaticMateResult::Checkmate(
@@ -2322,7 +2411,7 @@ impl DfPnSolver {
 
         let defenses = self.generate_defense_moves(board);
         if defenses.is_empty() {
-            self.table.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE);
+            self.table.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, pos_key);
             return StaticMateResult::Checkmate([0; HAND_KINDS]);
         }
         if remaining < 2 {
@@ -2357,7 +2446,7 @@ impl DfPnSolver {
                     // OR 側と異なり budget_before ガードは不要:
                     //   AND は逃れ手を1つ見つけた時点で不詰が確定し，
                     //   OR のように全子を巡回して結果を合成する必要がない
-                    self.table.store(pos_key, att_hand, INF, 0, rem16);
+                    self.table.store(pos_key, att_hand, INF, 0, rem16, pos_key);
                     return StaticMateResult::NoCheckmate;
                 }
                 StaticMateResult::Exhausted => {
@@ -2380,7 +2469,7 @@ impl DfPnSolver {
         for k in 0..HAND_KINDS {
             and_proof[k] = and_proof[k].min(att_hand[k]);
         }
-        self.table.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE);
+        self.table.store(pos_key, and_proof, 0, INF, REMAINING_INFINITE, pos_key);
         StaticMateResult::Checkmate(and_proof)
     }
 
