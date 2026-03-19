@@ -203,7 +203,9 @@ SNDA が同一 source の重複を控除するのに対し，WPN は分岐構造
 将棋と Othello での実験で，標準の証明数探索やその深さ優先変種より
 高い性能を示した．
 
-**maou_shogi:** 未実装．
+**maou_shogi:** v0.17.0 で実装済み．AND ノードの証明数計算を
+`sum(pn_children)` から `max(pn_children) + (unproven_count - 1)` に変更．
+VPN(証明済み子除外)および SNDA(DAG 合流補正)と併用．
 
 ### 5. 合駒(中合い)最適化
 

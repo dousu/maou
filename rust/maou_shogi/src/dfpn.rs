@@ -2112,7 +2112,10 @@ impl DfPnSolver {
                     current_dn = snda_dedup(&mut snda_pairs, current_dn);
                 }
             } else {
-                // AND ノード: sum(pn), min(dn)
+                // AND ノード: WPN (Weak Proof Number), min(dn)
+                // WPN (Ueda et al. 2008): sum(pn) の代わりに
+                // max(pn) + (unproven_count - 1) を使用．
+                // DAG 構造での二重計数問題を緩和する．
                 current_pn = 0;
                 current_dn = INF;
                 second_best = INF; // 2番目に小さい dn(選択用，バイアス込み)
@@ -2126,6 +2129,9 @@ impl DfPnSolver {
                 let mut best_effective_dn: u32 = INF;
                 // SNDA: (source, pn) ペアを収集
                 snda_pairs.clear();
+                // WPN: max(cpn) と未証明子の数を追跡
+                let mut max_cpn: u32 = 0;
+                let mut unproven_count: u32 = 0;
 
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -2191,10 +2197,11 @@ impl DfPnSolver {
 
                     all_proved = false;
 
-                    current_pn = (current_pn as u64)
-                        .saturating_add(cpn as u64)
-                        .min(INF as u64)
-                        as u32;
+                    // WPN: max(cpn) を追跡し，未証明子をカウント
+                    if cpn > max_cpn {
+                        max_cpn = cpn;
+                    }
+                    unproven_count += 1;
                     // TT 保存用: 真の min(dn)
                     if cdn < current_dn {
                         current_dn = cdn;
@@ -2226,6 +2233,14 @@ impl DfPnSolver {
                 if proved_or_disproved {
                     self.path.remove(&full_hash);
                     return;
+                }
+
+                // WPN: current_pn = max(cpn) + (unproven_count - 1)
+                // unproven_count == 0 の場合は全子証明済み(current_pn = 0)
+                if unproven_count > 0 {
+                    current_pn = (max_cpn as u64)
+                        .saturating_add(unproven_count as u64 - 1)
+                        .min(INF as u64) as u32;
                 }
 
                 // SNDA 補正: 同一 source の子は DAG 合流の可能性
