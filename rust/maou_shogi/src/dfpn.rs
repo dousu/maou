@@ -1261,7 +1261,7 @@ impl DfPnSolver {
         }
 
         // Phase 1: Best-First PNS
-        self.pns_main(board);
+        let pns_pv = self.pns_main(board);
 
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
@@ -1280,36 +1280,49 @@ impl DfPnSolver {
         let (root_pn, root_dn) = self.look_up_board(board);
 
         if root_pn == 0 {
-            // PV 抽出を先に試行
-            let moves = self.extract_pv(board);
-            if moves.is_empty() {
-                // PV 抽出失敗: TT 上書きにより手順が断片化している．
-                // find_shortest の値に関わらず，PV 復元のために追加証明が必要．
-                // (L457 の find_shortest 用 complete_or_proofs とは目的が異なる)
-                self.complete_or_proofs(board);
-                let moves = self.extract_pv(board);
-                if moves.is_empty() {
-                    // TT エントリ上限 (MAX_TT_ENTRIES_PER_POSITION) 等により
-                    // 詰みは証明済みだが PV 復元不可．
-                    return TsumeResult::CheckmateNoPv {
+            // PNS アリーナから PV を抽出できた場合はそちらを優先
+            // (TT ベースの extract_pv は PNS 証明パスが不完全になりうる)
+            if let Some(pv) = pns_pv {
+                if self.find_shortest {
+                    // 最短手数探索: PV 長を depth 上限にして追加証明
+                    let saved_depth = self.depth;
+                    self.depth = pv.len() as u32;
+                    self.complete_or_proofs(board);
+                    self.depth = saved_depth;
+                    let final_moves = self.extract_pv(board);
+                    let moves = if !final_moves.is_empty()
+                        && final_moves.len() <= pv.len()
+                    {
+                        final_moves
+                    } else {
+                        pv
+                    };
+                    return TsumeResult::Checkmate {
+                        moves,
                         nodes_searched: self.nodes_searched,
                     };
                 }
                 return TsumeResult::Checkmate {
-                    moves,
+                    moves: pv,
+                    nodes_searched: self.nodes_searched,
+                };
+            }
+
+            // アリーナ PV が取れなかった場合は TT ベースにフォールバック
+            self.complete_or_proofs(board);
+
+            let moves = self.extract_pv(board);
+            if moves.is_empty() {
+                return TsumeResult::CheckmateNoPv {
                     nodes_searched: self.nodes_searched,
                 };
             }
             if self.find_shortest {
-                // 最短手数探索: PV 長を depth 上限にして
-                // 全 OR ノードの未証明子を追加証明する．
-                // 同じ長さ以下の代替手順のみ探索されるため効率的．
                 let saved_depth = self.depth;
                 self.depth = moves.len() as u32;
                 self.complete_or_proofs(board);
                 self.depth = saved_depth;
                 let final_moves = self.extract_pv(board);
-                // 追加証明で短い手順が見つかればそちらを採用
                 let moves = if !final_moves.is_empty()
                     && final_moves.len() <= moves.len()
                 {
@@ -3748,6 +3761,12 @@ impl DfPnSolver {
                     visited.remove(&full_hash);
 
                     let total_len = 1 + sub_pv.len();
+                    // OR ノードの PV は奇数長でなければならない
+                    // (攻め方の手で始まり攻め方の手で終わる)
+                    if total_len % 2 == 0 && !sub_pv.is_empty() {
+                        board.undo_move(*m, captured);
+                        continue;
+                    }
                     let is_better = match &best_pv {
                         None => true,
                         Some(prev) => total_len < prev.len(),
@@ -3788,6 +3807,12 @@ impl DfPnSolver {
                     visited.remove(&full_hash);
 
                     let total_len = 1 + sub_pv.len();
+                    // AND ノードの PV は偶数長でなければならない
+                    // (玉方の手で始まり攻め方の手で終わる)
+                    if total_len % 2 == 1 {
+                        board.undo_move(*m, captured);
+                        continue;
+                    }
                     let is_capture = m.captured_piece_raw() > 0;
                     let is_better = match &best_pv {
                         None => true,
@@ -3891,7 +3916,7 @@ impl DfPnSolver {
     ///
     /// アリーナが `PNS_MAX_ARENA_NODES` に達した場合は探索を打ち切り，
     /// 呼び出し元で MID ベースの探索にフォールバックする．
-    fn pns_main(&mut self, board: &mut Board) {
+    fn pns_main(&mut self, board: &mut Board) -> Option<Vec<Move>> {
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
             PNS_MAX_ARENA_NODES.min(1024 * 1024),
         );
@@ -3985,6 +4010,16 @@ impl DfPnSolver {
 
         // 証明/反証結果を TT に格納(PV 抽出用)
         self.pns_store_to_tt(&arena);
+
+        // ルートが証明済みならアリーナから直接 PV を抽出
+        if arena[0].pn == 0 {
+            let mut visited: FxHashSet<u64> = FxHashSet::default();
+            let pv = self.pns_extract_pv(board, &arena, 0, &mut visited);
+            if !pv.is_empty() && pv.len() % 2 == 1 {
+                return Some(pv);
+            }
+        }
+        None
     }
 
     /// PNS ノード展開: リーフノードの子を生成し初期 pn/dn を設定する．
@@ -4247,6 +4282,123 @@ impl DfPnSolver {
                 return;
             }
             current = arena[ni].parent;
+        }
+    }
+
+    /// PNS アリーナから直接 PV を抽出する．
+    ///
+    /// TT ベースの `extract_pv` と異なり，PNS が構築した明示的な探索木を
+    /// 辿るため，PNS が証明した経路を正確に復元できる．
+    /// 展開されていないリーフ(TT から pn=0 を取得した子)では
+    /// TT ベースの `extract_pv_recursive` にフォールバックする．
+    ///
+    /// - OR ノード: 証明済み子のうち最短 PV を選択
+    /// - AND ノード: 証明済み子のうち最長 PV を選択(最長抵抗)
+    fn pns_extract_pv(
+        &self,
+        board: &mut Board,
+        arena: &[PnsNode],
+        node_idx: u32,
+        visited: &mut FxHashSet<u64>,
+    ) -> Vec<Move> {
+        let node = &arena[node_idx as usize];
+
+        // 未証明ノード → PV なし
+        if node.pn != 0 {
+            return Vec::new();
+        }
+
+        // ループ検出
+        if visited.contains(&node.full_hash) {
+            return Vec::new();
+        }
+
+        // 未展開リーフまたは子なし(終端) → TT フォールバック
+        if !node.expanded || node.children.is_empty() {
+            return self.extract_pv_recursive(board, node.or_node, visited, 0);
+        }
+
+        if node.or_node {
+            // OR ノード: 証明済み子から最短 PV を選択
+            let mut best_pv: Option<Vec<Move>> = None;
+
+            for &ci in &node.children {
+                let child = &arena[ci as usize];
+                if child.pn != 0 {
+                    continue;
+                }
+
+                let captured = board.do_move(child.move_from_parent);
+                visited.insert(node.full_hash);
+                let sub_pv = self.pns_extract_pv(board, arena, ci, visited);
+                visited.remove(&node.full_hash);
+                board.undo_move(child.move_from_parent, captured);
+
+                // sub_pv が空でないか，AND 終端(応手なし=詰み)なら有効
+                let total_len = 1 + sub_pv.len();
+                // 奇数長(攻め方の手で終わる)のみ有効な PV
+                if total_len % 2 == 0 && !sub_pv.is_empty() {
+                    continue;
+                }
+                let is_better = match &best_pv {
+                    None => true,
+                    Some(prev) => total_len < prev.len(),
+                };
+                if is_better {
+                    let mut pv = vec![child.move_from_parent];
+                    pv.extend(sub_pv);
+                    best_pv = Some(pv);
+                }
+            }
+
+            best_pv.unwrap_or_default()
+        } else {
+            // AND ノード: 全子が証明済み，最長 PV を選択(最長抵抗)
+            let mut best_pv: Option<Vec<Move>> = None;
+            let mut best_is_capture = false;
+
+            for &ci in &node.children {
+                let child = &arena[ci as usize];
+                if child.pn != 0 {
+                    continue;
+                }
+
+                let captured = board.do_move(child.move_from_parent);
+                visited.insert(node.full_hash);
+                let sub_pv = self.pns_extract_pv(board, arena, ci, visited);
+                visited.remove(&node.full_hash);
+                board.undo_move(child.move_from_parent, captured);
+
+                let total_len = 1 + sub_pv.len();
+                // AND ノードの PV は偶数長でなければならない
+                if total_len % 2 == 1 {
+                    continue;
+                }
+                let is_capture = child.move_from_parent.captured_piece_raw() > 0;
+                let is_better = match &best_pv {
+                    None => true,
+                    Some(prev) => {
+                        if total_len > prev.len() {
+                            true
+                        } else if total_len == prev.len()
+                            && is_capture
+                            && !best_is_capture
+                        {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if is_better {
+                    let mut pv = vec![child.move_from_parent];
+                    pv.extend(sub_pv);
+                    best_pv = Some(pv);
+                    best_is_capture = is_capture;
+                }
+            }
+
+            best_pv.unwrap_or_default()
         }
     }
 
@@ -4661,6 +4813,28 @@ mod tests {
                     usi_moves.len() % 2 == 1,
                     "tsume must have odd number of moves, got {}", usi_moves.len(),
                 );
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+    }
+
+    /// test_tsume_4: 4手目 △2二玉変化の検証．
+    #[test]
+    fn test_tsume_4_variation_king_2b() {
+        // P*1b, 1a1b, N*2d, 1b2b の4手後
+        let sfen = "7n1/7k1/5R3/7Np/6P2/9/9/9/9 b Sr2b4g3s2n4l16p 1";
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+        match &result {
+            TsumeResult::Checkmate { moves, nodes_searched } => {
+                let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("PV ({} moves, {} nodes): {:?}", usi.len(), nodes_searched, usi);
+                // S*2c または S*1c からの詰み．
+                // S*1c は △同桂 があるが，その後も飛車活用で詰む．
+                // S*2c は 3手詰め(S*2c → 1a/3a → 成銀)．
+                assert!(usi.len() <= 7 && usi.len() % 2 == 1,
+                    "expected odd ≤7 moves, got {}: {:?}", usi.len(), usi);
+                assert!(usi[0] == "S*2c" || usi[0] == "S*1c",
+                    "first move should be S*2c or S*1c, got {}", usi[0]);
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
