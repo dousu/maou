@@ -4827,4 +4827,125 @@ mod tests {
         }
     }
 
+    /// 39手詰 PV 上の各サブ問題を小予算(100K)でソルブし，
+    /// どの ply でノード爆発が起きるかを特定する．
+    ///
+    /// 各 ply 後の局面を独立した詰将棋として解き，
+    /// 消費ノード数と結果を出力する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_subproblem_quick() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        eprintln!("\n{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
+            "After", "Typ", "Remain", "Budget", "Nodes", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        for (i, &usi) in pv_usi.iter().enumerate() {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+
+            let remaining = 39 - (i + 1);
+            if remaining == 0 { break; }
+            let or_sub = i % 2 == 1; // 奇数 i 後は攻め方番 = OR
+
+            // 小予算で素早くテスト
+            let budget = 100_000u64;
+            let mut solver = DfPnSolver::new(
+                (remaining + 2) as u32, budget, 32767,
+            );
+            solver.set_find_shortest(false);
+            solver.set_interpose_pre_solve_nodes(0); // Pre-Solve 無効
+            let mut test_board = board.clone();
+            let result = solver.solve(&mut test_board);
+
+            let (status, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            let node_type = if or_sub { "OR " } else { "AND" };
+            eprintln!("{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
+                format!("ply{}", i + 1), node_type, remaining,
+                budget, nodes, status);
+        }
+    }
+
+    /// 39手詰で最も分岐の多い ply 4 (AND ノード，20手の応手) の
+    /// 各回避手を単体ソルブし，どの分岐でノード爆発するかを特定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply4_breakdown() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_setup = ["7b6b", "5b4c", "8b9c"]; // 3手進めて ply 4 の局面へ
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // ply 4: 後手番(AND ノード)
+        assert_eq!(board.turn, Color::White);
+
+        let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+
+        eprintln!("\n=== Ply 4 AND ノード回避手ブレークダウン ===");
+        eprintln!("回避手数: {} (うち drop: {}, move: {})",
+            defenses.len(),
+            defenses.iter().filter(|m| m.is_drop()).count(),
+            defenses.iter().filter(|m| !m.is_drop()).count());
+
+        eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}",
+            "#", "Move", "Type", "Budget", "Nodes", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        for (i, &defense) in defenses.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(defense);
+
+            // 残り35手分で探索 (depth=37, budget=500K)
+            let mut child_solver = DfPnSolver::new(37, 500_000, 32767);
+            child_solver.set_find_shortest(false);
+            child_solver.set_interpose_pre_solve_nodes(0);
+            let result = child_solver.solve(&mut child_board);
+
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            let is_correct = defense.to_usi() == "4c3d";
+            let marker = if is_correct { " ← CORRECT" } else { "" };
+            eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}{}",
+                i + 1, defense.to_usi(), move_type,
+                500_000, nodes, result_str, marker);
+        }
+    }
+
 }
