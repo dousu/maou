@@ -55,6 +55,19 @@ const INTERPOSE_DN_BIAS: u32 = INF / 2;
 /// - 初期 pn 計算で drop を割引く
 const LAZY_INTERPOSE_THRESHOLD: u32 = 8;
 
+/// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
+/// 過小評価対策．
+///
+/// 巡回グラフ(DCG)上の df-pn では，ループ検出により子ノードが
+/// (INF, 0) を返し，兄弟ノードの pn/dn が過小評価されうる．
+/// TCA は OR ノードでループ子が存在する場合に MID ループの閾値を
+/// 加算的に拡張し，兄弟のより深い探索を促す．
+///
+/// 拡張量 = `threshold / TCA_EXTEND_DENOM + 1` (約 25% の加算)．
+/// 乗算的拡張(2×)は再帰で指数的に増大するが，加算的拡張は
+/// 各レベルで独立に適用されるため膨張を抑える．
+const TCA_EXTEND_DENOM: u32 = 4;
+
 /// DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック．
 ///
 /// 標準 df-pn+ はノード(局面)の特徴で初期 pn/dn を設定するが，
@@ -1748,6 +1761,9 @@ impl DfPnSolver {
             // SNDA 用: best child の source を追跡
             let mut best_source: u64 = 0;
 
+            // TCA: OR ノードでのループ子ノード数
+            let mut loop_child_count: u32 = 0;
+
             if or_node {
                 // OR ノード: min(pn), sum(dn)
                 current_pn = INF;
@@ -1765,6 +1781,7 @@ impl DfPnSolver {
                 {
                     let (cpn, cdn, csrc) =
                         if self.path.contains(&child_fh) {
+                            loop_child_count += 1;
                             (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
@@ -2001,9 +2018,33 @@ impl DfPnSolver {
             profile_timed!(self, tt_store_ns, tt_store_count,
                 self.store(pos_key, att_hand, current_pn, current_dn, remaining, best_source));
 
-            // 閾値チェック
-            if current_pn >= pn_threshold
-                || current_dn >= dn_threshold
+            // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
+            //
+            // OR ノードでループ子(path 上の子)が存在する場合，
+            // 兄弟の pn/dn が過小評価されている可能性がある．
+            // 閾値を加算的に拡張し，兄弟をより深く探索させる．
+            // 拡張は MID ループ出口と子閾値の両方に適用する:
+            // - MID 出口のみ拡張すると，子閾値が元の値に束縛され
+            //   ループが空転する(attempt 2 の教訓)．
+            // - 子閾値も含め加算的に拡張することで進捗を保証する．
+            let (eff_pn_th, eff_dn_th) = if loop_child_count > 0 {
+                (
+                    pn_threshold
+                        .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
+                        .saturating_add(1)
+                        .min(INF - 1),
+                    dn_threshold
+                        .saturating_add(dn_threshold / TCA_EXTEND_DENOM)
+                        .saturating_add(1)
+                        .min(INF - 1),
+                )
+            } else {
+                (pn_threshold, dn_threshold)
+            };
+
+            // 閾値チェック(TCA 拡張済み閾値を使用)
+            if current_pn >= eff_pn_th
+                || current_dn >= eff_dn_th
             {
                 break;
             }
@@ -2033,23 +2074,26 @@ impl DfPnSolver {
             // 乗算型 ε を使用し，pn/dn に比例した余裕を与える:
             //   threshold = second_best + second_best/4 + 1
             //             ≈ ceil(second_best * 5/4)
+            //
+            // TCA 拡張: eff_*_th を使用し，ループ子存在時は
+            // 子ノードにも拡張済み閾値を伝播する．
             let (child_pn_th, child_dn_th) = if or_node {
-                let child_dn_th = dn_threshold
+                let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
                     .min(INF - 1);
                 let epsilon = second_best / 4 + 1;
-                let child_pn_th = pn_threshold
+                let child_pn_th = eff_pn_th
                     .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
-                let child_pn_th = pn_threshold
+                let child_pn_th = eff_pn_th
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
                 let epsilon = second_best / 4 + 1;
-                let child_dn_th = dn_threshold
+                let child_dn_th = eff_dn_th
                     .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
