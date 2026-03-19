@@ -625,6 +625,21 @@ impl TranspositionTable {
         self.retain_proofs();
     }
 
+    /// 他の TT から確定エントリ(証明・反証)をマージする．
+    ///
+    /// `other` の全エントリを走査し，証明済み(pn=0)および
+    /// 確定反証(dn=0)のエントリのみを `self` に `store()` する．
+    /// 中間エントリは破棄される．
+    fn merge_proven(&mut self, other: &TranspositionTable) {
+        for (pos_key, entries) in &other.tt {
+            for e in entries {
+                if e.pn == 0 || e.dn == 0 {
+                    self.store(*pos_key, e.hand, e.pn, e.dn, e.remaining);
+                }
+            }
+        }
+    }
+
     /// プロファイル統計をリセットする．
     #[cfg(feature = "profile")]
     fn reset_profile(&mut self) {
@@ -717,12 +732,24 @@ pub struct DfPnSolver {
     /// 0 にすると静的詰め探索を無効化し，インライン1手・3手詰め判定のみ行う．
     /// デフォルトは 0(無効)．
     mate_budget: u32,
+    /// 合駒事前証明(interpose pre-solve)の1子あたりノード予算．
+    ///
+    /// AND ノードの合駒(drop)子ノードに対して，MID ループ前に
+    /// クリーンな TT で `mid()` を呼び出し，証明/反証を試みる．
+    /// 1つ目の合駒で蓄積された証明が2つ目以降に TT ヒットで伝播する．
+    /// 0 にすると事前証明を無効化する．デフォルトは 256．
+    interpose_pre_solve_nodes: u64,
     /// TT GC 閾値: TT のポジション数がこの値を超えると GC を実行する．
     ///
     /// 0 にすると GC を無効化する．
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
     /// 推奨値: 探索ノード数の 1/5〜1/2 程度(例: 100M ノードなら 20M〜50M)．
     tt_gc_threshold: usize,
+    /// 合駒事前証明の再帰防止フラグ．
+    ///
+    /// Pre-Solve 内の mid() が再帰的に AND ノードに到達した場合，
+    /// ネストした Pre-Solve によるスタックオーバーフローを防ぐ．
+    in_pre_solve: bool,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
@@ -746,6 +773,8 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             mate_budget: 0,
+            interpose_pre_solve_nodes: 256,
+            in_pre_solve: false,
             tt_gc_threshold: 0,
             next_gc_check: 0,
             table: TranspositionTable::new(),
@@ -788,6 +817,16 @@ impl DfPnSolver {
     /// デフォルトは 0(無効)．
     pub fn set_mate_budget(&mut self, v: u32) -> &mut Self {
         self.mate_budget = v;
+        self
+    }
+
+    /// 合駒事前証明のノード予算を設定する．
+    ///
+    /// AND ノードの合駒子ノードに対して，MID ループ前にクリーンな TT で
+    /// df-pn 探索を実行し，証明/反証を試みる．
+    /// 0 にすると事前証明を無効化する．デフォルトは 256．
+    pub fn set_interpose_pre_solve_nodes(&mut self, v: u64) -> &mut Self {
+        self.interpose_pre_solve_nodes = v;
         self
     }
 
@@ -1422,6 +1461,45 @@ impl DfPnSolver {
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
+        // --- 合駒事前証明 (interpose pre-solve) ---
+        // AND ノードの合駒(drop)子ノードに対して，クリーンな TT で
+        // df-pn の mid() を予算付きで実行し，MID ループ前に証明/反証を確定する．
+        //
+        // 設計思想 (Lambda df-pn の simplest-first 原則):
+        // 1. 一時 TT を使って1つ目の合駒を証明 → TT に証明パスが蓄積
+        // 2. 2つ目以降の合駒は持ち駒優越で TT ヒット → 事実上ゼロコストで証明
+        // 3. 証明済み子は children から除外 → MID ループの負荷が激減
+        //
+        // 既存 TT はノイズになるためリセットし，Pre-Solve 間で TT を共有する．
+        // 終了後に確定エントリ(証明・反証)のみ本体 TT にマージする．
+        //
+        // `#[inline(never)]` の別関数に抽出し，mid() のスタックフレーム膨張を防ぐ．
+        if !or_node && !deferred_children.is_empty()
+            && self.interpose_pre_solve_nodes > 0 && remaining >= 3
+            && !self.in_pre_solve
+        {
+            match self.interpose_pre_solve(
+                board, &mut deferred_children, pos_key, &att_hand,
+                ply, remaining,
+            ) {
+                PreSolveResult::Disproved(dp) => {
+                    self.store(pos_key, dp, INF, 0, REMAINING_INFINITE);
+                    self.path.remove(&full_hash);
+                    return;
+                }
+                PreSolveResult::AllProved(proof) if children.is_empty() => {
+                    let mut p = proof;
+                    for k in 0..HAND_KINDS {
+                        p[k] = p[k].min(att_hand[k]);
+                    }
+                    self.store(pos_key, p, 0, INF, REMAINING_INFINITE);
+                    self.path.remove(&full_hash);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // AND ノードで遅延合駒の活性化判定:
         // (a) 非合駒の children が空 → 遅延をキャンセルし即座に合流
         // (b) deferred_children が少数(< 8) → 効果が薄いので即座に合流
@@ -1941,6 +2019,148 @@ impl DfPnSolver {
         }
         false
     }
+
+    /// 合駒(drop)子ノードの事前証明を試みる．
+    ///
+    /// クリーンな一時 TT を使い，各合駒子に対してノード予算付きの
+    /// `mid()` を実行する．1つ目の合駒で蓄積された証明エントリが
+    /// 2つ目以降の合駒に TT ヒットで伝播するため，多くの合駒を
+    /// 低コストで証明できる．
+    ///
+    /// 既存 TT はノイズになるため，Pre-Solve 開始時にリセットし，
+    /// 完了後に確定エントリ(証明・反証)のみ本体 TT にマージする．
+    ///
+    /// # 戻り値
+    ///
+    /// - `Disproved(dp)`: 合駒子の1つが反証 → AND ノード全体が反証
+    /// - `AllProved(proof)`: 全合駒子が証明済み(証明駒の和集合)
+    /// - `Partial`: 一部未確定(deferred_children から証明済みを除去済み)
+    ///
+    /// `#[inline(never)]` により，mid() のスタックフレームに
+    /// Pre-Solve のローカル変数が含まれるのを防ぐ．
+    #[inline(never)]
+    fn interpose_pre_solve(
+        &mut self,
+        board: &mut Board,
+        deferred_children: &mut ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        _pos_key: u64,
+        _att_hand: &[u8; HAND_KINDS],
+        ply: u32,
+        remaining: u16,
+    ) -> PreSolveResult {
+        // 一時 TT にスワップ
+        let main_tt = std::mem::replace(
+            &mut self.table,
+            TranspositionTable::new(),
+        );
+        let saved_max_nodes = self.max_nodes;
+
+        let saved_depth = self.depth;
+
+        let mut and_proof = [0u8; HAND_KINDS];
+        let mut pre_solved_indices: ArrayVec<usize, MAX_MOVES> = ArrayVec::new();
+
+        for (i, &(ref m, _child_fh, child_pk, ref child_hand))
+            in deferred_children.iter().enumerate()
+        {
+            let child_remaining = remaining.saturating_sub(1);
+
+            // TT で既に証明/反証済みなら即処理
+            let (cpn, cdn) = self.look_up_pn_dn(
+                child_pk, child_hand, child_remaining,
+            );
+            if cpn == 0 {
+                // 前の合駒の Pre-Solve で TT ヒット → 証明済み
+                let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                let adj = adjust_hand_for_move(*m, &child_ph);
+                for k in 0..HAND_KINDS {
+                    and_proof[k] = and_proof[k].max(adj[k]);
+                }
+                let _ = pre_solved_indices.try_push(i);
+                continue;
+            }
+            if cdn == 0 {
+                // 反証: AND ノード全体が反証
+                let pre_solve_tt = std::mem::replace(
+                    &mut self.table, main_tt,
+                );
+                self.table.merge_proven(&pre_solve_tt);
+                self.depth = saved_depth;
+                self.max_nodes = saved_max_nodes;
+                let child_dp = pre_solve_tt.get_disproof_hand(child_pk, child_hand);
+                return PreSolveResult::Disproved(child_dp);
+            }
+
+            // mid() をノード予算付きで実行
+            let captured = board.do_move(*m);
+            self.max_nodes = self.nodes_searched
+                .saturating_add(self.interpose_pre_solve_nodes);
+            self.in_pre_solve = true;
+            self.mid(board, INF - 1, INF - 1, ply + 1, true);
+            self.in_pre_solve = false;
+            board.undo_move(*m, captured);
+            self.max_nodes = saved_max_nodes;
+
+            // 結果確認
+            let (cpn, cdn) = self.look_up_pn_dn(
+                child_pk, child_hand, child_remaining,
+            );
+            if cpn == 0 {
+                let child_ph = self.table.get_proof_hand(child_pk, child_hand);
+                let adj = adjust_hand_for_move(*m, &child_ph);
+                for k in 0..HAND_KINDS {
+                    and_proof[k] = and_proof[k].max(adj[k]);
+                }
+                let _ = pre_solved_indices.try_push(i);
+            } else if cdn == 0 {
+                // 反証: AND ノード全体が反証
+                let pre_solve_tt = std::mem::replace(
+                    &mut self.table, main_tt,
+                );
+                self.table.merge_proven(&pre_solve_tt);
+                self.depth = saved_depth;
+                self.max_nodes = saved_max_nodes;
+                let child_dp = pre_solve_tt.get_disproof_hand(child_pk, child_hand);
+                return PreSolveResult::Disproved(child_dp);
+            } else if pre_solved_indices.is_empty() {
+                // 最初の合駒すら証明できない → 不詰の可能性が高い．
+                // これ以上の Pre-Solve はノードの浪費なので打ち切る．
+                break;
+            }
+        }
+
+        // TT を復元し，確定エントリをマージ
+        let pre_solve_tt = std::mem::replace(
+            &mut self.table, main_tt,
+        );
+        self.table.merge_proven(&pre_solve_tt);
+        self.depth = saved_depth;
+        self.max_nodes = saved_max_nodes;
+
+        // 証明済み子を deferred_children から除去(逆順で安全に削除)
+        for &i in pre_solved_indices.iter().rev() {
+            deferred_children.remove(i);
+        }
+
+        if deferred_children.is_empty() {
+            PreSolveResult::AllProved(and_proof)
+        } else {
+            PreSolveResult::Partial
+        }
+    }
+}
+
+/// 合駒事前証明の結果．
+enum PreSolveResult {
+    /// 合駒子の1つが反証 → AND ノード全体が反証．反証駒を含む．
+    Disproved([u8; HAND_KINDS]),
+    /// 全合駒子が証明済み．証明駒の和集合(max)を含む．
+    AllProved([u8; HAND_KINDS]),
+    /// 一部未確定(証明済みの子は deferred_children から除去済み)．
+    Partial,
 }
 
 /// 予算制の静的詰め探索の結果．
@@ -4472,6 +4692,81 @@ mod tests {
 
             eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}{}",
                 i + 1, defense.to_usi(), move_type, nodes, result_str, pv_len, marker);
+        }
+    }
+
+    /// 39手詰 PV 上の合駒(S*6i)後の局面を単体ソルブし，
+    /// Pre-Solve に必要なノード数を計測する．
+    ///
+    /// 合駒は30手目(S*6i)で，攻め方は31手目(8i6i)で銀を取る．
+    /// 取った後の局面(攻め方番)を単体で解き，ノード数を確認する．
+    #[test]
+    #[ignore]
+    fn test_interpose_subproblem_breakdown() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // PV: 39手
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+        ];
+        // 29手目(8g8i = 飛車8i)まで進める → 30手目が合駒局面(AND ノード)
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_usi {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // ply 29 後: 後手番(AND ノード) - ここで合駒 S*6i が最善
+        assert_eq!(board.turn, Color::White);
+
+        // AND ノードの回避手を生成
+        let solver_tmp = DfPnSolver::default_solver();
+        let defenses = solver_tmp.generate_defense_moves(&mut board);
+
+        eprintln!("\n=== 合駒局面ブレークダウン (ply 29 後) ===");
+        eprintln!("回避手数: {} (うち drop: {})",
+            defenses.len(),
+            defenses.iter().filter(|m| m.is_drop()).count());
+
+        eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}",
+            "#", "Move", "Type", "Nodes", "Time(ms)", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        // 各回避手を適用後，攻め方視点でソルブ
+        for (i, &defense) in defenses.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(defense);
+
+            // 残り手数 = 39 - 30 = 9 手(合駒後)
+            // ただしここで攻め方が合駒を取るので，取り後は残り 8 手
+            let remaining = 10; // 余裕を持って depth=10
+            let mut child_solver = DfPnSolver::new(remaining, 100_000, 32767);
+            child_solver.set_find_shortest(false);
+            child_solver.set_interpose_pre_solve_nodes(0); // Pre-Solve 無効
+            let start = Instant::now();
+            let result = child_solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            let is_best = defense.to_usi() == "S*6i";
+            let marker = if is_best { " ← BEST" } else { "" };
+            eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}{}",
+                i + 1, defense.to_usi(), move_type, nodes,
+                elapsed.as_secs_f64() * 1000.0, result_str, marker);
         }
     }
 
