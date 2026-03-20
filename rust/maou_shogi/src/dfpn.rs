@@ -5295,6 +5295,21 @@ mod tests {
                     pv.len(),
                     pv.join(" ")
                 );
+                // ぴよ将棋で検証済みの正解手順 (後手攻め)
+                // 手順8(L*7g)と手順14(G*7h)は合駒 — ソルバーが別の駒を選ぶ可能性あり
+                let expected = [
+                    "8f8g+", "7h8g", "S*7i", "8h9g", "G*8f", "9g8f",
+                    "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g+", "9g8g",
+                    "6h6i", "G*7h", "6i7h", "6g7h", "P*8f", "8g9g",
+                    "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
+                    "P*8e", "8f9g", "S*8f", "9g9h", "G*8g",
+                ];
+                assert_eq!(
+                    pv, expected,
+                    "PV mismatch:\n  got:      {}\n  expected: {}",
+                    pv.join(" "),
+                    expected.join(" "),
+                );
             }
             other => panic!("expected Checkmate for tsume6, got {:?}", other),
         }
