@@ -4875,7 +4875,14 @@ mod tests {
 
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 assert_eq!(moves.len(), 1);
+                // G*1b(12金打) または G*2b(22金打) が正解
+                assert!(
+                    pv[0] == "G*1b" || pv[0] == "G*2b",
+                    "expected G*1b or G*2b, got {}",
+                    pv[0],
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
