@@ -3857,12 +3857,18 @@ impl DfPnSolver {
     /// 攻め方(OR): 証明済み子ノードの中で最短手順を選択．
     /// 玉方(AND): 証明済み子ノードの中で最長抵抗を選択．
     fn extract_pv(&self, board: &mut Board) -> Vec<Move> {
+        self.extract_pv_with_diag(board, false)
+    }
+
+    /// PV を復元する(`diag=true` で診断ログを標準エラーに出力)．
+    fn extract_pv_with_diag(&self, board: &mut Board, diag: bool) -> Vec<Move> {
         let mut board_clone = board.clone();
-        self.extract_pv_recursive(
+        self.extract_pv_recursive_inner(
             &mut board_clone,
             true,
             &mut FxHashSet::default(),
             0,
+            diag,
         )
     }
 
@@ -3888,14 +3894,35 @@ impl DfPnSolver {
         visited: &mut FxHashSet<u64>,
         ply: u32,
     ) -> Vec<Move> {
+        self.extract_pv_recursive_inner(board, or_node, visited, ply, false)
+    }
+
+    /// `extract_pv_recursive` の内部実装．
+    ///
+    /// `diag` が true の場合，各plyでの候補手・sub_pv長・選択理由を
+    /// 標準エラーに出力する．
+    fn extract_pv_recursive_inner(
+        &self,
+        board: &mut Board,
+        or_node: bool,
+        visited: &mut FxHashSet<u64>,
+        ply: u32,
+        diag: bool,
+    ) -> Vec<Move> {
         // スタックオーバーフロー防止: 探索手数の2倍を再帰深度の上限とする
         if ply >= self.depth.saturating_mul(2) {
+            if diag {
+                eprintln!("[PV diag] ply={} depth_limit reached (max={})", ply, self.depth.saturating_mul(2));
+            }
             return Vec::new();
         }
         let full_hash = board.hash;
 
         // ループ検出(フルハッシュ)
         if visited.contains(&full_hash) {
+            if diag {
+                eprintln!("[PV diag] ply={} loop detected hash={:#x}", ply, full_hash);
+            }
             return Vec::new();
         }
 
@@ -3903,12 +3930,22 @@ impl DfPnSolver {
 
         if or_node {
             if node_pn != 0 {
+                if diag {
+                    eprintln!("[PV diag] ply={} OR node unproven pn={}", ply, node_pn);
+                }
                 return Vec::new();
             }
 
             let moves = self.generate_check_moves(board);
             if moves.is_empty() {
+                if diag {
+                    eprintln!("[PV diag] ply={} OR node no check moves", ply);
+                }
                 return Vec::new();
+            }
+
+            if diag {
+                eprintln!("[PV diag] ply={} OR node, {} check moves", ply, moves.len());
             }
 
             let mut best_pv: Option<Vec<Move>> = None;
@@ -3920,8 +3957,8 @@ impl DfPnSolver {
                 if child_pn == 0 {
                     visited.insert(full_hash);
                     let sub_pv =
-                        self.extract_pv_recursive(
-                            board, false, visited, ply + 1,
+                        self.extract_pv_recursive_inner(
+                            board, false, visited, ply + 1, diag,
                         );
                     visited.remove(&full_hash);
 
@@ -3929,6 +3966,12 @@ impl DfPnSolver {
                     // OR ノードの PV は奇数長でなければならない
                     // (攻め方の手で始まり攻め方の手で終わる)
                     if total_len % 2 == 0 && !sub_pv.is_empty() {
+                        if diag {
+                            eprintln!(
+                                "[PV diag] ply={} OR skip {} (even len={}, sub={})",
+                                ply, m.to_usi(), total_len, sub_pv.len()
+                            );
+                        }
                         board.undo_move(*m, captured);
                         continue;
                     }
@@ -3937,14 +3980,42 @@ impl DfPnSolver {
                         Some(prev) => total_len < prev.len(),
                     };
 
+                    if diag {
+                        eprintln!(
+                            "[PV diag] ply={} OR candidate {} len={} better={}{}",
+                            ply, m.to_usi(), total_len, is_better,
+                            if let Some(prev) = &best_pv {
+                                format!(" (prev_best={})", prev.len())
+                            } else {
+                                String::new()
+                            }
+                        );
+                    }
+
                     if is_better {
                         let mut pv = vec![*m];
                         pv.extend(sub_pv);
                         best_pv = Some(pv);
                     }
+                } else if diag {
+                    eprintln!(
+                        "[PV diag] ply={} OR child {} unproven pn={}",
+                        ply, m.to_usi(), child_pn
+                    );
                 }
 
                 board.undo_move(*m, captured);
+            }
+
+            if diag {
+                if let Some(ref pv) = best_pv {
+                    eprintln!(
+                        "[PV diag] ply={} OR CHOSEN {} (pv_len={})",
+                        ply, pv[0].to_usi(), pv.len()
+                    );
+                } else {
+                    eprintln!("[PV diag] ply={} OR no valid PV found", ply);
+                }
             }
 
             best_pv.unwrap_or_default()
@@ -3953,7 +4024,14 @@ impl DfPnSolver {
             // 確認した後のみ再帰するため，この局面は証明済みのはず．
             let moves = self.generate_defense_moves(board);
             if moves.is_empty() {
+                if diag {
+                    eprintln!("[PV diag] ply={} AND node no defense (checkmate)", ply);
+                }
                 return Vec::new();
+            }
+
+            if diag {
+                eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
             }
 
             let mut best_pv: Option<Vec<Move>> = None;
@@ -3966,8 +4044,8 @@ impl DfPnSolver {
                 if child_pn == 0 {
                     visited.insert(full_hash);
                     let sub_pv =
-                        self.extract_pv_recursive(
-                            board, true, visited, ply + 1,
+                        self.extract_pv_recursive_inner(
+                            board, true, visited, ply + 1, diag,
                         );
                     visited.remove(&full_hash);
 
@@ -3975,6 +4053,12 @@ impl DfPnSolver {
                     // AND ノードの PV は偶数長でなければならない
                     // (玉方の手で始まり攻め方の手で終わる)
                     if total_len % 2 == 1 {
+                        if diag {
+                            eprintln!(
+                                "[PV diag] ply={} AND skip {} (odd len={}, sub={})",
+                                ply, m.to_usi(), total_len, sub_pv.len()
+                            );
+                        }
                         board.undo_move(*m, captured);
                         continue;
                     }
@@ -3995,15 +4079,43 @@ impl DfPnSolver {
                         }
                     };
 
+                    if diag {
+                        eprintln!(
+                            "[PV diag] ply={} AND candidate {} len={} capture={} better={}{}",
+                            ply, m.to_usi(), total_len, is_capture, is_better,
+                            if let Some(prev) = &best_pv {
+                                format!(" (prev_best={} prev_cap={})", prev.len(), best_is_capture)
+                            } else {
+                                String::new()
+                            }
+                        );
+                    }
+
                     if is_better {
                         let mut pv = vec![*m];
                         pv.extend(sub_pv);
                         best_pv = Some(pv);
                         best_is_capture = is_capture;
                     }
+                } else if diag {
+                    eprintln!(
+                        "[PV diag] ply={} AND child {} unproven pn={}",
+                        ply, m.to_usi(), child_pn
+                    );
                 }
 
                 board.undo_move(*m, captured);
+            }
+
+            if diag {
+                if let Some(ref pv) = best_pv {
+                    eprintln!(
+                        "[PV diag] ply={} AND CHOSEN {} (pv_len={})",
+                        ply, pv[0].to_usi(), pv.len()
+                    );
+                } else {
+                    eprintln!("[PV diag] ply={} AND no valid PV found", ply);
+                }
             }
 
             best_pv.unwrap_or_default()
@@ -5316,9 +5428,23 @@ mod tests {
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched: _,
+                nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("=== tsume6 result: {} moves, {} nodes ===", pv.len(), nodes_searched);
+                eprintln!("PV: {}", pv.join(" "));
+
+                // 診断PV抽出: 各plyでの選択理由を表示
+                eprintln!("\n=== PV extraction diagnostics ===");
+                let diag_pv = solver.extract_pv_with_diag(&mut board, true);
+                let diag_usi: Vec<String> = diag_pv.iter().map(|m| m.to_usi()).collect();
+                eprintln!("=== diag PV: {} ===\n", diag_usi.join(" "));
+
+                // 8i7g が含まれているか確認 — 27手詰めになるバグの診断
+                if let Some(pos) = pv.iter().position(|m| m == "8i7g") {
+                    eprintln!("WARNING: 8i7g found at ply {} — this leads to 27-move mate, not 29", pos);
+                }
+
                 assert_eq!(
                     pv.len(),
                     29,
