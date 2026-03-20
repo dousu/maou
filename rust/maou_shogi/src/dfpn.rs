@@ -5485,10 +5485,13 @@ mod tests {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> =
                     moves.iter().map(|m| m.to_usi()).collect();
-                // 3四玉(銀取り)から始まる手順を確認
-                assert!(
-                    !usi_moves.is_empty(),
-                    "expected non-empty PV"
+                // 3四玉(銀取り開き王手) → 31玉 → 42銀打 → 32玉 → 33飛成
+                let expected = ["2d3d", "2b3a", "S*4b", "3a3b", "4c3c+"];
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {}\n  expected: {}",
+                    usi_moves.join(" "),
+                    expected.join(" "),
                 );
             }
             other => panic!(
