@@ -350,9 +350,17 @@ const MAX_TT_ENTRIES_PER_POSITION: usize = 16;
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
 ///
 /// 証明駒の優越判定に使用: 持ち駒が多い方が有利(攻め方)．
+///
+/// SWAR (SIMD Within A Register): 7 バイトを u64 にパックし分岐なしで一括比較する．
+/// 各バイトに MSB(0x80) をセットして引き算し，MSB が全て残れば全要素 a[i] >= b[i]．
+/// 持ち駒値は 0-18 の範囲なので各バイトの MSB は常に 0 であり，
+/// (a[i] + 128) - b[i] >= 110 となるためバイト間の桁借りは発生しない．
 #[inline(always)]
 fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
-    a.iter().zip(b.iter()).all(|(x, y)| x >= y)
+    let a_packed = u64::from_ne_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);
+    let b_packed = u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0]);
+    const H: u64 = 0x8080_8080_8080_8080;
+    ((a_packed | H) - b_packed) & H == H
 }
 
 /// 盤面のみのハッシュ(持ち駒を除外)を返す．
@@ -2479,22 +2487,18 @@ impl DfPnSolver {
     /// KomoringHeights v0.4.0 のヒューリスティック初期化を参考にした手法．
     fn heuristic_and_pn(&self, board: &Board, num_defenses: u32) -> u32 {
         let defender = board.turn;
-        let attacker = defender.opponent();
         let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
             None => return num_defenses,
         };
 
-        // 玉の安全な逃げ場をカウント
+        // 玉の安全な逃げ場をカウント(ビットボード一括判定)
+        // compute_king_danger は X-ray(玉を除いた占有)を使うため，
+        // 玉が移動した先で飛び駒に当たるケースも正しく検出する．
         let king_moves = attack::step_attacks(defender, PieceType::King, king_sq);
         let our_occ = board.occupied[defender.index()];
-        let king_targets = king_moves & !our_occ;
-        let mut safe_escapes = 0u32;
-        for to in king_targets {
-            if !board.is_attacked_by(to, attacker) {
-                safe_escapes += 1;
-            }
-        }
+        let danger = board.compute_king_danger(defender, king_sq);
+        let safe_escapes = (king_moves & !our_occ & !danger).count();
 
         // 逃げ場に基づく pn 調整
         if safe_escapes == 0 {
@@ -2520,23 +2524,17 @@ impl DfPnSolver {
             return INF; // 王手なし → 不詰(呼び出し側で処理済みのはず)
         }
 
-        let attacker = board.turn;
-        let defender = attacker.opponent();
+        let defender = board.turn.opponent();
         let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
             None => return 1,
         };
 
-        // 玉の安全な逃げ場をカウント(攻め方から利きがないマス)
+        // 玉の安全な逃げ場をカウント(ビットボード一括判定)
         let king_moves = attack::step_attacks(defender, PieceType::King, king_sq);
         let def_occ = board.occupied[defender.index()];
-        let king_targets = king_moves & !def_occ;
-        let mut safe_escapes = 0u32;
-        for to in king_targets {
-            if !board.is_attacked_by(to, attacker) {
-                safe_escapes += 1;
-            }
-        }
+        let danger = board.compute_king_danger(defender, king_sq);
+        let safe_escapes = (king_moves & !def_occ & !danger).count();
 
         // 王手数が少なく逃げ場が多い → 追い詰めが困難
         // 王手数が多く逃げ場がない → 包囲完成に近い
@@ -3110,21 +3108,56 @@ impl DfPnSolver {
         all_occ: Bitboard,
         our_occ: Bitboard,
     ) {
-        // 玉以外の自駒で checker_sq に利いている駒を探す
-        let mut our_bb = our_occ;
-        while our_bb.is_not_empty() {
-            let from = our_bb.pop_lsb();
-            if from == king_sq {
-                continue; // 玉は上で処理済み
-            }
+        // 逆引き利き計算: checker_sq を攻撃できる自駒のビットボードを直接求める．
+        // is_attacked_by と同じ逆射パターンで，全自駒イテレーション(~16駒)を
+        // 駒種ごとのビットボード AND(~10回)に置き換え，該当駒(2-4駒)のみ処理する．
+        let attacker = defender.opponent();
+        let d = defender.index();
+        let mut can_capture = Bitboard::EMPTY;
+
+        // 歩: checker_sq から「相手視点の歩の利き方向」に自歩があるか
+        can_capture |= attack::step_attacks(attacker, PieceType::Pawn, checker_sq)
+            & board.piece_bb[d][PieceType::Pawn as usize];
+        // 桂
+        can_capture |= attack::step_attacks(attacker, PieceType::Knight, checker_sq)
+            & board.piece_bb[d][PieceType::Knight as usize];
+        // 銀
+        can_capture |= attack::step_attacks(attacker, PieceType::Silver, checker_sq)
+            & board.piece_bb[d][PieceType::Silver as usize];
+        // 金 + 成駒
+        let gold_reach = attack::step_attacks(attacker, PieceType::Gold, checker_sq);
+        can_capture |= gold_reach
+            & (board.piece_bb[d][PieceType::Gold as usize]
+                | board.piece_bb[d][PieceType::ProPawn as usize]
+                | board.piece_bb[d][PieceType::ProLance as usize]
+                | board.piece_bb[d][PieceType::ProKnight as usize]
+                | board.piece_bb[d][PieceType::ProSilver as usize]);
+        // 王・馬・龍(ステップ部分): 玉は後で除外
+        let king_reach = attack::step_attacks(attacker, PieceType::King, checker_sq);
+        can_capture |= king_reach
+            & (board.piece_bb[d][PieceType::Horse as usize]
+                | board.piece_bb[d][PieceType::Dragon as usize]);
+        // 香
+        can_capture |= attack::lance_attacks(attacker, checker_sq, all_occ)
+            & board.piece_bb[d][PieceType::Lance as usize];
+        // 角・馬
+        can_capture |= attack::bishop_attacks(checker_sq, all_occ)
+            & (board.piece_bb[d][PieceType::Bishop as usize]
+                | board.piece_bb[d][PieceType::Horse as usize]);
+        // 飛・龍
+        can_capture |= attack::rook_attacks(checker_sq, all_occ)
+            & (board.piece_bb[d][PieceType::Rook as usize]
+                | board.piece_bb[d][PieceType::Dragon as usize]);
+
+        // 玉を除外(玉による取りは呼び出し元で処理済み)
+        can_capture.clear(king_sq);
+
+        let captured_raw = board.squares[checker_sq.index()].0;
+
+        while can_capture.is_not_empty() {
+            let from = can_capture.pop_lsb();
             let piece = board.squares[from.index()];
             let pt = piece.piece_type().unwrap();
-            let attacks = attack::piece_attacks(defender, pt, from, all_occ);
-            if !attacks.contains(checker_sq) {
-                continue;
-            }
-
-            let captured_raw = board.squares[checker_sq.index()].0;
             let in_promo_zone =
                 checker_sq.is_promotion_zone(defender) || from.is_promotion_zone(defender);
 
@@ -3262,20 +3295,44 @@ impl DfPnSolver {
         // futile | chain = 駒移動の無駄合いフィルタ対象
         let futile_or_chain = *futile | *chain;
 
+        let d = defender.index();
+
         for to in *between {
             // --- 駒移動による合い駒 ---
-            let mut our_bb = our_occ;
-            while our_bb.is_not_empty() {
-                let from = our_bb.pop_lsb();
-                if from == king_sq {
-                    continue;
-                }
+            // 逆引き利き計算: to マスに到達できる自駒のビットボードを直接求める．
+            let mut can_interpose = Bitboard::EMPTY;
+            can_interpose |= attack::step_attacks(attacker, PieceType::Pawn, to)
+                & board.piece_bb[d][PieceType::Pawn as usize];
+            can_interpose |= attack::step_attacks(attacker, PieceType::Knight, to)
+                & board.piece_bb[d][PieceType::Knight as usize];
+            can_interpose |= attack::step_attacks(attacker, PieceType::Silver, to)
+                & board.piece_bb[d][PieceType::Silver as usize];
+            let gold_reach = attack::step_attacks(attacker, PieceType::Gold, to);
+            can_interpose |= gold_reach
+                & (board.piece_bb[d][PieceType::Gold as usize]
+                    | board.piece_bb[d][PieceType::ProPawn as usize]
+                    | board.piece_bb[d][PieceType::ProLance as usize]
+                    | board.piece_bb[d][PieceType::ProKnight as usize]
+                    | board.piece_bb[d][PieceType::ProSilver as usize]);
+            let king_reach = attack::step_attacks(attacker, PieceType::King, to);
+            can_interpose |= king_reach
+                & (board.piece_bb[d][PieceType::Horse as usize]
+                    | board.piece_bb[d][PieceType::Dragon as usize]);
+            can_interpose |= attack::lance_attacks(attacker, to, all_occ)
+                & board.piece_bb[d][PieceType::Lance as usize];
+            can_interpose |= attack::bishop_attacks(to, all_occ)
+                & (board.piece_bb[d][PieceType::Bishop as usize]
+                    | board.piece_bb[d][PieceType::Horse as usize]);
+            can_interpose |= attack::rook_attacks(to, all_occ)
+                & (board.piece_bb[d][PieceType::Rook as usize]
+                    | board.piece_bb[d][PieceType::Dragon as usize]);
+            // 玉は合駒に使えない
+            can_interpose.clear(king_sq);
+
+            while can_interpose.is_not_empty() {
+                let from = can_interpose.pop_lsb();
                 let piece = board.squares[from.index()];
                 let pt = piece.piece_type().unwrap();
-                let attacks = attack::piece_attacks(defender, pt, from, all_occ);
-                if !attacks.contains(to) {
-                    continue;
-                }
 
                 // 駒移動による合い駒の無駄合いフィルタ:
                 // futile/chain マスへの移動でも，以下の場合は無駄合いではない:
