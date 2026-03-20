@@ -5676,6 +5676,22 @@ mod tests {
                     pv.len(),
                     pv.join(" ")
                 );
+                // ぴよ将棋で検証済みの正解手順
+                let expected = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+                assert_eq!(
+                    pv, expected,
+                    "PV mismatch:\n  got:      {}\n  expected: {}",
+                    pv.join(" "),
+                    expected.join(" "),
+                );
             }
             other => panic!(
                 "expected Checkmate for 39te aigoma, got {:?}",
