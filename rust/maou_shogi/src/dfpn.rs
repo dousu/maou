@@ -5291,7 +5291,7 @@ mod tests {
     ///
     /// 先手攻め test_tsume_1te の盤面を180度回転+色反転した局面．
     /// 先手玉9九(K)，後手金8七(g)，後手持ち駒:金．
-    /// 正解: g*9h(9八金打)で詰み．
+    /// 正解: G*8h(8八金打)で詰み(G*9hも正解)．
     #[test]
     fn test_tsume_1te_gote() {
         // 先手玉 9i, 後手金 8g, 後手持ち駒: g
@@ -5306,6 +5306,7 @@ mod tests {
             TsumeResult::Checkmate { moves, .. } => {
                 assert_eq!(moves.len(), 1, "should be 1-move checkmate, got: {:?}",
                     moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
+                assert_eq!(moves[0].to_usi(), "G*8h", "1手詰め: G*8h(8八金打)");
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
@@ -5315,7 +5316,7 @@ mod tests {
     ///
     /// 先手攻め test_tsume_3te の盤面を180度回転+色反転した局面．
     /// 先手玉9九(K)，後手飛7七(r)，後手持ち駒:金．
-    /// 正解: 7g9g+(9七飛成)，9i8a(8一玉)，g*8b(8二金打) まで3手詰．
+    /// 正解: 7g9g+(9七飛成)，9i8i(8九玉)，G*8h(8八金打) まで3手詰．
     #[test]
     fn test_tsume_3te_gote() {
         // 先手玉 9i, 後手飛 7g, 後手持ち駒: g
@@ -5326,12 +5327,19 @@ mod tests {
 
         let result = solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None, None, None).unwrap();
 
+        let expected = ["7g9g+", "9i8i", "G*8h"];
+
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 assert_eq!(
                     usi_moves.len(), 3,
                     "expected 3 moves, got {}: {:?}", usi_moves.len(), usi_moves
+                );
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
+                    usi_moves, expected,
                 );
             }
             other => panic!("expected Checkmate, got {:?}", other),
