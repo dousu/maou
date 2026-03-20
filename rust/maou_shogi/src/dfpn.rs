@@ -5632,6 +5632,16 @@ mod tests {
                     "after gold interposition, expected 7 more moves, got {}: {:?}",
                     usi_moves.len(), usi_moves
                 );
+                // B*3c → 2a2b の後の正解手順 (ぴよ将棋で検証済み)
+                let expected = [
+                    "N*2c", "1a2a", "S*3b", "2a3b", "3c4b+", "3b2a", "4b3a",
+                ];
+                assert_eq!(
+                    usi_moves, expected,
+                    "PV mismatch:\n  got:      {}\n  expected: {}",
+                    usi_moves.join(" "),
+                    expected.join(" "),
+                );
             }
             other => panic!(
                 "expected Checkmate after gold interposition, got {:?}",
