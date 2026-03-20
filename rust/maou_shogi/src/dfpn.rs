@@ -1777,8 +1777,7 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m))
-                                        .saturating_add(sacrifice_check_boost(board, &checks));
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1798,8 +1797,7 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m))
-                                        .saturating_add(sacrifice_check_boost(board, &checks));
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1829,8 +1827,7 @@ impl DfPnSolver {
                         } else {
                             let nc = checks.len() as u32;
                             let pn = self.heuristic_or_pn(board, nc)
-                                .saturating_add(edge_cost_and(*m))
-                                .saturating_add(sacrifice_check_boost(board, &checks));
+                                .saturating_add(edge_cost_and(*m));
                             let dn = depth_biased_dn(nc, ply + 1);
                             self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
@@ -2582,8 +2579,8 @@ impl DfPnSolver {
         // 王手数が少なく逃げ場が多い → 追い詰めが困難
         // 王手数が多く逃げ場がない → 包囲完成に近い
         if num_checks <= 2 && safe_escapes >= 3 {
-            // 王手が少なく逃げ場が多い → 詰みにくい
-            return 2 + safe_escapes / 2;
+            // 王手が少なく逃げ場が多い → 詰みにくい(上限3: 不詰証明遅延を抑制)
+            return (2 + safe_escapes / 2).min(3);
         }
         if safe_escapes == 0 {
             // 逃げ場なし → 詰みやすい(合駒のみで防御)
