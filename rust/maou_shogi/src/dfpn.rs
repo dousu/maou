@@ -5306,7 +5306,11 @@ mod tests {
             TsumeResult::Checkmate { moves, .. } => {
                 assert_eq!(moves.len(), 1, "should be 1-move checkmate, got: {:?}",
                     moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
-                assert_eq!(moves[0].to_usi(), "G*8h", "1手詰め: G*8h(8八金打)");
+                let usi = moves[0].to_usi();
+                assert!(
+                    usi == "G*8h" || usi == "G*9h",
+                    "1手詰め: G*8h(8八金打) or G*9h(9八金打), got: {}", usi
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
