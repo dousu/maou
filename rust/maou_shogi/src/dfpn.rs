@@ -5233,6 +5233,24 @@ mod tests {
                     pv.len(),
                     pv.join(" ")
                 );
+
+                // 攻め方の手順を検証(奇数手)
+                // 41銀打，32銀打，11飛成，33角成，同馬，23金打，21銀成，32銀成
+                assert_eq!(pv[0], "S*4a", "move 1: 41銀打");
+                assert_eq!(pv[2], "S*3b", "move 3: 32銀打");
+                assert_eq!(pv[4], "1d1a+", "move 5: 11飛成");
+                assert_eq!(pv[6], "1e3c+", "move 7: 33角成");
+                assert_eq!(pv[8], "3c2b", "move 9: 同馬");
+                assert_eq!(pv[10], "G*2c", "move 11: 23金打");
+                // move 12: 何を合駒してもよい
+                assert_eq!(pv[12], "3b2a+", "move 13: 21銀成");
+                assert_eq!(pv[14], "4a3b+", "move 15: 32銀成");
+                // move 17: 22成銀(3b2b) or 22金(2c2b) など複数正解
+                assert!(
+                    pv[16] == "3b2b" || pv[16] == "2c2b",
+                    "move 17: expected 3b2b or 2c2b, got {}",
+                    pv[16],
+                );
             }
             other => panic!("expected Checkmate for tsume5, got {:?}", other),
         }
@@ -5255,8 +5273,14 @@ mod tests {
                 nodes_searched: _,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                // find_shortest = false でも詰みは見つかる(手数は最短とは限らない)
-                assert!(!pv.is_empty(), "should find checkmate");
+                // find_shortest = false でも17手詰みが見つかる
+                assert_eq!(
+                    pv.len(),
+                    17,
+                    "expected 17-move checkmate, got {} moves: {}",
+                    pv.len(),
+                    pv.join(" ")
+                );
             }
             other => panic!("expected Checkmate for tsume5, got {:?}", other),
         }
