@@ -5051,6 +5051,19 @@ mod tests {
                     usi_moves.len() % 2 == 1,
                     "tsume must have odd number of moves, got {}", usi_moves.len(),
                 );
+                // 最終2手は玉の逃げ方により3パターン:
+                //   1一玉，2二桂成 / 1一玉，2二龍 / 1三玉，2二龍
+                let last2 = &usi_moves[usi_moves.len() - 2..];
+                let valid_endings = [
+                    ["1b1a", "3d2b+"],  // 1一玉，2二桂成
+                    ["1b1a", "4b2b"],   // 1一玉，2二龍
+                    ["1b1c", "4b2b"],   // 1三玉，2二龍
+                ];
+                assert!(
+                    valid_endings.iter().any(|e| last2 == e),
+                    "last 2 moves must match a valid ending pattern, got: {:?}\n  valid: {:?}",
+                    last2, valid_endings,
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
