@@ -126,6 +126,33 @@ fn edge_cost_and(m: Move) -> u32 {
     1
 }
 
+/// 捨て駒のみ王手ブースト(人間的枝刈り)．
+///
+/// OR ノード(攻め方手番)で利用可能な全王手が「支えなし」の捨て駒である場合，
+/// 人間が直感的に「不詰」と見切るのと同様に pn を加算して探索優先度を下げる．
+///
+/// 「支え」の判定: 王手後のマス(`to_sq`)に攻め方の他の駒が利いているか．
+/// 駒移動の場合は移動元を除外して判定する．
+///
+/// 全王手が捨て駒の場合，王手数に比例するブースト(最低2)を返す．
+/// 捨て駒でない王手が1つでもあれば 0 を返す．
+fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
+    if checks.is_empty() {
+        return 0;
+    }
+    let attacker = board.turn;
+    for m in checks {
+        let to = m.to_sq();
+        let excluded = if m.is_drop() { None } else { Some(m.from_sq()) };
+        // 攻め方の他の駒が to に利いていれば支えあり → 捨て駒ではない
+        if board.is_attacked_by_excluding(to, attacker, false, excluded) {
+            return 0;
+        }
+    }
+    // 全王手が捨て駒 → 詰ませにくい(上限2: 大きくしすぎると不詰証明が遅延)
+    2
+}
+
 /// Deep df-pn の深さ係数 R (Song Zhang et al. 2017)．
 ///
 /// 深い位置ほど初期 dn を高く設定し，探索のスラッシングを抑制する．
@@ -1750,7 +1777,8 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m));
+                                        .saturating_add(edge_cost_and(*m))
+                                        .saturating_add(sacrifice_check_boost(board, &checks));
                                     let dn = depth_biased_dn(nc, ply + 1);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1770,7 +1798,8 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m));
+                                        .saturating_add(edge_cost_and(*m))
+                                        .saturating_add(sacrifice_check_boost(board, &checks));
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1800,7 +1829,8 @@ impl DfPnSolver {
                         } else {
                             let nc = checks.len() as u32;
                             let pn = self.heuristic_or_pn(board, nc)
-                                .saturating_add(edge_cost_and(*m));
+                                .saturating_add(edge_cost_and(*m))
+                                .saturating_add(sacrifice_check_boost(board, &checks));
                             let dn = depth_biased_dn(nc, ply + 1);
                             self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
@@ -2536,6 +2566,19 @@ impl DfPnSolver {
         let danger = board.compute_king_danger(defender, king_sq);
         let safe_escapes = (king_moves & !def_occ & !danger).count();
 
+        // --- 開放空間逃走検出(人間的枝刈り) ---
+        // 玉周辺(隣接8マス)への攻め駒の利き数が少なく，かつ逃げ場が多い場合，
+        // 人間が「玉が広い方に逃げて捕まらない」と直感するのと同様に
+        // pn を引き上げて探索優先度を下げる．
+        let king_adjacent = king_moves & !def_occ; // 玉が移動可能なマス(自駒除外)
+        let pressured = (king_adjacent & danger).count(); // 攻め方に利かれているマス数
+        let adjacent_total = king_adjacent.count(); // 移動可能マス総数
+
+        if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
+            // 玉周辺に攻め駒の利きが皆無の開放空間 → 非常に詰みにくい
+            return 3;
+        }
+
         // 王手数が少なく逃げ場が多い → 追い詰めが困難
         // 王手数が多く逃げ場がない → 包囲完成に近い
         if num_checks <= 2 && safe_escapes >= 3 {
@@ -3106,7 +3149,7 @@ impl DfPnSolver {
         king_sq: Square,
         defender: Color,
         all_occ: Bitboard,
-        our_occ: Bitboard,
+        _our_occ: Bitboard,
     ) {
         // 逆引き利き計算: checker_sq を攻撃できる自駒のビットボードを直接求める．
         // is_attacked_by と同じ逆射パターンで，全自駒イテレーション(~16駒)を
@@ -3284,7 +3327,7 @@ impl DfPnSolver {
         king_sq: Square,
         defender: Color,
         all_occ: Bitboard,
-        our_occ: Bitboard,
+        _our_occ: Bitboard,
     ) {
         let king_step = attack::step_attacks(
             defender.opponent(),
@@ -4249,7 +4292,8 @@ impl DfPnSolver {
                     } else {
                         let nc = checks.len() as u32;
                         cpn = self.heuristic_or_pn(board, nc)
-                            .saturating_add(edge_cost_and(*m));
+                            .saturating_add(edge_cost_and(*m))
+                            .saturating_add(sacrifice_check_boost(board, &checks));
                         cdn = depth_biased_dn(nc, ply + 1);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
