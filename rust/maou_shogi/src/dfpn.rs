@@ -79,17 +79,6 @@ const TCA_EXTEND_DENOM: u32 = 4;
 /// - OR ノードの王手: 成+取 > 取/成 > 近い静か手 > 遠い静か手
 /// - AND ノードの応手: 合駒(攻め方有利) < 駒取り < 玉の逃げ
 
-/// 整数平方根(floor)を計算する．
-///
-/// 閾値の下限計算(threshold starvation 防止)に使用．
-#[inline]
-fn isqrt(n: u32) -> u32 {
-    if n <= 1 {
-        return n;
-    }
-    (n as f64).sqrt() as u32
-}
-
 /// OR ノード(攻め方の王手)のエッジコストを計算する(DFPN-E)．
 ///
 /// 有力な王手ほどコストが低く(pn に加算される量が少ない)，
@@ -111,46 +100,7 @@ fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
     let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
     let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
     let dist = dc.max(dr);
-    if dist <= 2 { PN_SCALE } else { PN_SCALE * 2 }
-}
-
-/// ただ捨て王手(sacrifice check)の検出に基づく pn ブースト．
-///
-/// OR ノード(攻め方手番)で全ての王手が「ただ捨て」の場合，
-/// 詰みの見込みが低いため pn を増加させて探索優先度を下げる．
-///
-/// ただ捨て王手の定義:
-/// - 成りでも取りでもない(静かな手)
-/// - かつ，相手(守備側)がその地点に利いている(即座に取られる)
-///
-/// 人間の棋感に相当する枝刈りで，駒のただ捨てしか王手がない局面は
-/// 不詰と判断して読みを入れない判断に対応する．
-#[inline]
-fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
-    if checks.is_empty() {
-        return 0;
-    }
-    let defender = board.turn.opponent();
-    let mut all_sacrifice = true;
-    for m in checks {
-        // 成りや取りは有力な王手 → ただ捨てではない
-        if m.is_promotion() || m.captured_piece_raw() > 0 {
-            all_sacrifice = false;
-            break;
-        }
-        let to = m.to_sq();
-        // 相手が利いていない地点への王手 → ただ捨てではない
-        if !board.is_attacked_by(to, defender) {
-            all_sacrifice = false;
-            break;
-        }
-    }
-    if all_sacrifice {
-        // 全ただ捨て → 王手数に応じたブースト(最低2)，PN_SCALE でスケーリング
-        (checks.len() as u32).max(2) * PN_SCALE
-    } else {
-        0
-    }
+    if dist <= 2 { 1 } else { 2 }
 }
 
 /// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
@@ -170,10 +120,10 @@ fn edge_cost_and(m: Move) -> u32 {
     let capture = m.captured_piece_raw() > 0;
     if capture {
         // 駒取り: 攻め駒を除去するため攻め方にとって不利
-        return PN_SCALE * 2;
+        return 2;
     }
     // 玉の逃げ・駒移動合い
-    PN_SCALE
+    1
 }
 
 /// Deep df-pn の深さ係数 R (Song Zhang et al. 2017)．
@@ -191,9 +141,7 @@ const DEEP_DFPN_R: f32 = 0.5;
 #[inline]
 fn depth_biased_dn(base: u32, ply: u32) -> u32 {
     let bias = ((DEEP_DFPN_R * ply as f32).ceil() as u32).max(1);
-    // PN_SCALE でスケーリング: AND ノードの dn 閾値(epsilon_th)を
-    // 十分大きくし，MID の dn 方向の閾値飢餓を防ぐ．
-    base.max(bias) * PN_SCALE
+    base.max(bias)
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
@@ -507,18 +455,7 @@ struct PnsNode {
 ///
 /// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
 /// 2M ノードで約 200〜300 MB を使用する．
-const PNS_MAX_ARENA_NODES: usize = 4_000_000;
-
-/// 初期 pn のスケーリング係数．
-///
-/// heuristic_or_pn の返り値に乗じて初期 pn を拡大する．
-/// KomoringHeights が pn=10-80 を使うのに対し，素のヒューリスティックは 1-8 と小さく，
-/// MID の 1+ε 閾値(second_best * 3/2)が深い探索木で飢餓を起こす．
-///
-/// PN_SCALE=64 で初期 pn は 64-512 範囲となり，
-/// epsilon_th=96-768 が WPN の AND 減少(≈ unproven_count-1 ≈ 4)に対して
-/// 十分な深度(96/4 = 24 ペア = 48 ply)を確保する．
-const PN_SCALE: u32 = 64;
+const PNS_MAX_ARENA_NODES: usize = 2_000_000;
 
 /// HashMap ベースの転置表(証明駒/反証駒対応)．
 ///
@@ -582,7 +519,7 @@ impl TranspositionTable {
     ) -> (u32, u32, u64) {
         let entries = match self.tt.get(&pos_key) {
             Some(e) => e,
-            None => return (PN_SCALE, PN_SCALE, 0),
+            None => return (1, 1, 0),
         };
 
         let mut exact_match: Option<(u32, u32, u64)> = None;
@@ -616,7 +553,7 @@ impl TranspositionTable {
             }
         }
 
-        exact_match.unwrap_or((PN_SCALE, PN_SCALE, 0))
+        exact_match.unwrap_or((1, 1, 0))
     }
 
     /// TT Best Move を参照する．
@@ -1363,27 +1300,21 @@ impl DfPnSolver {
             self.table.reset_profile();
         }
 
-        // Phase 1: Best-First PNS で探索木をメモリ上に構築し，
-        //          グローバルに最適なノード選択を行う．
-        // Phase 2: PNS がアリーナ上限に達した場合，残りの予算で
-        //          IDS-dfpn (MID) にフォールバックする．
-        let mut pns_pv = self.pns_main(board);
+        // Phase 1: Best-First PNS
+        let pns_pv = self.pns_main(board);
 
+        let pk = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let (root_pn_after_pns, root_dn_after_pns, _) =
+            self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+
+        // PNS で未解決 + 残り予算あり → MID フォールバック
+        if root_pn_after_pns != 0 && root_dn_after_pns != 0
+            && self.nodes_searched < self.max_nodes
+            && !self.timed_out
         {
-            let pk = position_key(board);
-            let att_hand = board.hand[self.attacker.index()];
-            let (root_pn, root_dn, _) =
-                self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-            eprintln!("After PNS: pn={}, dn={}, nodes={}, tt={}, max_ply={}",
-                root_pn, root_dn, self.nodes_searched,
-                self.table.len(), self.max_ply);
-
-            if root_pn > 0 && root_dn > 0
-                && self.nodes_searched < self.max_nodes
-                && !self.timed_out
-            {
-                self.mid_fallback(board);
-            }
+            // PNS で蓄積した TT エントリを活用して IDS-dfpn を実行
+            self.mid_fallback(board);
         }
 
         let (root_pn, root_dn) = self.look_up_board(board);
@@ -1490,10 +1421,6 @@ impl DfPnSolver {
         self.nodes_searched += 1;
         if ply > self.max_ply {
             self.max_ply = ply;
-            if ply >= 10 && ply % 2 == 0 {
-                eprintln!("  MID new max_ply={}, nodes={}, th=({},{})",
-                    ply, self.nodes_searched, pn_threshold, dn_threshold);
-            }
         }
 
         let full_hash = board.hash;
@@ -1643,7 +1570,7 @@ impl DfPnSolver {
             let child_remaining = remaining.saturating_sub(1);
             let (cpn, cdn, _csrc) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-            if cpn == PN_SCALE && cdn == PN_SCALE {
+            if cpn == 1 && cdn == 1 {
                 #[cfg(feature = "profile")]
                 let _static_mate_start = Instant::now();
                 #[cfg(feature = "profile")]
@@ -1776,7 +1703,7 @@ impl DfPnSolver {
                             }
                         } else {
                             // depth 制限超過: 応手生成なし → deep df-pn のみ適用
-                            let mut pn = PN_SCALE;
+                            let mut pn = 1u32;
                             // DFPN-E: エッジコスト加算
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
@@ -1815,8 +1742,7 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m))
-                                        .saturating_add(sacrifice_check_boost(board, &checks));
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1836,8 +1762,7 @@ impl DfPnSolver {
                                 } else {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
-                                        .saturating_add(edge_cost_and(*m))
-                                        .saturating_add(sacrifice_check_boost(board, &checks));
+                                        .saturating_add(edge_cost_and(*m));
                                     let dn = depth_biased_dn(nc, ply + 1).max(2);
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
@@ -1867,8 +1792,7 @@ impl DfPnSolver {
                         } else {
                             let nc = checks.len() as u32;
                             let pn = self.heuristic_or_pn(board, nc)
-                                .saturating_add(edge_cost_and(*m))
-                                .saturating_add(sacrifice_check_boost(board, &checks));
+                                .saturating_add(edge_cost_and(*m));
                             let dn = depth_biased_dn(nc, ply + 1);
                             self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
@@ -2474,30 +2398,24 @@ impl DfPnSolver {
                 }
             }
 
-            // 1+εトリック (Pawlewicz & Lew 2007) による乗算型閾値伝播
+            // 閾値計算(1+ε トリック, Pawlewicz & Lew 2007)
             //
-            // 標準 df-pn: threshold = second_best + 1 (加算型)
-            //   → seesaw effect(スラッシング)が発生する．
-            //
-            // 1+εトリック: threshold = ceil(second_best * (1 + ε))  (乗算型)
-            //   → pn が大きくなるほど増分も比例して大きくなり，
-            //     深い探索木でのスラッシングを大幅に削減する．
-            //
-            // ε = 1/2 (3/2 乗算): 初期 pn が 1-5 と小さい環境では
-            // 標準的な ε = 1/4 では閾値成長が不十分．
-            //   second_best=1 → 2    second_best=5 → 8
-            //   second_best=10 → 15  second_best=100 → 150
+            // 標準 df-pn の second_best + 1 では，best child の pn/dn が
+            // 僅かに増加しただけで親に戻りスラッシングが発生する．
+            // 乗算型 ε を使用し，pn/dn に比例した余裕を与える:
+            //   threshold = second_best + second_best/4 + 1
+            //             ≈ ceil(second_best * 5/4)
             //
             // TCA 拡張: eff_*_th を使用し，ループ子存在時は
             // 子ノードにも拡張済み閾値を伝播する．
-            let epsilon_th = (second_best.saturating_mul(3).saturating_add(1)) / 2;
             let (child_pn_th, child_dn_th) = if or_node {
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
                     .min(INF - 1);
+                let epsilon = second_best / 4 + 1;
                 let child_pn_th = eff_pn_th
-                    .min(epsilon_th)
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
@@ -2505,8 +2423,9 @@ impl DfPnSolver {
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
+                let epsilon = second_best / 4 + 1;
                 let child_dn_th = eff_dn_th
-                    .min(epsilon_th)
+                    .min(second_best.saturating_add(epsilon))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             };
@@ -2578,18 +2497,15 @@ impl DfPnSolver {
         }
 
         // 逃げ場に基づく pn 調整
-        // WPN: AND_pn ≈ max(child_pn) + (unproven_count - 1) ≈ PN_SCALE + count - 1
-        // ヒューリスティックもこの形式に合わせて PN_SCALE ベースで見積もる．
-        let base = if safe_escapes == 0 {
+        if safe_escapes == 0 {
             // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい
-            PN_SCALE + (num_defenses * 2 / 3).saturating_sub(1)
+            (num_defenses * 2 / 3).max(1)
         } else if safe_escapes >= 3 {
             // 逃げ場が多い: 詰みにくい
-            PN_SCALE + num_defenses + safe_escapes / 2 - 1
+            num_defenses + safe_escapes / 2
         } else {
-            PN_SCALE + num_defenses.saturating_sub(1)
-        };
-        base.max(PN_SCALE)
+            num_defenses
+        }
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
@@ -2624,31 +2540,20 @@ impl DfPnSolver {
 
         // 王手数が少なく逃げ場が多い → 追い詰めが困難
         // 王手数が多く逃げ場がない → 包囲完成に近い
-        //
-        // 人間の棋感: 玉が敵駒のいない方に逃げたとき不詰と判断する．
-        // 逃げ場が多い局面ほど pn を大きくして探索優先度を下げる．
-        // 基本 pn 計算(1-8 範囲)
-        let base_pn = if num_checks <= 2 && safe_escapes >= 3 {
-            // 王手が少なく逃げ場が多い → 非常に詰みにくい
-            1 + safe_escapes
-        } else if safe_escapes == 0 {
+        if num_checks <= 2 && safe_escapes >= 3 {
+            // 王手が少なく逃げ場が多い → 詰みにくい
+            return 2 + safe_escapes / 2;
+        }
+        if safe_escapes == 0 {
             // 逃げ場なし → 詰みやすい(合駒のみで防御)
-            1
-        } else if safe_escapes >= 4 {
+            return 1;
+        }
+        if safe_escapes >= 4 {
             // 逃げ場が非常に多い → 追い詰めに手数を要する
-            safe_escapes / 2 + 1
-        } else if safe_escapes >= 2 {
-            // 中程度の逃げ場 → やや詰みにくい
-            2
-        } else {
-            // 標準的な局面
-            1
-        };
-
-        // PN_SCALE でスケーリング: MID の 1+ε 閾値伝播を深い探索木でも維持する．
-        // epsilon_th = ceil(second_best * 3/2) が second_best ∝ PN_SCALE に比例して
-        // 大きくなり，WPN の AND 減少(≈4/level)に対する耐性が向上する．
-        base_pn * PN_SCALE
+            return 1 + safe_escapes / 3;
+        }
+        // 標準的な局面
+        1
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．
@@ -4018,42 +3923,53 @@ impl DfPnSolver {
     /// PNS がアリーナ上限に達した場合に呼び出される．
     /// PNS で蓄積された TT エントリ(証明・中間値)を引き継ぎ，
     /// 残りのノード予算で IDS-dfpn を実行する．
-    /// KomoringHeights 方式の漸増閾値ループで MID を反復呼び出しする．
-    ///
-    /// PNS の TT エントリ(証明・中間値・反証)を全て保持し，MID の
-    /// ブートストラップに活用する．PNS 反証は `node.remaining` で
-    /// 正しくスコープされるため MID と干渉しない．
-    ///
-    /// 従来の IDS + retain_proofs 方式は反復間で 95%+ のエントリを
-    /// 喪失し MID がスラッシングを起こすため，KomoringHeights の
-    /// 漸増閾値方式に置き換える:
-    /// - TT エントリは全反復で保持(retain_proofs 不使用)
-    /// - 各反復で root の pn/dn を 7/4 倍に拡大し，探索を段階的に深化
     fn mid_fallback(&mut self, board: &mut Board) {
-        let pns_max_ply = self.max_ply;
-        self.max_ply = 0;
-
-        // 単一 MID 呼び出し: (INF-1, INF-1) 閾値で全ノード予算を投入．
-        // 1+εトリック + MID_MIN_THRESHOLD で閾値飢餓を防ぎ，
-        // PNS 由来の中間 TT エントリが realistic な second_best を提供する．
-        //
-        // TT GC を無効化: MID が蓄積した中間値を GC で失うと
-        // 同じ局面を再計算するスラッシングが発生する．
-        // メモリ制約は PNS 側で管理し，MID では TT の自然成長を許容する．
-        let saved_gc = self.tt_gc_threshold;
-        self.tt_gc_threshold = 0; // GC 無効化
-
-        eprintln!("mid_fallback: starting MID with (INF-1, INF-1), pns_max_ply={}, nodes={}, tt={}",
-            pns_max_ply, self.nodes_searched, self.table.len());
-        self.path.clear();
-        self.mid(board, INF - 1, INF - 1, 0, true);
-
-        self.tt_gc_threshold = saved_gc; // GC 復元
-
-        let (root_pn, root_dn) = self.look_up_board(board);
-        eprintln!("  MID done: pn={}, dn={}, nodes={}, tt={}, max_ply={}",
-            root_pn, root_dn, self.nodes_searched,
-            self.table.len(), self.max_ply);
+        let pk = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let saved_depth = self.depth;
+        let mut ids_depth: u32 = 2;
+        let total_max_nodes = self.max_nodes;
+        loop {
+            if ids_depth > saved_depth {
+                ids_depth = saved_depth;
+            }
+            self.depth = ids_depth;
+            self.path.clear();
+            let remaining = ids_depth as u16;
+            let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn == 0 {
+                break;
+            }
+            if ids_depth < saved_depth {
+                let budget = (total_max_nodes / 16).max(1024);
+                self.max_nodes = self.nodes_searched.saturating_add(budget);
+            } else {
+                self.max_nodes = total_max_nodes;
+            }
+            {
+                let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                if root_pn != 0 && root_dn != 0
+                    && self.nodes_searched < self.max_nodes
+                    && !self.timed_out
+                {
+                    self.mid(board, INF - 1, INF - 1, 0, true);
+                }
+            }
+            let (root_pn2, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn2 == 0 {
+                break;
+            }
+            if self.nodes_searched >= total_max_nodes || self.timed_out {
+                break;
+            }
+            if ids_depth >= saved_depth {
+                break;
+            }
+            self.table.retain_proofs();
+            ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
+        }
+        self.depth = saved_depth;
+        self.max_nodes = total_max_nodes;
     }
 
     // ================================================================
@@ -4110,7 +4026,6 @@ impl DfPnSolver {
             }
             // 終了条件: アリーナ満杯
             if arena.len() >= PNS_MAX_ARENA_NODES {
-                eprintln!("PNS arena full: {} nodes", arena.len());
                 break;
             }
             // 定期タイムアウトチェック
@@ -4261,8 +4176,8 @@ impl DfPnSolver {
                 (p, d)
             };
 
-            // TT に初期値(PN_SCALE,PN_SCALE)しかない場合: ヒューリスティック初期化
-            if cpn == PN_SCALE && cdn == PN_SCALE && !is_loop {
+            // TT に初期値(1,1)しかない場合: ヒューリスティック初期化
+            if cpn == 1 && cdn == 1 && !is_loop {
                 if child_or_node {
                     // 子は OR ノード(攻め方手番): 王手数ベース
                     let checks = self.generate_check_moves(board);
@@ -4277,8 +4192,7 @@ impl DfPnSolver {
                     } else {
                         let nc = checks.len() as u32;
                         cpn = self.heuristic_or_pn(board, nc)
-                            .saturating_add(edge_cost_and(*m))
-                            .saturating_add(sacrifice_check_boost(board, &checks));
+                            .saturating_add(edge_cost_and(*m));
                         cdn = depth_biased_dn(nc, ply + 1);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
@@ -4635,10 +4549,7 @@ impl DfPnSolver {
     /// OR 証明ノードには TT Best Move も記録する．
     fn pns_store_to_tt(&mut self, arena: &[PnsNode]) {
         for node in arena {
-            if !node.expanded {
-                continue;
-            }
-            if node.pn == 0 && !node.children.is_empty() {
+            if node.pn == 0 && node.expanded && !node.children.is_empty() {
                 // 証明済み中間ノード
                 if node.or_node {
                     // OR 証明: 証明子の手を TT Best Move に記録
@@ -4658,19 +4569,13 @@ impl DfPnSolver {
                         REMAINING_INFINITE, node.pos_key,
                     );
                 }
-            } else if node.dn == 0 {
-                // 反証済みノード: PNS の反証は深さ制限による仮反証を含むため，
-                // node.remaining で保存する．REMAINING_INFINITE を使うと
-                // 「全深さで不詰」と扱われ，MID が偽の NoCheckmate を返す．
+            } else if node.dn == 0 && node.expanded {
+                // 反証済みノード
                 self.store(
                     node.pos_key, node.hand, INF, 0,
-                    node.remaining, node.pos_key,
+                    REMAINING_INFINITE, node.pos_key,
                 );
             }
-            // 中間ノード(pn>0 かつ dn>0)は TT に保存しない．
-            // PNS の中間 pn/dn 値は探索途中の推定であり，
-            // TT に蓄積すると MID が過大評価を参照して効率が低下する．
-            // 証明/反証のみを蓄積し，反復 PNS の精度を維持する．
         }
     }
 }
@@ -5626,9 +5531,8 @@ mod tests {
         board.set_sfen(sfen).unwrap();
 
         let mut solver =
-            DfPnSolver::with_timeout(43, 500_000_000, 32767, 180);
+            DfPnSolver::with_timeout(41, 10_000_000, 32767, 30);
         solver.set_find_shortest(false);
-        solver.set_tt_gc_threshold(10_000_000);
         let start = Instant::now();
         let result = solver.solve(&mut board);
         let elapsed = start.elapsed();

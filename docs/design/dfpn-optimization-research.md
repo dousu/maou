@@ -54,10 +54,9 @@ pn_threshold(c1) = min(pn_threshold(parent), ceil(pn2 * (1 + epsilon)))
 - pnが大きい時: 大きな増分(深い探索を許容)
 - TTオーバーフロー時に効果が劇的(再展開頻度を大幅削減)
 
-**maou_shogi:** 実装済み(v0.11.0，v0.18.4 で論文式に修正)．
-`ceil(second_best * (1 + ε))` (ε = 1/2) を使用．
-整数演算では `(second_best * 3 + 1) / 2` で ceiling division を実現．
-初期 pn が 1-5 と小さいため，論文推奨値(ε = 1/4)より大きい値を採用．
+**maou_shogi:** 実装済み(v0.11.0)．
+`epsilon = second_best / 4 + 1` を使用(≈ 5/4 乗算型)．
+`min` キャップなしで全域に渡り乗算型の性質を維持．
 
 #### 1.4 TCA (Kishimoto & Müller 2008)
 
