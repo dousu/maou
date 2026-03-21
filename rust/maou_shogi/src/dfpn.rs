@@ -7220,4 +7220,121 @@ mod tests {
         }
     }
 
+    /// 39手詰 ply 4 の未解決応手(500K で NO_MATE)を高予算で再調査し，
+    /// 真の詰み手数・必要ノード数・分岐の特徴を分析する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_hard_defenses_deep() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_setup = ["7b6b", "5b4c", "8b9c"]; // 3手進めて ply 4
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        // 前回 500K で未解決だった応手のみ高予算で再調査
+        let hard_moves = [
+            ("4c3b", "king move (3b)"),
+            ("4c3d", "king move (3d) [CORRECT]"),
+            ("N*5c", "knight drop 5c"),
+            ("P*5c", "pawn drop 5c"),
+            ("N*6c", "knight drop 6c"),
+            ("P*7c", "pawn drop 7c"),
+            ("N*7c", "knight drop 7c"),
+        ];
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 39手詰 ply 4: 高予算(5M)でのボトルネック応手分析");
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("\n{:>12} {:>25} {:>10} {:>8} {:>10}",
+            "Move", "Description", "Nodes", "Time(s)", "Result");
+        eprintln!("{}", "-".repeat(75));
+
+        for (usi, desc) in &hard_moves {
+            let m = board.move_from_usi(usi).unwrap();
+            let mut child_board = board.clone();
+            child_board.do_move(m);
+
+            let mut solver = DfPnSolver::with_timeout(37, 5_000_000, 32767, 120);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            eprintln!("{:>12} {:>25} {:>10} {:>8.1} {:>10}",
+                usi, desc, nodes, elapsed.as_secs_f64(), result_str);
+
+            // 解けた場合は PV を表示
+            if let TsumeResult::Checkmate { moves, .. } = &result {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("             PV: {}", pv.join(" "));
+            }
+        }
+
+        // 正解手(4c3d)の PV を辿り，各 ply での分岐数とノードを段階的に分析
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 正解 PV 沿いの IDS 各段階での進捗");
+        eprintln!("{}", "=".repeat(80));
+
+        let pv_usi = [
+            "4c3d", "1b2c", "3d2c", "N*1e", "2c3b", "N*2d",
+            "3b2b", "2d1b+", "2b3b", "1b2b", "3b2b", "4f1c",
+            "2b1c", "9c3c", "1c1d", "3c2c", "1d1e", "P*1f",
+            "1e1f", "P*1g", "1f1g", "5g6f", "1g1h", "2c2g",
+            "1h1i", "8g8i", "S*6i", "8i6i", "6h6i+", "S*2h",
+            "1i2i", "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        // IDS depth 5,9,13,...,41 での進捗
+        let depths = [5, 9, 13, 17, 21, 25, 29, 33, 37, 41];
+
+        let mut pv_board = board.clone();
+        let correct_def = board.move_from_usi("4c3d").unwrap();
+        pv_board.do_move(correct_def);
+        // 4c3d 後の局面 = ply 5 (攻め方番 OR)
+
+        eprintln!("\n{:>6} {:>10} {:>8} {:>10}",
+            "Depth", "Nodes", "Time(s)", "Result");
+        eprintln!("{}", "-".repeat(40));
+
+        for &depth in &depths {
+            let mut solver = DfPnSolver::with_timeout(depth, 2_000_000, 32767, 30);
+            solver.set_find_shortest(false);
+            let mut test_board = pv_board.clone();
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            eprintln!("{:>6} {:>10} {:>8.1} {:>10}", depth, nodes, elapsed.as_secs_f64(), result_str);
+
+            if let TsumeResult::Checkmate { .. } = &result {
+                break; // 解けたら終了
+            }
+        }
+    }
+
 }
