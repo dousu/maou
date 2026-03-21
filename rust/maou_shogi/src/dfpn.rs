@@ -895,8 +895,12 @@ impl TranspositionTable {
     fn retain_proofs(&mut self) {
         self.tt.retain(|_key, entries| {
             entries.retain(|e| {
-                // 証明のみ保持(反証は浅い探索のコンテキスト依存性があるため除外)
-                e.pn == 0
+                // 証明(pn=0): 常に保持
+                // 確定反証(dn=0 かつ path_dependent=false): 経路非依存の真の不詰
+                //   → どのパスからアクセスしても同じ結果になるため IDS 間で再利用安全
+                // 経路依存反証(dn=0 かつ path_dependent=true): ループ由来
+                //   → 異なる IDS 反復では経路が変わり無効になりうるため破棄
+                e.pn == 0 || (e.dn == 0 && !e.path_dependent)
             });
             !entries.is_empty()
         });
@@ -1597,6 +1601,8 @@ impl DfPnSolver {
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        // GHI 伝播: init ループ中に反証済み子の path_dependent を蓄積
+        let mut init_or_path_dep = false;
         // AND ノードの init フェーズ用: TT プレフィルタで証明済み合駒の証明駒蓄積
         let mut init_and_proof = [0u8; HAND_KINDS];
         let mut init_prefiltered_count: u32 = 0;
@@ -1897,8 +1903,18 @@ impl DfPnSolver {
                 let child_dp = self
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
-                self.store(pos_key, child_dp, INF, 0,
-                    REMAINING_INFINITE, pos_key);
+                // GHI 伝播: 子の反証が経路依存なら親の反証も経路依存
+                if self.table.has_path_dependent_disproof(
+                    child_pk, &child_hand,
+                ) {
+                    self.store_path_dep(
+                        pos_key, child_dp, INF, 0,
+                        remaining, pos_key, true,
+                    );
+                } else {
+                    self.store(pos_key, child_dp, INF, 0,
+                        REMAINING_INFINITE, pos_key);
+                }
                 return;
             }
             // cdn_now == 0 ブロックに入るのは or_node == true のみ．
@@ -1915,6 +1931,10 @@ impl DfPnSolver {
                     init_or_disproof[k] =
                         init_or_disproof[k].min(adj[k]);
                 }
+                // GHI 伝播: 子の反証が経路依存なら蓄積
+                init_or_path_dep |= self.table.has_path_dependent_disproof(
+                    child_pk, &child_hand,
+                );
                 continue;
             }
 
@@ -1952,10 +1972,18 @@ impl DfPnSolver {
 
         // OR ノードで全子が反証済み(children が空)
         if or_node && children.is_empty() {
-            self.store(
-                pos_key, init_or_disproof, INF, 0,
-                remaining, pos_key,
-            );
+            // GHI 伝播: いずれかの子の反証が経路依存なら親も経路依存
+            if init_or_path_dep {
+                self.store_path_dep(
+                    pos_key, init_or_disproof, INF, 0,
+                    remaining, pos_key, true,
+                );
+            } else {
+                self.store(
+                    pos_key, init_or_disproof, INF, 0,
+                    remaining, pos_key,
+                );
+            }
             return;
         }
 
@@ -2098,11 +2126,15 @@ impl DfPnSolver {
                     } else {
                         if cdn == 0 {
                             let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
-                            // GHI 対策: ループ子による反証は経路依存
-                            if is_loop_child {
+                            // GHI 対策: ループ子または子の反証が経路依存なら親も経路依存
+                            let child_path_dep = is_loop_child
+                                || self.table.has_path_dependent_disproof(
+                                    child_pk, child_hand,
+                                );
+                            if child_path_dep {
                                 self.store_path_dep(
                                     pos_key, child_dp, INF, 0,
-                                    remaining, 0, true,
+                                    remaining, if is_loop_child { 0 } else { pos_key }, true,
                                 );
                             } else {
                                 self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
@@ -2260,10 +2292,10 @@ impl DfPnSolver {
 
                 // 全子が反証済み(dn=0) → OR ノード反証
                 if current_dn == 0 {
-                    // GHI 対策: ループ子が寄与した反証は経路依存．
-                    // ループ子は現在の探索パスに依存して dn=0 と見做されるため，
-                    // 異なるパスの IDS 反復では無効になりうる．
-                    if loop_child_count > 0 {
+                    // GHI 対策: ループ子または経路依存な子の反証が寄与した場合は
+                    // 親の反証も経路依存．init フェーズで蓄積した init_or_path_dep
+                    // も考慮する(init で反証済みの子が MID ループには残らないため)．
+                    if loop_child_count > 0 || init_or_path_dep {
                         self.store_path_dep(
                             pos_key, or_disproof,
                             INF, 0,
@@ -2329,10 +2361,14 @@ impl DfPnSolver {
                             .get_disproof_hand(
                                 child_pk, child_hand,
                             );
-                        // GHI 対策: ループ子による反証は経路依存(path-dependent)．
+                        // GHI 対策: ループ子または子の反証が経路依存なら親も経路依存．
                         // REMAINING_INFINITE ではなく有限 remaining で保存し，
                         // 異なる経路のより深い探索で再評価可能にする．
-                        if is_loop_child {
+                        let child_path_dep = is_loop_child
+                            || self.table.has_path_dependent_disproof(
+                                child_pk, child_hand,
+                            );
+                        if child_path_dep {
                             self.store_path_dep(
                                 pos_key, child_dp, INF, 0,
                                 remaining, csrc, true,
