@@ -1912,8 +1912,11 @@ impl DfPnSolver {
                         remaining, pos_key, true,
                     );
                 } else {
+                    // 子の NM は現在の remaining での深さ制限付き反証．
+                    // REMAINING_INFINITE ではなく remaining で格納し，
+                    // より深い IDS 反復で再評価可能にする．
                     self.store(pos_key, child_dp, INF, 0,
-                        REMAINING_INFINITE, pos_key);
+                        remaining, pos_key);
                 }
                 return;
             }
@@ -2018,7 +2021,7 @@ impl DfPnSolver {
                 ply, remaining,
             ) {
                 PreSolveResult::Disproved(dp) => {
-                    self.store(pos_key, dp, INF, 0, REMAINING_INFINITE, pos_key);
+                    self.store(pos_key, dp, INF, 0, remaining, pos_key);
                     self.path.remove(&full_hash);
                     return;
                 }
@@ -2137,7 +2140,7 @@ impl DfPnSolver {
                                     remaining, if is_loop_child { 0 } else { pos_key }, true,
                                 );
                             } else {
-                                self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
+                                self.store(pos_key, child_dp, INF, 0, remaining, pos_key);
                             }
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
@@ -2376,7 +2379,7 @@ impl DfPnSolver {
                         } else {
                             self.store(
                                 pos_key, child_dp, INF, 0,
-                                REMAINING_INFINITE, csrc,
+                                remaining, csrc,
                             );
                         }
                         proved_or_disproved = true;
@@ -4818,7 +4821,7 @@ impl DfPnSolver {
                 arena[node_idx as usize].pn = INF;
                 arena[node_idx as usize].dn = 0;
                 arena[node_idx as usize].expanded = true;
-                self.store(pos_key, child_dp, INF, 0, REMAINING_INFINITE, pos_key);
+                self.store(pos_key, child_dp, INF, 0, remaining, pos_key);
                 return;
             }
             // OR ノードで子が反証済み → 子を追加せずスキップ
@@ -7289,7 +7292,7 @@ mod tests {
         eprintln!(" 正解 PV 沿いの IDS 各段階での進捗");
         eprintln!("{}", "=".repeat(80));
 
-        let pv_usi = [
+        let _pv_usi = [
             "4c3d", "1b2c", "3d2c", "N*1e", "2c3b", "N*2d",
             "3b2b", "2d1b+", "2b3b", "1b2b", "3b2b", "4f1c",
             "2b1c", "9c3c", "1c1d", "3c2c", "1d1e", "P*1f",
