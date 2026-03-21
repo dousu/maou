@@ -2907,7 +2907,19 @@ impl DfPnSolver {
         self.depth = saved_depth;
         self.max_nodes = saved_max_nodes;
 
-        // 証明済み子を deferred_children から除去(逆順で安全に削除)
+        // 証明済み子を deferred_children から除去(降順ソートして安全に削除)
+        pre_solved_indices.sort_unstable();
+        // dedup: ArrayVec doesn't have dedup, do it manually
+        {
+            let mut write = 0;
+            for read in 0..pre_solved_indices.len() {
+                if read == 0 || pre_solved_indices[read] != pre_solved_indices[read - 1] {
+                    pre_solved_indices[write] = pre_solved_indices[read];
+                    write += 1;
+                }
+            }
+            pre_solved_indices.truncate(write);
+        }
         for &i in pre_solved_indices.iter().rev() {
             deferred_children.remove(i);
         }
@@ -7574,6 +7586,101 @@ mod tests {
 
             if let TsumeResult::Checkmate { .. } = &result {
                 break; // 解けたら終了
+            }
+        }
+    }
+
+    /// 39手詰: N*1e → 2c1d 後の OR ノード(ply 8)を深掘りし，
+    /// どの王手でノード爆発が起きるかを特定する．
+    ///
+    /// 2c1d は N*1e の AND 子ノードで 500K budget では未解決．
+    /// ply 8 後は攻め方番(OR)なので，各王手候補を 1M budget で個別ソルブし，
+    /// さらに解けない王手については AND 子ノード(回避手)を個別に分析する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_2c1d_deep_breakdown() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // 8手進めて N*1e → 2c1d 後の局面へ
+        let pv_setup = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // ply 8 後: 攻め方番(OR ノード)
+        assert_eq!(board.turn, Color::Black);
+
+        let helper = DfPnSolver::default_solver();
+        let checks = helper.generate_check_moves(&mut board);
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 39手詰 N*1e → 2c1d 深掘り分析 (ply 8 OR ノード)");
+        eprintln!(" 局面: {} (8手進めた後)", board.sfen());
+        eprintln!(" 王手候補数: {} (うちドロップ: {})",
+            checks.len(),
+            checks.iter().filter(|m| m.is_drop()).count());
+        eprintln!("{}", "=".repeat(80));
+
+        // ── N*1e の AND 子ノード(回避手)を 1M budget で各ソルブ ──
+        // ply 7 まで戻って N*1e 後の局面を作る
+        let mut board_after_n1e = Board::new();
+        board_after_n1e.set_sfen(sfen).unwrap();
+        let pv_to_n1e = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e",
+        ];
+        for usi in &pv_to_n1e {
+            let m = board_after_n1e.move_from_usi(usi).unwrap();
+            board_after_n1e.do_move(m);
+        }
+        // N*1e 後: 守備方番(AND ノード)
+        assert_eq!(board_after_n1e.turn, Color::White);
+
+        let defenses = helper.generate_defense_moves(&mut board_after_n1e);
+
+        eprintln!("\n--- N*1e 後の AND 子ノード(回避手)分析 (budget=1M) ---");
+        eprintln!("回避手数: {}\n", defenses.len());
+        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+            "#", "Defense", "Type", "Nodes", "Time(s)", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        for (i, &defense) in defenses.iter().enumerate() {
+            let mut child_board = board_after_n1e.clone();
+            child_board.do_move(defense);
+
+            // depth=33 (残り 39-8=31 手 + margin 2), budget=1M
+            let mut solver = DfPnSolver::with_timeout(33, 1_000_000, 32767, 60);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let def_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NM".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNK".into(), *nodes_searched),
+            };
+
+            let heavy = if nodes >= 500_000 { " <<<" } else { "" };
+            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}{}",
+                i + 1, defense.to_usi(), def_type, nodes,
+                elapsed.as_secs_f64(), result_str, heavy);
+
+            if let TsumeResult::Checkmate { moves, .. } = &result {
+                let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
+                let suffix = if moves.len() > 10 { " ..." } else { "" };
+                eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
     }
