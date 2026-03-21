@@ -842,29 +842,6 @@ impl TranspositionTable {
         *hand
     }
 
-    /// 指定局面に確定反証(dn=0, remaining=REMAINING_INFINITE)が存在するか判定する．
-    ///
-    /// OR ノードの NM 格納時に，全子が確定 NM であれば親も
-    /// REMAINING_INFINITE で格納するための判定に使用する．
-    #[inline(always)]
-    fn has_confirmed_disproof(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> bool {
-        if let Some(entries) = self.tt.get(&pos_key) {
-            for e in entries {
-                if e.dn == 0
-                    && hand_gte(&e.hand, hand)
-                    && e.remaining == REMAINING_INFINITE
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// 反証済みエントリの反証駒(登録時の持ち駒)を返す．
     ///
     /// 持ち駒劣越で一致する反証済みエントリの hand を返す．
@@ -885,6 +862,26 @@ impl TranspositionTable {
         *hand
     }
 
+    /// 反証エントリが経路依存(path_dependent)かどうかを返す．
+    ///
+    /// OR ノードで子の反証を集約する際，経路依存の子反証が含まれるなら
+    /// 親の反証も経路依存として保存する必要がある．
+    /// GHI 由来のループ反証は IDS 間で経路が変わると無効になりうるため．
+    fn has_path_dependent_disproof(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        if let Some(entries) = self.tt.get(&pos_key) {
+            for e in entries {
+                if e.dn == 0 && hand_gte(&e.hand, hand) {
+                    return e.path_dependent;
+                }
+            }
+        }
+        false
+    }
+
     /// 全エントリをクリアする．
     fn clear(&mut self) {
         self.tt.clear();
@@ -895,22 +892,11 @@ impl TranspositionTable {
     /// 反復深化 df-pn で使用: 浅い深さの中間エントリや
     /// 深さ制限による仮反証エントリを除去しつつ，
     /// 確定した証明・反証エントリは再利用する．
-    ///
-    /// 保持条件:
-    /// - pn=0(証明済み): 深さに関係なく有効
-    /// - dn=0 かつ remaining=REMAINING_INFINITE(確定反証): 真の不詰
-    ///
-    /// 深さ制限による仮反証(remaining が有限値)は除去する．
-    /// これにより深い探索で再評価可能になる．
     fn retain_proofs(&mut self) {
         self.tt.retain(|_key, entries| {
             entries.retain(|e| {
-                // 証明(pn=0)は深さに関係なく有効．
-                // 確定反証(dn=0 かつ remaining=REMAINING_INFINITE)も保持する．
-                // 深さ制限による仮反証(remaining が有限値)は除去し，
-                // 深い探索で再評価可能にする．
+                // 証明のみ保持(反証は浅い探索のコンテキスト依存性があるため除外)
                 e.pn == 0
-                    || (e.dn == 0 && e.remaining == REMAINING_INFINITE)
             });
             !entries.is_empty()
         });
@@ -1608,9 +1594,6 @@ impl DfPnSolver {
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
-        // OR ノードの確定 NM 追跡: 全 NM 子が REMAINING_INFINITE なら
-        // 親も REMAINING_INFINITE で格納可能
-        let mut all_nm_confirmed = true;
         // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
         let defender_king_sq = if or_node {
             board.king_square(board.turn.opponent())
@@ -1917,13 +1900,6 @@ impl DfPnSolver {
             // AND かつ cdn_now != 0 のときはここを通過して children に追加される．
             if cdn_now == 0 {
                 // OR: この子は反証済み → 反証駒を蓄積
-                if all_nm_confirmed
-                    && !self.table.has_confirmed_disproof(
-                        child_pk, &child_hand,
-                    )
-                {
-                    all_nm_confirmed = false;
-                }
                 let child_dp = self
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
@@ -1956,15 +1932,9 @@ impl DfPnSolver {
 
         // OR ノードで全子が反証済み(children が空)
         if or_node && children.is_empty() {
-            // 全子が確定 NM(REMAINING_INFINITE)なら親も確定 NM
-            let or_remaining = if all_nm_confirmed {
-                REMAINING_INFINITE
-            } else {
-                remaining
-            };
             self.store(
                 pos_key, init_or_disproof, INF, 0,
-                or_remaining, pos_key,
+                remaining, pos_key,
             );
             return;
         }
@@ -2076,7 +2046,20 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 dp[k] = dp[k].min(adj[k]);
                             }
-                            self.store(pos_key, dp, INF, 0, remaining, pos_key);
+                            // GHI 対策: ループ子由来の反証は経路依存
+                            // 子の反証が経路依存なら親の反証も経路依存
+                            let child_path_dep = is_loop_child
+                                || self.table.has_path_dependent_disproof(
+                                    child_pk, child_hand,
+                                );
+                            if child_path_dep {
+                                self.store_path_dep(
+                                    pos_key, dp, INF, 0,
+                                    remaining, pos_key, true,
+                                );
+                            } else {
+                                self.store(pos_key, dp, INF, 0, remaining, pos_key);
+                            }
                         }
                     } else {
                         if cdn == 0 {
@@ -2153,8 +2136,6 @@ impl DfPnSolver {
                     let (cpn, cdn, csrc) =
                         if self.path.contains(&child_fh) {
                             loop_child_count += 1;
-                            // ループ子は経路依存 → 確定 NM ではない
-                            all_nm_confirmed = false;
                             (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
@@ -2192,13 +2173,6 @@ impl DfPnSolver {
                     // 反証済みの子: 反証駒を蓄積
                     // adjust_hand_for_move は証明駒/反証駒共通の駒入出補正関数
                     if cdn == 0 {
-                        if all_nm_confirmed
-                            && !self.table.has_confirmed_disproof(
-                                child_pk, child_hand,
-                            )
-                        {
-                            all_nm_confirmed = false;
-                        }
                         let child_dp = self
                             .table
                             .get_disproof_hand(
@@ -2211,6 +2185,14 @@ impl DfPnSolver {
                         for k in 0..HAND_KINDS {
                             or_disproof[k] =
                                 or_disproof[k].min(adj[k]);
+                        }
+                        // GHI 伝播: 子の反証が経路依存なら親も経路依存
+                        if !self.path.contains(&child_fh)
+                            && self.table.has_path_dependent_disproof(
+                                child_pk, child_hand,
+                            )
+                        {
+                            loop_child_count += 1; // path_dependent として扱う
                         }
                     }
 
@@ -2244,17 +2226,22 @@ impl DfPnSolver {
 
                 // 全子が反証済み(dn=0) → OR ノード反証
                 if current_dn == 0 {
-                    // 全子が確定 NM(REMAINING_INFINITE)なら親も確定 NM
-                    let or_remaining = if all_nm_confirmed {
-                        REMAINING_INFINITE
+                    // GHI 対策: ループ子が寄与した反証は経路依存．
+                    // ループ子は現在の探索パスに依存して dn=0 と見做されるため，
+                    // 異なるパスの IDS 反復では無効になりうる．
+                    if loop_child_count > 0 {
+                        self.store_path_dep(
+                            pos_key, or_disproof,
+                            INF, 0,
+                            remaining, pos_key, true,
+                        );
                     } else {
-                        remaining
-                    };
-                    self.store(
-                        pos_key, or_disproof,
-                        INF, 0,
-                        or_remaining, pos_key,
-                    );
+                        self.store(
+                            pos_key, or_disproof,
+                            INF, 0,
+                            remaining, pos_key,
+                        );
+                    }
                     self.path.remove(&full_hash);
                     return;
                 }
@@ -2810,6 +2797,14 @@ impl DfPnSolver {
                     and_proof[k] = and_proof[k].max(adj[k]);
                 }
                 let _ = pre_solved_indices.try_push(i);
+
+                // --- 同一マス合駒の捕獲後 TT 転用 ---
+                // 合駒 i が証明済みの場合，同一マスの他の合駒について
+                // 捕獲後の共通局面の TT エントリで証明を転用する．
+                self.cross_deduce_same_square_proofs(
+                    board, deferred_children, i, remaining,
+                    &mut and_proof, &mut pre_solved_indices,
+                );
             } else if cdn == 0 {
                 // 反証: AND ノード全体が反証
                 let pre_solve_tt = std::mem::replace(
@@ -2845,6 +2840,127 @@ impl DfPnSolver {
         } else {
             PreSolveResult::Partial
         }
+    }
+
+    /// 同一マス合駒の捕獲後 TT 転用(証明のみ)．
+    ///
+    /// 合駒 `solved_idx` が証明済みになった後，同一マスの他の合駒について
+    /// 攻方の捕獲後の共通局面を TT で参照し，証明を転用する．
+    ///
+    /// ## 原理
+    ///
+    /// 同一マス S への合駒 P1, P2, ..., Pn は，攻方が捕獲した後の
+    /// 盤面(position_key)が全て同一になる(捕獲駒が S に移動し，合駒が
+    /// 盤上から消える)．異なるのは攻方の持ち駒のみ(+P_i 分)．
+    ///
+    /// 合駒 P_i の捕獲後局面が TT で証明済み(pn=0)ならば，攻方は
+    /// 「合駒 P_i を取って王手」→「証明済み手順で詰み」と進めるため，
+    /// 合駒 P_i の子ノード(OR ノード)も pn=0 と確定できる．
+    #[inline(never)]
+    fn cross_deduce_same_square_proofs(
+        &mut self,
+        board: &mut Board,
+        deferred_children: &ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        solved_idx: usize,
+        remaining: u16,
+        and_proof: &mut [u8; HAND_KINDS],
+        pre_solved_indices: &mut ArrayVec<usize, MAX_MOVES>,
+    ) {
+        let (ref solved_move, _, _, _) = deferred_children[solved_idx];
+        let target_sq = solved_move.to_sq();
+
+        // 同一マスに未解決の合駒がなければスキップ
+        let has_siblings = deferred_children.iter().enumerate().any(|(j, (mj, _, _, _))| {
+            j > solved_idx && mj.to_sq() == target_sq && !pre_solved_indices.contains(&j)
+        });
+        if !has_siblings {
+            return;
+        }
+
+        // 合駒を実行し，攻方の捕獲手を探索
+        let captured_by_block = board.do_move(*solved_move);
+        let legal = movegen::generate_legal_moves(board);
+
+        // 捕獲手(ターゲットマスへの駒取り)を全て試行
+        for cap_mv in legal.iter().filter(|mv| {
+            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
+        }) {
+            let cap_piece = board.do_move(*cap_mv);
+
+            // 捕獲が王手でなければ詰将棋の合法手ではない → スキップ
+            if !board.is_in_check(board.turn) {
+                board.undo_move(*cap_mv, cap_piece);
+                continue;
+            }
+
+            let pc_pk = position_key(board);
+            let base_hand = board.hand[self.attacker.index()];
+            board.undo_move(*cap_mv, cap_piece);
+
+            let solved_pt = solved_move.drop_piece_type().unwrap();
+            let solved_hi = solved_pt.hand_index().unwrap();
+
+            // 各未解決の同一マス合駒について TT 参照
+            for (j, &(ref mj, _, child_pk_j, ref child_hand_j))
+                in deferred_children.iter().enumerate()
+            {
+                if j <= solved_idx || mj.to_sq() != target_sq {
+                    continue;
+                }
+                if pre_solved_indices.contains(&j) {
+                    continue;
+                }
+
+                let pt_j = match mj.drop_piece_type() {
+                    Some(pt) => pt,
+                    None => continue,
+                };
+                let hi_j = match pt_j.hand_index() {
+                    Some(hi) => hi,
+                    None => continue,
+                };
+
+                // 合駒 j を捕獲した場合の攻方持ち駒を計算:
+                // base_hand は solved_move の駒を捕獲した状態なので，
+                // solved の駒分を引いて j の駒分を足す
+                let mut hand_j = base_hand;
+                hand_j[solved_hi] = hand_j[solved_hi].saturating_sub(1);
+                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
+
+                let pc_remaining = remaining.saturating_sub(2);
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
+
+                if ppn == 0 {
+                    // 捕獲後局面が証明済み → 合駒 j の OR ノードも証明
+                    let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
+
+                    // OR ノードの証明駒: 捕獲で得る駒 j の分を差し引く
+                    let mut or_ph = pc_ph;
+                    or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
+                    for k in 0..HAND_KINDS {
+                        or_ph[k] = or_ph[k].min(child_hand_j[k]);
+                    }
+
+                    // 子 TT に証明エントリを格納(次回ループの TT チェックで使用)
+                    self.table.store(
+                        child_pk_j, or_ph, 0, INF,
+                        remaining.saturating_sub(1), child_pk_j,
+                    );
+
+                    // AND 証明駒の更新
+                    let adj = adjust_hand_for_move(*mj, &or_ph);
+                    for k in 0..HAND_KINDS {
+                        and_proof[k] = and_proof[k].max(adj[k]);
+                    }
+                    let _ = pre_solved_indices.try_push(j);
+                }
+            }
+        }
+
+        board.undo_move(*solved_move, captured_by_block);
     }
 }
 
@@ -4254,8 +4370,8 @@ impl DfPnSolver {
                     self.mid(board, INF - 1, INF - 1, 0, true);
                 }
             }
-            let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-            if root_pn2 == 0 || root_dn2 == 0 {
+            let (root_pn2, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn2 == 0 {
                 break;
             }
             if self.nodes_searched >= total_max_nodes || self.timed_out {
