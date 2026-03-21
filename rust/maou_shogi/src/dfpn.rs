@@ -6731,4 +6731,209 @@ mod tests {
         }
     }
 
+    /// 39手詰のボトルネック分析: 不詰み証明に時間がかかる分岐を特定する．
+    ///
+    /// ply 4 (AND ノード) の各応手について:
+    /// 1. 応手後の OR ノード(ply 5)で生成される王手の数と各王手の結果
+    /// 2. 各王手の先(ply 6 AND ノード)の回避手数と各回避手の結果
+    /// を再帰的に調べ，ノード消費のホットスポットを特定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_bottleneck_analysis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_setup = ["7b6b", "5b4c", "8b9c"]; // 3手進めて ply 4
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_setup {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // ply 4: 後手番(AND ノード)
+        assert_eq!(board.turn, Color::White);
+
+        let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+
+        // Phase 1: 各応手を 500K でソルブし，NO_MATE / UNKNOWN を特定
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 39手詰 ply 4 ボトルネック分析");
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("\n--- Phase 1: ply 4 応手の概要 (budget=500K) ---\n");
+        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
+            "#", "Move", "Type", "Nodes", "Time(ms)", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        let mut hard_defenses: Vec<(Move, String, u64, String)> = Vec::new();
+
+        for (i, &defense) in defenses.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(defense);
+
+            let mut s = DfPnSolver::with_timeout(37, 500_000, 32767, 10);
+            s.set_find_shortest(false);
+            let start = Instant::now();
+            let result = s.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NO_MATE".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNKNOWN".into(), *nodes_searched),
+            };
+
+            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
+                i + 1, defense.to_usi(), move_type, nodes,
+                elapsed.as_secs_f64() * 1000.0, result_str);
+
+            // 500K 以上消費 or UNKNOWN → ボトルネック候補
+            if nodes >= 200_000 {
+                hard_defenses.push((
+                    defense, defense.to_usi(), nodes, result_str.clone(),
+                ));
+            }
+        }
+
+        // Phase 2: ボトルネック応手の内部構造を分析
+        // check 後は defender turn なので，各回避手を個別に attacker turn でソルブ
+        eprintln!("\n--- Phase 2: ボトルネック応手を深掘り ---");
+        eprintln!("(defense → check → reply → attacker 視点でソルブ)\n");
+
+        for (defense, def_usi, parent_nodes, parent_result) in &hard_defenses {
+            let mut def_board = board.clone();
+            def_board.do_move(*defense);
+
+            // ply 5: 攻め方番(OR) — 王手を列挙
+            let checks = solver.generate_check_moves(&mut def_board);
+
+            eprintln!("=== {} ({}，親ノード={}，王手数={}) ===\n",
+                def_usi, parent_result, parent_nodes, checks.len());
+
+            for (j, &check) in checks.iter().enumerate() {
+                let mut check_board = def_board.clone();
+                check_board.do_move(check);
+
+                // ply 6: 守備方番(AND) — 回避手を列挙
+                let defs_after = solver.generate_defense_moves(&mut check_board);
+                let def_count = defs_after.len();
+                let check_type = if check.is_drop() { "drop" } else { "move" };
+
+                eprintln!("  王手 {:>2}. {} ({}) → 回避手 {} 手",
+                    j + 1, check.to_usi(), check_type, def_count);
+
+                if def_count == 0 {
+                    eprintln!("    → 応手なし(詰み)\n");
+                    continue;
+                }
+
+                eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
+                    "#", "Reply", "Type", "Nodes", "ms", "Result", "Chks");
+                eprintln!("  {}", "-".repeat(58));
+
+                let mut total_nodes: u64 = 0;
+                let mut nm_count = 0;
+                let mut mate_count = 0;
+                let mut unk_count = 0;
+
+                for (k, &reply) in defs_after.iter().enumerate() {
+                    let mut reply_board = check_board.clone();
+                    reply_board.do_move(reply);
+
+                    // ply 7: 攻め方番(OR) — 正しい視点でソルブ
+                    let next_checks = solver.generate_check_moves(&mut reply_board);
+                    let chk_count = next_checks.len();
+
+                    let mut s = DfPnSolver::with_timeout(33, 200_000, 32767, 5);
+                    s.set_find_shortest(false);
+                    let start = Instant::now();
+                    let result = s.solve(&mut reply_board);
+                    let elapsed = start.elapsed();
+
+                    let reply_type = if reply.is_drop() { "drop" } else { "move" };
+                    let (result_str, nodes) = match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            mate_count += 1;
+                            (format!("MATE({})", moves.len()), *nodes_searched)
+                        }
+                        TsumeResult::CheckmateNoPv { nodes_searched } => {
+                            mate_count += 1;
+                            ("MATE(nopv)".into(), *nodes_searched)
+                        }
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            nm_count += 1;
+                            ("NM".into(), *nodes_searched)
+                        }
+                        TsumeResult::Unknown { nodes_searched } => {
+                            unk_count += 1;
+                            ("UNK".into(), *nodes_searched)
+                        }
+                    };
+                    total_nodes += nodes;
+
+                    let heavy = if nodes >= 50_000 { " <<<" } else { "" };
+                    eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}",
+                        k + 1, reply.to_usi(), reply_type, nodes,
+                        elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy);
+                }
+                eprintln!("  合計: {} nodes | MATE={} NM={} UNK={}\n",
+                    total_nodes, mate_count, nm_count, unk_count);
+            }
+        }
+
+        // Phase 3: PV 上の正解手(4c3d)後を 2 階層深掘り
+        eprintln!("--- Phase 3: 正解手 4c3d → 1b2c(PV) 後の回避手分析 ---\n");
+        let correct_def = board.move_from_usi("4c3d").unwrap();
+        let mut correct_board = board.clone();
+        correct_board.do_move(correct_def);
+
+        let pv_check = correct_board.move_from_usi("1b2c").unwrap();
+        let mut pv_board = correct_board.clone();
+        pv_board.do_move(pv_check);
+
+        let pv_defs = solver.generate_defense_moves(&mut pv_board);
+        eprintln!("4c3d → 1b2c 後の回避手: {} 手", pv_defs.len());
+        eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
+            "#", "Reply", "Type", "Nodes", "ms", "Result", "Chks");
+        eprintln!("{}", "-".repeat(55));
+
+        for (k, &reply) in pv_defs.iter().enumerate() {
+            let mut reply_board = pv_board.clone();
+            reply_board.do_move(reply);
+
+            let next_checks = solver.generate_check_moves(&mut reply_board);
+            let chk_count = next_checks.len();
+
+            let mut s = DfPnSolver::with_timeout(33, 2_000_000, 32767, 30);
+            s.set_find_shortest(false);
+            let start = Instant::now();
+            let result = s.solve(&mut reply_board);
+            let elapsed = start.elapsed();
+
+            let reply_type = if reply.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NM".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNK".into(), *nodes_searched),
+            };
+
+            let is_pv = reply.to_usi() == "3d2c";
+            let marker = if is_pv { " ← PV" } else { "" };
+            let heavy = if nodes >= 100_000 { " <<<" } else { "" };
+            eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}{}",
+                k + 1, reply.to_usi(), reply_type, nodes,
+                elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy, marker);
+        }
+    }
+
 }
