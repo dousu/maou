@@ -7683,6 +7683,45 @@ mod tests {
                 eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
+
+        // ── 2c1d 後の各王手を 1M budget で個別ソルブ ──
+        eprintln!("\n--- 2c1d 後の各王手候補 (budget=1M, depth=33) ---\n");
+        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+            "#", "Check", "Type", "Nodes", "Time(s)", "Result");
+        eprintln!("{}", "-".repeat(55));
+
+        for (i, &check) in checks.iter().enumerate() {
+            let mut child_board = board.clone();
+            child_board.do_move(check);
+
+            let mut solver = DfPnSolver::with_timeout(33, 1_000_000, 32767, 60);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+
+            let check_type = if check.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("MATE({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MATE(nopv)".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NM".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("UNK".into(), *nodes_searched),
+            };
+
+            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+                i + 1, check.to_usi(), check_type, nodes,
+                elapsed.as_secs_f64(), result_str);
+
+            if let TsumeResult::Checkmate { moves, .. } = &result {
+                let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
+                let suffix = if moves.len() > 10 { " ..." } else { "" };
+                eprintln!("    PV: {}{}", pv.join(" "), suffix);
+            }
+        }
     }
 
 }
