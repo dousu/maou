@@ -6569,13 +6569,14 @@ mod tests {
         }
     }
 
-    /// 39手詰 ply 4 の問題手(N*5c)後の探索ツリーを再帰的に展開し，
-    /// どの分岐でノードが消費されるかを診断する．
+    /// 39手詰 ply 4 の全応手について，合駒は龍で取った後の局面を solve し
+    /// PV(詰み筋)を比較する．
     ///
-    /// 3層(6 ply)分の全分岐を展開し，各末端の sub-solve ノード数を出力．
+    /// 仮説: 合駒を取ると元の局面とほぼ同じ → 同じ詰み筋が繰り返される．
+    /// 合駒の数だけ同難度のサブ問題が増殖しているかを確認する．
     #[test]
     #[ignore]
-    fn test_tsume_39te_tree_expansion() {
+    fn test_tsume_39te_ply4_pv_comparison() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let pv_setup = ["7b6b", "5b4c", "8b9c"]; // 3手進めて ply 4 の局面へ
 
@@ -6586,89 +6587,88 @@ mod tests {
             board.do_move(m);
         }
 
-        // N*5c, 4c3b を深掘り
-        let hard_moves = ["N*5c", "4c3b"];
         let solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
 
-        for hard_usi in &hard_moves {
-            let defense = board.move_from_usi(hard_usi).unwrap();
-            let mut b1 = board.clone();
-            b1.do_move(defense);
+        // ── Part 1: 逃げ手(盤上の手)の PV ──
+        eprintln!("\n=== Part 1: 逃げ手の詰み筋 (budget=500K) ===\n");
+        for (i, &defense) in defenses.iter().enumerate() {
+            if defense.is_drop() { continue; }
+            let mut child_board = board.clone();
+            child_board.do_move(defense);
 
-            eprintln!("\n======================================================================");
-            eprintln!("=== {} 後の探索ツリー (攻め方番) ===", hard_usi);
+            let mut s = DfPnSolver::with_timeout(37, 500_000, 32767, 10);
+            s.set_find_shortest(false);
+            let result = s.solve(&mut child_board);
 
-            // Level 1: OR (攻め方の王手)
-            let checks = solver.generate_check_moves(&mut b1);
-            eprintln!("L1 王手候補: {} 手", checks.len());
+            let is_correct = defense.to_usi() == "4c3d";
+            let marker = if is_correct { " ← CORRECT" } else { "" };
+            Self::print_result(i + 1, &defense.to_usi(), &result, marker);
+        }
 
-            for (i, &check) in checks.iter().enumerate() {
-                let cap1 = b1.do_move(check);
+        // ── Part 2: 合駒を龍で取った後の局面の PV ──
+        // 合駒は 5c/6c/7c/8c 筋に打たれ，龍(9c)が取る．
+        // 取った後の局面を solve し，PV を比較する．
+        eprintln!("\n=== Part 2: 合駒 → 龍で取った後の詰み筋 (budget=500K) ===");
+        eprintln!("(defense → capture → 玉方応手の各分岐を solve)\n");
 
-                // Level 2: AND (玉方の応手)
-                let defenses = solver.generate_defense_moves(&mut b1);
-                eprintln!("\n  L1[{}] {} (応手{}手)", i+1, check.to_usi(), defenses.len());
+        let interpositions: Vec<(&str, &str)> = vec![
+            // (合駒, 龍の取り)
+            ("B*5c", "9c5c"), ("G*5c", "9c5c"), ("S*5c", "9c5c"),
+            ("N*5c", "9c5c"), ("L*5c", "9c5c"), ("P*5c", "9c5c"),
+            ("L*6c", "9c6c"), ("B*6c", "9c6c"), ("N*6c", "9c6c"),
+            ("P*7c", "9c7c"), ("B*7c", "9c7c"), ("N*7c", "9c7c"),
+            ("P*8c", "9c8c"), ("B*8c", "9c8c"), ("N*8c", "9c8c"),
+        ];
 
-                for (j, &def) in defenses.iter().enumerate() {
-                    let cap2 = b1.do_move(def);
+        for (idx, &(interpose_usi, capture_usi)) in interpositions.iter().enumerate() {
+            let interpose = board.move_from_usi(interpose_usi).unwrap();
+            let mut b = board.clone();
+            b.do_move(interpose);
+            let capture = b.move_from_usi(capture_usi).unwrap();
+            b.do_move(capture);
 
-                    // Level 3: OR (攻め方の王手)
-                    let checks2 = solver.generate_check_moves(&mut b1);
+            // ply 6 相当: 玉方番(AND) → 各応手後の攻め方局面を solve
+            let defs = solver.generate_defense_moves(&mut b);
+            eprintln!("{:>2}. {} → {} (玉方応手{}手)",
+                idx + 1, interpose_usi, capture_usi, defs.len());
 
-                    // この局面から sub-solve (budget=10K, depth=35)
-                    let mut sub = DfPnSolver::new(35, 10_000, 32767);
-                    sub.set_find_shortest(false);
-                    sub.set_interpose_pre_solve_nodes(0);
-                    let mut tb = b1.clone();
-                    let result = sub.solve(&mut tb);
-                    let (tag, nodes) = match &result {
-                        TsumeResult::Checkmate { moves, nodes_searched } =>
-                            (format!("M{}", moves.len()), *nodes_searched),
-                        TsumeResult::CheckmateNoPv { nodes_searched } =>
-                            ("M?".into(), *nodes_searched),
-                        TsumeResult::NoCheckmate { nodes_searched } =>
-                            ("NM".into(), *nodes_searched),
-                        TsumeResult::Unknown { nodes_searched } =>
-                            ("??".into(), *nodes_searched),
-                    };
+            for &def in defs.iter() {
+                let mut bc = b.clone();
+                bc.do_move(def);
 
-                    let sfen_str = b1.sfen();
-                    eprintln!("    L2[{}] {} → L3王手{}手 sub={:>6}({:>2}) {}",
-                        j+1, def.to_usi(), checks2.len(), nodes, tag, sfen_str);
+                // 攻め方番: 残り33手で solve
+                let mut s = DfPnSolver::with_timeout(33, 200_000, 32767, 3);
+                s.set_find_shortest(false);
+                let result = s.solve(&mut bc);
 
-                    // Level 3 詳細(王手が多い場合のみ)
-                    if checks2.len() > 0 && nodes > 1000 {
-                        for (k, &check2) in checks2.iter().enumerate() {
-                            let cap3 = b1.do_move(check2);
-                            let defs3 = solver.generate_defense_moves(&mut b1);
+                let label = format!("  {} → {}", capture_usi, def.to_usi());
+                Self::print_result(0, &label, &result, "");
+            }
+            eprintln!();
+        }
+    }
 
-                            // Level 4 sub-solve
-                            let mut sub2 = DfPnSolver::new(33, 5_000, 32767);
-                            sub2.set_find_shortest(false);
-                            sub2.set_interpose_pre_solve_nodes(0);
-                            let mut tb2 = b1.clone();
-                            let result2 = sub2.solve(&mut tb2);
-                            let (tag2, nodes2) = match &result2 {
-                                TsumeResult::Checkmate { moves, nodes_searched } =>
-                                    (format!("M{}", moves.len()), *nodes_searched),
-                                TsumeResult::CheckmateNoPv { nodes_searched } =>
-                                    ("M?".into(), *nodes_searched),
-                                TsumeResult::NoCheckmate { nodes_searched } =>
-                                    ("NM".into(), *nodes_searched),
-                                TsumeResult::Unknown { nodes_searched } =>
-                                    ("??".into(), *nodes_searched),
-                            };
-
-                            eprintln!("      L3[{}] {} → 応手{}手 sub={:>5}({:>2})",
-                                k+1, check2.to_usi(), defs3.len(), nodes2, tag2);
-
-                            b1.undo_move(check2, cap3);
-                        }
-                    }
-
-                    b1.undo_move(def, cap2);
+    fn print_result(idx: usize, label: &str, result: &TsumeResult, marker: &str) {
+        match result {
+            TsumeResult::Checkmate { moves, nodes_searched } => {
+                let pv_str: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                if idx > 0 {
+                    eprintln!("{:>2}. {} nodes={:>7} MATE({:>2}) PV: {}{}",
+                        idx, label, nodes_searched, moves.len(), pv_str.join(" "), marker);
+                } else {
+                    eprintln!("    {} nodes={:>7} MATE({:>2}) PV: {}{}",
+                        label, nodes_searched, moves.len(), pv_str.join(" "), marker);
                 }
-                b1.undo_move(check, cap1);
+            }
+            TsumeResult::CheckmateNoPv { nodes_searched } => {
+                eprintln!("    {} nodes={:>7} MATE(nopv){}", label, nodes_searched, marker);
+            }
+            TsumeResult::NoCheckmate { nodes_searched } => {
+                eprintln!("    {} nodes={:>7} NO_MATE{}", label, nodes_searched, marker);
+            }
+            TsumeResult::Unknown { nodes_searched } => {
+                eprintln!("    {} nodes={:>7} UNKNOWN{}", label, nodes_searched, marker);
             }
         }
     }
