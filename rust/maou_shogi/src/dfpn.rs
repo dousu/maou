@@ -1297,7 +1297,11 @@ impl DfPnSolver {
     fn look_up_board(&self, board: &Board) -> (u32, u32) {
         let pk = position_key(board);
         let hand = &board.hand[self.attacker.index()];
-        let (pn, dn, _source) = self.table.look_up(pk, hand, 0);
+        // self.depth を remaining として使用し，浅い IDS 反復の
+        // 仮反証(NM)を最終結果に採用しないようにする．
+        // remaining=0 だと全ての NM エントリを受け入れてしまい，
+        // PNS の深さ制限内での仮反証が最終判定を汚染する．
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16);
         (pn, dn)
     }
 
@@ -5155,11 +5159,16 @@ impl DfPnSolver {
                     );
                 }
             } else if node.dn == 0 && node.expanded {
-                // 反証済みノード
-                self.store(
-                    node.pos_key, node.hand, INF, 0,
-                    REMAINING_INFINITE, node.pos_key,
-                );
+                // PNS の反証(NM)は TT にバックプロパゲーションしない．
+                // 理由: PNS はアリーナサイズに制限された最良優先探索であり，
+                // 探索木を完全には展開しない．そのため PNS の NM は
+                // 「アリーナ内で反証された」という意味でしかなく，
+                // MID(DFS) の NM のように「深さ R 以内で完全に反証された」
+                // とは保証できない．PNS NM を remaining 付きで TT に格納すると，
+                // 後続の mid_fallback が NM エントリをヒットして探索をスキップし，
+                // 偽 NoCheckmate を引き起こす．
+                // 展開フェーズ(expand_pns_node)で各ノードの NM は既に
+                // TT に個別に記録済みなので，backprop での追加格納は不要．
             }
         }
     }
@@ -6264,6 +6273,235 @@ mod tests {
                 other
             ),
         }
+    }
+
+    /// 39手詰めサブ問題実験: PV 終盤側から逆順に詰み探索ノード数を計測し，
+    /// 全体を解くのに必要な予算を推定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_subproblem_budget_estimation() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        // PV: 攻め手(奇数)と玉方(偶数)
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 39手詰めサブ問題予算推定実験(終盤→序盤)");
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("{:<6} {:<14} {:<10} {:<10} {:<12} {}",
+            "Ply", "Nodes", "Time(s)", "MaxPly", "Result", "Remaining");
+
+        // PV を偶数手ずつ進めた局面(攻め番=ORノード)を全て事前構築
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        let mut sub_board = board.clone();
+        // ply 0
+        positions.push((0, sub_board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = sub_board.move_from_usi(pv_usi[ply_start]).unwrap();
+            sub_board.do_move(m1);
+            let m2 = sub_board.move_from_usi(pv_usi[ply_start + 1]).unwrap();
+            sub_board.do_move(m2);
+            positions.push((ply_start + 2, sub_board.clone()));
+        }
+
+        // 終盤側(簡単)から序盤側(困難)へ逆順で解く
+        // 解けなくなったら停止
+        positions.reverse();
+
+        let node_limit: u64 = 50_000_000; // 5000万ノード上限
+        let timeout = 60; // 60秒
+
+        for (ply, pos) in &positions {
+            let remaining_moves = 39 - ply;
+            let depth = (remaining_moves + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+
+            eprintln!("{:<6} {:<14} {:<10.2} {:<10} {:<12} {}手",
+                ply, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, result_str, remaining_moves);
+
+            // 解けなくなったら局面のSFENを出力して停止
+            if !solved {
+                eprintln!("--- ply {} で未解決 ---", ply);
+                eprintln!("  SFEN: {}", pos.sfen());
+                eprintln!("  PV残り: {:?}", &pv_usi[*ply..]);
+
+                // 深さを大きくして再試行
+                for &d in &[25u32, 31, 41, 51] {
+                    let mut test_board2 = pos.clone();
+                    let mut solver2 = DfPnSolver::with_timeout(
+                        d, 50_000_000, 32767, 60,
+                    );
+                    solver2.set_find_shortest(false);
+
+                    let start2 = Instant::now();
+                    let result2 = solver2.solve(&mut test_board2);
+                    let elapsed2 = start2.elapsed();
+
+                    let result_str2 = match &result2 {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } =>
+                            "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } =>
+                            "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } =>
+                            "Unknown".to_string(),
+                    };
+
+                    eprintln!("  depth={:<4} {:<14} {:<10.2} {:<10} {}",
+                        d, solver2.nodes_searched, elapsed2.as_secs_f64(),
+                        solver2.max_ply, result_str2);
+                }
+
+                // 1手進めた局面(ply+1, 玉方手番=ANDノード)も試す
+                eprintln!("\n  --- ply {} (攻め手1手目 {} 適用後、玉方手番) ---", ply, pv_usi[*ply]);
+                let mut after1 = pos.clone();
+                let m1 = after1.move_from_usi(pv_usi[*ply]).unwrap();
+                after1.do_move(m1);
+                eprintln!("  SFEN after {}: {}", pv_usi[*ply], after1.sfen());
+
+                // PV の最後の手から逆順に、1手ずつ戻って解けるポイントを探す
+                eprintln!("\n  --- 1手ずつ PV を遡り解ける境界を特定 ---");
+                // ply+1 (玉方手番後) から ply+16 まで奇数手のみ(OR局面)
+                let mut walk_board = pos.clone();
+                for step in 0..remaining_moves {
+                    let mv_str = pv_usi[*ply + step];
+                    let mv = walk_board.move_from_usi(mv_str).unwrap();
+                    walk_board.do_move(mv);
+
+                    // OR局面(攻め方手番)のみ詰み探索
+                    if step % 2 == 0 {
+                        continue; // step=0 で玉方手番、step=1 で攻め方手番
+                    }
+
+                    let sub_remaining = remaining_moves - step - 1;
+                    if sub_remaining == 0 { break; }
+                    let sub_depth = (sub_remaining + 2).min(41) as u32;
+
+                    let mut sub_board = walk_board.clone();
+                    let mut sub_solver = DfPnSolver::with_timeout(
+                        sub_depth, 50_000_000, 32767, 60,
+                    );
+                    sub_solver.set_find_shortest(false);
+                    let sub_result = sub_solver.solve(&mut sub_board);
+
+                    let sub_result_str = match &sub_result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } =>
+                            "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } =>
+                            "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } =>
+                            "Unknown".to_string(),
+                    };
+
+                    eprintln!("  ply{}+{} {:<14} {:<12} rem={}手 SFEN: {}",
+                        ply, step + 1, sub_solver.nodes_searched, sub_result_str,
+                        sub_remaining, walk_board.sfen());
+                }
+
+                // P*1g 後の局面(玉方手番)の合法手を全列挙
+                eprintln!("\n  --- P*1g 後の玉方応手分析 ---");
+                let mut after_drop = pos.clone();
+                let mv_drop = after_drop.move_from_usi("P*1g").unwrap();
+                after_drop.do_move(mv_drop);
+
+                let legal_moves = movegen::generate_legal_moves(&mut after_drop);
+                eprintln!("  合法手数: {}", legal_moves.len());
+                for lm in &legal_moves {
+                    let mut after_resp = after_drop.clone();
+                    after_resp.do_move(*lm);
+
+                    let mut sub_board = after_resp.clone();
+                    let mut sub_solver = DfPnSolver::with_timeout(
+                        19, 50_000_000, 32767, 60,
+                    );
+                    sub_solver.set_find_shortest(false);
+                    let sub_result = sub_solver.solve(&mut sub_board);
+
+                    let sub_result_str = match &sub_result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    eprintln!("  {} {:<14} {}", lm.to_usi(), sub_solver.nodes_searched, sub_result_str);
+                }
+
+                // 直接診断: depth=19 で solve 後、TT 内のルートエントリをダンプ
+                let att_hand22 = pos.hand[Color::Black.index()];
+                {
+                    let mut test_board = pos.clone();
+                    let mut solver = DfPnSolver::with_timeout(19, 50_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    let result = solver.solve(&mut test_board);
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    eprintln!("  depth=19 result: {} nodes={}", result_str, solver.nodes_searched);
+
+                    // TT ルートの全エントリをダンプ
+                    let pk = position_key(pos);
+                    if let Some(entries) = solver.table.tt.get(&pk) {
+                        eprintln!("  TT entries for root (count={})", entries.len());
+                        for (i, e) in entries.iter().enumerate() {
+                            eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
+                                i, e.pn, e.dn, e.remaining, e.path_dependent,
+                                e.hand, e.source);
+                        }
+                    } else {
+                        eprintln!("  TT: no entries for root");
+                    }
+
+                    // remaining=0 vs remaining=19 の look_up 結果
+                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0);
+                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19);
+                    eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
+                    eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
+                }
+
+                break;
+            }
+        }
+
+        eprintln!("{}", "=".repeat(80));
     }
 
     /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
