@@ -842,6 +842,29 @@ impl TranspositionTable {
         *hand
     }
 
+    /// 指定局面に確定反証(dn=0, remaining=REMAINING_INFINITE)が存在するか判定する．
+    ///
+    /// OR ノードの NM 格納時に，全子が確定 NM であれば親も
+    /// REMAINING_INFINITE で格納するための判定に使用する．
+    #[inline(always)]
+    fn has_confirmed_disproof(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        if let Some(entries) = self.tt.get(&pos_key) {
+            for e in entries {
+                if e.dn == 0
+                    && hand_gte(&e.hand, hand)
+                    && e.remaining == REMAINING_INFINITE
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// 反証済みエントリの反証駒(登録時の持ち駒)を返す．
     ///
     /// 持ち駒劣越で一致する反証済みエントリの hand を返す．
@@ -882,8 +905,12 @@ impl TranspositionTable {
     fn retain_proofs(&mut self) {
         self.tt.retain(|_key, entries| {
             entries.retain(|e| {
-                // 証明のみ保持(反証は浅い探索のコンテキスト依存性があるため除外)
+                // 証明(pn=0)は深さに関係なく有効．
+                // 確定反証(dn=0 かつ remaining=REMAINING_INFINITE)も保持する．
+                // 深さ制限による仮反証(remaining が有限値)は除去し，
+                // 深い探索で再評価可能にする．
                 e.pn == 0
+                    || (e.dn == 0 && e.remaining == REMAINING_INFINITE)
             });
             !entries.is_empty()
         });
@@ -1581,6 +1608,9 @@ impl DfPnSolver {
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        // OR ノードの確定 NM 追跡: 全 NM 子が REMAINING_INFINITE なら
+        // 親も REMAINING_INFINITE で格納可能
+        let mut all_nm_confirmed = true;
         // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
         let defender_king_sq = if or_node {
             board.king_square(board.turn.opponent())
@@ -1887,6 +1917,13 @@ impl DfPnSolver {
             // AND かつ cdn_now != 0 のときはここを通過して children に追加される．
             if cdn_now == 0 {
                 // OR: この子は反証済み → 反証駒を蓄積
+                if all_nm_confirmed
+                    && !self.table.has_confirmed_disproof(
+                        child_pk, &child_hand,
+                    )
+                {
+                    all_nm_confirmed = false;
+                }
                 let child_dp = self
                     .table
                     .get_disproof_hand(child_pk, &child_hand);
@@ -1919,9 +1956,15 @@ impl DfPnSolver {
 
         // OR ノードで全子が反証済み(children が空)
         if or_node && children.is_empty() {
+            // 全子が確定 NM(REMAINING_INFINITE)なら親も確定 NM
+            let or_remaining = if all_nm_confirmed {
+                REMAINING_INFINITE
+            } else {
+                remaining
+            };
             self.store(
                 pos_key, init_or_disproof, INF, 0,
-                remaining, pos_key,
+                or_remaining, pos_key,
             );
             return;
         }
@@ -2110,6 +2153,8 @@ impl DfPnSolver {
                     let (cpn, cdn, csrc) =
                         if self.path.contains(&child_fh) {
                             loop_child_count += 1;
+                            // ループ子は経路依存 → 確定 NM ではない
+                            all_nm_confirmed = false;
                             (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
@@ -2147,6 +2192,13 @@ impl DfPnSolver {
                     // 反証済みの子: 反証駒を蓄積
                     // adjust_hand_for_move は証明駒/反証駒共通の駒入出補正関数
                     if cdn == 0 {
+                        if all_nm_confirmed
+                            && !self.table.has_confirmed_disproof(
+                                child_pk, child_hand,
+                            )
+                        {
+                            all_nm_confirmed = false;
+                        }
                         let child_dp = self
                             .table
                             .get_disproof_hand(
@@ -2192,10 +2244,16 @@ impl DfPnSolver {
 
                 // 全子が反証済み(dn=0) → OR ノード反証
                 if current_dn == 0 {
+                    // 全子が確定 NM(REMAINING_INFINITE)なら親も確定 NM
+                    let or_remaining = if all_nm_confirmed {
+                        REMAINING_INFINITE
+                    } else {
+                        remaining
+                    };
                     self.store(
                         pos_key, or_disproof,
                         INF, 0,
-                        remaining, pos_key,
+                        or_remaining, pos_key,
                     );
                     self.path.remove(&full_hash);
                     return;
@@ -4196,8 +4254,8 @@ impl DfPnSolver {
                     self.mid(board, INF - 1, INF - 1, 0, true);
                 }
             }
-            let (root_pn2, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-            if root_pn2 == 0 {
+            let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            if root_pn2 == 0 || root_dn2 == 0 {
                 break;
             }
             if self.nodes_searched >= total_max_nodes || self.timed_out {
@@ -6603,7 +6661,7 @@ mod tests {
 
             let is_correct = defense.to_usi() == "4c3d";
             let marker = if is_correct { " ← CORRECT" } else { "" };
-            Self::print_result(i + 1, &defense.to_usi(), &result, marker);
+            print_result(i + 1, &defense.to_usi(), &result, marker);
         }
 
         // ── Part 2: 合駒を龍で取った後の局面の PV ──
@@ -6643,7 +6701,7 @@ mod tests {
                 let result = s.solve(&mut bc);
 
                 let label = format!("  {} → {}", capture_usi, def.to_usi());
-                Self::print_result(0, &label, &result, "");
+                print_result(0, &label, &result, "");
             }
             eprintln!();
         }
