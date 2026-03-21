@@ -1069,6 +1069,8 @@ pub struct DfPnSolver {
     /// Pre-Solve 内の mid() が再帰的に AND ノードに到達した場合，
     /// ネストした Pre-Solve によるスタックオーバーフローを防ぐ．
     in_pre_solve: bool,
+    /// TT ベース合駒プレフィルタの発火回数(診断用)．
+    prefilter_hits: u64,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
     /// Killer Move テーブル(OR ノード用)．
@@ -1101,6 +1103,7 @@ impl DfPnSolver {
             mate_budget: 0,
             interpose_pre_solve_nodes: 256,
             in_pre_solve: false,
+            prefilter_hits: 0,
             tt_gc_threshold: 0,
             next_gc_check: 0,
             killer_table: Vec::new(),
@@ -1594,6 +1597,9 @@ impl DfPnSolver {
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
         // OR ノードの反証駒(init ループ中に蓄積)
         let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        // AND ノードの init フェーズ用: TT プレフィルタで証明済み合駒の証明駒蓄積
+        let mut init_and_proof = [0u8; HAND_KINDS];
+        let mut init_prefiltered_count: u32 = 0;
         // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
         let defender_king_sq = if or_node {
             board.king_square(board.turn.opponent())
@@ -1914,12 +1920,26 @@ impl DfPnSolver {
 
             // AND ノードの合駒(drop)は deferred_children に分離
             if !or_node && m.is_drop() {
-                push_move(&mut deferred_children, (
-                    *m,
-                    child_full_hash,
-                    child_pk,
-                    child_hand,
-                ));
+                // --- TT ベース合駒プレフィルタ ---
+                // 合駒を deferred_children に追加する前に，攻方の捕獲後局面を
+                // メイン TT で参照する．捕獲後局面が証明済み(pn=0)なら，
+                // 合駒の OR ノードは「捕獲して詰み」と確定できるため展開不要．
+                // IDS の浅い反復で証明された深いレベルの合駒結果を活用し，
+                // 合駒チェーンの指数的展開をボトムアップに折り畳む．
+                if self.try_prefilter_block(
+                    board, *m, &child_hand, remaining,
+                    &mut init_and_proof,
+                ) {
+                    init_prefiltered_count += 1;
+                    self.prefilter_hits += 1;
+                } else {
+                    push_move(&mut deferred_children, (
+                        *m,
+                        child_full_hash,
+                        child_pk,
+                        child_hand,
+                    ));
+                }
             } else {
                 push_move(&mut children, (
                     *m,
@@ -1974,17 +1994,31 @@ impl DfPnSolver {
                     self.path.remove(&full_hash);
                     return;
                 }
-                PreSolveResult::AllProved(proof) if children.is_empty() => {
-                    let mut p = proof;
+                PreSolveResult::AllProved(mut proof) if children.is_empty() => {
+                    // プレフィルタで証明済みの合駒と pre-solve の結果を統合
                     for k in 0..HAND_KINDS {
-                        p[k] = p[k].min(att_hand[k]);
+                        proof[k] = proof[k].max(init_and_proof[k]);
+                        proof[k] = proof[k].min(att_hand[k]);
                     }
-                    self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key);
+                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
                     self.path.remove(&full_hash);
                     return;
                 }
                 _ => {}
             }
+        }
+
+        // プレフィルタで全合駒が証明済み(deferred_children が空になった場合)
+        if !or_node && deferred_children.is_empty() && init_prefiltered_count > 0
+            && children.is_empty()
+        {
+            let mut p = init_and_proof;
+            for k in 0..HAND_KINDS {
+                p[k] = p[k].min(att_hand[k]);
+            }
+            self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key);
+            self.path.remove(&full_hash);
+            return;
         }
 
         // AND ノードで遅延合駒の活性化判定:
@@ -2840,6 +2874,102 @@ impl DfPnSolver {
         } else {
             PreSolveResult::Partial
         }
+    }
+
+    /// TT ベース合駒プレフィルタ: 合駒の捕獲後局面がメイン TT で
+    /// 証明済みなら，合駒の OR ノードを展開せずに証明確定する．
+    ///
+    /// IDS のボトムアップ特性を活用する:
+    /// 1. 浅い IDS 反復で深いレベルの合駒チェーン末端が証明される
+    /// 2. 証明は `retain_proofs` でメイン TT に保持される
+    /// 3. 深い IDS 反復で，浅いレベルの合駒処理時にこの証明を参照し，
+    ///    合駒チェーンの展開をスキップする
+    ///
+    /// 返り値: true なら証明済み(and_proof に蓄積済み)，false なら未証明．
+    #[inline(never)]
+    fn try_prefilter_block(
+        &mut self,
+        board: &mut Board,
+        block_move: Move,
+        child_hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        and_proof: &mut [u8; HAND_KINDS],
+    ) -> bool {
+        // 合駒の捕獲後に使える remaining
+        let pc_remaining = remaining.saturating_sub(2);
+        if pc_remaining == 0 {
+            return false;
+        }
+
+        let target_sq = block_move.to_sq();
+
+        // 合駒を盤上で実行
+        let captured_by_block = board.do_move(block_move);
+        let child_pk = position_key(board); // 合駒後(OR ノード)の position_key
+
+        // 攻方の合法手から，合駒マスへの捕獲かつ王手になる手を探す
+        let legal = movegen::generate_legal_moves(board);
+        let mut proved = false;
+
+        for cap_mv in legal.iter().filter(|mv| {
+            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
+        }) {
+            let cap_piece = board.do_move(*cap_mv);
+
+            // 捕獲が王手でなければ詰将棋の合法手ではない
+            if !board.is_in_check(board.turn) {
+                board.undo_move(*cap_mv, cap_piece);
+                continue;
+            }
+
+            let pc_pk = position_key(board);
+            let pc_hand = board.hand[self.attacker.index()];
+
+            // メイン TT で捕獲後局面の証明を参照
+            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining);
+            if ppn == 0 {
+                // 捕獲後局面が証明済み → 合駒の OR ノードも証明
+                let pc_ph = self.table.get_proof_hand(pc_pk, &pc_hand);
+
+                // OR ノードの証明駒: 捕獲で得る駒分を差し引く
+                let cap_raw = cap_mv.captured_piece_raw();
+                let mut or_ph = pc_ph;
+                if cap_raw > 0 {
+                    let piece = Piece::from_raw_u8(cap_raw);
+                    if let Some(pt) = piece.piece_type() {
+                        let base_pt = pt.unpromoted().unwrap_or(pt);
+                        if let Some(hi) = base_pt.hand_index() {
+                            or_ph[hi] = or_ph[hi].saturating_sub(1);
+                        }
+                    }
+                }
+                // 子ノードの持ち駒で上限クリップ
+                for k in 0..HAND_KINDS {
+                    or_ph[k] = or_ph[k].min(child_hand[k]);
+                }
+
+                // 子 TT に証明エントリを格納(後続の look_up で再利用)
+                self.table.store(
+                    child_pk, or_ph, 0, INF,
+                    remaining.saturating_sub(1), child_pk,
+                );
+
+                // AND 証明駒の更新
+                let adj = adjust_hand_for_move(block_move, &or_ph);
+                for k in 0..HAND_KINDS {
+                    and_proof[k] = and_proof[k].max(adj[k]);
+                }
+                proved = true;
+            }
+
+            board.undo_move(*cap_mv, cap_piece);
+            if proved {
+                break;
+            }
+        }
+
+        board.undo_move(block_move, captured_by_block);
+        proved
     }
 
     /// 同一マス合駒の捕獲後 TT 転用(証明のみ)．
@@ -5637,7 +5767,8 @@ mod tests {
                 nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("=== tsume6 result: {} moves, {} nodes ===", pv.len(), nodes_searched);
+                eprintln!("=== tsume6 result: {} moves, {} nodes, prefilter_hits={} ===",
+                    pv.len(), nodes_searched, solver.prefilter_hits);
                 eprintln!("PV: {}", pv.join(" "));
 
                 // 診断PV抽出は完了後のみ実行(Phase 2 後は TT が巨大化するため省略)
@@ -6054,8 +6185,9 @@ mod tests {
         let start = Instant::now();
         let result = solver.solve(&mut board);
         let elapsed = start.elapsed();
-        eprintln!("39te: {} nodes, {:.1}s, max_ply={}",
-            solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply);
+        eprintln!("39te: {} nodes, {:.1}s, max_ply={}, prefilter_hits={}",
+            solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply,
+            solver.prefilter_hits);
 
         match &result {
             TsumeResult::Checkmate {
