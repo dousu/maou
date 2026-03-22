@@ -7175,6 +7175,172 @@ mod tests {
         eprintln!("結果: /tmp/tsume_39te_backward_1m.log");
     }
 
+    /// ply 24 のノード数急増を診断する．
+    ///
+    /// ply 25 ANDノード(5g6f 後)の合駒フィルタ(futile/chain)分類と，
+    /// Unknown となった4応手(1g1f, N*6g, P*7g, N*7g)の探索構造を調査する．
+    /// 各Unknownの応手について，攻め手が取り進んだ後の再帰的なチェーン構造を
+    /// 深さ2まで展開して報告する．
+    #[test]
+    fn test_ply24_diagnostic() {
+        use std::io::Write;
+        let out_path = "/tmp/ply24_diagnostic.log";
+        let result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        // ply 25 ANDノード: 5g6f 後の局面
+        let and_sfen = "9/3+N1P3/7+R1/9/9/3S5/1R6k/3p5/9 w 2b4g3s3n4l16p 26";
+        let mut board = Board::new();
+        board.set_sfen(and_sfen).unwrap();
+
+        let defender = board.turn(); // White
+        let attacker = defender.opponent(); // Black
+
+        let king_sq = board.king_square(defender).unwrap();
+        let solver = DfPnSolver::default_solver();
+        let checker_sq = board.compute_checkers_at(king_sq, attacker).lsb().unwrap();
+
+        writeln!(out, "=== Ply 24 Diagnostic ===").unwrap();
+        writeln!(out, "King: {}{}  Checker: {}{}",
+            9 - king_sq.col(), (b'a' + king_sq.row()) as char,
+            9 - checker_sq.col(), (b'a' + checker_sq.row()) as char).unwrap();
+
+        // between_bb
+        let between = attack::between_bb(checker_sq, king_sq);
+        write!(out, "Between squares:").unwrap();
+        for sq in between {
+            write!(out, " {}{}", 9 - sq.col(), (b'a' + sq.row()) as char).unwrap();
+        }
+        writeln!(out).unwrap();
+
+        // futile/chain 分類
+        let (futile, chain) = solver.compute_futile_and_chain_squares(
+            &board, &between, king_sq, checker_sq, defender, attacker,
+        );
+        write!(out, "Futile squares:").unwrap();
+        for sq in futile { write!(out, " {}{}", 9 - sq.col(), (b'a' + sq.row()) as char).unwrap(); }
+        writeln!(out).unwrap();
+        write!(out, "Chain squares:").unwrap();
+        for sq in chain { write!(out, " {}{}", 9 - sq.col(), (b'a' + sq.row()) as char).unwrap(); }
+        writeln!(out).unwrap();
+        write!(out, "Normal squares:").unwrap();
+        for sq in between {
+            if !futile.contains(sq) && !chain.contains(sq) {
+                write!(out, " {}{}", 9 - sq.col(), (b'a' + sq.row()) as char).unwrap();
+            }
+        }
+        writeln!(out).unwrap();
+
+        // 防御手一覧
+        let defenses = solver.generate_defense_moves(&mut board);
+        writeln!(out, "\nDefense moves ({}):", defenses.len()).unwrap();
+        for m in &defenses {
+            writeln!(out, "  {}", m.to_usi()).unwrap();
+        }
+
+        // 問題の4応手 + 比較用に解ける応手を分析
+        let targets = ["1g1f", "N*6g", "P*7g", "N*7g", "L*6g", "B*7g"];
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, "=== Unknown応手の探索構造分析 ===").unwrap();
+
+        for &target_usi in &targets {
+            writeln!(out, "\n--- {} ---", target_usi).unwrap();
+
+            // 応手を適用
+            let mut after_def = board.clone();
+            let def_move = after_def.move_from_usi(target_usi).unwrap();
+            after_def.do_move(def_move);
+            writeln!(out, "SFEN after: {}", after_def.sfen()).unwrap();
+
+            // この局面(ORノード)で攻め手を生成
+            let attack_solver = DfPnSolver::default_solver();
+            let attacks = attack_solver.generate_check_moves(&mut after_def);
+            writeln!(out, "Attack moves ({}):", attacks.len()).unwrap();
+
+            // 各攻め手について，1手進めた後のANDノードを簡易分析
+            for atk in &attacks {
+                let mut after_atk = after_def.clone();
+                after_atk.do_move(*atk);
+
+                // この後の防御手数をカウント
+                let sub_solver = DfPnSolver::default_solver();
+                let sub_defenses = sub_solver.generate_defense_moves(&mut after_atk);
+
+                // チェーン構造の確認: 飛び駒の王手ならbetween/futile/chainを表示
+                let sub_king_sq = match after_atk.king_square(after_atk.turn()) {
+                    Some(sq) => sq,
+                    None => {
+                        writeln!(out, "  {} → no king (capture?), defenses={}", atk.to_usi(), sub_defenses.len()).unwrap();
+                        continue;
+                    }
+                };
+                let sub_attacker = after_atk.turn().opponent();
+                let sub_checkers = after_atk.compute_checkers_at(sub_king_sq, sub_attacker);
+                if sub_checkers.is_empty() {
+                    writeln!(out, "  {} → not check, defenses={}", atk.to_usi(), sub_defenses.len()).unwrap();
+                    continue;
+                }
+                let sub_checker_sq = sub_checkers.lsb().unwrap();
+                let sub_sliding = sub_solver.find_sliding_checker(&after_atk, sub_king_sq, sub_attacker);
+                let chain_info = if sub_sliding.is_some() {
+                    let sub_between = attack::between_bb(sub_checker_sq, sub_king_sq);
+                    let (sf, sc) = sub_solver.compute_futile_and_chain_squares(
+                        &after_atk, &sub_between, sub_king_sq, sub_checker_sq,
+                        after_atk.turn(), sub_attacker,
+                    );
+                    format!("between={} futile={} chain={} normal={}",
+                        sub_between.count(), sf.count(), sc.count(),
+                        sub_between.count() - sf.count() - sc.count())
+                } else {
+                    "non-sliding".to_string()
+                };
+
+                writeln!(out, "  {} → defenses={} [{}]",
+                    atk.to_usi(), sub_defenses.len(), chain_info).unwrap();
+
+                // 攻め手が飛び駒の取り進みの場合(チェーン再帰)，2段目も展開
+                if sub_sliding.is_some() && sub_defenses.len() > 5 {
+                    // 防御手のうちドロップ(合駒)の数
+                    let drop_count = sub_defenses.iter().filter(|m| m.is_drop()).count();
+                    let non_drop_count = sub_defenses.len() - drop_count;
+                    writeln!(out, "    (drops={}, non-drops={})", drop_count, non_drop_count).unwrap();
+                }
+            }
+
+            // 250Kノードで解いて各深さのノード使用量を確認
+            let mut solve_board = after_def.clone();
+            let remaining = 15 - 1; // 攻め手1手消費
+            let depth = (remaining + 2).min(41) as u32;
+            let mut solve_solver = DfPnSolver::with_timeout(
+                depth, 250_000, 32767, 30,
+            );
+            solve_solver.set_find_shortest(false);
+
+            let start = std::time::Instant::now();
+            let result = solve_solver.solve(&mut solve_board);
+            let elapsed = start.elapsed();
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            writeln!(out, "Solve: {} nodes={} time={:.2}s max_ply={}",
+                result_str, solve_solver.nodes_searched,
+                elapsed.as_secs_f64(), solve_solver.max_ply).unwrap();
+            writeln!(out, "TT entries: {}", solve_solver.table.len()).unwrap();
+        }
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: /tmp/ply24_diagnostic.log");
+    }
+
     /// ply 22 偽証明: 最終局面の合駒生成と between_bb を診断．
     #[test]
     #[ignore]
