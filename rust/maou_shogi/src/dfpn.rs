@@ -9830,7 +9830,6 @@ mod tests {
     /// stderr に `[tt_diag]` プレフィックスのログが出力される．
     #[test]
     #[ignore]
-    #[cfg(feature = "tt_diag")]
     fn test_tt_diag_monitor() {
         // 39手詰め問題: PV を24手進めた局面(ply 24 = 攻め番)から開始
         // PV: 7b6b 5b4c ... P*1g 1f1g ← ここまで24手
@@ -9856,9 +9855,8 @@ mod tests {
 
         // ply 1 の AND ノード(応手)をモニタリング
         // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
-        let mut solver = DfPnSolver::with_timeout(17, 500_000, 32767, 180);
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 180);
         solver.set_find_shortest(false);
-        solver.set_tt_diag(1, "", 100);
 
         let result = solver.solve(&mut board);
         let result_str = match &result {
@@ -9868,9 +9866,9 @@ mod tests {
             _ => "Other".to_string(),
         };
         eprintln!(
-            "Result: {} nodes={} max_ply={} tt_pos={} tt_ent={}",
+            "Result: {} nodes={} max_ply={} tt_pos={}",
             result_str, solver.nodes_searched, solver.max_ply,
-            solver.table.len(), solver.table.total_entries(),
+            solver.table.len(),
         );
     }
 
