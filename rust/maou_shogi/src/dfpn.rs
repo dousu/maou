@@ -9858,7 +9858,7 @@ mod tests {
         // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
         let mut solver = DfPnSolver::with_timeout(17, 500_000, 32767, 180);
         solver.set_find_shortest(false);
-        solver.set_tt_diag(1, "P*7g", 100);
+        solver.set_tt_diag(1, "", 100);
 
         let result = solver.solve(&mut board);
         let result_str = match &result {
