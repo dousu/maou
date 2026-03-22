@@ -7077,6 +7077,75 @@ mod tests {
         }
     }
 
+    /// ply 22 偽証明: 最終局面の合駒生成と between_bb を診断．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply22_ids_depth_diagnosis() {
+        // 最終局面: 飛車 8e から玉 1e への王手
+        let final_sfen = "9/3+N1P3/7+R1/9/1R6k/9/8P/3S5/9 w 2b4g3s3n4l16p 30";
+
+        let mut final_board = Board::new();
+        final_board.set_sfen(final_sfen).unwrap();
+
+        let defender = final_board.turn(); // White
+        let attacker = defender.opponent(); // Black
+        let king_sq = final_board.king_square(defender).unwrap();
+        eprintln!("King square: {:?} (col={}, row={})", king_sq, king_sq.col(), king_sq.row());
+
+        // compute_checkers_at
+        let checkers = final_board.compute_checkers_at(king_sq, attacker);
+        eprintln!("Checkers: count={}", checkers.count());
+        for sq in checkers {
+            eprintln!("  checker at {:?} (col={}, row={})", sq, sq.col(), sq.row());
+        }
+
+        // find_sliding_checker
+        let solver = DfPnSolver::default_solver();
+        let sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
+        eprintln!("find_sliding_checker: {:?}", sliding.map(|s| format!("col={}, row={}", s.col(), s.row())));
+
+        // checker_sq
+        let checker_sq = checkers.lsb().unwrap();
+
+        // between_bb
+        let between = attack::between_bb(checker_sq, king_sq);
+        eprintln!("between_bb({:?}, {:?}): count={}", checker_sq, king_sq, between.count());
+        for sq in between {
+            eprintln!("  between: col={}, row={}", sq.col(), sq.row());
+        }
+
+        // compute_futile_and_chain_squares
+        let (futile, chain) = solver.compute_futile_and_chain_squares(
+            &final_board, &between, king_sq, checker_sq, defender, attacker,
+        );
+        eprintln!("futile: count={}", futile.count());
+        for sq in futile {
+            eprintln!("  futile: col={}, row={}", sq.col(), sq.row());
+        }
+        eprintln!("chain: count={}", chain.count());
+        for sq in chain {
+            eprintln!("  chain: col={}, row={}", sq.col(), sq.row());
+        }
+
+        // generate_defense_moves
+        let defenses = solver.generate_defense_moves(&mut final_board);
+        eprintln!("generate_defense_moves: {} moves", defenses.len());
+        for d in &defenses {
+            eprintln!("  {}", d.to_usi());
+        }
+
+        // 比較: generate_legal_moves
+        let legal = movegen::generate_legal_moves(&mut final_board);
+        eprintln!("generate_legal_moves: {} moves", legal.len());
+
+        // between_bb が空なら合駒生成がスキップされる → バグの原因
+        assert!(
+            between.count() > 0,
+            "between_bb is empty for checker={:?} king={:?}, blocking moves will be skipped!",
+            checker_sq, king_sq
+        );
+    }
+
     /// 39手詰め ply 22 局面で偽の短手数詰みを返すバグのリグレッションテスト．
     ///
     /// ソルバーが Mate(7) を返すが，最終局面 8g8e の後に合法手が36手あり
