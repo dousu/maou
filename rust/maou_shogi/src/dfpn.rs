@@ -943,6 +943,18 @@ impl TranspositionTable {
         });
     }
 
+    /// 証明エントリ(pn=0)のみを保持し，NM を含む他の全エントリを除去する．
+    ///
+    /// PNS → IDS 切替時に使用: PNS で蓄積された深さ制限由来の仮 NM エントリを
+    /// 除去し，IDS が独立して NM を検出できるようにする．
+    /// 証明(pn=0)は常に正しいため保持する．
+    fn retain_proofs_only(&mut self) {
+        self.tt.retain(|_key, entries| {
+            entries.retain(|e| e.pn == 0);
+            !entries.is_empty()
+        });
+    }
+
 
     /// TT のポジション数を返す．
     fn len(&self) -> usize {
@@ -1493,15 +1505,29 @@ impl DfPnSolver {
         }
     }
 
-    /// 深さ制限 OR ノードの2手延長 NM 判定．
+    /// 深さ制限 OR ノードの再帰的 NM 判定．
     ///
-    /// 全王手に対して玉方に「応手後に王手なし」となる逃げ手が存在するかを確認する．
-    /// 全王手が即座に反証可能(= 応手なし or 応手後に王手手段なし)であれば
-    /// 真の不詰(REMAINING_INFINITE)として扱える．
+    /// 全王手に対して玉方に不詰を示す応手が存在するかを再帰的に確認する．
+    /// 各王手に対し，玉方に「応手後に王手なし」または「応手後の王手が
+    /// さらに反証可能」となる逃げ手が存在すれば真の不詰(REMAINING_INFINITE)
+    /// として扱える．`max_depth` で再帰の深さを制限し，分岐爆発を防止する．
     fn depth_limit_all_checks_refutable(
         &mut self,
         board: &mut Board,
         checks: &[Move],
+    ) -> bool {
+        self.all_checks_refutable_recursive(board, checks, 3)
+    }
+
+    /// `depth_limit_all_checks_refutable` の再帰本体．
+    ///
+    /// `depth` は残りの再帰深さ(0 で打ち切り)．各再帰レベルで
+    /// 王手→応手→次の王手 を確認し，最大 `depth` 段階まで追跡する．
+    fn all_checks_refutable_recursive(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+        depth: u32,
     ) -> bool {
         for check in checks {
             let captured = board.do_move(*check);
@@ -1514,11 +1540,22 @@ impl DfPnSolver {
             for defense in &defenses {
                 let cap_d = board.do_move(*defense);
                 let next_checks = self.generate_check_moves(board);
-                board.undo_move(*defense, cap_d);
                 if next_checks.is_empty() {
+                    board.undo_move(*defense, cap_d);
                     has_refuting_defense = true;
                     break;
                 }
+                // 再帰: 次の王手もすべて反証可能か確認
+                if depth > 0
+                    && self.all_checks_refutable_recursive(
+                        board, &next_checks, depth - 1,
+                    )
+                {
+                    board.undo_move(*defense, cap_d);
+                    has_refuting_defense = true;
+                    break;
+                }
+                board.undo_move(*defense, cap_d);
             }
             board.undo_move(*check, captured);
             if !has_refuting_defense {
@@ -2085,8 +2122,20 @@ impl DfPnSolver {
         if or_node && children.is_empty() {
             // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
             // 全子が REMAINING_INFINITE なら親も REMAINING_INFINITE(真の不詰)．
-            let parent_nm_remaining = propagate_nm_remaining(
+            let mut parent_nm_remaining = propagate_nm_remaining(
                 init_or_nm_min_remaining, remaining);
+            // 2手延長による REMAINING_INFINITE 昇格:
+            // 伝播結果が有限(深さ制限由来)でも，全王手が2手で反証可能なら
+            // 真の不詰として REMAINING_INFINITE に昇格する．
+            // これにより IDS 間の TT 再利用が大幅に改善される．
+            if parent_nm_remaining != REMAINING_INFINITE {
+                let checks = self.generate_check_moves(board);
+                if checks.is_empty()
+                    || self.depth_limit_all_checks_refutable(board, &checks)
+                {
+                    parent_nm_remaining = REMAINING_INFINITE;
+                }
+            }
             // GHI 伝播: いずれかの子の反証が経路依存なら親も経路依存
             if init_or_path_dep {
                 self.store_path_dep(
@@ -2417,8 +2466,19 @@ impl DfPnSolver {
                 // 全子が反証済み(dn=0) → OR ノード反証
                 if current_dn == 0 {
                     // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
-                    let parent_nm_remaining = propagate_nm_remaining(
+                    let mut parent_nm_remaining = propagate_nm_remaining(
                         or_nm_min_remaining, remaining);
+                    // 2手延長による REMAINING_INFINITE 昇格:
+                    // 伝播結果が有限(深さ制限由来)でも，全王手が2手で反証可能なら
+                    // 真の不詰として REMAINING_INFINITE に昇格する．
+                    if parent_nm_remaining != REMAINING_INFINITE {
+                        let checks = self.generate_check_moves(board);
+                        if checks.is_empty()
+                            || self.depth_limit_all_checks_refutable(board, &checks)
+                        {
+                            parent_nm_remaining = REMAINING_INFINITE;
+                        }
+                    }
                     // GHI 対策: ループ子または経路依存な子の反証が寄与した場合は
                     // 親の反証も経路依存．init フェーズで蓄積した init_or_path_dep
                     // も考慮する(init で反証済みの子が MID ループには残らないため)．
@@ -4654,6 +4714,11 @@ impl DfPnSolver {
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
         let mut consecutive_nm: u32 = 0;
+        // PNS で蓄積された深さ制限由来の仮 NM エントリを除去する．
+        // 証明(pn=0)のみ残し，IDS が独立して NM を検出できるようにする．
+        // これにより PNS の仮 NM が IDS のノード効率ベース NM 判定を
+        // 汚染するのを防ぐ．
+        self.table.retain_proofs_only();
         loop {
             if ids_depth > saved_depth {
                 ids_depth = saved_depth;
@@ -4665,12 +4730,15 @@ impl DfPnSolver {
             if root_pn == 0 {
                 break;
             }
-            if ids_depth < saved_depth {
-                let budget = (total_max_nodes / 16).max(1024);
-                self.max_nodes = self.nodes_searched.saturating_add(budget);
+            let budget = if ids_depth < saved_depth {
+                let b = (total_max_nodes / 16).max(1024);
+                self.max_nodes = self.nodes_searched.saturating_add(b);
+                b
             } else {
                 self.max_nodes = total_max_nodes;
-            }
+                total_max_nodes.saturating_sub(self.nodes_searched)
+            };
+            let nodes_before = self.nodes_searched;
             {
                 let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
                 if root_pn != 0 && root_dn != 0
@@ -4680,24 +4748,50 @@ impl DfPnSolver {
                     self.mid(board, INF - 1, INF - 1, 0, true);
                 }
             }
+            let nodes_used = self.nodes_searched.saturating_sub(nodes_before);
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             if root_pn2 == 0 {
                 break;
             }
-            // IDS NM 安定性判定: 複数の IDS 深さで連続して NM が検出された場合，
-            // その NM は深さに依存しない真の不詰である可能性が高い．
-            // 2回連続で NM を確認したら REMAINING_INFINITE に昇格して IDS を打ち切る．
-            // これにより「全王手が反証可能だが深い分岐木を持つ」局面での
-            // IDS の指数的再探索を回避する．
+            // IDS NM 判定:
+            // 1. NM remaining が REMAINING_INFINITE なら真の不詰として打ち切る．
+            // 2. 全王手が再帰的に反証可能なら REMAINING_INFINITE に昇格して打ち切る．
+            // 3. 連続 NM かつ使用ノードが予算の1/4未満なら，NM が効率的に
+            //    確認されたことを意味し，真の不詰の可能性が高い．
+            //    深い IDS 深さでの大規模な再探索なしに NM が即座に確認された
+            //    = 深さ制限ではなく構造的な不詰．REMAINING_INFINITE に昇格．
             if root_dn2 == 0 {
-                consecutive_nm += 1;
-                if consecutive_nm >= 2 {
-                    // NM 安定: REMAINING_INFINITE に昇格
+                let root_nm_rem = self.table.get_disproof_remaining(pk, &att_hand);
+                if root_nm_rem == REMAINING_INFINITE {
+                    break;
+                }
+                let checks = self.generate_check_moves(board);
+                if checks.is_empty()
+                    || self.depth_limit_all_checks_refutable(board, &checks)
+                {
                     let dp = self.table.get_disproof_hand(pk, &att_hand);
                     self.table.store(
                         pk, dp, INF, 0, REMAINING_INFINITE, pk,
                     );
                     break;
+                }
+                // ノード効率ベースの consecutive_nm:
+                // MID が予算の1/4未満で NM を検出 → 深い探索なしに NM が確認された
+                // = TT の既存 NM エントリで即座に反証が確定しており，
+                //   新たな深い分岐を展開していない．
+                // 2回連続でこの条件を満たせば真の不詰として昇格する．
+                let efficient_nm = nodes_used < budget / 4;
+                if efficient_nm {
+                    consecutive_nm += 1;
+                    if consecutive_nm >= 2 {
+                        let dp = self.table.get_disproof_hand(pk, &att_hand);
+                        self.table.store(
+                            pk, dp, INF, 0, REMAINING_INFINITE, pk,
+                        );
+                        break;
+                    }
+                } else {
+                    consecutive_nm = 0;
                 }
             } else {
                 consecutive_nm = 0;
@@ -5030,7 +5124,16 @@ impl DfPnSolver {
             arena[node_idx as usize].pn = INF;
             arena[node_idx as usize].dn = 0;
             arena[node_idx as usize].expanded = true;
-            let prop_rem = propagate_nm_remaining(or_nm_min_remaining, remaining);
+            let mut prop_rem = propagate_nm_remaining(or_nm_min_remaining, remaining);
+            // 2手延長による REMAINING_INFINITE 昇格
+            if prop_rem != REMAINING_INFINITE {
+                let checks = self.generate_check_moves(board);
+                if checks.is_empty()
+                    || self.depth_limit_all_checks_refutable(board, &checks)
+                {
+                    prop_rem = REMAINING_INFINITE;
+                }
+            }
             self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key);
             return;
         }
