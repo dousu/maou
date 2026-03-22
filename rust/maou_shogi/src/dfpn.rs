@@ -7088,9 +7088,7 @@ mod tests {
                 solver.max_ply, result_str).unwrap();
 
             if !solved {
-                if first_unsolved_ply.is_none() {
-                    first_unsolved_ply = Some(*ply);
-                }
+                first_unsolved_ply = Some(*ply);
 
                 // --- ANDノードの各応手コスト分析 ---
                 // PV の攻め手を1手進めた後(ANDノード)の応手を調べる
@@ -7159,6 +7157,7 @@ mod tests {
                             sub_result_str, marker).unwrap();
                     }
                 }
+                break; // 最初の未解決局面の分析後に停止
             }
         }
 
