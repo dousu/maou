@@ -9832,19 +9832,33 @@ mod tests {
     #[ignore]
     #[cfg(feature = "tt_diag")]
     fn test_tt_diag_monitor() {
-        // 39手詰め問題の ply 22 局面(攻め番)を直接設定
-        let sfen = "9/3+N1P3/7+R1/9/9/8k/1R2S4/3p5/9 b P2b4g3s3n4l15p 23";
+        // 39手詰め問題: PV を24手進めた局面(ply 24 = 攻め番)から開始
+        // PV: 7b6b 5b4c ... P*1g 1f1g ← ここまで24手
+        // この局面から ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 等)
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
-        eprintln!("\n=== TT Diag: ply 22 局面 ===");
+        // PV を24手進める
+        let pv_24 = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        for usi in &pv_24 {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        eprintln!("\n=== TT Diag: ply 24 局面(攻め番) → P*7g 調査 ===");
         eprintln!("SFEN: {}", board.sfen());
 
-        // ply 2 の AND ノード(応手)をモニタリング
-        // P*7g 等の合駒応手の TT エントリ爆増を調査
-        let mut solver = DfPnSolver::with_timeout(19, 500_000, 32767, 180);
+        // ply 1 の AND ノード(応手)をモニタリング
+        // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
+        let mut solver = DfPnSolver::with_timeout(17, 500_000, 32767, 180);
         solver.set_find_shortest(false);
-        solver.set_tt_diag(2, "", 50);
+        solver.set_tt_diag(1, "P*7g", 100);
 
         let result = solver.solve(&mut board);
         let result_str = match &result {
@@ -9854,8 +9868,8 @@ mod tests {
             _ => "Other".to_string(),
         };
         eprintln!(
-            "Result: {} nodes={} tt_pos={} tt_ent={}",
-            result_str, solver.nodes_searched,
+            "Result: {} nodes={} max_ply={} tt_pos={} tt_ent={}",
+            result_str, solver.nodes_searched, solver.max_ply,
             solver.table.len(), solver.table.total_entries(),
         );
     }
