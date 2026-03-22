@@ -7346,6 +7346,331 @@ mod tests {
         eprintln!("結果: /tmp/tsume_39te_backward_1m.log");
     }
 
+    /// 39手詰めの必要ノード数を推定する．
+    ///
+    /// 方針: ply 24 境界の 4 Unknown 応手(1g1f, N*6g, P*7g, N*7g)を
+    /// 個別に 1M ノードで解き，応手別コストの合計から推定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_budget_estimation() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_budget_est.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: &[&str] = &[
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め予算推定: 境界ply の応手別 1M 個別分析").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // Phase 1 結果(backward_1m より)を記載
+        writeln!(out, "\n--- Phase 1 結果サマリー (backward_1m) ---").unwrap();
+        writeln!(out, "ply 26 (残り13): 104 nodes → Mate(13)").unwrap();
+        writeln!(out, "ply 24 (残り15): 473K nodes → Unknown (境界)").unwrap();
+        writeln!(out, "ply 22-4: 全て Unknown at 1M").unwrap();
+
+        // Phase 2: ply 24 の AND ノード(5g6f後)の各応手を 1M で個別分析
+        writeln!(out, "\n--- Phase 2: ply 24 境界の応手別 1M 分析 ---").unwrap();
+
+        // ply 24 の局面を構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for i in 0..24 {
+            let m = board.move_from_usi(pv[i]).unwrap();
+            board.do_move(m);
+        }
+        // 攻め手 5g6f を指して AND ノードへ
+        let attack_m = board.move_from_usi(pv[24]).unwrap(); // 5g6f
+        board.do_move(attack_m);
+        writeln!(out, "AND node after 5g6f (ply 25)").unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+
+        let defense_solver = DfPnSolver::default_solver();
+        let defenses = defense_solver.generate_defense_moves(&mut board);
+        writeln!(out, "Defense moves: {} (PV: 1g1h)\n", defenses.len()).unwrap();
+
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+
+        let mut total_nodes: u64 = 0;
+        let mut solved_count = 0;
+        let mut unknown_moves: Vec<(String, u64)> = Vec::new();
+
+        for def_mv in &defenses {
+            let mut after_def = board.clone();
+            after_def.do_move(*def_mv);
+
+            // 残り: 39 - 24 - 1(攻め) - 1(受け) = 13 手
+            let def_remaining = 13;
+            let sub_depth = (def_remaining + 2).min(41) as u32;
+
+            let mut sub_board = after_def.clone();
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, 1_000_000, 32767, 180,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_start = Instant::now();
+            let sub_result = sub_solver.solve(&mut sub_board);
+            let sub_elapsed = sub_start.elapsed();
+            let nodes = sub_solver.nodes_searched;
+
+            let (sub_result_str, sub_solved) = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+            let marker = if def_mv.to_usi() == "1g1h" { " ← PV" } else { "" };
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+                def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
+                sub_solver.max_ply, sub_result_str, marker).unwrap();
+
+            total_nodes += nodes;
+            if sub_solved {
+                solved_count += 1;
+            } else {
+                unknown_moves.push((def_mv.to_usi(), nodes));
+            }
+        }
+
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "合計 nodes: {}, 解決: {}/{}, Unknown: {}",
+            total_nodes, solved_count, defenses.len(), unknown_moves.len()).unwrap();
+
+        if unknown_moves.is_empty() {
+            writeln!(out, "\n→ ply 24 推定必要ノード ≈ {} ({:.1}M)",
+                total_nodes, total_nodes as f64 / 1_000_000.0).unwrap();
+        } else {
+            writeln!(out, "\n→ 1M/応手でも未解決: {:?}", unknown_moves).unwrap();
+        }
+
+        // Phase 3: ply 22 の AND ノード(P*1g後)の各応手分析
+        writeln!(out, "\n--- Phase 3: ply 22 の応手別 1M 分析 ---").unwrap();
+
+        let mut board22 = Board::new();
+        board22.set_sfen(sfen).unwrap();
+        for i in 0..22 {
+            let m = board22.move_from_usi(pv[i]).unwrap();
+            board22.do_move(m);
+        }
+        // 攻め手 P*1g を指して AND ノードへ
+        let attack_m22 = board22.move_from_usi(pv[22]).unwrap(); // P*1g
+        board22.do_move(attack_m22);
+        writeln!(out, "AND node after P*1g (ply 23)").unwrap();
+        writeln!(out, "SFEN: {}", board22.sfen()).unwrap();
+
+        let defenses22 = defense_solver.generate_defense_moves(&mut board22);
+        writeln!(out, "Defense moves: {} (PV: 1f1g)\n", defenses22.len()).unwrap();
+
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+
+        let mut total22: u64 = 0;
+        let mut solved22 = 0;
+        let mut unknown22: Vec<(String, u64)> = Vec::new();
+
+        for def_mv in &defenses22 {
+            let mut after_def = board22.clone();
+            after_def.do_move(*def_mv);
+
+            // 残り: 39 - 22 - 1(攻め) - 1(受け) = 15 手
+            let def_remaining = 15;
+            let sub_depth = (def_remaining + 2).min(41) as u32;
+
+            let mut sub_board = after_def.clone();
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, 1_000_000, 32767, 180,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_start = Instant::now();
+            let sub_result = sub_solver.solve(&mut sub_board);
+            let sub_elapsed = sub_start.elapsed();
+            let nodes = sub_solver.nodes_searched;
+
+            let (sub_result_str, sub_solved) = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+            let marker = if def_mv.to_usi() == "1f1g" { " ← PV" } else { "" };
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+                def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
+                sub_solver.max_ply, sub_result_str, marker).unwrap();
+
+            total22 += nodes;
+            if sub_solved {
+                solved22 += 1;
+            } else {
+                unknown22.push((def_mv.to_usi(), nodes));
+            }
+        }
+
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "合計 nodes: {}, 解決: {}/{}, Unknown: {}",
+            total22, solved22, defenses22.len(), unknown22.len()).unwrap();
+
+        if unknown22.is_empty() {
+            writeln!(out, "→ ply 22 推定必要ノード ≈ {} ({:.1}M)",
+                total22, total22 as f64 / 1_000_000.0).unwrap();
+        } else {
+            writeln!(out, "→ 1M/応手でも未解決: {:?}", unknown22).unwrap();
+        }
+
+        // Phase 4: 4 Unknown 応手の再帰分解(1レベル深い)
+        // 各 Unknown 応手の後の OR ノード → 攻め手 → AND ノードの応手数を調査
+        writeln!(out, "\n--- Phase 4: Unknown 応手の再帰分解 ---").unwrap();
+
+        let unknown_defenses = ["1g1f", "N*6g", "P*7g", "N*7g"];
+
+        for &def_usi in &unknown_defenses {
+            let mut after_def = board.clone();
+            let def_m = after_def.move_from_usi(def_usi).unwrap();
+            after_def.do_move(def_m);
+
+            writeln!(out, "\n--- {} 後 (OR node, 攻め番) ---", def_usi).unwrap();
+            writeln!(out, "SFEN: {}", after_def.sfen()).unwrap();
+
+            let attacks = defense_solver.generate_check_moves(&mut after_def);
+            writeln!(out, "Attack moves: {}", attacks.len()).unwrap();
+
+            writeln!(out, "{:<12} {:<8} {:<14} {:<10} {}",
+                "Attack", "#Def", "Nodes", "Time(s)", "Result").unwrap();
+
+            let mut def_total: u64 = 0;
+            let mut def_unknown = 0;
+
+            for atk in &attacks {
+                // AND ノードの応手数を数える
+                let mut count_board = after_def.clone();
+                count_board.do_move(*atk);
+                let and_defenses = defense_solver.generate_defense_moves(&mut count_board);
+                let num_def = and_defenses.len();
+
+                // 各攻め手の AND サブ問題を 100K で試行
+                let sub_remaining = 11; // 13 - 2 (def + atk)
+                let sub_depth = (sub_remaining + 2).min(41) as u32;
+
+                let mut sub_solver = DfPnSolver::with_timeout(
+                    sub_depth, 100_000, 32767, 30,
+                );
+                sub_solver.set_find_shortest(false);
+
+                let sub_start = Instant::now();
+                let sub_result = sub_solver.solve(&mut count_board);
+                let sub_elapsed = sub_start.elapsed();
+                let nodes = sub_solver.nodes_searched;
+
+                let (result_str, solved) = match &sub_result {
+                    TsumeResult::Checkmate { moves, .. } =>
+                        (format!("Mate({})", moves.len()), true),
+                    TsumeResult::CheckmateNoPv { .. } =>
+                        ("MateNoPV".to_string(), true),
+                    TsumeResult::NoCheckmate { .. } =>
+                        ("NoMate".to_string(), false),
+                    TsumeResult::Unknown { .. } =>
+                        ("Unknown".to_string(), false),
+                };
+                writeln!(out, "{:<12} {:<8} {:<14} {:<10.2} {}",
+                    atk.to_usi(), num_def, nodes, sub_elapsed.as_secs_f64(),
+                    result_str).unwrap();
+
+                def_total += nodes;
+                if !solved { def_unknown += 1; }
+            }
+            writeln!(out, "合計: {} nodes, Unknown 攻め手: {}/{}",
+                def_total, def_unknown, attacks.len()).unwrap();
+        }
+
+        // Phase 5: ply 20 の分析(P*1f 後)
+        writeln!(out, "\n--- Phase 5: ply 20 の応手別 1M 分析 ---").unwrap();
+        let mut board20 = Board::new();
+        board20.set_sfen(sfen).unwrap();
+        for i in 0..20 {
+            let m = board20.move_from_usi(pv[i]).unwrap();
+            board20.do_move(m);
+        }
+        let attack_m20 = board20.move_from_usi(pv[20]).unwrap(); // P*1f
+        board20.do_move(attack_m20);
+        writeln!(out, "AND node after P*1f (ply 21)").unwrap();
+        writeln!(out, "SFEN: {}", board20.sfen()).unwrap();
+
+        let defenses20 = defense_solver.generate_defense_moves(&mut board20);
+        writeln!(out, "Defense moves: {} (PV: 1e1f)\n", defenses20.len()).unwrap();
+
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+
+        for def_mv in &defenses20 {
+            let mut after_def = board20.clone();
+            after_def.do_move(*def_mv);
+            let def_remaining = 17; // 39 - 20 - 1 - 1 = 17
+            let sub_depth = (def_remaining + 2).min(41) as u32;
+
+            let mut sub_board = after_def.clone();
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, 1_000_000, 32767, 180,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_start = Instant::now();
+            let sub_result = sub_solver.solve(&mut sub_board);
+            let sub_elapsed = sub_start.elapsed();
+            let nodes = sub_solver.nodes_searched;
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } =>
+                    "NoMate".to_string(),
+                TsumeResult::Unknown { .. } =>
+                    "Unknown".to_string(),
+            };
+            let marker = if def_mv.to_usi() == "1e1f" { " ← PV" } else { "" };
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+                def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
+                sub_solver.max_ply, result_str, marker).unwrap();
+        }
+
+        // 推定サマリー
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 推定サマリー").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: {}", out_path);
+    }
+
     /// ply 24 のノード数急増を診断する．
     ///
     /// ply 25 ANDノード(5g6f 後)の合駒フィルタ(futile/chain)分類と，
