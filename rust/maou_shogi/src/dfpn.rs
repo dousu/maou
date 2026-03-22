@@ -7077,6 +7077,63 @@ mod tests {
         }
     }
 
+    /// 39手詰め ply 22 局面で偽の短手数詰みを返すバグのリグレッションテスト．
+    ///
+    /// ソルバーが Mate(7) を返すが，最終局面 8g8e の後に合法手が36手あり
+    /// 詰みではない(is_checkmate=false)．証明ツリーが不正．
+    /// `find_shortest=true` でも同じ Mate(7) を返すため PV 抽出ではなく
+    /// 証明自体のバグ．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply22_pv_must_end_in_checkmate() {
+        // 39手詰めの ply 22 局面(攻め番)
+        let sfen = "9/3+N1P3/7+R1/9/9/8k/1R2S4/3p5/9 b P2b4g3s3n4l15p 23";
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(19, 1_000_000, 32767, 180);
+        solver.set_find_shortest(false);
+
+        let mut test_board = board.clone();
+        let result = solver.solve(&mut test_board);
+
+        if let TsumeResult::Checkmate { moves, .. } = &result {
+            // PV の全手が合法手であること
+            let mut vb = board.clone();
+            for (i, m) in moves.iter().enumerate() {
+                let legal = movegen::generate_legal_moves(&mut vb);
+                assert!(
+                    legal.iter().any(|lm| lm.to_usi() == m.to_usi()),
+                    "PV move {} ({}) is illegal at SFEN: {}",
+                    i + 1, m.to_usi(), vb.sfen()
+                );
+                // 攻め手(偶数 index)は王手であること
+                vb.do_move(*m);
+                if i % 2 == 0 {
+                    assert!(
+                        vb.is_in_check(vb.turn()),
+                        "ATK move {} ({}) does not give check",
+                        i + 1, m.to_usi()
+                    );
+                }
+            }
+
+            // 最終局面が詰み(合法手0 かつ王手)であること
+            let final_legal = movegen::generate_legal_moves(&mut vb);
+            assert!(
+                final_legal.is_empty() && vb.is_in_check(vb.turn()),
+                "PV of length {} does not end in checkmate: \
+                 legal_moves={}, in_check={}, SFEN={}",
+                moves.len(),
+                final_legal.len(),
+                vb.is_in_check(vb.turn()),
+                vb.sfen()
+            );
+        }
+        // Checkmate 以外(Unknown 等)は許容: 解けなかっただけ
+    }
+
     /// ply 22 OR ノードの王手ごとのノード消費を調査する．
     ///
     /// 151K ノードで NoMate (1M 予算を使い切らない) の原因を特定:
