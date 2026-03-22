@@ -1007,6 +1007,23 @@ impl TranspositionTable {
         self.tt.len()
     }
 
+    /// TT の全エントリ数(全ポジションの Vec 長の合計)を返す．
+    ///
+    /// 同一盤面・異なる持ち駒のエントリを含む総数．
+    /// `len()` がポジション数(HashMap キー数)を返すのに対し，
+    /// `total_entries()` は実際のメモリ消費に比例する値を返す．
+    #[cfg(feature = "tt_diag")]
+    fn total_entries(&self) -> usize {
+        self.tt.values().map(|v| v.len()).sum()
+    }
+
+    /// 指定ポジションのエントリ数を返す．
+    #[cfg(feature = "tt_diag")]
+    #[allow(dead_code)]
+    fn entries_for_position(&self, pos_key: u64) -> usize {
+        self.tt.get(&pos_key).map_or(0, |v| v.len())
+    }
+
     /// TT ガベージコレクション: メモリ使用量を抑制する．
     ///
     /// 2段階の GC を実行する:
@@ -1182,6 +1199,22 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub profile_stats: ProfileStats,
+    /// TT 診断: 監視対象の ply(0 = 無効)．
+    ///
+    /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
+    /// エントリ爆増の原因を特定する．
+    #[cfg(feature = "tt_diag")]
+    diag_ply: u32,
+    /// TT 診断: 監視対象の手(USI 形式，例: "P*7g")．
+    ///
+    /// 空文字列の場合は ply のみでフィルタする．
+    #[cfg(feature = "tt_diag")]
+    diag_move_usi: String,
+    /// TT 診断: MID ループの反復回数上限(0 = 無制限)．
+    ///
+    /// 爆増が起きる手を特定した後，少数回の反復に絞って詳細を確認する．
+    #[cfg(feature = "tt_diag")]
+    diag_max_iterations: u32,
 }
 
 impl DfPnSolver {
@@ -1215,6 +1248,12 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            #[cfg(feature = "tt_diag")]
+            diag_ply: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_move_usi: String::new(),
+            #[cfg(feature = "tt_diag")]
+            diag_max_iterations: 0,
         }
     }
 
@@ -1265,6 +1304,29 @@ impl DfPnSolver {
     /// 0 にすると GC を無効化する．デフォルトは 2,000,000．
     pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
         self.tt_gc_threshold = v;
+        self
+    }
+
+    /// TT 診断の監視対象を設定する．
+    ///
+    /// 指定 ply で指定手(USI 形式)が選択された MID ループ反復ごとに，
+    /// TT サイズの変化を stderr に出力する．
+    ///
+    /// # 引数
+    ///
+    /// - `ply`: 監視対象の ply(0 で無効化)
+    /// - `move_usi`: 監視対象の手(空文字列で ply のみフィルタ)
+    /// - `max_iterations`: MID ループの反復回数上限(0 で無制限)
+    #[cfg(feature = "tt_diag")]
+    pub fn set_tt_diag(
+        &mut self,
+        ply: u32,
+        move_usi: &str,
+        max_iterations: u32,
+    ) -> &mut Self {
+        self.diag_ply = ply;
+        self.diag_move_usi = move_usi.to_string();
+        self.diag_max_iterations = max_iterations;
         self
     }
 
@@ -2375,6 +2437,41 @@ impl DfPnSolver {
         // SNDA 用の (source, value) ペアバッファ(ループ外で確保し再利用)
         let mut snda_pairs: Vec<(u64, u32)> = Vec::new();
 
+        // TT 診断: このノードが監視対象 ply かどうか + 反復カウンタ
+        #[cfg(feature = "tt_diag")]
+        let _diag_this_node = self.diag_ply > 0 && ply == self.diag_ply;
+        #[cfg(feature = "tt_diag")]
+        let mut _diag_iteration: u32 = 0;
+        #[cfg(feature = "tt_diag")]
+        if _diag_this_node {
+            eprintln!(
+                "[tt_diag] === ply={} {} node entered === \
+                 pos_key={:#x} children={} deferred={} \
+                 tt_pos={} tt_ent={} nodes={}",
+                ply, if or_node { "OR" } else { "AND" },
+                pos_key, children.len(), deferred_children.len(),
+                self.table.len(), self.table.total_entries(),
+                self.nodes_searched,
+            );
+            // 各子ノードの初期 pn/dn を出力
+            for (i, &(ref cm, _, cpk, ref ch)) in children.iter().enumerate() {
+                let (cpn, cdn, _) = self.look_up_pn_dn(
+                    cpk, ch, remaining.saturating_sub(1));
+                eprintln!(
+                    "[tt_diag]   child[{}] move={} pn={} dn={} pos_key={:#x}",
+                    i, cm.to_usi(), cpn, cdn, cpk,
+                );
+            }
+            for (i, &(ref cm, _, cpk, ref ch)) in deferred_children.iter().enumerate() {
+                let (cpn, cdn, _) = self.look_up_pn_dn(
+                    cpk, ch, remaining.saturating_sub(1));
+                eprintln!(
+                    "[tt_diag]   deferred[{}] move={} pn={} dn={} pos_key={:#x}",
+                    i, cm.to_usi(), cpn, cdn, cpk,
+                );
+            }
+        }
+
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
             #[cfg(feature = "profile")]
@@ -2795,6 +2892,26 @@ impl DfPnSolver {
                 (child_pn_th, child_dn_th)
             };
 
+            // TT 診断: 反復カウンタ + 上限チェック
+            #[cfg(feature = "tt_diag")]
+            {
+                if _diag_this_node {
+                    _diag_iteration += 1;
+                    if self.diag_max_iterations > 0
+                        && _diag_iteration > self.diag_max_iterations
+                    {
+                        eprintln!(
+                            "[tt_diag] ply={} iteration limit reached ({}), \
+                             tt_pos={} tt_ent={} current_pn={} current_dn={}",
+                            ply, self.diag_max_iterations,
+                            self.table.len(), self.table.total_entries(),
+                            current_pn, current_dn,
+                        );
+                        break;
+                    }
+                }
+            }
+
             // 子ノードを探索
             let (m, _, _, _) = children[best_idx];
             let captured = profile_timed!(self, do_move_ns, do_move_count,
@@ -2818,6 +2935,18 @@ impl DfPnSolver {
                 }
             }
 
+            #[cfg(feature = "tt_diag")]
+            let _diag_match = self.diag_ply > 0 && ply == self.diag_ply && {
+                let usi = m.to_usi();
+                self.diag_move_usi.is_empty() || usi == self.diag_move_usi
+            };
+            #[cfg(feature = "tt_diag")]
+            let (_diag_tt_pos_before, _diag_tt_ent_before, _diag_nodes_before) = if _diag_match {
+                (self.table.len(), self.table.total_entries(), self.nodes_searched)
+            } else {
+                (0, 0, 0)
+            };
+
             self.mid(
                 board,
                 child_pn_th,
@@ -2825,6 +2954,35 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
+
+            #[cfg(feature = "tt_diag")]
+            if _diag_match {
+                let tt_pos_after = self.table.len();
+                let tt_ent_after = self.table.total_entries();
+                let nodes_after = self.nodes_searched;
+                let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
+                    children[best_idx].2,
+                    &children[best_idx].3,
+                    remaining.saturating_sub(1),
+                );
+                eprintln!(
+                    "[tt_diag] ply={} move={} node={} \
+                     pn_th={} dn_th={} \
+                     child_pn={} child_dn={} \
+                     tt_pos: {}→{} (+{}) \
+                     tt_ent: {}→{} (+{}) \
+                     nodes_used={}",
+                    ply, m.to_usi(), self.nodes_searched,
+                    child_pn_th, child_dn_th,
+                    cpn_after, cdn_after,
+                    _diag_tt_pos_before, tt_pos_after,
+                    tt_pos_after.saturating_sub(_diag_tt_pos_before),
+                    _diag_tt_ent_before, tt_ent_after,
+                    tt_ent_after.saturating_sub(_diag_tt_ent_before),
+                    nodes_after.saturating_sub(_diag_nodes_before),
+                );
+            }
+
             profile_timed!(self, undo_move_ns, undo_move_count,
                 board.undo_move(m, captured));
         }
@@ -9664,6 +9822,42 @@ mod tests {
                 eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
+    }
+
+    /// TT 診断テスト: 指定 ply の指定手で TT エントリの変化をモニタリングする．
+    ///
+    /// `--features tt_diag` でビルドし `cargo test --features tt_diag -- --nocapture` で実行．
+    /// stderr に `[tt_diag]` プレフィックスのログが出力される．
+    #[test]
+    #[ignore]
+    #[cfg(feature = "tt_diag")]
+    fn test_tt_diag_monitor() {
+        // 39手詰め問題の ply 22 局面(攻め番)を直接設定
+        let sfen = "9/3+N1P3/7+R1/9/9/8k/1R2S4/3p5/9 b P2b4g3s3n4l15p 23";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        eprintln!("\n=== TT Diag: ply 22 局面 ===");
+        eprintln!("SFEN: {}", board.sfen());
+
+        // ply 2 の AND ノード(応手)をモニタリング
+        // P*7g 等の合駒応手の TT エントリ爆増を調査
+        let mut solver = DfPnSolver::with_timeout(19, 500_000, 32767, 180);
+        solver.set_find_shortest(false);
+        solver.set_tt_diag(2, "", 50);
+
+        let result = solver.solve(&mut board);
+        let result_str = match &result {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            _ => "Other".to_string(),
+        };
+        eprintln!(
+            "Result: {} nodes={} tt_pos={} tt_ent={}",
+            result_str, solver.nodes_searched,
+            solver.table.len(), solver.table.total_entries(),
+        );
     }
 
 }
