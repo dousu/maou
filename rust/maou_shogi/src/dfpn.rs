@@ -6539,12 +6539,16 @@ mod tests {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> =
                     moves.iter().map(|m| m.to_usi()).collect();
-                // 5手詰め: 探索順序により PV は変わりうるが手数は同じであること
-                assert_eq!(
-                    usi_moves.len(), 5,
-                    "Expected 5-move checkmate, got {} moves: {}",
-                    usi_moves.len(),
+                // 5手詰め(2解あり): 探索順序によりいずれかの PV が返る
+                let pv1 = vec!["2d3d", "2b3a", "S*4b", "3a3b", "4c3c+"];
+                let pv2 = vec!["2d3d", "R*2c", "2e2c+", "2b1a", "1c1b+"];
+                let pv_str: Vec<&str> = usi_moves.iter().map(|s| s.as_str()).collect();
+                assert!(
+                    pv_str == pv1 || pv_str == pv2,
+                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}",
                     usi_moves.join(" "),
+                    pv1.join(" "),
+                    pv2.join(" "),
                 );
             }
             other => panic!(
