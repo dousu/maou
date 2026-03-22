@@ -390,6 +390,49 @@ fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
     ((a_packed | H) - b_packed) & H == H
 }
 
+/// 前方利き駒チェーン(歩 ≤ 香 ≤ 飛)を考慮した持ち駒の半順序比較．
+///
+/// 標準の `hand_gte`(駒種ごと独立比較)に加えて，
+/// 前方利き駒の上位互換関係を利用した代替判定を行う:
+///
+/// - 飛車は香車の上位互換(飛車は前方を含む4方向に利く)
+/// - 香車は歩の上位互換(香車は前方に複数マス利く)
+///
+/// これにより「歩で詰む → 香でも詰む → 飛でも詰む」が成立し，
+/// TT の証明/反証エントリの再利用範囲が拡大する．
+///
+/// # アルゴリズム
+///
+/// 1. 高速パス: 標準の `hand_gte` で判定(大半はここで確定)
+/// 2. 低速パス: 桂・銀・金・角は標準比較，歩・香・飛は
+///    弱い駒種から順に不足分を上位駒種で補填するカスケード判定
+///
+/// # 正当性の根拠
+///
+/// 詰み証明で歩を使う手(打ち・移動)は，香で代替可能:
+/// - 歩打ち → 香打ち: 前方の利きは香 ⊇ 歩
+/// - 相手に歩を渡す → 香を渡す: 守備側の持ち駒が強くなるが，
+///   これは攻め方にとって不利方向のため証明は依然有効
+/// - 成り後: と金 = 成香(ともに金の動き)
+///
+/// 同様に香 → 飛も成立(飛の利き ⊇ 香の利き，竜 ⊇ 成香)．
+#[inline(always)]
+fn hand_gte_forward_chain(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
+    // 高速パス: 全駒種で a[i] >= b[i] なら即 true
+    if hand_gte(a, b) {
+        return true;
+    }
+    // 桂(2)・銀(3)・金(4)・角(5): 標準比較(代替関係なし)
+    if a[2] < b[2] || a[3] < b[3] || a[4] < b[4] || a[5] < b[5] {
+        return false;
+    }
+    // 歩(0) ≤ 香(1) ≤ 飛(6) チェーン: 不足分をカスケード補填
+    // deficit: 弱い駒種の不足を上位駒種で吸収していく
+    let deficit = (b[0] as i16 - a[0] as i16).max(0);
+    let deficit = (b[1] as i16 + deficit - a[1] as i16).max(0);
+    b[6] as i16 + deficit <= a[6] as i16
+}
+
 /// 盤面のみのハッシュ(持ち駒を除外)を返す．
 ///
 /// Board が `board_hash` をインクリメンタルに維持しているため O(1)．
@@ -584,14 +627,14 @@ impl TranspositionTable {
         // 単一パスでの early return では entries の格納順に依存して
         // 反証が先に返される場合があるため，証明を先にスキャンする．
         for e in entries {
-            if e.pn == 0 && hand_gte(hand, &e.hand) {
+            if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
                 return (0, e.dn, e.source);
             }
         }
         for e in entries {
             // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
             if e.dn == 0
-                && hand_gte(&e.hand, hand)
+                && hand_gte_forward_chain(&e.hand, hand)
                 && e.remaining >= remaining
             {
                 return (e.pn, 0, e.source);
@@ -714,14 +757,14 @@ impl TranspositionTable {
         // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
         for e in entries.iter() {
             // 証明済みエントリが支配: hand ≥ e.hand → 新エントリの持ち駒で詰み確定
-            if e.pn == 0 && hand_gte(&hand, &e.hand) {
+            if e.pn == 0 && hand_gte_forward_chain(&hand, &e.hand) {
                 return;
             }
             // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
             // GHI: 経路依存の反証は経路非依存の反証に支配されない
             if e.dn == 0
                 && !e.path_dependent
-                && hand_gte(&e.hand, &hand)
+                && hand_gte_forward_chain(&e.hand, &hand)
                 && e.remaining >= remaining
             {
                 return;
@@ -739,7 +782,7 @@ impl TranspositionTable {
                 if e.dn == 0 {
                     return true;
                 }
-                !hand_gte(&e.hand, &hand)
+                !hand_gte_forward_chain(&e.hand, &hand)
             });
             entries.push(DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
             return;
@@ -761,7 +804,7 @@ impl TranspositionTable {
                         return false;
                     }
                     // 反証: e.hand ≤ hand かつ e.remaining ≤ remaining → 冗長
-                    return !(hand_gte(&hand, &e.hand)
+                    return !(hand_gte_forward_chain(&hand, &e.hand)
                         && remaining >= e.remaining);
                 }
                 // 中間エントリは保護(remaining の不一致で必要になりうる)
@@ -852,7 +895,7 @@ impl TranspositionTable {
     ) -> [u8; HAND_KINDS] {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
-                if e.pn == 0 && hand_gte(hand, &e.hand) {
+                if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
                     return e.hand;
                 }
             }
@@ -872,7 +915,7 @@ impl TranspositionTable {
     ) -> [u8; HAND_KINDS] {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
-                if e.dn == 0 && hand_gte(&e.hand, hand) {
+                if e.dn == 0 && hand_gte_forward_chain(&e.hand, hand) {
                     return e.hand;
                 }
             }
@@ -892,7 +935,7 @@ impl TranspositionTable {
     ) -> bool {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
-                if e.dn == 0 && hand_gte(&e.hand, hand) {
+                if e.dn == 0 && hand_gte_forward_chain(&e.hand, hand) {
                     return e.path_dependent;
                 }
             }
@@ -911,7 +954,7 @@ impl TranspositionTable {
     ) -> u16 {
         if let Some(entries) = self.tt.get(&pos_key) {
             for e in entries {
-                if e.dn == 0 && hand_gte(&e.hand, hand) {
+                if e.dn == 0 && hand_gte_forward_chain(&e.hand, hand) {
                     return e.remaining;
                 }
             }
@@ -5607,6 +5650,171 @@ pub fn solve_tsume_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // === hand_gte / hand_gte_forward_chain のユニットテスト ===
+
+    /// hand_gte: 全駒種で a >= b なら true．
+    #[test]
+    fn test_hand_gte_basic() {
+        let a = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(hand_gte(&a, &b));
+
+        let a = [2, 0, 0, 0, 0, 0, 0]; // 歩2
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(hand_gte(&a, &b));
+
+        let a = [0, 0, 0, 0, 0, 0, 0]; // 空
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(!hand_gte(&a, &b));
+    }
+
+    /// hand_gte: 異種駒では代替不可(従来の挙動)．
+    #[test]
+    fn test_hand_gte_different_pieces() {
+        // 香1 vs 歩1: 香で歩を代替できない(hand_gteでは)
+        let a = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(!hand_gte(&a, &b));
+
+        // 飛1 vs 香1
+        let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        let b = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        assert!(!hand_gte(&a, &b));
+    }
+
+    /// forward_chain: 歩 ≤ 香 ≤ 飛 のチェーン代替．
+    #[test]
+    fn test_forward_chain_pawn_to_lance() {
+        // 香1 >= 歩1 (香は歩の上位互換)
+        let a = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(hand_gte_forward_chain(&a, &b));
+    }
+
+    #[test]
+    fn test_forward_chain_pawn_to_rook() {
+        // 飛1 >= 歩1 (飛は歩の上位互換)
+        let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        assert!(hand_gte_forward_chain(&a, &b));
+    }
+
+    #[test]
+    fn test_forward_chain_lance_to_rook() {
+        // 飛1 >= 香1 (飛は香の上位互換)
+        let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        let b = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        assert!(hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: 逆方向は不成立(歩は香の代替にならない)．
+    #[test]
+    fn test_forward_chain_no_reverse() {
+        // 歩1 < 香1 (歩は香の代替にならない)
+        let a = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        let b = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        assert!(!hand_gte_forward_chain(&a, &b));
+
+        // 香1 < 飛1
+        let a = [0, 1, 0, 0, 0, 0, 0]; // 香1
+        let b = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        assert!(!hand_gte_forward_chain(&a, &b));
+
+        // 歩1 < 飛1
+        let a = [1, 0, 0, 0, 0, 0, 0]; // 歩1
+        let b = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        assert!(!hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: カスケード(歩不足 → 香で補填 → 香不足 → 飛で補填)．
+    #[test]
+    fn test_forward_chain_cascade() {
+        // 歩1+香1 を 飛2 で代替
+        let a = [0, 0, 0, 0, 0, 0, 2]; // 飛2
+        let b = [1, 1, 0, 0, 0, 0, 0]; // 歩1+香1
+        assert!(hand_gte_forward_chain(&a, &b));
+
+        // 歩2 を 香1+飛1 で代替(香が歩1つ分を吸収，飛が残り1つを吸収)
+        let a = [0, 1, 0, 0, 0, 0, 1]; // 香1+飛1
+        let b = [2, 0, 0, 0, 0, 0, 0]; // 歩2
+        assert!(hand_gte_forward_chain(&a, &b));
+
+        // 歩2+香1 を 飛1 では不足(飛1で代替できるのは1つだけ)
+        let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        let b = [2, 1, 0, 0, 0, 0, 0]; // 歩2+香1
+        assert!(!hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: 非チェーン駒(桂・銀・金・角)は代替不可．
+    #[test]
+    fn test_forward_chain_non_chain_pieces() {
+        // 桂が足りなければ false
+        let a = [1, 1, 0, 0, 0, 0, 1]; // 歩1+香1+飛1
+        let b = [0, 0, 1, 0, 0, 0, 0]; // 桂1
+        assert!(!hand_gte_forward_chain(&a, &b));
+
+        // 角が足りなければ false
+        let a = [0, 0, 0, 0, 0, 0, 2]; // 飛2
+        let b = [0, 0, 0, 0, 0, 1, 0]; // 角1
+        assert!(!hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: 複合ケース(チェーン + 非チェーン駒)．
+    #[test]
+    fn test_forward_chain_mixed() {
+        // 香1+金1 >= 歩1+金1
+        let a = [0, 1, 0, 0, 1, 0, 0]; // 香1+金1
+        let b = [1, 0, 0, 0, 1, 0, 0]; // 歩1+金1
+        assert!(hand_gte_forward_chain(&a, &b));
+
+        // 飛1+桂1 >= 歩1+桂1
+        let a = [0, 0, 1, 0, 0, 0, 1]; // 桂1+飛1
+        let b = [1, 0, 1, 0, 0, 0, 0]; // 歩1+桂1
+        assert!(hand_gte_forward_chain(&a, &b));
+
+        // 飛1+金0 < 歩1+金1 (金が不足)
+        let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
+        let b = [1, 0, 0, 0, 1, 0, 0]; // 歩1+金1
+        assert!(!hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: 同一 hand なら常に true (hand_gte の fast path)．
+    #[test]
+    fn test_forward_chain_identity() {
+        let h = [3, 2, 1, 1, 2, 1, 1];
+        assert!(hand_gte_forward_chain(&h, &h));
+    }
+
+    /// forward_chain: 空の hand(何も必要としない)なら常に true．
+    #[test]
+    fn test_forward_chain_empty_requirement() {
+        let a = [0, 0, 0, 0, 0, 0, 0];
+        let b = [0, 0, 0, 0, 0, 0, 0];
+        assert!(hand_gte_forward_chain(&a, &b));
+
+        let a = [1, 1, 1, 1, 1, 1, 1];
+        assert!(hand_gte_forward_chain(&a, &b));
+    }
+
+    /// forward_chain: 実際のチェーン合駒シナリオ(L*6g → N*6g)．
+    ///
+    /// L*6g の proof で attacker hand に lance が必要な局面の TT エントリを，
+    /// N*6g の探索(attacker hand に knight がある)で再利用できるか．
+    #[test]
+    fn test_forward_chain_real_scenario() {
+        // L*6g 後の proof entry: 攻め方が香を獲得
+        let stored = [0, 1, 0, 0, 0, 0, 0]; // 香1(Rx6g で獲得)
+        // N*6g 後の current hand: 攻め方が桂を獲得
+        let current = [0, 0, 1, 0, 0, 0, 0]; // 桂1(Rx6g で獲得)
+        // 桂は香の上位互換ではない → 再利用不可
+        assert!(!hand_gte_forward_chain(&current, &stored));
+
+        // 逆に: stored が歩1, current が香1 → 再利用可能
+        let stored_pawn = [1, 0, 0, 0, 0, 0, 0];
+        let current_lance = [0, 1, 0, 0, 0, 0, 0];
+        assert!(hand_gte_forward_chain(&current_lance, &stored_pawn));
+    }
 
     /// 詰将棋画像のテストケース: 小阪昇作，9手詰
     ///
