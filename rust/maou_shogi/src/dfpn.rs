@@ -7341,6 +7341,149 @@ mod tests {
         eprintln!("結果: /tmp/ply24_diagnostic.log");
     }
 
+    /// ply 24 TT共有効果の測定．
+    ///
+    /// 同じANDノードの兄弟応手間で TT を共有した場合としない場合の
+    /// ノード数差を計測し，hand dominance による TT ヒットの実効性を検証する．
+    ///
+    /// 検証方法:
+    /// 1. L*6g (解ける) を解いた後の TT を保持したまま N*6g を解く (共有あり)
+    /// 2. N*6g を新規 TT で解く (共有なし)
+    /// 3. ノード数とTTエントリ数を比較
+    #[test]
+    fn test_ply24_tt_sharing_effectiveness() {
+        use std::io::Write;
+        let out_path = "/tmp/ply24_tt_sharing.log";
+        let result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        // ply 25 ANDノード: 5g6f 後
+        let and_sfen = "9/3+N1P3/7+R1/9/9/3S5/1R6k/3p5/9 w 2b4g3s3n4l16p 26";
+
+        // チェーン合駒ペア: (先に解く応手, 後に解く応手)
+        let pairs = [
+            ("L*6g", "N*6g", "同一マス(6g)への異種駒ドロップ"),
+            ("B*7g", "N*7g", "同一マス(7g)への異種駒ドロップ"),
+            ("B*7g", "P*7g", "同一マス(7g)への異種駒ドロップ(歩)"),
+            ("L*6g", "P*7g", "異なるマスへの異種駒ドロップ"),
+        ];
+
+        writeln!(out, "=== TT共有効果の測定 ===\n").unwrap();
+
+        for (first_usi, second_usi, desc) in &pairs {
+            writeln!(out, "--- {} ---", desc).unwrap();
+            writeln!(out, "先行: {}, 後行: {}\n", first_usi, second_usi).unwrap();
+
+            // --- (A) TT共有あり: first → second (TT保持) ---
+            let mut board_first = Board::new();
+            board_first.set_sfen(and_sfen).unwrap();
+            let m_first = board_first.move_from_usi(first_usi).unwrap();
+            let mut after_first = board_first.clone();
+            after_first.do_move(m_first);
+
+            let depth = 16u32;
+            let budget = 500_000u64;
+            let mut solver = DfPnSolver::with_timeout(depth, budget, 32767, 60);
+            solver.set_find_shortest(false);
+
+            // first を解く
+            let start = Instant::now();
+            let r1 = solver.solve(&mut after_first);
+            let first_nodes = solver.nodes_searched;
+            let first_tt = solver.table.len();
+            let first_time = start.elapsed();
+            let r1_str = match &r1 {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                _ => "Other".to_string(),
+            };
+            writeln!(out, "(A) {} 単独: nodes={}, TT={}, {:.2}s → {}",
+                first_usi, first_nodes, first_tt, first_time.as_secs_f64(), r1_str).unwrap();
+
+            // TT を保持したまま second を解く
+            // solve() は table.clear() するので、手動で状態をリセット
+            let mut board_second = Board::new();
+            board_second.set_sfen(and_sfen).unwrap();
+            let m_second = board_second.move_from_usi(second_usi).unwrap();
+            let mut after_second = board_second.clone();
+            after_second.do_move(m_second);
+
+            // solve() の内部を手動で再現(table.clear() をスキップ)
+            solver.nodes_searched = 0;
+            solver.max_ply = 0;
+            solver.path.clear();
+            solver.killer_table.clear();
+            solver.start_time = Instant::now();
+            solver.timed_out = false;
+            solver.next_gc_check = 100_000;
+            solver.attacker = after_second.turn; // Black (attacker)
+            // table.clear() を意図的にスキップ
+            let tt_before = solver.table.len();
+
+            let saved_max_nodes = solver.max_nodes;
+            solver.max_nodes = saved_max_nodes / 2;
+            let _pns_pv = solver.pns_main(&mut after_second);
+            solver.max_nodes = saved_max_nodes;
+
+            let pk = position_key(&after_second);
+            let att_hand = after_second.hand[solver.attacker.index()];
+            let (root_pn, root_dn, _) = solver.look_up_pn_dn(pk, &att_hand, solver.depth as u16);
+            if root_pn != 0 && root_dn != 0 && !solver.timed_out && solver.nodes_searched < solver.max_nodes {
+                solver.mid(&mut after_second, INF - 1, INF - 1, 0, true);
+            }
+
+            let shared_nodes = solver.nodes_searched;
+            let shared_tt = solver.table.len();
+            let shared_time = solver.start_time.elapsed();
+            let (final_pn, final_dn, _) = solver.look_up_pn_dn(pk, &att_hand, solver.depth as u16);
+            let r2_shared = if final_pn == 0 { "Proved" } else if final_dn == 0 { "Disproved" } else { "Unknown" };
+            writeln!(out, "(A) {} (TT共有): nodes={}, TT={}→{} (+{}), {:.2}s → {}",
+                second_usi, shared_nodes, tt_before, shared_tt, shared_tt - tt_before,
+                shared_time.as_secs_f64(), r2_shared).unwrap();
+
+            // --- (B) TT共有なし: second を新規ソルバで解く ---
+            let mut fresh_board = Board::new();
+            fresh_board.set_sfen(and_sfen).unwrap();
+            let m_fresh = fresh_board.move_from_usi(second_usi).unwrap();
+            let mut after_fresh = fresh_board.clone();
+            after_fresh.do_move(m_fresh);
+
+            let mut fresh_solver = DfPnSolver::with_timeout(depth, budget, 32767, 60);
+            fresh_solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let r2 = fresh_solver.solve(&mut after_fresh);
+            let fresh_nodes = fresh_solver.nodes_searched;
+            let fresh_tt = fresh_solver.table.len();
+            let fresh_time = start.elapsed();
+            let r2_str = match &r2 {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                _ => "Other".to_string(),
+            };
+            writeln!(out, "(B) {} (新規TT): nodes={}, TT={}, {:.2}s → {}",
+                second_usi, fresh_nodes, fresh_tt, fresh_time.as_secs_f64(), r2_str).unwrap();
+
+            // 効果
+            if shared_nodes < fresh_nodes && shared_nodes > 0 {
+                writeln!(out, "→ TT共有効果: {:.1}x 削減 ({} → {} nodes)\n",
+                    fresh_nodes as f64 / shared_nodes as f64, fresh_nodes, shared_nodes).unwrap();
+            } else if shared_nodes > 0 {
+                writeln!(out, "→ TT共有効果: なし (shared={}, fresh={})\n",
+                    shared_nodes, fresh_nodes).unwrap();
+            } else {
+                writeln!(out, "→ TT共有効果: 計測不能\n").unwrap();
+            }
+        }
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: /tmp/ply24_tt_sharing.log");
+    }
+
     /// ply 22 偽証明: 最終局面の合駒生成と between_bb を診断．
     #[test]
     #[ignore]
