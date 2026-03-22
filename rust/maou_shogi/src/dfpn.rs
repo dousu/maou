@@ -9855,7 +9855,7 @@ mod tests {
 
         // ply 1 の AND ノード(応手)をモニタリング
         // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
-        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 180);
+        let mut solver = DfPnSolver::with_timeout(21, 1_000_000, 32767, 180);
         solver.set_find_shortest(false);
 
         let result = solver.solve(&mut board);
