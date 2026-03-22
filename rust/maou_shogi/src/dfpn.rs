@@ -9863,24 +9863,37 @@ mod tests {
             eprintln!("  {}", m.to_usi());
         }
 
-        // (2) IDS の各深さでの結果を個別に確認
+        // (2) IDS の各深さでの結果を個別に確認(MIDのみ，PNSスキップ)
         // 浅い深さで不当な NoMate/disproof が出ていないか
         for depth in (3..=17).step_by(2) {
-            let mut s = DfPnSolver::with_timeout(depth, 1_000_000, 32767, 60);
+            let mut s = DfPnSolver::with_timeout(depth, 50_000, 32767, 5);
             s.set_find_shortest(false);
+            s.attacker = board.turn;
+            s.table.clear();
+            s.nodes_searched = 0;
+            s.max_ply = 0;
+            s.path.clear();
+            s.killer_table.clear();
+            s.start_time = Instant::now();
+            s.timed_out = false;
+            s.next_gc_check = 100_000;
             let mut b = board.clone();
-            let r = s.solve(&mut b);
-            let r_str = match &r {
-                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
-                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
-                TsumeResult::Unknown { .. } => "Unknown".to_string(),
-                _ => "Other".to_string(),
+            s.mid_fallback(&mut b);
+            let pk = position_key(&b);
+            let att_hand = b.hand[s.attacker.index()];
+            let (root_pn, root_dn, _) = s.look_up_pn_dn(pk, &att_hand, depth as u16);
+            let r_str = if root_pn == 0 {
+                "Mate".to_string()
+            } else if root_dn == 0 {
+                "NoMate".to_string()
+            } else {
+                format!("Unknown(pn={},dn={})", root_pn, root_dn)
             };
             eprintln!(
                 "  depth={:2} → {} nodes={} max_ply={} tt_pos={}",
                 depth, r_str, s.nodes_searched, s.max_ply, s.table.len(),
             );
-            if matches!(r, TsumeResult::Checkmate { .. }) {
+            if root_pn == 0 {
                 break;
             }
         }
