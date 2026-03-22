@@ -6920,6 +6920,163 @@ mod tests {
         eprintln!("{}", "=".repeat(80));
     }
 
+    /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
+    /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
+    /// 探索コスト内訳を報告する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_1m() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 1_000_000;
+        let timeout: u64 = 180;
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 39手詰め逆順サブ問題 (1M nodes / 180s)");
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("{:<6} {:<10} {:<14} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "Result");
+        eprintln!("{}", "-".repeat(80));
+
+        // PV を偶数手ずつ進めた局面(攻め番=ORノード)を全て事前構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+
+        // 終盤(簡単)→序盤(困難)の逆順
+        positions.reverse();
+
+        let mut first_unsolved_ply: Option<usize> = None;
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+
+            eprintln!("{:<6} {:<10} {:<14} {:<10.2} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, result_str);
+
+            if !solved {
+                first_unsolved_ply = Some(*ply);
+
+                // --- ANDノードの各応手コスト分析 ---
+                // PV の攻め手を1手進めた後(ANDノード)の応手を調べる
+                if *ply < pv.len() {
+                    let attack_move = pv[*ply];
+                    let sub_remaining = remaining - 1; // 攻め手1手分消費
+                    if sub_remaining == 0 { break; }
+
+                    let mut after_attack = pos.clone();
+                    let m = after_attack.move_from_usi(attack_move).unwrap();
+                    after_attack.do_move(m);
+
+                    eprintln!("\n  --- AND node analysis: after {} (ply {}) ---",
+                        attack_move, ply + 1);
+                    eprintln!("  SFEN: {}", after_attack.sfen());
+
+                    // 応手一覧
+                    let defense_solver = DfPnSolver::default_solver();
+                    let defenses = defense_solver.generate_defense_moves(&mut after_attack);
+                    eprintln!("  Defense moves: {} (PV: {})", defenses.len(),
+                        if *ply + 1 < pv.len() { pv[*ply + 1] } else { "N/A" });
+
+                    eprintln!("  {:<12} {:<14} {:<10} {:<10} {}",
+                        "Move", "Nodes", "Time(s)", "MaxPly", "Result");
+
+                    for def_mv in &defenses {
+                        let mut after_def = after_attack.clone();
+                        after_def.do_move(*def_mv);
+
+                        // 守り手を指した後 → OR ノード(攻め番)
+                        let def_remaining = sub_remaining - 1;
+                        if def_remaining == 0 {
+                            eprintln!("  {:<12} --- (remaining=0)", def_mv.to_usi());
+                            continue;
+                        }
+                        let sub_depth = (def_remaining + 2).min(41) as u32;
+                        // 応手あたりのノード予算: 全体の1/4か100Kの大きい方
+                        let per_move_budget = (node_limit / 4).max(100_000);
+
+                        let mut sub_board = after_def.clone();
+                        let mut sub_solver = DfPnSolver::with_timeout(
+                            sub_depth, per_move_budget, 32767, 30,
+                        );
+                        sub_solver.set_find_shortest(false);
+
+                        let sub_start = Instant::now();
+                        let sub_result = sub_solver.solve(&mut sub_board);
+                        let sub_elapsed = sub_start.elapsed();
+
+                        let sub_result_str = match &sub_result {
+                            TsumeResult::Checkmate { moves, .. } =>
+                                format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } =>
+                                "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } =>
+                                "NoMate".to_string(),
+                            TsumeResult::Unknown { .. } =>
+                                "Unknown".to_string(),
+                        };
+                        let marker = if *ply + 1 < pv.len() && def_mv.to_usi() == pv[*ply + 1] {
+                            " ← PV"
+                        } else { "" };
+                        eprintln!("  {:<12} {:<14} {:<10.2} {:<10} {}{}",
+                            def_mv.to_usi(), sub_solver.nodes_searched,
+                            sub_elapsed.as_secs_f64(), sub_solver.max_ply,
+                            sub_result_str, marker);
+                    }
+                }
+                break; // 最初の未解決局面で停止
+            }
+        }
+
+        eprintln!("{}", "=".repeat(80));
+        if let Some(ply) = first_unsolved_ply {
+            eprintln!("境界: ply {} (残り{}手) で 1M ノードでは解けない",
+                ply, 39 - ply);
+        } else {
+            eprintln!("全局面 1M ノード以内で解決");
+        }
+    }
+
     /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
     ///
     /// complete_or_proofs 中の mid() が転置により証明済み TT エントリを
