@@ -6293,7 +6293,6 @@ mod tests {
     /// 深さ制限時の TT 保存バグの回帰テスト．
     /// PieceType::MAX_HAND_COUNT で保存すると不詰として誤判定されていた．
     #[test]
-    #[ignore] // 50M ノード / 300 秒タイムアウトの重いテスト
     fn test_tsume_6_29te() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         let mut board = Board::new();
@@ -6329,19 +6328,27 @@ mod tests {
                 // ぴよ将棋で検証済みの正解手順 (後手攻め)
                 // 手順8(L*7g)と手順14(G*7h)は合駒 — ソルバーが別の駒を選ぶ可能性あり
                 // 手順26(8f9g)は玉の逃げ方で分岐 — 8f8g でも同手数の29手詰め
-                // 先頭25手は固定
-                let expected_prefix = [
+                // 初手3手は 8f8g+/7h8g/S*7i と S*7i/8h9g/8f8g+ の2解あり
+                let prefix1 = [
                     "8f8g+", "7h8g", "S*7i", "8h9g", "G*8f", "9g8f",
                     "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g+", "9g8g",
                     "6h6i", "G*7h", "6i7h", "6g7h", "P*8f", "8g9g",
                     "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
                     "P*8e",
                 ];
-                assert_eq!(
-                    &pv[..25], &expected_prefix,
-                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  expected: {}",
+                let prefix2 = [
+                    "S*7i", "8h9g", "8f8g+", "7h8g", "G*8f", "9g8f",
+                    "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g+", "9g8g",
+                    "6h6i", "G*7h", "6i7h", "6g7h", "P*8f", "8g9g",
+                    "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
+                    "P*8e",
+                ];
+                assert!(
+                    pv[..25] == prefix1 || pv[..25] == prefix2,
+                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  pv1: {}\n  pv2: {}",
                     pv[..25].join(" "),
-                    expected_prefix.join(" "),
+                    prefix1.join(" "),
+                    prefix2.join(" "),
                 );
                 // 8i7g は不正解(27手詰めへの分岐)
                 assert!(
