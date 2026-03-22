@@ -907,6 +907,9 @@ impl TranspositionTable {
     ///
     /// 持ち駒劣越で一致する反証済みエントリの hand を返す．
     /// 見つからない場合は渡された hand をそのまま返す．
+    /// 注: 反証を att_hand で保存する最適化により現在未使用だが，
+    /// デバッグ・分析用に保持．
+    #[allow(dead_code)]
     #[inline(always)]
     fn get_disproof_hand(
         &self,
@@ -1795,8 +1798,7 @@ impl DfPnSolver {
         > = ArrayVec::new();
         // deferred が children に合流済みかどうかのフラグ
         let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
-        // OR ノードの反証駒(init ループ中に蓄積)
-        let mut init_or_disproof = PieceType::MAX_HAND_COUNT;
+        // (OR ノードの反証は att_hand で保存するため反証駒蓄積は不要)
         // GHI 伝播: init ループ中に反証済み子の path_dependent を蓄積
         let mut init_or_path_dep = false;
         // init フェーズでの OR 子 NM remaining の最小値
@@ -2097,26 +2099,23 @@ impl DfPnSolver {
                 return;
             }
             if !or_node && cdn_now == 0 {
-                // AND 反証: 子の反証駒を親に伝播
-                let child_dp = self
-                    .table
-                    .get_disproof_hand(child_pk, &child_hand);
-                // NM remaining 伝播: 子の NM remaining + 1 を使用
+                // AND 反証: att_hand で保存(TT ヒット率最大化)
+                // AND ノードでは守備側が着手するため att_hand は不変．
+                // att_hand で保存することで hand dominance のカバー範囲が最大になる．
                 let child_nm_rem = self.table.get_disproof_remaining(
                     child_pk, &child_hand,
                 );
                 let parent_nm_remaining = propagate_nm_remaining(
                     child_nm_rem, remaining);
-                // GHI 伝播: 子の反証が経路依存なら親の反証も経路依存
                 if self.table.has_path_dependent_disproof(
                     child_pk, &child_hand,
                 ) {
                     self.store_path_dep(
-                        pos_key, child_dp, INF, 0,
+                        pos_key, att_hand, INF, 0,
                         parent_nm_remaining, pos_key, true,
                     );
                 } else {
-                    self.store(pos_key, child_dp, INF, 0,
+                    self.store(pos_key, att_hand, INF, 0,
                         parent_nm_remaining, pos_key);
                 }
                 return;
@@ -2125,16 +2124,7 @@ impl DfPnSolver {
             // AND ノードは cdn_now == 0 のとき上で return 済み，
             // AND かつ cdn_now != 0 のときはここを通過して children に追加される．
             if cdn_now == 0 {
-                // OR: この子は反証済み → 反証駒を蓄積
-                let child_dp = self
-                    .table
-                    .get_disproof_hand(child_pk, &child_hand);
-                let adj =
-                    adjust_hand_for_move(*m, &child_dp);
-                for k in 0..HAND_KINDS {
-                    init_or_disproof[k] =
-                        init_or_disproof[k].min(adj[k]);
-                }
+                // OR: この子は反証済み(反証は att_hand で保存するため蓄積不要)
                 // NM remaining 伝播: 子の remaining の最小値を追跡
                 let child_nm_rem = self.table.get_disproof_remaining(
                     child_pk, &child_hand,
@@ -2198,14 +2188,17 @@ impl DfPnSolver {
                 }
             }
             // GHI 伝播: いずれかの子の反証が経路依存なら親も経路依存
+            // OR ノード反証: att_hand で保存(TT ヒット率最大化)
+            // 実際の持ち駒で不詰が確定しているため，att_hand で登録すれば
+            // hand dominance によるカバー範囲が最大になる．
             if init_or_path_dep {
                 self.store_path_dep(
-                    pos_key, init_or_disproof, INF, 0,
+                    pos_key, att_hand, INF, 0,
                     parent_nm_remaining, pos_key, true,
                 );
             } else {
                 self.store(
-                    pos_key, init_or_disproof, INF, 0,
+                    pos_key, att_hand, INF, 0,
                     parent_nm_remaining, pos_key,
                 );
             }
@@ -2327,42 +2320,34 @@ impl DfPnSolver {
                             self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
                         } else {
                             // cdn == 0: 唯一の子が反証 → OR 反証
-                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
-                            let adj = adjust_hand_for_move(m, &child_dp);
-                            let mut dp = init_or_disproof;
-                            for k in 0..HAND_KINDS {
-                                dp[k] = dp[k].min(adj[k]);
-                            }
-                            // GHI 対策: ループ子由来の反証は経路依存
-                            // 子の反証が経路依存なら親の反証も経路依存
+                            // att_hand で保存(TT ヒット率最大化)
                             let child_path_dep = is_loop_child
                                 || self.table.has_path_dependent_disproof(
                                     child_pk, child_hand,
                                 );
                             if child_path_dep {
                                 self.store_path_dep(
-                                    pos_key, dp, INF, 0,
+                                    pos_key, att_hand, INF, 0,
                                     remaining, pos_key, true,
                                 );
                             } else {
-                                self.store(pos_key, dp, INF, 0, remaining, pos_key);
+                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key);
                             }
                         }
                     } else {
                         if cdn == 0 {
-                            let child_dp = self.table.get_disproof_hand(child_pk, child_hand);
-                            // GHI 対策: ループ子または子の反証が経路依存なら親も経路依存
+                            // AND 反証: att_hand で保存(TT ヒット率最大化)
                             let child_path_dep = is_loop_child
                                 || self.table.has_path_dependent_disproof(
                                     child_pk, child_hand,
                                 );
                             if child_path_dep {
                                 self.store_path_dep(
-                                    pos_key, child_dp, INF, 0,
+                                    pos_key, att_hand, INF, 0,
                                     remaining, if is_loop_child { 0 } else { pos_key }, true,
                                 );
                             } else {
-                                self.store(pos_key, child_dp, INF, 0, remaining, pos_key);
+                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key);
                             }
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
@@ -2416,9 +2401,6 @@ impl DfPnSolver {
                 current_pn = INF;
                 current_dn = 0;
                 second_best = INF; // 2番目に小さい pn
-                // 反証駒の交差(全子の反証駒の min)
-                // init フェーズで反証済みの子から蓄積した init_or_disproof を引き継ぐ
-                let mut or_disproof = init_or_disproof;
                 // NM remaining 伝播: init フェーズの値を引き継ぐ
                 or_nm_min_remaining = init_or_nm_min_remaining;
                 // SNDA: (source, dn) ペアを収集し，同一 source の子は
@@ -2465,22 +2447,8 @@ impl DfPnSolver {
                         break;
                     }
 
-                    // 反証済みの子: 反証駒を蓄積
-                    // adjust_hand_for_move は証明駒/反証駒共通の駒入出補正関数
+                    // 反証済みの子: 反証は att_hand で保存するため蓄積不要
                     if cdn == 0 {
-                        let child_dp = self
-                            .table
-                            .get_disproof_hand(
-                                child_pk, child_hand,
-                            );
-                        let adj = adjust_hand_for_move(
-                            children[i].0,
-                            &child_dp,
-                        );
-                        for k in 0..HAND_KINDS {
-                            or_disproof[k] =
-                                or_disproof[k].min(adj[k]);
-                        }
                         // NM remaining 伝播: 子の remaining の最小値を追跡
                         let child_nm_rem = self.table.get_disproof_remaining(
                             child_pk, child_hand,
@@ -2543,15 +2511,16 @@ impl DfPnSolver {
                     // GHI 対策: ループ子または経路依存な子の反証が寄与した場合は
                     // 親の反証も経路依存．init フェーズで蓄積した init_or_path_dep
                     // も考慮する(init で反証済みの子が MID ループには残らないため)．
+                    // OR ノード反証: att_hand で保存(TT ヒット率最大化)
                     if loop_child_count > 0 || init_or_path_dep {
                         self.store_path_dep(
-                            pos_key, or_disproof,
+                            pos_key, att_hand,
                             INF, 0,
                             parent_nm_remaining, pos_key, true,
                         );
                     } else {
                         self.store(
-                            pos_key, or_disproof,
+                            pos_key, att_hand,
                             INF, 0,
                             parent_nm_remaining, pos_key,
                         );
@@ -2603,31 +2572,25 @@ impl DfPnSolver {
 
                     if cdn == 0 {
                         // 子が反証済み → AND ノード反証
-                        // 反証駒 = 子の反証駒
-                        let child_dp = self
-                            .table
-                            .get_disproof_hand(
-                                child_pk, child_hand,
-                            );
-                        // NM remaining 伝播: 子の NM remaining + 1
+                        // att_hand で保存(TT ヒット率最大化)
+                        // AND ノードでは守備側が着手するため att_hand は不変．
                         let child_nm_rem = self.table.get_disproof_remaining(
                             child_pk, child_hand,
                         );
                         let parent_nm_remaining = propagate_nm_remaining(
                             child_nm_rem, remaining);
-                        // GHI 対策: ループ子または子の反証が経路依存なら親も経路依存．
                         let child_path_dep = is_loop_child
                             || self.table.has_path_dependent_disproof(
                                 child_pk, child_hand,
                             );
                         if child_path_dep {
                             self.store_path_dep(
-                                pos_key, child_dp, INF, 0,
+                                pos_key, att_hand, INF, 0,
                                 parent_nm_remaining, csrc, true,
                             );
                         } else {
                             self.store(
-                                pos_key, child_dp, INF, 0,
+                                pos_key, att_hand, INF, 0,
                                 parent_nm_remaining, csrc,
                             );
                         }
@@ -3051,7 +3014,7 @@ impl DfPnSolver {
             MAX_MOVES,
         >,
         _pos_key: u64,
-        _att_hand: &[u8; HAND_KINDS],
+        att_hand_ref: &[u8; HAND_KINDS],
         ply: u32,
         remaining: u16,
     ) -> PreSolveResult {
@@ -3088,14 +3051,14 @@ impl DfPnSolver {
             }
             if cdn == 0 {
                 // 反証: AND ノード全体が反証
+                // att_hand で保存(TT ヒット率最大化)
                 let pre_solve_tt = std::mem::replace(
                     &mut self.table, main_tt,
                 );
                 self.table.merge_proven(&pre_solve_tt);
                 self.depth = saved_depth;
                 self.max_nodes = saved_max_nodes;
-                let child_dp = pre_solve_tt.get_disproof_hand(child_pk, child_hand);
-                return PreSolveResult::Disproved(child_dp);
+                return PreSolveResult::Disproved(*att_hand_ref);
             }
 
             // mid() をノード予算付きで実行
@@ -3129,14 +3092,14 @@ impl DfPnSolver {
                 );
             } else if cdn == 0 {
                 // 反証: AND ノード全体が反証
+                // att_hand で保存(TT ヒット率最大化)
                 let pre_solve_tt = std::mem::replace(
                     &mut self.table, main_tt,
                 );
                 self.table.merge_proven(&pre_solve_tt);
                 self.depth = saved_depth;
                 self.max_nodes = saved_max_nodes;
-                let child_dp = pre_solve_tt.get_disproof_hand(child_pk, child_hand);
-                return PreSolveResult::Disproved(child_dp);
+                return PreSolveResult::Disproved(*att_hand_ref);
             } else if pre_solved_indices.is_empty() {
                 // 最初の合駒すら証明できない → 不詰の可能性が高い．
                 // これ以上の Pre-Solve はノードの浪費なので打ち切る．
@@ -4908,9 +4871,9 @@ impl DfPnSolver {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
                 if checks.is_empty() || refutable {
-                    let dp = self.table.get_disproof_hand(pk, &att_hand);
+                    // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
-                        pk, dp, INF, 0, REMAINING_INFINITE, pk,
+                        pk, att_hand, INF, 0, REMAINING_INFINITE, pk,
                     );
                     break;
                 }
@@ -5205,14 +5168,14 @@ impl DfPnSolver {
                 return;
             }
             // AND ノードで子が即座に反証 → 親を反証して終了
+            // att_hand で保存(TT ヒット率最大化)
             if !or_node && cdn == 0 {
-                let child_dp = self.table.get_disproof_hand(child_pk, &child_hand);
                 arena[node_idx as usize].pn = INF;
                 arena[node_idx as usize].dn = 0;
                 arena[node_idx as usize].expanded = true;
                 let child_rem = self.table.get_disproof_remaining(child_pk, &child_hand);
                 let prop_rem = propagate_nm_remaining(child_rem, remaining);
-                self.store(pos_key, child_dp, INF, 0, prop_rem, pos_key);
+                self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key);
                 return;
             }
             // OR ノードで子が反証済み → 子を追加せずスキップ
