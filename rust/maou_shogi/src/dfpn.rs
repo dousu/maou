@@ -5924,6 +5924,143 @@ mod tests {
         }
     }
 
+    /// 39手詰め PV 途中の全局面で generate_check_moves が brute-force と一致することを検証．
+    ///
+    /// 特に ply 22 の P*1g が生成されないバグの回帰テスト．
+    #[test]
+    fn test_check_moves_completeness_39te_pv() {
+        use std::collections::BTreeSet;
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let solver = DfPnSolver::default_solver();
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        // PV の各 OR node (攻め方手番) で check_moves の完全性を検証
+        for (ply, &usi) in pv.iter().enumerate() {
+            if ply % 2 == 0 {
+                // OR node: 攻め方手番 → check_moves を検証
+                let brute_checks: BTreeSet<String> =
+                    movegen::generate_legal_moves(&mut board)
+                        .into_iter()
+                        .filter(|m| {
+                            let c = board.do_move(*m);
+                            let gives_check = board.is_in_check(board.turn);
+                            board.undo_move(*m, c);
+                            gives_check
+                        })
+                        .map(|m| m.to_usi())
+                        .collect();
+
+                let optimized_checks: BTreeSet<String> = solver
+                    .generate_check_moves(&mut board)
+                    .iter()
+                    .map(|m| m.to_usi())
+                    .collect();
+
+                let missing: BTreeSet<_> =
+                    brute_checks.difference(&optimized_checks).collect();
+                let extra: BTreeSet<_> =
+                    optimized_checks.difference(&brute_checks).collect();
+
+                assert!(
+                    missing.is_empty() && extra.is_empty(),
+                    "check moves mismatch at ply {} (next PV move: {})\n  \
+                     missing: {:?}\n  extra: {:?}",
+                    ply, usi, missing, extra
+                );
+            }
+
+            let m = board
+                .move_from_usi(usi)
+                .unwrap_or_else(|| panic!("invalid USI at ply {}: {}", ply, usi));
+            board.do_move(m);
+        }
+    }
+
+    /// 39手詰め PV の各 AND ノードで defense_moves ⊆ legal_moves を検証する．
+    ///
+    /// chain 最適化により defense_moves は legal_moves のサブセットになるため，
+    /// extra(legal にない手)が空であることのみ検証する．
+    /// また，PV 上の応手が defense_moves に含まれることも確認する．
+    #[test]
+    fn test_defense_moves_subset_39te_pv() {
+        use std::collections::BTreeSet;
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let solver = DfPnSolver::default_solver();
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        for (ply, &usi) in pv.iter().enumerate() {
+            let m = board
+                .move_from_usi(usi)
+                .unwrap_or_else(|| panic!("invalid USI at ply {}: {}", ply, usi));
+            board.do_move(m);
+
+            if ply % 2 == 0 {
+                // 攻め手の後 → AND node (玉方手番)
+                if !board.is_in_check(board.turn) {
+                    continue;
+                }
+
+                let legal_moves: BTreeSet<String> =
+                    movegen::generate_legal_moves(&mut board)
+                        .iter()
+                        .map(|m| m.to_usi())
+                        .collect();
+
+                let defense_moves: BTreeSet<String> = solver
+                    .generate_defense_moves(&mut board)
+                    .iter()
+                    .map(|m| m.to_usi())
+                    .collect();
+
+                // defense_moves ⊆ legal_moves (不正な手がないこと)
+                let extra: BTreeSet<_> =
+                    defense_moves.difference(&legal_moves).collect();
+                assert!(
+                    extra.is_empty(),
+                    "defense has illegal moves at ply {} (after {})\n  \
+                     extra: {:?}",
+                    ply + 1, usi, extra
+                );
+
+                // PV の次の応手が defense_moves に含まれること
+                if ply + 1 < pv.len() {
+                    let next_defense = pv[ply + 1];
+                    assert!(
+                        defense_moves.contains(next_defense),
+                        "PV defense move {} missing from defense_moves at ply {}\n  \
+                         defense({}): {:?}",
+                        next_defense, ply + 1,
+                        defense_moves.len(), defense_moves
+                    );
+                }
+            }
+        }
+    }
+
     /// generate_defense_moves と generate_legal_moves の結果を比較する．
     ///
     /// 王手がかかっている局面で，回避手生成(evasion)が
