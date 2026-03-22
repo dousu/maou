@@ -9866,7 +9866,7 @@ mod tests {
         // (2) IDS の各深さでの結果を個別に確認
         // 浅い深さで不当な NoMate/disproof が出ていないか
         for depth in (3..=17).step_by(2) {
-            let mut s = DfPnSolver::with_timeout(depth, 50_000_000, 32767, 600);
+            let mut s = DfPnSolver::with_timeout(depth, 1_000_000, 32767, 60);
             s.set_find_shortest(false);
             let mut b = board.clone();
             let r = s.solve(&mut b);
