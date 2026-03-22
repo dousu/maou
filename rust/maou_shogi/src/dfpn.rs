@@ -9855,21 +9855,35 @@ mod tests {
 
         // ply 1 の AND ノード(応手)をモニタリング
         // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
-        let mut solver = DfPnSolver::with_timeout(21, 1_000_000, 32767, 180);
-        solver.set_find_shortest(false);
+        // (1) この局面で王手が生成されるか確認
+        let check_solver = DfPnSolver::default_solver();
+        let checks = check_solver.generate_check_moves(&mut board);
+        eprintln!("Check moves from ply 24 ({}):", checks.len());
+        for m in &checks {
+            eprintln!("  {}", m.to_usi());
+        }
 
-        let result = solver.solve(&mut board);
-        let result_str = match &result {
-            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
-            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
-            TsumeResult::Unknown { .. } => "Unknown".to_string(),
-            _ => "Other".to_string(),
-        };
-        eprintln!(
-            "Result: {} nodes={} max_ply={} tt_pos={}",
-            result_str, solver.nodes_searched, solver.max_ply,
-            solver.table.len(),
-        );
+        // (2) IDS の各深さでの結果を個別に確認
+        // 浅い深さで不当な NoMate/disproof が出ていないか
+        for depth in (3..=17).step_by(2) {
+            let mut s = DfPnSolver::with_timeout(depth, 50_000_000, 32767, 600);
+            s.set_find_shortest(false);
+            let mut b = board.clone();
+            let r = s.solve(&mut b);
+            let r_str = match &r {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                _ => "Other".to_string(),
+            };
+            eprintln!(
+                "  depth={:2} → {} nodes={} max_ply={} tt_pos={}",
+                depth, r_str, s.nodes_searched, s.max_ply, s.table.len(),
+            );
+            if matches!(r, TsumeResult::Checkmate { .. }) {
+                break;
+            }
+        }
     }
 
 }
