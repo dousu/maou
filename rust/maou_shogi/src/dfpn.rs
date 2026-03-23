@@ -4866,6 +4866,11 @@ impl DfPnSolver {
         // PNS で蓄積された深さ制限由来の仮 NM エントリを除去する．
         // 証明(pn=0)のみ残し，IDS が独立して NM を検出できるようにする．
         self.table.retain_proofs_only();
+
+        #[cfg(feature = "tt_diag")]
+        eprintln!("[mid_fallback] after retain_proofs_only: TT_pos={} nodes_so_far={} total_budget={}",
+            self.table.len(), self.nodes_searched, total_max_nodes);
+
         loop {
             if ids_depth > saved_depth {
                 ids_depth = saved_depth;
@@ -4885,6 +4890,10 @@ impl DfPnSolver {
                 self.max_nodes = total_max_nodes;
                 total_max_nodes.saturating_sub(self.nodes_searched)
             };
+
+            #[cfg(feature = "tt_diag")]
+            let pre_nodes = self.nodes_searched;
+
             {
                 let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
                 if root_pn != 0 && root_dn != 0
@@ -4893,6 +4902,15 @@ impl DfPnSolver {
                 {
                     self.mid(board, INF - 1, INF - 1, 0, true);
                 }
+            }
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let used = self.nodes_searched - pre_nodes;
+                let (pn, dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={}",
+                    ids_depth, saved_depth, _budget, used,
+                    self.table.len(), pn, dn);
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             if root_pn2 == 0 {
@@ -4935,6 +4953,10 @@ impl DfPnSolver {
                 break;
             }
             self.table.retain_proofs();
+
+            #[cfg(feature = "tt_diag")]
+            eprintln!("[ids_diag] after retain_proofs: TT_pos={}", self.table.len());
+
             ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
         }
         self.depth = saved_depth;
@@ -5215,6 +5237,17 @@ impl DfPnSolver {
 
             // バックアップ: 展開ノードからルートまで pn/dn を更新
             Self::pns_backup(&mut arena, current);
+        }
+
+        // 診断: PNS 終了時の状態
+        #[cfg(feature = "tt_diag")]
+        {
+            let pns_nodes_used = self.nodes_searched;
+            let root_pn = arena[0].pn;
+            let root_dn = arena[0].dn;
+            eprintln!("[pns_diag] arena={}/{} nodes_used={} root_pn={} root_dn={} TT_pos={}",
+                arena.len(), PNS_MAX_ARENA_NODES, pns_nodes_used, root_pn, root_dn,
+                self.table.len());
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
@@ -7977,6 +8010,286 @@ mod tests {
         eprintln!("結果: {}", out_path);
     }
 
+    /// 39手詰め問題の必要予算を段階的に推定する．
+    ///
+    /// backward_1m の結果を踏まえ，ply 24 の未解決応手を
+    /// 段階的に予算増加して解き，ply 間のコスト成長率から
+    /// 全体の必要予算を外挿する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_budget_scaling() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_budget_scaling.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: &[&str] = &[
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め予算スケーリング推定").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // ===== Phase A: ply 24 未解決応手の予算スケーリング =====
+        writeln!(out, "\n### Phase A: ply 24 未解決応手の段階的予算増加").unwrap();
+        writeln!(out, "ply 25 AND node (after 5g6f) → 4 Unknown defense moves\n").unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for i in 0..24 {
+            let m = board.move_from_usi(pv[i]).unwrap();
+            board.do_move(m);
+        }
+        let attack_m = board.move_from_usi(pv[24]).unwrap(); // 5g6f
+        board.do_move(attack_m);
+
+        let unknown_defenses = ["1g1f", "N*6g", "P*7g", "N*7g"];
+        let budgets: &[u64] = &[1_000_000, 5_000_000, 10_000_000];
+
+        for &def_usi in &unknown_defenses {
+            writeln!(out, "--- {} ---", def_usi).unwrap();
+            writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+                "Budget", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+
+            let def_m = board.move_from_usi(def_usi).unwrap();
+
+            for &budget in budgets {
+                let mut after_def = board.clone();
+                after_def.do_move(def_m);
+
+                // depth=41(最大)を使用: 非PV変化では PV より長い詰みが存在しうる
+                let sub_depth = 41_u32;
+
+                let mut sub_solver = DfPnSolver::with_timeout(
+                    sub_depth, budget, 32767, 600,
+                );
+                sub_solver.set_find_shortest(false);
+
+                let sub_start = Instant::now();
+                let sub_result = sub_solver.solve(&mut after_def);
+                let sub_elapsed = sub_start.elapsed();
+
+                let (result_str, solved) = match &sub_result {
+                    TsumeResult::Checkmate { moves, .. } =>
+                        (format!("Mate({})", moves.len()), true),
+                    TsumeResult::CheckmateNoPv { .. } =>
+                        ("MateNoPV".to_string(), true),
+                    TsumeResult::NoCheckmate { .. } =>
+                        ("NoMate".to_string(), false),
+                    TsumeResult::Unknown { .. } =>
+                        ("Unknown".to_string(), false),
+                };
+
+                writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}",
+                    format!("{}M", budget / 1_000_000),
+                    sub_solver.nodes_searched,
+                    sub_elapsed.as_secs_f64(),
+                    sub_solver.max_ply,
+                    sub_solver.table.len(),
+                    result_str).unwrap();
+
+                #[cfg(feature = "tt_diag")]
+                {
+                    let proven = sub_solver.table.count_proven();
+                    let disproven = sub_solver.table.count_disproven();
+                    let intermediate = sub_solver.table.count_intermediate();
+                    let total = sub_solver.table.total_entries();
+                    writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                        total, proven, disproven, intermediate).unwrap();
+                }
+
+                if solved { break; } // 解けたらこの応手は終了
+            }
+            writeln!(out).unwrap();
+        }
+
+        // ===== Phase B: ply 24 全体を解くのに必要な予算 =====
+        writeln!(out, "### Phase B: ply 24 全体の予算スケーリング").unwrap();
+        writeln!(out, "ply 24 OR node を段階的予算で直接解く\n").unwrap();
+
+        let ply24_budgets: &[u64] = &[5_000_000, 10_000_000, 50_000_000];
+
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+            "Budget", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+
+        let mut board24 = Board::new();
+        board24.set_sfen(sfen).unwrap();
+        for i in 0..24 {
+            let m = board24.move_from_usi(pv[i]).unwrap();
+            board24.do_move(m);
+        }
+
+        for &budget in ply24_budgets {
+            let mut test_board = board24.clone();
+            let depth = 41_u32; // 最大深さ: 非PV変化で長い手順が存在
+            let mut solver = DfPnSolver::with_timeout(
+                depth, budget, 32767, 600,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, _solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}",
+                format!("{}M", budget / 1_000_000),
+                solver.nodes_searched,
+                elapsed.as_secs_f64(),
+                solver.max_ply,
+                solver.table.len(),
+                result_str).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = solver.table.count_proven();
+                let disproven = solver.table.count_disproven();
+                let intermediate = solver.table.count_intermediate();
+                let total = solver.table.total_entries();
+                writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
+        }
+
+        // ===== Phase C: ply 22 全体の予算スケーリング =====
+        writeln!(out, "\n### Phase C: ply 22 全体の予算スケーリング").unwrap();
+        writeln!(out, "ply 22 OR node を段階的予算で直接解く\n").unwrap();
+
+        let ply22_budgets: &[u64] = &[5_000_000, 10_000_000, 50_000_000];
+
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+            "Budget", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+
+        let mut board22 = Board::new();
+        board22.set_sfen(sfen).unwrap();
+        for i in 0..22 {
+            let m = board22.move_from_usi(pv[i]).unwrap();
+            board22.do_move(m);
+        }
+
+        for &budget in ply22_budgets {
+            let mut test_board = board22.clone();
+            let depth = 41_u32; // 最大深さ
+            let mut solver = DfPnSolver::with_timeout(
+                depth, budget, 32767, 600,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, _solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}",
+                format!("{}M", budget / 1_000_000),
+                solver.nodes_searched,
+                elapsed.as_secs_f64(),
+                solver.max_ply,
+                solver.table.len(),
+                result_str).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = solver.table.count_proven();
+                let disproven = solver.table.count_disproven();
+                let intermediate = solver.table.count_intermediate();
+                let total = solver.table.total_entries();
+                writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
+        }
+
+        // ===== Phase D: ply 20 以前の推定 =====
+        writeln!(out, "\n### Phase D: ply 20, 18, 16 の予算スケーリング").unwrap();
+        writeln!(out, "各 OR node を 50M で解く\n").unwrap();
+
+        for target_ply in [20_usize, 18, 16] {
+            let mut board_t = Board::new();
+            board_t.set_sfen(sfen).unwrap();
+            for i in 0..target_ply {
+                let m = board_t.move_from_usi(pv[i]).unwrap();
+                board_t.do_move(m);
+            }
+
+            let remaining = 39 - target_ply;
+            let depth = 41_u32; // 最大深さ
+
+            let mut test_board = board_t.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, 50_000_000, 32767, 600,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } =>
+                    "NoMate".to_string(),
+                TsumeResult::Unknown { .. } =>
+                    "Unknown".to_string(),
+            };
+
+            writeln!(out, "ply {:<4} remaining={:<4} nodes={:<14} time={:<10.2}s maxply={:<4} TT_pos={:<10} {}",
+                target_ply, remaining, solver.nodes_searched,
+                elapsed.as_secs_f64(), solver.max_ply,
+                solver.table.len(), result_str).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = solver.table.count_proven();
+                let disproven = solver.table.count_disproven();
+                let intermediate = solver.table.count_intermediate();
+                let total = solver.table.total_entries();
+                writeln!(out, "         TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: {}", out_path);
+    }
+
     /// ply 24 のノード数急増を診断する．
     ///
     /// ply 25 ANDノード(5g6f 後)の合駒フィルタ(futile/chain)分類と，
@@ -10053,6 +10366,164 @@ mod tests {
     /// 2. チェーンドロップ3カテゴリ制限
     /// 3. 同一マス証明転用(cross_deduce_deferred)
     /// 4. TT ベース合駒プレフィルタ(try_prefilter_block)
+    /// ply 24 の depth 問題を診断する．
+    ///
+    /// 非 PV 変化では PV より長い詰み手順が存在するため，
+    /// `depth = remaining + 2` では不足する．depth=41(最大)で
+    /// 解けるかを確認し，必要予算を推定する．
+    #[test]
+    #[ignore]
+    fn test_1g1f_nomate_verification() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: &[&str] = &[
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f",
+        ];
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        // ply 25 の局面を構築 (5g6f 後)
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for &mv in pv {
+            let m = board.move_from_usi(mv).unwrap();
+            board.do_move(m);
+        }
+
+        // 1g1f (玉逃げ) を指す
+        let def = board.move_from_usi("1g1f").unwrap();
+        board.do_move(def);
+
+        eprintln!("=== 1g1f 後の局面 (OR node, 攻め番) ===");
+        eprintln!("SFEN: {}", board.sfen());
+
+        // 王手生成で攻め手を確認
+        let mut check_solver = DfPnSolver::default_solver();
+        let checks = check_solver.generate_check_moves(&mut board);
+        eprintln!("Check moves: {} {:?}", checks.len(),
+            checks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
+
+        // 段階的に深さを増やして解析
+        for depth in [15u32, 21, 31, 41] {
+            let mut solver = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 60);
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
+                depth, result_str, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.table.len());
+        }
+
+        // 旧互換用: 最後の結果を使う
+        let mut solver = DfPnSolver::with_timeout(15, 5_000_000, 32767, 120);
+        solver.set_find_shortest(false);
+        let result = solver.solve(&mut board);
+
+        eprintln!("Result: {:?}", match &result {
+            TsumeResult::Checkmate { moves, .. } =>
+                format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+        });
+        eprintln!("Nodes: {}, TT_pos: {}", solver.nodes_searched, solver.table.len());
+
+        // N*6g 後の各攻め手を depth=41 で解く
+        {
+            let mut brd_n6g = Board::new();
+            brd_n6g.set_sfen(sfen).unwrap();
+            for &mv in pv {
+                let m = brd_n6g.move_from_usi(mv).unwrap();
+                brd_n6g.do_move(m);
+            }
+            let def_n6g = brd_n6g.move_from_usi("N*6g").unwrap();
+            brd_n6g.do_move(def_n6g);
+
+            eprintln!("\n=== N*6g 後の各攻め手サブ問題 (depth=41, 1M) ===");
+            eprintln!("SFEN: {}", brd_n6g.sfen());
+
+            let mut gen = DfPnSolver::default_solver();
+            let attacks = gen.generate_check_moves(&mut brd_n6g);
+            eprintln!("Check moves: {} {:?}", attacks.len(),
+                attacks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
+
+            for atk in &attacks {
+                let mut after_atk = brd_n6g.clone();
+                after_atk.do_move(*atk);
+
+                let mut sub = DfPnSolver::with_timeout(41, 1_000_000, 32767, 60);
+                sub.set_find_shortest(false);
+                let start = Instant::now();
+                let r = sub.solve(&mut after_atk);
+                let elapsed = start.elapsed();
+
+                let r_str = match &r {
+                    TsumeResult::Checkmate { moves, .. } =>
+                        format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("  {} → {} nodes={} time={:.2}s TT_pos={}",
+                    atk.to_usi(), r_str, sub.nodes_searched,
+                    elapsed.as_secs_f64(), sub.table.len());
+            }
+        }
+
+        // 残り3応手も段階的深さテスト
+        for def_usi in ["N*6g", "P*7g", "N*7g"] {
+            let mut brd = Board::new();
+            brd.set_sfen(sfen).unwrap();
+            for &mv in pv {
+                let m = brd.move_from_usi(mv).unwrap();
+                brd.do_move(m);
+            }
+            let def = brd.move_from_usi(def_usi).unwrap();
+            brd.do_move(def);
+
+            eprintln!("\n=== {} 後の局面 (OR node, 攻め番) ===", def_usi);
+            eprintln!("SFEN: {}", brd.sfen());
+
+            for depth in [15u32, 21, 31, 41] {
+                let mut s = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 60);
+                s.set_find_shortest(false);
+
+                let start = Instant::now();
+                let r = s.solve(&mut brd);
+                let elapsed = start.elapsed();
+
+                let r_str = match &r {
+                    TsumeResult::Checkmate { moves, .. } =>
+                        format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
+                    depth, r_str, s.nodes_searched, elapsed.as_secs_f64(),
+                    s.table.len());
+            }
+        }
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// 5. TT エントリ数の推移
     #[test]
     #[cfg(feature = "tt_diag")]
