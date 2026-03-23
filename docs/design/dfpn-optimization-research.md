@@ -235,6 +235,9 @@ AND ノードの合駒(drop)を `deferred_children` に分離し，
 `LAZY_INTERPOSE_THRESHOLD = 8` 未満の場合は即座に合流．
 合駒事前証明(interpose pre-solve)も併用．
 
+**詳細:** チェーン合駒に特化した全最適化(実装済み9項目 + 新規提案6項目)を
+[chain-interpose-optimization.md](chain-interpose-optimization.md) に記載．
+
 ### 6. 静的詰め判定
 
 リーフノードで短手数の詰みを検出し，Df-Pnオーバーヘッドを回避．
