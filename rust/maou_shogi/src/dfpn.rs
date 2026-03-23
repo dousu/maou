@@ -10524,6 +10524,197 @@ mod tests {
             .unwrap();
     }
 
+    /// N*6g → 8g6g 後のボトルネック局面調査(診断用)．
+    #[test]
+    #[ignore]
+    fn test_n6g_bottleneck_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: &[&str] = &[
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f",
+        ];
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        // ply 25 の局面を構築 (5g6f 後)
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for &mv in pv {
+            let m = board.move_from_usi(mv).unwrap();
+            board.do_move(m);
+        }
+        eprintln!("=== ply 25 AND (5g6f 後) ===");
+        eprintln!("SFEN: {}", board.sfen());
+
+        // N*6g を指す
+        let n6g = board.move_from_usi("N*6g").unwrap();
+        board.do_move(n6g);
+        eprintln!("\n=== N*6g 後 (OR node) ===");
+        eprintln!("SFEN: {}", board.sfen());
+
+        // 8g6g(飛車で桂を取る)
+        let r6g = board.move_from_usi("8g6g").unwrap();
+        board.do_move(r6g);
+        eprintln!("\n=== 8g6g 後 (AND node, 玉方番) ===");
+        eprintln!("SFEN: {}", board.sfen());
+
+        // この局面の情報
+        let defender = board.turn();
+        let attacker = defender.opponent();
+        let king_sq = board.king_square(defender).unwrap();
+        eprintln!("King: {}{}  turn: {:?}",
+            9 - king_sq.col(), (b'a' + king_sq.row()) as char, defender);
+
+        let checkers = board.compute_checkers_at(king_sq, attacker);
+        eprintln!("Checkers: {}", checkers.count());
+        for sq in checkers {
+            let piece = board.squares[sq.index()];
+            eprintln!("  {:?} at {}{}", piece, 9 - sq.col(), (b'a' + sq.row()) as char);
+        }
+
+        let mut solver = DfPnSolver::default_solver();
+
+        // between / futile / chain
+        let checker_sq = checkers.lsb().unwrap();
+        let sliding = solver.find_sliding_checker(&board, king_sq, attacker);
+        eprintln!("Sliding checker: {:?}", sliding.is_some());
+
+        if sliding.is_some() {
+            let between = attack::between_bb(checker_sq, king_sq);
+            let (futile, chain) = solver.compute_futile_and_chain_squares(
+                &board, &between, king_sq, checker_sq, defender, attacker,
+            );
+            let normal_count = between.count() - futile.count() - chain.count();
+            eprintln!("Between: {}  Futile: {}  Chain: {}  Normal: {}",
+                between.count(), futile.count(), chain.count(), normal_count);
+            for sq in between {
+                let tag = if futile.contains(sq) { "futile" }
+                         else if chain.contains(sq) { "chain" }
+                         else { "normal" };
+                eprintln!("  {}{} = {}",
+                    9 - sq.col(), (b'a' + sq.row()) as char, tag);
+            }
+        }
+
+        // 防御手一覧
+        let defenses = solver.generate_defense_moves(&mut board);
+        eprintln!("\nDefense moves ({}):", defenses.len());
+        let drops: Vec<_> = defenses.iter().filter(|m| m.is_drop()).collect();
+        let non_drops: Vec<_> = defenses.iter().filter(|m| !m.is_drop()).collect();
+        eprintln!("  Non-drops ({}):", non_drops.len());
+        for m in &non_drops {
+            eprintln!("    {}", m.to_usi());
+        }
+        eprintln!("  Drops ({}):", drops.len());
+        for m in &drops {
+            eprintln!("    {}", m.to_usi());
+        }
+
+        // N*6g 後(OR node, 攻め方手番)から解く
+        let mut or_board = {
+            let mut b = Board::new();
+            b.set_sfen(sfen).unwrap();
+            for &mv in pv {
+                let m = b.move_from_usi(mv).unwrap();
+                b.do_move(m);
+            }
+            let n6g_m = b.move_from_usi("N*6g").unwrap();
+            b.do_move(n6g_m);
+            b
+        };
+
+        // MID のみ(PNS skip)で解く
+        eprintln!("\n=== N*6g 後 MID only (depth=41, 10M, 300s) ===");
+        eprintln!("SFEN: {}", or_board.sfen());
+        {
+            let mut s = DfPnSolver::with_timeout(41, 10_000_000, 32767, 300);
+            s.set_find_shortest(false);
+            s.table.clear();
+            s.nodes_searched = 0;
+            s.max_ply = 0;
+            s.path.clear();
+            s.killer_table.clear();
+            s.start_time = std::time::Instant::now();
+            s.timed_out = false;
+            s.attacker = or_board.turn;
+            // mid_fallback を直接呼ぶ
+            s.mid_fallback(&mut or_board);
+            let (root_pn, root_dn) = s.look_up_board(&or_board);
+            let r_str = if root_pn == 0 { "Proven" }
+                        else if root_dn == 0 { "Disproven" }
+                        else { "Unknown" };
+            eprintln!("  → {} pn={} dn={} searched={} time={:.2}s TT={}",
+                r_str, root_pn, root_dn, s.nodes_searched,
+                s.start_time.elapsed().as_secs_f64(), s.table.len());
+        }
+
+        // 8g6g 後の各防御手を個別に OR node として解く
+        eprintln!("\n=== 8g6g 後 → 各防御手のサブ問題 (depth=41, 2M) ===");
+        for def_mv in &defenses {
+            let mut after_def = board.clone();
+            after_def.do_move(*def_mv);
+
+            let mut s = DfPnSolver::with_timeout(41, 2_000_000, 32767, 60);
+            s.set_find_shortest(false);
+            let start = std::time::Instant::now();
+            let r = s.solve(&mut after_def);
+            let elapsed = start.elapsed();
+            let r_str = match &r {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            eprintln!("  {} → {} searched={} time={:.2}s TT={}",
+                def_mv.to_usi(), r_str, s.nodes_searched, elapsed.as_secs_f64(), s.table.len());
+        }
+
+        // Unknown が出た防御手を掘り下げ(2段目: 攻め手→防御手)
+        eprintln!("\n=== Unknown 防御手の攻め手別サブ問題 (depth=41, 2M) ===");
+        for def_mv in &defenses {
+            let mut after_def = board.clone();
+            after_def.do_move(*def_mv);
+
+            let mut s_check = DfPnSolver::with_timeout(41, 2_000_000, 32767, 60);
+            s_check.set_find_shortest(false);
+            let r_check = s_check.solve(&mut after_def);
+            if !matches!(r_check, TsumeResult::Unknown { .. }) {
+                continue;
+            }
+
+            eprintln!("--- {} (Unknown) → 攻め手展開 ---", def_mv.to_usi());
+            let mut gen = DfPnSolver::default_solver();
+            let attacks = gen.generate_check_moves(&mut after_def);
+            eprintln!("  攻め手数: {}", attacks.len());
+            for atk in &attacks {
+                let mut after_atk = after_def.clone();
+                after_atk.do_move(*atk);
+
+                let mut s2 = DfPnSolver::with_timeout(41, 2_000_000, 32767, 60);
+                s2.set_find_shortest(false);
+                let start2 = std::time::Instant::now();
+                let r2 = s2.solve(&mut after_atk);
+                let elapsed2 = start2.elapsed();
+                let r2_str = match &r2 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("    {} → {} searched={} time={:.2}s TT={}",
+                    atk.to_usi(), r2_str, s2.nodes_searched, elapsed2.as_secs_f64(), s2.table.len());
+            }
+        }
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// 5. TT エントリ数の推移
     #[test]
     #[cfg(feature = "tt_diag")]
