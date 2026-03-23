@@ -2280,29 +2280,33 @@ impl DfPnSolver {
         // deferred_children が全てチェーンマスへのドロップなら Pre-Solve をスキップし，
         // PNS/IDS の自然な探索に委ねる．チェーンマスのドロップは内側(玉に近い)から
         // 外側(飛び駒に近い)の順に並び替え，TT 蓄積の再利用効率を向上させる．
-        let all_deferred_are_chain = if !or_node && !deferred_children.is_empty()
-            && self.chain_bb_cache.is_not_empty()
-        {
-            let chain_bb = self.chain_bb_cache;
-            let all_chain = deferred_children.iter().all(|(m, _, _, _)| {
-                chain_bb.contains(m.to_sq())
-            });
-            if all_chain {
-                // 提案A: チェーンドロップを内側(玉に近い)→外側の順にソート．
-                // 内側の短いサブチェーンを先に証明し，TT エントリを蓄積させることで
-                // 外側の長いサブチェーンの探索を加速する．
-                let king_sq = board.king_square(board.turn).unwrap();
-                deferred_children.sort_by_key(|(m, _, _, _)| {
-                    let to = m.to_sq();
-                    let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
-                    let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
-                    dr.max(dc) // Chebyshev distance: inner (small) first
+        // チェーン合駒判定 + 内→外ソート + DN スケーリング用の玉位置保持
+        let (all_deferred_are_chain, chain_king_sq) =
+            if !or_node && !deferred_children.is_empty()
+                && self.chain_bb_cache.is_not_empty()
+            {
+                let chain_bb = self.chain_bb_cache;
+                let all_chain = deferred_children.iter().all(|(m, _, _, _)| {
+                    chain_bb.contains(m.to_sq())
                 });
-            }
-            all_chain
-        } else {
-            false
-        };
+                if all_chain {
+                    // §3.10: チェーンドロップを内側(玉に近い)→外側の順にソート．
+                    // 内側の短いサブチェーンを先に証明し，TT エントリを蓄積させることで
+                    // 外側の長いサブチェーンの探索を加速する．
+                    let king_sq = board.king_square(board.turn).unwrap();
+                    deferred_children.sort_by_key(|(m, _, _, _)| {
+                        let to = m.to_sq();
+                        let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
+                        let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
+                        dr.max(dc) // Chebyshev distance: inner (small) first
+                    });
+                    (true, Some(king_sq))
+                } else {
+                    (false, None)
+                }
+            } else {
+                (false, None)
+            };
 
         // --- 合駒事前証明 (interpose pre-solve) ---
         // AND ノードの合駒(drop)子ノードに対して，クリーンな TT で
@@ -2761,8 +2765,21 @@ impl DfPnSolver {
                         snda_pairs.push((csrc, cpn));
                     }
                     // 子ノード選択用: 合駒(drop)にバイアスを加算
+                    // チェーン合駒の場合，外側(玉から遠い)ほどバイアスを
+                    // 大きくし，内側の短いサブチェーンを優先探索させる．
                     let effective_cdn = if m.is_drop() {
-                        cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        let bias = if let Some(ksq) = chain_king_sq {
+                            let to = m.to_sq();
+                            let dr = (to.row() as i8 - ksq.row() as i8)
+                                .unsigned_abs() as u32;
+                            let dc = (to.col() as i8 - ksq.col() as i8)
+                                .unsigned_abs() as u32;
+                            // Chebyshev distance をスケーリング係数に使用
+                            INTERPOSE_DN_BIAS.saturating_mul(dr.max(dc))
+                        } else {
+                            INTERPOSE_DN_BIAS
+                        };
+                        cdn.saturating_add(bias)
                     } else {
                         cdn
                     };
