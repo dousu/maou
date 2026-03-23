@@ -537,6 +537,9 @@ struct PnsNode {
     children: Vec<u32>,
     /// 残り探索深さ．
     remaining: u16,
+    /// AND ノード用: 逐次活性化待ちの合駒(drop)手．
+    /// 弱い駒から順に1つずつ子ノードとして展開する．
+    deferred_drops: Vec<Move>,
 }
 
 /// PNS アリーナの最大ノード数(メモリ上限)．
@@ -5070,6 +5073,7 @@ impl DfPnSolver {
             expanded: false,
             children: Vec::new(),
             remaining: self.depth as u16,
+            deferred_drops: Vec::new(),
         });
 
         // 再利用バッファ(ループ内のアロケーション回避)
@@ -5107,15 +5111,105 @@ impl DfPnSolver {
             ancestors.insert(arena[0].full_hash);
             let mut current = 0u32;
 
+            let mut skip_expand = false;
+
             while arena[current as usize].expanded {
-                let node = &arena[current as usize];
-                // OR: min(pn) の子を選択，AND: min(dn) の子を選択
-                let best_child = if node.or_node {
-                    *node.children.iter()
+                let ci = current as usize;
+
+                // AND ノード: 全子証明済み + deferred_drops → 逐次活性化
+                if !arena[ci].or_node && !arena[ci].deferred_drops.is_empty() {
+                    let all_proven = arena[ci].children.iter()
+                        .all(|&c| arena[c as usize].pn == 0);
+                    if all_proven {
+                        let mut activated_unproven = false;
+                        while !arena[ci].deferred_drops.is_empty() {
+                            let next_drop = arena[ci].deferred_drops.remove(0);
+                            #[cfg(feature = "tt_diag")]
+                            eprintln!(
+                                "[pns_seq] AND node idx={}: activate drop {} (deferred_remaining={}), tt_entries={}",
+                                ci, next_drop.to_usi(), arena[ci].deferred_drops.len(),
+                                self.table.total_entries(),
+                            );
+                            let cap = board.do_move(next_drop);
+                            let child_fh = board.hash;
+                            let child_pk = position_key(board);
+                            let child_hand = board.hand[self.attacker.index()];
+                            let child_remaining =
+                                arena[ci].remaining.saturating_sub(1);
+
+                            let is_loop = ancestors.contains(&child_fh);
+                            let (cpn, cdn) = if is_loop {
+                                (INF, 0u32)
+                            } else {
+                                let (p, d, _) = self.look_up_pn_dn(
+                                    child_pk, &child_hand, child_remaining,
+                                );
+                                (p, d)
+                            };
+
+                            board.undo_move(next_drop, cap);
+
+                            // 反証(防御成功) → AND ノード反証
+                            if cdn == 0 {
+                                arena[ci].pn = INF;
+                                arena[ci].dn = 0;
+                                skip_expand = true;
+                                activated_unproven = true;
+                                break;
+                            }
+
+                            // 子ノード生成
+                            let child_idx = arena.len() as u32;
+                            arena.push(PnsNode {
+                                pos_key: child_pk,
+                                full_hash: child_fh,
+                                hand: child_hand,
+                                pn: cpn,
+                                dn: cdn,
+                                parent: current,
+                                move_from_parent: next_drop,
+                                or_node: true,
+                                expanded: cpn == 0 || cdn == 0,
+                                children: Vec::new(),
+                                remaining: child_remaining,
+                                deferred_drops: Vec::new(),
+                            });
+                            arena[ci].children.push(child_idx);
+
+                            // 証明済み → 次の deferred drop へ
+                            if cpn == 0 {
+                                continue;
+                            }
+
+                            // 未証明 → この子を MPN として選択
+                            let cap = board.do_move(next_drop);
+                            captures.push(cap);
+                            path.push(child_idx);
+                            ancestors.insert(child_fh);
+                            current = child_idx;
+                            activated_unproven = true;
+                            break;
+                        }
+
+                        if activated_unproven {
+                            break; // MPN 選択ループ終了
+                        }
+
+                        // 全 deferred が証明済み → AND ノード証明
+                        arena[ci].pn = 0;
+                        arena[ci].dn = INF;
+                        skip_expand = true;
+                        break;
+                    }
+                }
+
+                // 通常の子ノード選択
+                let best_child = if arena[ci].or_node {
+                    *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].pn, arena[c as usize].dn))
                         .unwrap()
                 } else {
-                    *node.children.iter()
+                    *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].dn, arena[c as usize].pn))
                         .unwrap()
                 };
@@ -5127,9 +5221,11 @@ impl DfPnSolver {
                 current = best_child;
             }
 
-            // リーフ展開
-            let ply = (path.len() - 1) as u32;
-            self.pns_expand(board, &mut arena, current, ply, &ancestors);
+            // リーフ展開(逐次活性化で解決済みの場合はスキップ)
+            if !skip_expand {
+                let ply = (path.len() - 1) as u32;
+                self.pns_expand(board, &mut arena, current, ply, &ancestors);
+            }
 
             // 盤面をルートに戻す
             for i in (1..path.len()).rev() {
@@ -5240,6 +5336,8 @@ impl DfPnSolver {
         let child_remaining = remaining.saturating_sub(1);
         let child_or_node = !or_node;
         let mut or_nm_min_remaining: u16 = REMAINING_INFINITE;
+        // AND ノードの合駒逐次活性化: 最初の unproven drop のみ子ノード生成
+        let mut first_unproven_drop_added = or_node; // OR ノードでは無効
 
         for m in &moves {
             let captured = board.do_move(*m);
@@ -5330,6 +5428,23 @@ impl DfPnSolver {
                 continue;
             }
 
+            // AND ノードの合駒逐次活性化:
+            // 未証明の drop を1つだけ子ノードとして展開し，残りは deferred_drops に格納．
+            // 弱い駒から順に証明 → TT 蓄積 → 強い駒の探索で援用する．
+            // 既に証明済み(cpn=0)の drop はそのまま子ノードとして追加する．
+            if !or_node && m.is_drop() && cpn > 0 {
+                if first_unproven_drop_added {
+                    #[cfg(feature = "tt_diag")]
+                    eprintln!(
+                        "[pns_seq] pns_expand: defer drop {} at AND node idx={}",
+                        m.to_usi(), node_idx,
+                    );
+                    arena[node_idx as usize].deferred_drops.push(*m);
+                    continue;
+                }
+                first_unproven_drop_added = true;
+            }
+
             let child_idx = arena.len() as u32;
             arena.push(PnsNode {
                 pos_key: child_pk,
@@ -5343,6 +5458,7 @@ impl DfPnSolver {
                 expanded: cpn == 0 || cdn == 0,
                 children: Vec::new(),
                 remaining: child_remaining,
+                deferred_drops: Vec::new(),
             });
             arena[node_idx as usize].children.push(child_idx);
         }
@@ -5442,8 +5558,13 @@ impl DfPnSolver {
                 }
                 if disproved {
                     (INF, 0u32)
-                } else if unproven == 0 {
+                } else if unproven == 0 && arena[ni].deferred_drops.is_empty() {
+                    // 全子証明済み + deferred なし → AND ノード証明
                     (0u32, INF)
+                } else if unproven == 0 {
+                    // 全子証明済みだが deferred_drops 残り → 未完了
+                    // MPN 選択時に次の合駒を活性化するため pn=1, dn=1 で保持
+                    (1u32, 1u32)
                 } else {
                     let pn = (max_pn as u64)
                         .saturating_add(unproven as u64 - 1)
@@ -6659,12 +6780,21 @@ mod tests {
                     "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
                     "P*8e",
                 ];
+                // 8e8g(不成)も同等に正しい — 弱い駒優先順序変更で出現
+                let prefix3 = [
+                    "S*7i", "8h9g", "8f8g+", "7h8g", "G*8f", "9g8f",
+                    "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g", "9g8g",
+                    "6h6i", "G*7h", "6i7h", "6g7h", "P*8f", "8g9g",
+                    "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
+                    "P*8e",
+                ];
                 assert!(
-                    pv[..25] == prefix1 || pv[..25] == prefix2,
-                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  pv1: {}\n  pv2: {}",
+                    pv[..25] == prefix1 || pv[..25] == prefix2 || pv[..25] == prefix3,
+                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  pv1: {}\n  pv2: {}\n  pv3: {}",
                     pv[..25].join(" "),
                     prefix1.join(" "),
                     prefix2.join(" "),
+                    prefix3.join(" "),
                 );
                 // 8i7g は不正解(27手詰めへの分岐)
                 assert!(
