@@ -5204,6 +5204,10 @@ impl DfPnSolver {
                 }
 
                 // 通常の子ノード選択
+                if arena[ci].children.is_empty() {
+                    // 子ノードなし(展開済みだが全消去等) → リーフとして再展開
+                    break;
+                }
                 let best_child = if arena[ci].or_node {
                     *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].pn, arena[c as usize].dn))
