@@ -1189,6 +1189,18 @@ pub struct DfPnSolver {
     /// 爆増が起きる手を特定した後，少数回の反復に絞って詳細を確認する．
     #[cfg(feature = "tt_diag")]
     diag_max_iterations: u32,
+    /// TT 診断: MID での deferred → children 逐次活性化回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_mid_deferred_activations: u64,
+    /// TT 診断: PNS での deferred_drops 活性化回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_pns_deferred_activations: u64,
+    /// TT 診断: PNS で活性化時に既に TT 証明済みだった回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_pns_deferred_already_proven: u64,
+    /// TT 診断: cross_deduce_deferred で証明除去された合駒数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_cross_deduce_hits: u64,
 }
 
 impl DfPnSolver {
@@ -1227,6 +1239,14 @@ impl DfPnSolver {
             diag_move_usi: String::new(),
             #[cfg(feature = "tt_diag")]
             diag_max_iterations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_mid_deferred_activations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_pns_deferred_activations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_pns_deferred_already_proven: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_cross_deduce_hits: 0,
         }
     }
 
@@ -2289,6 +2309,8 @@ impl DfPnSolver {
         // 弱い駒から順に証明することで，TT に蓄積された証明パスを
         // 強い合駒の探索で援用でき，探索効率が向上する．
         if !or_node && !deferred_children.is_empty() && children.is_empty() {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_mid_deferred_activations += 1; }
             children.push(deferred_children.remove(0));
         }
 
@@ -2763,6 +2785,8 @@ impl DfPnSolver {
                         }
                         // 逐次活性化: 次の合駒を1つだけ追加して MID ループ続行．
                         // 前の合駒で蓄積された TT エントリを次の合駒で活用する．
+                        #[cfg(feature = "tt_diag")]
+                        { self.diag_mid_deferred_activations += 1; }
                         children.push(deferred_children.remove(0));
                         continue;
                     }
@@ -3363,6 +3387,8 @@ impl DfPnSolver {
 
         // 証明済みの合駒を deferred_children から除去(降順で安全に削除)
         proven_indices.sort_unstable();
+        #[cfg(feature = "tt_diag")]
+        { self.diag_cross_deduce_hits += proven_indices.len() as u64; }
         for &i in proven_indices.iter().rev() {
             deferred_children.remove(i);
         }
@@ -4981,6 +5007,8 @@ impl DfPnSolver {
                         while !arena[ci].deferred_drops.is_empty() {
                             let next_drop = arena[ci].deferred_drops.remove(0);
                             #[cfg(feature = "tt_diag")]
+                            { self.diag_pns_deferred_activations += 1; }
+                            #[cfg(feature = "tt_diag")]
                             eprintln!(
                                 "[pns_seq] AND node idx={}: activate drop {} (deferred_remaining={}), tt_entries={}",
                                 ci, next_drop.to_usi(), arena[ci].deferred_drops.len(),
@@ -5034,6 +5062,8 @@ impl DfPnSolver {
 
                             // 証明済み → 次の deferred drop へ
                             if cpn == 0 {
+                                #[cfg(feature = "tt_diag")]
+                                { self.diag_pns_deferred_already_proven += 1; }
                                 continue;
                             }
 
@@ -9876,5 +9906,314 @@ mod tests {
         }
     }
 
+    /// チェーン合駒最適化の動作検証テスト．
+    ///
+    /// 39手詰め ply 25 AND ノード(5g6f 後)を対象に，以下の最適化が
+    /// 正常に機能しているかをモニタリングする:
+    ///
+    /// 1. 合駒遅延展開(deferred children)の逐次活性化
+    /// 2. チェーンドロップ3カテゴリ制限
+    /// 3. 同一マス証明転用(cross_deduce_deferred)
+    /// 4. TT ベース合駒プレフィルタ(try_prefilter_block)
+    /// 5. TT エントリ数の推移
+    #[test]
+    #[cfg(feature = "tt_diag")]
+    fn test_chain_interpose_diagnostics() {
+        use std::io::Write;
+        let out_path = "/tmp/chain_interpose_diag.log";
+        let result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " チェーン合駒最適化 動作検証").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // ply 25 AND ノード(5g6f 後): 飛車8g→玉1gの横利き開き王手
+        let and_sfen = "9/3+N1P3/7+R1/9/9/3S5/1R6k/3p5/9 w 2b4g3s3n4l16p 26";
+
+        let mut board = Board::new();
+        board.set_sfen(and_sfen).unwrap();
+
+        // ========================================
+        // Phase 1: チェーンドロップ3カテゴリ制限の検証
+        // ========================================
+        writeln!(out, "\n--- Phase 1: チェーンドロップ3カテゴリ制限 ---\n").unwrap();
+
+        let mut solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+        let chain_bb = solver.chain_bb_cache;
+
+        writeln!(out, "chain_bb: {:?}", chain_bb).unwrap();
+        writeln!(out, "全回避手数: {}", defenses.len()).unwrap();
+
+        // チェーンマスへのドロップを抽出
+        let mut chain_drops: Vec<String> = Vec::new();
+        let mut normal_drops: Vec<String> = Vec::new();
+        let mut non_drops: Vec<String> = Vec::new();
+
+        for m in &defenses {
+            if m.is_drop() {
+                let to = m.to_sq();
+                if chain_bb.contains(to) {
+                    chain_drops.push(m.to_usi());
+                } else {
+                    normal_drops.push(m.to_usi());
+                }
+            } else {
+                non_drops.push(m.to_usi());
+            }
+        }
+
+        writeln!(out, "チェーンマスへのドロップ: {:?}", chain_drops).unwrap();
+        writeln!(out, "通常マスへのドロップ: {:?}", normal_drops).unwrap();
+        writeln!(out, "駒移動: {:?}", non_drops).unwrap();
+
+        // チェーンマスへのドロップが3カテゴリ制限に従っているか検証
+        // 各マスごとにグループ化
+        use std::collections::HashMap;
+        let mut drops_by_sq: HashMap<String, Vec<String>> = HashMap::new();
+        for m in &defenses {
+            if m.is_drop() && chain_bb.contains(m.to_sq()) {
+                let sq_str = format!("{}{}",
+                    (b'1' + (8 - m.to_sq().col())) as char,
+                    (b'a' + m.to_sq().row()) as char,
+                );
+                let pt = m.drop_piece_type().unwrap();
+                let pt_str = match pt {
+                    PieceType::Pawn => "P", PieceType::Lance => "L",
+                    PieceType::Knight => "N", PieceType::Silver => "S",
+                    PieceType::Gold => "G", PieceType::Bishop => "B",
+                    PieceType::Rook => "R", _ => "?",
+                };
+                drops_by_sq.entry(sq_str).or_default().push(pt_str.to_string());
+            }
+        }
+
+        let mut all_ok = true;
+        for (sq, pieces) in &drops_by_sq {
+            writeln!(out, "  チェーンマス {}: 駒種={:?} ({}個)", sq, pieces, pieces.len()).unwrap();
+            // 3カテゴリ制限: 最大3手(前方系1 + 角1 + 桂1)
+            if pieces.len() > 3 {
+                writeln!(out, "  *** 異常: 3カテゴリ制限違反! {} > 3 ***", pieces.len()).unwrap();
+                all_ok = false;
+            }
+            // 前方利き系は最弱の1つのみ
+            let forward_count = pieces.iter().filter(|p| {
+                matches!(p.as_str(), "P" | "L" | "S" | "G" | "R")
+            }).count();
+            if forward_count > 1 {
+                writeln!(out, "  *** 異常: 前方利き系 {} > 1 ***", forward_count).unwrap();
+                all_ok = false;
+            }
+        }
+        writeln!(out, "3カテゴリ制限: {}", if all_ok { "OK" } else { "*** NG ***" }).unwrap();
+
+        // ========================================
+        // Phase 2: 各応手の探索とTTモニタリング
+        // ========================================
+        writeln!(out, "\n--- Phase 2: 応手別探索 + TT/最適化モニタリング ---\n").unwrap();
+
+        // P*3g (短いチェーン) と P*7g (長いチェーン) を比較
+        let target_moves = ["P*3g", "B*3g", "N*3g", "P*7g", "N*7g", "1g1f", "1g1h"];
+
+        writeln!(out, "{:<10} {:<10} {:<12} {:<10} {:<17} {:<17} {:<10}",
+            "Move", "Nodes", "TT_pos", "Prefilter", "Defer(MID/PNS)", "XDeduce/PNSprov", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        let mut phase2_cross_deduce_total: u64 = 0;
+        let mut phase2_pns_proven_total: u64 = 0;
+
+        for &mv_usi in &target_moves {
+            let m = match board.move_from_usi(mv_usi) {
+                Some(m) => m,
+                None => {
+                    writeln!(out, "{:<10} (invalid move)", mv_usi).unwrap();
+                    continue;
+                }
+            };
+
+            let mut after_def = board.clone();
+            after_def.do_move(m);
+
+            let def_remaining = 13; // 39 - 24 - 1(攻め) - 1(受け) = 13
+            let sub_depth = (def_remaining + 2).min(41) as u32;
+
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, 250_000, 32767, 30,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let mut sub_board = after_def.clone();
+            let sub_result = sub_solver.solve(&mut sub_board);
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            phase2_cross_deduce_total += sub_solver.diag_cross_deduce_hits;
+            phase2_pns_proven_total += sub_solver.diag_pns_deferred_already_proven;
+
+            writeln!(out, "{:<10} {:<10} {:<12} {:<10} {:<8}/{:<8} {:<8}/{:<8} {:<10}",
+                mv_usi,
+                sub_solver.nodes_searched,
+                sub_solver.table.len(),
+                sub_solver.prefilter_hits,
+                sub_solver.diag_mid_deferred_activations,
+                sub_solver.diag_pns_deferred_activations,
+                sub_solver.diag_cross_deduce_hits,
+                sub_solver.diag_pns_deferred_already_proven,
+                result_str,
+            ).unwrap();
+        }
+
+        writeln!(out, "\nPhase 2 合計: cross_deduce={}, pns_proven={}",
+            phase2_cross_deduce_total, phase2_pns_proven_total).unwrap();
+
+        // ========================================
+        // Phase 3: ply 24 全体の TT 推移モニタリング
+        // ========================================
+        writeln!(out, "\n--- Phase 3: ply 24 全体探索の TT 推移 ---\n").unwrap();
+
+        // PV を ply 24 まで進めて OR ノードから探索
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let mut board24 = Board::new();
+        board24.set_sfen(sfen).unwrap();
+        for mv in &pv {
+            let m = board24.move_from_usi(mv).unwrap();
+            board24.do_move(m);
+        }
+
+        let node_limit: u64 = 500_000;
+        let depth = 17u32; // remaining 15 + 2
+        let mut full_solver = DfPnSolver::with_timeout(
+            depth, node_limit, 32767, 60,
+        );
+        full_solver.set_find_shortest(false);
+
+        let start = Instant::now();
+        let full_result = full_solver.solve(&mut board24);
+        let elapsed = start.elapsed();
+
+        let result_str = match &full_result {
+            TsumeResult::Checkmate { moves, .. } =>
+                format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+        };
+
+        let total_deferred = full_solver.diag_mid_deferred_activations
+            + full_solver.diag_pns_deferred_activations;
+        writeln!(out, "Result: {}", result_str).unwrap();
+        writeln!(out, "Nodes: {}", full_solver.nodes_searched).unwrap();
+        writeln!(out, "Time: {:.2}s", elapsed.as_secs_f64()).unwrap();
+        writeln!(out, "NPS: {:.0}", full_solver.nodes_searched as f64 / elapsed.as_secs_f64()).unwrap();
+        writeln!(out, "TT positions: {}", full_solver.table.len()).unwrap();
+        writeln!(out, "TT entries: {}", full_solver.table.total_entries()).unwrap();
+        writeln!(out, "Prefilter hits: {}", full_solver.prefilter_hits).unwrap();
+        writeln!(out, "Deferred activations: {} (MID={}, PNS={})",
+            total_deferred,
+            full_solver.diag_mid_deferred_activations,
+            full_solver.diag_pns_deferred_activations).unwrap();
+        writeln!(out, "PNS deferred already proven: {}", full_solver.diag_pns_deferred_already_proven).unwrap();
+        writeln!(out, "Cross-deduce hits (MID): {}", full_solver.diag_cross_deduce_hits).unwrap();
+
+        // ========================================
+        // Phase 4: 正常性チェック
+        // ========================================
+        writeln!(out, "\n--- Phase 4: 正常性チェック ---\n").unwrap();
+
+        let mut checks_passed = 0;
+        let mut checks_failed = 0;
+
+        // Check 1: prefilter_hits > 0 (プレフィルタが動作している)
+        if full_solver.prefilter_hits > 0 {
+            writeln!(out, "[OK] prefilter_hits = {} (> 0)", full_solver.prefilter_hits).unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] prefilter_hits = 0 (プレフィルタが動作していない)").unwrap();
+            checks_failed += 1;
+        }
+
+        // Check 2: deferred_activations > 0 (遅延展開が動作している)
+        if total_deferred > 0 {
+            writeln!(out, "[OK] deferred_activations = {} (> 0, MID={} PNS={})",
+                total_deferred,
+                full_solver.diag_mid_deferred_activations,
+                full_solver.diag_pns_deferred_activations).unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] deferred_activations = 0 (遅延展開が動作していない)").unwrap();
+            checks_failed += 1;
+        }
+
+        // Check 3: cross_deduce が per-move テストで動作している
+        // 全体探索は PNS 支配のため MID cross_deduce = 0 は想定内．
+        // per-move テスト(Phase 2)の合計で検証する．
+        if phase2_cross_deduce_total > 0 {
+            writeln!(out, "[OK] cross_deduce(Phase2合計) = {} (> 0, MID で TT 転用が動作)",
+                phase2_cross_deduce_total).unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] cross_deduce(Phase2合計) = 0 (同一マス証明転用が動作していない)").unwrap();
+            checks_failed += 1;
+        }
+
+        // Check 4: 3カテゴリ制限
+        if all_ok {
+            writeln!(out, "[OK] 3カテゴリ制限: 全チェーンマスで遵守").unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] 3カテゴリ制限: 違反あり").unwrap();
+            checks_failed += 1;
+        }
+
+        // Check 5: TT entries < nodes (TT がノード数と乖離していない)
+        let ratio = full_solver.table.total_entries() as f64
+            / full_solver.nodes_searched as f64;
+        if ratio < 2.0 {
+            writeln!(out, "[OK] TT entries/nodes = {:.2} (< 2.0)", ratio).unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] TT entries/nodes = {:.2} (>= 2.0, TT 肥大化の疑い)", ratio).unwrap();
+            checks_failed += 1;
+        }
+
+        // Check 6: deferred_activations << nodes (バルク活性化していない)
+        let act_ratio = total_deferred as f64
+            / full_solver.nodes_searched as f64;
+        if act_ratio < 0.1 {
+            writeln!(out, "[OK] deferred_act/nodes = {:.4} (< 0.1, 逐次活性化)", act_ratio).unwrap();
+            checks_passed += 1;
+        } else {
+            writeln!(out, "[NG] deferred_act/nodes = {:.4} (>= 0.1, 過剰な活性化の疑い)", act_ratio).unwrap();
+            checks_failed += 1;
+        }
+
+        writeln!(out, "\n合計: {} passed, {} failed", checks_passed, checks_failed).unwrap();
+
+        // テスト結果
+        assert!(checks_failed == 0,
+            "チェーン合駒最適化の動作検証に失敗: {} 件のチェックが NG (詳細: {})",
+            checks_failed, out_path);
+
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: {}", out_path);
+    }
 
 }
