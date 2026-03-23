@@ -1019,6 +1019,25 @@ impl TranspositionTable {
         self.tt.get(&pos_key).map_or(0, |v| v.len())
     }
 
+    /// 証明済み(pn=0)のエントリ数を返す．
+    #[cfg(feature = "tt_diag")]
+    fn count_proven(&self) -> usize {
+        self.tt.values().flat_map(|v| v.iter()).filter(|e| e.pn == 0).count()
+    }
+
+    /// 反証済み(dn=0)のエントリ数を返す．
+    #[cfg(feature = "tt_diag")]
+    fn count_disproven(&self) -> usize {
+        self.tt.values().flat_map(|v| v.iter()).filter(|e| e.dn == 0).count()
+    }
+
+    /// 中間(pn>0 かつ dn>0)のエントリ数を返す．
+    #[cfg(feature = "tt_diag")]
+    fn count_intermediate(&self) -> usize {
+        self.tt.values().flat_map(|v| v.iter())
+            .filter(|e| e.pn > 0 && e.dn > 0).count()
+    }
+
     /// TT ガベージコレクション: メモリ使用量を抑制する．
     ///
     /// 2段階の GC を実行する:
@@ -5003,6 +5022,25 @@ impl DfPnSolver {
                     let all_proven = arena[ci].children.iter()
                         .all(|&c| arena[c as usize].pn == 0);
                     if all_proven {
+                        // 証明済み子の直接 OR ノードのみ TT に flush．
+                        // 中間ノード(子ありの AND/OR)は actual hand で格納するため
+                        // 既存の中間エントリを不正に evict し MID 収束を妨げる恐れがある．
+                        // 直接 OR 子ノードのみ flush することで，try_prefilter_block が
+                        // 「合駒後の OR ノードが証明済みか」を判定できるようにする．
+                        for &child_idx in &arena[ci].children {
+                            let child = &arena[child_idx as usize];
+                            if child.pn == 0 && child.or_node {
+                                self.store(
+                                    child.pos_key, child.hand, 0, INF,
+                                    REMAINING_INFINITE, child.pos_key,
+                                );
+                            }
+                        }
+
+                        let and_remaining = arena[ci].remaining;
+                        let att_hand = arena[ci].hand;
+                        let mut and_proof = [0u8; HAND_KINDS];
+
                         let mut activated_unproven = false;
                         while !arena[ci].deferred_drops.is_empty() {
                             let next_drop = arena[ci].deferred_drops.remove(0);
@@ -5014,6 +5052,58 @@ impl DfPnSolver {
                                 ci, next_drop.to_usi(), arena[ci].deferred_drops.len(),
                                 self.table.total_entries(),
                             );
+
+                            // TT ベースプレフィルタ: 合駒の捕獲後局面が
+                            // 既に TT で証明済みなら展開不要．
+                            // PNS flush で先行子の証明が TT に反映された後に
+                            // チェックすることで，同一マスの兄弟合駒を
+                            // TT ヒットで即座に証明できる．
+                            if and_remaining >= 3 {
+                                let cap_pre = board.do_move(next_drop);
+                                let child_hand_pre = board.hand[self.attacker.index()];
+                                board.undo_move(next_drop, cap_pre);
+                                if self.try_prefilter_block(
+                                    board, next_drop, &child_hand_pre,
+                                    and_remaining, &mut and_proof,
+                                ) {
+                                    self.prefilter_hits += 1;
+                                    #[cfg(feature = "tt_diag")]
+                                    {
+                                        self.diag_pns_deferred_already_proven += 1;
+                                        eprintln!(
+                                            "[pns_seq]   prefilter hit for {} → proven",
+                                            next_drop.to_usi(),
+                                        );
+                                    }
+                                    // アリーナにも証明済みとして追加
+                                    let cap_pf = board.do_move(next_drop);
+                                    let child_pk_pf = position_key(board);
+                                    let child_fh_pf = board.hash;
+                                    let child_hand_pf =
+                                        board.hand[self.attacker.index()];
+                                    let child_remaining_pf =
+                                        and_remaining.saturating_sub(1);
+                                    board.undo_move(next_drop, cap_pf);
+                                    let pf_idx = arena.len() as u32;
+                                    arena.push(PnsNode {
+                                        pos_key: child_pk_pf,
+                                        full_hash: child_fh_pf,
+                                        hand: child_hand_pf,
+                                        pn: 0,
+                                        dn: INF,
+                                        parent: current,
+                                        move_from_parent: next_drop,
+                                        or_node: true,
+                                        expanded: true,
+                                        children: Vec::new(),
+                                        remaining: child_remaining_pf,
+                                        deferred_drops: Vec::new(),
+                                    });
+                                    arena[ci].children.push(pf_idx);
+                                    continue;
+                                }
+                            }
+
                             let cap = board.do_move(next_drop);
                             let child_fh = board.hash;
                             let child_pk = position_key(board);
@@ -5649,11 +5739,6 @@ impl DfPnSolver {
         }
     }
 
-    /// PNS ツリーの結果を TT に格納する．
-    ///
-    /// 証明/反証済みの中間ノードを TT に書き込み，
-    /// 既存の `extract_pv()` による PV 抽出を可能にする．
-    /// OR 証明ノードには TT Best Move も記録する．
     fn pns_store_to_tt(&mut self, arena: &[PnsNode]) {
         for node in arena {
             if node.pn == 0 && node.expanded && !node.children.is_empty() {
@@ -10059,6 +10144,8 @@ mod tests {
             phase2_cross_deduce_total += sub_solver.diag_cross_deduce_hits;
             phase2_pns_proven_total += sub_solver.diag_pns_deferred_already_proven;
 
+            let sub_proven = sub_solver.table.count_proven();
+            let sub_disproven = sub_solver.table.count_disproven();
             writeln!(out, "{:<10} {:<10} {:<12} {:<10} {:<8}/{:<8} {:<8}/{:<8} {:<10}",
                 mv_usi,
                 sub_solver.nodes_searched,
@@ -10069,6 +10156,9 @@ mod tests {
                 sub_solver.diag_cross_deduce_hits,
                 sub_solver.diag_pns_deferred_already_proven,
                 result_str,
+            ).unwrap();
+            writeln!(out, "{:<10} TT: proven={}, disproven={}, total={}",
+                "", sub_proven, sub_disproven, sub_solver.table.total_entries(),
             ).unwrap();
         }
 
@@ -10120,8 +10210,13 @@ mod tests {
         writeln!(out, "Nodes: {}", full_solver.nodes_searched).unwrap();
         writeln!(out, "Time: {:.2}s", elapsed.as_secs_f64()).unwrap();
         writeln!(out, "NPS: {:.0}", full_solver.nodes_searched as f64 / elapsed.as_secs_f64()).unwrap();
+        let tt_total = full_solver.table.total_entries();
+        let tt_proven = full_solver.table.count_proven();
+        let tt_disproven = full_solver.table.count_disproven();
+        let tt_intermediate = full_solver.table.count_intermediate();
         writeln!(out, "TT positions: {}", full_solver.table.len()).unwrap();
-        writeln!(out, "TT entries: {}", full_solver.table.total_entries()).unwrap();
+        writeln!(out, "TT entries: {} (proven={}, disproven={}, intermediate={})",
+            tt_total, tt_proven, tt_disproven, tt_intermediate).unwrap();
         writeln!(out, "Prefilter hits: {}", full_solver.prefilter_hits).unwrap();
         writeln!(out, "Deferred activations: {} (MID={}, PNS={})",
             total_deferred,
