@@ -1056,20 +1056,6 @@ impl TranspositionTable {
     /// `other` の全エントリを走査し，証明済み(pn=0)および
     /// 確定反証(dn=0)のエントリのみを `self` に `store()` する．
     /// 中間エントリは破棄される．
-    fn merge_proven(&mut self, other: &TranspositionTable) {
-        for (pos_key, entries) in &other.tt {
-            for e in entries {
-                if e.pn == 0 || e.dn == 0 {
-                    // GHI: 経路依存フラグを保持してマージ
-                    self.store_path_dep(
-                        *pos_key, e.hand, e.pn, e.dn,
-                        e.remaining, e.source, e.path_dependent,
-                    );
-                }
-            }
-        }
-    }
-
     /// プロファイル統計をリセットする．
     #[cfg(feature = "profile")]
     fn reset_profile(&mut self) {
@@ -1162,24 +1148,12 @@ pub struct DfPnSolver {
     /// 0 にすると静的詰め探索を無効化し，インライン1手・3手詰め判定のみ行う．
     /// デフォルトは 0(無効)．
     mate_budget: u32,
-    /// 合駒事前証明(interpose pre-solve)の1子あたりノード予算．
-    ///
-    /// AND ノードの合駒(drop)子ノードに対して，MID ループ前に
-    /// クリーンな TT で `mid()` を呼び出し，証明/反証を試みる．
-    /// 1つ目の合駒で蓄積された証明が2つ目以降に TT ヒットで伝播する．
-    /// 0 にすると事前証明を無効化する．デフォルトは 256．
-    interpose_pre_solve_nodes: u64,
     /// TT GC 閾値: TT のポジション数がこの値を超えると GC を実行する．
     ///
     /// 0 にすると GC を無効化する．
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
     /// 推奨値: 探索ノード数の 1/5〜1/2 程度(例: 100M ノードなら 20M〜50M)．
     tt_gc_threshold: usize,
-    /// 合駒事前証明の再帰防止フラグ．
-    ///
-    /// Pre-Solve 内の mid() が再帰的に AND ノードに到達した場合，
-    /// ネストした Pre-Solve によるスタックオーバーフローを防ぐ．
-    in_pre_solve: bool,
     /// 直前の `generate_defense_moves` で計算されたチェーンマスのビットボード．
     ///
     /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
@@ -1233,8 +1207,6 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             mate_budget: 0,
-            interpose_pre_solve_nodes: 256,
-            in_pre_solve: false,
             chain_bb_cache: Bitboard::EMPTY,
             prefilter_hits: 0,
             tt_gc_threshold: 0,
@@ -1286,16 +1258,6 @@ impl DfPnSolver {
     /// デフォルトは 0(無効)．
     pub fn set_mate_budget(&mut self, v: u32) -> &mut Self {
         self.mate_budget = v;
-        self
-    }
-
-    /// 合駒事前証明のノード予算を設定する．
-    ///
-    /// AND ノードの合駒子ノードに対して，MID ループ前にクリーンな TT で
-    /// df-pn 探索を実行し，証明/反証を試みる．
-    /// 0 にすると事前証明を無効化する．デフォルトは 256．
-    pub fn set_interpose_pre_solve_nodes(&mut self, v: u64) -> &mut Self {
-        self.interpose_pre_solve_nodes = v;
         self
     }
 
@@ -2277,11 +2239,11 @@ impl DfPnSolver {
         self.path.insert(full_hash);
 
         // --- チェーン合駒の分類と並び替え (提案E + 提案A) ---
-        // deferred_children が全てチェーンマスへのドロップなら Pre-Solve をスキップし，
+        // deferred_children が全てチェーンマスへのドロップなら，
         // PNS/IDS の自然な探索に委ねる．チェーンマスのドロップは内側(玉に近い)から
         // 外側(飛び駒に近い)の順に並び替え，TT 蓄積の再利用効率を向上させる．
         // チェーン合駒判定 + 内→外ソート + DN スケーリング用の玉位置保持
-        let (all_deferred_are_chain, chain_king_sq) =
+        let chain_king_sq =
             if !or_node && !deferred_children.is_empty()
                 && self.chain_bb_cache.is_not_empty()
             {
@@ -2300,57 +2262,14 @@ impl DfPnSolver {
                         let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
                         dr.max(dc) // Chebyshev distance: inner (small) first
                     });
-                    (true, Some(king_sq))
+                    Some(king_sq)
                 } else {
-                    (false, None)
+                    None
                 }
             } else {
-                (false, None)
+                None
             };
 
-        // --- 合駒事前証明 (interpose pre-solve) ---
-        // AND ノードの合駒(drop)子ノードに対して，クリーンな TT で
-        // df-pn の mid() を予算付きで実行し，MID ループ前に証明/反証を確定する．
-        //
-        // 設計思想 (Lambda df-pn の simplest-first 原則):
-        // 1. 一時 TT を使って1つ目の合駒を証明 → TT に証明パスが蓄積
-        // 2. 2つ目以降の合駒は持ち駒優越で TT ヒット → 事実上ゼロコストで証明
-        // 3. 証明済み子は children から除外 → MID ループの負荷が激減
-        //
-        // 既存 TT はノイズになるためリセットし，Pre-Solve 間で TT を共有する．
-        // 終了後に確定エントリ(証明・反証)のみ本体 TT にマージする．
-        //
-        // `#[inline(never)]` の別関数に抽出し，mid() のスタックフレーム膨張を防ぐ．
-        // 提案E: チェーン合駒のみの AND ノードでは Pre-Solve をスキップし，
-        // PNS/IDS の既存の仕組み(プレフィルタ + 逐次活性化 + IDS ボトムアップ)に委ねる．
-        // 通常マスへの合駒を含む場合は従来どおり Pre-Solve を実行する．
-        if !or_node && !deferred_children.is_empty()
-            && self.interpose_pre_solve_nodes > 0 && remaining >= 3
-            && !self.in_pre_solve
-            && !all_deferred_are_chain
-        {
-            match self.interpose_pre_solve(
-                board, &mut deferred_children, pos_key, &att_hand,
-                ply, remaining,
-            ) {
-                PreSolveResult::Disproved(dp) => {
-                    self.store(pos_key, dp, INF, 0, remaining, pos_key);
-                    self.path.remove(&full_hash);
-                    return;
-                }
-                PreSolveResult::AllProved(mut proof) if children.is_empty() => {
-                    // プレフィルタで証明済みの合駒と pre-solve の結果を統合
-                    for k in 0..HAND_KINDS {
-                        proof[k] = proof[k].max(init_and_proof[k]);
-                        proof[k] = proof[k].min(att_hand[k]);
-                    }
-                    self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
-                    self.path.remove(&full_hash);
-                    return;
-                }
-                _ => {}
-            }
-        }
 
         // プレフィルタで全合駒が証明済み(deferred_children が空になった場合)
         if !or_node && deferred_children.is_empty() && init_prefiltered_count > 0
@@ -3213,158 +3132,6 @@ impl DfPnSolver {
         false
     }
 
-    /// 合駒(drop)子ノードの事前証明を試みる．
-    ///
-    /// クリーンな一時 TT を使い，各合駒子に対してノード予算付きの
-    /// `mid()` を実行する．1つ目の合駒で蓄積された証明エントリが
-    /// 2つ目以降の合駒に TT ヒットで伝播するため，多くの合駒を
-    /// 低コストで証明できる．
-    ///
-    /// 既存 TT はノイズになるため，Pre-Solve 開始時にリセットし，
-    /// 完了後に確定エントリ(証明・反証)のみ本体 TT にマージする．
-    ///
-    /// # 戻り値
-    ///
-    /// - `Disproved(dp)`: 合駒子の1つが反証 → AND ノード全体が反証
-    /// - `AllProved(proof)`: 全合駒子が証明済み(証明駒の和集合)
-    /// - `Partial`: 一部未確定(deferred_children から証明済みを除去済み)
-    ///
-    /// `#[inline(never)]` により，mid() のスタックフレームに
-    /// Pre-Solve のローカル変数が含まれるのを防ぐ．
-    #[inline(never)]
-    fn interpose_pre_solve(
-        &mut self,
-        board: &mut Board,
-        deferred_children: &mut ArrayVec<
-            (Move, u64, u64, [u8; HAND_KINDS]),
-            MAX_MOVES,
-        >,
-        _pos_key: u64,
-        att_hand_ref: &[u8; HAND_KINDS],
-        ply: u32,
-        remaining: u16,
-    ) -> PreSolveResult {
-        // 一時 TT にスワップ
-        let main_tt = std::mem::replace(
-            &mut self.table,
-            TranspositionTable::new(),
-        );
-        let saved_max_nodes = self.max_nodes;
-
-        let saved_depth = self.depth;
-
-        let mut and_proof = [0u8; HAND_KINDS];
-        let mut pre_solved_indices: ArrayVec<usize, MAX_MOVES> = ArrayVec::new();
-
-        for (i, &(ref m, _child_fh, child_pk, ref child_hand))
-            in deferred_children.iter().enumerate()
-        {
-            let child_remaining = remaining.saturating_sub(1);
-
-            // TT で既に証明/反証済みなら即処理
-            let (cpn, cdn, _csrc) = self.look_up_pn_dn(
-                child_pk, child_hand, child_remaining,
-            );
-            if cpn == 0 {
-                // 前の合駒の Pre-Solve で TT ヒット → 証明済み
-                let child_ph = self.table.get_proof_hand(child_pk, child_hand);
-                let adj = adjust_hand_for_move(*m, &child_ph);
-                for k in 0..HAND_KINDS {
-                    and_proof[k] = and_proof[k].max(adj[k]);
-                }
-                let _ = pre_solved_indices.try_push(i);
-                continue;
-            }
-            if cdn == 0 {
-                // 反証: AND ノード全体が反証
-                // att_hand で保存(TT ヒット率最大化)
-                let pre_solve_tt = std::mem::replace(
-                    &mut self.table, main_tt,
-                );
-                self.table.merge_proven(&pre_solve_tt);
-                self.depth = saved_depth;
-                self.max_nodes = saved_max_nodes;
-                return PreSolveResult::Disproved(*att_hand_ref);
-            }
-
-            // mid() をノード予算付きで実行
-            let captured = board.do_move(*m);
-            self.max_nodes = self.nodes_searched
-                .saturating_add(self.interpose_pre_solve_nodes);
-            self.in_pre_solve = true;
-            self.mid(board, INF - 1, INF - 1, ply + 1, true);
-            self.in_pre_solve = false;
-            board.undo_move(*m, captured);
-            self.max_nodes = saved_max_nodes;
-
-            // 結果確認
-            let (cpn, cdn, _csrc) = self.look_up_pn_dn(
-                child_pk, child_hand, child_remaining,
-            );
-            if cpn == 0 {
-                let child_ph = self.table.get_proof_hand(child_pk, child_hand);
-                let adj = adjust_hand_for_move(*m, &child_ph);
-                for k in 0..HAND_KINDS {
-                    and_proof[k] = and_proof[k].max(adj[k]);
-                }
-                let _ = pre_solved_indices.try_push(i);
-
-                // --- 同一マス合駒の捕獲後 TT 転用 ---
-                // 合駒 i が証明済みの場合，同一マスの他の合駒について
-                // 捕獲後の共通局面の TT エントリで証明を転用する．
-                self.cross_deduce_same_square_proofs(
-                    board, deferred_children, i, remaining,
-                    &mut and_proof, &mut pre_solved_indices,
-                );
-            } else if cdn == 0 {
-                // 反証: AND ノード全体が反証
-                // att_hand で保存(TT ヒット率最大化)
-                let pre_solve_tt = std::mem::replace(
-                    &mut self.table, main_tt,
-                );
-                self.table.merge_proven(&pre_solve_tt);
-                self.depth = saved_depth;
-                self.max_nodes = saved_max_nodes;
-                return PreSolveResult::Disproved(*att_hand_ref);
-            } else if pre_solved_indices.is_empty() {
-                // 最初の合駒すら証明できない → 不詰の可能性が高い．
-                // これ以上の Pre-Solve はノードの浪費なので打ち切る．
-                break;
-            }
-        }
-
-        // TT を復元し，確定エントリをマージ
-        let pre_solve_tt = std::mem::replace(
-            &mut self.table, main_tt,
-        );
-        self.table.merge_proven(&pre_solve_tt);
-        self.depth = saved_depth;
-        self.max_nodes = saved_max_nodes;
-
-        // 証明済み子を deferred_children から除去(降順ソートして安全に削除)
-        pre_solved_indices.sort_unstable();
-        // dedup: ArrayVec doesn't have dedup, do it manually
-        {
-            let mut write = 0;
-            for read in 0..pre_solved_indices.len() {
-                if read == 0 || pre_solved_indices[read] != pre_solved_indices[read - 1] {
-                    pre_solved_indices[write] = pre_solved_indices[read];
-                    write += 1;
-                }
-            }
-            pre_solved_indices.truncate(write);
-        }
-        for &i in pre_solved_indices.iter().rev() {
-            deferred_children.remove(i);
-        }
-
-        if deferred_children.is_empty() {
-            PreSolveResult::AllProved(and_proof)
-        } else {
-            PreSolveResult::Partial
-        }
-    }
-
     /// TT ベース合駒プレフィルタ: 合駒の捕獲後局面がメイン TT で
     /// 証明済みなら，合駒の OR ノードを展開せずに証明確定する．
     ///
@@ -3475,118 +3242,10 @@ impl DfPnSolver {
     /// 合駒 P_i の捕獲後局面が TT で証明済み(pn=0)ならば，攻方は
     /// 「合駒 P_i を取って王手」→「証明済み手順で詰み」と進めるため，
     /// 合駒 P_i の子ノード(OR ノード)も pn=0 と確定できる．
-    #[inline(never)]
-    fn cross_deduce_same_square_proofs(
-        &mut self,
-        board: &mut Board,
-        deferred_children: &ArrayVec<
-            (Move, u64, u64, [u8; HAND_KINDS]),
-            MAX_MOVES,
-        >,
-        solved_idx: usize,
-        remaining: u16,
-        and_proof: &mut [u8; HAND_KINDS],
-        pre_solved_indices: &mut ArrayVec<usize, MAX_MOVES>,
-    ) {
-        let (ref solved_move, _, _, _) = deferred_children[solved_idx];
-        let target_sq = solved_move.to_sq();
-
-        // 同一マスに未解決の合駒がなければスキップ
-        let has_siblings = deferred_children.iter().enumerate().any(|(j, (mj, _, _, _))| {
-            j > solved_idx && mj.to_sq() == target_sq && !pre_solved_indices.contains(&j)
-        });
-        if !has_siblings {
-            return;
-        }
-
-        // 合駒を実行し，攻方の捕獲手を探索
-        let captured_by_block = board.do_move(*solved_move);
-        let legal = movegen::generate_legal_moves(board);
-
-        // 捕獲手(ターゲットマスへの駒取り)を全て試行
-        for cap_mv in legal.iter().filter(|mv| {
-            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
-        }) {
-            let cap_piece = board.do_move(*cap_mv);
-
-            // 捕獲が王手でなければ詰将棋の合法手ではない → スキップ
-            if !board.is_in_check(board.turn) {
-                board.undo_move(*cap_mv, cap_piece);
-                continue;
-            }
-
-            let pc_pk = position_key(board);
-            let base_hand = board.hand[self.attacker.index()];
-            board.undo_move(*cap_mv, cap_piece);
-
-            let solved_pt = solved_move.drop_piece_type().unwrap();
-            let solved_hi = solved_pt.hand_index().unwrap();
-
-            // 各未解決の同一マス合駒について TT 参照
-            for (j, &(ref mj, _, child_pk_j, ref child_hand_j))
-                in deferred_children.iter().enumerate()
-            {
-                if j <= solved_idx || mj.to_sq() != target_sq {
-                    continue;
-                }
-                if pre_solved_indices.contains(&j) {
-                    continue;
-                }
-
-                let pt_j = match mj.drop_piece_type() {
-                    Some(pt) => pt,
-                    None => continue,
-                };
-                let hi_j = match pt_j.hand_index() {
-                    Some(hi) => hi,
-                    None => continue,
-                };
-
-                // 合駒 j を捕獲した場合の攻方持ち駒を計算:
-                // base_hand は solved_move の駒を捕獲した状態なので，
-                // solved の駒分を引いて j の駒分を足す
-                let mut hand_j = base_hand;
-                hand_j[solved_hi] = hand_j[solved_hi].saturating_sub(1);
-                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
-
-                let pc_remaining = remaining.saturating_sub(2);
-                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
-
-                if ppn == 0 {
-                    // 捕獲後局面が証明済み → 合駒 j の OR ノードも証明
-                    let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
-
-                    // OR ノードの証明駒: 捕獲で得る駒 j の分を差し引く
-                    let mut or_ph = pc_ph;
-                    or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
-                    for k in 0..HAND_KINDS {
-                        or_ph[k] = or_ph[k].min(child_hand_j[k]);
-                    }
-
-                    // 子 TT に証明エントリを格納(次回ループの TT チェックで使用)
-                    self.table.store(
-                        child_pk_j, or_ph, 0, INF,
-                        remaining.saturating_sub(1), child_pk_j,
-                    );
-
-                    // AND 証明駒の更新
-                    let adj = adjust_hand_for_move(*mj, &or_ph);
-                    for k in 0..HAND_KINDS {
-                        and_proof[k] = and_proof[k].max(adj[k]);
-                    }
-                    let _ = pre_solved_indices.try_push(j);
-                }
-            }
-        }
-
-        board.undo_move(*solved_move, captured_by_block);
-    }
-
     /// メイン TT 上での同一マス合駒証明転用．
     ///
     /// `children` 内の証明済みドロップ手 `solved_move` に対し，
     /// `deferred_children` の同一マスの合駒を TT から証明転用する．
-    /// `interpose_pre_solve` を経由しないチェーン合駒(提案E)で使用する．
     ///
     /// 証明された合駒は `deferred_children` から除去し，
     /// `and_proof` に証明駒を蓄積する．
@@ -3708,16 +3367,6 @@ impl DfPnSolver {
             deferred_children.remove(i);
         }
     }
-}
-
-/// 合駒事前証明の結果．
-enum PreSolveResult {
-    /// 合駒子の1つが反証 → AND ノード全体が反証．反証駒を含む．
-    Disproved([u8; HAND_KINDS]),
-    /// 全合駒子が証明済み．証明駒の和集合(max)を含む．
-    AllProved([u8; HAND_KINDS]),
-    /// 一部未確定(証明済みの子は deferred_children から除去済み)．
-    Partial,
 }
 
 /// 予算制の静的詰め探索の結果．
@@ -9280,7 +8929,7 @@ mod tests {
     }
 
     /// 39手詰 PV 上の合駒(S*6i)後の局面を単体ソルブし，
-    /// Pre-Solve に必要なノード数を計測する．
+    /// 各応手に必要なノード数を計測する．
     ///
     /// 合駒は30手目(S*6i)で，攻め方は31手目(8i6i)で銀を取る．
     /// 取った後の局面(攻め方番)を単体で解き，ノード数を確認する．
@@ -9329,7 +8978,6 @@ mod tests {
             let remaining = 10; // 余裕を持って depth=10
             let mut child_solver = DfPnSolver::new(remaining, 100_000, 32767);
             child_solver.set_find_shortest(false);
-            child_solver.set_interpose_pre_solve_nodes(0); // Pre-Solve 無効
             let start = Instant::now();
             let result = child_solver.solve(&mut child_board);
             let elapsed = start.elapsed();
@@ -9450,7 +9098,6 @@ mod tests {
                 (remaining + 2) as u32, budget, 32767,
             );
             solver.set_find_shortest(false);
-            solver.set_interpose_pre_solve_nodes(0); // Pre-Solve 無効
             let mut test_board = board.clone();
             let result = solver.solve(&mut test_board);
 
@@ -9509,7 +9156,6 @@ mod tests {
             // 残り35手分で探索 (depth=37, budget=500K)
             let mut child_solver = DfPnSolver::new(37, 500_000, 32767);
             child_solver.set_find_shortest(false);
-            child_solver.set_interpose_pre_solve_nodes(0);
             let result = child_solver.solve(&mut child_board);
 
             let move_type = if defense.is_drop() { "drop" } else { "move" };
