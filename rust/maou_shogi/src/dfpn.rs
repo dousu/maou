@@ -7460,9 +7460,9 @@ mod tests {
         writeln!(out, "{}", "=".repeat(80)).unwrap();
         writeln!(out, " 39手詰め逆順サブ問題 (1M nodes / 180s)").unwrap();
         writeln!(out, "{}", "=".repeat(80)).unwrap();
-        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {}",
-            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
-        writeln!(out, "{}", "-".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
 
         // PV を偶数手ずつ進めた局面(攻め番=ORノード)を全て事前構築
         let mut board = Board::new();
@@ -7507,9 +7507,19 @@ mod tests {
                     ("Unknown".to_string(), false),
             };
 
-            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {}",
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
                 ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
-                solver.max_ply, result_str).unwrap();
+                solver.max_ply, solver.table.len(), result_str).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = solver.table.count_proven();
+                let disproven = solver.table.count_disproven();
+                let intermediate = solver.table.count_intermediate();
+                let total = solver.table.total_entries();
+                writeln!(out, "       TT entries: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
 
             if !solved {
                 first_unsolved_ply = Some(*ply);
@@ -7535,8 +7545,8 @@ mod tests {
                     writeln!(out, "  Defense moves: {} (PV: {})", defenses.len(),
                         if *ply + 1 < pv.len() { pv[*ply + 1] } else { "N/A" }).unwrap();
 
-                    writeln!(out, "  {:<12} {:<14} {:<10} {:<10} {}",
-                        "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+                    writeln!(out, "  {:<12} {:<14} {:<10} {:<10} {:<10} {}",
+                        "Move", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
 
                     for def_mv in &defenses {
                         let mut after_def = after_attack.clone();
@@ -7575,10 +7585,20 @@ mod tests {
                         let marker = if *ply + 1 < pv.len() && def_mv.to_usi() == pv[*ply + 1] {
                             " ← PV"
                         } else { "" };
-                        writeln!(out, "  {:<12} {:<14} {:<10.2} {:<10} {}{}",
+                        writeln!(out, "  {:<12} {:<14} {:<10.2} {:<10} {:<10} {}{}",
                             def_mv.to_usi(), sub_solver.nodes_searched,
                             sub_elapsed.as_secs_f64(), sub_solver.max_ply,
-                            sub_result_str, marker).unwrap();
+                            sub_solver.table.len(), sub_result_str, marker).unwrap();
+
+                        #[cfg(feature = "tt_diag")]
+                        {
+                            let proven = sub_solver.table.count_proven();
+                            let disproven = sub_solver.table.count_disproven();
+                            let intermediate = sub_solver.table.count_intermediate();
+                            let total = sub_solver.table.total_entries();
+                            writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                                total, proven, disproven, intermediate).unwrap();
+                        }
                     }
                 }
                 break; // 最初の未解決局面の分析後に停止
@@ -7654,9 +7674,9 @@ mod tests {
         let defenses = defense_solver.generate_defense_moves(&mut board);
         writeln!(out, "Defense moves: {} (PV: 1g1h)\n", defenses.len()).unwrap();
 
-        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
-            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
-        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(80)).unwrap();
 
         let mut total_nodes: u64 = 0;
         let mut solved_count = 0;
@@ -7692,9 +7712,20 @@ mod tests {
                     ("Unknown".to_string(), false),
             };
             let marker = if def_mv.to_usi() == "1g1h" { " ← PV" } else { "" };
-            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}{}",
                 def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
-                sub_solver.max_ply, sub_result_str, marker).unwrap();
+                sub_solver.max_ply, sub_solver.table.len(),
+                sub_result_str, marker).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = sub_solver.table.count_proven();
+                let disproven = sub_solver.table.count_disproven();
+                let intermediate = sub_solver.table.count_intermediate();
+                let total = sub_solver.table.total_entries();
+                writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
 
             total_nodes += nodes;
             if sub_solved {
@@ -7704,7 +7735,7 @@ mod tests {
             }
         }
 
-        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "{}", "-".repeat(80)).unwrap();
         writeln!(out, "合計 nodes: {}, 解決: {}/{}, Unknown: {}",
             total_nodes, solved_count, defenses.len(), unknown_moves.len()).unwrap();
 
@@ -7733,9 +7764,9 @@ mod tests {
         let defenses22 = defense_solver.generate_defense_moves(&mut board22);
         writeln!(out, "Defense moves: {} (PV: 1f1g)\n", defenses22.len()).unwrap();
 
-        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
-            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
-        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(80)).unwrap();
 
         let mut total22: u64 = 0;
         let mut solved22 = 0;
@@ -7771,9 +7802,20 @@ mod tests {
                     ("Unknown".to_string(), false),
             };
             let marker = if def_mv.to_usi() == "1f1g" { " ← PV" } else { "" };
-            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}{}",
                 def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
-                sub_solver.max_ply, sub_result_str, marker).unwrap();
+                sub_solver.max_ply, sub_solver.table.len(),
+                sub_result_str, marker).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = sub_solver.table.count_proven();
+                let disproven = sub_solver.table.count_disproven();
+                let intermediate = sub_solver.table.count_intermediate();
+                let total = sub_solver.table.total_entries();
+                writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
 
             total22 += nodes;
             if sub_solved {
@@ -7875,9 +7917,9 @@ mod tests {
         let defenses20 = defense_solver.generate_defense_moves(&mut board20);
         writeln!(out, "Defense moves: {} (PV: 1e1f)\n", defenses20.len()).unwrap();
 
-        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {}",
-            "Move", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
-        writeln!(out, "{}", "-".repeat(70)).unwrap();
+        writeln!(out, "{:<12} {:<14} {:<10} {:<10} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(80)).unwrap();
 
         for def_mv in &defenses20 {
             let mut after_def = board20.clone();
@@ -7907,9 +7949,20 @@ mod tests {
                     "Unknown".to_string(),
             };
             let marker = if def_mv.to_usi() == "1e1f" { " ← PV" } else { "" };
-            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {}{}",
+            writeln!(out, "{:<12} {:<14} {:<10.2} {:<10} {:<10} {}{}",
                 def_mv.to_usi(), nodes, sub_elapsed.as_secs_f64(),
-                sub_solver.max_ply, result_str, marker).unwrap();
+                sub_solver.max_ply, sub_solver.table.len(),
+                result_str, marker).unwrap();
+
+            #[cfg(feature = "tt_diag")]
+            {
+                let proven = sub_solver.table.count_proven();
+                let disproven = sub_solver.table.count_disproven();
+                let intermediate = sub_solver.table.count_intermediate();
+                let total = sub_solver.table.total_entries();
+                writeln!(out, "             TT: {} (proven={}, disproven={}, intermediate={})",
+                    total, proven, disproven, intermediate).unwrap();
+            }
         }
 
         // 推定サマリー
