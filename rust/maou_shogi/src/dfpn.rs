@@ -46,14 +46,6 @@ const INF: u32 = u32::MAX;
 /// 局面が既に証明済みになっていることが多く，高速に証明できる．
 const INTERPOSE_DN_BIAS: u32 = INF / 2;
 
-/// 遅延合駒展開の閾値: drop 応手がこの数以上の AND ノードで適用．
-///
-/// 合駒(drop)が多い AND ノードでは初期 pn が膨張し，
-/// 親 OR ノードがこの分岐を後回しにする問題が生じる．
-/// この閾値以上の drop がある場合:
-/// - MID ループで drop 子を遅延活性化する
-/// - 初期 pn 計算で drop を割引く
-const LAZY_INTERPOSE_THRESHOLD: u32 = 8;
 
 /// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
 /// 過小評価対策．
@@ -1858,8 +1850,7 @@ impl DfPnSolver {
             (Move, u64, u64, [u8; HAND_KINDS]),
             MAX_MOVES,
         > = ArrayVec::new();
-        // deferred が children に合流済みかどうかのフラグ
-        let mut deferred_activated = or_node; // OR ノードでは常に true(遅延なし)
+        // (逐次活性化: deferred_children.is_empty() で完了判定)
         // (OR ノードの反証は att_hand で保存するため反証駒蓄積は不要)
         // GHI 伝播: init ループ中に反証済み子の path_dependent を蓄積
         let mut init_or_path_dep = false;
@@ -2329,16 +2320,12 @@ impl DfPnSolver {
             return;
         }
 
-        // AND ノードで遅延合駒の活性化判定:
-        // (a) 非合駒の children が空 → 遅延をキャンセルし即座に合流
-        // (b) deferred_children が少数(< 8) → 効果が薄いので即座に合流
-        //     少数の合駒を遅延させると，不詰み局面で合駒が鍵となる応手の
-        //     発見が遅れ，かえって探索効率が低下する．
-        if !or_node && !deferred_children.is_empty()
-            && (children.is_empty() || (deferred_children.len() as u32) < LAZY_INTERPOSE_THRESHOLD)
-        {
-            children.extend(deferred_children.drain(..));
-            deferred_activated = true;
+        // AND ノードで非合駒の children が空 → 合駒を1つだけ活性化して開始．
+        // 逐次活性化: 合駒を1つずつ証明/反証しきってから次の合駒を追加する．
+        // 弱い駒から順に証明することで，TT に蓄積された証明パスを
+        // 強い合駒の探索で援用でき，探索効率が向上する．
+        if !or_node && !deferred_children.is_empty() && children.is_empty() {
+            children.push(deferred_children.remove(0));
         }
 
         // --- 単一子最適化 ---
@@ -2773,10 +2760,10 @@ impl DfPnSolver {
 
                 // 全子が証明済み
                 if all_proved && current_pn == 0 {
-                    if !deferred_activated && !deferred_children.is_empty() {
-                        // 遅延合駒を活性化: children に合流させて MID ループ続行
-                        children.extend(deferred_children.drain(..));
-                        deferred_activated = true;
+                    if !deferred_children.is_empty() {
+                        // 逐次活性化: 次の合駒を1つだけ追加して MID ループ続行．
+                        // 前の合駒で蓄積された TT エントリを次の合駒で活用する．
+                        children.push(deferred_children.remove(0));
                         continue;
                     }
                     // AND ノード証明(deferred 含め全子が証明済み)
@@ -4225,11 +4212,11 @@ impl DfPnSolver {
                 // chain マス: 3カテゴリの代表駒のみ生成
                 self.generate_chain_drops(board, moves, to, defender);
             } else {
-                // 通常マス: 全駒種を逆順(強い駒から)生成．
-                // 強い駒の合駒を先に証明すると，攻め方が多くの持ち駒を
-                // 獲得した局面が TT に蓄積され，弱い駒の合駒探索時に
-                // TT ヒットで高速化される可能性がある．
-                for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate().rev() {
+                // 通常マス: 全駒種を弱い駒から生成(歩→香→桂→銀→金→角→飛)．
+                // 弱い合駒を先に証明すると，攻め方が合駒を取った後の
+                // 証明パスが TT に蓄積され，強い合駒探索時に同じ詰み筋を
+                // TT ヒットで援用できる(攻め方の持ち駒が増えるため)．
+                for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
                     if board.hand[defender.index()][hand_idx] == 0 {
                         continue;
                     }
@@ -6875,16 +6862,19 @@ mod tests {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> =
                     moves.iter().map(|m| m.to_usi()).collect();
-                // 5手詰め(2解あり): 探索順序によりいずれかの PV が返る
+                // 5手詰め(複数解あり): 探索順序によりいずれかの PV が返る
+                // 合駒の駒種は探索順序依存(弱い駒優先 → 歩合が先に証明される)
                 let pv1 = vec!["2d3d", "2b3a", "S*4b", "3a3b", "4c3c+"];
                 let pv2 = vec!["2d3d", "R*2c", "2e2c+", "2b1a", "1c1b+"];
+                let pv3 = vec!["2d3d", "P*2c", "2e2c+", "2b1a", "1c1b+"];
                 let pv_str: Vec<&str> = usi_moves.iter().map(|s| s.as_str()).collect();
                 assert!(
-                    pv_str == pv1 || pv_str == pv2,
-                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}",
+                    pv_str == pv1 || pv_str == pv2 || pv_str == pv3,
+                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}\n  pv3: {}",
                     usi_moves.join(" "),
                     pv1.join(" "),
                     pv2.join(" "),
+                    pv3.join(" "),
                 );
             }
             other => panic!(
@@ -9898,5 +9888,6 @@ mod tests {
             }
         }
     }
+
 
 }
