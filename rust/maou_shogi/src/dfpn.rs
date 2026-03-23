@@ -1180,6 +1180,11 @@ pub struct DfPnSolver {
     /// Pre-Solve 内の mid() が再帰的に AND ノードに到達した場合，
     /// ネストした Pre-Solve によるスタックオーバーフローを防ぐ．
     in_pre_solve: bool,
+    /// 直前の `generate_defense_moves` で計算されたチェーンマスのビットボード．
+    ///
+    /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
+    /// 各 `mid()` 呼び出しで更新され，飛び駒の王手がない場合は空．
+    chain_bb_cache: Bitboard,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
     prefilter_hits: u64,
     /// 次に TT GC チェックを行うノード数．
@@ -1230,6 +1235,7 @@ impl DfPnSolver {
             mate_budget: 0,
             interpose_pre_solve_nodes: 256,
             in_pre_solve: false,
+            chain_bb_cache: Bitboard::EMPTY,
             prefilter_hits: 0,
             tt_gc_threshold: 0,
             next_gc_check: 0,
@@ -2270,6 +2276,34 @@ impl DfPnSolver {
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
+        // --- チェーン合駒の分類と並び替え (提案E + 提案A) ---
+        // deferred_children が全てチェーンマスへのドロップなら Pre-Solve をスキップし，
+        // PNS/IDS の自然な探索に委ねる．チェーンマスのドロップは内側(玉に近い)から
+        // 外側(飛び駒に近い)の順に並び替え，TT 蓄積の再利用効率を向上させる．
+        let all_deferred_are_chain = if !or_node && !deferred_children.is_empty()
+            && self.chain_bb_cache.is_not_empty()
+        {
+            let chain_bb = self.chain_bb_cache;
+            let all_chain = deferred_children.iter().all(|(m, _, _, _)| {
+                chain_bb.contains(m.to_sq())
+            });
+            if all_chain {
+                // 提案A: チェーンドロップを内側(玉に近い)→外側の順にソート．
+                // 内側の短いサブチェーンを先に証明し，TT エントリを蓄積させることで
+                // 外側の長いサブチェーンの探索を加速する．
+                let king_sq = board.king_square(board.turn).unwrap();
+                deferred_children.sort_by_key(|(m, _, _, _)| {
+                    let to = m.to_sq();
+                    let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
+                    let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
+                    dr.max(dc) // Chebyshev distance: inner (small) first
+                });
+            }
+            all_chain
+        } else {
+            false
+        };
+
         // --- 合駒事前証明 (interpose pre-solve) ---
         // AND ノードの合駒(drop)子ノードに対して，クリーンな TT で
         // df-pn の mid() を予算付きで実行し，MID ループ前に証明/反証を確定する．
@@ -2283,9 +2317,13 @@ impl DfPnSolver {
         // 終了後に確定エントリ(証明・反証)のみ本体 TT にマージする．
         //
         // `#[inline(never)]` の別関数に抽出し，mid() のスタックフレーム膨張を防ぐ．
+        // 提案E: チェーン合駒のみの AND ノードでは Pre-Solve をスキップし，
+        // PNS/IDS の既存の仕組み(プレフィルタ + 逐次活性化 + IDS ボトムアップ)に委ねる．
+        // 通常マスへの合駒を含む場合は従来どおり Pre-Solve を実行する．
         if !or_node && !deferred_children.is_empty()
             && self.interpose_pre_solve_nodes > 0 && remaining >= 3
             && !self.in_pre_solve
+            && !all_deferred_are_chain
         {
             match self.interpose_pre_solve(
                 board, &mut deferred_children, pos_key, &att_hand,
@@ -2764,6 +2802,29 @@ impl DfPnSolver {
                 // 全子が証明済み
                 if all_proved && current_pn == 0 {
                     if !deferred_children.is_empty() {
+                        // 提案E: 証明済みのドロップ子から同一マスの deferred 合駒を転用．
+                        // メイン TT 上で cross-deduction を行い，冗長な探索を削減する．
+                        for ci in 0..children.len() {
+                            let cm = children[ci].0;
+                            if cm.is_drop() && !deferred_children.is_empty() {
+                                self.cross_deduce_deferred(
+                                    board, cm, &mut deferred_children,
+                                    remaining, &mut and_proof,
+                                );
+                            }
+                        }
+                        if deferred_children.is_empty() {
+                            // cross-deduction で全合駒が証明済み
+                            for k in 0..HAND_KINDS {
+                                and_proof[k] = and_proof[k].min(att_hand[k]);
+                            }
+                            self.store(
+                                pos_key, and_proof, 0, INF,
+                                REMAINING_INFINITE, pos_key,
+                            );
+                            self.path.remove(&full_hash);
+                            return;
+                        }
                         // 逐次活性化: 次の合駒を1つだけ追加して MID ループ続行．
                         // 前の合駒で蓄積された TT エントリを次の合駒で活用する．
                         children.push(deferred_children.remove(0));
@@ -3503,6 +3564,133 @@ impl DfPnSolver {
 
         board.undo_move(*solved_move, captured_by_block);
     }
+
+    /// メイン TT 上での同一マス合駒証明転用．
+    ///
+    /// `children` 内の証明済みドロップ手 `solved_move` に対し，
+    /// `deferred_children` の同一マスの合駒を TT から証明転用する．
+    /// `interpose_pre_solve` を経由しないチェーン合駒(提案E)で使用する．
+    ///
+    /// 証明された合駒は `deferred_children` から除去し，
+    /// `and_proof` に証明駒を蓄積する．
+    #[inline(never)]
+    fn cross_deduce_deferred(
+        &mut self,
+        board: &mut Board,
+        solved_move: Move,
+        deferred_children: &mut ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        remaining: u16,
+        and_proof: &mut [u8; HAND_KINDS],
+    ) {
+        let target_sq = solved_move.to_sq();
+
+        // 同一マスに未解決の合駒がなければスキップ
+        let has_siblings = deferred_children.iter().any(|(mj, _, _, _)| {
+            mj.to_sq() == target_sq
+        });
+        if !has_siblings {
+            return;
+        }
+
+        let solved_pt = match solved_move.drop_piece_type() {
+            Some(pt) => pt,
+            None => return,
+        };
+        let solved_hi = match solved_pt.hand_index() {
+            Some(hi) => hi,
+            None => return,
+        };
+
+        // 合駒を実行し，攻方の捕獲手を探索
+        let captured_by_block = board.do_move(solved_move);
+        let legal = movegen::generate_legal_moves(board);
+
+        // 捕獲手(ターゲットマスへの駒取り)を全て試行
+        let mut proven_indices: ArrayVec<usize, MAX_MOVES> = ArrayVec::new();
+
+        for cap_mv in legal.iter().filter(|mv| {
+            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
+        }) {
+            let cap_piece = board.do_move(*cap_mv);
+
+            // 捕獲が王手でなければ詰将棋の合法手ではない → スキップ
+            if !board.is_in_check(board.turn) {
+                board.undo_move(*cap_mv, cap_piece);
+                continue;
+            }
+
+            let pc_pk = position_key(board);
+            let base_hand = board.hand[self.attacker.index()];
+            board.undo_move(*cap_mv, cap_piece);
+
+            // 各未解決の同一マス合駒について TT 参照
+            for (j, &(ref mj, _, child_pk_j, ref child_hand_j))
+                in deferred_children.iter().enumerate()
+            {
+                if mj.to_sq() != target_sq {
+                    continue;
+                }
+                if proven_indices.contains(&j) {
+                    continue;
+                }
+
+                let pt_j = match mj.drop_piece_type() {
+                    Some(pt) => pt,
+                    None => continue,
+                };
+                let hi_j = match pt_j.hand_index() {
+                    Some(hi) => hi,
+                    None => continue,
+                };
+
+                // 合駒 j を捕獲した場合の攻方持ち駒を計算:
+                // base_hand は solved_move の駒を捕獲した状態なので，
+                // solved の駒分を引いて j の駒分を足す
+                let mut hand_j = base_hand;
+                hand_j[solved_hi] = hand_j[solved_hi].saturating_sub(1);
+                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
+
+                let pc_remaining = remaining.saturating_sub(2);
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
+
+                if ppn == 0 {
+                    // 捕獲後局面が証明済み → 合駒 j の OR ノードも証明
+                    let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
+
+                    // OR ノードの証明駒: 捕獲で得る駒 j の分を差し引く
+                    let mut or_ph = pc_ph;
+                    or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
+                    for k in 0..HAND_KINDS {
+                        or_ph[k] = or_ph[k].min(child_hand_j[k]);
+                    }
+
+                    // メイン TT に証明エントリを格納
+                    self.table.store(
+                        child_pk_j, or_ph, 0, INF,
+                        remaining.saturating_sub(1), child_pk_j,
+                    );
+
+                    // AND 証明駒の更新
+                    let adj = adjust_hand_for_move(*mj, &or_ph);
+                    for k in 0..HAND_KINDS {
+                        and_proof[k] = and_proof[k].max(adj[k]);
+                    }
+                    let _ = proven_indices.try_push(j);
+                }
+            }
+        }
+
+        board.undo_move(solved_move, captured_by_block);
+
+        // 証明済みの合駒を deferred_children から除去(降順で安全に削除)
+        proven_indices.sort_unstable();
+        for &i in proven_indices.iter().rev() {
+            deferred_children.remove(i);
+        }
+    }
 }
 
 /// 合駒事前証明の結果．
@@ -3745,7 +3933,7 @@ impl DfPnSolver {
     ///
     /// 合い効かず(futile interposition)もフィルタする．
     fn generate_defense_moves(
-        &self,
+        &mut self,
         board: &mut Board,
     ) -> ArrayVec<Move, MAX_MOVES> {
         self.generate_defense_moves_inner(board, false)
@@ -3757,10 +3945,11 @@ impl DfPnSolver {
     /// `has_any_defense` と `generate_defense_moves` の両方がこの関数を共有し，
     /// ロジックの重複を排除する．
     fn generate_defense_moves_inner(
-        &self,
+        &mut self,
         board: &mut Board,
         early_exit: bool,
     ) -> ArrayVec<Move, MAX_MOVES> {
+        self.chain_bb_cache = Bitboard::EMPTY;
         let defender = board.turn;
         let attacker = defender.opponent();
 
@@ -3842,6 +4031,7 @@ impl DfPnSolver {
                 let (futile, chain) = self.compute_futile_and_chain_squares(
                     board, &between, king_sq, checker_sq, defender, attacker,
                 );
+                self.chain_bb_cache = chain;
                 // 間のマスへの合い駒
                 self.generate_interpositions(
                     board, &mut moves, &between, &futile, &chain, king_sq, defender, all_occ, our_occ,
@@ -4037,7 +4227,7 @@ impl DfPnSolver {
         board: &Board,
         capture_sq: Square,
         checker_sq: Square,
-        king_sq: Square,
+        _king_sq: Square,
         king_step: &Bitboard,
         defender: Color,
         attacker: Color,
@@ -4651,7 +4841,7 @@ impl DfPnSolver {
     }
 
     /// 訪問数制限付き PV 復元．
-    fn extract_pv_limited(&self, board: &mut Board, max_visits: u64) -> Vec<Move> {
+    fn extract_pv_limited(&mut self, board: &mut Board, max_visits: u64) -> Vec<Move> {
         let mut board_clone = board.clone();
         let mut visits = 0u64;
         self.extract_pv_recursive_inner(
@@ -4681,7 +4871,7 @@ impl DfPnSolver {
     /// AND ノードの応手評価で ply が急増し，深度制限に達して空リストが返ることがある．
     /// この場合 `pv_nodes_per_child` を増やしても改善されず，`depth` の増加が必要．
     fn extract_pv_recursive(
-        &self,
+        &mut self,
         board: &mut Board,
         or_node: bool,
         visited: &mut FxHashSet<u64>,
@@ -4697,7 +4887,7 @@ impl DfPnSolver {
     /// 標準エラーに出力する．
     /// `visits` は TT 参照回数を計測し，`max_visits` を超えると空リストを返す．
     fn extract_pv_recursive_inner(
-        &self,
+        &mut self,
         board: &mut Board,
         or_node: bool,
         visited: &mut FxHashSet<u64>,
@@ -4976,7 +5166,7 @@ impl DfPnSolver {
             if root_pn == 0 {
                 break;
             }
-            let budget = if ids_depth < saved_depth {
+            let _budget = if ids_depth < saved_depth {
                 let b = (total_max_nodes / 16).max(1024);
                 self.max_nodes = self.nodes_searched.saturating_add(b);
                 b
@@ -5656,7 +5846,7 @@ impl DfPnSolver {
     /// - OR ノード: 証明済み子のうち最短 PV を選択
     /// - AND ノード: 証明済み子のうち最長 PV を選択(最長抵抗)
     fn pns_extract_pv(
-        &self,
+        &mut self,
         board: &mut Board,
         arena: &[PnsNode],
         node_idx: u32,
@@ -6408,7 +6598,7 @@ mod tests {
             "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
         ];
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         for sfen in &test_positions {
             let mut board = Board::new();
             board.set_sfen(sfen).unwrap();
@@ -6460,7 +6650,7 @@ mod tests {
             "2g2h", "3i4i", "2h4h",
         ];
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
@@ -6526,7 +6716,7 @@ mod tests {
             "2g2h", "3i4i", "2h4h",
         ];
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
@@ -6598,7 +6788,7 @@ mod tests {
             "l1k6/R8/1pB6/9/9/9/9/9/9 w rb4g4s4n3l16p 2",
         ];
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
 
         for sfen in &test_positions {
             let mut board = Board::new();
@@ -7105,7 +7295,7 @@ mod tests {
         board.do_move(b3c);
 
         // 後手番: 回避手を生成
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
         let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
 
@@ -7559,7 +7749,7 @@ mod tests {
                     writeln!(out, "  SFEN: {}", after_attack.sfen()).unwrap();
 
                     // 応手一覧
-                    let defense_solver = DfPnSolver::default_solver();
+                    let mut defense_solver = DfPnSolver::default_solver();
                     let defenses = defense_solver.generate_defense_moves(&mut after_attack);
                     writeln!(out, "  Defense moves: {} (PV: {})", defenses.len(),
                         if *ply + 1 < pv.len() { pv[*ply + 1] } else { "N/A" }).unwrap();
@@ -7679,7 +7869,7 @@ mod tests {
         writeln!(out, "AND node after 5g6f (ply 25)").unwrap();
         writeln!(out, "SFEN: {}", board.sfen()).unwrap();
 
-        let defense_solver = DfPnSolver::default_solver();
+        let mut defense_solver = DfPnSolver::default_solver();
         let defenses = defense_solver.generate_defense_moves(&mut board);
         writeln!(out, "Defense moves: {} (PV: 1g1h)\n", defenses.len()).unwrap();
 
@@ -7977,7 +8167,7 @@ mod tests {
         let attacker = defender.opponent(); // Black
 
         let king_sq = board.king_square(defender).unwrap();
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let checker_sq = board.compute_checkers_at(king_sq, attacker).lsb().unwrap();
 
         writeln!(out, "=== Ply 24 Diagnostic ===").unwrap();
@@ -8044,7 +8234,7 @@ mod tests {
                 after_atk.do_move(*atk);
 
                 // この後の防御手数をカウント
-                let sub_solver = DfPnSolver::default_solver();
+                let mut sub_solver = DfPnSolver::default_solver();
                 let sub_defenses = sub_solver.generate_defense_moves(&mut after_atk);
 
                 // チェーン構造の確認: 飛び駒の王手ならbetween/futile/chainを表示
@@ -8285,7 +8475,7 @@ mod tests {
         }
 
         // find_sliding_checker
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
         eprintln!("find_sliding_checker: {:?}", sliding.map(|s| format!("col={}, row={}", s.col(), s.row())));
 
@@ -8362,7 +8552,7 @@ mod tests {
         assert_eq!(checkers.count(), 1, "Expected exactly one checker");
         let checker_sq = checkers.lsb().unwrap();
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
 
         // between_bb が正しく計算されること
         let between = attack::between_bb(checker_sq, king_sq);
@@ -8416,7 +8606,7 @@ mod tests {
         }
         let checker_sq = checkers.lsb().unwrap();
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let between = attack::between_bb(checker_sq, king_sq);
 
         if between.is_empty() {
@@ -8648,7 +8838,7 @@ mod tests {
         eprintln!("\n--- all_checks_refutable analysis for P*1g ---");
         let pawn_drop2 = board.move_from_usi("P*1g").unwrap();
         let cap_pg = board.do_move(pawn_drop2);
-        let def_solver = DfPnSolver::default_solver();
+        let mut def_solver = DfPnSolver::default_solver();
         let defenses = def_solver.generate_defense_moves(&mut board);
         eprintln!("  P*1g 後の応手数: {}", defenses.len());
         for def_mv in &defenses {
@@ -8862,7 +9052,7 @@ mod tests {
         board.do_move(m);
 
         // AND ノード: 後手の回避手を生成
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
         let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
 
@@ -8958,7 +9148,7 @@ mod tests {
 
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
 
         eprintln!("\n{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} {}",
             "Ply", "Node", "Moves", "Drops", "Total", "PV Move", "Sample moves (first 10)");
@@ -9029,7 +9219,7 @@ mod tests {
         // ply 4: 後手番(AND ノード)
         assert_eq!(board.turn, Color::White);
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
         eprintln!("\nPly 4 子ノード難易度診断 (budget=100,000 nodes, depth=37)");
@@ -9100,7 +9290,7 @@ mod tests {
         assert_eq!(board.turn, Color::White);
 
         // AND ノードの回避手を生成
-        let solver_tmp = DfPnSolver::default_solver();
+        let mut solver_tmp = DfPnSolver::default_solver();
         let defenses = solver_tmp.generate_defense_moves(&mut board);
 
         eprintln!("\n=== 合駒局面ブレークダウン (ply 29 後) ===");
@@ -9282,7 +9472,7 @@ mod tests {
         // ply 4: 後手番(AND ノード)
         assert_eq!(board.turn, Color::White);
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
         eprintln!("\n=== Ply 4 AND ノード回避手ブレークダウン ===");
@@ -9343,7 +9533,7 @@ mod tests {
             board.do_move(m);
         }
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
         // ── Part 1: 逃げ手(盤上の手)の PV ──
@@ -9450,7 +9640,7 @@ mod tests {
         // ply 4: 後手番(AND ノード)
         assert_eq!(board.turn, Color::White);
 
-        let solver = DfPnSolver::default_solver();
+        let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
         // Phase 1: 各応手を 500K でソルブし，NO_MATE / UNKNOWN を特定
@@ -9839,7 +10029,7 @@ mod tests {
         // ply 8 後: 攻め方番(OR ノード)
         assert_eq!(board.turn, Color::Black);
 
-        let helper = DfPnSolver::default_solver();
+        let mut helper = DfPnSolver::default_solver();
         let checks = helper.generate_check_moves(&mut board);
 
         eprintln!("\n{}", "=".repeat(80));
