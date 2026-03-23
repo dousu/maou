@@ -2916,8 +2916,23 @@ impl DfPnSolver {
                     .saturating_add(best_pn_dn.0)
                     .min(INF - 1);
                 let epsilon = second_best / 4 + 1;
+                let sibling_based = second_best.saturating_add(epsilon);
+                // AND ノード dn 閾値の最低保証(親予算の 1/4)．
+                //
+                // 標準の 1+ε 閾値 (second_best + ε) は兄弟間のスラッシング防止に
+                // 有効だが，eff_dn_th >> second_best の場合(親 OR ノードが少数の
+                // 王手しか持たないケース等)，子に配分される dn 予算が親予算に対して
+                // 極端に小さくなる．チェーン合駒のように AND ノードが多数の類似 dn
+                // 子を持つ局面では，dn 閾値が OR レベルを通過するたびに縮退し，
+                // MID が深部に到達できず停滞する(カスケード縮退)．
+                //
+                // 親予算の 1/4 を最低保証することで，各子が親の dn 予算の
+                // 十分な割合を受け取ることを保証する．この下限は eff_dn_th が
+                // second_best に近い通常ケースでは発動しない
+                // (sibling_based ≥ eff_dn_th / 4 であるため)．
+                let dn_floor = eff_dn_th / 4;
                 let child_dn_th = eff_dn_th
-                    .min(second_best.saturating_add(epsilon))
+                    .min(sibling_based.max(dn_floor))
                     .min(INF - 1);
                 (child_pn_th, child_dn_th)
             };
@@ -4871,6 +4886,12 @@ impl DfPnSolver {
         eprintln!("[mid_fallback] after retain_proofs_only: TT_pos={} nodes_so_far={} total_budget={}",
             self.table.len(), self.nodes_searched, total_max_nodes);
 
+        // 停滞検出用: 前回の IDS 反復終了時の root pn/dn を保持する．
+        // IDS 反復後に root_pn/dn が変化しなかった場合，MID が
+        // dn 閾値カスケード縮退により進捗不能と判断する．
+        let mut prev_root_pn: u32 = 0;
+        let mut prev_root_dn: u32 = 0;
+
         loop {
             if ids_depth > saved_depth {
                 ids_depth = saved_depth;
@@ -4952,12 +4973,40 @@ impl DfPnSolver {
             if ids_depth >= saved_depth {
                 break;
             }
-            self.table.retain_proofs();
 
-            #[cfg(feature = "tt_diag")]
-            eprintln!("[ids_diag] after retain_proofs: TT_pos={}", self.table.len());
+            // 停滞検出: 予算を使い切ったのに root pn/dn が変化していない場合，
+            // dn 閾値カスケード縮退により MID が深部に到達できていない．
+            // この場合 retain_proofs で中間 TT を破棄すると，次の反復で
+            // dn 値を 1 から再構築するコストが再発し，永続的に停滞する．
+            //
+            // 対策:
+            // 1. retain_proofs をスキップして中間エントリ(pn>0, dn>0)を保持する．
+            //    TT look_up の remaining チェック(e.remaining >= remaining)により，
+            //    浅い反復の仮 NM が深い反復で誤用されることは防がれている．
+            // 2. ids_depth を saved_depth へ即座に引き上げ，残り予算を集中投入する．
+            let stagnated = root_pn2 > 0
+                && root_dn2 > 0
+                && root_pn2 == prev_root_pn
+                && root_dn2 == prev_root_dn;
 
-            ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
+            if stagnated {
+                #[cfg(feature = "tt_diag")]
+                eprintln!("[ids_diag] stagnation detected (pn={} dn={}), skipping retain_proofs, jumping to depth={}",
+                    root_pn2, root_dn2, saved_depth);
+                // retain_proofs をスキップし，中間 TT を保持したまま
+                // 最大深さへジャンプする．
+                ids_depth = saved_depth;
+            } else {
+                self.table.retain_proofs();
+
+                #[cfg(feature = "tt_diag")]
+                eprintln!("[ids_diag] after retain_proofs: TT_pos={}", self.table.len());
+
+                ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
+            }
+
+            prev_root_pn = root_pn2;
+            prev_root_dn = root_dn2;
         }
         self.depth = saved_depth;
         self.max_nodes = total_max_nodes;
