@@ -44,7 +44,15 @@ const INF: u32 = u32::MAX;
 /// 展開すると，それらの証明エントリが転置表に蓄積される．
 /// その後に合駒の分岐を探索する際，攻め方が合駒を取った後の
 /// 局面が既に証明済みになっていることが多く，高速に証明できる．
-const INTERPOSE_DN_BIAS: u32 = INF / 2;
+///
+/// 旧値: INF/2(≈2B)は deferred_children 方式と併用する前提の値であり，
+/// drops を children にそのまま含める現方式では事実上の無限バイアスとなり
+/// 非 drop 子が全て証明されるまで drop が選択されない問題があった．
+///
+/// 新値: 256 は king move の初期 dn(1)より十分大きく，
+/// king move が探索されて dn が上昇した後に drop の探索が始まる程度のバイアス．
+/// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
+const INTERPOSE_DN_BIAS: u32 = 8;
 
 
 /// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
@@ -151,18 +159,6 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 /// 高い dn は「この部分木の反証にはコストがかかる」ことを意味し，
 /// ソルバーがブランチを早期に見捨てずに深く探索するよう促す．
 /// 論文推奨値は R=0.4 (Othello/Hex)．
-const DEEP_DFPN_R: f32 = 0.5;
-
-/// Deep df-pn による深さ依存の初期値バイアスを計算する．
-///
-/// `base` は元の初期値(応手数や王手数)，`ply` は根からの深さ．
-/// 返り値は `max(base, ceil(R * ply))` で，深い位置ほど大きくなる．
-#[inline]
-fn depth_biased_dn(base: u32, ply: u32) -> u32 {
-    let bias = ((DEEP_DFPN_R * ply as f32).ceil() as u32).max(1);
-    base.max(bias)
-}
-
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
 ///
 /// `(source, value)` ペアのリストと通常の sum を受け取り，
@@ -546,7 +542,7 @@ struct PnsNode {
 ///
 /// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
 /// 2M ノードで約 200〜300 MB を使用する．
-const PNS_MAX_ARENA_NODES: usize = 2_000_000;
+const PNS_MAX_ARENA_NODES: usize = 5_000_000;
 
 /// HashMap ベースの転置表(証明駒/反証駒対応)．
 ///
@@ -627,10 +623,16 @@ impl TranspositionTable {
             }
         }
         for e in entries {
-            // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用
+            // 反証済み: 持ち駒が少ない(以下)かつ十分な深さなら再利用．
+            // 経路依存反証(path_dependent)は remaining チェックを免除する．
+            // GHI ループ検出に由来する反証は propagate_nm_remaining で
+            // remaining が極端に小さくなりがちで，同一 IDS 深さの再訪時に
+            // マッチせず無限再入(スラッシング)を引き起こすため．
+            // IDS 反復間では retain_proofs_only で経路依存反証は除去されるため，
+            // 深い反復で古い反証が不正に使われる心配はない．
             if e.dn == 0
                 && hand_gte_forward_chain(&e.hand, hand)
-                && e.remaining >= remaining
+                && (e.remaining >= remaining || e.path_dependent)
             {
                 return (e.pn, 0, e.source);
             }
@@ -757,8 +759,10 @@ impl TranspositionTable {
             }
             // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
             // GHI: 経路依存の反証は経路非依存の反証に支配されない
+            // 経路依存の新エントリ(remaining 免除)は経路非依存の既存エントリに支配されない
             if e.dn == 0
                 && !e.path_dependent
+                && !path_dependent
                 && hand_gte_forward_chain(&e.hand, &hand)
                 && e.remaining >= remaining
             {
@@ -787,16 +791,17 @@ impl TranspositionTable {
             // === 反証済みエントリの挿入 ===
             // パレートフロンティア(最大持ち駒 × 最大remaining 集合)を維持:
             // 新反証に支配される既存エントリを除去する．
-            // GHI: 経路非依存の反証は経路依存の反証を支配して置換できる
+            // GHI: 経路依存の反証は remaining 免除で lookup に使えるため保護する
             entries.retain(|e| {
                 // 証明済みは保護
                 if e.pn == 0 {
                     return true;
                 }
                 if e.dn == 0 {
-                    if !path_dependent && e.path_dependent {
-                        // 経路非依存の新反証は経路依存の既存反証を置換
-                        return false;
+                    // 経路依存の反証は remaining チェック免除で lookup に使えるため，
+                    // 経路非依存の反証では置換しない(remaining 不足で使えなくなる)
+                    if e.path_dependent && !path_dependent {
+                        return true;
                     }
                     // 反証: e.hand ≤ hand かつ e.remaining ≤ remaining → 冗長
                     return !(hand_gte_forward_chain(&hand, &e.hand)
@@ -815,8 +820,8 @@ impl TranspositionTable {
         for e in entries.iter_mut() {
             if e.hand == hand {
                 // 証明済み(pn=0)は上の共通チェックで return 済み
-                // 反証済み(dn=0)はより深い探索でのみ上書き可能
-                if e.dn == 0 && remaining <= e.remaining {
+                // 反証済み(dn=0)は中間値(pn>0, dn>0)で上書きしない
+                if e.dn == 0 {
                     return;
                 }
                 e.pn = pn;
@@ -960,6 +965,33 @@ impl TranspositionTable {
         0
     }
 
+    /// lookup が実際に使用する反証エントリの (remaining, path_dependent) を返す．
+    ///
+    /// `has_path_dependent_disproof` / `get_disproof_remaining` は
+    /// 最初にマッチした反証エントリの値を返すが，`look_up` は
+    /// `e.remaining >= remaining || e.path_dependent` を追加でチェックする．
+    /// このため，lookup が使うエントリと情報取得関数が返すエントリが
+    /// 食い違う場合がある．この関数は lookup と同じ条件でマッチした
+    /// エントリの情報を返す．
+    fn get_effective_disproof_info(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> Option<(u16, bool)> {
+        if let Some(entries) = self.tt.get(&pos_key) {
+            for e in entries {
+                if e.dn == 0
+                    && hand_gte_forward_chain(&e.hand, hand)
+                    && (e.remaining >= remaining || e.path_dependent)
+                {
+                    return Some((e.remaining, e.path_dependent));
+                }
+            }
+        }
+        None
+    }
+
     /// 全エントリをクリアする．
     fn clear(&mut self) {
         self.tt.clear();
@@ -984,6 +1016,17 @@ impl TranspositionTable {
         });
     }
 
+    /// 経路依存の反証エントリを除去する．
+    ///
+    /// IDS 反復間で使用: ループ由来の経路依存反証は異なる反復では
+    /// 無効になりうるため，次の反復の前に除去する．
+    /// 証明・非経路依存反証・中間エントリは保持する．
+    fn remove_path_dependent_disproofs(&mut self) {
+        for entries in self.tt.values_mut() {
+            entries.retain(|e| !(e.dn == 0 && e.path_dependent));
+        }
+    }
+
     /// 証明エントリ(pn=0)のみを保持し，NM を含む他の全エントリを除去する．
     ///
     /// PNS → IDS 切替時に使用: PNS で蓄積された深さ制限由来の仮 NM エントリを
@@ -992,6 +1035,14 @@ impl TranspositionTable {
     fn retain_proofs_only(&mut self) {
         self.tt.retain(|_key, entries| {
             entries.retain(|e| e.pn == 0);
+            !entries.is_empty()
+        });
+    }
+
+    /// 確定エントリ(証明 pn=0 と反証 dn=0)のみ保持し，中間エントリを除去する．
+    fn retain_terminal(&mut self) {
+        self.tt.retain(|_key, entries| {
+            entries.retain(|e| e.pn == 0 || e.dn == 0);
             !entries.is_empty()
         });
     }
@@ -1017,6 +1068,19 @@ impl TranspositionTable {
     #[allow(dead_code)]
     fn entries_for_position(&self, pos_key: u64) -> usize {
         self.tt.get(&pos_key).map_or(0, |v| v.len())
+    }
+
+    /// 指定局面の全エントリをダンプする(診断用)．
+    #[cfg(feature = "tt_diag")]
+    fn dump_entries(&self, pos_key: u64) {
+        if let Some(entries) = self.tt.get(&pos_key) {
+            for (i, e) in entries.iter().enumerate() {
+                eprintln!(
+                    "[tt_dump] entry[{}]: pn={} dn={} remaining={} path_dep={} hand={:?}",
+                    i, e.pn, e.dn, e.remaining, e.path_dependent, &e.hand
+                );
+            }
+        }
     }
 
     /// 証明済み(pn=0)のエントリ数を返す．
@@ -1220,6 +1284,59 @@ pub struct DfPnSolver {
     /// TT 診断: cross_deduce_deferred で証明除去された合駒数．
     #[cfg(feature = "tt_diag")]
     pub diag_cross_deduce_hits: u64,
+    /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_deferred_not_ready: u64,
+    /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=true の回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_deferred_ready: u64,
+    /// TT 診断: AND ノードで prefilter 後 deferred_children に入った合駒数(累計)．
+    #[cfg(feature = "tt_diag")]
+    pub diag_deferred_enqueued: u64,
+    /// TT 診断: MID ループの総反復数(nodes_searched 以上になりうる)．
+    #[cfg(feature = "tt_diag")]
+    pub diag_mid_loop_iters: u64,
+    /// TT 診断: prefilter が remaining < 3 のためスキップされた回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_prefilter_skip_remaining: u64,
+    /// TT 診断: prefilter が試行されたが TT ヒットしなかった回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_prefilter_miss: u64,
+    /// TT 診断: ply ごとの MID 訪問回数(最大64手)．
+    #[cfg(feature = "tt_diag")]
+    pub diag_ply_visits: [u64; 64],
+    /// TT 診断: ply ごとの pn=0 証明ストア回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_ply_proofs: [u64; 64],
+    /// TT 診断: try_capture_tt_proof の呼び出し / ヒット回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_capture_tt_calls: u64,
+    #[cfg(feature = "tt_diag")]
+    pub diag_capture_tt_hits: u64,
+    /// TT 診断: MID 早期リターン(閾値チェック)回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_threshold_exits: u64,
+    /// TT 診断: MID 早期リターン(tt_pn==0 || tt_dn==0)回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_terminal_exits: u64,
+    /// TT 診断: MID ループ内 break 原因別カウンタ．
+    #[cfg(feature = "tt_diag")]
+    pub diag_loop_break_proved: u64,
+    #[cfg(feature = "tt_diag")]
+    pub diag_loop_break_threshold: u64,
+    #[cfg(feature = "tt_diag")]
+    pub diag_loop_break_nodes: u64,
+    #[cfg(feature = "tt_diag")]
+    pub diag_in_path_exits: u64,
+    /// TT 診断: init フェーズでの AND 反証リターン回数(ply 別)．
+    #[cfg(feature = "tt_diag")]
+    pub diag_init_and_disproof_exits: u64,
+    /// TT 診断: 単一子最適化パス回数(ply 別)．
+    #[cfg(feature = "tt_diag")]
+    pub diag_single_child_exits: u64,
+    /// TT 診断: ノード制限によるリターン回数．
+    #[cfg(feature = "tt_diag")]
+    pub diag_node_limit_exits: u64,
 }
 
 impl DfPnSolver {
@@ -1266,6 +1383,44 @@ impl DfPnSolver {
             diag_pns_deferred_already_proven: 0,
             #[cfg(feature = "tt_diag")]
             diag_cross_deduce_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_deferred_not_ready: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_deferred_ready: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_deferred_enqueued: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_mid_loop_iters: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_prefilter_skip_remaining: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_prefilter_miss: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_ply_visits: [0u64; 64],
+            #[cfg(feature = "tt_diag")]
+            diag_ply_proofs: [0u64; 64],
+            #[cfg(feature = "tt_diag")]
+            diag_capture_tt_calls: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_capture_tt_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_threshold_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_terminal_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_loop_break_proved: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_loop_break_threshold: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_loop_break_nodes: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_in_path_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_init_and_disproof_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_single_child_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_node_limit_exits: 0,
         }
     }
 
@@ -1519,11 +1674,12 @@ impl DfPnSolver {
         }
 
         // Phase 1: Best-First PNS
-        // PNS の予算を全体の半分に制限し，MID fallback(IDS)に十分な
-        // 予算を残す．PNS は最良優先探索のため深い分岐を優先的に展開するが，
-        // 浅い反復で不詰を検出できるケースでは IDS の方が効率的．
+        // PNS は浅い詰将棋を解くのが主目的．全体の 1/4 を割り当てるが，
+        // 150K ノードを上限とする．PNS はアリーナ飽和後の反復で効率が
+        // 急落するため予算を抑え，残りを MID に回す．
         let saved_max_nodes = self.max_nodes;
-        self.max_nodes = saved_max_nodes / 2;
+        const PNS_BUDGET_CAP: u64 = 150_000;
+        self.max_nodes = (saved_max_nodes / 4).min(PNS_BUDGET_CAP);
         let pns_pv = self.pns_main(board);
         self.max_nodes = saved_max_nodes;
 
@@ -1711,6 +1867,8 @@ impl DfPnSolver {
     ) {
         // ノード制限・タイムアウトチェック
         if self.nodes_searched >= self.max_nodes {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_node_limit_exits += 1; }
             return;
         }
         // 1024 ノードごとにタイマーをチェック
@@ -1724,6 +1882,10 @@ impl DfPnSolver {
         if ply > self.max_ply {
             self.max_ply = ply;
         }
+        #[cfg(feature = "tt_diag")]
+        if (ply as usize) < 64 {
+            self.diag_ply_visits[ply as usize] += 1;
+        }
 
         let full_hash = board.hash;
         let pos_key = profile_timed!(self, position_key_ns, position_key_count,
@@ -1734,6 +1896,8 @@ impl DfPnSolver {
         let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
             self.path.contains(&full_hash));
         if in_path {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_in_path_exits += 1; }
             return;
         }
 
@@ -1745,10 +1909,42 @@ impl DfPnSolver {
         let (tt_pn, tt_dn, _) = profile_timed!(self, tt_lookup_ns, tt_lookup_count,
             self.look_up_pn_dn(pos_key, &att_hand, remaining));
         if tt_pn == 0 || tt_dn == 0 {
+            #[cfg(feature = "tt_diag")]
+            {
+                self.diag_terminal_exits += 1;
+                if ply == self.diag_ply && self.diag_terminal_exits <= 3 {
+                    eprintln!("[tt_diag] ply={} terminal exit: tt_pn={} tt_dn={} remaining={}",
+                        ply, tt_pn, tt_dn, remaining);
+                }
+            }
             return;
         }
         if tt_pn >= pn_threshold || tt_dn >= dn_threshold {
+            #[cfg(feature = "tt_diag")]
+            {
+                self.diag_threshold_exits += 1;
+                if ply == self.diag_ply && self.diag_threshold_exits <= 3 {
+                    eprintln!("[tt_diag] ply={} threshold exit: tt_pn={} tt_dn={} pn_th={} dn_th={}",
+                        ply, tt_pn, tt_dn, pn_threshold, dn_threshold);
+                }
+            }
             return;
+        }
+        // TT 診断: ply 35 で terminal exit しなかった場合の TT 状態を出力
+        #[cfg(feature = "tt_diag")]
+        {
+            let visit_count = self.diag_ply_visits[ply as usize];
+            if ply == self.diag_ply && (visit_count <= 5 || (visit_count % 1000000 == 0)) {
+                let entry_count = self.table.entries_for_position(pos_key);
+                eprintln!(
+                    "[tt_diag] ply={} non-terminal entry #{}: pos_key={:#x} tt_pn={} tt_dn={} \
+                     remaining={} hand={:?} tt_entries_at_key={}",
+                    ply, visit_count, pos_key, tt_pn, tt_dn,
+                    remaining, &att_hand, entry_count);
+                if visit_count <= 3 || visit_count == 1000000 {
+                    self.table.dump_entries(pos_key);
+                }
+            }
         }
 
         // 終端条件: 深さ制限・手数制限
@@ -1851,16 +2047,7 @@ impl DfPnSolver {
             (Move, u64, u64, [u8; HAND_KINDS]),
             MAX_MOVES,
         > = ArrayVec::new();
-        // AND ノードの遅延合駒展開 (lazy interposition expansion):
-        // 合駒(drop)の子ノードは初期化時に deferred_children に分離し，
-        // 非合駒応手(王移動・捕獲・駒移動合い)が全て証明された後に
-        // children へ合流させる．これにより AND ノードの初期 pn(= sum)が
-        // 大幅に低下し，親 OR ノードがこの分岐を深く探索しやすくなる．
-        let mut deferred_children: ArrayVec<
-            (Move, u64, u64, [u8; HAND_KINDS]),
-            MAX_MOVES,
-        > = ArrayVec::new();
-        // (逐次活性化: deferred_children.is_empty() で完了判定)
+        // (合駒は children にそのまま追加し，DN バイアスで後回し探索)
         // (OR ノードの反証は att_hand で保存するため反証駒蓄積は不要)
         // GHI 伝播: init ループ中に反証済み子の path_dependent を蓄積
         let mut init_or_path_dep = false;
@@ -1868,6 +2055,10 @@ impl DfPnSolver {
         let mut init_or_nm_min_remaining: u16 = REMAINING_INFINITE;
         // AND ノードの init フェーズ用: TT プレフィルタで証明済み合駒の証明駒蓄積
         let mut init_and_proof = [0u8; HAND_KINDS];
+        // チェーン合駒コンテキストでの遅延 AND 反証
+        let mut init_and_disproof_found = false;
+        let mut init_and_disproof_remaining: u16 = 0;
+        let mut init_and_disproof_path_dep = false;
         let mut init_prefiltered_count: u32 = 0;
         // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
         let defender_king_sq = if or_node {
@@ -1941,7 +2132,7 @@ impl DfPnSolver {
                                     if let Some(ksq) = defender_king_sq {
                                         pn = pn.saturating_add(edge_cost_or(*m, ksq));
                                     }
-                                    let dn = depth_biased_dn(n, ply + 1);
+                                    let dn = 1u32;
                                     self.store(child_pk, child_hand, pn, dn,
                                         child_remaining, child_pk);
                                 }
@@ -1966,7 +2157,7 @@ impl DfPnSolver {
                                     if let Some(ksq) = defender_king_sq {
                                         pn = pn.saturating_add(edge_cost_or(*m, ksq));
                                     }
-                                    let dn = depth_biased_dn(n, ply + 1).max(2);
+                                    let dn = 2u32;
                                     self.store(child_pk, child_hand, pn, dn,
                                         child_remaining, child_pk);
                                 }
@@ -2020,7 +2211,7 @@ impl DfPnSolver {
                                 if let Some(ksq) = defender_king_sq {
                                     pn = pn.saturating_add(edge_cost_or(*m, ksq));
                                 }
-                                let dn = depth_biased_dn(n, ply + 1);
+                                let dn = 1u32;
                                 self.store(child_pk, child_hand, pn, dn,
                                     child_remaining, child_pk);
                             }
@@ -2031,7 +2222,7 @@ impl DfPnSolver {
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
                             }
-                            let dn = depth_biased_dn(1, ply + 1);
+                            let dn = 1u32;
                             self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk);
                         }
@@ -2066,7 +2257,7 @@ impl DfPnSolver {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
                                         .saturating_add(edge_cost_and(*m));
-                                    let dn = depth_biased_dn(nc, ply + 1);
+                                    let dn = 1u32;
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
                                 }
@@ -2086,7 +2277,7 @@ impl DfPnSolver {
                                     let nc = checks.len() as u32;
                                     let pn = self.heuristic_or_pn(board, nc)
                                         .saturating_add(edge_cost_and(*m));
-                                    let dn = depth_biased_dn(nc, ply + 1).max(2);
+                                    let dn = 2u32;
                                     self.store(child_pk, child_hand, pn,
                                         dn, child_remaining, child_pk);
                                 }
@@ -2116,7 +2307,7 @@ impl DfPnSolver {
                             let nc = checks.len() as u32;
                             let pn = self.heuristic_or_pn(board, nc)
                                 .saturating_add(edge_cost_and(*m));
-                            let dn = depth_biased_dn(nc, ply + 1);
+                            let dn = 1u32;
                             self.store(child_pk, child_hand, pn,
                                 dn, child_remaining, child_pk);
                         }
@@ -2162,17 +2353,67 @@ impl DfPnSolver {
                 return;
             }
             if !or_node && cdn_now == 0 {
-                // AND 反証: att_hand で保存(TT ヒット率最大化)
-                // AND ノードでは守備側が着手するため att_hand は不変．
-                // att_hand で保存することで hand dominance のカバー範囲が最大になる．
-                let child_nm_rem = self.table.get_disproof_remaining(
-                    child_pk, &child_hand,
-                );
-                let parent_nm_remaining = propagate_nm_remaining(
-                    child_nm_rem, remaining);
-                if self.table.has_path_dependent_disproof(
-                    child_pk, &child_hand,
-                ) {
+                // AND 反証: 子の反証を検出．
+                //
+                // チェーン合駒のコンテキスト(chain_bb_cache が非空)では，
+                // 即座に return せず init ループを継続する．これにより
+                // 後続のチェーン合駒(ドロップ)に対して TT プレフィルタが
+                // 実行され，証明エントリが TT に蓄積される．
+                // 即座に return すると王逃げ/駒取りが先に処理されて
+                // ドロップが到達不能になり，プレフィルタが一切発火しない．
+                //
+                // 反証情報は init_and_disproof_* に保存し，ループ終了後に
+                // まとめて store + return する．
+                #[cfg(feature = "tt_diag")]
+                { self.diag_init_and_disproof_exits += 1; }
+                if self.chain_bb_cache.is_not_empty() {
+                    // チェーン合駒コンテキスト: 反証情報を記録して継続
+                    if !init_and_disproof_found {
+                        init_and_disproof_found = true;
+                        // lookup と同じ条件でマッチする反証の情報を取得する
+                        let (child_nm_rem, child_pd) = self.table
+                            .get_effective_disproof_info(
+                                child_pk, &child_hand, child_remaining,
+                            )
+                            .unwrap_or((0, false));
+                        init_and_disproof_remaining = if child_pd {
+                            remaining
+                        } else {
+                            propagate_nm_remaining(child_nm_rem, remaining)
+                        };
+                        init_and_disproof_path_dep = child_pd;
+                        #[cfg(feature = "tt_diag")]
+                        if ply == self.diag_ply && self.diag_in_path_exits < 10 {
+                            eprintln!("[tt_diag] ply={} init AND disproof (deferred): move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
+                                ply, m.to_usi(), child_nm_rem, init_and_disproof_remaining, remaining,
+                                init_and_disproof_path_dep, pos_key);
+                            self.diag_in_path_exits += 1;
+                        }
+                    }
+                    continue;
+                }
+                // 非チェーン: 従来の即座 return
+                // lookup と同じ条件でマッチする反証の情報を取得する
+                let (child_nm_rem, is_path_dep) = self.table
+                    .get_effective_disproof_info(
+                        child_pk, &child_hand, child_remaining,
+                    )
+                    .unwrap_or((0, false));
+                // 経路依存の反証は同一 IDS 反復内では有効とみなし，
+                // remaining を現在の深さに設定して lookup の remaining チェックを通過させる．
+                // 非経路依存の反証は通常の NM 伝播で remaining を制限する．
+                let parent_nm_remaining = if is_path_dep {
+                    remaining
+                } else {
+                    propagate_nm_remaining(child_nm_rem, remaining)
+                };
+                #[cfg(feature = "tt_diag")]
+                if ply == self.diag_ply && self.diag_in_path_exits < 10 {
+                    eprintln!("[tt_diag] ply={} init AND disproof: move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
+                        ply, m.to_usi(), child_nm_rem, parent_nm_remaining, remaining, is_path_dep, pos_key);
+                    self.diag_in_path_exits += 1;
+                }
+                if is_path_dep {
                     self.store_path_dep(
                         pos_key, att_hand, INF, 0,
                         parent_nm_remaining, pos_key, true,
@@ -2180,6 +2421,28 @@ impl DfPnSolver {
                 } else {
                     self.store(pos_key, att_hand, INF, 0,
                         parent_nm_remaining, pos_key);
+                }
+                #[cfg(feature = "tt_diag")]
+                {
+                    self.diag_init_and_disproof_exits += 1;
+                    let visit_count = if (ply as usize) < 64 {
+                        self.diag_ply_visits[ply as usize]
+                    } else { 0 };
+                    let (v_pn, v_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
+                    if v_dn != 0 {
+                        if self.diag_init_and_disproof_exits <= 5
+                            || (ply == self.diag_ply && (visit_count % 1000000 == 0))
+                        {
+                            eprintln!(
+                                "[tt_diag] WARNING: non-chain init AND disproof verification FAILED: \
+                                 ply={} visit={} pos_key={:#x} hand={:?} stored dn=0 path_dep={} rem={} \
+                                 but lookup(rem={}) returns pn={} dn={}",
+                                ply, visit_count, pos_key, &att_hand, is_path_dep,
+                                parent_nm_remaining, remaining, v_pn, v_dn
+                            );
+                            self.table.dump_entries(pos_key);
+                        }
+                    }
                 }
                 return;
             }
@@ -2200,36 +2463,34 @@ impl DfPnSolver {
                 continue;
             }
 
-            // AND ノードの合駒(drop)は deferred_children に分離
-            if !or_node && m.is_drop() {
-                // --- TT ベース合駒プレフィルタ ---
-                // 合駒を deferred_children に追加する前に，攻方の捕獲後局面を
-                // メイン TT で参照する．捕獲後局面が証明済み(pn=0)なら，
-                // 合駒の OR ノードは「捕獲して詰み」と確定できるため展開不要．
-                // IDS の浅い反復で証明された深いレベルの合駒結果を活用し，
-                // 合駒チェーンの指数的展開をボトムアップに折り畳む．
+            // AND ノードの合駒(drop)は TT プレフィルタで証明可能かチェック．
+            // 証明済みなら children に追加せずスキップする．
+            // 未証明の合駒は children にそのまま追加し，DN バイアスで
+            // 後回しに探索される(旧 deferred_children 方式を廃止)．
+            //
+            // 重要: プレフィルタは初回訪問(cpn == 1 && cdn == 1)の子のみ実行．
+            // 再訪問時に毎回実行すると generate_legal_moves が呼ばれるため，
+            // 42M+ 回の無駄な movegen が発生して NPS が壊滅的に低下する．
+            // IDS の浅い反復で TT に蓄積された証明を深い反復で活用するのは
+            // 初回訪問時のプレフィルタで十分(§3.5)．
+            if !or_node && m.is_drop() && cpn == 1 && cdn == 1 {
                 if self.try_prefilter_block(
                     board, *m, &child_hand, remaining,
                     &mut init_and_proof,
                 ) {
                     init_prefiltered_count += 1;
                     self.prefilter_hits += 1;
-                } else {
-                    push_move(&mut deferred_children, (
-                        *m,
-                        child_full_hash,
-                        child_pk,
-                        child_hand,
-                    ));
+                    continue;
                 }
-            } else {
-                push_move(&mut children, (
-                    *m,
-                    child_full_hash,
-                    child_pk,
-                    child_hand,
-                ));
+                #[cfg(feature = "tt_diag")]
+                { self.diag_deferred_enqueued += 1; }
             }
+            push_move(&mut children, (
+                *m,
+                child_full_hash,
+                child_pk,
+                child_hand,
+            ));
         }
 
         // OR ノードで全子が反証済み(children が空)
@@ -2268,6 +2529,45 @@ impl DfPnSolver {
             return;
         }
 
+        // チェーン合駒の遅延 AND 反証: init ループで合駒プレフィルタを
+        // 先に実行した後，反証を確定して return する．
+        // プレフィルタで蓄積された TT 証明エントリは次回以降の訪問で
+        // 高速にチェーン合駒をスキップさせる(§3.5)．
+        if init_and_disproof_found {
+            if init_and_disproof_path_dep {
+                self.store_path_dep(
+                    pos_key, att_hand, INF, 0,
+                    init_and_disproof_remaining, pos_key, true,
+                );
+            } else {
+                self.store(pos_key, att_hand, INF, 0,
+                    init_and_disproof_remaining, pos_key);
+            }
+            #[cfg(feature = "tt_diag")]
+            {
+                self.diag_init_and_disproof_exits += 1;
+                let visit_count = if (ply as usize) < 64 {
+                    self.diag_ply_visits[ply as usize]
+                } else { 0 };
+                let (v_pn, v_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
+                if v_dn != 0 {
+                    if self.diag_init_and_disproof_exits <= 5
+                        || (ply == self.diag_ply && (visit_count % 1000000 == 0))
+                    {
+                        eprintln!(
+                            "[tt_diag] WARNING: deferred init AND disproof verification FAILED: \
+                             ply={} visit={} pos_key={:#x} hand={:?} stored dn=0 path_dep={} rem={} \
+                             but lookup(rem={}) returns pn={} dn={}",
+                            ply, visit_count, pos_key, &att_hand, init_and_disproof_path_dep,
+                            init_and_disproof_remaining, remaining, v_pn, v_dn
+                        );
+                        self.table.dump_entries(pos_key);
+                    }
+                }
+            }
+            return;
+        }
+
         #[cfg(feature = "profile")]
         {
             self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
@@ -2277,31 +2577,22 @@ impl DfPnSolver {
         // パスに追加(フルハッシュ)
         self.path.insert(full_hash);
 
-        // --- チェーン合駒の分類と並び替え (提案E + 提案A) ---
-        // deferred_children が全てチェーンマスへのドロップなら，
-        // PNS/IDS の自然な探索に委ねる．チェーンマスのドロップは内側(玉に近い)から
-        // 外側(飛び駒に近い)の順に並び替え，TT 蓄積の再利用効率を向上させる．
-        // チェーン合駒判定 + 内→外ソート + DN スケーリング用の玉位置保持
+        // --- チェーン合駒の DN バイアス用玉位置 ---
+        // children 内のドロップ子がチェーンマスへのドロップなら，
+        // DN バイアスに Chebyshev 距離を使い内側(玉に近い)から探索する．
         let chain_king_sq =
-            if !or_node && !deferred_children.is_empty()
-                && self.chain_bb_cache.is_not_empty()
-            {
+            if !or_node && self.chain_bb_cache.is_not_empty() {
                 let chain_bb = self.chain_bb_cache;
-                let all_chain = deferred_children.iter().all(|(m, _, _, _)| {
-                    chain_bb.contains(m.to_sq())
-                });
-                if all_chain {
-                    // §3.10: チェーンドロップを内側(玉に近い)→外側の順にソート．
-                    // 内側の短いサブチェーンを先に証明し，TT エントリを蓄積させることで
-                    // 外側の長いサブチェーンの探索を加速する．
-                    let king_sq = board.king_square(board.turn).unwrap();
-                    deferred_children.sort_by_key(|(m, _, _, _)| {
-                        let to = m.to_sq();
-                        let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
-                        let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
-                        dr.max(dc) // Chebyshev distance: inner (small) first
-                    });
-                    Some(king_sq)
+                let has_drop = children.iter().any(|(m, _, _, _)| m.is_drop());
+                if has_drop {
+                    let all_chain = children.iter()
+                        .filter(|(m, _, _, _)| m.is_drop())
+                        .all(|(m, _, _, _)| chain_bb.contains(m.to_sq()));
+                    if all_chain {
+                        board.king_square(board.turn)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -2309,11 +2600,8 @@ impl DfPnSolver {
                 None
             };
 
-
-        // プレフィルタで全合駒が証明済み(deferred_children が空になった場合)
-        if !or_node && deferred_children.is_empty() && init_prefiltered_count > 0
-            && children.is_empty()
-        {
+        // プレフィルタで全合駒が証明済み(children が空になった場合)
+        if !or_node && init_prefiltered_count > 0 && children.is_empty() {
             let mut p = init_and_proof;
             for k in 0..HAND_KINDS {
                 p[k] = p[k].min(att_hand[k]);
@@ -2323,24 +2611,16 @@ impl DfPnSolver {
             return;
         }
 
-        // AND ノードで非合駒の children が空 → 合駒を1つだけ活性化して開始．
-        // 逐次活性化: 合駒を1つずつ証明/反証しきってから次の合駒を追加する．
-        // 弱い駒から順に証明することで，TT に蓄積された証明パスを
-        // 強い合駒の探索で援用でき，探索効率が向上する．
-        if !or_node && !deferred_children.is_empty() && children.is_empty() {
-            #[cfg(feature = "tt_diag")]
-            { self.diag_mid_deferred_activations += 1; }
-            children.push(deferred_children.remove(0));
-        }
-
         // --- 単一子最適化 ---
         // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
         // 親の閾値をそのまま渡して直接再帰する．
         // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
         // ケースが詰将棋で頻出する．
-        // AND ノードで deferred_children がある場合は単一子最適化を
-        // 使用できない(証明後に deferred を活性化する必要がある)．
-        if children.len() == 1 && deferred_children.is_empty() {
+        if children.len() == 1 {
+            #[cfg(feature = "tt_diag")]
+            if (ply as usize) < 64 {
+                self.diag_ply_proofs[ply as usize] += 1; // reuse as single-child counter
+            }
             let (m, child_fh, child_pk, ref child_hand) = children[0];
             loop {
                 // ノード制限・タイムアウトチェック
@@ -2423,6 +2703,8 @@ impl DfPnSolver {
                     board.undo_move(m, captured));
             }
             self.path.remove(&full_hash);
+            #[cfg(feature = "tt_diag")]
+            { self.diag_single_child_exits += 1; }
             return;
         }
 
@@ -2435,14 +2717,16 @@ impl DfPnSolver {
         #[cfg(feature = "tt_diag")]
         let mut _diag_iteration: u32 = 0;
         #[cfg(feature = "tt_diag")]
-        if _diag_this_node {
+        if _diag_this_node && self.diag_ply_visits[ply as usize] <= 2 {
             eprintln!(
-                "[tt_diag] === ply={} {} node entered === \
-                 pos_key={:#x} children={} deferred={} \
-                 tt_pos={} tt_ent={} nodes={}",
+                "[tt_diag] === ply={} {} node entered (visit #{}) === \
+                 pos_key={:#x} children={} pn_th={} dn_th={} \
+                 tt_pn={} tt_dn={} nodes={}",
                 ply, if or_node { "OR" } else { "AND" },
-                pos_key, children.len(), deferred_children.len(),
-                self.table.len(), self.table.total_entries(),
+                self.diag_ply_visits[ply as usize],
+                pos_key, children.len(),
+                pn_threshold, dn_threshold,
+                tt_pn, tt_dn,
                 self.nodes_searched,
             );
             // 各子ノードの初期 pn/dn を出力
@@ -2450,22 +2734,16 @@ impl DfPnSolver {
                 let (cpn, cdn, _) = self.look_up_pn_dn(
                     cpk, ch, remaining.saturating_sub(1));
                 eprintln!(
-                    "[tt_diag]   child[{}] move={} pn={} dn={} pos_key={:#x}",
-                    i, cm.to_usi(), cpn, cdn, cpk,
-                );
-            }
-            for (i, &(ref cm, _, cpk, ref ch)) in deferred_children.iter().enumerate() {
-                let (cpn, cdn, _) = self.look_up_pn_dn(
-                    cpk, ch, remaining.saturating_sub(1));
-                eprintln!(
-                    "[tt_diag]   deferred[{}] move={} pn={} dn={} pos_key={:#x}",
-                    i, cm.to_usi(), cpn, cdn, cpk,
+                    "[tt_diag]   child[{}] move={} drop={} pn={} dn={} pos_key={:#x}",
+                    i, cm.to_usi(), cm.is_drop(), cpn, cdn, cpk,
                 );
             }
         }
 
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_mid_loop_iters += 1; }
             #[cfg(feature = "profile")]
             let _collect_start = Instant::now();
 
@@ -2663,6 +2941,7 @@ impl DfPnSolver {
                         // 子が反証済み → AND ノード反証
                         // att_hand で保存(TT ヒット率最大化)
                         // AND ノードでは守備側が着手するため att_hand は不変．
+                        //
                         let child_nm_rem = self.table.get_disproof_remaining(
                             child_pk, child_hand,
                         );
@@ -2704,6 +2983,7 @@ impl DfPnSolver {
                                 and_proof[k] = child_ph[k];
                             }
                         }
+                        // cross-deduction は all_proved パスで実行される．
                         // VPN: 証明済み子は pn=0 で sum に影響しないため，
                         // child 選択ループもスキップして効率化する．
                         continue;
@@ -2724,22 +3004,33 @@ impl DfPnSolver {
                     if csrc != 0 {
                         snda_pairs.push((csrc, cpn));
                     }
-                    // 子ノード選択用: 合駒(drop)にバイアスを加算
-                    // チェーン合駒の場合，外側(玉から遠い)ほどバイアスを
-                    // 大きくし，内側の短いサブチェーンを優先探索させる．
-                    let effective_cdn = if m.is_drop() {
-                        let bias = if let Some(ksq) = chain_king_sq {
+                    // 子ノード選択用: AND ノードの合駒/非合駒バイアス．
+                    //
+                    // チェーン AND (chain_king_sq あり):
+                    //   ドロップ(合駒)を優先し，内側(玉に近い)から探索する．
+                    //   cross-deduce が同一マスの兄弟ドロップを一括証明するため，
+                    //   1つのドロップを先に証明することがチェーン全体の鍵となる．
+                    //   非合駒(玉逃げ・駒取り)には大きなバイアスを加算して後回しにする．
+                    //
+                    // 非チェーン AND:
+                    //   ドロップ(合駒)にバイアスを加算し，非合駒を優先する．
+                    //   通常の AND ノードでは玉逃げの反証が速いため．
+                    let effective_cdn = if let Some(ksq) = chain_king_sq {
+                        // チェーン AND: ドロップ優先，外側ほど後回し
+                        if m.is_drop() {
                             let to = m.to_sq();
                             let dr = (to.row() as i8 - ksq.row() as i8)
                                 .unsigned_abs() as u32;
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
-                            // Chebyshev distance をスケーリング係数に使用
-                            INTERPOSE_DN_BIAS.saturating_mul(dr.max(dc))
+                            // 内側(d=1)はバイアス0，外側は距離に比例
+                            cdn.saturating_add(dr.max(dc).saturating_sub(1))
                         } else {
-                            INTERPOSE_DN_BIAS
-                        };
-                        cdn.saturating_add(bias)
+                            // 非合駒: 大きなバイアスで後回し
+                            cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        }
+                    } else if m.is_drop() {
+                        cdn.saturating_add(INTERPOSE_DN_BIAS)
                     } else {
                         cdn
                     };
@@ -2758,6 +3049,8 @@ impl DfPnSolver {
                 }
 
                 if proved_or_disproved {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_loop_break_proved += 1; }
                     self.path.remove(&full_hash);
                     return;
                 }
@@ -2776,40 +3069,8 @@ impl DfPnSolver {
                     current_pn = snda_dedup(&mut snda_pairs, current_pn);
                 }
 
-                // 全子が証明済み
+                // AND ノード証明(全子が証明済み)
                 if all_proved && current_pn == 0 {
-                    if !deferred_children.is_empty() {
-                        // 提案E: 証明済みのドロップ子から同一マスの deferred 合駒を転用．
-                        // メイン TT 上で cross-deduction を行い，冗長な探索を削減する．
-                        for ci in 0..children.len() {
-                            let cm = children[ci].0;
-                            if cm.is_drop() && !deferred_children.is_empty() {
-                                self.cross_deduce_deferred(
-                                    board, cm, &mut deferred_children,
-                                    remaining, &mut and_proof,
-                                );
-                            }
-                        }
-                        if deferred_children.is_empty() {
-                            // cross-deduction で全合駒が証明済み
-                            for k in 0..HAND_KINDS {
-                                and_proof[k] = and_proof[k].min(att_hand[k]);
-                            }
-                            self.store(
-                                pos_key, and_proof, 0, INF,
-                                REMAINING_INFINITE, pos_key,
-                            );
-                            self.path.remove(&full_hash);
-                            return;
-                        }
-                        // 逐次活性化: 次の合駒を1つだけ追加して MID ループ続行．
-                        // 前の合駒で蓄積された TT エントリを次の合駒で活用する．
-                        #[cfg(feature = "tt_diag")]
-                        { self.diag_mid_deferred_activations += 1; }
-                        children.push(deferred_children.remove(0));
-                        continue;
-                    }
-                    // AND ノード証明(deferred 含め全子が証明済み)
                     // 証明駒を現在の持ち駒で制限
                     for k in 0..HAND_KINDS {
                         and_proof[k] =
@@ -2863,6 +3124,19 @@ impl DfPnSolver {
             if current_pn >= eff_pn_th
                 || current_dn >= eff_dn_th
             {
+                #[cfg(feature = "tt_diag")]
+                { self.diag_loop_break_threshold += 1; }
+                #[cfg(feature = "tt_diag")]
+                if _diag_this_node && _diag_iteration <= 2 {
+                    eprintln!(
+                        "[tt_diag] ply={} loop break: iter={} pn={}/{} dn={}/{} children={} best={}",
+                        ply, _diag_iteration,
+                        current_pn, eff_pn_th,
+                        current_dn, eff_dn_th,
+                        children.len(),
+                        children[best_idx].0.to_usi(),
+                    );
+                }
                 // Killer Move 記録: OR ノードで pn 閾値超過時，
                 // 最善子(最も有望な王手)を killer として保存する．
                 // 同じ ply の別の局面でも同じ手が有効な可能性が高い．
@@ -2876,6 +3150,8 @@ impl DfPnSolver {
             if self.nodes_searched >= self.max_nodes
                 || self.timed_out
             {
+                #[cfg(feature = "tt_diag")]
+                { self.diag_loop_break_nodes += 1; }
                 break;
             }
 
@@ -2901,39 +3177,85 @@ impl DfPnSolver {
             // TCA 拡張: eff_*_th を使用し，ループ子存在時は
             // 子ノードにも拡張済み閾値を伝播する．
             let (child_pn_th, child_dn_th) = if or_node {
+                // OR ノード dn 閾値の最低保証(dn_floor_or)．
+                //
+                // OR ノードの dn = sum(child_dn) であり，子が増えると
+                // 各子の dn 予算 (dn_th − Σ他兄弟 dn + best_dn) が急速に縮小する．
+                // 合駒チェーンの深部では予算が dn_floor(100) 未満に縮退し，
+                // 子 AND ノードの TT dn が予算を上回って即座に TT exit する
+                // 1-node スラッシングが発生する(ply-35 で 9.8M 回の空振り)．
+                // dn_floor_or=100 を保証し，子 AND に探索進捗させる余裕を与える．
+                let dn_floor_or: u32 = 100;
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
+                    .max(dn_floor_or)
                     .min(INF - 1);
-                let epsilon = second_best / 4 + 1;
-                let child_pn_th = eff_pn_th
-                    .min(second_best.saturating_add(epsilon))
-                    .min(INF - 1);
+                // OR ノード pn 閾値: 1+ε 制限を廃止し親予算をそのまま伝播する．
+                //
+                // 従来の 1+ε trick (Pawlewicz & Lew 2007) では
+                //   child_pn_th = min(eff_pn_th, second_best + ε)
+                // として最善子に second_best+ε の予算しか与えなかった．
+                // これは浅い問題でのスラッシング防止に有効だが，
+                // 深い合駒チェーンでは致命的な問題を引き起こす:
+                //
+                //   root second_best ≈ 10 → child_pn_th ≈ 13
+                //   → AND(unproven=9) で child_pn_th = 13-9+1 = 5
+                //   → 次の OR で child_pn_th = min(5, 4+2) = 5
+                //   → 次の AND で child_pn_th = 5-5+1 = 1
+                //   → ply=6 で pn 閾値が 1 以下に縮退(pn カスケード縮退)
+                //
+                // 詰将棋では OR ノードの王手手数が少なく(典型: 1〜5手)，
+                // 不正解の王手は玉方の逃げにより比較的少ないノード数で
+                // 反証される．このため eff_pn_th をそのまま渡しても
+                // 全体的なノード効率に大きな悪影響はなく，
+                // 深い合駒チェーンの探索が可能になる利益が上回る．
+                let child_pn_th = eff_pn_th.min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
+                // AND ノード pn 閾値の最低保証(親予算の 1/2)．
+                //
+                // 標準の pn 閾値計算 (pn_th - current_pn + best_cpn) では，
+                // AND ノードの未証明子が多い場合に current_pn が大きくなり，
+                // 子の pn 閾値が急速にゼロに近づく．WPN では
+                // current_pn = max(cpn) + (unproven_count - 1) であり，
+                // 未証明子が10個なら current_pn >= 10，子の pn 閾値は
+                // pn_th - 10 + 1 = pn_th - 9 と大幅に縮小する．
+                //
+                // 合駒チェーンでは AND ノードが連続し，各レベルで pn_th が
+                // (unproven_count-1) ずつ減少するため，2〜3レベルで pn_th が
+                // 1以下に縮退し MID が深部に到達できない(pn カスケード縮退)．
+                //
+                // pn_floor = eff_pn_th / 2 を最低保証することで，
+                // 各 AND レベルで pn が最大2倍に縮退する速度に抑える．
+                // 12レベルの AND でも pn ≈ INF/2^12 ≈ 1M が確保され，
+                // 深い合駒チェーンの探索が可能になる．
+                let pn_floor = eff_pn_th / 2;
                 let child_pn_th = eff_pn_th
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
+                    .max(pn_floor)
                     .min(INF - 1);
                 let epsilon = second_best / 4 + 1;
                 let sibling_based = second_best.saturating_add(epsilon);
-                // AND ノード dn 閾値の最低保証(親予算の 1/4)．
+                // AND ノード dn 閾値の最低保証．
                 //
-                // 標準の 1+ε 閾値 (second_best + ε) は兄弟間のスラッシング防止に
-                // 有効だが，eff_dn_th >> second_best の場合(親 OR ノードが少数の
-                // 王手しか持たないケース等)，子に配分される dn 予算が親予算に対して
-                // 極端に小さくなる．チェーン合駒のように AND ノードが多数の類似 dn
-                // 子を持つ局面では，dn 閾値が OR レベルを通過するたびに縮退し，
-                // MID が深部に到達できず停滞する(カスケード縮退)．
+                // 初期 dn=1(depth_biased_dn 廃止後)では sibling_based ≈ 2 と
+                // 極端に小さくなるため，dn_floor なしでは全く深部に到達できない．
+                // dn_floor=100 で深部までの到達を確保する．
                 //
-                // 親予算の 1/4 を最低保証することで，各子が親の dn 予算の
-                // 十分な割合を受け取ることを保証する．この下限は eff_dn_th が
-                // second_best に近い通常ケースでは発動しない
-                // (sibling_based ≥ eff_dn_th / 4 であるため)．
-                let dn_floor = eff_dn_th / 4;
-                let child_dn_th = eff_dn_th
-                    .min(sibling_based.max(dn_floor))
-                    .min(INF - 1);
+                // チェーン合駒の AND ノードでは，親 OR ノードからの dn 閾値
+                // (eff_dn_th) がチェーンの深さ分だけ縮退し dn_floor を下回る．
+                // キャップ(eff_dn_th.min(...))を外して dn_floor を保証し，
+                // チェーン末端の証明に十分な探索予算を確保する(§3 最適化)．
+                let dn_floor: u32 = 100;
+                let child_dn_th = if chain_king_sq.is_some() {
+                    sibling_based.max(dn_floor).min(INF - 1)
+                } else {
+                    eff_dn_th
+                        .min(sibling_based.max(dn_floor))
+                        .min(INF - 1)
+                };
                 (child_pn_th, child_dn_th)
             };
 
@@ -2968,11 +3290,15 @@ impl DfPnSolver {
             // 収集ループ内で全子に対して行うと NPS が激減するため，
             // 選択された子に対してのみ実行する．
             if !or_node && m.is_drop() && remaining >= 3 {
+                #[cfg(feature = "tt_diag")]
+                { self.diag_capture_tt_calls += 1; }
                 let checks = self.generate_check_moves(board);
                 if self.try_capture_tt_proof(
                     board, &checks,
                     remaining.saturating_sub(1),
                 ) {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_capture_tt_hits += 1; }
                     // 証明済み → MID 再帰をスキップ
                     profile_timed!(self, undo_move_ns, undo_move_count,
                         board.undo_move(m, captured));
@@ -3030,6 +3356,23 @@ impl DfPnSolver {
 
             profile_timed!(self, undo_move_ns, undo_move_count,
                 board.undo_move(m, captured));
+
+            // インライン cross-deduce: AND ノードでドロップ子が証明された直後に，
+            // 同一マスの兄弟ドロップを TT 参照で証明する．
+            // 旧 deferred_children 方式の cross_deduce_deferred と同等の効果を
+            // MID ループ内で実現する．
+            if !or_node && m.is_drop() {
+                let (cpn_after, _, _) = self.look_up_pn_dn(
+                    children[best_idx].2,
+                    &children[best_idx].3,
+                    remaining.saturating_sub(1),
+                );
+                if cpn_after == 0 {
+                    self.cross_deduce_children(
+                        board, m, &children, remaining,
+                    );
+                }
+            }
         }
 
         // パスから除去
@@ -3212,6 +3555,8 @@ impl DfPnSolver {
         // 合駒の捕獲後に使える remaining
         let pc_remaining = remaining.saturating_sub(2);
         if pc_remaining == 0 {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_prefilter_skip_remaining += 1; }
             return false;
         }
 
@@ -3283,6 +3628,10 @@ impl DfPnSolver {
         }
 
         board.undo_move(block_move, captured_by_block);
+        #[cfg(feature = "tt_diag")]
+        if !proved {
+            self.diag_prefilter_miss += 1;
+        }
         proved
     }
 
@@ -3426,6 +3775,119 @@ impl DfPnSolver {
         for &i in proven_indices.iter().rev() {
             deferred_children.remove(i);
         }
+    }
+
+    /// children 内の証明済みドロップから兄弟ドロップを TT で証明する．
+    ///
+    /// `cross_deduce_deferred` と同等のロジックだが，`children` を読み取り専用で
+    /// 参照し，TT にエントリを格納するのみ(children からの除去は行わない)．
+    /// MID ループの次の collect フェーズで cpn=0 として検出される．
+    #[inline(never)]
+    fn cross_deduce_children(
+        &mut self,
+        board: &mut Board,
+        solved_move: Move,
+        children: &ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        remaining: u16,
+    ) {
+        let target_sq = solved_move.to_sq();
+
+        // 同一マスに未解決のドロップ兄弟がなければスキップ
+        let has_siblings = children.iter().any(|(mj, _, _, _)| {
+            mj.is_drop() && mj.to_sq() == target_sq
+                && !std::ptr::eq(&solved_move as *const _, mj as *const _)
+        });
+        if !has_siblings {
+            return;
+        }
+
+        let solved_pt = match solved_move.drop_piece_type() {
+            Some(pt) => pt,
+            None => return,
+        };
+        let solved_hi = match solved_pt.hand_index() {
+            Some(hi) => hi,
+            None => return,
+        };
+
+        // 合駒を実行し，攻方の捕獲手を探索
+        let captured_by_block = board.do_move(solved_move);
+        let legal = movegen::generate_legal_moves(board);
+        let mut cross_count: u64 = 0;
+
+        for cap_mv in legal.iter().filter(|mv| {
+            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
+        }) {
+            let cap_piece = board.do_move(*cap_mv);
+
+            if !board.is_in_check(board.turn) {
+                board.undo_move(*cap_mv, cap_piece);
+                continue;
+            }
+
+            let pc_pk = position_key(board);
+            let base_hand = board.hand[self.attacker.index()];
+            board.undo_move(*cap_mv, cap_piece);
+
+            // 各兄弟ドロップについて TT 参照
+            for (mj, _, child_pk_j, child_hand_j) in children.iter() {
+                if !mj.is_drop() || mj.to_sq() != target_sq {
+                    continue;
+                }
+                // 自分自身はスキップ
+                if mj.to_move16() == solved_move.to_move16() {
+                    continue;
+                }
+                // 既に証明済みならスキップ
+                let (cpn_j, _, _) = self.look_up_pn_dn(
+                    *child_pk_j, child_hand_j,
+                    remaining.saturating_sub(1),
+                );
+                if cpn_j == 0 {
+                    continue;
+                }
+
+                let pt_j = match mj.drop_piece_type() {
+                    Some(pt) => pt,
+                    None => continue,
+                };
+                let hi_j = match pt_j.hand_index() {
+                    Some(hi) => hi,
+                    None => continue,
+                };
+
+                // 合駒 j を捕獲した場合の攻方持ち駒を計算
+                let mut hand_j = base_hand;
+                hand_j[solved_hi] = hand_j[solved_hi].saturating_sub(1);
+                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
+
+                let pc_remaining = remaining.saturating_sub(2);
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
+
+                if ppn == 0 {
+                    let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
+                    let mut or_ph = pc_ph;
+                    or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
+                    for k in 0..HAND_KINDS {
+                        or_ph[k] = or_ph[k].min(child_hand_j[k]);
+                    }
+                    // メイン TT に証明エントリを格納
+                    self.table.store(
+                        *child_pk_j, or_ph, 0, INF,
+                        remaining.saturating_sub(1), *child_pk_j,
+                    );
+                    cross_count += 1;
+                }
+            }
+        }
+
+        board.undo_move(solved_move, captured_by_block);
+
+        #[cfg(feature = "tt_diag")]
+        { self.diag_cross_deduce_hits += cross_count; }
     }
 }
 
@@ -4878,8 +5340,16 @@ impl DfPnSolver {
         let saved_depth = self.depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
-        // PNS で蓄積された深さ制限由来の仮 NM エントリを除去する．
-        // 証明(pn=0)のみ残し，IDS が独立して NM を検出できるようにする．
+        // PNS で蓄積された中間エントリ(pn>0, dn>0)を除去し，
+        // 証明(pn=0)のみ保持する．
+        //
+        // 中間エントリを保持すると以下の問題が発生する:
+        // 1. HashMap サイズ増大により CPU キャッシュ効率が低下し NPS が半減する
+        //    (338K entries → ~126 NPS vs 12K entries → ~194 NPS)．
+        // 2. MID の child init で cpn>1/cdn>1 として扱われ，
+        //    底辺の簡単な詰みを再発見する機会が失われる．
+        //
+        // 証明エントリ(pn=0)は prefilter/cross_deduce に直接活用される．
         self.table.retain_proofs_only();
 
         #[cfg(feature = "tt_diag")]
@@ -4891,6 +5361,18 @@ impl DfPnSolver {
         // dn 閾値カスケード縮退により進捗不能と判断する．
         let mut prev_root_pn: u32 = 0;
         let mut prev_root_dn: u32 = 0;
+
+        // 合駒チェーン最適化の IDS 反復間デルタ追跡
+        #[cfg(feature = "tt_diag")]
+        let mut prev_prefilter_hits = self.prefilter_hits;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_cross_deduce = self.diag_cross_deduce_hits;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_deferred_act = self.diag_mid_deferred_activations;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_prefilter_skip = self.diag_prefilter_skip_remaining;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_prefilter_miss = self.diag_prefilter_miss;
 
         loop {
             if ids_depth > saved_depth {
@@ -4904,7 +5386,18 @@ impl DfPnSolver {
                 break;
             }
             let _budget = if ids_depth < saved_depth {
-                let b = (total_max_nodes / 16).max(1024);
+                // 残り IDS ステップ数に応じた予算配分．
+                // 線形進行(+2)で残り何ステップあるかを見積もり，
+                // 残りノード予算を均等に分配する．
+                // 最終深さ(full depth)に最大の予算を残すため，
+                // 浅い反復には 1/(remaining_steps+1) を割り当てる．
+                let remaining_budget =
+                    total_max_nodes.saturating_sub(self.nodes_searched);
+                let remaining_steps =
+                    ((saved_depth.saturating_sub(ids_depth)) / 2)
+                        .max(1) as u64 + 1;
+                let b = (remaining_budget / (remaining_steps + 1))
+                    .max(1024);
                 self.max_nodes = self.nodes_searched.saturating_add(b);
                 b
             } else {
@@ -4914,6 +5407,10 @@ impl DfPnSolver {
 
             #[cfg(feature = "tt_diag")]
             let pre_nodes = self.nodes_searched;
+            #[cfg(feature = "tt_diag")]
+            let pre_max_ply = self.max_ply;
+            // IDS 反復ごとに max_ply をリセットし，各反復の到達深さを追跡する
+            self.max_ply = 0;
 
             {
                 let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
@@ -4921,7 +5418,10 @@ impl DfPnSolver {
                     && self.nodes_searched < self.max_nodes
                     && !self.timed_out
                 {
+                    let _mid_wall_start = std::time::Instant::now();
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    eprintln!("[ids_diag] MID wall time: depth={} {:.3}s",
+                        ids_depth, _mid_wall_start.elapsed().as_secs_f64());
                 }
             }
 
@@ -4929,9 +5429,73 @@ impl DfPnSolver {
             {
                 let used = self.nodes_searched - pre_nodes;
                 let (pn, dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-                eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={}",
+                let d_prefilter = self.prefilter_hits - prev_prefilter_hits;
+                let d_cross = self.diag_cross_deduce_hits - prev_cross_deduce;
+                let d_deferred = self.diag_mid_deferred_activations - prev_deferred_act;
+                let d_pf_skip = self.diag_prefilter_skip_remaining - prev_prefilter_skip;
+                let d_pf_miss = self.diag_prefilter_miss - prev_prefilter_miss;
+                let ids_elapsed = self.start_time.elapsed().as_secs_f64();
+                eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={} max_ply={} \
+                    prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} act={} \
+                    cap_tt={}/{} thr_exits={} term_exits={} in_path={} lb_prov={} lb_thr={} lb_nodes={} \
+                    init_and_dis={} single_ch={} node_lim={} time={:.2}s",
                     ids_depth, saved_depth, _budget, used,
-                    self.table.len(), pn, dn);
+                    self.table.len(), pn, dn,
+                    self.max_ply,
+                    d_prefilter, d_pf_skip, d_pf_miss,
+                    d_cross, d_deferred,
+                    self.diag_capture_tt_hits, self.diag_capture_tt_calls,
+                    self.diag_threshold_exits,
+                    self.diag_terminal_exits,
+                    self.diag_in_path_exits,
+                    self.diag_loop_break_proved,
+                    self.diag_loop_break_threshold,
+                    self.diag_loop_break_nodes,
+                    self.diag_init_and_disproof_exits,
+                    self.diag_single_child_exits,
+                    self.diag_node_limit_exits,
+                    ids_elapsed);
+                // ply ヒストグラム出力(非ゼロ ply のみ)
+                let mut ply_str = String::new();
+                for p in 0..64 {
+                    if self.diag_ply_visits[p] > 0 {
+                        if !ply_str.is_empty() { ply_str.push_str(", "); }
+                        ply_str.push_str(&format!("{}:{}", p, self.diag_ply_visits[p]));
+                    }
+                }
+                if !ply_str.is_empty() {
+                    eprintln!("[ids_diag] ply_visits: {}", ply_str);
+                }
+                // single-child counter (repurposed diag_ply_proofs)
+                let mut sc_str = String::new();
+                for p in 0..64 {
+                    if self.diag_ply_proofs[p] > 0 {
+                        if !sc_str.is_empty() { sc_str.push_str(", "); }
+                        sc_str.push_str(&format!("{}:{}", p, self.diag_ply_proofs[p]));
+                    }
+                }
+                if !sc_str.is_empty() {
+                    eprintln!("[ids_diag] single_child: {}", sc_str);
+                }
+                // リセット
+                self.diag_ply_visits = [0u64; 64];
+                self.diag_ply_proofs = [0u64; 64];
+                self.diag_capture_tt_calls = 0;
+                self.diag_capture_tt_hits = 0;
+                self.diag_threshold_exits = 0;
+                self.diag_terminal_exits = 0;
+                self.diag_loop_break_proved = 0;
+                self.diag_loop_break_threshold = 0;
+                self.diag_loop_break_nodes = 0;
+                self.diag_in_path_exits = 0;
+                self.diag_init_and_disproof_exits = 0;
+                self.diag_single_child_exits = 0;
+                self.diag_node_limit_exits = 0;
+                prev_prefilter_hits = self.prefilter_hits;
+                prev_cross_deduce = self.diag_cross_deduce_hits;
+                prev_deferred_act = self.diag_mid_deferred_activations;
+                prev_prefilter_skip = self.diag_prefilter_skip_remaining;
+                prev_prefilter_miss = self.diag_prefilter_miss;
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             if root_pn2 == 0 {
@@ -4953,11 +5517,14 @@ impl DfPnSolver {
                     break;
                 }
                 let checks = self.generate_check_moves(board);
+                let _ref_start = std::time::Instant::now();
                 let refutable = if checks.is_empty() {
                     true
                 } else {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
+                eprintln!("[ids_diag] refutable check: depth={} checks={} refutable={} time={:.3}s",
+                    ids_depth, checks.len(), refutable, _ref_start.elapsed().as_secs_f64());
                 if checks.is_empty() || refutable {
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
@@ -4976,33 +5543,58 @@ impl DfPnSolver {
 
             // 停滞検出: 予算を使い切ったのに root pn/dn が変化していない場合，
             // dn 閾値カスケード縮退により MID が深部に到達できていない．
-            // この場合 retain_proofs で中間 TT を破棄すると，次の反復で
-            // dn 値を 1 から再構築するコストが再発し，永続的に停滞する．
-            //
-            // 対策:
-            // 1. retain_proofs をスキップして中間エントリ(pn>0, dn>0)を保持する．
-            //    TT look_up の remaining チェック(e.remaining >= remaining)により，
-            //    浅い反復の仮 NM が深い反復で誤用されることは防がれている．
-            // 2. ids_depth を saved_depth へ即座に引き上げ，残り予算を集中投入する．
             let stagnated = root_pn2 > 0
                 && root_dn2 > 0
                 && root_pn2 == prev_root_pn
                 && root_dn2 == prev_root_dn;
 
-            if stagnated {
+            // 時間ベースの反復カットオフ:
+            // 浅い IDS 反復が残り時間の 1/4 以上消費した場合，
+            // この深さでの NPS が低く後続の深さに時間を回せないため
+            // 最大深さへ即座にジャンプする．
+            let total_elapsed = self.start_time.elapsed().as_secs_f64();
+            let remaining_time = self.timeout.as_secs_f64() - total_elapsed;
+            let time_exceeded = ids_depth < saved_depth
+                && remaining_time < self.timeout.as_secs_f64() * 0.25;
+
+            // IDS 反復間で経路依存の反証を除去する．
+            // ループ由来の反証は異なる深さの反復では無効になりうるため．
+            self.table.remove_path_dependent_disproofs();
+
+            if stagnated || time_exceeded {
                 #[cfg(feature = "tt_diag")]
-                eprintln!("[ids_diag] stagnation detected (pn={} dn={}), skipping retain_proofs, jumping to depth={}",
-                    root_pn2, root_dn2, saved_depth);
-                // retain_proofs をスキップし，中間 TT を保持したまま
-                // 最大深さへジャンプする．
+                {
+                    if stagnated {
+                        eprintln!("[ids_diag] stagnation detected (pn={} dn={}), jumping to depth={}",
+                            root_pn2, root_dn2, saved_depth);
+                    }
+                    if time_exceeded {
+                        eprintln!("[ids_diag] time exceeded ({:.1}s remaining), jumping to depth={}",
+                            remaining_time, saved_depth);
+                    }
+                }
                 ids_depth = saved_depth;
             } else {
-                self.table.retain_proofs();
-
                 #[cfg(feature = "tt_diag")]
-                eprintln!("[ids_diag] after retain_proofs: TT_pos={}", self.table.len());
+                eprintln!("[ids_diag] TT preserved: TT_pos={}", self.table.len());
 
-                ids_depth = ids_depth.saturating_mul(2).max(ids_depth + 2);
+                // 深さ進行: depth=4 以降は saved_depth に直接ジャンプ．
+                // 浅い反復(depth <= 4)はルート付近の簡単な詰みを
+                // TT に蓄積する．depth=6 以降の中間深さは NPS が低下し
+                // (各レベルでの子ノード初期化コスト)時間を浪費するため，
+                // depth=4 の次は直接 saved_depth へジャンプして
+                // 残り予算を集中投入する．
+                // チェーン合駒最適化(§3.5)のボトムアップ TT 蓄積は
+                // 単一 IDS 反復内の MID 深さ優先探索で自然に実現される．
+                let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
+                if next > 4 && next < saved_depth {
+                    #[cfg(feature = "tt_diag")]
+                    eprintln!("[ids_diag] skipping intermediate depths ({} -> {})",
+                        next, saved_depth);
+                    ids_depth = saved_depth;
+                } else {
+                    ids_depth = next;
+                }
             }
 
             prev_root_pn = root_pn2;
@@ -5056,7 +5648,15 @@ impl DfPnSolver {
             FxHashSet::with_capacity_and_hasher(max_path, Default::default());
 
         // PNS メインループ
+        let mut pns_iters: u64 = 0;
+        // PNS 収束検出: root_pn が一定反復数改善しなければ打ち切る．
+        // PNS はアリーナ飽和後に選択ウォークだけを繰り返し
+        // 予算を消費するため，早期打ち切りで MID に予算を回す．
+        let mut best_root_pn: u32 = u32::MAX;
+        let mut iters_since_improvement: u64 = 0;
+        const PNS_STAGNATION_LIMIT: u64 = 500_000;
         loop {
+            pns_iters += 1;
             // 終了条件: ルート証明/反証
             if arena[0].pn == 0 || arena[0].dn == 0 {
                 break;
@@ -5069,8 +5669,21 @@ impl DfPnSolver {
             if arena.len() >= PNS_MAX_ARENA_NODES {
                 break;
             }
+            // 終了条件: PNS 収束停滞
+            if arena[0].pn < best_root_pn {
+                best_root_pn = arena[0].pn;
+                iters_since_improvement = 0;
+            } else {
+                iters_since_improvement += 1;
+                if iters_since_improvement >= PNS_STAGNATION_LIMIT {
+                    #[cfg(feature = "tt_diag")]
+                    eprintln!("[pns_diag] stagnation: root_pn={} no improvement for {} iters, stopping",
+                        arena[0].pn, PNS_STAGNATION_LIMIT);
+                    break;
+                }
+            }
             // 定期タイムアウトチェック
-            if self.nodes_searched & 0x3FF == 0 && self.is_timed_out() {
+            if pns_iters & 0xFF == 0 && self.is_timed_out() {
                 self.timed_out = true;
                 break;
             }
@@ -5294,9 +5907,10 @@ impl DfPnSolver {
             let pns_nodes_used = self.nodes_searched;
             let root_pn = arena[0].pn;
             let root_dn = arena[0].dn;
-            eprintln!("[pns_diag] arena={}/{} nodes_used={} root_pn={} root_dn={} TT_pos={}",
-                arena.len(), PNS_MAX_ARENA_NODES, pns_nodes_used, root_pn, root_dn,
-                self.table.len());
+            let pns_elapsed = self.start_time.elapsed().as_secs_f64();
+            eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
+                arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
+                self.table.len(), pns_elapsed);
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
@@ -5435,7 +6049,7 @@ impl DfPnSolver {
                         cpn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
-                        cdn = depth_biased_dn(nc, ply + 1);
+                        cdn = 1;
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
                 } else {
@@ -5451,7 +6065,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             cpn = cpn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        cdn = depth_biased_dn(n, ply + 1);
+                        cdn = 1;
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
                 }
@@ -7237,14 +7851,24 @@ mod tests {
         board.set_sfen(sfen).unwrap();
 
         let mut solver =
-            DfPnSolver::with_timeout(41, 10_000_000, 32767, 30);
+            DfPnSolver::with_timeout(41, 10_000_000, 32767, 60);
         solver.set_find_shortest(false);
+        #[cfg(feature = "tt_diag")]
+        {
+            solver.diag_ply = 35;
+            solver.diag_max_iterations = 0; // don't break loop
+        }
         let start = Instant::now();
         let result = solver.solve(&mut board);
         let elapsed = start.elapsed();
         eprintln!("39te: {} nodes, {:.1}s, max_ply={}, prefilter_hits={}",
             solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply,
             solver.prefilter_hits);
+        #[cfg(feature = "profile")]
+        {
+            solver.sync_tt_profile();
+            eprintln!("{}", solver.profile_stats);
+        }
 
         match &result {
             TsumeResult::Checkmate {
@@ -10698,6 +11322,14 @@ mod tests {
             eprintln!("  → {} pn={} dn={} searched={} time={:.2}s TT={}",
                 r_str, root_pn, root_dn, s.nodes_searched,
                 s.start_time.elapsed().as_secs_f64(), s.table.len());
+            eprintln!("  prefilter_hits={}", s.prefilter_hits);
+            #[cfg(feature = "tt_diag")]
+            eprintln!("  deferred: act={} enqueued={} ready={} not_ready={} cross={}",
+                s.diag_mid_deferred_activations,
+                s.diag_deferred_enqueued,
+                s.diag_deferred_ready,
+                s.diag_deferred_not_ready,
+                s.diag_cross_deduce_hits);
         }
 
         // 8g6g 後の各防御手を個別に OR node として解く
