@@ -847,6 +847,7 @@ impl TranspositionTable {
             // パレートフロンティア(最大持ち駒 × 最大remaining 集合)を維持:
             // 新反証に支配される既存エントリを除去する．
             // GHI: 経路依存の反証は remaining 免除で lookup に使えるため保護する
+            //
             entries.retain(|e| {
                 // 証明済みは保護
                 if e.pn == 0 {
@@ -875,9 +876,16 @@ impl TranspositionTable {
         for e in entries.iter_mut() {
             if e.hand == hand {
                 // 証明済み(pn=0)は上の共通チェックで return 済み
-                // 反証済み(dn=0)は中間値(pn>0, dn>0)で上書きしない
                 if e.dn == 0 {
-                    return;
+                    // 反証済みエントリの remaining が新エントリの remaining を
+                    // カバーしている場合のみ中間値の上書きをブロックする．
+                    // カバーしていない場合(e.remaining < remaining)は，
+                    // look_up でも使えない「死んだ」反証であるため，
+                    // 中間値で上書きして探索の進行を保証する．
+                    if e.remaining >= remaining || e.path_dependent {
+                        return;
+                    }
+                    // remaining 不足の反証: 中間値で上書き
                 }
                 e.pn = pn;
                 e.dn = dn;
@@ -1315,11 +1323,7 @@ pub struct DfPnSolver {
     ///
     /// stale_effort に基づく pn ペナルティを選択時に加算し，
     /// 不正解手(pn 停滞)から正解手(pn 減少)への切替を促進する．
-    /// OR ノードの子ポジション別 effort 追跡．
-    /// キー: 子ポジションの pos_key．
-    /// 値: (stale_effort, best_pn, total_effort)．
-    /// stale_effort: pn 未改善時に蓄積(選択ペナルティ用)．
-    /// total_effort: 常に蓄積(閾値ブースト用)．
+    /// OR ノードの子ポジション別 effort 追跡(現在未使用)．
     or_effort: FxHashMap<u64, (u64, u32, u64)>,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
@@ -1780,10 +1784,14 @@ impl DfPnSolver {
             && !self.timed_out
         {
             // PNS で蓄積した TT エントリを活用して IDS-dfpn を実行
+            eprintln!("[solve] MID fallback start: nodes={}", self.nodes_searched);
             self.mid_fallback(board);
+            eprintln!("[solve] MID fallback end: nodes={} time={:.1}s",
+                self.nodes_searched, self.start_time.elapsed().as_secs_f64());
         }
 
         let (root_pn, root_dn) = self.look_up_board(board);
+        eprintln!("[solve] root_pn={} root_dn={} nodes={}", root_pn, root_dn, self.nodes_searched);
 
         if root_pn == 0 {
             // PNS アリーナから PV を抽出できた場合はそちらを優先
@@ -2015,6 +2023,12 @@ impl DfPnSolver {
             return;
         }
         self.nodes_searched += 1;
+        // Periodic progress: every 1M nodes
+        if self.nodes_searched % 1_000_000 == 0 && self.nodes_searched > 0 {
+            eprintln!("[progress] nodes={}M ply={} or={} time={:.1}s max_ply={} depth={} dn_th={}",
+                self.nodes_searched / 1_000_000, ply, or_node,
+                self.start_time.elapsed().as_secs_f64(), self.max_ply, self.depth, dn_threshold);
+        }
         if ply > self.max_ply {
             self.max_ply = ply;
         }
@@ -2034,6 +2048,9 @@ impl DfPnSolver {
         if in_path {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                eprintln!("[exit_diag] ply={} in_path_exit: hash={:#x} or={}", ply, full_hash, or_node);
+            }
             return;
         }
 
@@ -2053,6 +2070,11 @@ impl DfPnSolver {
                         ply, tt_pn, tt_dn, remaining);
                 }
             }
+            // Diagnostic: catch early exits at children of stuck node
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                eprintln!("[exit_diag] ply={} terminal_exit: tt_pn={} tt_dn={} rem={} or={} pk={:#x}",
+                    ply, tt_pn, tt_dn, remaining, or_node, pos_key);
+            }
             return;
         }
         if tt_pn >= pn_threshold || tt_dn >= dn_threshold {
@@ -2063,6 +2085,11 @@ impl DfPnSolver {
                     eprintln!("[tt_diag] ply={} threshold exit: tt_pn={} tt_dn={} pn_th={} dn_th={}",
                         ply, tt_pn, tt_dn, pn_threshold, dn_threshold);
                 }
+            }
+            // Diagnostic: catch threshold exits at children of stuck node
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                eprintln!("[exit_diag] ply={} threshold_exit: tt_pn={} tt_dn={} pn_th={} dn_th={} rem={} or={} pk={:#x}",
+                    ply, tt_pn, tt_dn, pn_threshold, dn_threshold, remaining, or_node, pos_key);
             }
             return;
         }
@@ -2085,21 +2112,27 @@ impl DfPnSolver {
 
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                eprintln!("[exit_diag] ply={} depth_limit: depth={} draw_ply={} board_ply={} or={} remaining={}",
+                    ply, self.depth, self.draw_ply, board.ply(), or_node, remaining);
+            }
             #[cfg(feature = "profile")]
             let _depth_limit_start = Instant::now();
+            let mut stored_remaining: u16 = 0;
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
                 // 王手が0手の不詰は深さに依存しないため，IDS 間で再利用可能にする．
-                // 王手がある場合: 全王手が即座に反証可能かを2手延長で確認する．
-                // 全王手に対し玉方に「王手なし局面」へ逃げる応手があれば真の不詰．
-                // この2手延長により IDS の指数的再探索を回避する．
+                // TT ベースの高速判定のみ使用．
+                // depth_limit_all_checks_refutable は IDS 外部ループでのみ使用．
                 let checks = self.generate_check_moves(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
-                } else if self.depth_limit_all_checks_refutable(board, &checks) {
+                    stored_remaining = REMAINING_INFINITE;
+                } else if self.all_checks_refutable_by_tt(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
+                    stored_remaining = REMAINING_INFINITE;
                 } else {
                     self.store(pos_key, att_hand, INF, 0, 0, pos_key);
                 }
@@ -2164,6 +2197,9 @@ impl DfPnSolver {
 
         // 終端条件チェック
         if moves.is_empty() {
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                eprintln!("[exit_diag] ply={} empty_moves: or={}", ply, or_node);
+            }
             if or_node {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
@@ -2214,6 +2250,7 @@ impl DfPnSolver {
         let saved_chain_bb = self.chain_bb_cache;
         #[cfg(feature = "profile")]
         let _child_init_start = Instant::now();
+        let _init_start = Instant::now();
         for m in &moves {
             #[cfg(feature = "profile")]
             let _domove_start = Instant::now();
@@ -2550,6 +2587,11 @@ impl DfPnSolver {
                         child_pk, &child_hand, child_remaining,
                     )
                     .unwrap_or((0, false));
+                if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                    let parent_nm_rem_preview = if is_path_dep { remaining } else { propagate_nm_remaining(child_nm_rem, remaining) };
+                    eprintln!("[exit_diag] ply={} init_and_disproof: child_move={} child_nm_rem={} parent_nm_rem={} remaining={} path_dep={} pk={:#x}",
+                        ply, m.to_usi(), child_nm_rem, parent_nm_rem_preview, remaining, is_path_dep, pos_key);
+                }
                 // 経路依存の反証は同一 IDS 反復内では有効とみなし，
                 // remaining を現在の深さに設定して lookup の remaining チェックを通過させる．
                 // 非経路依存の反証は通常の NM 伝播で remaining を制限する．
@@ -2608,9 +2650,13 @@ impl DfPnSolver {
             if cdn_now == 0 {
                 // OR: この子は反証済み(反証は att_hand で保存するため蓄積不要)
                 // NM remaining 伝播: 子の remaining の最小値を追跡
-                let child_nm_rem = self.table.get_disproof_remaining(
-                    child_pk, &child_hand,
-                );
+                // get_effective_disproof_info を使用: look_up と同じ remaining
+                // チェックを行い，正しいエントリの remaining を返す．
+                // get_disproof_remaining は remaining を検査しないため，
+                // 古いエントリ(低 remaining)を返して NM 伝播を汚染する．
+                let child_nm_rem = self.table.get_effective_disproof_info(
+                    child_pk, &child_hand, child_remaining,
+                ).map(|(r, _)| r).unwrap_or(0);
                 init_or_nm_min_remaining = init_or_nm_min_remaining.min(child_nm_rem);
                 // GHI 伝播: 子の反証が経路依存なら蓄積
                 init_or_path_dep |= self.table.has_path_dependent_disproof(
@@ -2659,25 +2705,26 @@ impl DfPnSolver {
 
         // OR ノードで全子が反証済み(children が空)
         if or_node && children.is_empty() {
+            // Diagnostic: detect OR all-children-disproved at stuck position
+            if pos_key == 0xf8322787b7535d9c || (ply == 26 && self.nodes_searched % 1_000_000 < 5 && self.nodes_searched > 200_000) {
+                eprintln!("[or_all_disproved] ply={} pk={:#x} moves={} init_or_nm_min_rem={} remaining={} path_dep={}",
+                    ply, pos_key, moves.len(), init_or_nm_min_remaining, remaining, init_or_path_dep);
+            }
             // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
             // 全子が REMAINING_INFINITE なら親も REMAINING_INFINITE(真の不詰)．
             let mut parent_nm_remaining = propagate_nm_remaining(
                 init_or_nm_min_remaining, remaining);
             // MID 内部での REMAINING_INFINITE 昇格(init フェーズ):
-            // キャッシュで失敗済みの局面は generate_check_moves も省略する．
-            // 持ち駒が異なると王手(ドロップ)も変わるため full_hash を使用．
-            if parent_nm_remaining != REMAINING_INFINITE
-                && !self.refutable_check_failed.contains(&full_hash)
-            {
+            // TT ベースの高速判定のみ使用．depth_limit_all_checks_refutable は
+            // 再帰的な movegen を伴い 1 回 ~6ms かかるため，MID の
+            // ホットパスでは使用しない(NPS が 1.5K まで低下する)．
+            // 完全な昇格判定は IDS 外部ループでのみ実行する．
+            if parent_nm_remaining != REMAINING_INFINITE {
                 let checks = self.generate_check_moves(board);
                 if checks.is_empty() {
                     parent_nm_remaining = REMAINING_INFINITE;
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
                     parent_nm_remaining = REMAINING_INFINITE;
-                } else if self.depth_limit_all_checks_refutable(board, &checks) {
-                    parent_nm_remaining = REMAINING_INFINITE;
-                } else {
-                    self.refutable_check_failed.insert(full_hash);
                 }
             }
             //
@@ -2694,6 +2741,19 @@ impl DfPnSolver {
                 self.store(
                     pos_key, att_hand, INF, 0,
                     parent_nm_remaining, pos_key,
+                );
+            }
+            // スラッシング防止: 反証の remaining が呼び出し元の remaining より低い場合，
+            // look_up は remaining チェックで反証をスキップし，古い中間値(低 pn)を返す．
+            // 親が低 pn の子を繰り返し選択し 1 ノードで帰還する無限ループの原因となる．
+            // 呼び出し元の remaining で高 pn の中間エントリを追加保存することで，
+            // look_up がこの高 pn 値を返し，親の閾値チェックが発火して他の子に切り替わる．
+            // 将来この局面で真の進捗があれば中間値は自然に上書きされる．
+            // (PNS フェーズでは mid() は呼ばれないため PNS の証明数に影響しない)
+            if parent_nm_remaining < remaining {
+                self.store(
+                    pos_key, att_hand, INF - 1, 1,
+                    remaining, pos_key,
                 );
             }
             #[cfg(feature = "profile")]
@@ -2791,9 +2851,22 @@ impl DfPnSolver {
             return;
         }
 
+        // Init phase duration diagnostic
+        {
+            let init_elapsed = _init_start.elapsed().as_secs_f64();
+            if init_elapsed > 1.0 {
+                eprintln!("[init_slow] ply={} or={} moves={} children={} init_time={:.2}s",
+                    ply, or_node, moves.len(), children.len(), init_elapsed);
+            }
+        }
+
         // --- 単一子最適化 ---
         // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
         // 親の閾値をそのまま渡して直接再帰する．
+        if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+            eprintln!("[exit_diag] ply={} REACHED_MAIN_LOOP: children={} remaining={} or={}",
+                ply, children.len(), remaining, or_node);
+        }
         // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
         // ケースが詰将棋で頻出する．
         if children.len() == 1 {
@@ -2802,7 +2875,14 @@ impl DfPnSolver {
                 self.diag_ply_proofs[ply as usize] += 1; // reuse as single-child counter
             }
             let (m, child_fh, child_pk, ref child_hand) = children[0];
+            let mut _sc_iter: u64 = 0;
             loop {
+                _sc_iter += 1;
+                if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
+                    eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
+                        ply, or_node, _sc_iter, self.nodes_searched,
+                        self.start_time.elapsed().as_secs_f64(), m.to_usi());
+                }
                 // ノード制限・タイムアウトチェック
                 if self.nodes_searched >= self.max_nodes || self.timed_out {
                     break;
@@ -2920,30 +3000,37 @@ impl DfPnSolver {
             }
         }
 
-        // OR ノードの effort ベース制御．
-        //
-        // penalty_divisor: 子の選択ペナルティ用(遅い成長)．
-        //   max_nodes/1000 → 50M で 50K ノードごとに +1 pn ペナルティ．
-        //   遅い成長により，正解手が stale 扱いされても選択順位が
-        //   急激に落ちない．
-        //
-        // boost_divisor: sibling_based ε 拡大用(速い成長)．
-        //   max_nodes/100000 → 50M で 500 ノードごとに +1 ε 拡大．
-        //   速い成長により，正解手の pn 閾値が早期に拡大し，
-        //   深い探索に必要な予算を確保できる．
-        let or_effort_divisor: u64 = if or_node {
-            (self.max_nodes as u64 / 1000).max(1)
-        } else {
-            u64::MAX
-        };
-        let or_boost_divisor: u64 = if or_node {
-            (self.max_nodes as u64 / 100_000).max(1)
-        } else {
-            u64::MAX
-        };
-
         // MID ループ(証明駒/反証駒の伝播を含む)
+        let mut _loop_iter: u64 = 0;
+        let _loop_start_nodes = self.nodes_searched;
+        let mut _next_diag_nodes = self.nodes_searched.saturating_add(1_000_000);
         loop {
+            _loop_iter += 1;
+            // 1M nodes ごとに詳細診断: この MID ノードで消費されたノード数と子の状態
+            if self.nodes_searched >= _next_diag_nodes {
+                let consumed = self.nodes_searched - _loop_start_nodes;
+                eprintln!("[mid_diag] ply={} or={} consumed={}K iter={} children={} time={:.1}s pn_th={} dn_th={}",
+                    ply, or_node, consumed / 1000, _loop_iter, children.len(),
+                    self.start_time.elapsed().as_secs_f64(), pn_threshold, dn_threshold);
+                for (i, &(ref cm, _, cpk, ref ch)) in children.iter().enumerate() {
+                    let child_rem = remaining.saturating_sub(1);
+                    let (cpn, cdn, _) = self.look_up_pn_dn(cpk, ch, child_rem);
+                    eprintln!("[mid_diag]   child[{}] move={} drop={} pn={} dn={} pk={:#x} {}",
+                        i, cm.to_usi(), cm.is_drop(), cpn, cdn, cpk,
+                        if cpn == 0 { "PROVED" } else if cdn == 0 { "DISPROVED" } else { "" });
+                    // Dump TT entries for stuck children (first diagnostic only)
+                    if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
+                        if let Some(entries) = self.table.tt.get(&cpk) {
+                            for (ei, e) in entries.iter().enumerate() {
+                                eprintln!("[tt_dump]     entry[{}]: pn={} dn={} rem={} path_dep={} hand={:?}",
+                                    ei, e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
+                            }
+                        }
+                    }
+                }
+                // current_pn/dn/best_idx は後で計算されるのでここでは出力しない
+                _next_diag_nodes = self.nodes_searched.saturating_add(1_000_000);
+            }
             #[cfg(feature = "tt_diag")]
             { self.diag_mid_loop_iters += 1; }
             #[cfg(feature = "profile")]
@@ -3020,9 +3107,10 @@ impl DfPnSolver {
                     // 反証済みの子: 反証は att_hand で保存するため蓄積不要
                     if cdn == 0 {
                         // NM remaining 伝播: 子の remaining の最小値を追跡
-                        let child_nm_rem = self.table.get_disproof_remaining(
+                        let child_nm_rem = self.table.get_effective_disproof_info(
                             child_pk, child_hand,
-                        );
+                            remaining.saturating_sub(1),
+                        ).map(|(r, _)| r).unwrap_or(0);
                         or_nm_min_remaining = or_nm_min_remaining.min(child_nm_rem);
                         // GHI 伝播: 子の反証が経路依存なら親も経路依存
                         if !self.path.contains(&child_fh)
@@ -3038,25 +3126,17 @@ impl DfPnSolver {
                     if cpn < current_pn {
                         current_pn = cpn;
                     }
-                    // Selection: progress-aware effort penalty.
-                    // pn が改善(best_pn を更新)した子は stale_effort = 0 でペナルティなし．
-                    // pn が停滞している子は stale_effort が蓄積しペナルティが増加．
-                    // 正解手は pn が減少し続けるため常にペナルティ 0，
-                    // 不正解手は pn が停滞しペナルティで劣後する．
-                    let (stale_effort, _, _) = self.or_effort.get(&child_pk).copied().unwrap_or((0, INF, 0));
-                    let penalty = (stale_effort / or_effort_divisor) as u32;
-                    let sel_cpn = cpn.saturating_add(penalty);
-                    if sel_cpn < select_best_pn
-                        || (sel_cpn == select_best_pn
+                    if cpn < select_best_pn
+                        || (cpn == select_best_pn
                             && cdn < best_pn_dn.1)
                     {
                         second_best = select_best_pn;
-                        select_best_pn = sel_cpn;
+                        select_best_pn = cpn;
                         best_idx = i;
                         best_pn_dn = (cpn, cdn);
                         best_source = csrc;
-                    } else if sel_cpn < second_best {
-                        second_best = sel_cpn;
+                    } else if cpn < second_best {
+                        second_best = cpn;
                     }
                     // SNDA: sum 計算は後段で行う
                     current_dn = (current_dn as u64)
@@ -3080,21 +3160,14 @@ impl DfPnSolver {
                     let mut parent_nm_remaining = propagate_nm_remaining(
                         or_nm_min_remaining, remaining);
                     // MID 内部での REMAINING_INFINITE 昇格(main loop):
-                    if parent_nm_remaining != REMAINING_INFINITE
-                        && !self.refutable_check_failed.contains(&full_hash)
-                    {
+                    // TT ベースの高速判定のみ(init フェーズと同様)
+                    if parent_nm_remaining != REMAINING_INFINITE {
                         let checks = self.generate_check_moves(board);
                         if checks.is_empty() {
                             parent_nm_remaining = REMAINING_INFINITE;
                         } else if self.all_checks_refutable_by_tt(board, &checks)
                         {
                             parent_nm_remaining = REMAINING_INFINITE;
-                        } else if self.depth_limit_all_checks_refutable(
-                            board, &checks,
-                        ) {
-                            parent_nm_remaining = REMAINING_INFINITE;
-                        } else {
-                            self.refutable_check_failed.insert(full_hash);
                         }
                     }
                     //
@@ -3113,6 +3186,13 @@ impl DfPnSolver {
                             pos_key, att_hand,
                             INF, 0,
                             parent_nm_remaining, pos_key,
+                        );
+                    }
+                    // スラッシング防止(main loop): init フェーズと同じ処理
+                    if parent_nm_remaining < remaining {
+                        self.store(
+                            pos_key, att_hand, INF - 1, 1,
+                            remaining, pos_key,
                         );
                     }
                     self.path.remove(&full_hash);
@@ -3166,9 +3246,10 @@ impl DfPnSolver {
                         // att_hand で保存(TT ヒット率最大化)
                         // AND ノードでは守備側が着手するため att_hand は不変．
                         //
-                        let child_nm_rem = self.table.get_disproof_remaining(
+                        let child_nm_rem = self.table.get_effective_disproof_info(
                             child_pk, child_hand,
-                        );
+                            remaining.saturating_sub(1),
+                        ).map(|(r, _)| r).unwrap_or(0);
                         let parent_nm_remaining = propagate_nm_remaining(
                             child_nm_rem, remaining);
                         let child_path_dep = is_loop_child
@@ -3293,6 +3374,16 @@ impl DfPnSolver {
                     current_pn = snda_dedup(&mut snda_pairs, current_pn);
                 }
 
+                // ply=27 AND node diagnostic
+                if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                    eprintln!("[ply27_and] max_cpn={} unproven={} current_pn={} current_dn={} pn_th={} dn_th={} remaining={} children={}",
+                        max_cpn, unproven_count, current_pn, current_dn, pn_threshold, dn_threshold, remaining, children.len());
+                    for (i, &(ref m, _, cpk, ref ch)) in children.iter().enumerate() {
+                        let (cpn, cdn, _) = self.look_up_pn_dn(cpk, ch, remaining.saturating_sub(1));
+                        eprintln!("[ply27_and]   child[{}] move={} cpn={} cdn={}", i, m.to_usi(), cpn, cdn);
+                    }
+                }
+
                 // AND ノード証明(全子が証明済み)
                 if all_proved && current_pn == 0 {
                     // 証明駒を現在の持ち駒で制限
@@ -3319,6 +3410,13 @@ impl DfPnSolver {
             let best_move16 = children[best_idx].0.to_move16();
             profile_timed!(self, tt_store_ns, tt_store_count,
                 self.store_with_best_move(pos_key, att_hand, current_pn, current_dn, remaining, best_source, best_move16));
+
+            // Verify store visibility at ply=27
+            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
+                let (v_pn, v_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
+                eprintln!("[ply27_store] stored pn={} dn={} rem={} → lookup returns pn={} dn={}",
+                    current_pn, current_dn, remaining, v_pn, v_dn);
+            }
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //
@@ -3415,22 +3513,11 @@ impl DfPnSolver {
                     .saturating_add(best_pn_dn.1)
                     .max(dn_floor_or)
                     .min(INF - 1);
-                // OR ノード pn 閾値: 適応的 sibling_based 制限．
+                // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
-                // 基本: second_best + ε で不正解手から正解手への切替を促す．
-                // 適応: 子の stale_effort が蓄積するにつれ ε を増加．
-                // 正解手は初回は tight 予算で浅く評価され，
-                // stale_effort 蓄積に伴い予算が拡大して深く探索可能になる．
-                // 不正解手も同様に予算が拡大するが，effort penalty により
-                // 選択されにくくなるため，全体としての無駄は抑制される．
-                //
-                // 合駒チェーン深部では王手が 1 手のみ(second_best = INF)
-                // となり sibling_based = INF で実質無制限．
-                let child_pk = children[best_idx].2;
-                let (_, _, total_effort) = self.or_effort
-                    .get(&child_pk).copied().unwrap_or((0, u32::MAX, 0));
-                let effort_boost = (total_effort / or_boost_divisor).min(1000) as u32;
-                let epsilon_or = (second_best / 4 + 1).saturating_add(effort_boost);
+                // 子の pn 予算を sibling_based(second_best + ε)に制限し，
+                // 不正解手から正解手への切替を全 OR ノードで強制する．
+                let epsilon_or = second_best / 4 + 1;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -3560,30 +3647,9 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
-            let _post_mid_nodes = self.nodes_searched;
-
-            // OR ノードの progress-aware effort 追跡．
-            // pn が改善された場合は stale_effort をリセットし，
-            // 改善されない場合は stale_effort を蓄積する．
-            if or_node {
-                let child_consumed = (_post_mid_nodes as u64).saturating_sub(_pre_mid_nodes as u64);
-                let child_pk = children[best_idx].2;
-                let (cpn_after, _, _) = self.look_up_pn_dn(
-                    child_pk,
-                    &children[best_idx].3,
-                    remaining.saturating_sub(1),
-                );
-                let entry = self.or_effort.entry(child_pk).or_insert((0, INF, 0));
-                // total_effort: 常に蓄積(閾値ブースト用)
-                entry.2 += child_consumed;
-                if cpn_after < entry.1 {
-                    // Progress: pn decreased below best. Reset stale effort.
-                    entry.1 = cpn_after;
-                    entry.0 = 0;
-                } else {
-                    // No progress: accumulate stale effort.
-                    entry.0 += child_consumed;
-                }
+            // Stuck-node diagnostic (temporary)
+            {
+                let _nodes_used = self.nodes_searched - _pre_mid_nodes;
             }
 
             #[cfg(feature = "tt_diag")]
@@ -3770,12 +3836,15 @@ impl DfPnSolver {
                 cap_pk, &cap_hand, capture_remaining,
             );
             if cap_pn == 0 {
-                // 取り後の局面が証明済み → この OR ノードは証明済み
+                // 取り後の局面が証明済み → この OR ノード(子)は証明済み
                 // 証明駒は取り後の証明駒を調整して使用
                 let cap_proof = self.table.get_proof_hand(cap_pk, &cap_hand);
                 let proof = adjust_hand_for_move(*check, &cap_proof);
-                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE, cap_pk);
+                // undo_move で子(OR ノード)の局面に戻してから store する．
+                // board は子の局面を指すため，store_board_with_hand は
+                // 子の position_key で TT に保存する．
                 board.undo_move(*check, captured);
+                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE, cap_pk);
                 return true;
             }
             board.undo_move(*check, captured);
@@ -5652,7 +5721,11 @@ impl DfPnSolver {
             self.path.clear();
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            eprintln!("[ids] depth={}/{} root_pn={} nodes={} time={:.1}s",
+                ids_depth, saved_depth, root_pn, self.nodes_searched,
+                self.start_time.elapsed().as_secs_f64());
             if root_pn == 0 {
+                eprintln!("[ids] root proved, break");
                 break;
             }
             let _budget = if ids_depth < saved_depth {
@@ -5688,76 +5761,21 @@ impl DfPnSolver {
                     && self.nodes_searched < self.max_nodes
                     && !self.timed_out
                 {
-                    // Per-root-move node tracking: capture check moves and their node costs
-                    let _root_checks = if ids_depth == saved_depth {
-                        let checks = self.generate_check_moves(board);
-                        let info: Vec<(String, u64, u64)> = checks.iter().map(|m| {
-                            let pk_c = {
-                                let cap = board.do_move(*m);
-                                let pk = position_key(board);
-                                let hand = board.hand[self.attacker.index()];
-                                let (pn, dn, _) = self.table.look_up(pk, &hand, ids_depth as u16 - 1);
-                                board.undo_move(*m, cap);
-                                (m.to_usi(), pn as u64, dn as u64)
-                            };
-                            pk_c
-                        }).collect();
-                        for (usi, pn, dn) in &info {
-                            eprintln!("[root_diag] check={} pn={} dn={}", usi, pn, dn);
-                        }
-                        Some(info)
-                    } else {
-                        None
-                    };
-                    let _pre_nodes = self.nodes_searched;
-                    let _mid_wall_start = std::time::Instant::now();
                     // IDS iteration ごとに or_effort をリセット．
                     // 前の depth の TT pn が stale になるため，
                     // depth ジャンプ後は全ての子がフレッシュに再評価される必要がある．
                     self.or_effort.clear();
+                    eprintln!("[ids] calling MID: depth={} root_pn={} root_dn={} nodes={}",
+                        ids_depth, root_pn, root_dn, self.nodes_searched);
+                    #[cfg(feature = "profile")]
+                    let _mid_wall_start = Instant::now();
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    eprintln!("[ids] MID returned: depth={} nodes={} time={:.1}s",
+                        ids_depth, self.nodes_searched, self.start_time.elapsed().as_secs_f64());
                     #[cfg(feature = "profile")]
                     {
-                        let _mid_elapsed = _mid_wall_start.elapsed().as_nanos() as u64;
-                        self.profile_stats.mid_total_ns += _mid_elapsed;
+                        self.profile_stats.mid_total_ns += _mid_wall_start.elapsed().as_nanos() as u64;
                         self.profile_stats.mid_total_count += 1;
-                    }
-                    let _elapsed = _mid_wall_start.elapsed().as_secs_f64();
-                    eprintln!("[ids_diag] MID wall time: depth={} {:.3}s nodes={}",
-                        ids_depth, _elapsed,
-                        self.nodes_searched - _pre_nodes);
-                    // Effort diagnostics: top total effort entries
-                    {
-                        let mut effort_entries: Vec<_> = self.or_effort.iter()
-                            .filter(|(_, (_, _, te))| *te > 10_000)
-                            .map(|(k, (se, bp, te))| (*k, *se, *bp, *te))
-                            .collect();
-                        effort_entries.sort_by(|a, b| b.3.cmp(&a.3));
-                        eprintln!("[effort_diag] total entries={}, top effort:", self.or_effort.len());
-                        let diag_divisor = (self.max_nodes as u64 / 1000).max(1);
-                        let boost_divisor = (self.max_nodes as u64 / 100_000).max(1);
-                        for (pk, se, bp, te) in effort_entries.iter().take(10) {
-                            let penalty = (*se / diag_divisor) as u32;
-                            let boost = (*te / boost_divisor).min(1000) as u32;
-                            eprintln!("  pk={:#x} stale={} total={} best_pn={} penalty={} boost={}",
-                                pk, se, te, bp, penalty, boost);
-                        }
-                    }
-                    // After MID: show updated pn/dn for each root check
-                    if let Some(ref _checks) = _root_checks {
-                        let checks = self.generate_check_moves(board);
-                        for m in &checks {
-                            let cap = board.do_move(*m);
-                            let pk = position_key(board);
-                            let hand = board.hand[self.attacker.index()];
-                            let (pn, dn, _) = self.table.look_up(pk, &hand, ids_depth as u16 - 1);
-                            let rem = self.table.get_disproof_remaining(pk, &hand);
-                            board.undo_move(*m, cap);
-                            if pn > 0 || dn == 0 {
-                                eprintln!("[root_diag] after: check={} pn={} dn={} nm_rem={}",
-                                    m.to_usi(), pn, dn, rem);
-                            }
-                        }
                     }
                 }
             }
@@ -5835,7 +5853,11 @@ impl DfPnSolver {
                 prev_prefilter_miss = self.diag_prefilter_miss;
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+            eprintln!("[ids] after MID: depth={} root_pn={} root_dn={} nodes={} time={:.1}s",
+                ids_depth, root_pn2, root_dn2, self.nodes_searched,
+                self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
+                eprintln!("[ids] proved after MID, break");
                 break;
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
@@ -5850,19 +5872,21 @@ impl DfPnSolver {
             // これを真の不詰と判定すると偽陽性が発生する(例: 39手詰め)．
             if root_dn2 == 0 {
                 let root_nm_rem = self.table.get_disproof_remaining(pk, &att_hand);
+                eprintln!("[ids] NM: depth={} nm_rem={} REMAINING_INFINITE={}",
+                    ids_depth, root_nm_rem, REMAINING_INFINITE);
                 if root_nm_rem == REMAINING_INFINITE {
+                    eprintln!("[ids] NM INFINITE, break");
                     break;
                 }
                 let checks = self.generate_check_moves(board);
-                let _ref_start = std::time::Instant::now();
                 let refutable = if checks.is_empty() {
                     true
                 } else {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
-                eprintln!("[ids_diag] refutable check: depth={} checks={} refutable={} time={:.3}s",
-                    ids_depth, checks.len(), refutable, _ref_start.elapsed().as_secs_f64());
+                eprintln!("[ids] refutable={} checks={}", refutable, checks.len());
                 if checks.is_empty() || refutable {
+                    eprintln!("[ids] NM promoted to INFINITE, break");
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
                         pk, att_hand, INF, 0, REMAINING_INFINITE, pk,
@@ -5899,27 +5923,9 @@ impl DfPnSolver {
             self.table.remove_path_dependent_disproofs();
 
             if stagnated || time_exceeded {
-                #[cfg(feature = "tt_diag")]
-                {
-                    if stagnated {
-                        eprintln!("[ids_diag] stagnation detected (pn={} dn={}), jumping to depth={}",
-                            root_pn2, root_dn2, saved_depth);
-                    }
-                    if time_exceeded {
-                        eprintln!("[ids_diag] time exceeded ({:.1}s remaining), jumping to depth={}",
-                            remaining_time, saved_depth);
-                    }
-                }
                 ids_depth = saved_depth;
             } else {
-                #[cfg(feature = "tt_diag")]
-                eprintln!("[ids_diag] TT preserved: TT_pos={}", self.table.len());
-
                 // 深さ進行: depth=4 以降は saved_depth に直接ジャンプ．
-                // 浅い反復(depth <= 4)はルート付近の簡単な詰みを
-                // TT に蓄積する．MID 内部の NM 昇格(TT 参照 + 軽量反証判定)
-                // により，depth=31 の MID 内で REMAINING_INFINITE が伝播し，
-                // 不詰部分木の再探索を回避する．
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
                 if next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
@@ -6423,14 +6429,18 @@ impl DfPnSolver {
                 arena[node_idx as usize].pn = INF;
                 arena[node_idx as usize].dn = 0;
                 arena[node_idx as usize].expanded = true;
-                let child_rem = self.table.get_disproof_remaining(child_pk, &child_hand);
+                let child_rem = self.table.get_effective_disproof_info(
+                    child_pk, &child_hand, child_remaining,
+                ).map(|(r, _)| r).unwrap_or(0);
                 let prop_rem = propagate_nm_remaining(child_rem, remaining);
                 self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key);
                 return;
             }
             // OR ノードで子が反証済み → 子を追加せずスキップ
             if or_node && cdn == 0 {
-                let child_rem = self.table.get_disproof_remaining(child_pk, &child_hand);
+                let child_rem = self.table.get_effective_disproof_info(
+                    child_pk, &child_hand, child_remaining,
+                ).map(|(r, _)| r).unwrap_or(0);
                 or_nm_min_remaining = or_nm_min_remaining.min(child_rem);
                 continue;
             }
