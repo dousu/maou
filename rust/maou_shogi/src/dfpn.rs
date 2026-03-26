@@ -1305,6 +1305,22 @@ pub struct DfPnSolver {
     /// 一度 false と判定された局面を再判定する必要はない．
     /// MID 内部で同一局面の重複判定を回避し，パフォーマンスを改善する．
     refutable_check_failed: FxHashSet<u64>,
+    /// OR ノードの子ポジション別 stale effort 追跡．
+    ///
+    /// キー: 子ポジションの pos_key．
+    /// 値: (stale_effort, best_pn)．
+    /// - stale_effort: pn が改善しなかった探索のノード累積．
+    ///   pn が best_pn を下回ると 0 にリセットされる．
+    /// - best_pn: これまでに観測された最低 pn．
+    ///
+    /// stale_effort に基づく pn ペナルティを選択時に加算し，
+    /// 不正解手(pn 停滞)から正解手(pn 減少)への切替を促進する．
+    /// OR ノードの子ポジション別 effort 追跡．
+    /// キー: 子ポジションの pos_key．
+    /// 値: (stale_effort, best_pn, total_effort)．
+    /// stale_effort: pn 未改善時に蓄積(選択ペナルティ用)．
+    /// total_effort: 常に蓄積(閾値ブースト用)．
+    or_effort: FxHashMap<u64, (u64, u32, u64)>,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
     /// Killer Move テーブル(OR ノード用)．
@@ -1419,6 +1435,7 @@ impl DfPnSolver {
             chain_bb_cache: Bitboard::EMPTY,
             prefilter_hits: 0,
             refutable_check_failed: FxHashSet::default(),
+            or_effort: FxHashMap::default(), // (stale_effort, best_pn, total_effort)
             tt_gc_threshold: 0,
             next_gc_check: 0,
             killer_table: Vec::new(),
@@ -2903,6 +2920,28 @@ impl DfPnSolver {
             }
         }
 
+        // OR ノードの effort ベース制御．
+        //
+        // penalty_divisor: 子の選択ペナルティ用(遅い成長)．
+        //   max_nodes/1000 → 50M で 50K ノードごとに +1 pn ペナルティ．
+        //   遅い成長により，正解手が stale 扱いされても選択順位が
+        //   急激に落ちない．
+        //
+        // boost_divisor: sibling_based ε 拡大用(速い成長)．
+        //   max_nodes/100000 → 50M で 500 ノードごとに +1 ε 拡大．
+        //   速い成長により，正解手の pn 閾値が早期に拡大し，
+        //   深い探索に必要な予算を確保できる．
+        let or_effort_divisor: u64 = if or_node {
+            (self.max_nodes as u64 / 1000).max(1)
+        } else {
+            u64::MAX
+        };
+        let or_boost_divisor: u64 = if or_node {
+            (self.max_nodes as u64 / 100_000).max(1)
+        } else {
+            u64::MAX
+        };
+
         // MID ループ(証明駒/反証駒の伝播を含む)
         loop {
             #[cfg(feature = "tt_diag")]
@@ -2930,7 +2969,8 @@ impl DfPnSolver {
                 // OR ノード: min(pn), sum(dn)
                 current_pn = INF;
                 current_dn = 0;
-                second_best = INF; // 2番目に小さい pn
+                second_best = INF; // 2番目に小さい pn(選択用，予算枯渇除外込み)
+                let mut select_best_pn: u32 = INF; // 選択用 best pn
                 // NM remaining 伝播: init フェーズの値を引き継ぐ
                 or_nm_min_remaining = init_or_nm_min_remaining;
                 // SNDA: (source, dn) ペアを収集し，同一 source の子は
@@ -2994,17 +3034,29 @@ impl DfPnSolver {
                         }
                     }
 
-                    if cpn < current_pn
-                        || (cpn == current_pn
+                    // True min cpn tracking (for node's proof number).
+                    if cpn < current_pn {
+                        current_pn = cpn;
+                    }
+                    // Selection: progress-aware effort penalty.
+                    // pn が改善(best_pn を更新)した子は stale_effort = 0 でペナルティなし．
+                    // pn が停滞している子は stale_effort が蓄積しペナルティが増加．
+                    // 正解手は pn が減少し続けるため常にペナルティ 0，
+                    // 不正解手は pn が停滞しペナルティで劣後する．
+                    let (stale_effort, _, _) = self.or_effort.get(&child_pk).copied().unwrap_or((0, INF, 0));
+                    let penalty = (stale_effort / or_effort_divisor) as u32;
+                    let sel_cpn = cpn.saturating_add(penalty);
+                    if sel_cpn < select_best_pn
+                        || (sel_cpn == select_best_pn
                             && cdn < best_pn_dn.1)
                     {
-                        second_best = current_pn;
-                        current_pn = cpn;
+                        second_best = select_best_pn;
+                        select_best_pn = sel_cpn;
                         best_idx = i;
                         best_pn_dn = (cpn, cdn);
                         best_source = csrc;
-                    } else if cpn < second_best {
-                        second_best = cpn;
+                    } else if sel_cpn < second_best {
+                        second_best = sel_cpn;
                     }
                     // SNDA: sum 計算は後段で行う
                     current_dn = (current_dn as u64)
@@ -3072,6 +3124,7 @@ impl DfPnSolver {
                 if snda_pairs.len() >= 2 {
                     current_dn = snda_dedup(&mut snda_pairs, current_dn);
                 }
+
             } else {
                 // AND ノード: WPN (Weak Proof Number), min(dn)
                 // WPN (Ueda et al. 2008): sum(pn) の代わりに
@@ -3362,19 +3415,22 @@ impl DfPnSolver {
                     .saturating_add(best_pn_dn.1)
                     .max(dn_floor_or)
                     .min(INF - 1);
-                // OR ノード pn 閾値: 兄弟ベース制限(eff_pn_th キャップなし)．
+                // OR ノード pn 閾値: 適応的 sibling_based 制限．
                 //
-                // 子の pn 予算を sibling_based(second_best + ε)に制限し，
-                // 不正解手から正解手への切替を全 OR ノードで強制する．
-                //
-                // eff_pn_th でキャップすると pn カスケード縮退が発生するため，
-                // 親予算と独立にする．子が親予算を超過する可能性があるが，
-                // 超過後に親 MID ループが current_pn >= eff_pn_th で
-                // 即座に break するため 1 呼び出し分に限定される．
+                // 基本: second_best + ε で不正解手から正解手への切替を促す．
+                // 適応: 子の stale_effort が蓄積するにつれ ε を増加．
+                // 正解手は初回は tight 予算で浅く評価され，
+                // stale_effort 蓄積に伴い予算が拡大して深く探索可能になる．
+                // 不正解手も同様に予算が拡大するが，effort penalty により
+                // 選択されにくくなるため，全体としての無駄は抑制される．
                 //
                 // 合駒チェーン深部では王手が 1 手のみ(second_best = INF)
                 // となり sibling_based = INF で実質無制限．
-                let epsilon_or = second_best / 4 + 1;
+                let child_pk = children[best_idx].2;
+                let (_, _, total_effort) = self.or_effort
+                    .get(&child_pk).copied().unwrap_or((0, u32::MAX, 0));
+                let effort_boost = (total_effort / or_boost_divisor).min(1000) as u32;
+                let epsilon_or = (second_best / 4 + 1).saturating_add(effort_boost);
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -3496,6 +3552,7 @@ impl DfPnSolver {
                 (0, 0, 0)
             };
 
+            let _pre_mid_nodes = self.nodes_searched;
             self.mid(
                 board,
                 child_pn_th,
@@ -3503,6 +3560,31 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
+            let _post_mid_nodes = self.nodes_searched;
+
+            // OR ノードの progress-aware effort 追跡．
+            // pn が改善された場合は stale_effort をリセットし，
+            // 改善されない場合は stale_effort を蓄積する．
+            if or_node {
+                let child_consumed = (_post_mid_nodes as u64).saturating_sub(_pre_mid_nodes as u64);
+                let child_pk = children[best_idx].2;
+                let (cpn_after, _, _) = self.look_up_pn_dn(
+                    child_pk,
+                    &children[best_idx].3,
+                    remaining.saturating_sub(1),
+                );
+                let entry = self.or_effort.entry(child_pk).or_insert((0, INF, 0));
+                // total_effort: 常に蓄積(閾値ブースト用)
+                entry.2 += child_consumed;
+                if cpn_after < entry.1 {
+                    // Progress: pn decreased below best. Reset stale effort.
+                    entry.1 = cpn_after;
+                    entry.0 = 0;
+                } else {
+                    // No progress: accumulate stale effort.
+                    entry.0 += child_consumed;
+                }
+            }
 
             #[cfg(feature = "tt_diag")]
             if _diag_match {
@@ -3558,6 +3640,9 @@ impl DfPnSolver {
                     }
                 }
             }
+
+            // (effort tracking は self.or_effort に蓄積済み．
+            // 次のループ反復で effort ペナルティが選択に反映される．)
         }
 
         // パスから除去
@@ -5626,6 +5711,10 @@ impl DfPnSolver {
                     };
                     let _pre_nodes = self.nodes_searched;
                     let _mid_wall_start = std::time::Instant::now();
+                    // IDS iteration ごとに or_effort をリセット．
+                    // 前の depth の TT pn が stale になるため，
+                    // depth ジャンプ後は全ての子がフレッシュに再評価される必要がある．
+                    self.or_effort.clear();
                     self.mid(board, INF - 1, INF - 1, 0, true);
                     #[cfg(feature = "profile")]
                     {
@@ -5637,6 +5726,23 @@ impl DfPnSolver {
                     eprintln!("[ids_diag] MID wall time: depth={} {:.3}s nodes={}",
                         ids_depth, _elapsed,
                         self.nodes_searched - _pre_nodes);
+                    // Effort diagnostics: top total effort entries
+                    {
+                        let mut effort_entries: Vec<_> = self.or_effort.iter()
+                            .filter(|(_, (_, _, te))| *te > 10_000)
+                            .map(|(k, (se, bp, te))| (*k, *se, *bp, *te))
+                            .collect();
+                        effort_entries.sort_by(|a, b| b.3.cmp(&a.3));
+                        eprintln!("[effort_diag] total entries={}, top effort:", self.or_effort.len());
+                        let diag_divisor = (self.max_nodes as u64 / 1000).max(1);
+                        let boost_divisor = (self.max_nodes as u64 / 100_000).max(1);
+                        for (pk, se, bp, te) in effort_entries.iter().take(10) {
+                            let penalty = (*se / diag_divisor) as u32;
+                            let boost = (*te / boost_divisor).min(1000) as u32;
+                            eprintln!("  pk={:#x} stale={} total={} best_pn={} penalty={} boost={}",
+                                pk, se, te, bp, penalty, boost);
+                        }
+                    }
                     // After MID: show updated pn/dn for each root check
                     if let Some(ref _checks) = _root_checks {
                         let checks = self.generate_check_moves(board);
@@ -7700,6 +7806,110 @@ mod tests {
                 );
             }
             other => panic!("expected Checkmate for tsume6, got {:?}", other),
+        }
+    }
+
+    /// 29手詰め PV 逆順解析: PV の手順を進め，各中間局面から解けるか検証．
+    /// どの深さで解けなくなるかを特定する．
+    #[test]
+    fn test_tsume_6_29te_pv_analysis() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        // PV の最初 25 手(テストで検証済みの手順)
+        let pv_moves = [
+            "S*7i", "8h9g", "8f8g+", "7h8g", "G*8f", "9g8f",
+            "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g+", "9g8g",
+            "6h6i", "G*7h", "6i7h", "6g7h", "P*8f", "8g9g",
+            "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
+            "P*8e",
+        ];
+
+        // 偶数 ply ごとに(攻め方の手番で)テスト
+        // 常に depth=31, 5M nodes, 30s で解けるか確認
+        for start_ply in (0..pv_moves.len()).step_by(2) {
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
+
+            // Play first start_ply moves
+            for i in 0..start_ply {
+                let m = board.move_from_usi(pv_moves[i])
+                    .unwrap_or_else(|| panic!("failed to parse move {} at index {}", pv_moves[i], i));
+                board.do_move(m);
+            }
+
+            let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 30);
+            let result = solver.solve(&mut board);
+
+            match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    eprintln!(
+                        "[pv_analysis] ply={:2} first_move={:<8} SOLVED {}te, {} nodes",
+                        start_ply, pv_moves[start_ply], moves.len(), nodes_searched
+                    );
+                }
+                TsumeResult::Unknown { nodes_searched } => {
+                    eprintln!(
+                        "[pv_analysis] ply={:2} first_move={:<8} FAILED ({} nodes)",
+                        start_ply, pv_moves[start_ply], nodes_searched
+                    );
+                }
+                other => {
+                    eprintln!(
+                        "[pv_analysis] ply={:2} first_move={:<8} {:?}",
+                        start_ply, pv_moves[start_ply], other
+                    );
+                }
+            }
+        }
+    }
+
+    /// 29手詰め ply1 応手解析: S*7i 後の各応手から解けるか検証．
+    #[test]
+    fn test_tsume_6_29te_ply1_analysis() {
+        use crate::movegen;
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        // Play S*7i (correct first move)
+        let first_move = board.move_from_usi("S*7i").unwrap();
+        board.do_move(first_move);
+
+        // Generate all defense moves at ply 1
+        let defenses = movegen::generate_legal_moves(&mut board);
+        eprintln!("[ply1_analysis] {} defense moves after S*7i", defenses.len());
+
+        for def in &defenses {
+            let cap = board.do_move(*def);
+            // From ply 2 position, try to solve
+            let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 30);
+            let result = solver.solve(&mut board);
+            match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    eprintln!(
+                        "[ply1_analysis] defense={:<8} CHECKMATE {}te, {} nodes",
+                        def.to_usi(), moves.len(), nodes_searched
+                    );
+                }
+                TsumeResult::NoCheckmate { nodes_searched } => {
+                    eprintln!(
+                        "[ply1_analysis] defense={:<8} NO_CHECKMATE (refuted), {} nodes",
+                        def.to_usi(), nodes_searched
+                    );
+                }
+                TsumeResult::Unknown { nodes_searched } => {
+                    eprintln!(
+                        "[ply1_analysis] defense={:<8} UNKNOWN (stuck), {} nodes",
+                        def.to_usi(), nodes_searched
+                    );
+                }
+                other => {
+                    eprintln!(
+                        "[ply1_analysis] defense={:<8} {:?}",
+                        def.to_usi(), other
+                    );
+                }
+            }
+            board.undo_move(*def, cap);
         }
     }
 
