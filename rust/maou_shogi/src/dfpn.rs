@@ -283,6 +283,32 @@ pub struct ProfileStats {
     pub main_loop_collect_ns: u64,
     /// メインループの pn/dn 収集回数．
     pub main_loop_collect_count: u64,
+    /// 深さ制限時の終端処理(`depth_limit_all_checks_refutable` を含む)の累積時間(ナノ秒)．
+    pub depth_limit_terminal_ns: u64,
+    /// 深さ制限時の終端処理の呼び出し回数．
+    pub depth_limit_terminal_count: u64,
+    /// NM 昇格のための `depth_limit_all_checks_refutable` の累積時間(ナノ秒)．
+    pub nm_promotion_refutable_ns: u64,
+    /// NM 昇格のための `depth_limit_all_checks_refutable` の呼び出し回数．
+    pub nm_promotion_refutable_count: u64,
+    /// 合駒 TT 先読み(`generate_check_moves` + `try_capture_tt_proof`)の累積時間(ナノ秒)．
+    pub capture_tt_lookahead_ns: u64,
+    /// 合駒 TT 先読みの呼び出し回数．
+    pub capture_tt_lookahead_count: u64,
+    /// `cross_deduce_children` の累積時間(ナノ秒)．
+    pub cross_deduce_ns: u64,
+    /// `cross_deduce_children` の呼び出し回数．
+    pub cross_deduce_count: u64,
+    /// `try_prefilter_block` の累積時間(ナノ秒)．
+    pub prefilter_ns: u64,
+    /// `try_prefilter_block` の呼び出し回数．
+    pub prefilter_count: u64,
+    /// MID 全体のウォール時間(ナノ秒)．mid_fallback 内のみ計測．
+    pub mid_total_ns: u64,
+    /// MID トップレベル呼び出し回数．
+    pub mid_total_count: u64,
+    /// PNS フェーズのウォール時間(ナノ秒)．
+    pub pns_total_ns: u64,
     /// TT エントリ溢れ(置換)の発生回数．
     pub tt_overflow_count: u64,
     /// TT エントリ溢れで置換対象が見つからなかった回数．
@@ -294,6 +320,10 @@ pub struct ProfileStats {
 #[cfg(feature = "profile")]
 impl std::fmt::Display for ProfileStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // child_init_domove は child_init の内訳だが，early return で child_init が
+        // 記録されないケースがあるため，未計上分を補正する．
+        let child_init_uncaptured = self.child_init_domove_ns
+            .saturating_sub(self.child_init_ns);
         let total_ns = self.position_key_ns
             + self.loop_detect_ns
             + self.tt_lookup_ns
@@ -303,7 +333,13 @@ impl std::fmt::Display for ProfileStats {
             + self.do_move_ns
             + self.undo_move_ns
             + self.child_init_ns
-            + self.main_loop_collect_ns;
+            + child_init_uncaptured
+            + self.main_loop_collect_ns
+            + self.depth_limit_terminal_ns
+            + self.nm_promotion_refutable_ns
+            + self.capture_tt_lookahead_ns
+            + self.cross_deduce_ns
+            + self.prefilter_ns;
         let total_us = total_ns as f64 / 1000.0;
 
         writeln!(f, "=== DFPN Profile Stats ===")?;
@@ -323,7 +359,13 @@ impl std::fmt::Display for ProfileStats {
             ("child_init", self.child_init_ns, self.child_init_count),
             ("  static_mate", self.static_mate_ns, self.static_mate_count),
             ("  child_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
+            ("  init_early_domove", child_init_uncaptured, 0),
             ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
+            ("depth_limit_terminal", self.depth_limit_terminal_ns, self.depth_limit_terminal_count),
+            ("nm_promotion_refut", self.nm_promotion_refutable_ns, self.nm_promotion_refutable_count),
+            ("capture_tt_lookahead", self.capture_tt_lookahead_ns, self.capture_tt_lookahead_count),
+            ("cross_deduce", self.cross_deduce_ns, self.cross_deduce_count),
+            ("prefilter", self.prefilter_ns, self.prefilter_count),
         ];
 
         for (name, ns, count) in &items {
@@ -350,6 +392,19 @@ impl std::fmt::Display for ProfileStats {
                 self.tt_overflow_count,
                 self.tt_overflow_no_victim_count,
                 self.tt_max_entries_per_position)?;
+        }
+        let solve_wall_ns = self.mid_total_ns + self.pns_total_ns;
+        if solve_wall_ns > 0 {
+            let mid_us = self.mid_total_ns as f64 / 1000.0;
+            let pns_us = self.pns_total_ns as f64 / 1000.0;
+            let coverage_pct = if self.mid_total_ns > 0 {
+                total_ns as f64 / self.mid_total_ns as f64 * 100.0
+            } else {
+                0.0
+            };
+            writeln!(f, "  MID wall: {:.1}µs ({} calls), PNS wall: {:.1}µs",
+                mid_us, self.mid_total_count, pns_us)?;
+            writeln!(f, "  MID profiled coverage: {:.1}%", coverage_pct)?;
         }
         Ok(())
     }
@@ -1244,6 +1299,12 @@ pub struct DfPnSolver {
     chain_bb_cache: Bitboard,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
     prefilter_hits: u64,
+    /// NM 昇格の反証判定キャッシュ: 判定が false だった局面キーの集合．
+    ///
+    /// `depth_limit_all_checks_refutable` は局面のみに依存し探索深さに依存しないため，
+    /// 一度 false と判定された局面を再判定する必要はない．
+    /// MID 内部で同一局面の重複判定を回避し，パフォーマンスを改善する．
+    refutable_check_failed: FxHashSet<u64>,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
     /// Killer Move テーブル(OR ノード用)．
@@ -1357,6 +1418,7 @@ impl DfPnSolver {
             mate_budget: 0,
             chain_bb_cache: Bitboard::EMPTY,
             prefilter_hits: 0,
+            refutable_check_failed: FxHashSet::default(),
             tt_gc_threshold: 0,
             next_gc_check: 0,
             killer_table: Vec::new(),
@@ -1663,6 +1725,7 @@ impl DfPnSolver {
         self.max_ply = 0;
         self.path.clear();
         self.killer_table.clear();
+        self.refutable_check_failed.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
         self.next_gc_check = 100_000;
@@ -1680,7 +1743,13 @@ impl DfPnSolver {
         let saved_max_nodes = self.max_nodes;
         const PNS_BUDGET_CAP: u64 = 150_000;
         self.max_nodes = (saved_max_nodes / 4).min(PNS_BUDGET_CAP);
+        #[cfg(feature = "profile")]
+        let _pns_start = Instant::now();
         let pns_pv = self.pns_main(board);
+        #[cfg(feature = "profile")]
+        {
+            self.profile_stats.pns_total_ns += _pns_start.elapsed().as_nanos() as u64;
+        }
         self.max_nodes = saved_max_nodes;
 
         let pk = position_key(board);
@@ -1788,7 +1857,52 @@ impl DfPnSolver {
         checks: &[Move],
     ) -> bool {
         let mut calls: u32 = 0;
-        self.all_checks_refutable_recursive(board, checks, 5, &mut calls)
+        self.all_checks_refutable_recursive(
+            board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
+        )
+    }
+
+    /// MID 内部用の版．完全版と同等の深さ 5・10K 回を使用．
+    ///
+    /// キャッシュ(`refutable_check_failed`)と組み合わせて使用するため，
+    /// 各ユニーク局面は1回のみ呼び出される．キャッシュなし時は
+    /// 1回 ~9ms × 数千回で全体の 97% を占めていたが，
+    /// キャッシュにより全体のオーバーヘッドはユニーク局面数 × 9ms に削減される．
+    fn depth_limit_all_checks_refutable_fast(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+    ) -> bool {
+        let mut calls: u32 = 0;
+        self.all_checks_refutable_recursive(
+            board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
+        )
+    }
+
+    /// TT ベースの NM 昇格判定(MID 内部用)．
+    ///
+    /// 各王手後の AND ノードが TT 上で REMAINING_INFINITE の
+    /// 不詰として記録されているかを確認する．
+    /// do_move + TT ルックアップのみで判定するため極めて高速
+    /// (~2μs/王手)．TT にエントリがない場合は保守的に false を返す．
+    fn all_checks_refutable_by_tt(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+    ) -> bool {
+        for check in checks {
+            let captured = board.do_move(*check);
+            let pk = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            // AND ノードが TT で REMAINING_INFINITE の不詰か確認
+            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE);
+            board.undo_move(*check, captured);
+            if dn != 0 {
+                // この王手後の局面が TT で不詰確定していない → 昇格不可
+                return false;
+            }
+        }
+        true
     }
 
     /// 呼び出し回数上限．組合せ爆発を防止する．
@@ -1796,22 +1910,27 @@ impl DfPnSolver {
     /// デバッグビルドでの実行時間を考慮して小さめに設定する．
     const REFUTABLE_CALL_LIMIT: u32 = 10_000;
 
+    /// MID 内部用の軽量版の呼び出し回数上限．
+    /// キャッシュにより各局面は1回のみ呼び出されるため，
+    /// 200 回で分岐爆発を防止しつつ十分な深さを確保する．
+    const REFUTABLE_CALL_LIMIT_FAST: u32 = 200;
+
     /// `depth_limit_all_checks_refutable` の再帰本体．
     ///
     /// `depth` は残りの再帰深さ(0 で打ち切り)．各再帰レベルで
     /// 王手→応手→次の王手 を確認し，最大 `depth` 段階まで追跡する．
-    /// `calls` は呼び出し回数カウンタで，`REFUTABLE_CALL_LIMIT` 超過時は
-    /// false を返す．
+    /// `calls` は呼び出し回数カウンタで，`limit` 超過時は false を返す．
     fn all_checks_refutable_recursive(
         &mut self,
         board: &mut Board,
         checks: &[Move],
         depth: u32,
         calls: &mut u32,
+        limit: u32,
     ) -> bool {
         for check in checks {
             *calls += 1;
-            if *calls > Self::REFUTABLE_CALL_LIMIT {
+            if *calls > limit {
                 return false;
             }
             let captured = board.do_move(*check);
@@ -1832,7 +1951,7 @@ impl DfPnSolver {
                 // 再帰: 次の王手もすべて反証可能か確認
                 if depth > 0
                     && self.all_checks_refutable_recursive(
-                        board, &next_checks, depth - 1, calls,
+                        board, &next_checks, depth - 1, calls, limit,
                     )
                 {
                     board.undo_move(*defense, cap_d);
@@ -1949,6 +2068,8 @@ impl DfPnSolver {
 
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
+            #[cfg(feature = "profile")]
+            let _depth_limit_start = Instant::now();
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
                 // 王手が0手の不詰は深さに依存しないため，IDS 間で再利用可能にする．
@@ -1971,6 +2092,11 @@ impl DfPnSolver {
                 // att_hand を使うことで，持ち駒が異なる経路からの
                 // 再到達時に TT ヒットせず，正しく再探索される．
                 self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+            }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
+                self.profile_stats.depth_limit_terminal_count += 1;
             }
             return;
         }
@@ -2066,6 +2192,9 @@ impl DfPnSolver {
         } else {
             None
         };
+        // chain_bb_cache を退避: 子ノードの初期化(generate_defense_moves 等)が
+        // chain_bb_cache を上書きするため，この AND ノードの値を保存する．
+        let saved_chain_bb = self.chain_bb_cache;
         #[cfg(feature = "profile")]
         let _child_init_start = Instant::now();
         for m in &moves {
@@ -2350,6 +2479,11 @@ impl DfPnSolver {
                 }
                 self.store(pos_key, proof, 0, INF,
                     REMAINING_INFINITE, pos_key);
+                #[cfg(feature = "profile")]
+                {
+                    self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
+                    self.profile_stats.child_init_count += 1;
+                }
                 return;
             }
             if !or_node && cdn_now == 0 {
@@ -2366,7 +2500,7 @@ impl DfPnSolver {
                 // まとめて store + return する．
                 #[cfg(feature = "tt_diag")]
                 { self.diag_init_and_disproof_exits += 1; }
-                if self.chain_bb_cache.is_not_empty() {
+                if saved_chain_bb.is_not_empty() {
                     // チェーン合駒コンテキスト: 反証情報を記録して継続
                     if !init_and_disproof_found {
                         init_and_disproof_found = true;
@@ -2444,6 +2578,11 @@ impl DfPnSolver {
                         }
                     }
                 }
+                #[cfg(feature = "profile")]
+                {
+                    self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
+                    self.profile_stats.child_init_count += 1;
+                }
                 return;
             }
             // cdn_now == 0 ブロックに入るのは or_node == true のみ．
@@ -2474,10 +2613,18 @@ impl DfPnSolver {
             // IDS の浅い反復で TT に蓄積された証明を深い反復で活用するのは
             // 初回訪問時のプレフィルタで十分(§3.5)．
             if !or_node && m.is_drop() && cpn == 1 && cdn == 1 {
-                if self.try_prefilter_block(
+                #[cfg(feature = "profile")]
+                let _pf_start = Instant::now();
+                let _pf_hit = self.try_prefilter_block(
                     board, *m, &child_hand, remaining,
                     &mut init_and_proof,
-                ) {
+                );
+                #[cfg(feature = "profile")]
+                {
+                    self.profile_stats.prefilter_ns += _pf_start.elapsed().as_nanos() as u64;
+                    self.profile_stats.prefilter_count += 1;
+                }
+                if _pf_hit {
                     init_prefiltered_count += 1;
                     self.prefilter_hits += 1;
                     continue;
@@ -2499,18 +2646,24 @@ impl DfPnSolver {
             // 全子が REMAINING_INFINITE なら親も REMAINING_INFINITE(真の不詰)．
             let mut parent_nm_remaining = propagate_nm_remaining(
                 init_or_nm_min_remaining, remaining);
-            // 2手延長による REMAINING_INFINITE 昇格:
-            // 伝播結果が有限(深さ制限由来)でも，全王手が2手で反証可能なら
-            // 真の不詰として REMAINING_INFINITE に昇格する．
-            // これにより IDS 間の TT 再利用が大幅に改善される．
-            if parent_nm_remaining != REMAINING_INFINITE {
+            // MID 内部での REMAINING_INFINITE 昇格(init フェーズ):
+            // キャッシュで失敗済みの局面は generate_check_moves も省略する．
+            // 持ち駒が異なると王手(ドロップ)も変わるため full_hash を使用．
+            if parent_nm_remaining != REMAINING_INFINITE
+                && !self.refutable_check_failed.contains(&full_hash)
+            {
                 let checks = self.generate_check_moves(board);
-                if checks.is_empty()
-                    || self.depth_limit_all_checks_refutable(board, &checks)
-                {
+                if checks.is_empty() {
                     parent_nm_remaining = REMAINING_INFINITE;
+                } else if self.all_checks_refutable_by_tt(board, &checks) {
+                    parent_nm_remaining = REMAINING_INFINITE;
+                } else if self.depth_limit_all_checks_refutable(board, &checks) {
+                    parent_nm_remaining = REMAINING_INFINITE;
+                } else {
+                    self.refutable_check_failed.insert(full_hash);
                 }
             }
+            //
             // GHI 伝播: いずれかの子の反証が経路依存なら親も経路依存
             // OR ノード反証: att_hand で保存(TT ヒット率最大化)
             // 実際の持ち駒で不詰が確定しているため，att_hand で登録すれば
@@ -2525,6 +2678,11 @@ impl DfPnSolver {
                     pos_key, att_hand, INF, 0,
                     parent_nm_remaining, pos_key,
                 );
+            }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
+                self.profile_stats.child_init_count += 1;
             }
             return;
         }
@@ -2565,6 +2723,11 @@ impl DfPnSolver {
                     }
                 }
             }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
+                self.profile_stats.child_init_count += 1;
+            }
             return;
         }
 
@@ -2581,8 +2744,8 @@ impl DfPnSolver {
         // children 内のドロップ子がチェーンマスへのドロップなら，
         // DN バイアスに Chebyshev 距離を使い内側(玉に近い)から探索する．
         let chain_king_sq =
-            if !or_node && self.chain_bb_cache.is_not_empty() {
-                let chain_bb = self.chain_bb_cache;
+            if !or_node && saved_chain_bb.is_not_empty() {
+                let chain_bb = saved_chain_bb;
                 let has_drop = children.iter().any(|(m, _, _, _)| m.is_drop());
                 if has_drop {
                     let all_chain = children.iter()
@@ -2864,17 +3027,25 @@ impl DfPnSolver {
                     // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
                     let mut parent_nm_remaining = propagate_nm_remaining(
                         or_nm_min_remaining, remaining);
-                    // 2手延長による REMAINING_INFINITE 昇格:
-                    // 伝播結果が有限(深さ制限由来)でも，全王手が2手で反証可能なら
-                    // 真の不詰として REMAINING_INFINITE に昇格する．
-                    if parent_nm_remaining != REMAINING_INFINITE {
+                    // MID 内部での REMAINING_INFINITE 昇格(main loop):
+                    if parent_nm_remaining != REMAINING_INFINITE
+                        && !self.refutable_check_failed.contains(&full_hash)
+                    {
                         let checks = self.generate_check_moves(board);
-                        if checks.is_empty()
-                            || self.depth_limit_all_checks_refutable(board, &checks)
+                        if checks.is_empty() {
+                            parent_nm_remaining = REMAINING_INFINITE;
+                        } else if self.all_checks_refutable_by_tt(board, &checks)
                         {
                             parent_nm_remaining = REMAINING_INFINITE;
+                        } else if self.depth_limit_all_checks_refutable(
+                            board, &checks,
+                        ) {
+                            parent_nm_remaining = REMAINING_INFINITE;
+                        } else {
+                            self.refutable_check_failed.insert(full_hash);
                         }
                     }
+                    //
                     // GHI 対策: ループ子または経路依存な子の反証が寄与した場合は
                     // 親の反証も経路依存．init フェーズで蓄積した init_or_path_dep
                     // も考慮する(init で反証済みの子が MID ループには残らないため)．
@@ -3290,6 +3461,8 @@ impl DfPnSolver {
             // 収集ループ内で全子に対して行うと NPS が激減するため，
             // 選択された子に対してのみ実行する．
             if !or_node && m.is_drop() && remaining >= 3 {
+                #[cfg(feature = "profile")]
+                let _cap_tt_start = Instant::now();
                 #[cfg(feature = "tt_diag")]
                 { self.diag_capture_tt_calls += 1; }
                 let checks = self.generate_check_moves(board);
@@ -3299,10 +3472,20 @@ impl DfPnSolver {
                 ) {
                     #[cfg(feature = "tt_diag")]
                     { self.diag_capture_tt_hits += 1; }
+                    #[cfg(feature = "profile")]
+                    {
+                        self.profile_stats.capture_tt_lookahead_ns += _cap_tt_start.elapsed().as_nanos() as u64;
+                        self.profile_stats.capture_tt_lookahead_count += 1;
+                    }
                     // 証明済み → MID 再帰をスキップ
                     profile_timed!(self, undo_move_ns, undo_move_count,
                         board.undo_move(m, captured));
                     continue;
+                }
+                #[cfg(feature = "profile")]
+                {
+                    self.profile_stats.capture_tt_lookahead_ns += _cap_tt_start.elapsed().as_nanos() as u64;
+                    self.profile_stats.capture_tt_lookahead_count += 1;
                 }
             }
 
@@ -3368,9 +3551,16 @@ impl DfPnSolver {
                     remaining.saturating_sub(1),
                 );
                 if cpn_after == 0 {
+                    #[cfg(feature = "profile")]
+                    let _cd_start = Instant::now();
                     self.cross_deduce_children(
                         board, m, &children, remaining,
                     );
+                    #[cfg(feature = "profile")]
+                    {
+                        self.profile_stats.cross_deduce_ns += _cd_start.elapsed().as_nanos() as u64;
+                        self.profile_stats.cross_deduce_count += 1;
+                    }
                 }
             }
         }
@@ -5420,6 +5610,12 @@ impl DfPnSolver {
                 {
                     let _mid_wall_start = std::time::Instant::now();
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    #[cfg(feature = "profile")]
+                    {
+                        let _mid_elapsed = _mid_wall_start.elapsed().as_nanos() as u64;
+                        self.profile_stats.mid_total_ns += _mid_elapsed;
+                        self.profile_stats.mid_total_count += 1;
+                    }
                     eprintln!("[ids_diag] MID wall time: depth={} {:.3}s",
                         ids_depth, _mid_wall_start.elapsed().as_secs_f64());
                 }
@@ -5580,12 +5776,9 @@ impl DfPnSolver {
 
                 // 深さ進行: depth=4 以降は saved_depth に直接ジャンプ．
                 // 浅い反復(depth <= 4)はルート付近の簡単な詰みを
-                // TT に蓄積する．depth=6 以降の中間深さは NPS が低下し
-                // (各レベルでの子ノード初期化コスト)時間を浪費するため，
-                // depth=4 の次は直接 saved_depth へジャンプして
-                // 残り予算を集中投入する．
-                // チェーン合駒最適化(§3.5)のボトムアップ TT 蓄積は
-                // 単一 IDS 反復内の MID 深さ優先探索で自然に実現される．
+                // TT に蓄積する．MID 内部の NM 昇格(TT 参照 + 軽量反証判定)
+                // により，depth=31 の MID 内で REMAINING_INFINITE が伝播し，
+                // 不詰部分木の再探索を回避する．
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
                 if next > 4 && next < saved_depth {
                     #[cfg(feature = "tt_diag")]
@@ -7906,6 +8099,41 @@ mod tests {
                 other
             ),
         }
+    }
+
+    /// 39手詰め直接MID テスト(PNS/IDS なし)．
+    ///
+    /// main ブランチと同様に単一 MID 呼び出しで解けるか確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_direct_mid() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver =
+            DfPnSolver::with_timeout(63, 10_000_000, 32767, 60);
+        solver.set_find_shortest(false);
+
+        // 直接 MID を呼び出す(PNS/IDS をバイパス)
+        solver.table.clear();
+        solver.nodes_searched = 0;
+        solver.max_ply = 0;
+        solver.path.clear();
+        solver.killer_table.clear();
+        solver.start_time = Instant::now();
+        solver.timed_out = false;
+        solver.next_gc_check = 100_000;
+        solver.attacker = board.turn;
+        solver.mid(&mut board, INF - 1, INF - 1, 0, true);
+
+        let (root_pn, _root_dn) = solver.look_up_board(&board);
+        let start = Instant::now();
+        let elapsed = start.elapsed();
+        eprintln!("39te_direct_mid: {} nodes, {:.1}s, max_ply={}, prefilter={}  pn={}",
+            solver.nodes_searched, solver.start_time.elapsed().as_secs_f64(),
+            solver.max_ply, solver.prefilter_hits, root_pn);
+        assert_eq!(root_pn, 0, "expected pn=0 (proved) for 39te direct MID");
     }
 
     /// 39手詰めサブ問題実験: PV 終盤側から逆順に詰み探索ノード数を計測し，
