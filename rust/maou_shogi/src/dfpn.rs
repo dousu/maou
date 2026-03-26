@@ -1110,6 +1110,37 @@ impl TranspositionTable {
         });
     }
 
+    /// 浅い反復で remaining が不足する中間・反証エントリを除去する．
+    ///
+    /// IDS 反復間で使用: スラッシング防止用の中間エントリ
+    /// (pn >= INF-1, dn > 0)を除去し，深い反復で再評価させる．
+    ///
+    /// 反証エントリは除去しない: PNS で蓄積された深い ply の反証は
+    /// remaining が小さい(saved_depth - ply)が，full depth で有効であり，
+    /// 除去すると root_pn が大幅に増加する．
+    fn remove_stale_for_ids(&mut self) {
+        for entries in self.tt.values_mut() {
+            entries.retain(|e| {
+                // 証明は常に保持
+                if e.pn == 0 { return true; }
+                // スラッシング防止エントリ(pn >= INF-1, dn > 0)は除去
+                if e.pn >= INF - 1 && e.dn > 0 { return false; }
+                // 反証・その他は保持
+                true
+            });
+        }
+    }
+
+
+    /// 指定局面の証明エントリ(pn=0)を除去する．
+    ///
+    /// IDS の浅い深さで PNS 由来の証明が使われた場合に，
+    /// 根の証明を除去して full depth で再証明させるために使用する．
+    fn remove_proof(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
+        if let Some(entries) = self.tt.get_mut(&pos_key) {
+            entries.retain(|e| !(e.pn == 0 && e.hand == *hand));
+        }
+    }
 
     /// TT のポジション数を返す．
     fn len(&self) -> usize {
@@ -1268,6 +1299,11 @@ pub struct DfPnSolver {
     nodes_searched: u64,
     /// 探索中の最大ply(デバッグ用)．
     max_ply: u32,
+    /// ply別ノード数(デバッグ用)．
+    ply_nodes: [u64; 64],
+    /// ルート局面情報(進捗追跡用)．
+    diag_root_pk: u64,
+    diag_root_hand: [u8; HAND_KINDS],
     /// 探索中のパス(ループ検出用，フルハッシュ)．
     path: FxHashSet<u64>,
     /// 探索開始時刻．
@@ -1446,6 +1482,9 @@ impl DfPnSolver {
             table: TranspositionTable::new(),
             nodes_searched: 0,
             max_ply: 0,
+            ply_nodes: [0; 64],
+            diag_root_pk: 0,
+            diag_root_hand: [0; HAND_KINDS],
             path: FxHashSet::default(),
             start_time: Instant::now(),
             timed_out: false,
@@ -1744,6 +1783,7 @@ impl DfPnSolver {
         self.table.clear();
         self.nodes_searched = 0;
         self.max_ply = 0;
+        self.ply_nodes = [0; 64];
         self.path.clear();
         self.killer_table.clear();
         self.refutable_check_failed.clear();
@@ -2023,11 +2063,23 @@ impl DfPnSolver {
             return;
         }
         self.nodes_searched += 1;
-        // Periodic progress: every 1M nodes
-        if self.nodes_searched % 1_000_000 == 0 && self.nodes_searched > 0 {
-            eprintln!("[progress] nodes={}M ply={} or={} time={:.1}s max_ply={} depth={} dn_th={}",
+        if (ply as usize) < 64 {
+            self.ply_nodes[ply as usize] += 1;
+        }
+        // Periodic progress: every 100K nodes
+        if self.nodes_searched % 100_000 == 0 && self.nodes_searched > 0 {
+            // Ply distribution: show top consumers
+            let mut ply_dist: Vec<(usize, u64)> = self.ply_nodes.iter().enumerate()
+                .filter(|(_, &n)| n > 0).map(|(p, &n)| (p, n)).collect();
+            ply_dist.sort_by(|a, b| b.1.cmp(&a.1));
+            let top5: Vec<String> = ply_dist.iter().take(8)
+                .map(|(p, n)| format!("p{}={}K", p, n / 1000)).collect();
+            let (r_pn, r_dn, _) = self.look_up_pn_dn(
+                self.diag_root_pk, &self.diag_root_hand, self.depth as u16);
+            eprintln!("[progress] nodes={}M ply={} or={} time={:.1}s max_ply={} depth={} rpn={} rdn={} tt={} dist=[{}]",
                 self.nodes_searched / 1_000_000, ply, or_node,
-                self.start_time.elapsed().as_secs_f64(), self.max_ply, self.depth, dn_threshold);
+                self.start_time.elapsed().as_secs_f64(), self.max_ply, self.depth,
+                r_pn, r_dn, self.table.len(), top5.join(", "));
         }
         if ply > self.max_ply {
             self.max_ply = ply;
@@ -2265,6 +2317,36 @@ impl DfPnSolver {
             }
 
             let child_remaining = remaining.saturating_sub(1);
+
+            // 深さ制限ファストパス: 子ノードが ply+1 >= depth で即座に
+            // 深さ制限に到達する場合，mid() 呼び出しを省略して直接反証を記録する．
+            // これにより深さ制限 ply での nodes_searched++ が不要になり，
+            // 深い問題でノード削減効果がある．
+            // TT に証明が既にある場合はスキップ(PNS 等で蓄積済み)．
+            if ply + 1 >= self.depth {
+                let (dl_cpn, _, _) =
+                    self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+                if dl_cpn != 0 {
+                    // 未証明: 深さ制限反証を直接記録
+                    if !or_node {
+                        // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
+                        let checks = self.generate_check_moves(board);
+                        let dl_rem = if checks.is_empty() {
+                            REMAINING_INFINITE
+                        } else if self.all_checks_refutable_by_tt(board, &checks) {
+                            REMAINING_INFINITE
+                        } else {
+                            0
+                        };
+                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                    } else {
+                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
+                        self.store(child_pk, child_hand, INF, 0, 0, child_pk);
+                    }
+                }
+                // dl_cpn == 0: 証明済み → 通常フローへ fall through
+            }
+
             let (cpn, cdn, _csrc) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if cpn == 1 && cdn == 1 {
@@ -3004,6 +3086,11 @@ impl DfPnSolver {
         let mut _loop_iter: u64 = 0;
         let _loop_start_nodes = self.nodes_searched;
         let mut _next_diag_nodes = self.nodes_searched.saturating_add(1_000_000);
+        // 停滞検出: 子 mid() が消費するノード数が0(閾値で即座に返る)の
+        // 連続回数を追跡．一定回数以上ゼロ進捗が続けば MID ループを脱出し，
+        // 上位ノードに制御を戻す(dn_floor 由来の空転防止)．
+        let mut zero_progress_count: u32 = 0;
+        const ZERO_PROGRESS_LIMIT: u32 = 16;
         loop {
             _loop_iter += 1;
             // 1M nodes ごとに詳細診断: この MID ノードで消費されたノード数と子の状態
@@ -3226,6 +3313,9 @@ impl DfPnSolver {
                 // WPN: max(cpn) と未証明子の数を追跡
                 let mut max_cpn: u32 = 0;
                 let mut unproven_count: u32 = 0;
+                // CD-WPN: 同一マスのドロップを1グループとして数える
+                let mut cd_grouped_count: u32 = 0;
+                let mut drop_squares_seen: u128 = 0;
 
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -3301,6 +3391,16 @@ impl DfPnSolver {
                         max_cpn = cpn;
                     }
                     unproven_count += 1;
+                    // CD-WPN: 同一マスのドロップは1グループとして数える
+                    if m.is_drop() {
+                        let sq_bit = 1u128 << (m.to_sq().index() as u32);
+                        if drop_squares_seen & sq_bit == 0 {
+                            drop_squares_seen |= sq_bit;
+                            cd_grouped_count += 1;
+                        }
+                    } else {
+                        cd_grouped_count += 1;
+                    }
                     // TT 保存用: 真の min(dn)
                     if cdn < current_dn {
                         current_dn = cdn;
@@ -3360,9 +3460,20 @@ impl DfPnSolver {
                     return;
                 }
 
-                // WPN: current_pn = max(cpn) + (unproven_count - 1)
-                // unproven_count == 0 の場合は全子証明済み(current_pn = 0)
-                if unproven_count > 0 {
+                // WPN (Weak Proof Number) / CD-WPN 計算:
+                //
+                // 通常 WPN: current_pn = max(cpn) + (unproven_count - 1)
+                // CD-WPN:   current_pn = max(cpn) + (grouped_count - 1)
+                //   where grouped_count = non_drops + unique_drop_squares
+                //
+                // チェーン AND: CD-WPN を使用．同一マスの未証明ドロップは
+                // cross-deduce で一括証明できるため1グループとして数える．
+                // 非チェーン AND: 通常 WPN を使用．
+                if chain_king_sq.is_some() && cd_grouped_count > 0 {
+                    current_pn = (max_cpn as u64)
+                        .saturating_add(cd_grouped_count as u64 - 1)
+                        .min(INF as u64) as u32;
+                } else if unproven_count > 0 {
                     current_pn = (max_cpn as u64)
                         .saturating_add(unproven_count as u64 - 1)
                         .min(INF as u64) as u32;
@@ -3540,10 +3651,16 @@ impl DfPnSolver {
                 // 12レベルの AND でも pn ≈ INF/2^12 ≈ 1M が確保され，
                 // 深い合駒チェーンの探索が可能になる．
                 let pn_floor = eff_pn_th / 2;
+                // 最低進捗保証: child_pn_th は最低でも best_child.pn + 1 を
+                // 保証する．これにより eff_pn_th ≈ current_pn のとき
+                // child_pn_th = best_child.pn となり mid() が即座に返る
+                // ゼロ進捗パターンを防止する．
+                let progress_floor = best_pn_dn.0.saturating_add(1);
                 let child_pn_th = eff_pn_th
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .max(pn_floor)
+                    .max(progress_floor)
                     .min(INF - 1);
                 let epsilon = second_best / 4 + 1;
                 let sibling_based = second_best.saturating_add(epsilon);
@@ -3647,9 +3764,22 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
-            // Stuck-node diagnostic (temporary)
-            {
-                let _nodes_used = self.nodes_searched - _pre_mid_nodes;
+            // 零進捗検出: 子 mid() が 0 ノードしか消費しなかった場合，
+            // 子は閾値チェックで即座に返っている．これが連続すると
+            // dn_floor 由来の空転が発生するため，ZERO_PROGRESS_LIMIT 回
+            // 連続で発生したらループを脱出する．
+            // 深さ制限近傍(remaining <= 4)では子が深さ制限で返るのは正常動作
+            // であるため，この検出を無効化する．
+            if remaining > 4 {
+                let nodes_used = self.nodes_searched - _pre_mid_nodes;
+                if nodes_used <= 1 {
+                    zero_progress_count += 1;
+                    if zero_progress_count >= ZERO_PROGRESS_LIMIT {
+                        break;
+                    }
+                } else {
+                    zero_progress_count = 0;
+                }
             }
 
             #[cfg(feature = "tt_diag")]
@@ -5676,6 +5806,8 @@ impl DfPnSolver {
     fn mid_fallback(&mut self, board: &mut Board) {
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
+        self.diag_root_pk = pk;
+        self.diag_root_hand = att_hand;
         let saved_depth = self.depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
@@ -5857,7 +5989,7 @@ impl DfPnSolver {
                 ids_depth, root_pn2, root_dn2, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
-                eprintln!("[ids] proved after MID, break");
+                eprintln!("[ids] proved at depth={}, break", ids_depth);
                 break;
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
@@ -5918,19 +6050,29 @@ impl DfPnSolver {
             let time_exceeded = ids_depth < saved_depth
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
-            // IDS 反復間で経路依存の反証を除去する．
-            // ループ由来の反証は異なる深さの反復では無効になりうるため．
+            // IDS 反復間でのクリーンアップ:
+            // 1. 経路依存の反証を除去(ループ由来，異なる深さでは無効)
+            // 2. 浅い反復のスラッシング防止エントリと浅い反証を除去
             self.table.remove_path_dependent_disproofs();
+            // 現在の IDS 深さの remaining で蓄積された浅い反証/中間エントリを除去．
+            // PNS エントリは saved_depth で作成されているため，
+            // 現在の ids_depth 以下の remaining のみ対象にすることで
+            // PNS の深い ply エントリ(remaining が小さい)を保護する．
+            self.table.remove_stale_for_ids();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
-                // 深さ進行: depth=4 以降は saved_depth に直接ジャンプ．
+                // 深さ進行:
+                // saved_depth > 31 の場合: 段階的 IDS (2→4→8→16→32→41)
+                //   深い問題では段階的に TT を構築して探索効率を上げる
+                // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
+                //   浅い問題では中間深さの探索が無駄になるため
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
-                if next > 4 && next < saved_depth {
+                if saved_depth <= 31 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else {
-                    ids_depth = next;
+                    ids_depth = next.min(saved_depth);
                 }
             }
 
