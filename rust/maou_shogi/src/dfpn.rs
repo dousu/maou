@@ -3362,26 +3362,21 @@ impl DfPnSolver {
                     .saturating_add(best_pn_dn.1)
                     .max(dn_floor_or)
                     .min(INF - 1);
-                // OR ノード pn 閾値: 1+ε 制限を廃止し親予算をそのまま伝播する．
+                // OR ノード pn 閾値: 兄弟ベース制限(eff_pn_th キャップなし)．
                 //
-                // 従来の 1+ε trick (Pawlewicz & Lew 2007) では
-                //   child_pn_th = min(eff_pn_th, second_best + ε)
-                // として最善子に second_best+ε の予算しか与えなかった．
-                // これは浅い問題でのスラッシング防止に有効だが，
-                // 深い合駒チェーンでは致命的な問題を引き起こす:
+                // 子の pn 予算を sibling_based(second_best + ε)に制限し，
+                // 不正解手から正解手への切替を全 OR ノードで強制する．
                 //
-                //   root second_best ≈ 10 → child_pn_th ≈ 13
-                //   → AND(unproven=9) で child_pn_th = 13-9+1 = 5
-                //   → 次の OR で child_pn_th = min(5, 4+2) = 5
-                //   → 次の AND で child_pn_th = 5-5+1 = 1
-                //   → ply=6 で pn 閾値が 1 以下に縮退(pn カスケード縮退)
+                // eff_pn_th でキャップすると pn カスケード縮退が発生するため，
+                // 親予算と独立にする．子が親予算を超過する可能性があるが，
+                // 超過後に親 MID ループが current_pn >= eff_pn_th で
+                // 即座に break するため 1 呼び出し分に限定される．
                 //
-                // 詰将棋では OR ノードの王手手数が少なく(典型: 1〜5手)，
-                // 不正解の王手は玉方の逃げにより比較的少ないノード数で
-                // 反証される．このため eff_pn_th をそのまま渡しても
-                // 全体的なノード効率に大きな悪影響はなく，
-                // 深い合駒チェーンの探索が可能になる利益が上回る．
-                let child_pn_th = eff_pn_th.min(INF - 1);
+                // 合駒チェーン深部では王手が 1 手のみ(second_best = INF)
+                // となり sibling_based = INF で実質無制限．
+                let epsilon_or = second_best / 4 + 1;
+                let sibling_based_or = second_best.saturating_add(epsilon_or);
+                let child_pn_th = sibling_based_or.max(2).min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
                 // AND ノード pn 閾値の最低保証(親予算の 1/2)．
@@ -5608,6 +5603,28 @@ impl DfPnSolver {
                     && self.nodes_searched < self.max_nodes
                     && !self.timed_out
                 {
+                    // Per-root-move node tracking: capture check moves and their node costs
+                    let _root_checks = if ids_depth == saved_depth {
+                        let checks = self.generate_check_moves(board);
+                        let info: Vec<(String, u64, u64)> = checks.iter().map(|m| {
+                            let pk_c = {
+                                let cap = board.do_move(*m);
+                                let pk = position_key(board);
+                                let hand = board.hand[self.attacker.index()];
+                                let (pn, dn, _) = self.table.look_up(pk, &hand, ids_depth as u16 - 1);
+                                board.undo_move(*m, cap);
+                                (m.to_usi(), pn as u64, dn as u64)
+                            };
+                            pk_c
+                        }).collect();
+                        for (usi, pn, dn) in &info {
+                            eprintln!("[root_diag] check={} pn={} dn={}", usi, pn, dn);
+                        }
+                        Some(info)
+                    } else {
+                        None
+                    };
+                    let _pre_nodes = self.nodes_searched;
                     let _mid_wall_start = std::time::Instant::now();
                     self.mid(board, INF - 1, INF - 1, 0, true);
                     #[cfg(feature = "profile")]
@@ -5616,8 +5633,26 @@ impl DfPnSolver {
                         self.profile_stats.mid_total_ns += _mid_elapsed;
                         self.profile_stats.mid_total_count += 1;
                     }
-                    eprintln!("[ids_diag] MID wall time: depth={} {:.3}s",
-                        ids_depth, _mid_wall_start.elapsed().as_secs_f64());
+                    let _elapsed = _mid_wall_start.elapsed().as_secs_f64();
+                    eprintln!("[ids_diag] MID wall time: depth={} {:.3}s nodes={}",
+                        ids_depth, _elapsed,
+                        self.nodes_searched - _pre_nodes);
+                    // After MID: show updated pn/dn for each root check
+                    if let Some(ref _checks) = _root_checks {
+                        let checks = self.generate_check_moves(board);
+                        for m in &checks {
+                            let cap = board.do_move(*m);
+                            let pk = position_key(board);
+                            let hand = board.hand[self.attacker.index()];
+                            let (pn, dn, _) = self.table.look_up(pk, &hand, ids_depth as u16 - 1);
+                            let rem = self.table.get_disproof_remaining(pk, &hand);
+                            board.undo_move(*m, cap);
+                            if pn > 0 || dn == 0 {
+                                eprintln!("[root_diag] after: check={} pn={} dn={} nm_rem={}",
+                                    m.to_usi(), pn, dn, rem);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -5781,9 +5816,6 @@ impl DfPnSolver {
                 // 不詰部分木の再探索を回避する．
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
                 if next > 4 && next < saved_depth {
-                    #[cfg(feature = "tt_diag")]
-                    eprintln!("[ids_diag] skipping intermediate depths ({} -> {})",
-                        next, saved_depth);
                     ids_depth = saved_depth;
                 } else {
                     ids_depth = next;
