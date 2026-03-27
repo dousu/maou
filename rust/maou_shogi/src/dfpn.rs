@@ -3091,16 +3091,18 @@ impl DfPnSolver {
         // 上位ノードに制御を戻す(dn_floor 由来の空転防止)．
         let mut zero_progress_count: u32 = 0;
         const ZERO_PROGRESS_LIMIT: u32 = 16;
+        // 停滞検出: best child の pn/dn と閾値が変化しなければ，
+        // 同じ子に同じ予算で mid() を呼んでも結果は変わらない．
+        // 連続 STAGNATION_LIMIT 回の無変化で MID ループを脱出する．
+        let mut prev_best_idx: usize = usize::MAX;
+        let mut prev_best_pn: u32 = 0;
+        let mut prev_best_dn: u32 = 0;
+        let mut prev_child_pn_th: u32 = 0;
+        let mut prev_child_dn_th: u32 = 0;
+        let mut stagnation_count: u32 = 0;
+        const STAGNATION_LIMIT: u32 = 4;
         loop {
             _loop_iter += 1;
-            // ply 18-22 でループ回数が異常に多い場合の警告
-            if ply >= 18 && ply <= 22 && _loop_iter % 10_000 == 0 {
-                let consumed = self.nodes_searched - _loop_start_nodes;
-                eprintln!("[loop_warn] ply={} or={} iter={} consumed={}K nodes_per_iter={:.1} pn_th={} dn_th={}",
-                    ply, or_node, _loop_iter, consumed / 1000,
-                    consumed as f64 / _loop_iter as f64,
-                    pn_threshold, dn_threshold);
-            }
             // ply=0 は 100K ごと，それ以外は 1M ごとに詳細診断
             if self.nodes_searched >= _next_diag_nodes {
                 let consumed = self.nodes_searched - _loop_start_nodes;
@@ -3125,7 +3127,7 @@ impl DfPnSolver {
                 }
                 // current_pn/dn/best_idx は後で計算されるのでここでは出力しない
                 _next_diag_nodes = self.nodes_searched.saturating_add(
-                    if ply == 0 || (ply >= 18 && ply <= 22) { 100_000 } else { 1_000_000 }
+                    if ply == 0 { 100_000 } else { 1_000_000 }
                 );
             }
             #[cfg(feature = "tt_diag")]
@@ -3637,14 +3639,11 @@ impl DfPnSolver {
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
-                // 子の pn 予算を sibling_based(second_best + 1)に制限し，
+                // 子の pn 予算を sibling_based(second_best + ε)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                //
-                // 乗算型 ε (second_best/4 + 1) は浅い問題で高速だが，
-                // TT が疎な場合(PNS なし深い問題)に誤った子への予算膨張を招く．
-                // 標準 df-pn の固定 ε=1 は各子に最小限の追加予算のみ許可し，
-                // 兄弟間切替を迅速に行うことで予算膨張を防止する．
-                let child_pn_th = second_best.saturating_add(1).max(2).min(INF - 1);
+                let epsilon_or = second_best / 4 + 1;
+                let sibling_based_or = second_best.saturating_add(epsilon_or);
+                let child_pn_th = sibling_based_or.max(2).min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
                 // AND ノード pn 閾値の最低保証(親予算の 1/2)．
@@ -3807,6 +3806,52 @@ impl DfPnSolver {
                 }
             }
 
+            // 停滞検出: 同じ子に同じ閾値で mid() を呼んで pn/dn が変化しなければ，
+            // 再度呼んでも結果は同じ(TT にキャッシュ済み)．
+            // 閾値が増えた場合のみ新たな探索が可能なため，そのケースはリセットする．
+            if remaining > 4 {
+                let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
+                    children[best_idx].2,
+                    &children[best_idx].3,
+                    remaining.saturating_sub(1),
+                );
+                if best_idx == prev_best_idx
+                    && cpn_after == prev_best_pn
+                    && cdn_after == prev_best_dn
+                    && child_pn_th <= prev_child_pn_th
+                    && child_dn_th <= prev_child_dn_th
+                {
+                    stagnation_count += 1;
+                    if stagnation_count >= STAGNATION_LIMIT {
+                        board.undo_move(m, captured);
+                        // 停滞ペナルティ: pn/dn に +1 して TT に保存．
+                        // これにより上位ノードの collect で「変化あり」と判定され，
+                        // 上位でも兄弟への切替や stagnation 検出が正しく連鎖する．
+                        // ペナルティなしでは上位が同じ pn/dn を繰り返し取得し，
+                        // 同じ子に同じ閾値で mid() を呼び続ける空転が発生する．
+                        if or_node {
+                            let stag_pn = current_pn.saturating_add(1).min(INF - 1);
+                            self.store_with_best_move(
+                                pos_key, att_hand, stag_pn, current_dn,
+                                remaining, best_source, best_move16);
+                        } else {
+                            let stag_dn = current_dn.saturating_add(1).min(INF - 1);
+                            self.store_with_best_move(
+                                pos_key, att_hand, current_pn, stag_dn,
+                                remaining, best_source, best_move16);
+                        }
+                        break;
+                    }
+                } else {
+                    stagnation_count = 0;
+                }
+                prev_best_idx = best_idx;
+                prev_best_pn = cpn_after;
+                prev_best_dn = cdn_after;
+                prev_child_pn_th = child_pn_th;
+                prev_child_dn_th = child_dn_th;
+            }
+
             #[cfg(feature = "tt_diag")]
             if _diag_match {
                 let tt_pos_after = self.table.len();
@@ -3838,10 +3883,10 @@ impl DfPnSolver {
             profile_timed!(self, undo_move_ns, undo_move_count,
                 board.undo_move(m, captured));
 
-            // ply=0 および ply 18-22 の mid() 呼び出しごとの消費ノード追跡
-            {
+            // ply=0 の mid() 呼び出しごとの消費ノード追跡
+            if ply == 0 {
                 let child_nodes = self.nodes_searched - _pre_mid_nodes;
-                if ply == 0 && child_nodes >= 1_000 {
+                if child_nodes >= 1_000 {
                     let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
                         children[best_idx].2, &children[best_idx].3,
                         remaining.saturating_sub(1));
@@ -3851,16 +3896,6 @@ impl DfPnSolver {
                         cpn_now, cdn_now,
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64());
-                }
-                if ply >= 18 && ply <= 22 && child_nodes >= 500 {
-                    let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
-                        children[best_idx].2, &children[best_idx].3,
-                        remaining.saturating_sub(1));
-                    eprintln!("[deep_mid] ply={} or={} move={} nodes={}K pn_th={} dn_th={} → pn={} dn={} iter={} total={}K",
-                        ply, or_node, m.to_usi(), child_nodes / 1000,
-                        child_pn_th, child_dn_th,
-                        cpn_now, cdn_now,
-                        _loop_iter, self.nodes_searched / 1000);
                 }
             }
 
@@ -6110,11 +6145,17 @@ impl DfPnSolver {
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
-                // 深さ進行: 常に段階的 IDS (2→4→8→16→32→...)
-                // 中間深さの探索で TT エントリ(証明)を蓄積し，
-                // 最終深さでの探索効率を向上させる．
+                // 深さ進行:
+                // saved_depth > 31 の場合: 段階的 IDS (2→4→8→16→32→41)
+                //   深い問題では段階的に TT を構築して探索効率を上げる
+                // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
+                //   浅い問題では中間深さの探索が無駄になるため
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
-                ids_depth = next.min(saved_depth);
+                if saved_depth <= 31 && next > 4 && next < saved_depth {
+                    ids_depth = saved_depth;
+                } else {
+                    ids_depth = next.min(saved_depth);
+                }
             }
 
             prev_root_pn = root_pn2;
