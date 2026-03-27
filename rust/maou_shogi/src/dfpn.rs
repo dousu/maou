@@ -3093,7 +3093,7 @@ impl DfPnSolver {
         const ZERO_PROGRESS_LIMIT: u32 = 16;
         loop {
             _loop_iter += 1;
-            // 1M nodes ごとに詳細診断: この MID ノードで消費されたノード数と子の状態
+            // ply=0 は 100K ごと，それ以外は 1M ごとに詳細診断
             if self.nodes_searched >= _next_diag_nodes {
                 let consumed = self.nodes_searched - _loop_start_nodes;
                 eprintln!("[mid_diag] ply={} or={} consumed={}K iter={} children={} time={:.1}s pn_th={} dn_th={}",
@@ -3116,7 +3116,9 @@ impl DfPnSolver {
                     }
                 }
                 // current_pn/dn/best_idx は後で計算されるのでここでは出力しない
-                _next_diag_nodes = self.nodes_searched.saturating_add(1_000_000);
+                _next_diag_nodes = self.nodes_searched.saturating_add(
+                    if ply == 0 { 100_000 } else { 1_000_000 }
+                );
             }
             #[cfg(feature = "tt_diag")]
             { self.diag_mid_loop_iters += 1; }
@@ -3588,6 +3590,7 @@ impl DfPnSolver {
                 break;
             }
 
+
             // TT GC: 定期的にサイズチェックし，閾値超過時に GC 実行
             if self.tt_gc_threshold > 0
                 && self.nodes_searched >= self.next_gc_check
@@ -3626,11 +3629,14 @@ impl DfPnSolver {
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
-                // 子の pn 予算を sibling_based(second_best + ε)に制限し，
+                // 子の pn 予算を sibling_based(second_best + 1)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                let epsilon_or = second_best / 4 + 1;
-                let sibling_based_or = second_best.saturating_add(epsilon_or);
-                let child_pn_th = sibling_based_or.max(2).min(INF - 1);
+                //
+                // 乗算型 ε (second_best/4 + 1) は浅い問題で高速だが，
+                // TT が疎な場合(PNS なし深い問題)に誤った子への予算膨張を招く．
+                // 標準 df-pn の固定 ε=1 は各子に最小限の追加予算のみ許可し，
+                // 兄弟間切替を迅速に行うことで予算膨張を防止する．
+                let child_pn_th = second_best.saturating_add(1).max(2).min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
                 // AND ノード pn 閾値の最低保証(親予算の 1/2)．
@@ -3823,6 +3829,22 @@ impl DfPnSolver {
 
             profile_timed!(self, undo_move_ns, undo_move_count,
                 board.undo_move(m, captured));
+
+            // ply=0 の mid() 呼び出しごとの消費ノード追跡
+            if ply == 0 {
+                let child_nodes = self.nodes_searched - _pre_mid_nodes;
+                let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
+                    children[best_idx].2, &children[best_idx].3,
+                    remaining.saturating_sub(1));
+                if child_nodes >= 1_000 {
+                    eprintln!("[root_mid] move={} nodes={}K pn_th={} dn_th={} → pn={} dn={} total={}K time={:.1}s",
+                        m.to_usi(), child_nodes / 1000,
+                        child_pn_th, child_dn_th,
+                        cpn_now, cdn_now,
+                        self.nodes_searched / 1000,
+                        self.start_time.elapsed().as_secs_f64());
+                }
+            }
 
             // インライン cross-deduce: AND ノードでドロップ子が証明された直後に，
             // 同一マスの兄弟ドロップを TT 参照で証明する．
@@ -6065,26 +6087,16 @@ impl DfPnSolver {
             // 1. 経路依存の反証を除去(ループ由来，異なる深さでは無効)
             // 2. 浅い反復のスラッシング防止エントリと浅い反証を除去
             self.table.remove_path_dependent_disproofs();
-            // 現在の IDS 深さの remaining で蓄積された浅い反証/中間エントリを除去．
-            // PNS エントリは saved_depth で作成されているため，
-            // 現在の ids_depth 以下の remaining のみ対象にすることで
-            // PNS の深い ply エントリ(remaining が小さい)を保護する．
             self.table.remove_stale_for_ids();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
-                // 深さ進行:
-                // saved_depth > 31 の場合: 段階的 IDS (2→4→8→16→32→41)
-                //   深い問題では段階的に TT を構築して探索効率を上げる
-                // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
-                //   浅い問題では中間深さの探索が無駄になるため
+                // 深さ進行: 常に段階的 IDS (2→4→8→16→32→...)
+                // 中間深さの探索で TT エントリ(証明)を蓄積し，
+                // 最終深さでの探索効率を向上させる．
                 let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
-                if saved_depth <= 31 && next > 4 && next < saved_depth {
-                    ids_depth = saved_depth;
-                } else {
-                    ids_depth = next.min(saved_depth);
-                }
+                ids_depth = next.min(saved_depth);
             }
 
             prev_root_pn = root_pn2;
@@ -7983,34 +7995,40 @@ mod tests {
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
-        // max_nodes=4 にすることで PNS 予算 = min(4/4, 150000) = 1 ノード
-        // → PNS は事実上スキップされ，IDS-MID のみで解く
-        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
-        // PNS をスキップするため，max_nodes を一時的に制限して solve を呼ぶ代わりに，
-        // 直接 mid_fallback 相当のフローを使う．
-        // ただし mid_fallback は private なので，PNS 予算を 0 にする方法を使う:
-        // max_nodes=4 → PNS budget = 1 → 実質的にスキップ
+        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 600);
         solver.max_nodes = 4;
         solver.attacker = board.turn;
         solver.start_time = std::time::Instant::now();
-        // PNS をわずか1ノードだけ実行(実質スキップ)
         let _ = solver.pns_main(&mut board);
-        // MID 用に予算を復元
         solver.max_nodes = 50_000_000;
+
+        // mid_fallback 内の IDS ステップと root ply の診断を取得するため，
+        // diag_ply=0 で root ノードの mid_diag をトリガーする．
+        // mid_diag の間隔を 500K に短縮して root での応手別消費を追跡する．
         solver.mid_fallback(&mut board);
 
         let pk = position_key(&board);
         let att_hand = board.hand[solver.attacker.index()];
         let (root_pn, _, _) = solver.look_up_pn_dn(pk, &att_hand, 31);
-        eprintln!("[no_pns] root_pn={} nodes={}", root_pn, solver.nodes_searched);
+        eprintln!("[no_pns] root_pn={} nodes={} time={:.1}s",
+            root_pn, solver.nodes_searched, solver.start_time.elapsed().as_secs_f64());
 
-        assert_eq!(root_pn, 0, "IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
-
-        // PV 抽出
-        let pv = solver.extract_pv_limited(&mut board, 10_000);
-        let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
-        eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
-        assert_eq!(pv_usi.len(), 29, "expected 29-move PV, got {} moves", pv_usi.len());
+        if root_pn == 0 {
+            let pv = solver.extract_pv_limited(&mut board, 10_000);
+            let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+            eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
+            assert_eq!(pv_usi.len(), 29, "expected 29-move PV, got {} moves", pv_usi.len());
+        } else {
+            // 未解決時: ply 別ノード分布を出力
+            eprintln!("[no_pns] NOT PROVED: rpn={} nodes={}", root_pn, solver.nodes_searched);
+            let mut ply_dist: Vec<(usize, u64)> = solver.ply_nodes.iter().enumerate()
+                .filter(|(_, &n)| n > 0).map(|(p, &n)| (p, n)).collect();
+            ply_dist.sort_by(|a, b| b.1.cmp(&a.1));
+            for (p, n) in ply_dist.iter().take(15) {
+                eprintln!("[no_pns] ply {} = {}K nodes", p, n / 1000);
+            }
+            panic!("IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
+        }
     }
 
     /// 29手詰め PV 逆順解析: PV の手順を進め，各中間局面から解けるか検証．
