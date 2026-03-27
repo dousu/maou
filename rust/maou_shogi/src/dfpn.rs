@@ -3775,6 +3775,7 @@ impl DfPnSolver {
                 if nodes_used <= 1 {
                     zero_progress_count += 1;
                     if zero_progress_count >= ZERO_PROGRESS_LIMIT {
+                        board.undo_move(m, captured);
                         break;
                     }
                 } else {
@@ -7959,6 +7960,47 @@ mod tests {
             }
             other => panic!("expected Checkmate for tsume6, got {:?}", other),
         }
+    }
+
+    /// 29手詰め: PNS なし(IDS-MID のみ)のロバストネステスト．
+    ///
+    /// PNS は浅い詰みの発見に使われ，IDS-MID は深い詰みに使われる．
+    /// IDS-MID のみで29手詰めを発見できるか確認し，MID 単体のロバストネスを評価する．
+    #[test]
+    #[ignore]
+    fn test_tsume_6_29te_no_pns() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        // max_nodes=4 にすることで PNS 予算 = min(4/4, 150000) = 1 ノード
+        // → PNS は事実上スキップされ，IDS-MID のみで解く
+        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+        // PNS をスキップするため，max_nodes を一時的に制限して solve を呼ぶ代わりに，
+        // 直接 mid_fallback 相当のフローを使う．
+        // ただし mid_fallback は private なので，PNS 予算を 0 にする方法を使う:
+        // max_nodes=4 → PNS budget = 1 → 実質的にスキップ
+        solver.max_nodes = 4;
+        solver.attacker = board.turn;
+        solver.start_time = std::time::Instant::now();
+        // PNS をわずか1ノードだけ実行(実質スキップ)
+        let _ = solver.pns_main(&mut board);
+        // MID 用に予算を復元
+        solver.max_nodes = 50_000_000;
+        solver.mid_fallback(&mut board);
+
+        let pk = position_key(&board);
+        let att_hand = board.hand[solver.attacker.index()];
+        let (root_pn, _, _) = solver.look_up_pn_dn(pk, &att_hand, 31);
+        eprintln!("[no_pns] root_pn={} nodes={}", root_pn, solver.nodes_searched);
+
+        assert_eq!(root_pn, 0, "IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
+
+        // PV 抽出
+        let pv = solver.extract_pv_limited(&mut board, 10_000);
+        let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+        eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
+        assert_eq!(pv_usi.len(), 29, "expected 29-move PV, got {} moves", pv_usi.len());
     }
 
     /// 29手詰め PV 逆順解析: PV の手順を進め，各中間局面から解けるか検証．
