@@ -619,6 +619,19 @@ struct TranspositionTable {
     /// 1局面あたりのエントリ数の最大値．
     #[cfg(feature = "profile")]
     max_entries_per_position: usize,
+    // --- TT 増加診断カウンタ ---
+    /// 証明エントリ(pn=0)の挿入回数．
+    diag_proof_inserts: u64,
+    /// 反証エントリ(dn=0)の挿入回数．
+    diag_disproof_inserts: u64,
+    /// 中間エントリの新規追加(同一 hand なし)回数．
+    diag_intermediate_new: u64,
+    /// 中間エントリの既存更新(同一 hand あり)回数．
+    diag_intermediate_update: u64,
+    /// 支配チェックによるスキップ回数．
+    diag_dominated_skip: u64,
+    /// remaining 値別の挿入回数(0..=31 + 32=INFINITE)．
+    diag_remaining_dist: [u64; 33],
 }
 
 impl TranspositionTable {
@@ -635,6 +648,12 @@ impl TranspositionTable {
             overflow_no_victim_count: 0,
             #[cfg(feature = "profile")]
             max_entries_per_position: 0,
+            diag_proof_inserts: 0,
+            diag_disproof_inserts: 0,
+            diag_intermediate_new: 0,
+            diag_intermediate_update: 0,
+            diag_dominated_skip: 0,
+            diag_remaining_dist: [0; 33],
         }
     }
 
@@ -803,6 +822,9 @@ impl TranspositionTable {
         path_dependent: bool,
         best_move: u16,
     ) {
+        // remaining 分布カウンタ用インデックス
+        let rem_idx = if remaining == REMAINING_INFINITE { 32 } else { (remaining as usize).min(31) };
+
         let entries =
             self.tt.entry(pos_key).or_default();
 
@@ -810,6 +832,7 @@ impl TranspositionTable {
         for e in entries.iter() {
             // 証明済みエントリが支配: hand ≥ e.hand → 新エントリの持ち駒で詰み確定
             if e.pn == 0 && hand_gte_forward_chain(&hand, &e.hand) {
+                self.diag_dominated_skip += 1;
                 return;
             }
             // 反証済みエントリが支配: e.hand ≥ hand かつ十分な深さ → 不詰確定
@@ -821,6 +844,7 @@ impl TranspositionTable {
                 && hand_gte_forward_chain(&e.hand, &hand)
                 && e.remaining >= remaining
             {
+                self.diag_dominated_skip += 1;
                 return;
             }
         }
@@ -839,6 +863,8 @@ impl TranspositionTable {
                 !hand_gte_forward_chain(&e.hand, &hand)
             });
             entries.push(DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
+            self.diag_proof_inserts += 1;
+            self.diag_remaining_dist[rem_idx] += 1;
             return;
         }
 
@@ -867,6 +893,8 @@ impl TranspositionTable {
                 true
             });
             entries.push(DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source });
+            self.diag_disproof_inserts += 1;
+            self.diag_remaining_dist[rem_idx] += 1;
             return;
         }
 
@@ -895,6 +923,7 @@ impl TranspositionTable {
                 if best_move != 0 {
                     e.best_move = best_move;
                 }
+                self.diag_intermediate_update += 1;
                 return;
             }
         }
@@ -910,6 +939,8 @@ impl TranspositionTable {
                 path_dependent: false,
                 source,
             });
+            self.diag_intermediate_new += 1;
+            self.diag_remaining_dist[rem_idx] += 1;
             #[cfg(feature = "profile")]
             {
                 if entries.len() > self.max_entries_per_position {
@@ -2086,6 +2117,35 @@ impl DfPnSolver {
                 self.nodes_searched / 1_000_000, ply, or_node,
                 self.start_time.elapsed().as_secs_f64(), self.max_ply, self.depth,
                 r_pn, r_dn, self.table.len(), top5.join(", "));
+            // TT エントリ増加診断(5M ノードごと)
+            if self.nodes_searched % 5_000_000 == 0 {
+                let t = &self.table;
+                let total_ent: usize = t.tt.values().map(|v| v.len()).sum();
+                eprintln!("[tt_diag] positions={} entries={} proof={} disproof={} inter_new={} inter_upd={} dominated={}",
+                    t.tt.len(), total_ent,
+                    t.diag_proof_inserts, t.diag_disproof_inserts,
+                    t.diag_intermediate_new, t.diag_intermediate_update,
+                    t.diag_dominated_skip);
+                // remaining 値分布
+                let rem: Vec<String> = t.diag_remaining_dist.iter().enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(r, &c)| {
+                        if r == 32 { format!("INF:{}", c) }
+                        else { format!("{}:{}", r, c) }
+                    }).collect();
+                eprintln!("[tt_diag] remaining_dist=[{}]", rem.join(", "));
+                // エントリ数別局面分布
+                let mut size_dist = [0u64; 17]; // size_dist[n] = # positions with n entries
+                for v in t.tt.values() {
+                    let n = v.len().min(16);
+                    size_dist[n] += 1;
+                }
+                let sd: Vec<String> = size_dist.iter().enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(n, &c)| format!("{}ent:{}pos", n, c))
+                    .collect();
+                eprintln!("[tt_diag] entries_per_pos=[{}]", sd.join(", "));
+            }
         }
         if ply > self.max_ply {
             self.max_ply = ply;
