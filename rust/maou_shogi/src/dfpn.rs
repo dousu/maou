@@ -1301,6 +1301,10 @@ pub struct DfPnSolver {
     max_ply: u32,
     /// ply別ノード数(デバッグ用)．
     ply_nodes: [u64; 64],
+    /// ply別MIDループイテレーション数(デバッグ用)．
+    ply_iters: [u64; 64],
+    /// ply別停滞ペナルティ回数(デバッグ用)．
+    ply_stag_penalties: [u64; 64],
     /// ルート局面情報(進捗追跡用)．
     diag_root_pk: u64,
     diag_root_hand: [u8; HAND_KINDS],
@@ -1483,6 +1487,8 @@ impl DfPnSolver {
             nodes_searched: 0,
             max_ply: 0,
             ply_nodes: [0; 64],
+            ply_iters: [0; 64],
+            ply_stag_penalties: [0; 64],
             diag_root_pk: 0,
             diag_root_hand: [0; HAND_KINDS],
             path: FxHashSet::default(),
@@ -3103,6 +3109,9 @@ impl DfPnSolver {
         const STAGNATION_LIMIT: u32 = 4;
         loop {
             _loop_iter += 1;
+            if (ply as usize) < 64 {
+                self.ply_iters[ply as usize] += 1;
+            }
             // ply=0 は 100K ごと，それ以外は 1M ごとに詳細診断
             if self.nodes_searched >= _next_diag_nodes {
                 let consumed = self.nodes_searched - _loop_start_nodes;
@@ -3823,6 +3832,9 @@ impl DfPnSolver {
                 {
                     stagnation_count += 1;
                     if stagnation_count >= STAGNATION_LIMIT {
+                        if (ply as usize) < 64 {
+                            self.ply_stag_penalties[ply as usize] += 1;
+                        }
                         board.undo_move(m, captured);
                         // 停滞ペナルティ: pn/dn に +1 して TT に保存．
                         //
@@ -8078,14 +8090,25 @@ mod tests {
             eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
             assert_eq!(pv_usi.len(), 29, "expected 29-move PV, got {} moves", pv_usi.len());
         } else {
-            // 未解決時: ply 別ノード分布を出力
             eprintln!("[no_pns] NOT PROVED: rpn={} nodes={}", root_pn, solver.nodes_searched);
-            let mut ply_dist: Vec<(usize, u64)> = solver.ply_nodes.iter().enumerate()
-                .filter(|(_, &n)| n > 0).map(|(p, &n)| (p, n)).collect();
-            ply_dist.sort_by(|a, b| b.1.cmp(&a.1));
-            for (p, n) in ply_dist.iter().take(15) {
-                eprintln!("[no_pns] ply {} = {}K nodes", p, n / 1000);
+        }
+
+        // ply 別効率レポート(解決・未解決共通)
+        eprintln!("\n[efficiency] {:>3} {:>10} {:>12} {:>8} {:>8}",
+            "ply", "nodes", "iters", "n/iter", "stag");
+        for p in 0..64 {
+            let n = solver.ply_nodes[p];
+            let it = solver.ply_iters[p];
+            let stag = solver.ply_stag_penalties[p];
+            if n > 0 || it > 0 {
+                let ratio = if it > 0 { n as f64 / it as f64 } else { 0.0 };
+                eprintln!("[efficiency] {:>3} {:>10} {:>12} {:>8.1} {:>8}",
+                    p, n, it, ratio, stag);
             }
+        }
+        eprintln!();
+
+        if root_pn != 0 {
             panic!("IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
         }
     }
