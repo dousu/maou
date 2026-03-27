@@ -3105,6 +3105,8 @@ impl DfPnSolver {
         let mut prev_best_dn: u32 = 0;
         let mut prev_child_pn_th: u32 = 0;
         let mut prev_child_dn_th: u32 = 0;
+        // 前回の子 mid() が消費したノード数(ペナルティ保護・停滞検出用)．
+        let mut _prev_nodes_used: u64 = 0;
         let mut stagnation_count: u32 = 0;
         const STAGNATION_LIMIT: u32 = 4;
         loop {
@@ -3506,16 +3508,6 @@ impl DfPnSolver {
                     current_pn = snda_dedup(&mut snda_pairs, current_pn);
                 }
 
-                // ply=27 AND node diagnostic
-                if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                    eprintln!("[ply27_and] max_cpn={} unproven={} current_pn={} current_dn={} pn_th={} dn_th={} remaining={} children={}",
-                        max_cpn, unproven_count, current_pn, current_dn, pn_threshold, dn_threshold, remaining, children.len());
-                    for (i, &(ref m, _, cpk, ref ch)) in children.iter().enumerate() {
-                        let (cpn, cdn, _) = self.look_up_pn_dn(cpk, ch, remaining.saturating_sub(1));
-                        eprintln!("[ply27_and]   child[{}] move={} cpn={} cdn={}", i, m.to_usi(), cpn, cdn);
-                    }
-                }
-
                 // AND ノード証明(全子が証明済み)
                 if all_proved && current_pn == 0 {
                     // 証明駒を現在の持ち駒で制限
@@ -3547,21 +3539,23 @@ impl DfPnSolver {
             // 2回目以降のイテレーションでは，子の mid() 実行後に pn/dn が
             // 変化する可能性があるため，collect 値をそのまま保存する．
             let best_move16 = children[best_idx].0.to_move16();
-            let (store_pn, store_dn) = if _loop_iter == 1 {
+            // 停滞ペナルティの方向別保護:
+            // OR ノード(攻方)は pn のみ max 保護(証明方向のペナルティ蓄積)，
+            // AND ノード(受方)は dn のみ max 保護(反証方向のペナルティ蓄積)．
+            // 非証明方向は collect 値をそのまま保存し，反証/証明の伝播を妨げない．
+            // 保護は全イテレーションで適用し，ペナルティの上書き消失を防ぐ．
+            let (store_pn, store_dn) = if _prev_nodes_used <= 1 {
                 let (tt_pn, tt_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
-                (current_pn.max(tt_pn), current_dn.max(tt_dn))
+                if or_node {
+                    (current_pn.max(tt_pn), current_dn)
+                } else {
+                    (current_pn, current_dn.max(tt_dn))
+                }
             } else {
                 (current_pn, current_dn)
             };
             profile_timed!(self, tt_store_ns, tt_store_count,
                 self.store_with_best_move(pos_key, att_hand, store_pn, store_dn, remaining, best_source, best_move16));
-
-            // Verify store visibility at ply=27
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                let (v_pn, v_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
-                eprintln!("[ply27_store] stored pn={} dn={} rem={} → lookup returns pn={} dn={}",
-                    current_pn, current_dn, remaining, v_pn, v_dn);
-            }
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //
@@ -3809,6 +3803,7 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
+            _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
             // 零進捗検出: 子 mid() が 0 ノードしか消費しなかった場合，
             // 子は閾値チェックで即座に返っている．これが連続すると
             // dn_floor 由来の空転が発生するため，ZERO_PROGRESS_LIMIT 回
@@ -3831,7 +3826,19 @@ impl DfPnSolver {
             // 停滞検出: 同じ子に同じ閾値で mid() を呼んで pn/dn が変化しなければ，
             // 再度呼んでも結果は同じ(TT にキャッシュ済み)．
             // 閾値が増えた場合のみ新たな探索が可能なため，そのケースはリセットする．
-            if remaining > 4 {
+            //
+            // 最適化: 子 mid() が 2+ ノード消費した場合は探索が進展した可能性が
+            // 高いため，stagnation check をスキップして look_up コストを回避する．
+            {
+                let nodes_used = self.nodes_searched - _pre_mid_nodes;
+                if nodes_used > 1 {
+                    stagnation_count = 0;
+                    prev_best_idx = best_idx;
+                    prev_best_pn = 0;
+                    prev_best_dn = 0;
+                    prev_child_pn_th = child_pn_th;
+                    prev_child_dn_th = child_dn_th;
+                } else {
                 let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
                     children[best_idx].2,
                     &children[best_idx].3,
@@ -3849,13 +3856,22 @@ impl DfPnSolver {
                             self.ply_stag_penalties[ply as usize] += 1;
                         }
                         board.undo_move(m, captured);
-                        // 停滞ペナルティ: pn/dn に +1 して TT に保存．
+                        // 停滞ペナルティ(指数増加): 証明方向のみ TT 値を倍増．
                         //
-                        // ペナルティは MID ループの collect→store ステップで
-                        // 保護される(下記の max(collect, TT) ロジック)ため，
-                        // 呼び出しを跨いで蓄積し，最終的に閾値を超える．
-                        let stag_pn = current_pn.saturating_add(1).min(INF - 1);
-                        let stag_dn = current_dn.saturating_add(1).min(INF - 1);
+                        // 線形 +1 では閾値が INF 付近のとき収束に数十億回必要．
+                        // 既存の蓄積量(TT - collect)を新たなペナルティとし，
+                        // 各 stag_break で gap が倍増するようにする:
+                        //   gap: 1 → 2 → 4 → 8 → ... → ~32 回で INF 到達．
+                        let (tt_pn, tt_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
+                        let (stag_pn, stag_dn) = if or_node {
+                            let base = current_pn.max(tt_pn);
+                            let penalty = tt_pn.saturating_sub(current_pn).max(1);
+                            (base.saturating_add(penalty).min(INF - 1), current_dn)
+                        } else {
+                            let base = current_dn.max(tt_dn);
+                            let penalty = tt_dn.saturating_sub(current_dn).max(1);
+                            (current_pn, base.saturating_add(penalty).min(INF - 1))
+                        };
                         self.store_with_best_move(
                             pos_key, att_hand, stag_pn, stag_dn,
                             remaining, best_source, best_move16);
@@ -3869,7 +3885,7 @@ impl DfPnSolver {
                 prev_best_dn = cdn_after;
                 prev_child_pn_th = child_pn_th;
                 prev_child_dn_th = child_dn_th;
-            }
+            }}
 
             #[cfg(feature = "tt_diag")]
             if _diag_match {
