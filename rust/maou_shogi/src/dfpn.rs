@@ -3825,21 +3825,21 @@ impl DfPnSolver {
                     if stagnation_count >= STAGNATION_LIMIT {
                         board.undo_move(m, captured);
                         // 停滞ペナルティ: pn/dn に +1 して TT に保存．
-                        // これにより上位ノードの collect で「変化あり」と判定され，
-                        // 上位でも兄弟への切替や stagnation 検出が正しく連鎖する．
-                        // ペナルティなしでは上位が同じ pn/dn を繰り返し取得し，
-                        // 同じ子に同じ閾値で mid() を呼び続ける空転が発生する．
-                        if or_node {
-                            let stag_pn = current_pn.saturating_add(1).min(INF - 1);
-                            self.store_with_best_move(
-                                pos_key, att_hand, stag_pn, current_dn,
-                                remaining, best_source, best_move16);
+                        //
+                        // OR ノード: pn+1 → 上位 AND の pn 集約に反映
+                        // AND ノード: pn+1 かつ dn+1 → 上位 OR の best 選択で
+                        //   pn 変化により兄弟への切替を促進．dn のみ+1 では
+                        //   上位 OR の stagnation 検出が dn 変化を「進展」と
+                        //   誤判定して stagnation_count をリセットしてしまう．
+                        let stag_pn = current_pn.saturating_add(1).min(INF - 1);
+                        let stag_dn = if or_node {
+                            current_dn
                         } else {
-                            let stag_dn = current_dn.saturating_add(1).min(INF - 1);
-                            self.store_with_best_move(
-                                pos_key, att_hand, current_pn, stag_dn,
-                                remaining, best_source, best_move16);
-                        }
+                            current_dn.saturating_add(1).min(INF - 1)
+                        };
+                        self.store_with_best_move(
+                            pos_key, att_hand, stag_pn, stag_dn,
+                            remaining, best_source, best_move16);
                         break;
                     }
                 } else {
