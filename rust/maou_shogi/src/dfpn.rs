@@ -3539,9 +3539,22 @@ impl DfPnSolver {
             }
 
             // 転置表を更新(TT Best Move: 最善子の手を記録)
+            //
+            // 停滞ペナルティの保護: MID ループ初回の collect→store で，
+            // 前回の stag_break が保存したペナルティ(TT の pn/dn > collect 値)
+            // を max で保護する．これにより +1 ペナルティが蓄積可能になる．
+            //
+            // 2回目以降のイテレーションでは，子の mid() 実行後に pn/dn が
+            // 変化する可能性があるため，collect 値をそのまま保存する．
             let best_move16 = children[best_idx].0.to_move16();
+            let (store_pn, store_dn) = if _loop_iter == 1 {
+                let (tt_pn, tt_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
+                (current_pn.max(tt_pn), current_dn.max(tt_dn))
+            } else {
+                (current_pn, current_dn)
+            };
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store_with_best_move(pos_key, att_hand, current_pn, current_dn, remaining, best_source, best_move16));
+                self.store_with_best_move(pos_key, att_hand, store_pn, store_dn, remaining, best_source, best_move16));
 
             // Verify store visibility at ply=27
             if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
@@ -3838,17 +3851,11 @@ impl DfPnSolver {
                         board.undo_move(m, captured);
                         // 停滞ペナルティ: pn/dn に +1 して TT に保存．
                         //
-                        // OR ノード: pn+1 → 上位 AND の pn 集約に反映
-                        // AND ノード: pn+1 かつ dn+1 → 上位 OR の best 選択で
-                        //   pn 変化により兄弟への切替を促進．dn のみ+1 では
-                        //   上位 OR の stagnation 検出が dn 変化を「進展」と
-                        //   誤判定して stagnation_count をリセットしてしまう．
+                        // ペナルティは MID ループの collect→store ステップで
+                        // 保護される(下記の max(collect, TT) ロジック)ため，
+                        // 呼び出しを跨いで蓄積し，最終的に閾値を超える．
                         let stag_pn = current_pn.saturating_add(1).min(INF - 1);
-                        let stag_dn = if or_node {
-                            current_dn
-                        } else {
-                            current_dn.saturating_add(1).min(INF - 1)
-                        };
+                        let stag_dn = current_dn.saturating_add(1).min(INF - 1);
                         self.store_with_best_move(
                             pos_key, att_hand, stag_pn, stag_dn,
                             remaining, best_source, best_move16);
