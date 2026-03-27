@@ -3093,6 +3093,14 @@ impl DfPnSolver {
         const ZERO_PROGRESS_LIMIT: u32 = 16;
         loop {
             _loop_iter += 1;
+            // ply 18-22 でループ回数が異常に多い場合の警告
+            if ply >= 18 && ply <= 22 && _loop_iter % 10_000 == 0 {
+                let consumed = self.nodes_searched - _loop_start_nodes;
+                eprintln!("[loop_warn] ply={} or={} iter={} consumed={}K nodes_per_iter={:.1} pn_th={} dn_th={}",
+                    ply, or_node, _loop_iter, consumed / 1000,
+                    consumed as f64 / _loop_iter as f64,
+                    pn_threshold, dn_threshold);
+            }
             // ply=0 は 100K ごと，それ以外は 1M ごとに詳細診断
             if self.nodes_searched >= _next_diag_nodes {
                 let consumed = self.nodes_searched - _loop_start_nodes;
@@ -3117,7 +3125,7 @@ impl DfPnSolver {
                 }
                 // current_pn/dn/best_idx は後で計算されるのでここでは出力しない
                 _next_diag_nodes = self.nodes_searched.saturating_add(
-                    if ply == 0 { 100_000 } else { 1_000_000 }
+                    if ply == 0 || (ply >= 18 && ply <= 22) { 100_000 } else { 1_000_000 }
                 );
             }
             #[cfg(feature = "tt_diag")]
@@ -3830,19 +3838,29 @@ impl DfPnSolver {
             profile_timed!(self, undo_move_ns, undo_move_count,
                 board.undo_move(m, captured));
 
-            // ply=0 の mid() 呼び出しごとの消費ノード追跡
-            if ply == 0 {
+            // ply=0 および ply 18-22 の mid() 呼び出しごとの消費ノード追跡
+            {
                 let child_nodes = self.nodes_searched - _pre_mid_nodes;
-                let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
-                    children[best_idx].2, &children[best_idx].3,
-                    remaining.saturating_sub(1));
-                if child_nodes >= 1_000 {
+                if ply == 0 && child_nodes >= 1_000 {
+                    let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
+                        children[best_idx].2, &children[best_idx].3,
+                        remaining.saturating_sub(1));
                     eprintln!("[root_mid] move={} nodes={}K pn_th={} dn_th={} → pn={} dn={} total={}K time={:.1}s",
                         m.to_usi(), child_nodes / 1000,
                         child_pn_th, child_dn_th,
                         cpn_now, cdn_now,
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64());
+                }
+                if ply >= 18 && ply <= 22 && child_nodes >= 500 {
+                    let (cpn_now, cdn_now, _) = self.look_up_pn_dn(
+                        children[best_idx].2, &children[best_idx].3,
+                        remaining.saturating_sub(1));
+                    eprintln!("[deep_mid] ply={} or={} move={} nodes={}K pn_th={} dn_th={} → pn={} dn={} iter={} total={}K",
+                        ply, or_node, m.to_usi(), child_nodes / 1000,
+                        child_pn_th, child_dn_th,
+                        cpn_now, cdn_now,
+                        _loop_iter, self.nodes_searched / 1000);
                 }
             }
 
