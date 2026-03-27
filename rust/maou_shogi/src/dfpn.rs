@@ -2066,8 +2066,8 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // Periodic progress: every 100K nodes
-        if self.nodes_searched % 100_000 == 0 && self.nodes_searched > 0 {
+        // Periodic progress: every 1M nodes
+        if self.nodes_searched % 1_000_000 == 0 && self.nodes_searched > 0 {
             // Ply distribution: show top consumers
             let mut ply_dist: Vec<(usize, u64)> = self.ply_nodes.iter().enumerate()
                 .filter(|(_, &n)| n > 0).map(|(p, &n)| (p, n)).collect();
@@ -3725,17 +3725,27 @@ impl DfPnSolver {
                     board, &checks,
                     remaining.saturating_sub(1),
                 ) {
-                    #[cfg(feature = "tt_diag")]
-                    { self.diag_capture_tt_hits += 1; }
-                    #[cfg(feature = "profile")]
-                    {
-                        self.profile_stats.capture_tt_lookahead_ns += _cap_tt_start.elapsed().as_nanos() as u64;
-                        self.profile_stats.capture_tt_lookahead_count += 1;
+                    // 証明を store したが，hand dominance の不一致で
+                    // look_up_pn_dn が証明を検出できない場合がある．
+                    // 検出できなければ continue せず通常の mid() に fallback する．
+                    let child_pk = children[best_idx].2;
+                    let child_hand = &children[best_idx].3;
+                    let (verified_pn, _, _) = self.look_up_pn_dn(
+                        child_pk, child_hand, remaining.saturating_sub(1));
+                    if verified_pn == 0 {
+                        #[cfg(feature = "tt_diag")]
+                        { self.diag_capture_tt_hits += 1; }
+                        #[cfg(feature = "profile")]
+                        {
+                            self.profile_stats.capture_tt_lookahead_ns += _cap_tt_start.elapsed().as_nanos() as u64;
+                            self.profile_stats.capture_tt_lookahead_count += 1;
+                        }
+                        // 証明済みを確認 → MID 再帰をスキップ
+                        profile_timed!(self, undo_move_ns, undo_move_count,
+                            board.undo_move(m, captured));
+                        continue;
                     }
-                    // 証明済み → MID 再帰をスキップ
-                    profile_timed!(self, undo_move_ns, undo_move_count,
-                        board.undo_move(m, captured));
-                    continue;
+                    // 証明が look_up で検出できなかった → mid() にフォールスルー
                 }
                 #[cfg(feature = "profile")]
                 {
