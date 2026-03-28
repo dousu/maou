@@ -1184,6 +1184,35 @@ impl TranspositionTable {
         self.tt.len()
     }
 
+    /// 反復内 periodic GC: 低価値エントリを除去してメモリを解放する．
+    ///
+    /// IDS 反復間 GC(`remove_stale_for_ids`)と異なり，反復内で TT が肥大化した際に
+    /// 呼び出される．`remaining_threshold` 以下のエントリを除去対象とする．
+    ///
+    /// 除去対象:
+    /// - remaining ≤ threshold の反証(dn=0): 浅い深さ制限到達時の反証
+    /// - remaining ≤ threshold の中間(pn>0, dn>0): 浅い探索の中間結果
+    /// - 証明(pn=0)は常に保持
+    ///
+    /// 返り値: 除去されたエントリ数．
+    fn gc_shallow_entries(&mut self, remaining_threshold: u16) -> usize {
+        let mut removed = 0usize;
+        self.tt.retain(|_, entries| {
+            let before = entries.len();
+            entries.retain(|e| {
+                // 証明は常に保持
+                if e.pn == 0 { return true; }
+                // REMAINING_INFINITE の反証は常に保持(真の不詰)
+                if e.dn == 0 && e.remaining == REMAINING_INFINITE { return true; }
+                // remaining ≤ threshold のエントリを除去
+                e.remaining > remaining_threshold
+            });
+            removed += before - entries.len();
+            !entries.is_empty()
+        });
+        removed
+    }
+
     /// TT の全エントリ数(全ポジションの Vec 長の合計)を返す．
     ///
     /// 同一盤面・異なる持ち駒のエントリを含む総数．
@@ -2213,6 +2242,25 @@ impl DfPnSolver {
         self.nodes_searched += 1;
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
+        }
+        // Periodic GC: TT サイズに応じて浅い remaining のエントリを除去
+        // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)
+        if self.nodes_searched % 1_000_000 == 0 {
+            let tt_size = self.table.len();
+            let gc_threshold: Option<u16> = if tt_size > 60_000_000 {
+                Some(1) // remaining ≤ 1 を除去
+            } else if tt_size > 50_000_000 {
+                Some(0) // remaining = 0 のみ除去
+            } else {
+                None
+            };
+            if let Some(threshold) = gc_threshold {
+                let removed = self.table.gc_shallow_entries(threshold);
+                if removed > 0 {
+                    eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}",
+                        threshold, removed, self.table.len());
+                }
+            }
         }
         // Periodic progress: every 1M nodes
         if self.nodes_searched % 1_000_000 == 0 && self.nodes_searched > 0 {
