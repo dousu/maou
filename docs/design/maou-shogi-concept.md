@@ -52,7 +52,7 @@ solve_tsume(sfen, depth=200, nodes=100_000_000, timeout_secs=600)
 |------|------|
 | 持ち駒の優越(hand dominance) | 転置表で持ち駒の包含関係を利用した証明/反証の再利用 |
 | 反復深化 df-pn | 浅い探索の証明エントリで深い探索を加速(depth > 15で有効) |
-| 静的詰め判定 | 1手〜N手の詰みをDf-Pnオーバーヘッドなしで検出 |
+| インライン詰み検出 | 1手・3手の詰みをDf-Pnオーバーヘッドなしで検出 |
 | 合駒後回し(INTERPOSE_DN_BIAS) | AND nodeで非合駒応手を先に展開しTTを温める |
 | 無駄合い・連続合い枝刈り | 紐のない合駒をスキップ，連続合いは代表駒種のみ生成 |
 | 単一子最適化 | 合法手が1手の場合にMIDループをバイパス |
@@ -97,4 +97,5 @@ maou (Python)
 | ドキュメント | 内容 |
 |-------------|------|
 | [maou-shogi-crate.md](maou-shogi-crate.md) | クレート設計資料(座標系，駒ID，データ構造等) |
+| [tsume-solver-design.md](tsume-solver-design.md) | 詰将棋ソルバー設計(全最適化手法と出典) |
 | [../rust-backend.md](../rust-backend.md) | Rustバックエンド開発ガイド |
