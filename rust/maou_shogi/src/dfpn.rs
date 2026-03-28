@@ -1227,6 +1227,111 @@ impl TranspositionTable {
             .filter(|e| e.pn > 0 && e.dn > 0).count()
     }
 
+    /// TT コンテンツの詳細分析(診断用)．
+    fn dump_content_analysis(&self) {
+        let mut proof_count: u64 = 0;
+        let mut disproof_count: u64 = 0;
+        let mut intermediate_count: u64 = 0;
+        // 反証の remaining 分布
+        let mut disproof_rem: [u64; 33] = [0; 33];
+        // 中間エントリの pn 分布
+        let mut inter_pn_buckets: [u64; 8] = [0; 8]; // [1], [2-5], [6-20], [21-100], [101-1K], [1K-10K], [10K-100K], [100K+]
+        // 中間エントリの remaining 分布
+        let mut inter_rem: [u64; 33] = [0; 33];
+        // 中間エントリの dn 分布
+        let mut inter_dn_buckets: [u64; 5] = [0; 5]; // [1], [2-5], [6-20], [21-100], [100+]
+        // 局面あたりのエントリ構成
+        let mut pos_proof_only: u64 = 0;
+        let mut pos_disproof_only: u64 = 0;
+        let mut pos_inter_only: u64 = 0;
+        let mut pos_mixed: u64 = 0;
+
+        for entries in self.tt.values() {
+            let mut has_proof = false;
+            let mut has_disproof = false;
+            let mut has_inter = false;
+            for e in entries {
+                if e.pn == 0 {
+                    proof_count += 1;
+                    has_proof = true;
+                } else if e.dn == 0 {
+                    disproof_count += 1;
+                    has_disproof = true;
+                    let ri = if e.remaining == REMAINING_INFINITE { 32 } else { (e.remaining as usize).min(31) };
+                    disproof_rem[ri] += 1;
+                } else {
+                    intermediate_count += 1;
+                    has_inter = true;
+                    let ri = if e.remaining == REMAINING_INFINITE { 32 } else { (e.remaining as usize).min(31) };
+                    inter_rem[ri] += 1;
+                    // pn バケット
+                    let pb = match e.pn {
+                        1 => 0,
+                        2..=5 => 1,
+                        6..=20 => 2,
+                        21..=100 => 3,
+                        101..=1000 => 4,
+                        1001..=10000 => 5,
+                        10001..=100000 => 6,
+                        _ => 7,
+                    };
+                    inter_pn_buckets[pb] += 1;
+                    // dn バケット
+                    let db = match e.dn {
+                        1 => 0,
+                        2..=5 => 1,
+                        6..=20 => 2,
+                        21..=100 => 3,
+                        _ => 4,
+                    };
+                    inter_dn_buckets[db] += 1;
+                }
+            }
+            match (has_proof, has_disproof, has_inter) {
+                (true, false, false) => pos_proof_only += 1,
+                (false, true, false) => pos_disproof_only += 1,
+                (false, false, true) => pos_inter_only += 1,
+                _ => pos_mixed += 1,
+            }
+        }
+
+        eprintln!("\n=== TT Content Analysis ===");
+        eprintln!("positions: {}  entries: proof={} disproof={} intermediate={}",
+            self.tt.len(), proof_count, disproof_count, intermediate_count);
+        eprintln!("pos composition: proof_only={} disproof_only={} inter_only={} mixed={}",
+            pos_proof_only, pos_disproof_only, pos_inter_only, pos_mixed);
+
+        // 反証 remaining 分布
+        let dr: Vec<String> = disproof_rem.iter().enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
+            .collect();
+        eprintln!("disproof remaining: [{}]", dr.join(", "));
+
+        // 中間 remaining 分布
+        let ir: Vec<String> = inter_rem.iter().enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
+            .collect();
+        eprintln!("intermediate remaining: [{}]", ir.join(", "));
+
+        // 中間 pn 分布
+        let pn_labels = ["pn=1", "pn=2-5", "pn=6-20", "pn=21-100", "pn=101-1K", "pn=1K-10K", "pn=10K-100K", "pn=100K+"];
+        let pb: Vec<String> = inter_pn_buckets.iter().enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(i, &c)| format!("{}:{}", pn_labels[i], c))
+            .collect();
+        eprintln!("intermediate pn dist: [{}]", pb.join(", "));
+
+        // 中間 dn 分布
+        let dn_labels = ["dn=1", "dn=2-5", "dn=6-20", "dn=21-100", "dn=100+"];
+        let db: Vec<String> = inter_dn_buckets.iter().enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(i, &c)| format!("{}:{}", dn_labels[i], c))
+            .collect();
+        eprintln!("intermediate dn dist: [{}]", db.join(", "));
+    }
+
     /// TT ガベージコレクション: メモリ使用量を抑制する．
     ///
     /// 2段階の GC を実行する:
@@ -2145,6 +2250,10 @@ impl DfPnSolver {
                     .map(|(n, &c)| format!("{}ent:{}pos", n, c))
                     .collect();
                 eprintln!("[tt_diag] entries_per_pos=[{}]", sd.join(", "));
+                // 10M ノードごとにコンテンツ分析
+                if self.nodes_searched % 10_000_000 == 0 {
+                    self.table.dump_content_analysis();
+                }
             }
         }
         if ply > self.max_ply {
@@ -8190,6 +8299,9 @@ mod tests {
             }
         }
         eprintln!();
+
+        // TT コンテンツ分析
+        solver.table.dump_content_analysis();
 
         if root_pn != 0 {
             panic!("IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
