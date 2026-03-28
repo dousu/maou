@@ -99,6 +99,19 @@ const TCA_EXTEND_DENOM: u32 = 4;
 /// `look_up_pn_dn` で TT ミス時に `ply > depth/2` の場合に適用される．
 const DEEP_DFPN_R: u32 = 4;
 
+/// MID ループのゼロ進捗検出閾値．
+///
+/// 子 `mid()` が消費するノード数が連続して0の回数がこの値を超えると
+/// MID ループを脱出し，上位ノードに制御を戻す(`dn_floor` 由来の空転防止)．
+const ZERO_PROGRESS_LIMIT: u32 = 16;
+
+/// MID ループの停滞検出閾値．
+///
+/// best child の pn/dn と閾値が連続して変化しない回数がこの値を超えると
+/// MID ループを脱出する．同じ子に同じ予算で `mid()` を呼んでも
+/// 結果が変わらないケースを検出する．
+const STAGNATION_LIMIT: u32 = 4;
+
 /// 深さ制限なし(真の証明/反証)を示す定数．
 const REMAINING_INFINITE: u16 = u16::MAX;
 

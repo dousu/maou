@@ -339,6 +339,7 @@ impl TranspositionTable {
                     e.best_move = best_move;
                 }
                 self.diag_intermediate_update += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
                 return;
             }
         }
@@ -385,6 +386,7 @@ impl TranspositionTable {
             }
             if let Some(idx) = worst_idx {
                 entries[idx] = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source };
+                self.diag_remaining_dist[rem_idx] += 1;
             } else {
                 #[cfg(feature = "profile")]
                 { self.overflow_no_victim_count += 1; }

@@ -18,7 +18,7 @@ use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, REMAINING_INFINITE,
-    TCA_EXTEND_DENOM,
+    STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
 /// 詰将棋の探索結果．
@@ -315,7 +315,7 @@ impl DfPnSolver {
     /// TT GC 閾値を設定する．
     ///
     /// TT のポジション数がこの値を超えると GC を実行する．
-    /// 0 にすると GC を無効化する．デフォルトは 2,000,000．
+    /// 0 にすると GC を無効化する．デフォルトは 0(GC 無効)．
     pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
         self.tt_gc_threshold = v;
         self
@@ -799,8 +799,11 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // Periodic GC: TT サイズに応じて浅い remaining のエントリを除去
-        // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)
+        // === Periodic GC (ハードコード安全弁) ===
+        // TT が 50M/60M 位置を超えた場合に remaining の浅いエントリを除去する．
+        // tt_gc_threshold による GC (MID ループ内)とは独立した二段階目の安全弁で，
+        // OOM を防止する．tt_gc_threshold=0(デフォルト)でも動作する．
+        // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)．
         if self.nodes_searched % 1_000_000 == 0 {
             let tt_size = self.table.len();
             let gc_threshold: Option<u16> = if tt_size > 60_000_000 {
@@ -1686,7 +1689,6 @@ impl DfPnSolver {
         // 連続回数を追跡．一定回数以上ゼロ進捗が続けば MID ループを脱出し，
         // 上位ノードに制御を戻す(dn_floor 由来の空転防止)．
         let mut zero_progress_count: u32 = 0;
-        const ZERO_PROGRESS_LIMIT: u32 = 16;
         // 停滞検出: best child の pn/dn と閾値が変化しなければ，
         // 同じ子に同じ予算で mid() を呼んでも結果は変わらない．
         // 連続 STAGNATION_LIMIT 回の無変化で MID ループを脱出する．
@@ -1698,7 +1700,6 @@ impl DfPnSolver {
         // 前回の子 mid() が消費したノード数(ペナルティ保護・停滞検出用)．
         let mut _prev_nodes_used: u64 = 0;
         let mut stagnation_count: u32 = 0;
-        const STAGNATION_LIMIT: u32 = 4;
         loop {
             #[cfg(feature = "verbose")]
             { _loop_iter += 1; }
@@ -2215,7 +2216,11 @@ impl DfPnSolver {
                 break;
             }
 
-            // TT GC: 定期的にサイズチェックし，閾値超過時に GC 実行
+            // === User-configurable GC (tt_gc_threshold) ===
+            // set_tt_gc_threshold() で設定された閾値に基づく GC．
+            // 100K ノード毎にチェックし，TT 位置数が閾値を超えたら
+            // 75% まで縮小する．Periodic GC(上記)よりも低い閾値で
+            // きめ細かくメモリ制御する．デフォルト 0 = 無効．
             if self.tt_gc_threshold > 0
                 && self.nodes_searched >= self.next_gc_check
             {
