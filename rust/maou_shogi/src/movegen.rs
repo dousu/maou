@@ -176,15 +176,9 @@ pub(crate) fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
         // 二歩チェック: 歩の場合，自分の歩がある筋には打てない
         let mut drop_targets = empty_squares;
         if pt == PieceType::Pawn {
-            // 各筋に自分の歩があるかチェック
+            // 二歩チェック: occupied_files() で自歩がある筋を一括除外
             let our_pawns = board.piece_bb[us.index()][PieceType::Pawn as usize];
-            for col in 0..9u8 {
-                let file = Bitboard::file_mask(col);
-                if (our_pawns & file).is_not_empty() {
-                    // この筋には打てない
-                    drop_targets &= !file;
-                }
-            }
+            drop_targets &= !our_pawns.occupied_files();
         }
 
         // 行き所のない駒の制限

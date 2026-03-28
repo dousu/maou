@@ -154,3 +154,4 @@ stage1_data/
 .claude/settings.local.json
 docs/plans/
 tests/maou/infra/visualization/screenshots/
+.claude/worktrees/

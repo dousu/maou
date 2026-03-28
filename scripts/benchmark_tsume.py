@@ -34,6 +34,10 @@ PROBLEMS = {
         "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",
         31,
     ),
+    "tsume7_39te": (
+        "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
+        63,
+    ),
 }
 
 

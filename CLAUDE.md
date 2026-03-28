@@ -144,6 +144,8 @@ uv run maou --help                         # CLI help
 | Testing | [docs/testing-guide.md](docs/testing-guide.md) |
 | Code Quality | [docs/code-quality.md](docs/code-quality.md) |
 | Rust Backend | [docs/rust-backend.md](docs/rust-backend.md) |
+| maou_shogi 設計思想 | [docs/design/maou-shogi-concept.md](docs/design/maou-shogi-concept.md) |
+| 詰将棋ソルバー設計 | [docs/design/tsume-solver-design.md](docs/design/tsume-solver-design.md) |
 | Performance | [docs/performance.md](docs/performance.md) |
 | LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |
