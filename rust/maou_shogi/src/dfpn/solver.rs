@@ -2281,7 +2281,7 @@ impl DfPnSolver {
                 // 各 AND レベルで pn が最大2倍に縮退する速度に抑える．
                 // 12レベルの AND でも pn ≈ INF/2^12 ≈ 1M が確保され，
                 // 深い合駒チェーンの探索が可能になる．
-                let pn_floor = eff_pn_th / 2;
+                let pn_floor = (eff_pn_th / 2).max(1);
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + 1 を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
                 // child_pn_th = best_child.pn となり mid() が即座に返る

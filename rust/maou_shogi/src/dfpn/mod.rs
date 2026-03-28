@@ -274,10 +274,15 @@ fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
 // SWAR パッキングは HAND_KINDS == 7 を前提とする(u64 の 7 バイトに収める)．
 const _: () = assert!(HAND_KINDS == 7, "hand_gte SWAR assumes HAND_KINDS == 7");
 
+// SWAR 比較はエンディアン非依存(両オペランドが同一バイト順序でパックされるため
+// バイト単位の加減算とマスク演算は正しく動作する)が，明示性のため LE を使用する．
+#[cfg(not(target_endian = "little"))]
+compile_error!("hand_gte SWAR is tested only on little-endian targets");
+
 #[inline(always)]
 fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
-    let a_packed = u64::from_ne_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);
-    let b_packed = u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0]);
+    let a_packed = u64::from_le_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);
+    let b_packed = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0]);
     const H: u64 = 0x8080_8080_8080_8080;
     ((a_packed | H) - b_packed) & H == H
 }
