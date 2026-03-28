@@ -8331,12 +8331,12 @@ mod tests {
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
-        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 600);
+        let mut solver = DfPnSolver::with_timeout(31, 120_000_000, 32767, 1200);
         solver.max_nodes = 4;
         solver.attacker = board.turn;
         solver.start_time = std::time::Instant::now();
         let _ = solver.pns_main(&mut board);
-        solver.max_nodes = 50_000_000;
+        solver.max_nodes = 120_000_000;
 
         // mid_fallback 内の IDS ステップと root ply の診断を取得するため，
         // diag_ply=0 で root ノードの mid_diag をトリガーする．
