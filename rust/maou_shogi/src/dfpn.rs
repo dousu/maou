@@ -1150,16 +1150,22 @@ impl TranspositionTable {
     /// remaining が小さい(saved_depth - ply)が，full depth で有効であり，
     /// 除去すると root_pn が大幅に増加する．
     fn remove_stale_for_ids(&mut self) {
-        for entries in self.tt.values_mut() {
+        self.tt.retain(|_, entries| {
             entries.retain(|e| {
                 // 証明は常に保持
                 if e.pn == 0 { return true; }
                 // スラッシング防止エントリ(pn >= INF-1, dn > 0)は除去
                 if e.pn >= INF - 1 && e.dn > 0 { return false; }
+                // remaining=0 の反証は除去．
+                // 同一 depth 内でしか再利用できず，IDS depth が進むと
+                // remaining > 0 の検索にヒットしないため不要．
+                // IDS 反復間でメモリを解放する．
+                if e.dn == 0 && e.remaining == 0 { return false; }
                 // 反証・その他は保持
                 true
             });
-        }
+            !entries.is_empty()
+        });
     }
 
 
@@ -2339,35 +2345,24 @@ impl DfPnSolver {
 
         // 終端条件: 深さ制限・手数制限
         if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                eprintln!("[exit_diag] ply={} depth_limit: depth={} draw_ply={} board_ply={} or={} remaining={}",
-                    ply, self.depth, self.draw_ply, board.ply(), or_node, remaining);
-            }
             #[cfg(feature = "profile")]
             let _depth_limit_start = Instant::now();
-            let mut stored_remaining: u16 = 0;
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
                 // 王手が0手の不詰は深さに依存しないため，IDS 間で再利用可能にする．
                 // TT ベースの高速判定のみ使用．
-                // depth_limit_all_checks_refutable は IDS 外部ループでのみ使用．
                 let checks = self.generate_check_moves(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
-                    stored_remaining = REMAINING_INFINITE;
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
-                    stored_remaining = REMAINING_INFINITE;
                 } else {
                     self.store(pos_key, att_hand, INF, 0, 0, pos_key);
                 }
             } else {
                 // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
-                // 実際の持ち駒で不詰を記録する．
-                // att_hand を使うことで，持ち駒が異なる経路からの
-                // 再到達時に TT ヒットせず，正しく再探索される．
                 self.store(pos_key, att_hand, INF, 0, 0, pos_key);
             }
             #[cfg(feature = "profile")]
