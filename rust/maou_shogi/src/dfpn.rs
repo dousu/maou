@@ -1804,9 +1804,16 @@ impl DfPnSolver {
         self.timed_out || self.start_time.elapsed() >= self.timeout
     }
 
-    /// 転置表を参照する(位置キー＋持ち駒指定)．
+    /// Deep df-pn: 未探索ノードの pn 初期値に深さバイアスを適用する．
     ///
-    /// `remaining` は反証済みエントリの有効性判定に使用する．
+    /// 標準 df-pn は TT ミス時に `(pn=1, dn=1)` を返すが，これだと
+    /// OR ノードで未探索の子が常に最小 pn を持ち，探索済みの子から
+    /// 未探索の子へ頻繁にフォーカスが切り替わる(seesaw effect)．
+    ///
+    /// Deep df-pn では深い ply(depth の後半)にのみバイアスを適用:
+    /// `pn = 1 + (ply - depth/2) / R` (ply > depth/2 の場合)．
+    /// 浅い ply は標準 df-pn と同じ `pn=1` を維持し，
+    /// 不詰検出など浅い探索の効率を損なわない．
     #[inline]
     fn look_up_pn_dn(
         &self,
@@ -1814,7 +1821,21 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u64) {
-        self.table.look_up(pos_key, hand, remaining)
+        let result = self.table.look_up(pos_key, hand, remaining);
+        if result.0 == 1 && result.1 == 1 && result.2 == 0 {
+            // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
+            let ply = (self.depth as u32).saturating_sub(remaining as u32);
+            let half_depth = self.depth / 2;
+            if ply > half_depth {
+                const DEEP_DFPN_R: u32 = 4;
+                let biased_pn = 1 + (ply - half_depth) / DEEP_DFPN_R;
+                (biased_pn, 1, 0)
+            } else {
+                (1, 1, 0)
+            }
+        } else {
+            result
+        }
     }
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
@@ -8271,13 +8292,22 @@ mod tests {
                     "G*8g", "7h8g", "8f8g+", "9g8g", "P*8f", "8g8f",
                     "P*8e",
                 ];
+                // Deep df-pn バイアスにより合駒選択が変化した PV
+                let prefix4 = [
+                    "S*7i", "8h9g", "8f8g+", "7h8g", "G*8f", "9g8f",
+                    "5g6h+", "L*7g", "R*8e", "8f9g", "8e8g+", "9g8g",
+                    "6h6i", "G*7h", "N*9e", "9f9e", "6i7h", "6g7h",
+                    "P*8f", "8g9g", "G*9f", "9g9f", "9d9e", "9f8f",
+                    "P*8e",
+                ];
                 assert!(
-                    pv[..25] == prefix1 || pv[..25] == prefix2 || pv[..25] == prefix3,
-                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  pv1: {}\n  pv2: {}\n  pv3: {}",
+                    pv[..25] == prefix1 || pv[..25] == prefix2 || pv[..25] == prefix3 || pv[..25] == prefix4,
+                    "PV prefix mismatch (first 25 moves):\n  got:      {}\n  pv1: {}\n  pv2: {}\n  pv3: {}\n  pv4: {}",
                     pv[..25].join(" "),
                     prefix1.join(" "),
                     prefix2.join(" "),
                     prefix3.join(" "),
+                    prefix4.join(" "),
                 );
                 // 8i7g は不正解(27手詰めへの分岐)
                 assert!(
