@@ -74,6 +74,6 @@ pub(super) struct PnsNode {
 /// PNS アリーナの最大ノード数(メモリ上限)．
 ///
 /// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
-/// 2M ノードで約 200〜300 MB を使用する．
+/// 5M ノードで約 400〜600 MB を使用する．
 pub(super) const PNS_MAX_ARENA_NODES: usize = 5_000_000;
 

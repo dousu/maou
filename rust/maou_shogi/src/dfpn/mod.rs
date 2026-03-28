@@ -93,6 +93,12 @@ const DN_FLOOR: u32 = 100;
 /// 各レベルで独立に適用されるため膨張を抑える．
 const TCA_EXTEND_DENOM: u32 = 4;
 
+/// Deep df-pn (Song Zhang et al. 2017) の深さ係数 R．
+///
+/// 深い位置ほど初期 pn を高く設定し，浅い分岐の探索を優先させる．
+/// `look_up_pn_dn` で TT ミス時に `ply > depth/2` の場合に適用される．
+const DEEP_DFPN_R: u32 = 4;
+
 /// 深さ制限なし(真の証明/反証)を示す定数．
 const REMAINING_INFINITE: u16 = u16::MAX;
 
@@ -200,12 +206,6 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
     2
 }
 
-/// Deep df-pn の深さ係数 R (Song Zhang et al. 2017)．
-///
-/// 深い位置ほど初期 dn を高く設定し，探索のスラッシングを抑制する．
-/// 高い dn は「この部分木の反証にはコストがかかる」ことを意味し，
-/// ソルバーがブランチを早期に見捨てずに深く探索するよう促す．
-/// 論文推奨値は R=0.4 (Othello/Hex)．
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
 ///
 /// `(source, value)` ペアのリストと通常の sum を受け取り，
@@ -258,6 +258,9 @@ fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
 /// 各バイトに MSB(0x80) をセットして引き算し，MSB が全て残れば全要素 a[i] >= b[i]．
 /// 持ち駒値は 0-18 の範囲なので各バイトの MSB は常に 0 であり，
 /// (a[i] + 128) - b[i] >= 110 となるためバイト間の桁借りは発生しない．
+// SWAR パッキングは HAND_KINDS == 7 を前提とする(u64 の 7 バイトに収める)．
+const _: () = assert!(HAND_KINDS == 7, "hand_gte SWAR assumes HAND_KINDS == 7");
+
 #[inline(always)]
 fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
     let a_packed = u64::from_ne_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);

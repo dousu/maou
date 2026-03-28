@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "maou_shogi"
-version = "0.20.27"
+version = "0.20.28"
 dependencies = [
  "arrayvec",
  "rustc-hash",

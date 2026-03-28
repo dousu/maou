@@ -17,7 +17,8 @@ use super::profile::ProfileStats;
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
-    DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, REMAINING_INFINITE, TCA_EXTEND_DENOM,
+    DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, REMAINING_INFINITE,
+    TCA_EXTEND_DENOM,
 };
 
 /// 詰将棋の探索結果．
@@ -384,7 +385,6 @@ impl DfPnSolver {
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
             let half_depth = self.depth / 2;
             if ply > half_depth {
-                const DEEP_DFPN_R: u32 = 4;
                 let biased_pn = 1 + (ply - half_depth) / DEEP_DFPN_R;
                 (biased_pn, 1, 0)
             } else {
