@@ -3737,8 +3737,15 @@ impl DfPnSolver {
 
                 // SNDA 補正: 同一 source の子は DAG 合流の可能性
                 // 重複グループの最小値分を控除して過大評価を補正
+                //
+                // WPN 圧縮後に適用するため，控除量を制限する:
+                // max_cpn を下限として保証し，WPN の加算分(count-1)のみを
+                // 控除対象とする．これにより過大控除を防ぎつつ
+                // DAG 合流の二重カウントを補正する．
                 if snda_pairs.len() >= 2 {
-                    current_pn = snda_dedup(&mut snda_pairs, current_pn);
+                    let snda_result =
+                        snda_dedup(&mut snda_pairs, current_pn);
+                    current_pn = snda_result.max(max_cpn);
                 }
 
                 // AND ノード証明(全子が証明済み)
