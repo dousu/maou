@@ -50,6 +50,8 @@ def make_position_after_n_moves(n: int) -> str:
 def find_min_budget(sfen: str, remaining_moves: int) -> tuple[str, int, float]:
     """最小の解ける予算を見つける. (status, nodes, time_ms) を返す."""
     depth = remaining_moves + 4  # 余裕を持たせる
+    result = None
+    elapsed_ms = 0.0
     for budget in BUDGETS:
         t0 = time.perf_counter()
         result = solve_tsume(
@@ -64,6 +66,9 @@ def find_min_budget(sfen: str, remaining_moves: int) -> tuple[str, int, float]:
         if result.is_proven:
             return result.status, result.nodes_searched, elapsed_ms
     # 最大予算でも解けなかった場合，最後の結果を返す
+    if result is None:
+        msg = "BUDGETS is empty"
+        raise ValueError(msg)
     return result.status, result.nodes_searched, elapsed_ms
 
 

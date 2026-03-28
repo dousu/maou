@@ -65,6 +65,13 @@ const INF: u32 = u32::MAX;
 /// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
 const INTERPOSE_DN_BIAS: u32 = 8;
 
+/// MID ループの dn 閾値フロア(スラッシング防止)．
+///
+/// 子ノードの dn が小さすぎると MID ループが閾値超過で即座に返り，
+/// 進捗のない空転が発生する．dn_threshold を最低 DN_FLOOR まで引き上げることで
+/// 子ノードに十分な探索予算を確保し，スラッシングを防止する．
+const DN_FLOOR: u32 = 100;
+
 /// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
 /// 過小評価対策．
 ///
@@ -3618,11 +3625,10 @@ impl DfPnSolver {
                 // 子 AND ノードの TT dn が予算を上回って即座に TT exit する
                 // 1-node スラッシングが発生する(ply-35 で 9.8M 回の空振り)．
                 // dn_floor_or=100 を保証し，子 AND に探索進捗させる余裕を与える．
-                let dn_floor_or: u32 = 100;
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
-                    .max(dn_floor_or)
+                    .max(DN_FLOOR)
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
@@ -3674,12 +3680,11 @@ impl DfPnSolver {
                 // (eff_dn_th) がチェーンの深さ分だけ縮退し dn_floor を下回る．
                 // キャップ(eff_dn_th.min(...))を外して dn_floor を保証し，
                 // チェーン末端の証明に十分な探索予算を確保する(§3 最適化)．
-                let dn_floor: u32 = 100;
                 let child_dn_th = if chain_king_sq.is_some() {
-                    sibling_based.max(dn_floor).min(INF - 1)
+                    sibling_based.max(DN_FLOOR).min(INF - 1)
                 } else {
                     eff_dn_th
-                        .min(sibling_based.max(dn_floor))
+                        .min(sibling_based.max(DN_FLOOR))
                         .min(INF - 1)
                 };
                 (child_pn_th, child_dn_th)
@@ -6092,11 +6097,11 @@ impl DfPnSolver {
                 let best_child = if arena[ci].or_node {
                     *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].pn, arena[c as usize].dn))
-                        .unwrap()
+                        .expect("children non-empty (guarded above)")
                 } else {
                     *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].dn, arena[c as usize].pn))
-                        .unwrap()
+                        .expect("children non-empty (guarded above)")
                 };
                 let child_move = arena[best_child as usize].move_from_parent;
                 let captured = board.do_move(child_move);
@@ -6701,16 +6706,21 @@ impl DfPnSolver {
     }
 }
 
-/// 詰将棋を解く便利関数．
+/// デフォルトタイムアウト(300秒)で詰将棋を解く便利関数．
 ///
-/// タイムアウトを指定する場合は [`solve_tsume_with_timeout`] を使用する．
+/// [`solve_tsume_with_timeout`] のラッパーで，タイムアウト・PV ノード予算・
+/// TT GC 閾値にはデフォルト値を使用する．
 ///
 /// # 引数
 ///
-/// - `sfen`: 局面のSFEN文字列．
-/// - `depth`: 最大探索手数(None でデフォルト 31)．
-/// - `nodes`: 最大ノード数(None でデフォルト 1,048,576)．
-/// - `draw_ply`: 引き分け手数(None でデフォルト 32767)．
+/// - `sfen`: 局面の SFEN 文字列．
+/// - `depth`: 最大探索手数(`None` でデフォルト 31)．
+/// - `nodes`: 最大ノード数(`None` でデフォルト 1,048,576)．
+/// - `draw_ply`: 引き分け手数(`None` でデフォルト 32767)．
+///
+/// # 戻り値
+///
+/// [`TsumeResult`] を返す．SFEN パースエラー時は `Err` を返す．
 pub fn solve_tsume(
     sfen: &str,
     depth: Option<u32>,
@@ -8452,13 +8462,13 @@ mod tests {
                 }
 
                 // 1手進めた局面(ply+1, 玉方手番=ANDノード)も試す
-                verbose_eprintln!("\n  --- ply {} (攻め手1手目 {} 適用後、玉方手番) ---", ply, pv_usi[*ply]);
+                verbose_eprintln!("\n  --- ply {} (攻め手1手目 {} 適用後，玉方手番) ---", ply, pv_usi[*ply]);
                 let mut after1 = pos.clone();
                 let m1 = after1.move_from_usi(pv_usi[*ply]).unwrap();
                 after1.do_move(m1);
                 verbose_eprintln!("  SFEN after {}: {}", pv_usi[*ply], after1.sfen());
 
-                // PV の最後の手から逆順に、1手ずつ戻って解けるポイントを探す
+                // PV の最後の手から逆順に，1手ずつ戻って解けるポイントを探す
                 verbose_eprintln!("\n  --- 1手ずつ PV を遡り解ける境界を特定 ---");
                 // ply+1 (玉方手番後) から ply+16 まで奇数手のみ(OR局面)
                 let mut walk_board = pos.clone();
@@ -8469,7 +8479,7 @@ mod tests {
 
                     // OR局面(攻め方手番)のみ詰み探索
                     if step % 2 == 0 {
-                        continue; // step=0 で玉方手番、step=1 で攻め方手番
+                        continue; // step=0 で玉方手番，step=1 で攻め方手番
                     }
 
                     let sub_remaining = remaining_moves - step - 1;
@@ -8528,7 +8538,7 @@ mod tests {
                     verbose_eprintln!("  {} {:<14} {}", lm.to_usi(), sub_solver.nodes_searched, sub_result_str);
                 }
 
-                // 直接診断: depth=19 で solve 後、TT 内のルートエントリをダンプ
+                // 直接診断: depth=19 で solve 後，TT 内のルートエントリをダンプ
                 let att_hand22 = pos.hand[Color::Black.index()];
                 {
                     let mut test_board = pos.clone();
@@ -9624,7 +9634,7 @@ mod tests {
                 first_usi, first_nodes, first_tt, first_time.as_secs_f64(), r1_str).unwrap();
 
             // TT を保持したまま second を解く
-            // solve() は table.clear() するので、手動で状態をリセット
+            // solve() は table.clear() するので，手動で状態をリセット
             let mut board_second = Board::new();
             board_second.set_sfen(and_sfen).unwrap();
             let m_second = board_second.move_from_usi(second_usi).unwrap();
