@@ -1,6 +1,6 @@
 [package]
 name = "maou_shogi"
-version = "0.20.24"
+version = "0.20.25"
 edition = "2021"
 description = "Shogi (Japanese chess) engine library for the maou project"
 
@@ -15,6 +15,7 @@ arrayvec = { workspace = true }
 [features]
 profile = []
 tt_diag = []
+verbose = []
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

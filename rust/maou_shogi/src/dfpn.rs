@@ -14,6 +14,17 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::time::{Duration, Instant};
 
+/// `eprintln!` の `verbose` feature ガード版．
+///
+/// `verbose` feature が無効の場合はコンパイル時に完全に除去される．
+/// デバッグ・分析用の進捗表示やノード情報出力に使用する．
+macro_rules! verbose_eprintln {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "verbose")]
+        eprintln!($($arg)*)
+    };
+}
+
 use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::board::Board;
@@ -983,29 +994,6 @@ impl TranspositionTable {
         *hand
     }
 
-    /// 反証済みエントリの反証駒(登録時の持ち駒)を返す．
-    ///
-    /// 持ち駒劣越で一致する反証済みエントリの hand を返す．
-    /// 見つからない場合は渡された hand をそのまま返す．
-    /// 注: 反証を att_hand で保存する最適化により現在未使用だが，
-    /// デバッグ・分析用に保持．
-    #[allow(dead_code)]
-    #[inline(always)]
-    fn get_disproof_hand(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> [u8; HAND_KINDS] {
-        if let Some(entries) = self.tt.get(&pos_key) {
-            for e in entries {
-                if e.dn == 0 && hand_gte_forward_chain(&e.hand, hand) {
-                    return e.hand;
-                }
-            }
-        }
-        *hand
-    }
-
     /// 反証エントリが経路依存(path_dependent)かどうかを返す．
     ///
     /// OR ノードで子の反証を集約する際，経路依存の子反証が含まれるなら
@@ -1120,6 +1108,7 @@ impl TranspositionTable {
     }
 
     /// 確定エントリ(証明 pn=0 と反証 dn=0)のみ保持し，中間エントリを除去する．
+    #[allow(dead_code)]
     fn retain_terminal(&mut self) {
         self.tt.retain(|_key, entries| {
             entries.retain(|e| e.pn == 0 || e.dn == 0);
@@ -1158,6 +1147,7 @@ impl TranspositionTable {
     ///
     /// IDS の浅い深さで PNS 由来の証明が使われた場合に，
     /// 根の証明を除去して full depth で再証明させるために使用する．
+    #[allow(dead_code)]
     fn remove_proof(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
         if let Some(entries) = self.tt.get_mut(&pos_key) {
             entries.retain(|e| !(e.pn == 0 && e.hand == *hand));
@@ -1220,7 +1210,7 @@ impl TranspositionTable {
     fn dump_entries(&self, pos_key: u64) {
         if let Some(entries) = self.tt.get(&pos_key) {
             for (i, e) in entries.iter().enumerate() {
-                eprintln!(
+                verbose_eprintln!(
                     "[tt_dump] entry[{}]: pn={} dn={} remaining={} path_dep={} hand={:?}",
                     i, e.pn, e.dn, e.remaining, e.path_dependent, &e.hand
                 );
@@ -1248,6 +1238,7 @@ impl TranspositionTable {
     }
 
     /// TT コンテンツの詳細分析(診断用)．
+    #[cfg(feature = "verbose")]
     fn dump_content_analysis(&self) {
         let mut proof_count: u64 = 0;
         let mut disproof_count: u64 = 0;
@@ -1315,10 +1306,10 @@ impl TranspositionTable {
             }
         }
 
-        eprintln!("\n=== TT Content Analysis ===");
-        eprintln!("positions: {}  entries: proof={} disproof={} intermediate={}",
+        verbose_eprintln!("\n=== TT Content Analysis ===");
+        verbose_eprintln!("positions: {}  entries: proof={} disproof={} intermediate={}",
             self.tt.len(), proof_count, disproof_count, intermediate_count);
-        eprintln!("pos composition: proof_only={} disproof_only={} inter_only={} mixed={}",
+        verbose_eprintln!("pos composition: proof_only={} disproof_only={} inter_only={} mixed={}",
             pos_proof_only, pos_disproof_only, pos_inter_only, pos_mixed);
 
         // 反証 remaining 分布
@@ -1326,14 +1317,14 @@ impl TranspositionTable {
             .filter(|(_, &c)| c > 0)
             .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
             .collect();
-        eprintln!("disproof remaining: [{}]", dr.join(", "));
+        verbose_eprintln!("disproof remaining: [{}]", dr.join(", "));
 
         // 中間 remaining 分布
         let ir: Vec<String> = inter_rem.iter().enumerate()
             .filter(|(_, &c)| c > 0)
             .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
             .collect();
-        eprintln!("intermediate remaining: [{}]", ir.join(", "));
+        verbose_eprintln!("intermediate remaining: [{}]", ir.join(", "));
 
         // 中間 pn 分布
         let pn_labels = ["pn=1", "pn=2-5", "pn=6-20", "pn=21-100", "pn=101-1K", "pn=1K-10K", "pn=10K-100K", "pn=100K+"];
@@ -1341,7 +1332,7 @@ impl TranspositionTable {
             .filter(|(_, &c)| c > 0)
             .map(|(i, &c)| format!("{}:{}", pn_labels[i], c))
             .collect();
-        eprintln!("intermediate pn dist: [{}]", pb.join(", "));
+        verbose_eprintln!("intermediate pn dist: [{}]", pb.join(", "));
 
         // 中間 dn 分布
         let dn_labels = ["dn=1", "dn=2-5", "dn=6-20", "dn=21-100", "dn=100+"];
@@ -1349,7 +1340,7 @@ impl TranspositionTable {
             .filter(|(_, &c)| c > 0)
             .map(|(i, &c)| format!("{}:{}", dn_labels[i], c))
             .collect();
-        eprintln!("intermediate dn dist: [{}]", db.join(", "));
+        verbose_eprintln!("intermediate dn dist: [{}]", db.join(", "));
     }
 
     /// TT ガベージコレクション: メモリ使用量を抑制する．
@@ -1504,16 +1495,6 @@ pub struct DfPnSolver {
     refutable_check_failed: FxHashSet<u64>,
     /// OR ノードの子ポジション別 stale effort 追跡．
     ///
-    /// キー: 子ポジションの pos_key．
-    /// 値: (stale_effort, best_pn)．
-    /// - stale_effort: pn が改善しなかった探索のノード累積．
-    ///   pn が best_pn を下回ると 0 にリセットされる．
-    /// - best_pn: これまでに観測された最低 pn．
-    ///
-    /// stale_effort に基づく pn ペナルティを選択時に加算し，
-    /// 不正解手(pn 停滞)から正解手(pn 減少)への切替を促進する．
-    /// OR ノードの子ポジション別 effort 追跡(現在未使用)．
-    or_effort: FxHashMap<u64, (u64, u32, u64)>,
     /// 次に TT GC チェックを行うノード数．
     next_gc_check: u64,
     /// Killer Move テーブル(OR ノード用)．
@@ -1627,7 +1608,6 @@ impl DfPnSolver {
             chain_bb_cache: Bitboard::EMPTY,
             prefilter_hits: 0,
             refutable_check_failed: FxHashSet::default(),
-            or_effort: FxHashMap::default(), // (stale_effort, best_pn, total_effort)
             tt_gc_threshold: 0,
             next_gc_check: 0,
             killer_table: Vec::new(),
@@ -1990,14 +1970,14 @@ impl DfPnSolver {
             && !self.timed_out
         {
             // PNS で蓄積した TT エントリを活用して IDS-dfpn を実行
-            eprintln!("[solve] MID fallback start: nodes={}", self.nodes_searched);
+            verbose_eprintln!("[solve] MID fallback start: nodes={}", self.nodes_searched);
             self.mid_fallback(board);
-            eprintln!("[solve] MID fallback end: nodes={} time={:.1}s",
+            verbose_eprintln!("[solve] MID fallback end: nodes={} time={:.1}s",
                 self.nodes_searched, self.start_time.elapsed().as_secs_f64());
         }
 
         let (root_pn, root_dn) = self.look_up_board(board);
-        eprintln!("[solve] root_pn={} root_dn={} nodes={}", root_pn, root_dn, self.nodes_searched);
+        verbose_eprintln!("[solve] root_pn={} root_dn={} nodes={}", root_pn, root_dn, self.nodes_searched);
 
         if root_pn == 0 {
             // PNS アリーナから PV を抽出できた場合はそちらを優先
@@ -2093,23 +2073,6 @@ impl DfPnSolver {
         )
     }
 
-    /// MID 内部用の版．完全版と同等の深さ 5・10K 回を使用．
-    ///
-    /// キャッシュ(`refutable_check_failed`)と組み合わせて使用するため，
-    /// 各ユニーク局面は1回のみ呼び出される．キャッシュなし時は
-    /// 1回 ~9ms × 数千回で全体の 97% を占めていたが，
-    /// キャッシュにより全体のオーバーヘッドはユニーク局面数 × 9ms に削減される．
-    fn depth_limit_all_checks_refutable_fast(
-        &mut self,
-        board: &mut Board,
-        checks: &[Move],
-    ) -> bool {
-        let mut calls: u32 = 0;
-        self.all_checks_refutable_recursive(
-            board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
-        )
-    }
-
     /// TT ベースの NM 昇格判定(MID 内部用)．
     ///
     /// 各王手後の AND ノードが TT 上で REMAINING_INFINITE の
@@ -2140,11 +2103,6 @@ impl DfPnSolver {
     /// 各呼び出しで generate_defense_moves + generate_check_moves を実行するため，
     /// デバッグビルドでの実行時間を考慮して小さめに設定する．
     const REFUTABLE_CALL_LIMIT: u32 = 10_000;
-
-    /// MID 内部用の軽量版の呼び出し回数上限．
-    /// キャッシュにより各局面は1回のみ呼び出されるため，
-    /// 200 回で分岐爆発を防止しつつ十分な深さを確保する．
-    const REFUTABLE_CALL_LIMIT_FAST: u32 = 200;
 
     /// `depth_limit_all_checks_refutable` の再帰本体．
     ///
@@ -2246,12 +2204,13 @@ impl DfPnSolver {
             if let Some(threshold) = gc_threshold {
                 let removed = self.table.gc_shallow_entries(threshold);
                 if removed > 0 {
-                    eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}",
+                    verbose_eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}",
                         threshold, removed, self.table.len());
                 }
             }
         }
         // Periodic progress: every 1M nodes
+        #[cfg(feature = "verbose")]
         if self.nodes_searched % 1_000_000 == 0 && self.nodes_searched > 0 {
             // Ply distribution: show top consumers
             let mut ply_dist: Vec<(usize, u64)> = self.ply_nodes.iter().enumerate()
@@ -2319,7 +2278,7 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
             if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                eprintln!("[exit_diag] ply={} in_path_exit: hash={:#x} or={}", ply, full_hash, or_node);
+                verbose_eprintln!("[exit_diag] ply={} in_path_exit: hash={:#x} or={}", ply, full_hash, or_node);
             }
             return;
         }
@@ -2336,13 +2295,13 @@ impl DfPnSolver {
             {
                 self.diag_terminal_exits += 1;
                 if ply == self.diag_ply && self.diag_terminal_exits <= 3 {
-                    eprintln!("[tt_diag] ply={} terminal exit: tt_pn={} tt_dn={} remaining={}",
+                    verbose_eprintln!("[tt_diag] ply={} terminal exit: tt_pn={} tt_dn={} remaining={}",
                         ply, tt_pn, tt_dn, remaining);
                 }
             }
             // Diagnostic: catch early exits at children of stuck node
             if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                eprintln!("[exit_diag] ply={} terminal_exit: tt_pn={} tt_dn={} rem={} or={} pk={:#x}",
+                verbose_eprintln!("[exit_diag] ply={} terminal_exit: tt_pn={} tt_dn={} rem={} or={} pk={:#x}",
                     ply, tt_pn, tt_dn, remaining, or_node, pos_key);
             }
             return;
@@ -2352,13 +2311,13 @@ impl DfPnSolver {
             {
                 self.diag_threshold_exits += 1;
                 if ply == self.diag_ply && self.diag_threshold_exits <= 3 {
-                    eprintln!("[tt_diag] ply={} threshold exit: tt_pn={} tt_dn={} pn_th={} dn_th={}",
+                    verbose_eprintln!("[tt_diag] ply={} threshold exit: tt_pn={} tt_dn={} pn_th={} dn_th={}",
                         ply, tt_pn, tt_dn, pn_threshold, dn_threshold);
                 }
             }
             // Diagnostic: catch threshold exits at children of stuck node
             if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                eprintln!("[exit_diag] ply={} threshold_exit: tt_pn={} tt_dn={} pn_th={} dn_th={} rem={} or={} pk={:#x}",
+                verbose_eprintln!("[exit_diag] ply={} threshold_exit: tt_pn={} tt_dn={} pn_th={} dn_th={} rem={} or={} pk={:#x}",
                     ply, tt_pn, tt_dn, pn_threshold, dn_threshold, remaining, or_node, pos_key);
             }
             return;
@@ -2369,7 +2328,7 @@ impl DfPnSolver {
             let visit_count = self.diag_ply_visits[ply as usize];
             if ply == self.diag_ply && (visit_count <= 5 || (visit_count % 1000000 == 0)) {
                 let entry_count = self.table.entries_for_position(pos_key);
-                eprintln!(
+                verbose_eprintln!(
                     "[tt_diag] ply={} non-terminal entry #{}: pos_key={:#x} tt_pn={} tt_dn={} \
                      remaining={} hand={:?} tt_entries_at_key={}",
                     ply, visit_count, pos_key, tt_pn, tt_dn,
@@ -2457,7 +2416,7 @@ impl DfPnSolver {
         // 終端条件チェック
         if moves.is_empty() {
             if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                eprintln!("[exit_diag] ply={} empty_moves: or={}", ply, or_node);
+                verbose_eprintln!("[exit_diag] ply={} empty_moves: or={}", ply, or_node);
             }
             if or_node {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
@@ -2707,7 +2666,7 @@ impl DfPnSolver {
                         init_and_disproof_path_dep = child_pd;
                         #[cfg(feature = "tt_diag")]
                         if ply == self.diag_ply && self.diag_in_path_exits < 10 {
-                            eprintln!("[tt_diag] ply={} init AND disproof (deferred): move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
+                            verbose_eprintln!("[tt_diag] ply={} init AND disproof (deferred): move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
                                 ply, m.to_usi(), child_nm_rem, init_and_disproof_remaining, remaining,
                                 init_and_disproof_path_dep, pos_key);
                             self.diag_in_path_exits += 1;
@@ -2722,6 +2681,7 @@ impl DfPnSolver {
                         child_pk, &child_hand, child_remaining,
                     )
                     .unwrap_or((0, false));
+                #[cfg(feature = "verbose")]
                 if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
                     let parent_nm_rem_preview = if is_path_dep { remaining } else { propagate_nm_remaining(child_nm_rem, remaining) };
                     eprintln!("[exit_diag] ply={} init_and_disproof: child_move={} child_nm_rem={} parent_nm_rem={} remaining={} path_dep={} pk={:#x}",
@@ -2737,7 +2697,7 @@ impl DfPnSolver {
                 };
                 #[cfg(feature = "tt_diag")]
                 if ply == self.diag_ply && self.diag_in_path_exits < 10 {
-                    eprintln!("[tt_diag] ply={} init AND disproof: move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
+                    verbose_eprintln!("[tt_diag] ply={} init AND disproof: move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
                         ply, m.to_usi(), child_nm_rem, parent_nm_remaining, remaining, is_path_dep, pos_key);
                     self.diag_in_path_exits += 1;
                 }
@@ -2761,7 +2721,7 @@ impl DfPnSolver {
                         if self.diag_init_and_disproof_exits <= 5
                             || (ply == self.diag_ply && (visit_count % 1000000 == 0))
                         {
-                            eprintln!(
+                            verbose_eprintln!(
                                 "[tt_diag] WARNING: non-chain init AND disproof verification FAILED: \
                                  ply={} visit={} pos_key={:#x} hand={:?} stored dn=0 path_dep={} rem={} \
                                  but lookup(rem={}) returns pn={} dn={}",
@@ -2842,7 +2802,7 @@ impl DfPnSolver {
         if or_node && children.is_empty() {
             // Diagnostic: detect OR all-children-disproved at stuck position
             if pos_key == 0xf8322787b7535d9c || (ply == 26 && self.nodes_searched % 1_000_000 < 5 && self.nodes_searched > 200_000) {
-                eprintln!("[or_all_disproved] ply={} pk={:#x} moves={} init_or_nm_min_rem={} remaining={} path_dep={}",
+                verbose_eprintln!("[or_all_disproved] ply={} pk={:#x} moves={} init_or_nm_min_rem={} remaining={} path_dep={}",
                     ply, pos_key, moves.len(), init_or_nm_min_remaining, remaining, init_or_path_dep);
             }
             // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
@@ -2924,7 +2884,7 @@ impl DfPnSolver {
                     if self.diag_init_and_disproof_exits <= 5
                         || (ply == self.diag_ply && (visit_count % 1000000 == 0))
                     {
-                        eprintln!(
+                        verbose_eprintln!(
                             "[tt_diag] WARNING: deferred init AND disproof verification FAILED: \
                              ply={} visit={} pos_key={:#x} hand={:?} stored dn=0 path_dep={} rem={} \
                              but lookup(rem={}) returns pn={} dn={}",
@@ -2990,7 +2950,7 @@ impl DfPnSolver {
         {
             let init_elapsed = _init_start.elapsed().as_secs_f64();
             if init_elapsed > 1.0 {
-                eprintln!("[init_slow] ply={} or={} moves={} children={} init_time={:.2}s",
+                verbose_eprintln!("[init_slow] ply={} or={} moves={} children={} init_time={:.2}s",
                     ply, or_node, moves.len(), children.len(), init_elapsed);
             }
         }
@@ -2999,7 +2959,7 @@ impl DfPnSolver {
         // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
         // 親の閾値をそのまま渡して直接再帰する．
         if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-            eprintln!("[exit_diag] ply={} REACHED_MAIN_LOOP: children={} remaining={} or={}",
+            verbose_eprintln!("[exit_diag] ply={} REACHED_MAIN_LOOP: children={} remaining={} or={}",
                 ply, children.len(), remaining, or_node);
         }
         // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
@@ -3014,7 +2974,7 @@ impl DfPnSolver {
             loop {
                 _sc_iter += 1;
                 if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
-                    eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
+                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
                         ply, or_node, _sc_iter, self.nodes_searched,
                         self.start_time.elapsed().as_secs_f64(), m.to_usi());
                 }
@@ -3113,7 +3073,7 @@ impl DfPnSolver {
         let mut _diag_iteration: u32 = 0;
         #[cfg(feature = "tt_diag")]
         if _diag_this_node && self.diag_ply_visits[ply as usize] <= 2 {
-            eprintln!(
+            verbose_eprintln!(
                 "[tt_diag] === ply={} {} node entered (visit #{}) === \
                  pos_key={:#x} children={} pn_th={} dn_th={} \
                  tt_pn={} tt_dn={} nodes={}",
@@ -3128,7 +3088,7 @@ impl DfPnSolver {
             for (i, &(ref cm, _, cpk, ref ch)) in children.iter().enumerate() {
                 let (cpn, cdn, _) = self.look_up_pn_dn(
                     cpk, ch, remaining.saturating_sub(1));
-                eprintln!(
+                verbose_eprintln!(
                     "[tt_diag]   child[{}] move={} drop={} pn={} dn={} pos_key={:#x}",
                     i, cm.to_usi(), cm.is_drop(), cpn, cdn, cpk,
                 );
@@ -3136,8 +3096,11 @@ impl DfPnSolver {
         }
 
         // MID ループ(証明駒/反証駒の伝播を含む)
+        #[cfg(feature = "verbose")]
         let mut _loop_iter: u64 = 0;
+        #[cfg(feature = "verbose")]
         let _loop_start_nodes = self.nodes_searched;
+        #[cfg(feature = "verbose")]
         let mut _next_diag_nodes = self.nodes_searched.saturating_add(1_000_000);
         // 停滞検出: 子 mid() が消費するノード数が0(閾値で即座に返る)の
         // 連続回数を追跡．一定回数以上ゼロ進捗が続けば MID ループを脱出し，
@@ -3157,11 +3120,13 @@ impl DfPnSolver {
         let mut stagnation_count: u32 = 0;
         const STAGNATION_LIMIT: u32 = 4;
         loop {
-            _loop_iter += 1;
+            #[cfg(feature = "verbose")]
+            { _loop_iter += 1; }
             if (ply as usize) < 64 {
                 self.ply_iters[ply as usize] += 1;
             }
             // ply=0 は 100K ごと，それ以外は 1M ごとに詳細診断
+            #[cfg(feature = "verbose")]
             if self.nodes_searched >= _next_diag_nodes {
                 let consumed = self.nodes_searched - _loop_start_nodes;
                 eprintln!("[mid_diag] ply={} or={} consumed={}K iter={} children={} time={:.1}s pn_th={} dn_th={}",
@@ -3207,7 +3172,7 @@ impl DfPnSolver {
             // TCA: OR ノードでのループ子ノード数
             let mut loop_child_count: u32 = 0;
             // OR NM remaining 伝播: 全子 NM の remaining の最小値を追跡
-            let mut or_nm_min_remaining: u16 = REMAINING_INFINITE;
+            let mut or_nm_min_remaining: u16;
 
             if or_node {
                 // OR ノード: min(pn), sum(dn)
@@ -3643,7 +3608,7 @@ impl DfPnSolver {
                 { self.diag_loop_break_threshold += 1; }
                 #[cfg(feature = "tt_diag")]
                 if _diag_this_node && _diag_iteration <= 2 {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[tt_diag] ply={} loop break: iter={} pn={}/{} dn={}/{} children={} best={}",
                         ply, _diag_iteration,
                         current_pn, eff_pn_th,
@@ -3775,7 +3740,7 @@ impl DfPnSolver {
                     if self.diag_max_iterations > 0
                         && _diag_iteration > self.diag_max_iterations
                     {
-                        eprintln!(
+                        verbose_eprintln!(
                             "[tt_diag] ply={} iteration limit reached ({}), \
                              tt_pos={} tt_ent={} current_pn={} current_dn={}",
                             ply, self.diag_max_iterations,
@@ -3950,7 +3915,7 @@ impl DfPnSolver {
                     &children[best_idx].3,
                     remaining.saturating_sub(1),
                 );
-                eprintln!(
+                verbose_eprintln!(
                     "[tt_diag] ply={} move={} node={} \
                      pn_th={} dn_th={} \
                      child_pn={} child_dn={} \
@@ -3972,6 +3937,7 @@ impl DfPnSolver {
                 board.undo_move(m, captured));
 
             // ply=0 の mid() 呼び出しごとの消費ノード追跡
+            #[cfg(feature = "verbose")]
             if ply == 0 {
                 let child_nodes = self.nodes_searched - _pre_mid_nodes;
                 if child_nodes >= 1_000 {
@@ -4011,8 +3977,6 @@ impl DfPnSolver {
                 }
             }
 
-            // (effort tracking は self.or_effort に蓄積済み．
-            // 次のループ反復で effort ペナルティが選択に反映される．)
         }
 
         // パスから除去
@@ -4299,6 +4263,7 @@ impl DfPnSolver {
     ///
     /// 証明された合駒は `deferred_children` から除去し，
     /// `and_proof` に証明駒を蓄積する．
+    #[allow(dead_code)]
     #[inline(never)]
     fn cross_deduce_deferred(
         &mut self,
@@ -4459,6 +4424,7 @@ impl DfPnSolver {
         // 合駒を実行し，攻方の捕獲手を探索
         let captured_by_block = board.do_move(solved_move);
         let legal = movegen::generate_legal_moves(board);
+        #[cfg(feature = "tt_diag")]
         let mut cross_count: u64 = 0;
 
         for cap_mv in legal.iter().filter(|mv| {
@@ -4522,7 +4488,8 @@ impl DfPnSolver {
                         *child_pk_j, or_ph, 0, INF,
                         remaining.saturating_sub(1), *child_pk_j,
                     );
-                    cross_count += 1;
+                    #[cfg(feature = "tt_diag")]
+                    { cross_count += 1; }
                 }
             }
         }
@@ -5517,7 +5484,7 @@ impl DfPnSolver {
         // スタックオーバーフロー防止: 探索手数の2倍を再帰深度の上限とする
         if ply >= self.depth.saturating_mul(2) {
             if diag {
-                eprintln!("[PV diag] ply={} depth_limit reached (max={})", ply, self.depth.saturating_mul(2));
+                verbose_eprintln!("[PV diag] ply={} depth_limit reached (max={})", ply, self.depth.saturating_mul(2));
             }
             return Vec::new();
         }
@@ -5526,7 +5493,7 @@ impl DfPnSolver {
         // ループ検出(フルハッシュ)
         if visited.contains(&full_hash) {
             if diag {
-                eprintln!("[PV diag] ply={} loop detected hash={:#x}", ply, full_hash);
+                verbose_eprintln!("[PV diag] ply={} loop detected hash={:#x}", ply, full_hash);
             }
             return Vec::new();
         }
@@ -5536,7 +5503,7 @@ impl DfPnSolver {
         if or_node {
             if node_pn != 0 {
                 if diag {
-                    eprintln!("[PV diag] ply={} OR node unproven pn={}", ply, node_pn);
+                    verbose_eprintln!("[PV diag] ply={} OR node unproven pn={}", ply, node_pn);
                 }
                 return Vec::new();
             }
@@ -5544,13 +5511,13 @@ impl DfPnSolver {
             let moves = self.generate_check_moves(board);
             if moves.is_empty() {
                 if diag {
-                    eprintln!("[PV diag] ply={} OR node no check moves", ply);
+                    verbose_eprintln!("[PV diag] ply={} OR node no check moves", ply);
                 }
                 return Vec::new();
             }
 
             if diag {
-                eprintln!("[PV diag] ply={} OR node, {} check moves", ply, moves.len());
+                verbose_eprintln!("[PV diag] ply={} OR node, {} check moves", ply, moves.len());
             }
 
             let mut best_pv: Option<Vec<Move>> = None;
@@ -5576,7 +5543,7 @@ impl DfPnSolver {
                     // (攻め方の手で始まり攻め方の手で終わる)
                     if total_len % 2 == 0 && !sub_pv.is_empty() {
                         if diag {
-                            eprintln!(
+                            verbose_eprintln!(
                                 "[PV diag] ply={} OR skip {} (even len={}, sub={})",
                                 ply, m.to_usi(), total_len, sub_pv.len()
                             );
@@ -5590,7 +5557,7 @@ impl DfPnSolver {
                     };
 
                     if diag {
-                        eprintln!(
+                        verbose_eprintln!(
                             "[PV diag] ply={} OR candidate {} len={} better={}{}",
                             ply, m.to_usi(), total_len, is_better,
                             if let Some(prev) = &best_pv {
@@ -5607,7 +5574,7 @@ impl DfPnSolver {
                         best_pv = Some(pv);
                     }
                 } else if diag {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[PV diag] ply={} OR child {} unproven pn={}",
                         ply, m.to_usi(), child_pn
                     );
@@ -5616,6 +5583,7 @@ impl DfPnSolver {
                 board.undo_move(*m, captured);
             }
 
+            #[cfg(feature = "verbose")]
             if diag {
                 if let Some(ref pv) = best_pv {
                     eprintln!(
@@ -5634,13 +5602,13 @@ impl DfPnSolver {
             let moves = self.generate_defense_moves(board);
             if moves.is_empty() {
                 if diag {
-                    eprintln!("[PV diag] ply={} AND node no defense (checkmate)", ply);
+                    verbose_eprintln!("[PV diag] ply={} AND node no defense (checkmate)", ply);
                 }
                 return Vec::new();
             }
 
             if diag {
-                eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
+                verbose_eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
             }
 
             let mut best_pv: Option<Vec<Move>> = None;
@@ -5668,7 +5636,7 @@ impl DfPnSolver {
                     // (玉方の手で始まり攻め方の手で終わる)
                     if total_len % 2 == 1 {
                         if diag {
-                            eprintln!(
+                            verbose_eprintln!(
                                 "[PV diag] ply={} AND skip {} (odd len={}, sub={})",
                                 ply, m.to_usi(), total_len, sub_pv.len()
                             );
@@ -5705,7 +5673,7 @@ impl DfPnSolver {
                     };
 
                     if diag {
-                        eprintln!(
+                        verbose_eprintln!(
                             "[PV diag] ply={} AND candidate {} len={} capture={} drop={} better={}{}",
                             ply, m.to_usi(), total_len, is_capture, is_drop, is_better,
                             if let Some(prev) = &best_pv {
@@ -5724,7 +5692,7 @@ impl DfPnSolver {
                         best_is_drop = is_drop;
                     }
                 } else if diag {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[PV diag] ply={} AND child {} unproven pn={}",
                         ply, m.to_usi(), child_pn
                     );
@@ -5733,6 +5701,7 @@ impl DfPnSolver {
                 board.undo_move(*m, captured);
             }
 
+            #[cfg(feature = "verbose")]
             if diag {
                 if let Some(ref pv) = best_pv {
                     eprintln!(
@@ -5808,11 +5777,11 @@ impl DfPnSolver {
             self.path.clear();
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-            eprintln!("[ids] depth={}/{} root_pn={} nodes={} time={:.1}s",
+            verbose_eprintln!("[ids] depth={}/{} root_pn={} nodes={} time={:.1}s",
                 ids_depth, saved_depth, root_pn, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn == 0 {
-                eprintln!("[ids] root proved, break");
+                verbose_eprintln!("[ids] root proved, break");
                 break;
             }
             let _budget = if ids_depth < saved_depth {
@@ -5848,16 +5817,12 @@ impl DfPnSolver {
                     && self.nodes_searched < self.max_nodes
                     && !self.timed_out
                 {
-                    // IDS iteration ごとに or_effort をリセット．
-                    // 前の depth の TT pn が stale になるため，
-                    // depth ジャンプ後は全ての子がフレッシュに再評価される必要がある．
-                    self.or_effort.clear();
-                    eprintln!("[ids] calling MID: depth={} root_pn={} root_dn={} nodes={}",
+                    verbose_eprintln!("[ids] calling MID: depth={} root_pn={} root_dn={} nodes={}",
                         ids_depth, root_pn, root_dn, self.nodes_searched);
                     #[cfg(feature = "profile")]
                     let _mid_wall_start = Instant::now();
                     self.mid(board, INF - 1, INF - 1, 0, true);
-                    eprintln!("[ids] MID returned: depth={} nodes={} time={:.1}s",
+                    verbose_eprintln!("[ids] MID returned: depth={} nodes={} time={:.1}s",
                         ids_depth, self.nodes_searched, self.start_time.elapsed().as_secs_f64());
                     #[cfg(feature = "profile")]
                     {
@@ -5877,7 +5842,7 @@ impl DfPnSolver {
                 let d_pf_skip = self.diag_prefilter_skip_remaining - prev_prefilter_skip;
                 let d_pf_miss = self.diag_prefilter_miss - prev_prefilter_miss;
                 let ids_elapsed = self.start_time.elapsed().as_secs_f64();
-                eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={} max_ply={} \
+                verbose_eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={} max_ply={} \
                     prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} act={} \
                     cap_tt={}/{} thr_exits={} term_exits={} in_path={} lb_prov={} lb_thr={} lb_nodes={} \
                     init_and_dis={} single_ch={} node_lim={} time={:.2}s",
@@ -5906,7 +5871,7 @@ impl DfPnSolver {
                     }
                 }
                 if !ply_str.is_empty() {
-                    eprintln!("[ids_diag] ply_visits: {}", ply_str);
+                    verbose_eprintln!("[ids_diag] ply_visits: {}", ply_str);
                 }
                 // single-child counter (repurposed diag_ply_proofs)
                 let mut sc_str = String::new();
@@ -5917,7 +5882,7 @@ impl DfPnSolver {
                     }
                 }
                 if !sc_str.is_empty() {
-                    eprintln!("[ids_diag] single_child: {}", sc_str);
+                    verbose_eprintln!("[ids_diag] single_child: {}", sc_str);
                 }
                 // リセット
                 self.diag_ply_visits = [0u64; 64];
@@ -5940,11 +5905,11 @@ impl DfPnSolver {
                 prev_prefilter_miss = self.diag_prefilter_miss;
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-            eprintln!("[ids] after MID: depth={} root_pn={} root_dn={} nodes={} time={:.1}s",
+            verbose_eprintln!("[ids] after MID: depth={} root_pn={} root_dn={} nodes={} time={:.1}s",
                 ids_depth, root_pn2, root_dn2, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
-                eprintln!("[ids] proved at depth={}, break", ids_depth);
+                verbose_eprintln!("[ids] proved at depth={}, break", ids_depth);
                 break;
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
@@ -5959,10 +5924,10 @@ impl DfPnSolver {
             // これを真の不詰と判定すると偽陽性が発生する(例: 39手詰め)．
             if root_dn2 == 0 {
                 let root_nm_rem = self.table.get_disproof_remaining(pk, &att_hand);
-                eprintln!("[ids] NM: depth={} nm_rem={} REMAINING_INFINITE={}",
+                verbose_eprintln!("[ids] NM: depth={} nm_rem={} REMAINING_INFINITE={}",
                     ids_depth, root_nm_rem, REMAINING_INFINITE);
                 if root_nm_rem == REMAINING_INFINITE {
-                    eprintln!("[ids] NM INFINITE, break");
+                    verbose_eprintln!("[ids] NM INFINITE, break");
                     break;
                 }
                 let checks = self.generate_check_moves(board);
@@ -5971,9 +5936,9 @@ impl DfPnSolver {
                 } else {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
-                eprintln!("[ids] refutable={} checks={}", refutable, checks.len());
+                verbose_eprintln!("[ids] refutable={} checks={}", refutable, checks.len());
                 if checks.is_empty() || refutable {
-                    eprintln!("[ids] NM promoted to INFINITE, break");
+                    verbose_eprintln!("[ids] NM promoted to INFINITE, break");
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
                         pk, att_hand, INF, 0, REMAINING_INFINITE, pk,
@@ -6152,7 +6117,6 @@ impl DfPnSolver {
                         }
 
                         let and_remaining = arena[ci].remaining;
-                        let att_hand = arena[ci].hand;
                         let mut and_proof = [0u8; HAND_KINDS];
 
                         let mut activated_unproven = false;
@@ -6184,7 +6148,7 @@ impl DfPnSolver {
                                     #[cfg(feature = "tt_diag")]
                                     {
                                         self.diag_pns_deferred_already_proven += 1;
-                                        eprintln!(
+                                        verbose_eprintln!(
                                             "[pns_seq]   prefilter hit for {} → proven",
                                             next_drop.to_usi(),
                                         );
@@ -6338,7 +6302,7 @@ impl DfPnSolver {
             let root_pn = arena[0].pn;
             let root_dn = arena[0].dn;
             let pns_elapsed = self.start_time.elapsed().as_secs_f64();
-            eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
+            verbose_eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
                 arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
                 self.table.len(), pns_elapsed);
         }
@@ -6709,7 +6673,7 @@ impl DfPnSolver {
         }
         if !node.expanded || node.children.is_empty() {
             // リーフ: TT/ヒューリスティックから取得した pn=0
-            eprintln!("  PNS leaf proven: idx={}, or={}, pk={:#x}, move={}",
+            verbose_eprintln!("  PNS leaf proven: idx={}, or={}, pk={:#x}, move={}",
                 idx, node.or_node, node.pos_key,
                 if idx == 0 { "root".to_string() } else { node.move_from_parent.to_usi() });
             return;
@@ -6726,11 +6690,14 @@ impl DfPnSolver {
                         ch.move_from_parent.to_usi(), ch.pn, ch.dn, ch.or_node, ch.expanded)
                 }).collect::<Vec<_>>());
             // 証明された子を表示
-            let proven_child = node.children.iter()
-                .find(|&&c| arena[c as usize].pn == 0).unwrap();
-            eprintln!("  PNS OR proven: idx={}, pk={:#x}, best_child={} ({})",
-                idx, node.pos_key, proven_child,
-                arena[*proven_child as usize].move_from_parent.to_usi());
+            #[cfg(feature = "verbose")]
+            {
+                let proven_child = node.children.iter()
+                    .find(|&&c| arena[c as usize].pn == 0).unwrap();
+                eprintln!("  PNS OR proven: idx={}, pk={:#x}, best_child={} ({})",
+                    idx, node.pos_key, proven_child,
+                    arena[*proven_child as usize].move_from_parent.to_usi());
+            }
             // 再帰: 証明された子のみ
             for &c in &node.children {
                 if arena[c as usize].pn == 0 {
@@ -6738,7 +6705,7 @@ impl DfPnSolver {
                 }
             }
         } else {
-            eprintln!("  PNS AND proven: idx={}, pk={:#x}, move={}, {} children",
+            verbose_eprintln!("  PNS AND proven: idx={}, pk={:#x}, move={}, {} children",
                 idx, node.pos_key, node.move_from_parent.to_usi(), node.children.len());
             // AND: 全子が pn=0
             for &c in &node.children {
@@ -7827,7 +7794,10 @@ mod tests {
     ///
     /// 深さ制限時の TT 保存バグの回帰テスト．
     /// PieceType::MAX_HAND_COUNT で保存すると不詰として誤判定されていた．
+    /// デバッグビルド(opt-level=0)ではノード/時間制限を超過するため #[ignore]．
+    /// `cargo test --release` または opt-level >= 1 で実行すること．
     #[test]
+    #[ignore]
     fn test_tsume_6_29te() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         let mut board = Board::new();
@@ -7842,15 +7812,15 @@ mod tests {
                 nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("=== tsume6 result: {} moves, {} nodes, prefilter_hits={} ===",
+                verbose_eprintln!("=== tsume6 result: {} moves, {} nodes, prefilter_hits={} ===",
                     pv.len(), nodes_searched, solver.prefilter_hits);
-                eprintln!("PV: {}", pv.join(" "));
+                verbose_eprintln!("PV: {}", pv.join(" "));
 
                 // 診断PV抽出は完了後のみ実行(Phase 2 後は TT が巨大化するため省略)
 
                 // 8i7g が含まれているか確認 — 27手詰めになるバグの診断
                 if let Some(pos) = pv.iter().position(|m| m == "8i7g") {
-                    eprintln!("WARNING: 8i7g found at ply {} — this leads to 27-move mate, not 29", pos);
+                    verbose_eprintln!("WARNING: 8i7g found at ply {} — this leads to 27-move mate, not 29", pos);
                 }
 
                 assert_eq!(
@@ -7940,20 +7910,20 @@ mod tests {
         let pk = position_key(&board);
         let att_hand = board.hand[solver.attacker.index()];
         let (root_pn, _, _) = solver.look_up_pn_dn(pk, &att_hand, 31);
-        eprintln!("[no_pns] root_pn={} nodes={} time={:.1}s",
+        verbose_eprintln!("[no_pns] root_pn={} nodes={} time={:.1}s",
             root_pn, solver.nodes_searched, solver.start_time.elapsed().as_secs_f64());
 
         if root_pn == 0 {
             let pv = solver.extract_pv_limited(&mut board, 10_000);
             let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
-            eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
+            verbose_eprintln!("[no_pns] PV ({} moves): {}", pv_usi.len(), pv_usi.join(" "));
             assert_eq!(pv_usi.len(), 29, "expected 29-move PV, got {} moves", pv_usi.len());
         } else {
-            eprintln!("[no_pns] NOT PROVED: rpn={} nodes={}", root_pn, solver.nodes_searched);
+            verbose_eprintln!("[no_pns] NOT PROVED: rpn={} nodes={}", root_pn, solver.nodes_searched);
         }
 
         // ply 別効率レポート(解決・未解決共通)
-        eprintln!("\n[efficiency] {:>3} {:>10} {:>12} {:>8} {:>8}",
+        verbose_eprintln!("\n[efficiency] {:>3} {:>10} {:>12} {:>8} {:>8}",
             "ply", "nodes", "iters", "n/iter", "stag");
         for p in 0..64 {
             let n = solver.ply_nodes[p];
@@ -7961,13 +7931,14 @@ mod tests {
             let stag = solver.ply_stag_penalties[p];
             if n > 0 || it > 0 {
                 let ratio = if it > 0 { n as f64 / it as f64 } else { 0.0 };
-                eprintln!("[efficiency] {:>3} {:>10} {:>12} {:>8.1} {:>8}",
+                verbose_eprintln!("[efficiency] {:>3} {:>10} {:>12} {:>8.1} {:>8}",
                     p, n, it, ratio, stag);
             }
         }
-        eprintln!();
+        verbose_eprintln!();
 
         // TT コンテンツ分析
+        #[cfg(feature = "verbose")]
         solver.table.dump_content_analysis();
 
         if root_pn != 0 {
@@ -8007,19 +7978,19 @@ mod tests {
 
             match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} SOLVED {}te, {} nodes",
                         start_ply, pv_moves[start_ply], moves.len(), nodes_searched
                     );
                 }
                 TsumeResult::Unknown { nodes_searched } => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} FAILED ({} nodes)",
                         start_ply, pv_moves[start_ply], nodes_searched
                     );
                 }
                 other => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} {:?}",
                         start_ply, pv_moves[start_ply], other
                     );
@@ -8042,7 +8013,7 @@ mod tests {
 
         // Generate all defense moves at ply 1
         let defenses = movegen::generate_legal_moves(&mut board);
-        eprintln!("[ply1_analysis] {} defense moves after S*7i", defenses.len());
+        verbose_eprintln!("[ply1_analysis] {} defense moves after S*7i", defenses.len());
 
         for def in &defenses {
             let cap = board.do_move(*def);
@@ -8051,25 +8022,25 @@ mod tests {
             let result = solver.solve(&mut board);
             match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} CHECKMATE {}te, {} nodes",
                         def.to_usi(), moves.len(), nodes_searched
                     );
                 }
                 TsumeResult::NoCheckmate { nodes_searched } => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} NO_CHECKMATE (refuted), {} nodes",
                         def.to_usi(), nodes_searched
                     );
                 }
                 TsumeResult::Unknown { nodes_searched } => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} UNKNOWN (stuck), {} nodes",
                         def.to_usi(), nodes_searched
                     );
                 }
                 other => {
-                    eprintln!(
+                    verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} {:?}",
                         def.to_usi(), other
                     );
@@ -8462,13 +8433,13 @@ mod tests {
         let start = Instant::now();
         let result = solver.solve(&mut board);
         let elapsed = start.elapsed();
-        eprintln!("39te: {} nodes, {:.1}s, max_ply={}, prefilter_hits={}",
+        verbose_eprintln!("39te: {} nodes, {:.1}s, max_ply={}, prefilter_hits={}",
             solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply,
             solver.prefilter_hits);
         #[cfg(feature = "profile")]
         {
             solver.sync_tt_profile();
-            eprintln!("{}", solver.profile_stats);
+            verbose_eprintln!("{}", solver.profile_stats);
         }
 
         match &result {
@@ -8538,7 +8509,7 @@ mod tests {
         let (root_pn, _root_dn) = solver.look_up_board(&board);
         let start = Instant::now();
         let elapsed = start.elapsed();
-        eprintln!("39te_direct_mid: {} nodes, {:.1}s, max_ply={}, prefilter={}  pn={}",
+        verbose_eprintln!("39te_direct_mid: {} nodes, {:.1}s, max_ply={}, prefilter={}  pn={}",
             solver.nodes_searched, solver.start_time.elapsed().as_secs_f64(),
             solver.max_ply, solver.prefilter_hits, root_pn);
         assert_eq!(root_pn, 0, "expected pn=0 (proved) for 39te direct MID");
@@ -8564,10 +8535,10 @@ mod tests {
             "2g2h", "3i4i", "2h4h",
         ];
 
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" 39手詰めサブ問題予算推定実験(終盤→序盤)");
-        eprintln!("{}", "=".repeat(80));
-        eprintln!("{:<6} {:<14} {:<10} {:<10} {:<12} {}",
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" 39手詰めサブ問題予算推定実験(終盤→序盤)");
+        verbose_eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("{:<6} {:<14} {:<10} {:<10} {:<12} {}",
             "Ply", "Nodes", "Time(s)", "MaxPly", "Result", "Remaining");
 
         // PV を偶数手ずつ進めた局面(攻め番=ORノード)を全て事前構築
@@ -8615,15 +8586,15 @@ mod tests {
                     ("Unknown".to_string(), false),
             };
 
-            eprintln!("{:<6} {:<14} {:<10.2} {:<10} {:<12} {}手",
+            verbose_eprintln!("{:<6} {:<14} {:<10.2} {:<10} {:<12} {}手",
                 ply, solver.nodes_searched, elapsed.as_secs_f64(),
                 solver.max_ply, result_str, remaining_moves);
 
             // 解けなくなったら局面のSFENを出力して停止
             if !solved {
-                eprintln!("--- ply {} で未解決 ---", ply);
-                eprintln!("  SFEN: {}", pos.sfen());
-                eprintln!("  PV残り: {:?}", &pv_usi[*ply..]);
+                verbose_eprintln!("--- ply {} で未解決 ---", ply);
+                verbose_eprintln!("  SFEN: {}", pos.sfen());
+                verbose_eprintln!("  PV残り: {:?}", &pv_usi[*ply..]);
 
                 // 深さを大きくして再試行
                 for &d in &[25u32, 31, 41, 51] {
@@ -8648,20 +8619,20 @@ mod tests {
                             "Unknown".to_string(),
                     };
 
-                    eprintln!("  depth={:<4} {:<14} {:<10.2} {:<10} {}",
+                    verbose_eprintln!("  depth={:<4} {:<14} {:<10.2} {:<10} {}",
                         d, solver2.nodes_searched, elapsed2.as_secs_f64(),
                         solver2.max_ply, result_str2);
                 }
 
                 // 1手進めた局面(ply+1, 玉方手番=ANDノード)も試す
-                eprintln!("\n  --- ply {} (攻め手1手目 {} 適用後、玉方手番) ---", ply, pv_usi[*ply]);
+                verbose_eprintln!("\n  --- ply {} (攻め手1手目 {} 適用後、玉方手番) ---", ply, pv_usi[*ply]);
                 let mut after1 = pos.clone();
                 let m1 = after1.move_from_usi(pv_usi[*ply]).unwrap();
                 after1.do_move(m1);
-                eprintln!("  SFEN after {}: {}", pv_usi[*ply], after1.sfen());
+                verbose_eprintln!("  SFEN after {}: {}", pv_usi[*ply], after1.sfen());
 
                 // PV の最後の手から逆順に、1手ずつ戻って解けるポイントを探す
-                eprintln!("\n  --- 1手ずつ PV を遡り解ける境界を特定 ---");
+                verbose_eprintln!("\n  --- 1手ずつ PV を遡り解ける境界を特定 ---");
                 // ply+1 (玉方手番後) から ply+16 まで奇数手のみ(OR局面)
                 let mut walk_board = pos.clone();
                 for step in 0..remaining_moves {
@@ -8696,19 +8667,19 @@ mod tests {
                             "Unknown".to_string(),
                     };
 
-                    eprintln!("  ply{}+{} {:<14} {:<12} rem={}手 SFEN: {}",
+                    verbose_eprintln!("  ply{}+{} {:<14} {:<12} rem={}手 SFEN: {}",
                         ply, step + 1, sub_solver.nodes_searched, sub_result_str,
                         sub_remaining, walk_board.sfen());
                 }
 
                 // P*1g 後の局面(玉方手番)の合法手を全列挙
-                eprintln!("\n  --- P*1g 後の玉方応手分析 ---");
+                verbose_eprintln!("\n  --- P*1g 後の玉方応手分析 ---");
                 let mut after_drop = pos.clone();
                 let mv_drop = after_drop.move_from_usi("P*1g").unwrap();
                 after_drop.do_move(mv_drop);
 
                 let legal_moves = movegen::generate_legal_moves(&mut after_drop);
-                eprintln!("  合法手数: {}", legal_moves.len());
+                verbose_eprintln!("  合法手数: {}", legal_moves.len());
                 for lm in &legal_moves {
                     let mut after_resp = after_drop.clone();
                     after_resp.do_move(*lm);
@@ -8727,7 +8698,7 @@ mod tests {
                         TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                         TsumeResult::Unknown { .. } => "Unknown".to_string(),
                     };
-                    eprintln!("  {} {:<14} {}", lm.to_usi(), sub_solver.nodes_searched, sub_result_str);
+                    verbose_eprintln!("  {} {:<14} {}", lm.to_usi(), sub_solver.nodes_searched, sub_result_str);
                 }
 
                 // 直接診断: depth=19 で solve 後、TT 内のルートエントリをダンプ
@@ -8744,33 +8715,33 @@ mod tests {
                         TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                         TsumeResult::Unknown { .. } => "Unknown".to_string(),
                     };
-                    eprintln!("  depth=19 result: {} nodes={}", result_str, solver.nodes_searched);
+                    verbose_eprintln!("  depth=19 result: {} nodes={}", result_str, solver.nodes_searched);
 
                     // TT ルートの全エントリをダンプ
                     let pk = position_key(pos);
                     if let Some(entries) = solver.table.tt.get(&pk) {
-                        eprintln!("  TT entries for root (count={})", entries.len());
+                        verbose_eprintln!("  TT entries for root (count={})", entries.len());
                         for (i, e) in entries.iter().enumerate() {
-                            eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
+                            verbose_eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
                                 i, e.pn, e.dn, e.remaining, e.path_dependent,
                                 e.hand, e.source);
                         }
                     } else {
-                        eprintln!("  TT: no entries for root");
+                        verbose_eprintln!("  TT: no entries for root");
                     }
 
                     // remaining=0 vs remaining=19 の look_up 結果
                     let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0);
                     let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19);
-                    eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
-                    eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
+                    verbose_eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
+                    verbose_eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
                 }
 
                 break;
             }
         }
 
-        eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("{}", "=".repeat(80));
     }
 
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
@@ -8958,7 +8929,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: /tmp/tsume_39te_backward_1m.log");
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_1m.log");
     }
 
     /// 39手詰めの必要ノード数を推定する．
@@ -9316,7 +9287,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: {}", out_path);
+        verbose_eprintln!("結果: {}", out_path);
     }
 
     /// 39手詰め問題の必要予算を段階的に推定する．
@@ -9596,7 +9567,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: {}", out_path);
+        verbose_eprintln!("結果: {}", out_path);
     }
 
     /// ply 24 のノード数急増を診断する．
@@ -9762,7 +9733,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: /tmp/ply24_diagnostic.log");
+        verbose_eprintln!("結果: /tmp/ply24_diagnostic.log");
     }
 
     /// ply 24 TT共有効果の測定．
@@ -9905,7 +9876,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: /tmp/ply24_tt_sharing.log");
+        verbose_eprintln!("結果: /tmp/ply24_tt_sharing.log");
     }
 
     /// ply 22 偽証明: 最終局面の合駒生成と between_bb を診断．
@@ -9921,53 +9892,53 @@ mod tests {
         let defender = final_board.turn(); // White
         let attacker = defender.opponent(); // Black
         let king_sq = final_board.king_square(defender).unwrap();
-        eprintln!("King square: {:?} (col={}, row={})", king_sq, king_sq.col(), king_sq.row());
+        verbose_eprintln!("King square: {:?} (col={}, row={})", king_sq, king_sq.col(), king_sq.row());
 
         // compute_checkers_at
         let checkers = final_board.compute_checkers_at(king_sq, attacker);
-        eprintln!("Checkers: count={}", checkers.count());
+        verbose_eprintln!("Checkers: count={}", checkers.count());
         for sq in checkers {
-            eprintln!("  checker at {:?} (col={}, row={})", sq, sq.col(), sq.row());
+            verbose_eprintln!("  checker at {:?} (col={}, row={})", sq, sq.col(), sq.row());
         }
 
         // find_sliding_checker
         let mut solver = DfPnSolver::default_solver();
         let sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
-        eprintln!("find_sliding_checker: {:?}", sliding.map(|s| format!("col={}, row={}", s.col(), s.row())));
+        verbose_eprintln!("find_sliding_checker: {:?}", sliding.map(|s| format!("col={}, row={}", s.col(), s.row())));
 
         // checker_sq
         let checker_sq = checkers.lsb().unwrap();
 
         // between_bb
         let between = attack::between_bb(checker_sq, king_sq);
-        eprintln!("between_bb({:?}, {:?}): count={}", checker_sq, king_sq, between.count());
+        verbose_eprintln!("between_bb({:?}, {:?}): count={}", checker_sq, king_sq, between.count());
         for sq in between {
-            eprintln!("  between: col={}, row={}", sq.col(), sq.row());
+            verbose_eprintln!("  between: col={}, row={}", sq.col(), sq.row());
         }
 
         // compute_futile_and_chain_squares
         let (futile, chain) = solver.compute_futile_and_chain_squares(
             &final_board, &between, king_sq, checker_sq, defender, attacker,
         );
-        eprintln!("futile: count={}", futile.count());
+        verbose_eprintln!("futile: count={}", futile.count());
         for sq in futile {
-            eprintln!("  futile: col={}, row={}", sq.col(), sq.row());
+            verbose_eprintln!("  futile: col={}, row={}", sq.col(), sq.row());
         }
-        eprintln!("chain: count={}", chain.count());
+        verbose_eprintln!("chain: count={}", chain.count());
         for sq in chain {
-            eprintln!("  chain: col={}, row={}", sq.col(), sq.row());
+            verbose_eprintln!("  chain: col={}, row={}", sq.col(), sq.row());
         }
 
         // generate_defense_moves
         let defenses = solver.generate_defense_moves(&mut final_board);
-        eprintln!("generate_defense_moves: {} moves", defenses.len());
+        verbose_eprintln!("generate_defense_moves: {} moves", defenses.len());
         for d in &defenses {
-            eprintln!("  {}", d.to_usi());
+            verbose_eprintln!("  {}", d.to_usi());
         }
 
         // 比較: generate_legal_moves
         let legal = movegen::generate_legal_moves(&mut final_board);
-        eprintln!("generate_legal_moves: {} moves", legal.len());
+        verbose_eprintln!("generate_legal_moves: {} moves", legal.len());
 
         // between_bb が空なら合駒生成がスキップされる → バグの原因
         assert!(
@@ -10178,13 +10149,13 @@ mod tests {
         }
 
         let ply22_sfen = board.sfen();
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" Ply 22 OR node breakdown (残り17手, PV: P*1g)");
-        eprintln!(" SFEN: {}", ply22_sfen);
-        eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" Ply 22 OR node breakdown (残り17手, PV: P*1g)");
+        verbose_eprintln!(" SFEN: {}", ply22_sfen);
+        verbose_eprintln!("{}", "=".repeat(80));
 
         // 1. まず全体を depth=19 で解いてみる
-        eprintln!("\n--- 全体 solve (depth=19, 1M nodes) ---");
+        verbose_eprintln!("\n--- 全体 solve (depth=19, 1M nodes) ---");
         {
             let mut b = board.clone();
             let mut solver = DfPnSolver::with_timeout(19, 1_000_000, 32767, 180);
@@ -10198,12 +10169,12 @@ mod tests {
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 _ => "Other".to_string(),
             };
-            eprintln!("  depth=19: {} nodes={} time={:.2}s max_ply={}",
+            verbose_eprintln!("  depth=19: {} nodes={} time={:.2}s max_ply={}",
                 result_str, solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply);
         }
 
         // 2. depth を変えて解いてみる
-        eprintln!("\n--- depth 別 solve (1M nodes) ---");
+        verbose_eprintln!("\n--- depth 別 solve (1M nodes) ---");
         for depth in [17u32, 19, 21, 23, 25, 31, 41] {
             let mut b = board.clone();
             let mut solver = DfPnSolver::with_timeout(depth, 1_000_000, 32767, 180);
@@ -10217,15 +10188,15 @@ mod tests {
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 _ => "Other".to_string(),
             };
-            eprintln!("  depth={:<4} {} nodes={:<10} time={:.2}s max_ply={}",
+            verbose_eprintln!("  depth={:<4} {} nodes={:<10} time={:.2}s max_ply={}",
                 depth, result_str, solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply);
         }
 
         // 3. check_moves の一覧と個別探索
-        eprintln!("\n--- 王手一覧と個別探索 (depth=17, 250K nodes each) ---");
+        verbose_eprintln!("\n--- 王手一覧と個別探索 (depth=17, 250K nodes each) ---");
         let check_solver = DfPnSolver::default_solver();
         let check_moves = check_solver.generate_check_moves(&mut board);
-        eprintln!("  王手数: {}", check_moves.len());
+        verbose_eprintln!("  王手数: {}", check_moves.len());
 
         // brute-force でも確認
         let brute_checks: Vec<String> = movegen::generate_legal_moves(&mut board)
@@ -10238,9 +10209,9 @@ mod tests {
             })
             .map(|m| m.to_usi())
             .collect();
-        eprintln!("  brute-force 王手数: {}", brute_checks.len());
+        verbose_eprintln!("  brute-force 王手数: {}", brute_checks.len());
 
-        eprintln!("  {:<12} {:<14} {:<10} {:<10} {}",
+        verbose_eprintln!("  {:<12} {:<14} {:<10} {:<10} {}",
             "Move", "Nodes", "Time(s)", "MaxPly", "Result");
         for cm in &check_moves {
             let mut after = board.clone();
@@ -10261,13 +10232,13 @@ mod tests {
                 _ => "Other".to_string(),
             };
             let marker = if cm.to_usi() == "P*1g" { " ← PV" } else { "" };
-            eprintln!("  {:<12} {:<14} {:<10.2} {:<10} {}{}",
+            verbose_eprintln!("  {:<12} {:<14} {:<10.2} {:<10} {}{}",
                 cm.to_usi(), solver.nodes_searched, elapsed.as_secs_f64(),
                 solver.max_ply, result_str, marker);
         }
 
         // 4. P*1g に注目: depth を変えて解く
-        eprintln!("\n--- P*1g 単体 depth 別 (1M nodes) ---");
+        verbose_eprintln!("\n--- P*1g 単体 depth 別 (1M nodes) ---");
         let pawn_drop = board.move_from_usi("P*1g").unwrap();
         let mut after_pg = board.clone();
         after_pg.do_move(pawn_drop);
@@ -10285,29 +10256,29 @@ mod tests {
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 _ => "Other".to_string(),
             };
-            eprintln!("  depth={:<4} {} nodes={:<10} time={:.2}s max_ply={}",
+            verbose_eprintln!("  depth={:<4} {} nodes={:<10} time={:.2}s max_ply={}",
                 depth, result_str, solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply);
         }
 
         // 5. all_checks_refutable_recursive のバグ確認
         // P*1g 後の各応手について，次の王手の有無を確認
-        eprintln!("\n--- all_checks_refutable analysis for P*1g ---");
+        verbose_eprintln!("\n--- all_checks_refutable analysis for P*1g ---");
         let pawn_drop2 = board.move_from_usi("P*1g").unwrap();
         let cap_pg = board.do_move(pawn_drop2);
         let mut def_solver = DfPnSolver::default_solver();
         let defenses = def_solver.generate_defense_moves(&mut board);
-        eprintln!("  P*1g 後の応手数: {}", defenses.len());
+        verbose_eprintln!("  P*1g 後の応手数: {}", defenses.len());
         for def_mv in &defenses {
             let cap_d = board.do_move(*def_mv);
             let next_checks = def_solver.generate_check_moves(&mut board);
-            eprintln!("  {} → 次の王手数: {} {:?}",
+            verbose_eprintln!("  {} → 次の王手数: {} {:?}",
                 def_mv.to_usi(), next_checks.len(),
                 next_checks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
             board.undo_move(*def_mv, cap_d);
         }
         board.undo_move(pawn_drop2, cap_pg);
 
-        eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("{}", "=".repeat(80));
     }
 
     /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
@@ -10497,9 +10468,9 @@ mod tests {
         board.set_sfen(sfen).unwrap();
         let mut solver = DfPnSolver::default_solver();
 
-        eprintln!("\n{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} {}",
+        verbose_eprintln!("\n{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} {}",
             "Ply", "Node", "Moves", "Drops", "Total", "PV Move", "Sample moves (first 10)");
-        eprintln!("{}", "-".repeat(90));
+        verbose_eprintln!("{}", "-".repeat(90));
 
         for (i, &usi) in pv_usi.iter().enumerate() {
             let ply = i + 1;
@@ -10527,7 +10498,7 @@ mod tests {
             let node_type = if is_or { "OR" } else { "AND" };
             let mark = if !found { " *** MISSING ***" } else { "" };
 
-            eprintln!("{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} [{}]{}",
+            verbose_eprintln!("{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} [{}]{}",
                 ply, node_type, move_count, drop_count, moves.len(),
                 usi, sample.join(", "), mark);
 
@@ -10537,12 +10508,12 @@ mod tests {
 
         // 最終局面が詰みかチェック
         let final_defenses = solver.generate_defense_moves(&mut board);
-        eprintln!("\n最終局面(39手目後)の回避手数: {}", final_defenses.len());
+        verbose_eprintln!("\n最終局面(39手目後)の回避手数: {}", final_defenses.len());
         if final_defenses.is_empty() {
-            eprintln!("→ 詰み!");
+            verbose_eprintln!("→ 詰み!");
         } else {
             let sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
-            eprintln!("→ 回避手あり: [{}]", sample.join(", "));
+            verbose_eprintln!("→ 回避手あり: [{}]", sample.join(", "));
         }
     }
 
@@ -10569,10 +10540,10 @@ mod tests {
         let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
-        eprintln!("\nPly 4 子ノード難易度診断 (budget=100,000 nodes, depth=37)");
-        eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}",
+        verbose_eprintln!("\nPly 4 子ノード難易度診断 (budget=100,000 nodes, depth=37)");
+        verbose_eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}",
             "#", "Move", "Type", "Nodes", "Result", "PV len");
-        eprintln!("{}", "-".repeat(65));
+        verbose_eprintln!("{}", "-".repeat(65));
 
         for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
@@ -10604,7 +10575,7 @@ mod tests {
             let is_correct = defense.to_usi() == "4c3d";
             let marker = if is_correct { " ← CORRECT" } else { "" };
 
-            eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}{}",
+            verbose_eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}{}",
                 i + 1, defense.to_usi(), move_type, nodes, result_str, pv_len, marker);
         }
     }
@@ -10640,14 +10611,14 @@ mod tests {
         let mut solver_tmp = DfPnSolver::default_solver();
         let defenses = solver_tmp.generate_defense_moves(&mut board);
 
-        eprintln!("\n=== 合駒局面ブレークダウン (ply 29 後) ===");
-        eprintln!("回避手数: {} (うち drop: {})",
+        verbose_eprintln!("\n=== 合駒局面ブレークダウン (ply 29 後) ===");
+        verbose_eprintln!("回避手数: {} (うち drop: {})",
             defenses.len(),
             defenses.iter().filter(|m| m.is_drop()).count());
 
-        eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}",
+        verbose_eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}",
             "#", "Move", "Type", "Nodes", "Time(ms)", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         // 各回避手を適用後，攻め方視点でソルブ
         for (i, &defense) in defenses.iter().enumerate() {
@@ -10677,7 +10648,7 @@ mod tests {
 
             let is_best = defense.to_usi() == "S*6i";
             let marker = if is_best { " ← BEST" } else { "" };
-            eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}{}",
+            verbose_eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}{}",
                 i + 1, defense.to_usi(), move_type, nodes,
                 elapsed.as_secs_f64() * 1000.0, result_str, marker);
         }
@@ -10701,9 +10672,9 @@ mod tests {
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
-        eprintln!("\n{:>5} {:>3} {:>8} {:>10} {:>10} {:>8}",
+        verbose_eprintln!("\n{:>5} {:>3} {:>8} {:>10} {:>10} {:>8}",
             "After", "Typ", "Remain", "Nodes", "Time(ms)", "Result");
-        eprintln!("{}", "-".repeat(62));
+        verbose_eprintln!("{}", "-".repeat(62));
 
         for (i, &usi) in pv_usi.iter().enumerate() {
             let m = board.move_from_usi(usi).unwrap();
@@ -10734,7 +10705,7 @@ mod tests {
             };
 
             let node_type = if or_sub { "OR " } else { "AND" };
-            eprintln!("{:>5} {:>3} {:>8} {:>10} {:>10.1} {:>8}",
+            verbose_eprintln!("{:>5} {:>3} {:>8} {:>10} {:>10.1} {:>8}",
                 format!("ply{}", i + 1), node_type, remaining, nodes,
                 elapsed.as_secs_f64() * 1000.0, status);
         }
@@ -10761,9 +10732,9 @@ mod tests {
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
 
-        eprintln!("\n{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
+        verbose_eprintln!("\n{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
             "After", "Typ", "Remain", "Budget", "Nodes", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         for (i, &usi) in pv_usi.iter().enumerate() {
             let m = board.move_from_usi(usi).unwrap();
@@ -10794,7 +10765,7 @@ mod tests {
             };
 
             let node_type = if or_sub { "OR " } else { "AND" };
-            eprintln!("{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
+            verbose_eprintln!("{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
                 format!("ply{}", i + 1), node_type, remaining,
                 budget, nodes, status);
         }
@@ -10820,15 +10791,15 @@ mod tests {
         let mut solver = DfPnSolver::default_solver();
         let defenses = solver.generate_defense_moves(&mut board);
 
-        eprintln!("\n=== Ply 4 AND ノード回避手ブレークダウン ===");
-        eprintln!("回避手数: {} (うち drop: {}, move: {})",
+        verbose_eprintln!("\n=== Ply 4 AND ノード回避手ブレークダウン ===");
+        verbose_eprintln!("回避手数: {} (うち drop: {}, move: {})",
             defenses.len(),
             defenses.iter().filter(|m| m.is_drop()).count(),
             defenses.iter().filter(|m| !m.is_drop()).count());
 
-        eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}",
+        verbose_eprintln!("\n{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}",
             "#", "Move", "Type", "Budget", "Nodes", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
@@ -10853,7 +10824,7 @@ mod tests {
 
             let is_correct = defense.to_usi() == "4c3d";
             let marker = if is_correct { " ← CORRECT" } else { "" };
-            eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}{}",
+            verbose_eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}{}",
                 i + 1, defense.to_usi(), move_type,
                 500_000, nodes, result_str, marker);
         }
@@ -10881,7 +10852,7 @@ mod tests {
         let defenses = solver.generate_defense_moves(&mut board);
 
         // ── Part 1: 逃げ手(盤上の手)の PV ──
-        eprintln!("\n=== Part 1: 逃げ手の詰み筋 (budget=500K) ===\n");
+        verbose_eprintln!("\n=== Part 1: 逃げ手の詰み筋 (budget=500K) ===\n");
         for (i, &defense) in defenses.iter().enumerate() {
             if defense.is_drop() { continue; }
             let mut child_board = board.clone();
@@ -10899,8 +10870,8 @@ mod tests {
         // ── Part 2: 合駒を龍で取った後の局面の PV ──
         // 合駒は 5c/6c/7c/8c 筋に打たれ，龍(9c)が取る．
         // 取った後の局面を solve し，PV を比較する．
-        eprintln!("\n=== Part 2: 合駒 → 龍で取った後の詰み筋 (budget=500K) ===");
-        eprintln!("(defense → capture → 玉方応手の各分岐を solve)\n");
+        verbose_eprintln!("\n=== Part 2: 合駒 → 龍で取った後の詰み筋 (budget=500K) ===");
+        verbose_eprintln!("(defense → capture → 玉方応手の各分岐を solve)\n");
 
         let interpositions: Vec<(&str, &str)> = vec![
             // (合駒, 龍の取り)
@@ -10920,7 +10891,7 @@ mod tests {
 
             // ply 6 相当: 玉方番(AND) → 各応手後の攻め方局面を solve
             let defs = solver.generate_defense_moves(&mut b);
-            eprintln!("{:>2}. {} → {} (玉方応手{}手)",
+            verbose_eprintln!("{:>2}. {} → {} (玉方応手{}手)",
                 idx + 1, interpose_usi, capture_usi, defs.len());
 
             for &def in defs.iter() {
@@ -10935,7 +10906,7 @@ mod tests {
                 let label = format!("  {} → {}", capture_usi, def.to_usi());
                 print_result(0, &label, &result, "");
             }
-            eprintln!();
+            verbose_eprintln!();
         }
     }
 
@@ -10944,21 +10915,21 @@ mod tests {
             TsumeResult::Checkmate { moves, nodes_searched } => {
                 let pv_str: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 if idx > 0 {
-                    eprintln!("{:>2}. {} nodes={:>7} MATE({:>2}) PV: {}{}",
+                    verbose_eprintln!("{:>2}. {} nodes={:>7} MATE({:>2}) PV: {}{}",
                         idx, label, nodes_searched, moves.len(), pv_str.join(" "), marker);
                 } else {
-                    eprintln!("    {} nodes={:>7} MATE({:>2}) PV: {}{}",
+                    verbose_eprintln!("    {} nodes={:>7} MATE({:>2}) PV: {}{}",
                         label, nodes_searched, moves.len(), pv_str.join(" "), marker);
                 }
             }
             TsumeResult::CheckmateNoPv { nodes_searched } => {
-                eprintln!("    {} nodes={:>7} MATE(nopv){}", label, nodes_searched, marker);
+                verbose_eprintln!("    {} nodes={:>7} MATE(nopv){}", label, nodes_searched, marker);
             }
             TsumeResult::NoCheckmate { nodes_searched } => {
-                eprintln!("    {} nodes={:>7} NO_MATE{}", label, nodes_searched, marker);
+                verbose_eprintln!("    {} nodes={:>7} NO_MATE{}", label, nodes_searched, marker);
             }
             TsumeResult::Unknown { nodes_searched } => {
-                eprintln!("    {} nodes={:>7} UNKNOWN{}", label, nodes_searched, marker);
+                verbose_eprintln!("    {} nodes={:>7} UNKNOWN{}", label, nodes_searched, marker);
             }
         }
     }
@@ -10988,13 +10959,13 @@ mod tests {
         let defenses = solver.generate_defense_moves(&mut board);
 
         // Phase 1: 各応手を 500K でソルブし，NO_MATE / UNKNOWN を特定
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" 39手詰 ply 4 ボトルネック分析");
-        eprintln!("{}", "=".repeat(80));
-        eprintln!("\n--- Phase 1: ply 4 応手の概要 (budget=500K) ---\n");
-        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" 39手詰 ply 4 ボトルネック分析");
+        verbose_eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("\n--- Phase 1: ply 4 応手の概要 (budget=500K) ---\n");
+        verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
             "#", "Move", "Type", "Nodes", "Time(ms)", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         let mut hard_defenses: Vec<(Move, String, u64, String)> = Vec::new();
 
@@ -11020,7 +10991,7 @@ mod tests {
                     ("UNKNOWN".into(), *nodes_searched),
             };
 
-            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
+            verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>10.1} {:>10}",
                 i + 1, defense.to_usi(), move_type, nodes,
                 elapsed.as_secs_f64() * 1000.0, result_str);
 
@@ -11034,8 +11005,8 @@ mod tests {
 
         // Phase 2: ボトルネック応手の内部構造を分析
         // check 後は defender turn なので，各回避手を個別に attacker turn でソルブ
-        eprintln!("\n--- Phase 2: ボトルネック応手を深掘り ---");
-        eprintln!("(defense → check → reply → attacker 視点でソルブ)\n");
+        verbose_eprintln!("\n--- Phase 2: ボトルネック応手を深掘り ---");
+        verbose_eprintln!("(defense → check → reply → attacker 視点でソルブ)\n");
 
         for (defense, def_usi, parent_nodes, parent_result) in &hard_defenses {
             let mut def_board = board.clone();
@@ -11044,7 +11015,7 @@ mod tests {
             // ply 5: 攻め方番(OR) — 王手を列挙
             let checks = solver.generate_check_moves(&mut def_board);
 
-            eprintln!("=== {} ({}，親ノード={}，王手数={}) ===\n",
+            verbose_eprintln!("=== {} ({}，親ノード={}，王手数={}) ===\n",
                 def_usi, parent_result, parent_nodes, checks.len());
 
             for (j, &check) in checks.iter().enumerate() {
@@ -11056,17 +11027,17 @@ mod tests {
                 let def_count = defs_after.len();
                 let check_type = if check.is_drop() { "drop" } else { "move" };
 
-                eprintln!("  王手 {:>2}. {} ({}) → 回避手 {} 手",
+                verbose_eprintln!("  王手 {:>2}. {} ({}) → 回避手 {} 手",
                     j + 1, check.to_usi(), check_type, def_count);
 
                 if def_count == 0 {
-                    eprintln!("    → 応手なし(詰み)\n");
+                    verbose_eprintln!("    → 応手なし(詰み)\n");
                     continue;
                 }
 
-                eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
+                verbose_eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
                     "#", "Reply", "Type", "Nodes", "ms", "Result", "Chks");
-                eprintln!("  {}", "-".repeat(58));
+                verbose_eprintln!("  {}", "-".repeat(58));
 
                 let mut total_nodes: u64 = 0;
                 let mut nm_count = 0;
@@ -11109,17 +11080,17 @@ mod tests {
                     total_nodes += nodes;
 
                     let heavy = if nodes >= 50_000 { " <<<" } else { "" };
-                    eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}",
+                    verbose_eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}",
                         k + 1, reply.to_usi(), reply_type, nodes,
                         elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy);
                 }
-                eprintln!("  合計: {} nodes | MATE={} NM={} UNK={}\n",
+                verbose_eprintln!("  合計: {} nodes | MATE={} NM={} UNK={}\n",
                     total_nodes, mate_count, nm_count, unk_count);
             }
         }
 
         // Phase 3: PV 上の正解手(4c3d)後を 2 階層深掘り
-        eprintln!("--- Phase 3: 正解手 4c3d → 1b2c(PV) 後の回避手分析 ---\n");
+        verbose_eprintln!("--- Phase 3: 正解手 4c3d → 1b2c(PV) 後の回避手分析 ---\n");
         let correct_def = board.move_from_usi("4c3d").unwrap();
         let mut correct_board = board.clone();
         correct_board.do_move(correct_def);
@@ -11129,10 +11100,10 @@ mod tests {
         pv_board.do_move(pv_check);
 
         let pv_defs = solver.generate_defense_moves(&mut pv_board);
-        eprintln!("4c3d → 1b2c 後の回避手: {} 手", pv_defs.len());
-        eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
+        verbose_eprintln!("4c3d → 1b2c 後の回避手: {} 手", pv_defs.len());
+        verbose_eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}",
             "#", "Reply", "Type", "Nodes", "ms", "Result", "Chks");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         for (k, &reply) in pv_defs.iter().enumerate() {
             let mut reply_board = pv_board.clone();
@@ -11162,7 +11133,7 @@ mod tests {
             let is_pv = reply.to_usi() == "3d2c";
             let marker = if is_pv { " ← PV" } else { "" };
             let heavy = if nodes >= 100_000 { " <<<" } else { "" };
-            eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}{}",
+            verbose_eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}{}",
                 k + 1, reply.to_usi(), reply_type, nodes,
                 elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy, marker);
         }
@@ -11193,12 +11164,12 @@ mod tests {
             ("N*7c", "knight drop 7c"),
         ];
 
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" 39手詰 ply 4: 高予算(5M)でのボトルネック応手分析");
-        eprintln!("{}", "=".repeat(80));
-        eprintln!("\n{:>12} {:>25} {:>10} {:>8} {:>10}",
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" 39手詰 ply 4: 高予算(5M)でのボトルネック応手分析");
+        verbose_eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("\n{:>12} {:>25} {:>10} {:>8} {:>10}",
             "Move", "Description", "Nodes", "Time(s)", "Result");
-        eprintln!("{}", "-".repeat(75));
+        verbose_eprintln!("{}", "-".repeat(75));
 
         for (usi, desc) in &hard_moves {
             let m = board.move_from_usi(usi).unwrap();
@@ -11222,20 +11193,20 @@ mod tests {
                     ("UNKNOWN".into(), *nodes_searched),
             };
 
-            eprintln!("{:>12} {:>25} {:>10} {:>8.1} {:>10}",
+            verbose_eprintln!("{:>12} {:>25} {:>10} {:>8.1} {:>10}",
                 usi, desc, nodes, elapsed.as_secs_f64(), result_str);
 
             // 解けた場合は PV を表示
             if let TsumeResult::Checkmate { moves, .. } = &result {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("             PV: {}", pv.join(" "));
+                verbose_eprintln!("             PV: {}", pv.join(" "));
             }
         }
 
         // 正解手(4c3d)の PV を辿り，各 ply での分岐数とノードを段階的に分析
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" 正解 PV 沿いの IDS 各段階での進捗");
-        eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" 正解 PV 沿いの IDS 各段階での進捗");
+        verbose_eprintln!("{}", "=".repeat(80));
 
         let _pv_usi = [
             "4c3d", "1b2c", "3d2c", "N*1e", "2c3b", "N*2d",
@@ -11254,9 +11225,9 @@ mod tests {
         pv_board.do_move(correct_def);
         // 4c3d 後の局面 = ply 5 (攻め方番 OR)
 
-        eprintln!("\n{:>6} {:>10} {:>8} {:>10}",
+        verbose_eprintln!("\n{:>6} {:>10} {:>8} {:>10}",
             "Depth", "Nodes", "Time(s)", "Result");
-        eprintln!("{}", "-".repeat(40));
+        verbose_eprintln!("{}", "-".repeat(40));
 
         for &depth in &depths {
             let mut solver = DfPnSolver::with_timeout(depth, 2_000_000, 32767, 30);
@@ -11277,7 +11248,7 @@ mod tests {
                     ("UNKNOWN".into(), *nodes_searched),
             };
 
-            eprintln!("{:>6} {:>10} {:>8.1} {:>10}", depth, nodes, elapsed.as_secs_f64(), result_str);
+            verbose_eprintln!("{:>6} {:>10} {:>8.1} {:>10}", depth, nodes, elapsed.as_secs_f64(), result_str);
 
             if let TsumeResult::Checkmate { .. } = &result {
                 break; // 解けたら終了
@@ -11376,13 +11347,13 @@ mod tests {
         let mut helper = DfPnSolver::default_solver();
         let checks = helper.generate_check_moves(&mut board);
 
-        eprintln!("\n{}", "=".repeat(80));
-        eprintln!(" 39手詰 N*1e → 2c1d 深掘り分析 (ply 8 OR ノード)");
-        eprintln!(" 局面: {} (8手進めた後)", board.sfen());
-        eprintln!(" 王手候補数: {} (うちドロップ: {})",
+        verbose_eprintln!("\n{}", "=".repeat(80));
+        verbose_eprintln!(" 39手詰 N*1e → 2c1d 深掘り分析 (ply 8 OR ノード)");
+        verbose_eprintln!(" 局面: {} (8手進めた後)", board.sfen());
+        verbose_eprintln!(" 王手候補数: {} (うちドロップ: {})",
             checks.len(),
             checks.iter().filter(|m| m.is_drop()).count());
-        eprintln!("{}", "=".repeat(80));
+        verbose_eprintln!("{}", "=".repeat(80));
 
         // ── N*1e の AND 子ノード(回避手)を 1M budget で各ソルブ ──
         // ply 7 まで戻って N*1e 後の局面を作る
@@ -11401,11 +11372,11 @@ mod tests {
 
         let defenses = helper.generate_defense_moves(&mut board_after_n1e);
 
-        eprintln!("\n--- N*1e 後の AND 子ノード(回避手)分析 (budget=1M) ---");
-        eprintln!("回避手数: {}\n", defenses.len());
-        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+        verbose_eprintln!("\n--- N*1e 後の AND 子ノード(回避手)分析 (budget=1M) ---");
+        verbose_eprintln!("回避手数: {}\n", defenses.len());
+        verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
             "#", "Defense", "Type", "Nodes", "Time(s)", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board_after_n1e.clone();
@@ -11431,22 +11402,22 @@ mod tests {
             };
 
             let heavy = if nodes >= 500_000 { " <<<" } else { "" };
-            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}{}",
+            verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}{}",
                 i + 1, defense.to_usi(), def_type, nodes,
                 elapsed.as_secs_f64(), result_str, heavy);
 
             if let TsumeResult::Checkmate { moves, .. } = &result {
                 let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
                 let suffix = if moves.len() > 10 { " ..." } else { "" };
-                eprintln!("    PV: {}{}", pv.join(" "), suffix);
+                verbose_eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
 
         // ── 2c1d 後の各王手を 1M budget で個別ソルブ ──
-        eprintln!("\n--- 2c1d 後の各王手候補 (budget=1M, depth=33) ---\n");
-        eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+        verbose_eprintln!("\n--- 2c1d 後の各王手候補 (budget=1M, depth=33) ---\n");
+        verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
             "#", "Check", "Type", "Nodes", "Time(s)", "Result");
-        eprintln!("{}", "-".repeat(55));
+        verbose_eprintln!("{}", "-".repeat(55));
 
         for (i, &check) in checks.iter().enumerate() {
             let mut child_board = board.clone();
@@ -11470,14 +11441,14 @@ mod tests {
                     ("UNK".into(), *nodes_searched),
             };
 
-            eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
+            verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
                 i + 1, check.to_usi(), check_type, nodes,
                 elapsed.as_secs_f64(), result_str);
 
             if let TsumeResult::Checkmate { moves, .. } = &result {
                 let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
                 let suffix = if moves.len() > 10 { " ..." } else { "" };
-                eprintln!("    PV: {}{}", pv.join(" "), suffix);
+                verbose_eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
     }
@@ -11508,17 +11479,17 @@ mod tests {
             board.do_move(m);
         }
 
-        eprintln!("\n=== TT Diag: ply 24 局面(攻め番) → P*7g 調査 ===");
-        eprintln!("SFEN: {}", board.sfen());
+        verbose_eprintln!("\n=== TT Diag: ply 24 局面(攻め番) → P*7g 調査 ===");
+        verbose_eprintln!("SFEN: {}", board.sfen());
 
         // ply 1 の AND ノード(応手)をモニタリング
         // ply 0 = 5g6f(攻め)，ply 1 = 応手(P*7g 含む合駒)
         // (1) この局面で王手が生成されるか確認
         let check_solver = DfPnSolver::default_solver();
         let checks = check_solver.generate_check_moves(&mut board);
-        eprintln!("Check moves from ply 24 ({}):", checks.len());
+        verbose_eprintln!("Check moves from ply 24 ({}):", checks.len());
         for m in &checks {
-            eprintln!("  {}", m.to_usi());
+            verbose_eprintln!("  {}", m.to_usi());
         }
 
         // (2) IDS の各深さでの結果を個別に確認(MIDのみ，PNSスキップ)
@@ -11547,7 +11518,7 @@ mod tests {
             } else {
                 format!("Unknown(pn={},dn={})", root_pn, root_dn)
             };
-            eprintln!(
+            verbose_eprintln!(
                 "  depth={:2} → {} nodes={} max_ply={} tt_pos={}",
                 depth, r_str, s.nodes_searched, s.max_ply, s.table.len(),
             );
@@ -11597,13 +11568,13 @@ mod tests {
         let def = board.move_from_usi("1g1f").unwrap();
         board.do_move(def);
 
-        eprintln!("=== 1g1f 後の局面 (OR node, 攻め番) ===");
-        eprintln!("SFEN: {}", board.sfen());
+        verbose_eprintln!("=== 1g1f 後の局面 (OR node, 攻め番) ===");
+        verbose_eprintln!("SFEN: {}", board.sfen());
 
         // 王手生成で攻め手を確認
         let mut check_solver = DfPnSolver::default_solver();
         let checks = check_solver.generate_check_moves(&mut board);
-        eprintln!("Check moves: {} {:?}", checks.len(),
+        verbose_eprintln!("Check moves: {} {:?}", checks.len(),
             checks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
 
         // 段階的に深さを増やして解析
@@ -11622,7 +11593,7 @@ mod tests {
                 TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
             };
-            eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
+            verbose_eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
                 depth, result_str, solver.nodes_searched, elapsed.as_secs_f64(),
                 solver.table.len());
         }
@@ -11632,14 +11603,14 @@ mod tests {
         solver.set_find_shortest(false);
         let result = solver.solve(&mut board);
 
-        eprintln!("Result: {:?}", match &result {
+        verbose_eprintln!("Result: {:?}", match &result {
             TsumeResult::Checkmate { moves, .. } =>
                 format!("Mate({})", moves.len()),
             TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
             TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
             TsumeResult::Unknown { .. } => "Unknown".to_string(),
         });
-        eprintln!("Nodes: {}, TT_pos: {}", solver.nodes_searched, solver.table.len());
+        verbose_eprintln!("Nodes: {}, TT_pos: {}", solver.nodes_searched, solver.table.len());
 
         // N*6g 後の各攻め手を depth=41 で解く
         {
@@ -11652,12 +11623,12 @@ mod tests {
             let def_n6g = brd_n6g.move_from_usi("N*6g").unwrap();
             brd_n6g.do_move(def_n6g);
 
-            eprintln!("\n=== N*6g 後の各攻め手サブ問題 (depth=41, 1M) ===");
-            eprintln!("SFEN: {}", brd_n6g.sfen());
+            verbose_eprintln!("\n=== N*6g 後の各攻め手サブ問題 (depth=41, 1M) ===");
+            verbose_eprintln!("SFEN: {}", brd_n6g.sfen());
 
             let mut gen = DfPnSolver::default_solver();
             let attacks = gen.generate_check_moves(&mut brd_n6g);
-            eprintln!("Check moves: {} {:?}", attacks.len(),
+            verbose_eprintln!("Check moves: {} {:?}", attacks.len(),
                 attacks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
 
             for atk in &attacks {
@@ -11677,7 +11648,7 @@ mod tests {
                     TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
                     TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 };
-                eprintln!("  {} → {} nodes={} time={:.2}s TT_pos={}",
+                verbose_eprintln!("  {} → {} nodes={} time={:.2}s TT_pos={}",
                     atk.to_usi(), r_str, sub.nodes_searched,
                     elapsed.as_secs_f64(), sub.table.len());
             }
@@ -11694,8 +11665,8 @@ mod tests {
             let def = brd.move_from_usi(def_usi).unwrap();
             brd.do_move(def);
 
-            eprintln!("\n=== {} 後の局面 (OR node, 攻め番) ===", def_usi);
-            eprintln!("SFEN: {}", brd.sfen());
+            verbose_eprintln!("\n=== {} 後の局面 (OR node, 攻め番) ===", def_usi);
+            verbose_eprintln!("SFEN: {}", brd.sfen());
 
             for depth in [15u32, 21, 31, 41] {
                 let mut s = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 60);
@@ -11712,7 +11683,7 @@ mod tests {
                     TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
                     TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 };
-                eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
+                verbose_eprintln!("depth={}: {} nodes={} time={:.2}s TT_pos={}",
                     depth, r_str, s.nodes_searched, elapsed.as_secs_f64(),
                     s.table.len());
             }
@@ -11746,33 +11717,33 @@ mod tests {
             let m = board.move_from_usi(mv).unwrap();
             board.do_move(m);
         }
-        eprintln!("=== ply 25 AND (5g6f 後) ===");
-        eprintln!("SFEN: {}", board.sfen());
+        verbose_eprintln!("=== ply 25 AND (5g6f 後) ===");
+        verbose_eprintln!("SFEN: {}", board.sfen());
 
         // N*6g を指す
         let n6g = board.move_from_usi("N*6g").unwrap();
         board.do_move(n6g);
-        eprintln!("\n=== N*6g 後 (OR node) ===");
-        eprintln!("SFEN: {}", board.sfen());
+        verbose_eprintln!("\n=== N*6g 後 (OR node) ===");
+        verbose_eprintln!("SFEN: {}", board.sfen());
 
         // 8g6g(飛車で桂を取る)
         let r6g = board.move_from_usi("8g6g").unwrap();
         board.do_move(r6g);
-        eprintln!("\n=== 8g6g 後 (AND node, 玉方番) ===");
-        eprintln!("SFEN: {}", board.sfen());
+        verbose_eprintln!("\n=== 8g6g 後 (AND node, 玉方番) ===");
+        verbose_eprintln!("SFEN: {}", board.sfen());
 
         // この局面の情報
         let defender = board.turn();
         let attacker = defender.opponent();
         let king_sq = board.king_square(defender).unwrap();
-        eprintln!("King: {}{}  turn: {:?}",
+        verbose_eprintln!("King: {}{}  turn: {:?}",
             9 - king_sq.col(), (b'a' + king_sq.row()) as char, defender);
 
         let checkers = board.compute_checkers_at(king_sq, attacker);
-        eprintln!("Checkers: {}", checkers.count());
+        verbose_eprintln!("Checkers: {}", checkers.count());
         for sq in checkers {
             let piece = board.squares[sq.index()];
-            eprintln!("  {:?} at {}{}", piece, 9 - sq.col(), (b'a' + sq.row()) as char);
+            verbose_eprintln!("  {:?} at {}{}", piece, 9 - sq.col(), (b'a' + sq.row()) as char);
         }
 
         let mut solver = DfPnSolver::default_solver();
@@ -11780,7 +11751,7 @@ mod tests {
         // between / futile / chain
         let checker_sq = checkers.lsb().unwrap();
         let sliding = solver.find_sliding_checker(&board, king_sq, attacker);
-        eprintln!("Sliding checker: {:?}", sliding.is_some());
+        verbose_eprintln!("Sliding checker: {:?}", sliding.is_some());
 
         if sliding.is_some() {
             let between = attack::between_bb(checker_sq, king_sq);
@@ -11788,29 +11759,29 @@ mod tests {
                 &board, &between, king_sq, checker_sq, defender, attacker,
             );
             let normal_count = between.count() - futile.count() - chain.count();
-            eprintln!("Between: {}  Futile: {}  Chain: {}  Normal: {}",
+            verbose_eprintln!("Between: {}  Futile: {}  Chain: {}  Normal: {}",
                 between.count(), futile.count(), chain.count(), normal_count);
             for sq in between {
                 let tag = if futile.contains(sq) { "futile" }
                          else if chain.contains(sq) { "chain" }
                          else { "normal" };
-                eprintln!("  {}{} = {}",
+                verbose_eprintln!("  {}{} = {}",
                     9 - sq.col(), (b'a' + sq.row()) as char, tag);
             }
         }
 
         // 防御手一覧
         let defenses = solver.generate_defense_moves(&mut board);
-        eprintln!("\nDefense moves ({}):", defenses.len());
+        verbose_eprintln!("\nDefense moves ({}):", defenses.len());
         let drops: Vec<_> = defenses.iter().filter(|m| m.is_drop()).collect();
         let non_drops: Vec<_> = defenses.iter().filter(|m| !m.is_drop()).collect();
-        eprintln!("  Non-drops ({}):", non_drops.len());
+        verbose_eprintln!("  Non-drops ({}):", non_drops.len());
         for m in &non_drops {
-            eprintln!("    {}", m.to_usi());
+            verbose_eprintln!("    {}", m.to_usi());
         }
-        eprintln!("  Drops ({}):", drops.len());
+        verbose_eprintln!("  Drops ({}):", drops.len());
         for m in &drops {
-            eprintln!("    {}", m.to_usi());
+            verbose_eprintln!("    {}", m.to_usi());
         }
 
         // N*6g 後(OR node, 攻め方手番)から解く
@@ -11827,8 +11798,8 @@ mod tests {
         };
 
         // MID のみ(PNS skip)で解く
-        eprintln!("\n=== N*6g 後 MID only (depth=41, 10M, 300s) ===");
-        eprintln!("SFEN: {}", or_board.sfen());
+        verbose_eprintln!("\n=== N*6g 後 MID only (depth=41, 10M, 300s) ===");
+        verbose_eprintln!("SFEN: {}", or_board.sfen());
         {
             let mut s = DfPnSolver::with_timeout(41, 10_000_000, 32767, 300);
             s.set_find_shortest(false);
@@ -11846,10 +11817,10 @@ mod tests {
             let r_str = if root_pn == 0 { "Proven" }
                         else if root_dn == 0 { "Disproven" }
                         else { "Unknown" };
-            eprintln!("  → {} pn={} dn={} searched={} time={:.2}s TT={}",
+            verbose_eprintln!("  → {} pn={} dn={} searched={} time={:.2}s TT={}",
                 r_str, root_pn, root_dn, s.nodes_searched,
                 s.start_time.elapsed().as_secs_f64(), s.table.len());
-            eprintln!("  prefilter_hits={}", s.prefilter_hits);
+            verbose_eprintln!("  prefilter_hits={}", s.prefilter_hits);
             #[cfg(feature = "tt_diag")]
             eprintln!("  deferred: act={} enqueued={} ready={} not_ready={} cross={}",
                 s.diag_mid_deferred_activations,
@@ -11860,7 +11831,7 @@ mod tests {
         }
 
         // 8g6g 後の各防御手を個別に OR node として解く
-        eprintln!("\n=== 8g6g 後 → 各防御手のサブ問題 (depth=41, 2M) ===");
+        verbose_eprintln!("\n=== 8g6g 後 → 各防御手のサブ問題 (depth=41, 2M) ===");
         for def_mv in &defenses {
             let mut after_def = board.clone();
             after_def.do_move(*def_mv);
@@ -11876,12 +11847,12 @@ mod tests {
                 TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
             };
-            eprintln!("  {} → {} searched={} time={:.2}s TT={}",
+            verbose_eprintln!("  {} → {} searched={} time={:.2}s TT={}",
                 def_mv.to_usi(), r_str, s.nodes_searched, elapsed.as_secs_f64(), s.table.len());
         }
 
         // Unknown が出た防御手を掘り下げ(2段目: 攻め手→防御手)
-        eprintln!("\n=== Unknown 防御手の攻め手別サブ問題 (depth=41, 2M) ===");
+        verbose_eprintln!("\n=== Unknown 防御手の攻め手別サブ問題 (depth=41, 2M) ===");
         for def_mv in &defenses {
             let mut after_def = board.clone();
             after_def.do_move(*def_mv);
@@ -11893,10 +11864,10 @@ mod tests {
                 continue;
             }
 
-            eprintln!("--- {} (Unknown) → 攻め手展開 ---", def_mv.to_usi());
+            verbose_eprintln!("--- {} (Unknown) → 攻め手展開 ---", def_mv.to_usi());
             let mut gen = DfPnSolver::default_solver();
             let attacks = gen.generate_check_moves(&mut after_def);
-            eprintln!("  攻め手数: {}", attacks.len());
+            verbose_eprintln!("  攻め手数: {}", attacks.len());
             for atk in &attacks {
                 let mut after_atk = after_def.clone();
                 after_atk.do_move(*atk);
@@ -11912,7 +11883,7 @@ mod tests {
                     TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
                     TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 };
-                eprintln!("    {} → {} searched={} time={:.2}s TT={}",
+                verbose_eprintln!("    {} → {} searched={} time={:.2}s TT={}",
                     atk.to_usi(), r2_str, s2.nodes_searched, elapsed2.as_secs_f64(), s2.table.len());
             }
         }
@@ -12231,7 +12202,7 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        eprintln!("結果: {}", out_path);
+        verbose_eprintln!("結果: {}", out_path);
     }
 
 }
