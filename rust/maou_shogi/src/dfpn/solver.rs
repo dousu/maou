@@ -2857,8 +2857,7 @@ impl DfPnSolver {
 
         // 同一マスに未解決のドロップ兄弟がなければスキップ
         let has_siblings = children.iter().any(|(mj, _, _, _)| {
-            mj.is_drop() && mj.to_sq() == target_sq
-                && !std::ptr::eq(&solved_move as *const _, mj as *const _)
+            mj.is_drop() && mj.to_sq() == target_sq && *mj != solved_move
         });
         if !has_siblings {
             return;
