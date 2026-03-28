@@ -60,7 +60,7 @@ const INF: u32 = u32::MAX;
 /// drops を children にそのまま含める現方式では事実上の無限バイアスとなり
 /// 非 drop 子が全て証明されるまで drop が選択されない問題があった．
 ///
-/// 新値: 256 は king move の初期 dn(1)より十分大きく，
+/// 新値: 8 は king move の初期 dn(1)より十分大きく，
 /// king move が探索されて dn が上昇した後に drop の探索が始まる程度のバイアス．
 /// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
 const INTERPOSE_DN_BIAS: u32 = 8;
@@ -1107,15 +1107,6 @@ impl TranspositionTable {
         });
     }
 
-    /// 確定エントリ(証明 pn=0 と反証 dn=0)のみ保持し，中間エントリを除去する．
-    #[allow(dead_code)]
-    fn retain_terminal(&mut self) {
-        self.tt.retain(|_key, entries| {
-            entries.retain(|e| e.pn == 0 || e.dn == 0);
-            !entries.is_empty()
-        });
-    }
-
     /// 浅い反復で remaining が不足する中間・反証エントリを除去する．
     ///
     /// IDS 反復間で使用: スラッシング防止用の中間エントリ
@@ -1143,16 +1134,7 @@ impl TranspositionTable {
         });
     }
 
-    /// 指定局面の証明エントリ(pn=0)を除去する．
-    ///
-    /// IDS の浅い深さで PNS 由来の証明が使われた場合に，
-    /// 根の証明を除去して full depth で再証明させるために使用する．
-    #[allow(dead_code)]
-    fn remove_proof(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
-        if let Some(entries) = self.tt.get_mut(&pos_key) {
-            entries.retain(|e| !(e.pn == 0 && e.hand == *hand));
-        }
-    }
+
 
     /// TT のポジション数を返す．
     fn len(&self) -> usize {
@@ -2277,9 +2259,6 @@ impl DfPnSolver {
         if in_path {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                verbose_eprintln!("[exit_diag] ply={} in_path_exit: hash={:#x} or={}", ply, full_hash, or_node);
-            }
             return;
         }
 
@@ -2299,11 +2278,6 @@ impl DfPnSolver {
                         ply, tt_pn, tt_dn, remaining);
                 }
             }
-            // Diagnostic: catch early exits at children of stuck node
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                verbose_eprintln!("[exit_diag] ply={} terminal_exit: tt_pn={} tt_dn={} rem={} or={} pk={:#x}",
-                    ply, tt_pn, tt_dn, remaining, or_node, pos_key);
-            }
             return;
         }
         if tt_pn >= pn_threshold || tt_dn >= dn_threshold {
@@ -2314,11 +2288,6 @@ impl DfPnSolver {
                     verbose_eprintln!("[tt_diag] ply={} threshold exit: tt_pn={} tt_dn={} pn_th={} dn_th={}",
                         ply, tt_pn, tt_dn, pn_threshold, dn_threshold);
                 }
-            }
-            // Diagnostic: catch threshold exits at children of stuck node
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                verbose_eprintln!("[exit_diag] ply={} threshold_exit: tt_pn={} tt_dn={} pn_th={} dn_th={} rem={} or={} pk={:#x}",
-                    ply, tt_pn, tt_dn, pn_threshold, dn_threshold, remaining, or_node, pos_key);
             }
             return;
         }
@@ -2415,9 +2384,6 @@ impl DfPnSolver {
 
         // 終端条件チェック
         if moves.is_empty() {
-            if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                verbose_eprintln!("[exit_diag] ply={} empty_moves: or={}", ply, or_node);
-            }
             if or_node {
                 // 王手手段なし → 不詰(反証駒 = 現在の持ち駒)
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
@@ -2468,6 +2434,7 @@ impl DfPnSolver {
         let saved_chain_bb = self.chain_bb_cache;
         #[cfg(feature = "profile")]
         let _child_init_start = Instant::now();
+        #[cfg(feature = "verbose")]
         let _init_start = Instant::now();
         for m in &moves {
             #[cfg(feature = "profile")]
@@ -2681,12 +2648,6 @@ impl DfPnSolver {
                         child_pk, &child_hand, child_remaining,
                     )
                     .unwrap_or((0, false));
-                #[cfg(feature = "verbose")]
-                if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-                    let parent_nm_rem_preview = if is_path_dep { remaining } else { propagate_nm_remaining(child_nm_rem, remaining) };
-                    eprintln!("[exit_diag] ply={} init_and_disproof: child_move={} child_nm_rem={} parent_nm_rem={} remaining={} path_dep={} pk={:#x}",
-                        ply, m.to_usi(), child_nm_rem, parent_nm_rem_preview, remaining, is_path_dep, pos_key);
-                }
                 // 経路依存の反証は同一 IDS 反復内では有効とみなし，
                 // remaining を現在の深さに設定して lookup の remaining チェックを通過させる．
                 // 非経路依存の反証は通常の NM 伝播で remaining を制限する．
@@ -2800,11 +2761,6 @@ impl DfPnSolver {
 
         // OR ノードで全子が反証済み(children が空)
         if or_node && children.is_empty() {
-            // Diagnostic: detect OR all-children-disproved at stuck position
-            if pos_key == 0xf8322787b7535d9c || (ply == 26 && self.nodes_searched % 1_000_000 < 5 && self.nodes_searched > 200_000) {
-                verbose_eprintln!("[or_all_disproved] ply={} pk={:#x} moves={} init_or_nm_min_rem={} remaining={} path_dep={}",
-                    ply, pos_key, moves.len(), init_or_nm_min_remaining, remaining, init_or_path_dep);
-            }
             // NM remaining 伝播: 子の NM remaining の最小値 + 1 を使用．
             // 全子が REMAINING_INFINITE なら親も REMAINING_INFINITE(真の不詰)．
             let mut parent_nm_remaining = propagate_nm_remaining(
@@ -2947,10 +2903,11 @@ impl DfPnSolver {
         }
 
         // Init phase duration diagnostic
+        #[cfg(feature = "verbose")]
         {
             let init_elapsed = _init_start.elapsed().as_secs_f64();
             if init_elapsed > 1.0 {
-                verbose_eprintln!("[init_slow] ply={} or={} moves={} children={} init_time={:.2}s",
+                eprintln!("[init_slow] ply={} or={} moves={} children={} init_time={:.2}s",
                     ply, or_node, moves.len(), children.len(), init_elapsed);
             }
         }
@@ -2958,10 +2915,6 @@ impl DfPnSolver {
         // --- 単一子最適化 ---
         // 子が1つしかない場合，MID ループ(閾値計算・全子走査)をバイパスし，
         // 親の閾値をそのまま渡して直接再帰する．
-        if (ply == 26 || ply == 27) && self.nodes_searched > 200_000 && self.nodes_searched % 500_000 < 5 {
-            verbose_eprintln!("[exit_diag] ply={} REACHED_MAIN_LOOP: children={} remaining={} or={}",
-                ply, children.len(), remaining, or_node);
-        }
         // OR ノードでは王手が1手のみ，AND ノードでは合法応手が1手のみの
         // ケースが詰将棋で頻出する．
         if children.len() == 1 {
@@ -4259,132 +4212,6 @@ impl DfPnSolver {
     /// メイン TT 上での同一マス合駒証明転用．
     ///
     /// `children` 内の証明済みドロップ手 `solved_move` に対し，
-    /// `deferred_children` の同一マスの合駒を TT から証明転用する．
-    ///
-    /// 証明された合駒は `deferred_children` から除去し，
-    /// `and_proof` に証明駒を蓄積する．
-    #[allow(dead_code)]
-    #[inline(never)]
-    fn cross_deduce_deferred(
-        &mut self,
-        board: &mut Board,
-        solved_move: Move,
-        deferred_children: &mut ArrayVec<
-            (Move, u64, u64, [u8; HAND_KINDS]),
-            MAX_MOVES,
-        >,
-        remaining: u16,
-        and_proof: &mut [u8; HAND_KINDS],
-    ) {
-        let target_sq = solved_move.to_sq();
-
-        // 同一マスに未解決の合駒がなければスキップ
-        let has_siblings = deferred_children.iter().any(|(mj, _, _, _)| {
-            mj.to_sq() == target_sq
-        });
-        if !has_siblings {
-            return;
-        }
-
-        let solved_pt = match solved_move.drop_piece_type() {
-            Some(pt) => pt,
-            None => return,
-        };
-        let solved_hi = match solved_pt.hand_index() {
-            Some(hi) => hi,
-            None => return,
-        };
-
-        // 合駒を実行し，攻方の捕獲手を探索
-        let captured_by_block = board.do_move(solved_move);
-        let legal = movegen::generate_legal_moves(board);
-
-        // 捕獲手(ターゲットマスへの駒取り)を全て試行
-        let mut proven_indices: ArrayVec<usize, MAX_MOVES> = ArrayVec::new();
-
-        for cap_mv in legal.iter().filter(|mv| {
-            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
-        }) {
-            let cap_piece = board.do_move(*cap_mv);
-
-            // 捕獲が王手でなければ詰将棋の合法手ではない → スキップ
-            if !board.is_in_check(board.turn) {
-                board.undo_move(*cap_mv, cap_piece);
-                continue;
-            }
-
-            let pc_pk = position_key(board);
-            let base_hand = board.hand[self.attacker.index()];
-            board.undo_move(*cap_mv, cap_piece);
-
-            // 各未解決の同一マス合駒について TT 参照
-            for (j, &(ref mj, _, child_pk_j, ref child_hand_j))
-                in deferred_children.iter().enumerate()
-            {
-                if mj.to_sq() != target_sq {
-                    continue;
-                }
-                if proven_indices.contains(&j) {
-                    continue;
-                }
-
-                let pt_j = match mj.drop_piece_type() {
-                    Some(pt) => pt,
-                    None => continue,
-                };
-                let hi_j = match pt_j.hand_index() {
-                    Some(hi) => hi,
-                    None => continue,
-                };
-
-                // 合駒 j を捕獲した場合の攻方持ち駒を計算:
-                // base_hand は solved_move の駒を捕獲した状態なので，
-                // solved の駒分を引いて j の駒分を足す
-                let mut hand_j = base_hand;
-                hand_j[solved_hi] = hand_j[solved_hi].saturating_sub(1);
-                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
-
-                let pc_remaining = remaining.saturating_sub(2);
-                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
-
-                if ppn == 0 {
-                    // 捕獲後局面が証明済み → 合駒 j の OR ノードも証明
-                    let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
-
-                    // OR ノードの証明駒: 捕獲で得る駒 j の分を差し引く
-                    let mut or_ph = pc_ph;
-                    or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
-                    for k in 0..HAND_KINDS {
-                        or_ph[k] = or_ph[k].min(child_hand_j[k]);
-                    }
-
-                    // メイン TT に証明エントリを格納
-                    self.table.store(
-                        child_pk_j, or_ph, 0, INF,
-                        remaining.saturating_sub(1), child_pk_j,
-                    );
-
-                    // AND 証明駒の更新
-                    let adj = adjust_hand_for_move(*mj, &or_ph);
-                    for k in 0..HAND_KINDS {
-                        and_proof[k] = and_proof[k].max(adj[k]);
-                    }
-                    let _ = proven_indices.try_push(j);
-                }
-            }
-        }
-
-        board.undo_move(solved_move, captured_by_block);
-
-        // 証明済みの合駒を deferred_children から除去(降順で安全に削除)
-        proven_indices.sort_unstable();
-        #[cfg(feature = "tt_diag")]
-        { self.diag_cross_deduce_hits += proven_indices.len() as u64; }
-        for &i in proven_indices.iter().rev() {
-            deferred_children.remove(i);
-        }
-    }
-
     /// children 内の証明済みドロップから兄弟ドロップを TT で証明する．
     ///
     /// `cross_deduce_deferred` と同等のロジックだが，`children` を読み取り専用で

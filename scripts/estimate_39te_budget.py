@@ -58,7 +58,6 @@ def find_min_budget(sfen: str, remaining_moves: int) -> tuple[str, int, float]:
             nodes=budget,
             timeout_secs=120,
             find_shortest=False,
-            mate_budget=100,
             tt_gc_threshold=max(budget // 2, 1_000_000),
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
