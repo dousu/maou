@@ -5266,3 +5266,33 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: {}", out_path);
     }
 
+    /// 最適化ベンチマーク: 探索ノード数・TT エントリ数・実行時間を計測する．
+    #[test]
+    #[ignore]
+    fn test_optimization_benchmark() {
+        use crate::board::Board;
+        struct BenchCase { name: &'static str, sfen: &'static str, depth: u32, max_nodes: u64 }
+        let cases = [
+            BenchCase { name: "9te", sfen: "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1", depth: 15, max_nodes: 100_000 },
+            BenchCase { name: "39te", sfen: "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1", depth: 41, max_nodes: 10_000_000 },
+        ];
+        for case in &cases {
+            let mut board = Board::new();
+            board.set_sfen(case.sfen).unwrap();
+            let mut solver = DfPnSolver::with_timeout(case.depth, case.max_nodes, 32767, 120);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut board);
+            let elapsed = start.elapsed();
+            let tt_pos = solver.table.len();
+            let tt_ent: usize = solver.table.tt.values().map(|v| v.len()).sum();
+            let status = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("SOLVED({}te)", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "PROVED".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NO_CHECKMATE".to_string(),
+                TsumeResult::Unknown { .. } => "UNKNOWN".to_string(),
+            };
+            eprintln!("[bench] {} {}: nodes={} tt_pos={} tt_ent={} time={:.3}s",
+                case.name, status, solver.nodes_searched, tt_pos, tt_ent, elapsed.as_secs_f64());
+        }
+    }

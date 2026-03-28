@@ -1317,8 +1317,13 @@ impl DfPnSolver {
                 self.max_nodes = self.nodes_searched.saturating_add(b);
                 b
             } else {
-                self.max_nodes = total_max_nodes;
-                total_max_nodes.saturating_sub(self.nodes_searched)
+                // フルデプス MID: 残り予算の 3/4 を割り当て，
+                // 残りを Frontier Variant (Phase 3) に温存する．
+                let remaining_budget =
+                    total_max_nodes.saturating_sub(self.nodes_searched);
+                let b = remaining_budget * 3 / 4;
+                self.max_nodes = self.nodes_searched.saturating_add(b);
+                b
             };
 
             #[cfg(feature = "tt_diag")]
@@ -1512,7 +1517,74 @@ impl DfPnSolver {
             prev_root_pn = root_pn2;
             prev_root_dn = root_dn2;
         }
+        // Phase 3: Frontier Variant (PNS→局所MID)
+        //
+        // IDS-dfpn がフルデプスで証明できなかった場合，
+        // PNS→MID サイクルで残り予算を使う．
+        // PNS のグローバル最適なノード選択が MID の閾値飢餓を回避する．
         self.depth = saved_depth;
+        let (root_pn_final, root_dn_final, _) =
+            self.look_up_pn_dn(pk, &att_hand, saved_depth as u16);
+        if root_pn_final != 0 && root_dn_final != 0
+            && self.nodes_searched < total_max_nodes
+            && !self.timed_out
+        {
+            self.frontier_variant(board, total_max_nodes);
+        }
+        self.depth = saved_depth;
+        self.max_nodes = total_max_nodes;
+    }
+
+    /// Frontier Variant: PNS→局所 MID サイクル．
+    ///
+    /// PNS で TT を更新しつつフロンティアを特定し，
+    /// MID で局所的に証明/反証を進める．
+    /// PNS の TT 書き込みが MID の初期値を改善し，
+    /// MID の TT 蓄積が次の PNS サイクルの精度を向上させる相乗効果がある．
+    fn frontier_variant(&mut self, board: &mut Board, total_max_nodes: u64) {
+        let pk = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+
+        let mut frontier_iters = 0u32;
+        const MAX_FRONTIER_ITERS: u32 = 50;
+
+        while frontier_iters < MAX_FRONTIER_ITERS
+            && self.nodes_searched < total_max_nodes
+            && !self.timed_out
+        {
+            frontier_iters += 1;
+            let remaining_budget = total_max_nodes.saturating_sub(self.nodes_searched);
+            if remaining_budget < 10_000 {
+                break;
+            }
+
+            // PNS フェーズ: TT を更新しフロンティアを特定
+            let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
+            self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
+            let _pv = self.pns_main(board);
+
+            let (r_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+            if r_pn == 0 {
+                break; // PNS で証明完了
+            }
+
+            // MID フェーズ: PNS で更新された TT を活用して局所探索
+            let remaining_budget2 = total_max_nodes.saturating_sub(self.nodes_searched);
+            let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
+            self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
+            self.path.clear();
+
+            let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+            if r_pn2 == 0 || r_dn2 == 0 {
+                break;
+            }
+            self.mid(board, INF - 1, INF - 1, 0, true);
+
+            let (r_pn3, _, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+            if r_pn3 == 0 {
+                break;
+            }
+        }
         self.max_nodes = total_max_nodes;
     }
 
