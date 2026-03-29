@@ -795,6 +795,26 @@ impl DfPnSolver {
             self.timed_out = true;
             return;
         }
+        // デプスリミット早期リターン: nodes_searched を消費しない．
+        // 深さ制限到達時は TT に NM を記録して即座に返す．
+        // これによりデプスリミット・スラッシング(§10.2 ply 31 問題)を防止し，
+        // ノード予算を実際の探索に集中させる．
+        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
+            let pos_key = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            if or_node {
+                let checks = self.generate_check_moves(board);
+                if checks.is_empty() || self.all_checks_refutable_by_tt(board, &checks) {
+                    self.store(pos_key, att_hand, INF, 0,
+                        REMAINING_INFINITE, pos_key);
+                } else {
+                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                }
+            } else {
+                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+            }
+            return;
+        }
         self.nodes_searched += 1;
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
@@ -927,35 +947,9 @@ impl DfPnSolver {
             }
         }
 
-        // 終端条件: 深さ制限・手数制限
-        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
-            #[cfg(feature = "profile")]
-            let _depth_limit_start = Instant::now();
-            if or_node {
-                // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
-                // 王手が0手の不詰は深さに依存しないため，IDS 間で再利用可能にする．
-                // TT ベースの高速判定のみ使用．
-                let checks = self.generate_check_moves(board);
-                if checks.is_empty() {
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
-                } else if self.all_checks_refutable_by_tt(board, &checks) {
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
-                } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
-                }
-            } else {
-                // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
-            }
-            #[cfg(feature = "profile")]
-            {
-                self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
-                self.profile_stats.depth_limit_terminal_count += 1;
-            }
-            return;
-        }
+        // NOTE: 深さ制限チェックは nodes_searched++ の前に移動済み(デプスリミット・
+        // スラッシング防止)．ここに到達する時点で ply < depth が保証されている．
+        debug_assert!(ply < self.depth, "depth limit should be handled before nodes_searched");
 
         // 合法手生成
         let mut moves = if or_node {
@@ -2595,24 +2589,17 @@ impl DfPnSolver {
         let danger = board.compute_king_danger(defender, king_sq);
         let safe_escapes = (king_moves & !our_occ & !danger).count();
 
-        // 高解像度 pn 調整 (§10.2 方針A): PN_UNIT=16 で中間値を返す．
-        // 応手数と逃げ場数の組み合わせをより正確に反映する．
-        if safe_escapes == 0 {
-            // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい
+        // 拡張 heuristic_and_pn: 逃げ場に基づく連続スケーリング．
+        // num_defenses ベースで既に大きな値(例: 5×S=80)になるため，
+        // 逃げ場による補正は控えめに保つ．
+        let base = if safe_escapes == 0 {
+            // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい(2/3 に割引)
             (num_defenses * 2 / 3).max(1) * PN_UNIT
-        } else if safe_escapes >= 4 {
-            // 逃げ場が非常に多い: さらに詰みにくい
-            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2 + PN_UNIT / 4
-        } else if safe_escapes >= 3 {
-            // 逃げ場が多い: 詰みにくい
-            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
-        } else if safe_escapes == 2 {
-            // 中程度の逃げ場
-            num_defenses * PN_UNIT + PN_UNIT / 2
         } else {
-            // safe_escapes == 1: 逃げ場1つ — わずかに加算
-            num_defenses * PN_UNIT + PN_UNIT / 4
-        }
+            // 逃げ場あり: 応手数ベース + 逃げ場 × S/2
+            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
+        };
+        base
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
@@ -2649,32 +2636,46 @@ impl DfPnSolver {
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
             // 玉周辺に攻め駒の利きが皆無の開放空間 → 非常に詰みにくい
-            return 3 * PN_UNIT;
+            return 8 * PN_UNIT;
         }
 
-        // 高解像度 pn (§10.2 方針A): PN_UNIT=16 で連続スケーリング．
-        // num_checks と safe_escapes の組み合わせで中間値を返す．
-        if num_checks <= 2 && safe_escapes >= 3 {
-            // 王手が少なく逃げ場が多い → 詰みにくい
-            // safe_escapes=3→2S+S/4, =4→2S+S/2, ≥5→3S (上限: 不詰証明遅延抑制)
-            let val = 2 * PN_UNIT + (safe_escapes - 3) * PN_UNIT / 4;
-            return val.min(3 * PN_UNIT);
-        }
-        if safe_escapes == 0 {
-            // 逃げ場なし → 詰みやすい(合駒のみで防御)
-            return PN_UNIT;
-        }
-        if safe_escapes >= 4 {
-            // 逃げ場が非常に多い → 追い詰めに手数を要する
-            // safe_escapes=4→S+S/4, =5→S+S/2, =6→2S
-            return PN_UNIT + (safe_escapes - 3) * PN_UNIT / 4;
-        }
-        if safe_escapes >= 2 {
-            // safe_escapes=2: わずかに詰みにくい
-            return PN_UNIT + PN_UNIT / 4;
-        }
-        // safe_escapes == 1: 標準的な局面
-        PN_UNIT
+        // 拡張 heuristic_or_pn: S〜8S の範囲で num_checks と safe_escapes の
+        // 二次元スケーリング(KomoringHeights の pn=10-80 に相当)．
+        //
+        // 基本方針:
+        // - safe_escapes が多い → 追い詰めに手数を要する(pn↑)
+        // - num_checks が少ない → 選択肢が少なく詰みにくい(pn↑)
+        // - 両方が悪い場合は乗算的に大きくなる
+        //
+        // safe_escapes に基づくベース値(S〜4S):
+        let escape_base = if safe_escapes == 0 {
+            PN_UNIT // 逃げ場なし: 詰みやすい
+        } else if safe_escapes == 1 {
+            PN_UNIT + PN_UNIT / 2 // 1.5S
+        } else if safe_escapes == 2 {
+            2 * PN_UNIT // 2S
+        } else if safe_escapes == 3 {
+            3 * PN_UNIT // 3S
+        } else {
+            // safe_escapes >= 4: 4S ベース
+            4 * PN_UNIT
+        };
+
+        // num_checks に基づく乗数(1.0〜2.0):
+        // 王手が少ないほど詰みにくい
+        let check_mult = if num_checks >= 8 {
+            escape_base // ×1.0: 多数の王手 → ベースのまま
+        } else if num_checks >= 4 {
+            escape_base + escape_base / 4 // ×1.25
+        } else if num_checks >= 2 {
+            escape_base + escape_base / 2 // ×1.5
+        } else {
+            // num_checks == 1: 王手がたった1つ → ×2.0
+            escape_base * 2
+        };
+
+        // 上限 8S(128): 不詰証明遅延を抑制
+        check_mult.min(8 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．
