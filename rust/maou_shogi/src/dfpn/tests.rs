@@ -1,3 +1,8 @@
+// verbose feature 無効時に verbose_eprintln! 内でのみ使われる変数の
+// unused 警告を抑制する．verbose 有効時はマクロが eprintln! に展開され
+// 変数が実際に使用されるため警告は出ない．
+#![allow(unused_variables, unused_assignments)]
+
 use super::*;
 use super::solver::*;
 use super::pns::*;
