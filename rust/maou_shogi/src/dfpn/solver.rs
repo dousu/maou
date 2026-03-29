@@ -2268,7 +2268,19 @@ impl DfPnSolver {
                 // 各 AND レベルで pn が最大2倍に縮退する速度に抑える．
                 // 12レベルの AND でも pn ≈ INF/2^12 ≈ 1M が確保され，
                 // 深い合駒チェーンの探索が可能になる．
-                let pn_floor = (eff_pn_th / 2).max(1);
+                //
+                // チェーン合駒 AND ノード(chain_king_sq あり)では pn_floor を
+                // DN_FLOOR(=100)に引き上げる．dn のチェーン用キャップ外し
+                // (§3 最適化)と同じ発想:
+                // OR 親の sibling_based が 2〜5 と極端に小さい場合でも，
+                // チェーン AND の子 OR に DN_FLOOR 以上の pn 予算を保証する．
+                // 標準の pn_floor = eff_pn_th / 2 では eff_pn_th=2〜5 のとき
+                // pn_floor=1〜2 となり，23応手への配分が不可能(閾値飢餓 §10.4)．
+                let pn_floor = if chain_king_sq.is_some() {
+                    DN_FLOOR.max((eff_pn_th / 2).max(1))
+                } else {
+                    (eff_pn_th / 2).max(1)
+                };
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + 1 を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
                 // child_pn_th = best_child.pn となり mid() が即座に返る
