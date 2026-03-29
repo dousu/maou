@@ -839,9 +839,9 @@ impl DfPnSolver {
             // TT エントリ増加診断(5M ノードごと)
             if self.nodes_searched % 5_000_000 == 0 {
                 let t = &self.table;
-                let total_ent: usize = t.tt.values().map(|v| v.len()).sum();
-                eprintln!("[tt_diag] positions={} entries={} proof={} disproof={} inter_new={} inter_upd={} dominated={}",
-                    t.tt.len(), total_ent,
+                let total_ent = t.total_entries();
+                eprintln!("[tt_diag] entries={} proof={} disproof={} inter_new={} inter_upd={} dominated={}",
+                    total_ent,
                     t.diag_proof_inserts, t.diag_disproof_inserts,
                     t.diag_intermediate_new, t.diag_intermediate_update,
                     t.diag_dominated_skip);
@@ -853,17 +853,6 @@ impl DfPnSolver {
                         else { format!("{}:{}", r, c) }
                     }).collect();
                 eprintln!("[tt_diag] remaining_dist=[{}]", rem.join(", "));
-                // エントリ数別局面分布
-                let mut size_dist = [0u64; 17]; // size_dist[n] = # positions with n entries
-                for v in t.tt.values() {
-                    let n = v.len().min(16);
-                    size_dist[n] += 1;
-                }
-                let sd: Vec<String> = size_dist.iter().enumerate()
-                    .filter(|(_, &c)| c > 0)
-                    .map(|(n, &c)| format!("{}ent:{}pos", n, c))
-                    .collect();
-                eprintln!("[tt_diag] entries_per_pos=[{}]", sd.join(", "));
                 // 10M ノードごとにコンテンツ分析
                 if self.nodes_searched % 10_000_000 == 0 {
                     self.table.dump_content_analysis();
@@ -1721,11 +1710,9 @@ impl DfPnSolver {
                         if cpn == 0 { "PROVED" } else if cdn == 0 { "DISPROVED" } else { "" });
                     // Dump TT entries for stuck children (first diagnostic only)
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
-                        if let Some(entries) = self.table.tt.get(&cpk) {
-                            for (ei, e) in entries.iter().enumerate() {
-                                eprintln!("[tt_dump]     entry[{}]: pn={} dn={} rem={} path_dep={} hand={:?}",
-                                    ei, e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
-                            }
+                        for e in self.table.entries_iter(cpk) {
+                            eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
+                                e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
                         }
                     }
                 }

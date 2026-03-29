@@ -1780,15 +1780,18 @@ use crate::types::{Color, PieceType};
 
                     // TT ルートの全エントリをダンプ
                     let pk = position_key(pos);
-                    if let Some(entries) = solver.table.tt.get(&pk) {
-                        verbose_eprintln!("  TT entries for root (count={})", entries.len());
-                        for (_i, _e) in entries.iter().enumerate() {
+                    #[cfg(feature = "verbose")]
+                    {
+                        let mut count = 0u32;
+                        for e in solver.table.entries_iter(pk) {
                             verbose_eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
-                                i, e.pn, e.dn, e.remaining, e.path_dependent,
+                                count, e.pn, e.dn, e.remaining, e.path_dependent,
                                 e.hand, e.source);
+                            count += 1;
                         }
-                    } else {
-                        verbose_eprintln!("  TT: no entries for root");
+                        if count == 0 {
+                            verbose_eprintln!("  TT: no entries for root");
+                        }
                     }
 
                     // remaining=0 vs remaining=19 の look_up 結果
@@ -5285,7 +5288,7 @@ use crate::types::{Color, PieceType};
             let result = solver.solve(&mut board);
             let elapsed = start.elapsed();
             let tt_pos = solver.table.len();
-            let tt_ent: usize = solver.table.tt.values().map(|v| v.len()).sum();
+            let tt_ent = solver.table.total_entries();
             let status = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("SOLVED({}te)", moves.len()),
                 TsumeResult::CheckmateNoPv { .. } => "PROVED".to_string(),
