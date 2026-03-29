@@ -84,7 +84,7 @@ pub struct DfPnSolver {
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
     /// この値を増やすことで PV 復元の成功率が向上する．
     pub(super) pv_nodes_per_child: u64,
-    /// TT GC 閾値: TT のポジション数がこの値を超えると GC を実行する．
+    /// TT GC 閾値: TT のエントリ数がこの値を超えると GC を実行する．
     ///
     /// 0 にすると GC を無効化する．
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
@@ -314,7 +314,7 @@ impl DfPnSolver {
 
     /// TT GC 閾値を設定する．
     ///
-    /// TT のポジション数がこの値を超えると GC を実行する．
+    /// TT のエントリ数がこの値を超えると GC を実行する．
     /// 0 にすると GC を無効化する．デフォルトは 0(GC 無効)．
     pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
         self.tt_gc_threshold = v;
@@ -839,9 +839,9 @@ impl DfPnSolver {
             // TT エントリ増加診断(5M ノードごと)
             if self.nodes_searched % 5_000_000 == 0 {
                 let t = &self.table;
-                let total_ent: usize = t.tt.values().map(|v| v.len()).sum();
-                eprintln!("[tt_diag] positions={} entries={} proof={} disproof={} inter_new={} inter_upd={} dominated={}",
-                    t.tt.len(), total_ent,
+                let total_ent = t.total_entries();
+                eprintln!("[tt_diag] entries={} proof={} disproof={} inter_new={} inter_upd={} dominated={}",
+                    total_ent,
                     t.diag_proof_inserts, t.diag_disproof_inserts,
                     t.diag_intermediate_new, t.diag_intermediate_update,
                     t.diag_dominated_skip);
@@ -853,17 +853,6 @@ impl DfPnSolver {
                         else { format!("{}:{}", r, c) }
                     }).collect();
                 eprintln!("[tt_diag] remaining_dist=[{}]", rem.join(", "));
-                // エントリ数別局面分布
-                let mut size_dist = [0u64; 17]; // size_dist[n] = # positions with n entries
-                for v in t.tt.values() {
-                    let n = v.len().min(16);
-                    size_dist[n] += 1;
-                }
-                let sd: Vec<String> = size_dist.iter().enumerate()
-                    .filter(|(_, &c)| c > 0)
-                    .map(|(n, &c)| format!("{}ent:{}pos", n, c))
-                    .collect();
-                eprintln!("[tt_diag] entries_per_pos=[{}]", sd.join(", "));
                 // 10M ノードごとにコンテンツ分析
                 if self.nodes_searched % 10_000_000 == 0 {
                     self.table.dump_content_analysis();
@@ -1721,11 +1710,9 @@ impl DfPnSolver {
                         if cpn == 0 { "PROVED" } else if cdn == 0 { "DISPROVED" } else { "" });
                     // Dump TT entries for stuck children (first diagnostic only)
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
-                        if let Some(entries) = self.table.tt.get(&cpk) {
-                            for (ei, e) in entries.iter().enumerate() {
-                                eprintln!("[tt_dump]     entry[{}]: pn={} dn={} rem={} path_dep={} hand={:?}",
-                                    ei, e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
-                            }
+                        for e in self.table.entries_iter(cpk) {
+                            eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
+                                e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
                         }
                     }
                 }
@@ -2218,7 +2205,7 @@ impl DfPnSolver {
 
             // === User-configurable GC (tt_gc_threshold) ===
             // set_tt_gc_threshold() で設定された閾値に基づく GC．
-            // 100K ノード毎にチェックし，TT 位置数が閾値を超えたら
+            // 100K ノード毎にチェックし，TT エントリ数が閾値を超えたら
             // 75% まで縮小する．Periodic GC(上記)よりも低い閾値で
             // きめ細かくメモリ制御する．デフォルト 0 = 無効．
             if self.tt_gc_threshold > 0
