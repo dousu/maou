@@ -57,6 +57,23 @@ fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
 /// 証明数・反証数の無限大を表す定数．
 const INF: u32 = u32::MAX;
 
+/// pn/dn の 1 単位を表す定数．
+///
+/// 全ての pn/dn 初期値・加算定数・フロア値はこの定数の倍数で表現する．
+/// PN_UNIT=1 が従来動作と等価であり，PN_UNIT を拡大することで
+/// 1+ε 閾値の余裕を確保し閾値飢餓(§10.2)を緩和できる．
+///
+/// 完全なスケーリング要件: pn/dn の「量」を表す全ての定数に PN_UNIT を
+/// 適用する必要がある．スケーリング対象は以下の通り:
+/// - 初期値: TT ミス時の pn=1/dn=1，heuristic_or_pn/heuristic_and_pn 返り値
+/// - 加算値: edge_cost_or/and，sacrifice_check_boost，epsilon の +1，
+///   progress_floor の +1，TCA の +1
+/// - フロア/バイアス: DN_FLOOR，INTERPOSE_DN_BIAS，.max(N) のリテラル
+///
+/// スケーリング不要: 終端値(INF, 0)，相対比率(/4, /2, *2/3)，
+/// 盤面状態の比較(safe_escapes >= 4 等)，ループカウンタ．
+const PN_UNIT: u32 = 1;
+
 /// AND ノードで合駒(drop)を後回しにするための dn バイアス．
 ///
 /// AND ノード(玉方手番)で王の移動・駒取りなどの非合駒応手を先に
@@ -71,14 +88,14 @@ const INF: u32 = u32::MAX;
 /// 新値: 8 は king move の初期 dn(1)より十分大きく，
 /// king move が探索されて dn が上昇した後に drop の探索が始まる程度のバイアス．
 /// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
-const INTERPOSE_DN_BIAS: u32 = 8;
+const INTERPOSE_DN_BIAS: u32 = 8 * PN_UNIT;
 
 /// MID ループの dn 閾値フロア(スラッシング防止)．
 ///
 /// 子ノードの dn が小さすぎると MID ループが閾値超過で即座に返り，
 /// 進捗のない空転が発生する．dn_threshold を最低 DN_FLOOR まで引き上げることで
 /// 子ノードに十分な探索予算を確保し，スラッシングを防止する．
-const DN_FLOOR: u32 = 100;
+const DN_FLOOR: u32 = 100 * PN_UNIT;
 
 /// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
 /// 過小評価対策．
@@ -166,7 +183,7 @@ fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
     let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
     let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
     let dist = dc.max(dr);
-    if dist <= 2 { 1 } else { 2 }
+    if dist <= 2 { PN_UNIT } else { 2 * PN_UNIT }
 }
 
 /// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
@@ -186,10 +203,10 @@ fn edge_cost_and(m: Move) -> u32 {
     let capture = m.captured_piece_raw() > 0;
     if capture {
         // 駒取り: 攻め駒を除去するため攻め方にとって不利
-        return 2;
+        return 2 * PN_UNIT;
     }
     // 玉の逃げ・駒移動合い
-    1
+    PN_UNIT
 }
 
 /// 捨て駒のみ王手ブースト(人間的枝刈り)．
@@ -216,7 +233,7 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
         }
     }
     // 全王手が捨て駒 → 詰ませにくい(上限2: 大きくしすぎると不詰証明が遅延)
-    2
+    2 * PN_UNIT
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
@@ -260,7 +277,7 @@ fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
                 deduction.saturating_add(group_sum - group_max as u64);
         }
     }
-    (raw_sum as u64).saturating_sub(deduction).max(1) as u32
+    (raw_sum as u64).saturating_sub(deduction).max(PN_UNIT as u64) as u32
 }
 
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．

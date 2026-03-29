@@ -1,3 +1,8 @@
+// verbose feature 無効時に verbose_eprintln! 内でのみ使われる変数の
+// unused 警告を抑制する．verbose 有効時はマクロが eprintln! に展開され
+// 変数が実際に使用されるため警告は出ない．
+#![allow(unused_variables, unused_assignments)]
+
 use super::*;
 use super::solver::*;
 use super::pns::*;
@@ -775,7 +780,7 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched: _,
+                nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 assert_eq!(
@@ -822,7 +827,7 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched: _,
+                nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 // find_shortest = false でも17手詰みが見つかる
@@ -870,7 +875,7 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched: _,
+                nodes_searched,
             } => {
                 let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 verbose_eprintln!("=== tsume6 result: {} moves, {} nodes, prefilter_hits={} ===",
@@ -880,7 +885,7 @@ use crate::types::{Color, PieceType};
                 // 診断PV抽出は完了後のみ実行(Phase 2 後は TT が巨大化するため省略)
 
                 // 8i7g が含まれているか確認 — 27手詰めになるバグの診断
-                if let Some(_pos) = pv.iter().position(|m| m == "8i7g") {
+                if let Some(pos) = pv.iter().position(|m| m == "8i7g") {
                     verbose_eprintln!("WARNING: 8i7g found at ply {} — this leads to 27-move mate, not 29", pos);
                 }
 
@@ -989,9 +994,9 @@ use crate::types::{Color, PieceType};
         for p in 0..64 {
             let n = solver.ply_nodes[p];
             let it = solver.ply_iters[p];
-            let _stag = solver.ply_stag_penalties[p];
+            let stag = solver.ply_stag_penalties[p];
             if n > 0 || it > 0 {
-                let _ratio = if it > 0 { n as f64 / it as f64 } else { 0.0 };
+                let ratio = if it > 0 { n as f64 / it as f64 } else { 0.0 };
                 verbose_eprintln!("[efficiency] {:>3} {:>10} {:>12} {:>8.1} {:>8}",
                     p, n, it, ratio, stag);
             }
@@ -1038,19 +1043,19 @@ use crate::types::{Color, PieceType};
             let result = solver.solve(&mut board);
 
             match &result {
-                TsumeResult::Checkmate { moves: _, nodes_searched: _ } => {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
                     verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} SOLVED {}te, {} nodes",
                         start_ply, pv_moves[start_ply], moves.len(), nodes_searched
                     );
                 }
-                TsumeResult::Unknown { nodes_searched: _ } => {
+                TsumeResult::Unknown { nodes_searched } => {
                     verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} FAILED ({} nodes)",
                         start_ply, pv_moves[start_ply], nodes_searched
                     );
                 }
-                _other => {
+                other => {
                     verbose_eprintln!(
                         "[pv_analysis] ply={:2} first_move={:<8} {:?}",
                         start_ply, pv_moves[start_ply], other
@@ -1082,25 +1087,25 @@ use crate::types::{Color, PieceType};
             let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 30);
             let result = solver.solve(&mut board);
             match &result {
-                TsumeResult::Checkmate { moves: _, nodes_searched: _ } => {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
                     verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} CHECKMATE {}te, {} nodes",
                         def.to_usi(), moves.len(), nodes_searched
                     );
                 }
-                TsumeResult::NoCheckmate { nodes_searched: _ } => {
+                TsumeResult::NoCheckmate { nodes_searched } => {
                     verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} NO_CHECKMATE (refuted), {} nodes",
                         def.to_usi(), nodes_searched
                     );
                 }
-                TsumeResult::Unknown { nodes_searched: _ } => {
+                TsumeResult::Unknown { nodes_searched } => {
                     verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} UNKNOWN (stuck), {} nodes",
                         def.to_usi(), nodes_searched
                     );
                 }
-                _other => {
+                other => {
                     verbose_eprintln!(
                         "[ply1_analysis] defense={:<8} {:?}",
                         def.to_usi(), other
@@ -1493,7 +1498,7 @@ use crate::types::{Color, PieceType};
         }
         let start = Instant::now();
         let result = solver.solve(&mut board);
-        let _elapsed = start.elapsed();
+        let elapsed = start.elapsed();
         verbose_eprintln!("39te: {} nodes, {:.1}s, max_ply={}, prefilter_hits={}",
             solver.nodes_searched, elapsed.as_secs_f64(), solver.max_ply,
             solver.prefilter_hits);
@@ -1506,7 +1511,7 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate {
                 moves,
-                nodes_searched: _,
+                nodes_searched,
             } => {
                 let pv: Vec<String> =
                     moves.iter().map(|m| m.to_usi()).collect();
@@ -1634,9 +1639,9 @@ use crate::types::{Color, PieceType};
 
             let start = Instant::now();
             let result = solver.solve(&mut test_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let (_result_str, solved) = match &result {
+            let (result_str, solved) = match &result {
                 TsumeResult::Checkmate { moves, .. } =>
                     (format!("Mate({})", moves.len()), true),
                 TsumeResult::CheckmateNoPv { .. } =>
@@ -1667,9 +1672,9 @@ use crate::types::{Color, PieceType};
 
                     let start2 = Instant::now();
                     let result2 = solver2.solve(&mut test_board2);
-                    let _elapsed2 = start2.elapsed();
+                    let elapsed2 = start2.elapsed();
 
-                    let _result_str2 = match &result2 {
+                    let result_str2 = match &result2 {
                         TsumeResult::Checkmate { moves, .. } =>
                             format!("Mate({})", moves.len()),
                         TsumeResult::CheckmateNoPv { .. } =>
@@ -1717,7 +1722,7 @@ use crate::types::{Color, PieceType};
                     sub_solver.set_find_shortest(false);
                     let sub_result = sub_solver.solve(&mut sub_board);
 
-                    let _sub_result_str = match &sub_result {
+                    let sub_result_str = match &sub_result {
                         TsumeResult::Checkmate { moves, .. } =>
                             format!("Mate({})", moves.len()),
                         TsumeResult::CheckmateNoPv { .. } =>
@@ -1752,7 +1757,7 @@ use crate::types::{Color, PieceType};
                     sub_solver.set_find_shortest(false);
                     let sub_result = sub_solver.solve(&mut sub_board);
 
-                    let _sub_result_str = match &sub_result {
+                    let sub_result_str = match &sub_result {
                         TsumeResult::Checkmate { moves, .. } =>
                             format!("Mate({})", moves.len()),
                         TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
@@ -1770,7 +1775,7 @@ use crate::types::{Color, PieceType};
                     solver.set_find_shortest(false);
                     let result = solver.solve(&mut test_board);
 
-                    let _result_str = match &result {
+                    let result_str = match &result {
                         TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                         TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
                         TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
@@ -1795,8 +1800,8 @@ use crate::types::{Color, PieceType};
                     }
 
                     // remaining=0 vs remaining=19 の look_up 結果
-                    let (_p0, _d0, _) = solver.table.look_up(pk, &att_hand22, 0);
-                    let (_p19, _d19, _) = solver.table.look_up(pk, &att_hand22, 19);
+                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0);
+                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19);
                     verbose_eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
                     verbose_eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
                 }
@@ -2961,13 +2966,13 @@ use crate::types::{Color, PieceType};
         // compute_checkers_at
         let checkers = final_board.compute_checkers_at(king_sq, attacker);
         verbose_eprintln!("Checkers: count={}", checkers.count());
-        for _sq in checkers {
+        for sq in checkers {
             verbose_eprintln!("  checker at {:?} (col={}, row={})", sq, sq.col(), sq.row());
         }
 
         // find_sliding_checker
         let mut solver = DfPnSolver::default_solver();
-        let _sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
+        let sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
         verbose_eprintln!("find_sliding_checker: {:?}", sliding.map(|s| format!("col={}, row={}", s.col(), s.row())));
 
         // checker_sq
@@ -2976,7 +2981,7 @@ use crate::types::{Color, PieceType};
         // between_bb
         let between = attack::between_bb(checker_sq, king_sq);
         verbose_eprintln!("between_bb({:?}, {:?}): count={}", checker_sq, king_sq, between.count());
-        for _sq in between {
+        for sq in between {
             verbose_eprintln!("  between: col={}, row={}", sq.col(), sq.row());
         }
 
@@ -2985,23 +2990,23 @@ use crate::types::{Color, PieceType};
             &final_board, &between, king_sq, checker_sq, defender, attacker,
         );
         verbose_eprintln!("futile: count={}", futile.count());
-        for _sq in futile {
+        for sq in futile {
             verbose_eprintln!("  futile: col={}, row={}", sq.col(), sq.row());
         }
         verbose_eprintln!("chain: count={}", chain.count());
-        for _sq in chain {
+        for sq in chain {
             verbose_eprintln!("  chain: col={}, row={}", sq.col(), sq.row());
         }
 
         // generate_defense_moves
         let defenses = solver.generate_defense_moves(&mut final_board);
         verbose_eprintln!("generate_defense_moves: {} moves", defenses.len());
-        for _d in &defenses {
+        for d in &defenses {
             verbose_eprintln!("  {}", d.to_usi());
         }
 
         // 比較: generate_legal_moves
-        let _legal = movegen::generate_legal_moves(&mut final_board);
+        let legal = movegen::generate_legal_moves(&mut final_board);
         verbose_eprintln!("generate_legal_moves: {} moves", legal.len());
 
         // between_bb が空なら合駒生成がスキップされる → バグの原因
@@ -3212,7 +3217,7 @@ use crate::types::{Color, PieceType};
             board.do_move(m);
         }
 
-        let _ply22_sfen = board.sfen();
+        let ply22_sfen = board.sfen();
         verbose_eprintln!("\n{}", "=".repeat(80));
         verbose_eprintln!(" Ply 22 OR node breakdown (残り17手, PV: P*1g)");
         verbose_eprintln!(" SFEN: {}", ply22_sfen);
@@ -3226,8 +3231,8 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut b);
-            let _elapsed = start.elapsed();
-            let _result_str = match &result {
+            let elapsed = start.elapsed();
+            let result_str = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                 TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
@@ -3245,8 +3250,8 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut b);
-            let _elapsed = start.elapsed();
-            let _result_str = match &result {
+            let elapsed = start.elapsed();
+            let result_str = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                 TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
@@ -3263,7 +3268,7 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("  王手数: {}", check_moves.len());
 
         // brute-force でも確認
-        let _brute_checks: Vec<String> = movegen::generate_legal_moves(&mut board)
+        let brute_checks: Vec<String> = movegen::generate_legal_moves(&mut board)
             .into_iter()
             .filter(|m| {
                 let c = board.do_move(*m);
@@ -3287,15 +3292,15 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut sub);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _result_str = match &result {
+            let result_str = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                 TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
                 _ => "Other".to_string(),
             };
-            let _marker = if cm.to_usi() == "P*1g" { " ← PV" } else { "" };
+            let marker = if cm.to_usi() == "P*1g" { " ← PV" } else { "" };
             verbose_eprintln!("  {:<12} {:<14} {:<10.2} {:<10} {}{}",
                 cm.to_usi(), solver.nodes_searched, elapsed.as_secs_f64(),
                 solver.max_ply, result_str, marker);
@@ -3313,8 +3318,8 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut sub);
-            let _elapsed = start.elapsed();
-            let _result_str = match &result {
+            let elapsed = start.elapsed();
+            let result_str = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                 TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                 TsumeResult::Unknown { .. } => "Unknown".to_string(),
@@ -3334,7 +3339,7 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("  P*1g 後の応手数: {}", defenses.len());
         for def_mv in &defenses {
             let cap_d = board.do_move(*def_mv);
-            let _next_checks = def_solver.generate_check_moves(&mut board);
+            let next_checks = def_solver.generate_check_moves(&mut board);
             verbose_eprintln!("  {} → 次の王手数: {} {:?}",
                 def_mv.to_usi(), next_checks.len(),
                 next_checks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
@@ -3548,7 +3553,7 @@ use crate::types::{Color, PieceType};
 
             // ドロップ手のカウント
             let drop_count = moves.iter().filter(|m| m.is_drop()).count();
-            let _move_count = moves.len() - drop_count;
+            let move_count = moves.len() - drop_count;
 
             // 正解手が手リストに含まれているか確認
             let expected_move = board.move_from_usi(usi)
@@ -3557,10 +3562,10 @@ use crate::types::{Color, PieceType};
 
             // サンプル表示(ply 4 は全手, それ以外は先頭10手)
             let limit = if ply == 4 { moves.len() } else { 10 };
-            let _sample: Vec<String> = moves.iter().take(limit).map(|m| m.to_usi()).collect();
+            let sample: Vec<String> = moves.iter().take(limit).map(|m| m.to_usi()).collect();
 
-            let _node_type = if is_or { "OR" } else { "AND" };
-            let _mark = if !found { " *** MISSING ***" } else { "" };
+            let node_type = if is_or { "OR" } else { "AND" };
+            let mark = if !found { " *** MISSING ***" } else { "" };
 
             verbose_eprintln!("{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} [{}]{}",
                 ply, node_type, move_count, drop_count, moves.len(),
@@ -3576,7 +3581,7 @@ use crate::types::{Color, PieceType};
         if final_defenses.is_empty() {
             verbose_eprintln!("→ 詰み!");
         } else {
-            let _sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
+            let sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
             verbose_eprintln!("→ 回避手あり: [{}]", sample.join(", "));
         }
     }
@@ -3609,7 +3614,7 @@ use crate::types::{Color, PieceType};
             "#", "Move", "Type", "Nodes", "Result", "PV len");
         verbose_eprintln!("{}", "-".repeat(65));
 
-        for (_i, &defense) in defenses.iter().enumerate() {
+        for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
             child_board.do_move(defense);
 
@@ -3618,9 +3623,9 @@ use crate::types::{Color, PieceType};
             child_solver.set_find_shortest(false);
             let result = child_solver.solve(&mut child_board);
 
-            let _move_type = if defense.is_drop() { "drop" } else { "move" };
-            let (_result_str, _pv_len) = match &result {
-                TsumeResult::Checkmate { moves, nodes_searched: _ } =>
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, pv_len) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE"), moves.len()),
                 TsumeResult::CheckmateNoPv { .. } =>
                     (format!("MATE(nopv)"), 0),
@@ -3629,7 +3634,7 @@ use crate::types::{Color, PieceType};
                 TsumeResult::Unknown { .. } =>
                     (format!("UNKNOWN"), 0),
             };
-            let _nodes = match &result {
+            let nodes = match &result {
                 TsumeResult::Checkmate { nodes_searched, .. } => *nodes_searched,
                 TsumeResult::CheckmateNoPv { nodes_searched } => *nodes_searched,
                 TsumeResult::NoCheckmate { nodes_searched } => *nodes_searched,
@@ -3637,7 +3642,7 @@ use crate::types::{Color, PieceType};
             };
 
             let is_correct = defense.to_usi() == "4c3d";
-            let _marker = if is_correct { " ← CORRECT" } else { "" };
+            let marker = if is_correct { " ← CORRECT" } else { "" };
 
             verbose_eprintln!("{:>4} {:>12} {:>8} {:>10} {:>10} {:>8}{}",
                 i + 1, defense.to_usi(), move_type, nodes, result_str, pv_len, marker);
@@ -3685,7 +3690,7 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("{}", "-".repeat(55));
 
         // 各回避手を適用後，攻め方視点でソルブ
-        for (_i, &defense) in defenses.iter().enumerate() {
+        for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
             child_board.do_move(defense);
 
@@ -3696,10 +3701,10 @@ use crate::types::{Color, PieceType};
             child_solver.set_find_shortest(false);
             let start = Instant::now();
             let result = child_solver.solve(&mut child_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _move_type = if defense.is_drop() { "drop" } else { "move" };
-            let (_result_str, _nodes) = match &result {
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -3711,7 +3716,7 @@ use crate::types::{Color, PieceType};
             };
 
             let is_best = defense.to_usi() == "S*6i";
-            let _marker = if is_best { " ← BEST" } else { "" };
+            let marker = if is_best { " ← BEST" } else { "" };
             verbose_eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10.1} {:>8}{}",
                 i + 1, defense.to_usi(), move_type, nodes,
                 elapsed.as_secs_f64() * 1000.0, result_str, marker);
@@ -3755,9 +3760,9 @@ use crate::types::{Color, PieceType};
             let start = Instant::now();
             let mut test_board = board.clone();
             let result = solver.solve(&mut test_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let (_status, _nodes) = match &result {
+            let (status, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -3768,7 +3773,7 @@ use crate::types::{Color, PieceType};
                     ("UNKNOWN".into(), *nodes_searched),
             };
 
-            let _node_type = if or_sub { "OR " } else { "AND" };
+            let node_type = if or_sub { "OR " } else { "AND" };
             verbose_eprintln!("{:>5} {:>3} {:>8} {:>10} {:>10.1} {:>8}",
                 format!("ply{}", i + 1), node_type, remaining, nodes,
                 elapsed.as_secs_f64() * 1000.0, status);
@@ -3817,7 +3822,7 @@ use crate::types::{Color, PieceType};
             let mut test_board = board.clone();
             let result = solver.solve(&mut test_board);
 
-            let (_status, _nodes) = match &result {
+            let (status, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -3828,7 +3833,7 @@ use crate::types::{Color, PieceType};
                     ("UNKNOWN".into(), *nodes_searched),
             };
 
-            let _node_type = if or_sub { "OR " } else { "AND" };
+            let node_type = if or_sub { "OR " } else { "AND" };
             verbose_eprintln!("{:>5} {:>3} {:>6} {:>10} {:>10} {:>10}",
                 format!("ply{}", i + 1), node_type, remaining,
                 budget, nodes, status);
@@ -3865,7 +3870,7 @@ use crate::types::{Color, PieceType};
             "#", "Move", "Type", "Budget", "Nodes", "Result");
         verbose_eprintln!("{}", "-".repeat(55));
 
-        for (_i, &defense) in defenses.iter().enumerate() {
+        for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
             child_board.do_move(defense);
 
@@ -3874,8 +3879,8 @@ use crate::types::{Color, PieceType};
             child_solver.set_find_shortest(false);
             let result = child_solver.solve(&mut child_board);
 
-            let _move_type = if defense.is_drop() { "drop" } else { "move" };
-            let (_result_str, _nodes) = match &result {
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -3887,7 +3892,7 @@ use crate::types::{Color, PieceType};
             };
 
             let is_correct = defense.to_usi() == "4c3d";
-            let _marker = if is_correct { " ← CORRECT" } else { "" };
+            let marker = if is_correct { " ← CORRECT" } else { "" };
             verbose_eprintln!("{:>4} {:>8} {:>5} {:>10} {:>10} {:>10}{}",
                 i + 1, defense.to_usi(), move_type,
                 500_000, nodes, result_str, marker);
@@ -3946,7 +3951,7 @@ use crate::types::{Color, PieceType};
             ("P*8c", "9c8c"), ("B*8c", "9c8c"), ("N*8c", "9c8c"),
         ];
 
-        for (_idx, &(interpose_usi, capture_usi)) in interpositions.iter().enumerate() {
+        for (idx, &(interpose_usi, capture_usi)) in interpositions.iter().enumerate() {
             let interpose = board.move_from_usi(interpose_usi).unwrap();
             let mut b = board.clone();
             b.do_move(interpose);
@@ -3974,10 +3979,10 @@ use crate::types::{Color, PieceType};
         }
     }
 
-    fn print_result(idx: usize, _label: &str, result: &TsumeResult, _marker: &str) {
+    fn print_result(idx: usize, label: &str, result: &TsumeResult, marker: &str) {
         match result {
-            TsumeResult::Checkmate { moves, nodes_searched: _ } => {
-                let _pv_str: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+            TsumeResult::Checkmate { moves, nodes_searched } => {
+                let pv_str: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 if idx > 0 {
                     verbose_eprintln!("{:>2}. {} nodes={:>7} MATE({:>2}) PV: {}{}",
                         idx, label, nodes_searched, moves.len(), pv_str.join(" "), marker);
@@ -3986,13 +3991,13 @@ use crate::types::{Color, PieceType};
                         label, nodes_searched, moves.len(), pv_str.join(" "), marker);
                 }
             }
-            TsumeResult::CheckmateNoPv { nodes_searched: _ } => {
+            TsumeResult::CheckmateNoPv { nodes_searched } => {
                 verbose_eprintln!("    {} nodes={:>7} MATE(nopv){}", label, nodes_searched, marker);
             }
-            TsumeResult::NoCheckmate { nodes_searched: _ } => {
+            TsumeResult::NoCheckmate { nodes_searched } => {
                 verbose_eprintln!("    {} nodes={:>7} NO_MATE{}", label, nodes_searched, marker);
             }
-            TsumeResult::Unknown { nodes_searched: _ } => {
+            TsumeResult::Unknown { nodes_searched } => {
                 verbose_eprintln!("    {} nodes={:>7} UNKNOWN{}", label, nodes_searched, marker);
             }
         }
@@ -4033,7 +4038,7 @@ use crate::types::{Color, PieceType};
 
         let mut hard_defenses: Vec<(Move, String, u64, String)> = Vec::new();
 
-        for (_i, &defense) in defenses.iter().enumerate() {
+        for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board.clone();
             child_board.do_move(defense);
 
@@ -4041,9 +4046,9 @@ use crate::types::{Color, PieceType};
             s.set_find_shortest(false);
             let start = Instant::now();
             let result = s.solve(&mut child_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _move_type = if defense.is_drop() { "drop" } else { "move" };
+            let move_type = if defense.is_drop() { "drop" } else { "move" };
             let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
@@ -4072,7 +4077,7 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("\n--- Phase 2: ボトルネック応手を深掘り ---");
         verbose_eprintln!("(defense → check → reply → attacker 視点でソルブ)\n");
 
-        for (defense, _def_usi, _parent_nodes, _parent_result) in &hard_defenses {
+        for (defense, defusi, parent_nodes, parent_result) in &hard_defenses {
             let mut def_board = board.clone();
             def_board.do_move(*defense);
 
@@ -4080,16 +4085,16 @@ use crate::types::{Color, PieceType};
             let checks = solver.generate_check_moves(&mut def_board);
 
             verbose_eprintln!("=== {} ({}，親ノード={}，王手数={}) ===\n",
-                def_usi, parent_result, parent_nodes, checks.len());
+                defusi, parent_result, parent_nodes, checks.len());
 
-            for (_j, &check) in checks.iter().enumerate() {
+            for (j, &check) in checks.iter().enumerate() {
                 let mut check_board = def_board.clone();
                 check_board.do_move(check);
 
                 // ply 6: 守備方番(AND) — 回避手を列挙
                 let defs_after = solver.generate_defense_moves(&mut check_board);
                 let def_count = defs_after.len();
-                let _check_type = if check.is_drop() { "drop" } else { "move" };
+                let check_type = if check.is_drop() { "drop" } else { "move" };
 
                 verbose_eprintln!("  王手 {:>2}. {} ({}) → 回避手 {} 手",
                     j + 1, check.to_usi(), check_type, def_count);
@@ -4108,22 +4113,22 @@ use crate::types::{Color, PieceType};
                 let mut mate_count = 0;
                 let mut unk_count = 0;
 
-                for (_k, &reply) in defs_after.iter().enumerate() {
+                for (k, &reply) in defs_after.iter().enumerate() {
                     let mut reply_board = check_board.clone();
                     reply_board.do_move(reply);
 
                     // ply 7: 攻め方番(OR) — 正しい視点でソルブ
                     let next_checks = solver.generate_check_moves(&mut reply_board);
-                    let _chk_count = next_checks.len();
+                    let chk_count = next_checks.len();
 
                     let mut s = DfPnSolver::with_timeout(33, 200_000, 32767, 5);
                     s.set_find_shortest(false);
                     let start = Instant::now();
                     let result = s.solve(&mut reply_board);
-                    let _elapsed = start.elapsed();
+                    let elapsed = start.elapsed();
 
-                    let _reply_type = if reply.is_drop() { "drop" } else { "move" };
-                    let (_result_str, nodes) = match &result {
+                    let reply_type = if reply.is_drop() { "drop" } else { "move" };
+                    let (result_str, nodes) = match &result {
                         TsumeResult::Checkmate { moves, nodes_searched } => {
                             mate_count += 1;
                             (format!("MATE({})", moves.len()), *nodes_searched)
@@ -4143,7 +4148,7 @@ use crate::types::{Color, PieceType};
                     };
                     total_nodes += nodes;
 
-                    let _heavy = if nodes >= 50_000 { " <<<" } else { "" };
+                    let heavy = if nodes >= 50_000 { " <<<" } else { "" };
                     verbose_eprintln!("  {:>4} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}",
                         k + 1, reply.to_usi(), reply_type, nodes,
                         elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy);
@@ -4169,21 +4174,21 @@ use crate::types::{Color, PieceType};
             "#", "Reply", "Type", "Nodes", "ms", "Result", "Chks");
         verbose_eprintln!("{}", "-".repeat(55));
 
-        for (_k, &reply) in pv_defs.iter().enumerate() {
+        for (k, &reply) in pv_defs.iter().enumerate() {
             let mut reply_board = pv_board.clone();
             reply_board.do_move(reply);
 
             let next_checks = solver.generate_check_moves(&mut reply_board);
-            let _chk_count = next_checks.len();
+            let chk_count = next_checks.len();
 
             let mut s = DfPnSolver::with_timeout(33, 2_000_000, 32767, 30);
             s.set_find_shortest(false);
             let start = Instant::now();
             let result = s.solve(&mut reply_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _reply_type = if reply.is_drop() { "drop" } else { "move" };
-            let (_result_str, nodes) = match &result {
+            let reply_type = if reply.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -4195,8 +4200,8 @@ use crate::types::{Color, PieceType};
             };
 
             let is_pv = reply.to_usi() == "3d2c";
-            let _marker = if is_pv { " ← PV" } else { "" };
-            let _heavy = if nodes >= 100_000 { " <<<" } else { "" };
+            let marker = if is_pv { " ← PV" } else { "" };
+            let heavy = if nodes >= 100_000 { " <<<" } else { "" };
             verbose_eprintln!("{:>3} {:>10} {:>5} {:>10} {:>8.1} {:>10} {:>5}{}{}",
                 k + 1, reply.to_usi(), reply_type, nodes,
                 elapsed.as_secs_f64() * 1000.0, result_str, chk_count, heavy, marker);
@@ -4235,7 +4240,7 @@ use crate::types::{Color, PieceType};
             "Move", "Description", "Nodes", "Time(s)", "Result");
         verbose_eprintln!("{}", "-".repeat(75));
 
-        for (usi, _desc) in &hard_moves {
+        for (usi, desc) in &hard_moves {
             let m = board.move_from_usi(usi).unwrap();
             let mut child_board = board.clone();
             child_board.do_move(m);
@@ -4244,9 +4249,9 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut child_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let (_result_str, _nodes) = match &result {
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -4262,7 +4267,7 @@ use crate::types::{Color, PieceType};
 
             // 解けた場合は PV を表示
             if let TsumeResult::Checkmate { moves, .. } = &result {
-                let _pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 verbose_eprintln!("             PV: {}", pv.join(" "));
             }
         }
@@ -4299,9 +4304,9 @@ use crate::types::{Color, PieceType};
             let mut test_board = pv_board.clone();
             let start = Instant::now();
             let result = solver.solve(&mut test_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let (_result_str, _nodes) = match &result {
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -4442,7 +4447,7 @@ use crate::types::{Color, PieceType};
             "#", "Defense", "Type", "Nodes", "Time(s)", "Result");
         verbose_eprintln!("{}", "-".repeat(55));
 
-        for (_i, &defense) in defenses.iter().enumerate() {
+        for (i, &defense) in defenses.iter().enumerate() {
             let mut child_board = board_after_n1e.clone();
             child_board.do_move(defense);
 
@@ -4451,10 +4456,10 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut child_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _def_type = if defense.is_drop() { "drop" } else { "move" };
-            let (_result_str, nodes) = match &result {
+            let def_type = if defense.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -4465,14 +4470,14 @@ use crate::types::{Color, PieceType};
                     ("UNK".into(), *nodes_searched),
             };
 
-            let _heavy = if nodes >= 500_000 { " <<<" } else { "" };
+            let heavy = if nodes >= 500_000 { " <<<" } else { "" };
             verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}{}",
                 i + 1, defense.to_usi(), def_type, nodes,
                 elapsed.as_secs_f64(), result_str, heavy);
 
             if let TsumeResult::Checkmate { moves, .. } = &result {
-                let _pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
-                let _suffix = if moves.len() > 10 { " ..." } else { "" };
+                let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
+                let suffix = if moves.len() > 10 { " ..." } else { "" };
                 verbose_eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
@@ -4483,7 +4488,7 @@ use crate::types::{Color, PieceType};
             "#", "Check", "Type", "Nodes", "Time(s)", "Result");
         verbose_eprintln!("{}", "-".repeat(55));
 
-        for (_i, &check) in checks.iter().enumerate() {
+        for (i, &check) in checks.iter().enumerate() {
             let mut child_board = board.clone();
             child_board.do_move(check);
 
@@ -4491,10 +4496,10 @@ use crate::types::{Color, PieceType};
             solver.set_find_shortest(false);
             let start = Instant::now();
             let result = solver.solve(&mut child_board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _check_type = if check.is_drop() { "drop" } else { "move" };
-            let (_result_str, _nodes) = match &result {
+            let check_type = if check.is_drop() { "drop" } else { "move" };
+            let (result_str, nodes) = match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } =>
                     (format!("MATE({})", moves.len()), *nodes_searched),
                 TsumeResult::CheckmateNoPv { nodes_searched } =>
@@ -4510,8 +4515,8 @@ use crate::types::{Color, PieceType};
                 elapsed.as_secs_f64(), result_str);
 
             if let TsumeResult::Checkmate { moves, .. } = &result {
-                let _pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
-                let _suffix = if moves.len() > 10 { " ..." } else { "" };
+                let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
+                let suffix = if moves.len() > 10 { " ..." } else { "" };
                 verbose_eprintln!("    PV: {}{}", pv.join(" "), suffix);
             }
         }
@@ -4552,7 +4557,7 @@ use crate::types::{Color, PieceType};
         let check_solver = DfPnSolver::default_solver();
         let checks = check_solver.generate_check_moves(&mut board);
         verbose_eprintln!("Check moves from ply 24 ({}):", checks.len());
-        for _m in &checks {
+        for m in &checks {
             verbose_eprintln!("  {}", m.to_usi());
         }
 
@@ -4575,7 +4580,7 @@ use crate::types::{Color, PieceType};
             let pk = position_key(&b);
             let att_hand = b.hand[s.attacker.index()];
             let (root_pn, root_dn, _) = s.look_up_pn_dn(pk, &att_hand, depth as u16);
-            let _r_str = if root_pn == 0 {
+            let r_str = if root_pn == 0 {
                 "Mate".to_string()
             } else if root_dn == 0 {
                 "NoMate".to_string()
@@ -4637,7 +4642,7 @@ use crate::types::{Color, PieceType};
 
         // 王手生成で攻め手を確認
         let check_solver = DfPnSolver::default_solver();
-        let _checks = check_solver.generate_check_moves(&mut board);
+        let checks = check_solver.generate_check_moves(&mut board);
         verbose_eprintln!("Check moves: {} {:?}", checks.len(),
             checks.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
 
@@ -4648,9 +4653,9 @@ use crate::types::{Color, PieceType};
 
             let start = Instant::now();
             let result = solver.solve(&mut board);
-            let _elapsed = start.elapsed();
+            let elapsed = start.elapsed();
 
-            let _result_str = match &result {
+            let result_str = match &result {
                 TsumeResult::Checkmate { moves, .. } =>
                     format!("Mate({})", moves.len()),
                 TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
@@ -4665,7 +4670,7 @@ use crate::types::{Color, PieceType};
         // 旧互換用: 最後の結果を使う
         let mut solver = DfPnSolver::with_timeout(15, 5_000_000, 32767, 120);
         solver.set_find_shortest(false);
-        let _result = solver.solve(&mut board);
+        let result = solver.solve(&mut board);
 
         verbose_eprintln!("Result: {:?}", match &result {
             TsumeResult::Checkmate { moves, .. } =>
@@ -4703,9 +4708,9 @@ use crate::types::{Color, PieceType};
                 sub.set_find_shortest(false);
                 let start = Instant::now();
                 let r = sub.solve(&mut after_atk);
-                let _elapsed = start.elapsed();
+                let elapsed = start.elapsed();
 
-                let _r_str = match &r {
+                let r_str = match &r {
                     TsumeResult::Checkmate { moves, .. } =>
                         format!("Mate({})", moves.len()),
                     TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
@@ -4738,9 +4743,9 @@ use crate::types::{Color, PieceType};
 
                 let start = Instant::now();
                 let r = s.solve(&mut brd);
-                let _elapsed = start.elapsed();
+                let elapsed = start.elapsed();
 
-                let _r_str = match &r {
+                let r_str = match &r {
                     TsumeResult::Checkmate { moves, .. } =>
                         format!("Mate({})", moves.len()),
                     TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
@@ -4806,7 +4811,7 @@ use crate::types::{Color, PieceType};
         let checkers = board.compute_checkers_at(king_sq, attacker);
         verbose_eprintln!("Checkers: {}", checkers.count());
         for sq in checkers {
-            let _piece = board.squares[sq.index()];
+            let piece = board.squares[sq.index()];
             verbose_eprintln!("  {:?} at {}{}", piece, 9 - sq.col(), (b'a' + sq.row()) as char);
         }
 
@@ -4822,11 +4827,11 @@ use crate::types::{Color, PieceType};
             let (futile, chain) = solver.compute_futile_and_chain_squares(
                 &board, &between, king_sq, checker_sq, defender, attacker,
             );
-            let _normal_count = between.count() - futile.count() - chain.count();
+            let normal_count = between.count() - futile.count() - chain.count();
             verbose_eprintln!("Between: {}  Futile: {}  Chain: {}  Normal: {}",
                 between.count(), futile.count(), chain.count(), normal_count);
             for sq in between {
-                let _tag = if futile.contains(sq) { "futile" }
+                let tag = if futile.contains(sq) { "futile" }
                          else if chain.contains(sq) { "chain" }
                          else { "normal" };
                 verbose_eprintln!("  {}{} = {}",
@@ -4840,11 +4845,11 @@ use crate::types::{Color, PieceType};
         let drops: Vec<_> = defenses.iter().filter(|m| m.is_drop()).collect();
         let non_drops: Vec<_> = defenses.iter().filter(|m| !m.is_drop()).collect();
         verbose_eprintln!("  Non-drops ({}):", non_drops.len());
-        for _m in &non_drops {
+        for m in &non_drops {
             verbose_eprintln!("    {}", m.to_usi());
         }
         verbose_eprintln!("  Drops ({}):", drops.len());
-        for _m in &drops {
+        for m in &drops {
             verbose_eprintln!("    {}", m.to_usi());
         }
 
@@ -4878,7 +4883,7 @@ use crate::types::{Color, PieceType};
             // mid_fallback を直接呼ぶ
             s.mid_fallback(&mut or_board);
             let (root_pn, root_dn) = s.look_up_board(&or_board);
-            let _r_str = if root_pn == 0 { "Proven" }
+            let r_str = if root_pn == 0 { "Proven" }
                         else if root_dn == 0 { "Disproven" }
                         else { "Unknown" };
             verbose_eprintln!("  → {} pn={} dn={} searched={} time={:.2}s TT={}",
@@ -4904,8 +4909,8 @@ use crate::types::{Color, PieceType};
             s.set_find_shortest(false);
             let start = std::time::Instant::now();
             let r = s.solve(&mut after_def);
-            let _elapsed = start.elapsed();
-            let _r_str = match &r {
+            let elapsed = start.elapsed();
+            let r_str = match &r {
                 TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                 TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
                 TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
@@ -4940,8 +4945,8 @@ use crate::types::{Color, PieceType};
                 s2.set_find_shortest(false);
                 let start2 = std::time::Instant::now();
                 let r2 = s2.solve(&mut after_atk);
-                let _elapsed2 = start2.elapsed();
-                let _r2_str = match &r2 {
+                let elapsed2 = start2.elapsed();
+                let r2_str = match &r2 {
                     TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                     TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
                     TsumeResult::NoCheckmate { .. } => "NoCheckmate".to_string(),
@@ -5327,4 +5332,87 @@ use crate::types::{Color, PieceType};
                 elapsed.as_secs_f64(),
                 solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0);
         }
+    }
+
+    /// PN_UNIT スケーリング診断: ply 25 の各応手を個別に解き，ノード数を出力する．
+    ///
+    /// PN_UNIT=1 と PN_UNIT=64 で実行して結果を比較することで，
+    /// スケーリング漏れによる探索パターンの差異を検出する．
+    #[test]
+    #[ignore]
+    fn test_pn_unit_scaling_diagnostic() {
+        use std::io::Write;
+        let out_path = "/tmp/pn_unit_scaling_diag.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f",
+        ];
+
+        // ply 24 の開き王手後の局面を構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // 現在: ply 25 AND ノード(玉方手番)
+        writeln!(out, "PN_UNIT={}", super::PN_UNIT).unwrap();
+        writeln!(out, "SFEN after ply 25: {}", board.sfen()).unwrap();
+        writeln!(out, "{:<12} {:<14} {:<10} {}", "Move", "Nodes", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(50)).unwrap();
+
+        let mut defense_solver = DfPnSolver::default_solver();
+        let defenses = defense_solver.generate_defense_moves(&mut board);
+
+        for def_mv in &defenses {
+            let mut after_def = board.clone();
+            after_def.do_move(*def_mv);
+
+            let sub_depth = 15u32; // (13 + 2)
+            let per_move_budget = 250_000u64;
+
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, per_move_budget, 32767, 30,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_result = sub_solver.solve(&mut after_def);
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            writeln!(out, "{:<12} {:<14} {:<10} {}",
+                def_mv.to_usi(), sub_solver.nodes_searched,
+                sub_solver.table.len(), result_str).unwrap();
+
+            // P*4g の詳細診断: ply 分布
+            if def_mv.to_usi() == "P*4g" {
+                writeln!(out, "  P*4g ply distribution:").unwrap();
+                for (p, &n) in sub_solver.ply_nodes.iter().enumerate() {
+                    if n > 0 {
+                        writeln!(out, "    ply {:>2}: {:>10} nodes", p, n).unwrap();
+                    }
+                }
+                // root の pn/dn
+                let (rpn, rdn) = sub_solver.look_up_board(&after_def);
+                writeln!(out, "  root pn={} dn={} max_ply={}",
+                    rpn, rdn, sub_solver.max_ply).unwrap();
+            }
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }

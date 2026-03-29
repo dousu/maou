@@ -6,7 +6,7 @@
 use crate::types::HAND_KINDS;
 
 use super::entry::DfPnEntry;
-use super::{hand_gte_forward_chain, INF, REMAINING_INFINITE};
+use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 
 /// 1 クラスタあたりのエントリ数．
 ///
@@ -182,7 +182,7 @@ impl TranspositionTable {
             }
         }
 
-        exact_match.unwrap_or((1, 1, 0))
+        exact_match.unwrap_or((PN_UNIT, PN_UNIT, 0))
     }
 
     /// TT Best Move を参照する．
