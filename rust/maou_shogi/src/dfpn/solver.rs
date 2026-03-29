@@ -1152,7 +1152,7 @@ impl DfPnSolver {
                         }
                     } else {
                         // depth 制限超過: 応手生成なし → deep df-pn のみ適用
-                        let mut pn = 1u32;
+                        let mut pn = PN_UNIT;
                         // DFPN-E: エッジコスト加算
                         if let Some(ksq) = defender_king_sq {
                             pn = pn.saturating_add(edge_cost_or(*m, ksq));
