@@ -126,6 +126,17 @@ impl TranspositionTable {
         ((pos_key as usize) & self.mask) * CLUSTER_SIZE
     }
 
+    /// `pos_key == 0` をセンチネル(空スロット)と衝突させない変換．
+    ///
+    /// Zobrist ハッシュが 0 になる確率は 2^{-64} で極めて低いが，
+    /// 原理的に発生しうる．ビット 0 を立てることで 0 を回避する．
+    /// クラスタインデックスの計算には変換前の `pos_key` を使用し，
+    /// クラスタ内の識別にのみ `safe_key` を使用する．
+    #[inline(always)]
+    fn safe_key(pos_key: u64) -> u64 {
+        pos_key | 1
+    }
+
     /// 指定 pos_key のクラスタスライスを返す(不変参照)．
     #[inline(always)]
     fn cluster(&self, pos_key: u64) -> &[TTFlatEntry] {
@@ -148,6 +159,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u64) {
+        let pos_key = Self::safe_key(pos_key);
         let cluster = self.cluster(pos_key);
         let mut exact_match: Option<(u32, u32, u64)> = None;
 
@@ -187,6 +199,7 @@ impl TranspositionTable {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
+        let pos_key = Self::safe_key(pos_key);
         let cluster = self.cluster(pos_key);
         for fe in cluster {
             if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
@@ -252,6 +265,7 @@ impl TranspositionTable {
         path_dependent: bool,
         best_move: u16,
     ) {
+        let pos_key = Self::safe_key(pos_key);
         let rem_idx = if remaining == REMAINING_INFINITE { 32 } else { (remaining as usize).min(31) };
         let start = self.cluster_start(pos_key);
         let cluster = &mut self.table[start..start + CLUSTER_SIZE];
@@ -376,6 +390,7 @@ impl TranspositionTable {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; }
             self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
+            self.diag_intermediate_new += 1;
             self.diag_remaining_dist[rem_idx] += 1;
         }
     }
@@ -432,6 +447,7 @@ impl TranspositionTable {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
     ) -> [u8; HAND_KINDS] {
+        let pos_key = Self::safe_key(pos_key);
         for fe in self.cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.pn == 0
@@ -449,6 +465,7 @@ impl TranspositionTable {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
     ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
         for fe in self.cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -466,6 +483,7 @@ impl TranspositionTable {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
+        let pos_key = Self::safe_key(pos_key);
         for fe in self.cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -484,6 +502,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> Option<(u16, bool)> {
+        let pos_key = Self::safe_key(pos_key);
         for fe in self.cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -606,6 +625,7 @@ impl TranspositionTable {
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
     pub(super) fn entries_for_position(&self, pos_key: u64) -> usize {
+        let pos_key = Self::safe_key(pos_key);
         self.cluster(pos_key).iter()
             .filter(|fe| fe.pos_key == pos_key).count()
     }
@@ -613,6 +633,7 @@ impl TranspositionTable {
     /// 指定局面の全エントリをダンプする(診断用)．
     #[cfg(feature = "tt_diag")]
     pub(super) fn dump_entries(&self, pos_key: u64) {
+        let pos_key = Self::safe_key(pos_key);
         for (i, fe) in self.cluster(pos_key).iter().enumerate() {
             if fe.pos_key == pos_key {
                 let e = &fe.entry;
@@ -718,6 +739,7 @@ impl TranspositionTable {
     /// 指定 pos_key のエントリイテレータ(verbose 診断用)．
     #[cfg(feature = "verbose")]
     pub(super) fn entries_iter(&self, pos_key: u64) -> impl Iterator<Item = &DfPnEntry> {
+        let pos_key = Self::safe_key(pos_key);
         self.cluster(pos_key).iter()
             .filter(move |fe| fe.pos_key == pos_key)
             .map(|fe| &fe.entry)

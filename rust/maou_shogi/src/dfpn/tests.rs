@@ -5287,7 +5287,6 @@ use crate::types::{Color, PieceType};
             let start = Instant::now();
             let result = solver.solve(&mut board);
             let elapsed = start.elapsed();
-            let tt_pos = solver.table.len();
             let tt_ent = solver.table.total_entries();
             let status = match &result {
                 TsumeResult::Checkmate { moves, .. } => format!("SOLVED({}te)", moves.len()),
@@ -5295,8 +5294,8 @@ use crate::types::{Color, PieceType};
                 TsumeResult::NoCheckmate { .. } => "NO_CHECKMATE".to_string(),
                 TsumeResult::Unknown { .. } => "UNKNOWN".to_string(),
             };
-            eprintln!("[bench] {} {}: nodes={} tt_pos={} tt_ent={} time={:.3}s",
-                case.name, status, solver.nodes_searched, tt_pos, tt_ent, elapsed.as_secs_f64());
+            eprintln!("[bench] {} {}: nodes={} tt_ent={} time={:.3}s",
+                case.name, status, solver.nodes_searched, tt_ent, elapsed.as_secs_f64());
         }
     }
     /// 50M/100M ノードでの 39手詰めベンチマーク．
