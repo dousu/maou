@@ -72,7 +72,7 @@ const INF: u32 = u32::MAX;
 ///
 /// スケーリング不要: 終端値(INF, 0)，相対比率(/4, /2, *2/3)，
 /// 盤面状態の比較(safe_escapes >= 4 等)，ループカウンタ．
-const PN_UNIT: u32 = 1;
+const PN_UNIT: u32 = 16;
 
 /// AND ノードで合駒(drop)を後回しにするための dn バイアス．
 ///

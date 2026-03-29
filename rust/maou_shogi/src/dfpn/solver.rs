@@ -2248,7 +2248,10 @@ impl DfPnSolver {
                 //
                 // 子の pn 予算を sibling_based(second_best + ε)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                let epsilon_or = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
+                // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
+                // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
+                let epsilon_or = second_best / 4 + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2294,7 +2297,8 @@ impl DfPnSolver {
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                let epsilon = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく自然精度．
+                let epsilon = second_best / 4 + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
@@ -2591,17 +2595,24 @@ impl DfPnSolver {
         let danger = board.compute_king_danger(defender, king_sq);
         let safe_escapes = (king_moves & !our_occ & !danger).count();
 
-        // 逃げ場に基づく pn 調整
-        let base = if safe_escapes == 0 {
+        // 高解像度 pn 調整 (§10.2 方針A): PN_UNIT=16 で中間値を返す．
+        // 応手数と逃げ場数の組み合わせをより正確に反映する．
+        if safe_escapes == 0 {
             // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい
-            (num_defenses * 2 / 3).max(1)
+            (num_defenses * 2 / 3).max(1) * PN_UNIT
+        } else if safe_escapes >= 4 {
+            // 逃げ場が非常に多い: さらに詰みにくい
+            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2 + PN_UNIT / 4
         } else if safe_escapes >= 3 {
             // 逃げ場が多い: 詰みにくい
-            num_defenses + safe_escapes / 2
+            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
+        } else if safe_escapes == 2 {
+            // 中程度の逃げ場
+            num_defenses * PN_UNIT + PN_UNIT / 2
         } else {
-            num_defenses
-        };
-        base * PN_UNIT
+            // safe_escapes == 1: 逃げ場1つ — わずかに加算
+            num_defenses * PN_UNIT + PN_UNIT / 4
+        }
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
@@ -2641,11 +2652,13 @@ impl DfPnSolver {
             return 3 * PN_UNIT;
         }
 
-        // 王手数が少なく逃げ場が多い → 追い詰めが困難
-        // 王手数が多く逃げ場がない → 包囲完成に近い
+        // 高解像度 pn (§10.2 方針A): PN_UNIT=16 で連続スケーリング．
+        // num_checks と safe_escapes の組み合わせで中間値を返す．
         if num_checks <= 2 && safe_escapes >= 3 {
-            // 王手が少なく逃げ場が多い → 詰みにくい(上限3: 不詰証明遅延を抑制)
-            return (2 + safe_escapes / 2).min(3) * PN_UNIT;
+            // 王手が少なく逃げ場が多い → 詰みにくい
+            // safe_escapes=3→2S+S/4, =4→2S+S/2, ≥5→3S (上限: 不詰証明遅延抑制)
+            let val = 2 * PN_UNIT + (safe_escapes - 3) * PN_UNIT / 4;
+            return val.min(3 * PN_UNIT);
         }
         if safe_escapes == 0 {
             // 逃げ場なし → 詰みやすい(合駒のみで防御)
@@ -2653,9 +2666,14 @@ impl DfPnSolver {
         }
         if safe_escapes >= 4 {
             // 逃げ場が非常に多い → 追い詰めに手数を要する
-            return (1 + safe_escapes / 3) * PN_UNIT;
+            // safe_escapes=4→S+S/4, =5→S+S/2, =6→2S
+            return PN_UNIT + (safe_escapes - 3) * PN_UNIT / 4;
         }
-        // 標準的な局面
+        if safe_escapes >= 2 {
+            // safe_escapes=2: わずかに詰みにくい
+            return PN_UNIT + PN_UNIT / 4;
+        }
+        // safe_escapes == 1: 標準的な局面
         PN_UNIT
     }
 

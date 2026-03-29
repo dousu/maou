@@ -1326,32 +1326,50 @@ impl DfPnSolver {
             self.max_ply = 0;
 
             if ids_depth == saved_depth {
-                // フルデプス: MID 先行 + Frontier Variant フォールバック．
+                // フルデプス: MID 先行(動的予算) + Frontier Variant フォールバック．
                 //
-                // 1. まず MID を予算の 1/2 で実行する．
-                //    閾値飢餓が発生しない部分木は MID が効率的に処理する．
-                // 2. MID が予算を消費しても未解決なら，残り予算で
-                //    Frontier Variant (PNS→MID サイクル) に切り替える．
-                //    PNS のグローバル最適選択で閾値飢餓を回避する．
+                // 方針B(§10.2): MID を固定 1/2 予算ではなくチャンク分割し，
+                // TT エントリ成長を監視する．MID が新しい TT エントリを
+                // 生成しなくなった時点で停滞と判定し，残り予算を動的に
+                // Frontier に回す．方針A で MID の閾値余裕が拡大したため，
+                // MID が進捗できる範囲をまず効率的に処理し，
+                // 閾値飢餓で停滞した時点で速やかに Frontier に切り替える．
                 //
                 // TT 清掃なしでシームレスに遷移: MID が蓄積した
                 // 証明・反証・中間エントリを Frontier がそのまま活用する．
-                // PNS は TT 中間値に束縛されるリスクがあるが，
-                // MID 直後の中間値は最新の探索状態を反映しており，
-                // Phase 1→2 のような古い PNS 中間値とは異なる．
                 let remaining_budget =
                     total_max_nodes.saturating_sub(self.nodes_searched);
-                let mid_budget = remaining_budget / 2;
-                self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
-                {
+                // MID の最大予算は全体の 1/2(従来と同じ上限)
+                let mid_max_budget = remaining_budget / 2;
+                // チャンクサイズ: MID 最大予算の 1/4 (最低 50K)
+                let chunk_size = (mid_max_budget / 4).max(50_000);
+                let mid_deadline = self.nodes_searched.saturating_add(mid_max_budget);
+                let mut prev_tt_len = self.table.len();
+
+                while self.nodes_searched < mid_deadline && !self.timed_out {
+                    let chunk_end = (self.nodes_searched + chunk_size).min(mid_deadline);
+                    self.max_nodes = chunk_end;
                     let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
-                    if root_pn != 0 && root_dn != 0
-                        && self.nodes_searched < self.max_nodes
-                        && !self.timed_out
-                    {
-                        self.mid(board, INF - 1, INF - 1, 0, true);
+                    if root_pn == 0 || root_dn == 0 {
+                        break; // 証明/反証完了
                     }
+                    self.mid(board, INF - 1, INF - 1, 0, true);
+
+                    let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                    if r_pn == 0 || r_dn == 0 {
+                        break; // 証明/反証完了
+                    }
+
+                    // TT 成長チェック: 新規エントリが生成されていなければ停滞
+                    let curr_tt_len = self.table.len();
+                    if curr_tt_len <= prev_tt_len {
+                        verbose_eprintln!("[ids] MID stagnation: TT {} → {}, shifting to Frontier",
+                            prev_tt_len, curr_tt_len);
+                        break;
+                    }
+                    prev_tt_len = curr_tt_len;
                 }
+
                 // MID で未解決 → Frontier Variant にフォールバック
                 let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
                 if r_pn != 0 && r_dn != 0
