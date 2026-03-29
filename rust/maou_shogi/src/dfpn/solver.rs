@@ -2158,11 +2158,11 @@ impl DfPnSolver {
             let (eff_pn_th, eff_dn_th) = if loop_child_count > 0 {
                 (
                     pn_threshold
-                        .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
+                        .saturating_add(pn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                     dn_threshold
-                        .saturating_add(dn_threshold / TCA_EXTEND_DENOM)
+                        .saturating_add(dn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                 )
@@ -2248,7 +2248,7 @@ impl DfPnSolver {
                 //
                 // 子の pn 予算を sibling_based(second_best + ε)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                let epsilon_or = second_best / 4 + PN_UNIT;
+                let epsilon_or = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2279,9 +2279,9 @@ impl DfPnSolver {
                 // 標準の pn_floor = eff_pn_th / 2 では eff_pn_th=2〜5 のとき
                 // pn_floor=1〜2 となり，23応手への配分が不可能(閾値飢餓 §10.4)．
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max((eff_pn_th / 2).max(PN_UNIT))
+                    DN_FLOOR.max((eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT))
                 } else {
-                    (eff_pn_th / 2).max(PN_UNIT)
+                    (eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT)
                 };
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + PN_UNIT を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
@@ -2294,7 +2294,7 @@ impl DfPnSolver {
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                let epsilon = second_best / 4 + PN_UNIT;
+                let epsilon = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
