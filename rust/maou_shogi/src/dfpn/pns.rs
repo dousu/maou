@@ -1585,9 +1585,9 @@ impl DfPnSolver {
             self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
             let _pv = self.pns_main(board);
 
-            let (r_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-            if r_pn == 0 {
-                break; // PNS で証明完了
+            let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+            if r_pn == 0 || r_dn == 0 {
+                break; // PNS で証明または反証完了
             }
 
             // MID フェーズ: PNS で更新された TT を活用して局所探索

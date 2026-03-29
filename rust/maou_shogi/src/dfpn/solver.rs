@@ -84,7 +84,7 @@ pub struct DfPnSolver {
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
     /// この値を増やすことで PV 復元の成功率が向上する．
     pub(super) pv_nodes_per_child: u64,
-    /// TT GC 閾値: TT のポジション数がこの値を超えると GC を実行する．
+    /// TT GC 閾値: TT のエントリ数がこの値を超えると GC を実行する．
     ///
     /// 0 にすると GC を無効化する．
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
@@ -314,7 +314,7 @@ impl DfPnSolver {
 
     /// TT GC 閾値を設定する．
     ///
-    /// TT のポジション数がこの値を超えると GC を実行する．
+    /// TT のエントリ数がこの値を超えると GC を実行する．
     /// 0 にすると GC を無効化する．デフォルトは 0(GC 無効)．
     pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
         self.tt_gc_threshold = v;
@@ -2205,7 +2205,7 @@ impl DfPnSolver {
 
             // === User-configurable GC (tt_gc_threshold) ===
             // set_tt_gc_threshold() で設定された閾値に基づく GC．
-            // 100K ノード毎にチェックし，TT 位置数が閾値を超えたら
+            // 100K ノード毎にチェックし，TT エントリ数が閾値を超えたら
             // 75% まで縮小する．Periodic GC(上記)よりも低い閾値で
             // きめ細かくメモリ制御する．デフォルト 0 = 無効．
             if self.tt_gc_threshold > 0

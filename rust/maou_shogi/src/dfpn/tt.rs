@@ -241,7 +241,7 @@ impl TranspositionTable {
     }
 
     #[inline(always)]
-    pub(super) fn store_impl(
+    fn store_impl(
         &mut self,
         pos_key: u64,
         hand: [u8; HAND_KINDS],
@@ -548,20 +548,22 @@ impl TranspositionTable {
         }
     }
 
-    /// TT のポジション数(異なる pos_key の数)を返す．
+    /// TT の非空エントリ数を返す．
     ///
-    /// フラットテーブルでは正確なカウントにフルスキャンが必要なため，
-    /// 非空エントリ数をクラスタサイズで除した概算を返す．
+    /// フラットテーブルでは同一クラスタ内に異なる `pos_key` のエントリが
+    /// 共存するため，正確なポジション数(異なる pos\_key の数)の取得には
+    /// O(N) のフルスキャン + ハッシュセットが必要でコストが高い．
+    /// 本関数は非空エントリ数を返す．大半の局面は 1 エントリのため
+    /// ポジション数の近似値として使用できるが，厳密には異なる．
+    ///
+    /// GC 閾値(`tt_gc_threshold`)はこのエントリ数ベースで比較される．
     pub(super) fn len(&self) -> usize {
-        // 高速概算: 非空エントリ数を数え，平均エントリ/位置 で割る
-        let non_empty = self.table.iter().filter(|fe| fe.pos_key != 0).count();
-        // 大半の局面は 1 エントリなので，non_empty ≈ positions
-        non_empty
+        self.table.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
-    /// TT の全エントリ数を返す．
+    /// TT の全エントリ数を返す(`len()` と同一)．
     pub(super) fn total_entries(&self) -> usize {
-        self.table.iter().filter(|fe| fe.pos_key != 0).count()
+        self.len()
     }
 
     /// 浅いエントリを除去する GC．
