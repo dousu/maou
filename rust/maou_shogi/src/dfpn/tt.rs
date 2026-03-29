@@ -66,10 +66,8 @@ impl TTFlatEntry {
 /// - 証明済み(pn=0): 現在の持ち駒 >= 登録時の持ち駒 → 再利用
 /// - 反証済み(dn=0): 登録時の持ち駒 >= 現在の持ち駒 → 再利用
 pub(super) struct TranspositionTable {
-    /// フラットエントリ配列．`clusters[idx * CLUSTER_SIZE .. (idx+1) * CLUSTER_SIZE]`．
+    /// フラットエントリ配列．`table[idx * CLUSTER_SIZE .. (idx+1) * CLUSTER_SIZE]`．
     table: Vec<TTFlatEntry>,
-    /// クラスタ数(2 のべき乗)．
-    num_clusters: usize,
     /// `num_clusters - 1`(高速 modulo 用ビットマスク)．
     mask: usize,
     /// TT エントリ溢れ(置換)の発生回数．
@@ -103,7 +101,6 @@ impl TranspositionTable {
         let total = num_clusters * CLUSTER_SIZE;
         TranspositionTable {
             table: vec![TTFlatEntry::EMPTY; total],
-            num_clusters,
             mask: num_clusters - 1,
             #[cfg(feature = "profile")]
             overflow_count: 0,
@@ -130,8 +127,7 @@ impl TranspositionTable {
     ///
     /// Zobrist ハッシュが 0 になる確率は 2^{-64} で極めて低いが，
     /// 原理的に発生しうる．ビット 0 を立てることで 0 を回避する．
-    /// クラスタインデックスの計算には変換前の `pos_key` を使用し，
-    /// クラスタ内の識別にのみ `safe_key` を使用する．
+    /// クラスタインデックスとクラスタ内識別の両方に `safe_key` を使用する．
     #[inline(always)]
     fn safe_key(pos_key: u64) -> u64 {
         pos_key | 1
@@ -142,13 +138,6 @@ impl TranspositionTable {
     fn cluster(&self, pos_key: u64) -> &[TTFlatEntry] {
         let start = self.cluster_start(pos_key);
         &self.table[start..start + CLUSTER_SIZE]
-    }
-
-    /// 指定 pos_key のクラスタスライスを返す(可変参照)．
-    #[inline(always)]
-    fn cluster_mut(&mut self, pos_key: u64) -> &mut [TTFlatEntry] {
-        let start = self.cluster_start(pos_key);
-        &mut self.table[start..start + CLUSTER_SIZE]
     }
 
     /// 転置表を参照する(証明駒/反証駒の優越関係を利用)．

@@ -1602,8 +1602,8 @@ impl DfPnSolver {
             }
             self.mid(board, INF - 1, INF - 1, 0, true);
 
-            let (r_pn3, _, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-            if r_pn3 == 0 {
+            let (r_pn3, r_dn3, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+            if r_pn3 == 0 || r_dn3 == 0 {
                 break;
             }
 
