@@ -1303,10 +1303,6 @@ impl DfPnSolver {
             }
             let _budget = if ids_depth < saved_depth {
                 // 残り IDS ステップ数に応じた予算配分．
-                // 線形進行(+2)で残り何ステップあるかを見積もり，
-                // 残りノード予算を均等に分配する．
-                // 最終深さ(full depth)に最大の予算を残すため，
-                // 浅い反復には 1/(remaining_steps+1) を割り当てる．
                 let remaining_budget =
                     total_max_nodes.saturating_sub(self.nodes_searched);
                 let remaining_steps =
@@ -1317,13 +1313,9 @@ impl DfPnSolver {
                 self.max_nodes = self.nodes_searched.saturating_add(b);
                 b
             } else {
-                // フルデプス MID: 残り予算の 3/4 を割り当て，
-                // 残りを Frontier Variant (Phase 3) に温存する．
-                let remaining_budget =
-                    total_max_nodes.saturating_sub(self.nodes_searched);
-                let b = remaining_budget * 3 / 4;
-                self.max_nodes = self.nodes_searched.saturating_add(b);
-                b
+                // フルデプス: 残り予算の全てを割り当て．
+                self.max_nodes = total_max_nodes;
+                total_max_nodes.saturating_sub(self.nodes_searched)
             };
 
             #[cfg(feature = "tt_diag")]
@@ -1333,7 +1325,44 @@ impl DfPnSolver {
             // IDS 反復ごとに max_ply をリセットし，各反復の到達深さを追跡する
             self.max_ply = 0;
 
-            {
+            if ids_depth == saved_depth {
+                // フルデプス: MID 先行 + Frontier Variant フォールバック．
+                //
+                // 1. まず MID を予算の 1/2 で実行する．
+                //    閾値飢餓が発生しない部分木は MID が効率的に処理する．
+                // 2. MID が予算を消費しても未解決なら，残り予算で
+                //    Frontier Variant (PNS→MID サイクル) に切り替える．
+                //    PNS のグローバル最適選択で閾値飢餓を回避する．
+                //
+                // TT 清掃なしでシームレスに遷移: MID が蓄積した
+                // 証明・反証・中間エントリを Frontier がそのまま活用する．
+                // PNS は TT 中間値に束縛されるリスクがあるが，
+                // MID 直後の中間値は最新の探索状態を反映しており，
+                // Phase 1→2 のような古い PNS 中間値とは異なる．
+                let remaining_budget =
+                    total_max_nodes.saturating_sub(self.nodes_searched);
+                let mid_budget = remaining_budget / 2;
+                self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
+                {
+                    let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                    if root_pn != 0 && root_dn != 0
+                        && self.nodes_searched < self.max_nodes
+                        && !self.timed_out
+                    {
+                        self.mid(board, INF - 1, INF - 1, 0, true);
+                    }
+                }
+                // MID で未解決 → Frontier Variant にフォールバック
+                let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
+                if r_pn != 0 && r_dn != 0
+                    && self.nodes_searched < total_max_nodes
+                    && !self.timed_out
+                {
+                    self.max_nodes = total_max_nodes;
+                    self.frontier_variant(board, total_max_nodes);
+                }
+            } else {
+                // 浅い反復: 通常の MID で TT をウォームアップ
                 let (root_pn, root_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
                 if root_pn != 0 && root_dn != 0
                     && self.nodes_searched < self.max_nodes
@@ -1517,54 +1546,23 @@ impl DfPnSolver {
             prev_root_pn = root_pn2;
             prev_root_dn = root_dn2;
         }
-        // Phase 3: Frontier Variant (PNS→局所MID)
-        //
-        // IDS-dfpn がフルデプスで証明できなかった場合，
-        // PNS→MID サイクルで残り予算を使う．
-        // PNS のグローバル最適なノード選択が MID の閾値飢餓を回避する．
-        //
-        // Phase 2 → Phase 3 連携:
-        //   Phase 2 のフルデプス MID が蓄積した中間エントリは
-        //   Phase 3 の PNS のノード選択を歪めるため，証明エントリのみ保持する．
-        //   これは Phase 1 → Phase 2 の連携(§2.5)と同じ設計原理．
-        self.depth = saved_depth;
-        let (root_pn_final, root_dn_final, _) =
-            self.look_up_pn_dn(pk, &att_hand, saved_depth as u16);
-        if root_pn_final != 0 && root_dn_final != 0
-            && self.nodes_searched < total_max_nodes
-            && !self.timed_out
-        {
-            // Phase 2 の中間エントリを除去(証明+確定反証を保持)．
-            // retain_proofs_only ではなく retain_proofs を使用:
-            // 反証(dn=0, 非経路依存)は不詰証明に必要であり，
-            // Phase 3 の PNS/MID でも活用される．
-            self.table.retain_proofs();
-            self.frontier_variant(board, total_max_nodes);
-        }
         self.depth = saved_depth;
         self.max_nodes = total_max_nodes;
     }
 
     /// Frontier Variant: PNS→局所 MID サイクル．
     ///
-    /// PNS で TT を更新しつつフロンティアを特定し，
-    /// MID で局所的に証明/反証を進める．
-    ///
-    /// ### Phase 2 との連携
-    ///
-    /// - Phase 2 の IDS-MID が蓄積した**証明エントリ**(pn=0)は
-    ///   Phase 3 の PNS で TT ヒットとして活用される．
-    ///   特にチェーン合駒の TT ベースプレフィルタ(§8.4)に寄与する．
-    /// - Phase 2 の中間エントリ(pn>0, dn>0)は Phase 3 開始前に除去する．
-    ///   PNS は独自の pn/dn 評価を行うため，MID の中間値に束縛されると
-    ///   フロンティア選択が歪む(§2.5 と同一の設計原理)．
+    /// IDS のフルデプス反復で使用される．浅い IDS 反復で蓄積された
+    /// TT 証明・確定反証を活用しつつ，PNS のグローバル最適選択で
+    /// MID の閾値飢餓(§10.4)を回避する．
     ///
     /// ### PNS→MID サイクルの相乗効果
     ///
     /// - PNS の TT 書き込みが MID の child init で TT ヒット率を向上させる．
     /// - MID の証明蓄積が次の PNS サイクルでのフロンティア選択精度を向上させる．
-    /// - 各サイクルで MID 後に `retain_proofs_only` を呼び，
-    ///   中間エントリの蓄積による TT 汚染を防止する．
+    /// - 各サイクルで MID 後に `retain_proofs()` を呼び，
+    ///   中間エントリの蓄積による PNS フロンティア選択の汚染を防止する．
+    ///   証明(pn=0)と確定反証(dn=0, 非経路依存)は保持される．
     fn frontier_variant(&mut self, board: &mut Board, total_max_nodes: u64) {
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
