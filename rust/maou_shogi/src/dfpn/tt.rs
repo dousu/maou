@@ -298,9 +298,10 @@ impl TranspositionTable {
                 return;
             }
             // 空スロットなし → 異なる pos_key の最弱エントリを置換
-            self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
-            self.diag_proof_inserts += 1;
-            self.diag_remaining_dist[rem_idx] += 1;
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source }) {
+                self.diag_proof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
             return;
         }
 
@@ -317,9 +318,8 @@ impl TranspositionTable {
                     }
                 }
                 // 中間エントリまたは被支配反証 → 除去
-                if e.dn != 0 || (hand_gte_forward_chain(&hand, &e.hand) && remaining >= e.remaining) {
-                    fe.pos_key = 0;
-                }
+                // (continue を通過した時点で除去条件を満たしている)
+                fe.pos_key = 0;
             }
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
                 slot.pos_key = pos_key;
@@ -328,9 +328,10 @@ impl TranspositionTable {
                 self.diag_remaining_dist[rem_idx] += 1;
                 return;
             }
-            self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source });
-            self.diag_disproof_inserts += 1;
-            self.diag_remaining_dist[rem_idx] += 1;
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source }) {
+                self.diag_disproof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
             return;
         }
 
@@ -378,9 +379,10 @@ impl TranspositionTable {
         } else {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; }
-            self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source });
-            self.diag_intermediate_new += 1;
-            self.diag_remaining_dist[rem_idx] += 1;
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, source }) {
+                self.diag_intermediate_new += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
         }
     }
 
@@ -389,7 +391,8 @@ impl TranspositionTable {
     /// 証明(pn=0) / 確定反証(dn=0, REMAINING_INFINITE) は保護する．
     /// 異なる pos_key のエントリ → 同一 pos_key の中間エントリ の順で
     /// 置換対象を選択する．
-    fn replace_weakest(&mut self, start: usize, pos_key: u64, new_entry: DfPnEntry) {
+    /// 戻り値: 置換に成功したら `true`，victim が見つからなかったら `false`．
+    fn replace_weakest(&mut self, start: usize, pos_key: u64, new_entry: DfPnEntry) -> bool {
         let cluster = &mut self.table[start..start + CLUSTER_SIZE];
         let mut worst_idx: Option<usize> = None;
         let mut worst_score: u64 = u64::MAX;
@@ -423,10 +426,11 @@ impl TranspositionTable {
         if let Some(idx) = worst_idx {
             cluster[idx].pos_key = pos_key;
             cluster[idx].entry = new_entry;
-        } else {
-            #[cfg(feature = "profile")]
-            { self.overflow_no_victim_count += 1; }
+            return true;
         }
+        #[cfg(feature = "profile")]
+        { self.overflow_no_victim_count += 1; }
+        false
     }
 
     /// 証明済みエントリの証明駒を返す．
