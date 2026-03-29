@@ -5328,3 +5328,86 @@ use crate::types::{Color, PieceType};
                 solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0);
         }
     }
+
+    /// PN_UNIT スケーリング診断: ply 25 の各応手を個別に解き，ノード数を出力する．
+    ///
+    /// PN_UNIT=1 と PN_UNIT=64 で実行して結果を比較することで，
+    /// スケーリング漏れによる探索パターンの差異を検出する．
+    #[test]
+    #[ignore]
+    fn test_pn_unit_scaling_diagnostic() {
+        use std::io::Write;
+        let out_path = "/tmp/pn_unit_scaling_diag.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f",
+        ];
+
+        // ply 24 の開き王手後の局面を構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // 現在: ply 25 AND ノード(玉方手番)
+        writeln!(out, "PN_UNIT={}", super::PN_UNIT).unwrap();
+        writeln!(out, "SFEN after ply 25: {}", board.sfen()).unwrap();
+        writeln!(out, "{:<12} {:<14} {:<10} {}", "Move", "Nodes", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(50)).unwrap();
+
+        let mut defense_solver = DfPnSolver::default_solver();
+        let defenses = defense_solver.generate_defense_moves(&mut board);
+
+        for def_mv in &defenses {
+            let mut after_def = board.clone();
+            after_def.do_move(*def_mv);
+
+            let sub_depth = 15u32; // (13 + 2)
+            let per_move_budget = 250_000u64;
+
+            let mut sub_solver = DfPnSolver::with_timeout(
+                sub_depth, per_move_budget, 32767, 30,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_result = sub_solver.solve(&mut after_def);
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            writeln!(out, "{:<12} {:<14} {:<10} {}",
+                def_mv.to_usi(), sub_solver.nodes_searched,
+                sub_solver.table.len(), result_str).unwrap();
+
+            // P*4g の詳細診断: ply 分布
+            if def_mv.to_usi() == "P*4g" {
+                writeln!(out, "  P*4g ply distribution:").unwrap();
+                for (p, &n) in sub_solver.ply_nodes.iter().enumerate() {
+                    if n > 0 {
+                        writeln!(out, "    ply {:>2}: {:>10} nodes", p, n).unwrap();
+                    }
+                }
+                // root の pn/dn
+                let (rpn, rdn) = sub_solver.look_up_board(&after_def);
+                writeln!(out, "  root pn={} dn={} max_ply={}",
+                    rpn, rdn, sub_solver.max_ply).unwrap();
+            }
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
