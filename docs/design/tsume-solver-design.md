@@ -80,6 +80,7 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 32 | Frontier Variant (PNS→局所MID) | maou 独自 | §11.7 | v0.20.33 |
 | 33 | TT フラットハッシュテーブル | — | §6.6, §11.4 | v0.20.34 |
 | 34 | チェーン AND pn\_floor boost | maou 独自 | §3.3 | v0.20.35 |
+| 35 | PN\_UNIT 統一スケーリング | maou 独自 | §3.5 | v0.20.36 |
 
 ---
 
@@ -417,6 +418,35 @@ MID ループ内で pn/dn が改善しない場合に早期終了する．
 
 - `ZERO_PROGRESS_LIMIT = 16`: 子 `mid()` が消費するノード数が 0 の回数が連続16回で進展なしと判定
 - `STAGNATION_LIMIT = 4`: best child の pn/dn と閾値が連続4回不変で MID ループを終了
+
+### 3.5 PN\_UNIT 統一スケーリング
+
+pn/dn の 1 単位を定数 `PN_UNIT`(mod.rs)で表現し，全てのスケーリング対象を
+明示する仕組み．PN\_UNIT=1 で従来動作と等価であり，PN\_UNIT を拡大する
+ことで 1+ε 閾値の余裕を確保できる（KomoringHeights の初期 pn=10-80 に相当）．
+
+**スケーリング対象:**
+
+| 区分 | 具体例 |
+|------|--------|
+| 初期値 | TT ミスの pn=1/dn=1，heuristic\_or\_pn/heuristic\_and\_pn 返り値 |
+| 加算定数 | edge\_cost\_or/and，sacrifice\_check\_boost，epsilon の +1，progress\_floor の +1，TCA の +1 |
+| フロア・バイアス | DN\_FLOOR，INTERPOSE\_DN\_BIAS，`.max(N)` のリテラル |
+| WPN の加算分 | `(unproven_count - 1) * PN_UNIT`（盤面カウントを pn 単位に変換） |
+| TT ミス判定 | `cpn == PN_UNIT && cdn == PN_UNIT`（heuristic 初期化の条件） |
+
+**スケーリング不要:**
+
+| 区分 | 理由 |
+|------|------|
+| 終端値 (INF, 0) | 証明/反証のセンチネル |
+| 相対比率 (/4, /2, \*2/3) | pn/dn 同士の比率なのでスケール不変 |
+| 盤面状態の比較 (safe\_escapes >= 4 等) | 手数・マス数であり pn/dn 値ではない |
+| ループカウンタ (ZERO\_PROGRESS\_LIMIT 等) | イテレーション回数 |
+
+**v0.20.36 の検証結果:** PN\_UNIT=1 と PN\_UNIT=64 で 126 テスト全通過．
+backward 解析では TT クラスタ衝突パターンの微差で一部応手のノード数が
+変動するが，個別応手レベルでは全て同等の結果が得られる．
 
 ---
 
@@ -1497,6 +1527,7 @@ PNS→MID サイクルにフォールバックする．
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-03-29 | v0.20.36 | §3.5 PN\_UNIT 統一スケーリング．pn/dn 全定数を PN\_UNIT ベースに統一 |
 | 2026-03-29 | v0.20.35 | §3.3 チェーン AND pn\_floor boost．ply 24 サブ問題 1M Unknown → 397K Mate に改善 |
 | 2026-03-29 | v0.20.34 | §6.6 フラットハッシュテーブル化，§11.4 採用．NPS 3.83× |
 | 2026-03-29 | v0.20.33 | §11 最適化案の評価(§11.1-11.7)，§10.2 ベンチマーク追加，§11.7 Frontier Variant 採用 |

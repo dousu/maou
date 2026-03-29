@@ -17,8 +17,8 @@ use super::profile::ProfileStats;
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
-    DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, REMAINING_INFINITE,
-    STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
+    DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
+    REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
 /// 詰将棋の探索結果．
@@ -380,15 +380,15 @@ impl DfPnSolver {
         remaining: u16,
     ) -> (u32, u32, u64) {
         let result = self.table.look_up(pos_key, hand, remaining);
-        if result.0 == 1 && result.1 == 1 && result.2 == 0 {
+        if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
             let half_depth = self.depth / 2;
             if ply > half_depth {
-                let biased_pn = 1 + (ply - half_depth) / DEEP_DFPN_R;
-                (biased_pn, 1, 0)
+                let biased_pn = PN_UNIT + (ply - half_depth) / DEEP_DFPN_R * PN_UNIT;
+                (biased_pn, PN_UNIT, 0)
             } else {
-                (1, 1, 0)
+                (PN_UNIT, PN_UNIT, 0)
             }
         } else {
             result
@@ -1101,7 +1101,7 @@ impl DfPnSolver {
 
             let (cpn, cdn, _csrc) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-            if cpn == 1 && cdn == 1 {
+            if cpn == PN_UNIT && cdn == PN_UNIT {
                 if or_node {
                     // インライン1手・3手詰め判定(AND 子ノード)
                     let defenses = self.generate_defense_moves(board);
@@ -1146,7 +1146,7 @@ impl DfPnSolver {
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
                             }
-                            let dn = 1u32;
+                            let dn = PN_UNIT;
                             self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk);
                         }
@@ -1157,7 +1157,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             pn = pn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        let dn = 1u32;
+                        let dn = PN_UNIT;
                         self.store(child_pk, child_hand, pn, dn,
                             child_remaining, child_pk);
                     }
@@ -1181,7 +1181,7 @@ impl DfPnSolver {
                         let nc = checks.len() as u32;
                         let pn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m));
-                        let dn = 1u32;
+                        let dn = PN_UNIT;
                         self.store(child_pk, child_hand, pn,
                             dn, child_remaining, child_pk);
                     }
@@ -1350,7 +1350,7 @@ impl DfPnSolver {
             // 42M+ 回の無駄な movegen が発生して NPS が壊滅的に低下する．
             // IDS の浅い反復で TT に蓄積された証明を深い反復で活用するのは
             // 初回訪問時のプレフィルタで十分(§3.5)．
-            if !or_node && m.is_drop() && cpn == 1 && cdn == 1 {
+            if !or_node && m.is_drop() && cpn == PN_UNIT && cdn == PN_UNIT {
                 #[cfg(feature = "profile")]
                 let _pf_start = Instant::now();
                 let _pf_hit = self.try_prefilter_block(
@@ -2032,7 +2032,9 @@ impl DfPnSolver {
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
                             // 内側(d=1)はバイアス0，外側は距離に比例
-                            cdn.saturating_add(dr.max(dc).saturating_sub(1))
+                            cdn.saturating_add(
+                                dr.max(dc).saturating_sub(1) * PN_UNIT
+                            )
                         } else {
                             // 非合駒: 大きなバイアスで後回し
                             cdn.saturating_add(INTERPOSE_DN_BIAS)
@@ -2074,11 +2076,11 @@ impl DfPnSolver {
                 // 非チェーン AND: 通常 WPN を使用．
                 if chain_king_sq.is_some() && cd_grouped_count > 0 {
                     current_pn = (max_cpn as u64)
-                        .saturating_add(cd_grouped_count as u64 - 1)
+                        .saturating_add((cd_grouped_count as u64 - 1) * PN_UNIT as u64)
                         .min(INF as u64) as u32;
                 } else if unproven_count > 0 {
                     current_pn = (max_cpn as u64)
-                        .saturating_add(unproven_count as u64 - 1)
+                        .saturating_add((unproven_count as u64 - 1) * PN_UNIT as u64)
                         .min(INF as u64) as u32;
                 }
 
@@ -2157,11 +2159,11 @@ impl DfPnSolver {
                 (
                     pn_threshold
                         .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
-                        .saturating_add(1)
+                        .saturating_add(PN_UNIT)
                         .min(INF - 1),
                     dn_threshold
                         .saturating_add(dn_threshold / TCA_EXTEND_DENOM)
-                        .saturating_add(1)
+                        .saturating_add(PN_UNIT)
                         .min(INF - 1),
                 )
             } else {
@@ -2246,9 +2248,9 @@ impl DfPnSolver {
                 //
                 // 子の pn 予算を sibling_based(second_best + ε)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                let epsilon_or = second_best / 4 + 1;
+                let epsilon_or = second_best / 4 + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
-                let child_pn_th = sibling_based_or.max(2).min(INF - 1);
+                let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
             } else {
                 // AND ノード pn 閾値の最低保証(親予算の 1/2)．
@@ -2277,22 +2279,22 @@ impl DfPnSolver {
                 // 標準の pn_floor = eff_pn_th / 2 では eff_pn_th=2〜5 のとき
                 // pn_floor=1〜2 となり，23応手への配分が不可能(閾値飢餓 §10.4)．
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max((eff_pn_th / 2).max(1))
+                    DN_FLOOR.max((eff_pn_th / 2).max(PN_UNIT))
                 } else {
-                    (eff_pn_th / 2).max(1)
+                    (eff_pn_th / 2).max(PN_UNIT)
                 };
-                // 最低進捗保証: child_pn_th は最低でも best_child.pn + 1 を
+                // 最低進捗保証: child_pn_th は最低でも best_child.pn + PN_UNIT を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
                 // child_pn_th = best_child.pn となり mid() が即座に返る
                 // ゼロ進捗パターンを防止する．
-                let progress_floor = best_pn_dn.0.saturating_add(1);
+                let progress_floor = best_pn_dn.0.saturating_add(PN_UNIT);
                 let child_pn_th = eff_pn_th
                     .saturating_sub(current_pn)
                     .saturating_add(best_pn_dn.0)
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                let epsilon = second_best / 4 + 1;
+                let epsilon = second_best / 4 + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
@@ -2465,11 +2467,11 @@ impl DfPnSolver {
                         let (tt_pn, tt_dn, _) = self.look_up_pn_dn(pos_key, &att_hand, remaining);
                         let (stag_pn, stag_dn) = if or_node {
                             let base = current_pn.max(tt_pn);
-                            let penalty = tt_pn.saturating_sub(current_pn).max(1);
+                            let penalty = tt_pn.saturating_sub(current_pn).max(PN_UNIT);
                             (base.saturating_add(penalty).min(INF - 1), current_dn)
                         } else {
                             let base = current_dn.max(tt_dn);
-                            let penalty = tt_dn.saturating_sub(current_dn).max(1);
+                            let penalty = tt_dn.saturating_sub(current_dn).max(PN_UNIT);
                             (current_pn, base.saturating_add(penalty).min(INF - 1))
                         };
                         self.store_with_best_move(
@@ -2578,7 +2580,7 @@ impl DfPnSolver {
         let defender = board.turn;
         let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
-            None => return num_defenses,
+            None => return num_defenses * PN_UNIT,
         };
 
         // 玉の安全な逃げ場をカウント(ビットボード一括判定)
@@ -2590,7 +2592,7 @@ impl DfPnSolver {
         let safe_escapes = (king_moves & !our_occ & !danger).count();
 
         // 逃げ場に基づく pn 調整
-        if safe_escapes == 0 {
+        let base = if safe_escapes == 0 {
             // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい
             (num_defenses * 2 / 3).max(1)
         } else if safe_escapes >= 3 {
@@ -2598,7 +2600,8 @@ impl DfPnSolver {
             num_defenses + safe_escapes / 2
         } else {
             num_defenses
-        }
+        };
+        base * PN_UNIT
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
@@ -2616,7 +2619,7 @@ impl DfPnSolver {
         let defender = board.turn.opponent();
         let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
-            None => return 1,
+            None => return PN_UNIT,
         };
 
         // 玉の安全な逃げ場をカウント(ビットボード一括判定)
@@ -2635,25 +2638,25 @@ impl DfPnSolver {
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
             // 玉周辺に攻め駒の利きが皆無の開放空間 → 非常に詰みにくい
-            return 3;
+            return 3 * PN_UNIT;
         }
 
         // 王手数が少なく逃げ場が多い → 追い詰めが困難
         // 王手数が多く逃げ場がない → 包囲完成に近い
         if num_checks <= 2 && safe_escapes >= 3 {
             // 王手が少なく逃げ場が多い → 詰みにくい(上限3: 不詰証明遅延を抑制)
-            return (2 + safe_escapes / 2).min(3);
+            return (2 + safe_escapes / 2).min(3) * PN_UNIT;
         }
         if safe_escapes == 0 {
             // 逃げ場なし → 詰みやすい(合駒のみで防御)
-            return 1;
+            return PN_UNIT;
         }
         if safe_escapes >= 4 {
             // 逃げ場が非常に多い → 追い詰めに手数を要する
-            return 1 + safe_escapes / 3;
+            return (1 + safe_escapes / 3) * PN_UNIT;
         }
         // 標準的な局面
-        1
+        PN_UNIT
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．

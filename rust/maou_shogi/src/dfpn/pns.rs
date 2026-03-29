@@ -15,7 +15,7 @@ use super::solver::{DfPnSolver, TsumeResult};
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, sacrifice_check_boost,
-    INF, MAX_MOVES, REMAINING_INFINITE,
+    INF, MAX_MOVES, PN_UNIT, REMAINING_INFINITE,
 };
 
 impl DfPnSolver {
@@ -1640,8 +1640,8 @@ impl DfPnSolver {
             pos_key: pk,
             full_hash: fh,
             hand,
-            pn: 1,
-            dn: 1,
+            pn: PN_UNIT,
+            dn: PN_UNIT,
             parent: u32::MAX,
             move_from_parent: Move(0),
             or_node: true,
@@ -2042,7 +2042,7 @@ impl DfPnSolver {
             };
 
             // TT に初期値(1,1)しかない場合: ヒューリスティック初期化
-            if cpn == 1 && cdn == 1 && !is_loop {
+            if cpn == PN_UNIT && cdn == PN_UNIT && !is_loop {
                 if child_or_node {
                     // 子は OR ノード(攻め方手番): 王手数ベース
                     let checks = self.generate_check_moves(board);
@@ -2059,7 +2059,7 @@ impl DfPnSolver {
                         cpn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
-                        cdn = 1;
+                        cdn = PN_UNIT;
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
                 } else {
@@ -2075,7 +2075,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             cpn = cpn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        cdn = 1;
+                        cdn = PN_UNIT;
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
                     }
                 }
@@ -2254,10 +2254,10 @@ impl DfPnSolver {
                 } else if unproven == 0 {
                     // 全子証明済みだが deferred_drops 残り → 未完了
                     // MPN 選択時に次の合駒を活性化するため pn=1, dn=1 で保持
-                    (1u32, 1u32)
+                    (PN_UNIT, PN_UNIT)
                 } else {
                     let pn = (max_pn as u64)
-                        .saturating_add(unproven as u64 - 1)
+                        .saturating_add((unproven as u64 - 1) * PN_UNIT as u64)
                         .min(INF as u64) as u32;
                     (pn, min_dn)
                 }
