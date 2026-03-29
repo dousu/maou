@@ -1522,6 +1522,11 @@ impl DfPnSolver {
         // IDS-dfpn がフルデプスで証明できなかった場合，
         // PNS→MID サイクルで残り予算を使う．
         // PNS のグローバル最適なノード選択が MID の閾値飢餓を回避する．
+        //
+        // Phase 2 → Phase 3 連携:
+        //   Phase 2 のフルデプス MID が蓄積した中間エントリは
+        //   Phase 3 の PNS のノード選択を歪めるため，証明エントリのみ保持する．
+        //   これは Phase 1 → Phase 2 の連携(§2.5)と同じ設計原理．
         self.depth = saved_depth;
         let (root_pn_final, root_dn_final, _) =
             self.look_up_pn_dn(pk, &att_hand, saved_depth as u16);
@@ -1529,6 +1534,11 @@ impl DfPnSolver {
             && self.nodes_searched < total_max_nodes
             && !self.timed_out
         {
+            // Phase 2 の中間エントリを除去(証明+確定反証を保持)．
+            // retain_proofs_only ではなく retain_proofs を使用:
+            // 反証(dn=0, 非経路依存)は不詰証明に必要であり，
+            // Phase 3 の PNS/MID でも活用される．
+            self.table.retain_proofs();
             self.frontier_variant(board, total_max_nodes);
         }
         self.depth = saved_depth;
@@ -1539,8 +1549,22 @@ impl DfPnSolver {
     ///
     /// PNS で TT を更新しつつフロンティアを特定し，
     /// MID で局所的に証明/反証を進める．
-    /// PNS の TT 書き込みが MID の初期値を改善し，
-    /// MID の TT 蓄積が次の PNS サイクルの精度を向上させる相乗効果がある．
+    ///
+    /// ### Phase 2 との連携
+    ///
+    /// - Phase 2 の IDS-MID が蓄積した**証明エントリ**(pn=0)は
+    ///   Phase 3 の PNS で TT ヒットとして活用される．
+    ///   特にチェーン合駒の TT ベースプレフィルタ(§8.4)に寄与する．
+    /// - Phase 2 の中間エントリ(pn>0, dn>0)は Phase 3 開始前に除去する．
+    ///   PNS は独自の pn/dn 評価を行うため，MID の中間値に束縛されると
+    ///   フロンティア選択が歪む(§2.5 と同一の設計原理)．
+    ///
+    /// ### PNS→MID サイクルの相乗効果
+    ///
+    /// - PNS の TT 書き込みが MID の child init で TT ヒット率を向上させる．
+    /// - MID の証明蓄積が次の PNS サイクルでのフロンティア選択精度を向上させる．
+    /// - 各サイクルで MID 後に `retain_proofs_only` を呼び，
+    ///   中間エントリの蓄積による TT 汚染を防止する．
     fn frontier_variant(&mut self, board: &mut Board, total_max_nodes: u64) {
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
@@ -1584,6 +1608,11 @@ impl DfPnSolver {
             if r_pn3 == 0 {
                 break;
             }
+
+            // サイクル間 TT 清掃: MID が蓄積した中間エントリを除去し，
+            // 次の PNS サイクルが新鮮な状態でフロンティアを選択できるようにする．
+            // 証明(pn=0)と確定反証(dn=0, 非経路依存)は保持する．
+            self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;
     }

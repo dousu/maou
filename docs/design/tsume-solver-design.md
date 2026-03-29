@@ -263,6 +263,54 @@ PNS の寄与が不要であることを意味しない．
 特にチェーン合駒問題(§8)では PNS 由来の証明が
 プレフィルタ(§8.4)のヒット率を大幅に向上させる．
 
+### 2.6 Phase 2 → Phase 3 の連携
+
+Phase 2 (IDS-MID) がフルデプスで証明に到達できなかった場合，
+残り予算で Phase 3 (Frontier Variant) に遷移する．
+
+#### 予算分割
+
+Phase 2 のフルデプス反復には残り予算の 3/4 を割り当て，
+残りの 1/4 を Phase 3 に温存する．
+Phase 2 のフルデプス MID で証明できれば Phase 3 は実行されない．
+
+#### TT 清掃
+
+Phase 2 → Phase 3 遷移時に `retain_proofs()` を実行する．
+Phase 2 の MID が蓄積した中間エントリ(pn>0, dn>0)は
+Phase 3 の PNS のフロンティア選択を歪めるため除去する．
+これは Phase 1 → Phase 2 の連携(§2.5)と同一の設計原理:
+**PNS は独自の pn/dn 評価を行うため，MID の中間値に束縛されてはならない．**
+
+Phase 2 が蓄積した**証明エントリ(pn=0)と確定反証(dn=0, 非経路依存)**は保持される．
+Phase 3 の PNS で TT ヒットとして活用される．
+特にチェーン合駒の TT ベースプレフィルタ(§8.4)に寄与し，
+確定反証は不詰証明の効率に不可欠である．
+
+**注意:** Phase 1 → Phase 2 の連携では `retain_proofs_only()`(証明のみ保持)を
+使用するが，Phase 2 → Phase 3 では `retain_proofs()`(証明+確定反証を保持)を使用する．
+Phase 1 の PNS は浅い深さ制限(PNS 予算)で動作するため仮反証(NM)が多く，
+これらを Phase 2 に持ち越すと誤判定を引き起こす．
+一方 Phase 2 のフルデプス MID の確定反証は正確であり，
+Phase 3 の不詰証明に必要である．
+
+#### サイクル内 TT 清掃
+
+Phase 3 の各 PNS→MID サイクル間でも `retain_proofs()` を実行する．
+MID が各サイクルで蓄積した中間エントリが次の PNS サイクルの
+フロンティア選択を汚染するのを防止する．
+
+```mermaid
+flowchart TD
+    P2[Phase 2: IDS-MID\nフルデプス MID 3/4 予算] -->|未解決| C1[retain_proofs\n証明+確定反証を保持]
+    C1 --> P3[Phase 3: Frontier Variant\n残り 1/4 予算]
+    P3 --> PNS[PNS: フロンティア特定\nTT 証明+反証を活用]
+    PNS --> MID3[MID: 局所探索\nPNS の TT 更新を活用]
+    MID3 --> C2[retain_proofs\n中間エントリ除去]
+    C2 -->|未解決 & 予算残| PNS
+    MID3 -->|証明| Done[完了]
+```
+
 ---
 
 ## 3. 閾値制御
