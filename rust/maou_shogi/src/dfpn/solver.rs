@@ -795,26 +795,6 @@ impl DfPnSolver {
             self.timed_out = true;
             return;
         }
-        // デプスリミット早期リターン: nodes_searched を消費しない．
-        // 深さ制限到達時は TT に NM を記録して即座に返す．
-        // これによりデプスリミット・スラッシング(§10.2 ply 31 問題)を防止し，
-        // ノード予算を実際の探索に集中させる．
-        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
-            let pos_key = position_key(board);
-            let att_hand = board.hand[self.attacker.index()];
-            if or_node {
-                let checks = self.generate_check_moves(board);
-                if checks.is_empty() || self.all_checks_refutable_by_tt(board, &checks) {
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
-                } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
-                }
-            } else {
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
-            }
-            return;
-        }
         self.nodes_searched += 1;
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
@@ -947,9 +927,31 @@ impl DfPnSolver {
             }
         }
 
-        // NOTE: 深さ制限チェックは nodes_searched++ の前に移動済み(デプスリミット・
-        // スラッシング防止)．ここに到達する時点で ply < depth が保証されている．
-        debug_assert!(ply < self.depth, "depth limit should be handled before nodes_searched");
+        // 終端条件: 深さ制限・手数制限
+        if ply >= self.depth || board.ply() as u32 >= self.draw_ply {
+            #[cfg(feature = "profile")]
+            let _depth_limit_start = Instant::now();
+            if or_node {
+                let checks = self.generate_check_moves(board);
+                if checks.is_empty() {
+                    self.store(pos_key, att_hand, INF, 0,
+                        REMAINING_INFINITE, pos_key);
+                } else if self.all_checks_refutable_by_tt(board, &checks) {
+                    self.store(pos_key, att_hand, INF, 0,
+                        REMAINING_INFINITE, pos_key);
+                } else {
+                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                }
+            } else {
+                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+            }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
+                self.profile_stats.depth_limit_terminal_count += 1;
+            }
+            return;
+        }
 
         // 合法手生成
         let mut moves = if or_node {
