@@ -944,6 +944,15 @@ impl DfPnSolver {
                 }
             } else {
                 self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                // 診断: store 直後に look_up して NM が取得できるか検証
+                #[cfg(feature = "verbose")]
+                if ply == self.depth && self.nodes_searched > 4_000_000 && self.nodes_searched < 4_010_000 {
+                    let (v_pn, v_dn, _) = self.table.look_up(pos_key, &att_hand, 0);
+                    if v_dn != 0 {
+                        eprintln!("[dl_verify] FAIL store: ply={} pk={:#x} hand={:?} lookup=({},{})",
+                            ply, pos_key, &att_hand, v_pn, v_dn);
+                    }
+                }
             }
             #[cfg(feature = "profile")]
             {
@@ -1542,9 +1551,18 @@ impl DfPnSolver {
             loop {
                 _sc_iter += 1;
                 if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
-                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
+                    let child_rem = remaining.saturating_sub(1);
+                    let (dbg_pn, dbg_dn, _) = self.look_up_pn_dn(
+                        child_pk, child_hand, child_rem);
+                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={} cpk={:#x} ch={:?} rem={} lookup=({},{})",
                         ply, or_node, _sc_iter, self.nodes_searched,
-                        self.start_time.elapsed().as_secs_f64(), m.to_usi());
+                        self.start_time.elapsed().as_secs_f64(), m.to_usi(),
+                        child_pk, &child_hand, child_rem, dbg_pn, dbg_dn);
+                    // TT クラスタの内容をダンプ
+                    for e in self.table.entries_iter(child_pk) {
+                        verbose_eprintln!("[sc_tt_dump] pn={} dn={} rem={} hand={:?} path_dep={}",
+                            e.pn, e.dn, e.remaining, &e.hand, e.path_dependent);
+                    }
                 }
                 // ノード制限・タイムアウトチェック
                 if self.nodes_searched >= self.max_nodes || self.timed_out {
