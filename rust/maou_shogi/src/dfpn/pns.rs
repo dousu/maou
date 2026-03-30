@@ -2,6 +2,8 @@
 
 use arrayvec::ArrayVec;
 use rustc_hash::FxHashSet;
+#[cfg(feature = "profile")]
+use std::time::Instant;
 
 use crate::attack;
 use crate::bitboard::Bitboard;
