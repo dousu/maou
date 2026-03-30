@@ -2303,10 +2303,15 @@ impl DfPnSolver {
                 // チェーン AND の子 OR に DN_FLOOR 以上の pn 予算を保証する．
                 // 標準の pn_floor = eff_pn_th / 2 では eff_pn_th=2〜5 のとき
                 // pn_floor=1〜2 となり，23応手への配分が不可能(閾値飢餓 §10.4)．
+                // 自然精度 pn_floor (§10.2 方針A): 除算の自然精度 + 比率 2/3．
+                // AND ノードの WPN カスケード縮退を緩和する．
+                // eff_pn_th の 2/3 を最低保証することで，各 AND レベルでの
+                // 閾値減衰を (1/2)^N → (2/3)^N に改善する．
+                // 6 AND レベルで (2/3)^6 ≈ 0.088 vs (1/2)^6 ≈ 0.016 → 5.6倍．
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max((eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT))
+                    DN_FLOOR.max((eff_pn_th * 2 / 3).max(PN_UNIT))
                 } else {
-                    (eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT)
+                    (eff_pn_th * 2 / 3).max(PN_UNIT)
                 };
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + PN_UNIT を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
