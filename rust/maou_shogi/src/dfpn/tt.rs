@@ -50,7 +50,7 @@ const CLUSTER_SIZE: usize = 6;
 ///
 /// 29手詰め規模(~12.5M entries)では 2M clusters で TT 飽和が早い(6.3M)．
 /// 4M clusters で TT が 12.5M まで成長し 109M ノードで解決．
-const DEFAULT_NUM_CLUSTERS: usize = 1 << 22; // 4M
+const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
 /// フラットテーブルの 1 エントリ．
 ///
