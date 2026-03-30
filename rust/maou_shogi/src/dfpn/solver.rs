@@ -943,6 +943,7 @@ impl DfPnSolver {
                     self.store(pos_key, att_hand, INF, 0, 0, pos_key);
                 }
             } else {
+                // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
                 self.store(pos_key, att_hand, INF, 0, 0, pos_key);
             }
             #[cfg(feature = "profile")]
