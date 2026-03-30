@@ -799,26 +799,21 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // === Periodic GC (TT 飽和防止) ===
-        // TT エントリ数が容量の 80%/90% を超えた場合に remaining の浅い
-        // エントリを除去する．TT クラスタが飽和すると新規エントリが
-        // 挿入不能になり探索が停滞するため，事前に空きを確保する．
-        // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)．
+        // === Periodic GC (amount ベース TT 飽和防止) ===
+        // TT エントリ数が容量の 80% を超えた場合に amount の小さい
+        // エントリを除去する．amount は探索投資量を反映し，
+        // 価値の低いエントリを優先的に除去することで TT の質を維持する．
         if self.nodes_searched % 1_000_000 == 0 {
             let tt_size = self.table.len();
             let tt_capacity = self.table.capacity();
-            let gc_threshold: Option<u16> = if tt_size > tt_capacity * 9 / 10 {
-                Some(1) // remaining ≤ 1 を除去
-            } else if tt_size > tt_capacity * 4 / 5 {
-                Some(0) // remaining = 0 のみ除去
-            } else {
-                None
-            };
-            if let Some(threshold) = gc_threshold {
-                let removed = self.table.gc_shallow_entries(threshold);
+            if tt_size > tt_capacity * 4 / 5 {
+                // amount の小さいエントリ（中間値で探索投資が少ない）を除去
+                // 目標: 75% まで縮小
+                let target = tt_capacity * 3 / 4;
+                let removed = self.table.gc_by_amount(target);
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}/{}",
-                        threshold, removed, self.table.len(), tt_capacity);
+                    verbose_eprintln!("[periodic_gc] amount-based removed={} tt={}/{}",
+                        removed, self.table.len(), tt_capacity);
                 }
             }
         }
@@ -2439,6 +2434,18 @@ impl DfPnSolver {
                 !or_node,
             );
             _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
+
+            // 子エントリの amount / min_depth を更新
+            {
+                let spent = (_prev_nodes_used as u64).min(u16::MAX as u64) as u16;
+                self.table.update_amount_and_depth(
+                    children[best_idx].2,
+                    &children[best_idx].3,
+                    spent,
+                    (ply + 1) as u16,
+                );
+            }
+
             // 零進捗検出: 子 mid() が 0 ノードしか消費しなかった場合，
             // 子は閾値チェックで即座に返っている．これが連続すると
             // dn_floor 由来の空転が発生するため，ZERO_PROGRESS_LIMIT 回
