@@ -2435,8 +2435,8 @@ impl DfPnSolver {
             );
             _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
 
-            // 子エントリの amount を更新
-            {
+            // 子エントリの amount を更新(ノード消費があった場合のみ)
+            if _prev_nodes_used > 0 {
                 let spent = (_prev_nodes_used as u64).min(u16::MAX as u64) as u16;
                 self.table.update_amount(
                     children[best_idx].2,
@@ -2466,13 +2466,19 @@ impl DfPnSolver {
 
             // 停滞検出: 同じ子に同じ閾値で mid() を呼んで pn/dn が変化しなければ，
             // 再度呼んでも結果は同じ(TT にキャッシュ済み)．
-            // 閾値が増えた場合のみ新たな探索が可能なため，そのケースはリセットする．
+            // 最適化: _prev_nodes_used == 0 なら mid() が即 return しており
+            // pn/dn は不変なので look_up を省略して前回値を再利用する．
             {
-                let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
-                    children[best_idx].2,
-                    &children[best_idx].3,
-                    remaining.saturating_sub(1),
-                );
+                let (cpn_after, cdn_after) = if _prev_nodes_used == 0 {
+                    (prev_best_pn, prev_best_dn)
+                } else {
+                    let (p, d, _) = self.look_up_pn_dn(
+                        children[best_idx].2,
+                        &children[best_idx].3,
+                        remaining.saturating_sub(1),
+                    );
+                    (p, d)
+                };
                 if best_idx == prev_best_idx
                     && cpn_after == prev_best_pn
                     && cdn_after == prev_best_dn
