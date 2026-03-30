@@ -2273,7 +2273,7 @@ impl DfPnSolver {
                 // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
                 // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
                 // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
-                let epsilon_or = second_best / 4 + PN_UNIT;
+                let epsilon_or = second_best / 3 + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2325,7 +2325,7 @@ impl DfPnSolver {
                     .max(progress_floor)
                     .min(INF - 1);
                 // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく自然精度．
-                let epsilon = second_best / 4 + PN_UNIT;
+                let epsilon = second_best / 3 + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
