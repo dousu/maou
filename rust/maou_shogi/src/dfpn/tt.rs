@@ -23,7 +23,7 @@ const CLUSTER_SIZE: usize = 6;
 /// フラットテーブルではクラスタ内の異なる pos_key のエントリが
 /// 置換対象となるが，証明/反証エントリの保護ポリシーにより
 /// 重要なエントリは維持される．
-const DEFAULT_NUM_CLUSTERS: usize = 1 << 20; // 1M
+const DEFAULT_NUM_CLUSTERS: usize = 1 << 22; // 4M
 
 /// フラットテーブルの 1 エントリ．
 ///
