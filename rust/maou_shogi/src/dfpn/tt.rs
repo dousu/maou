@@ -403,9 +403,9 @@ impl TranspositionTable {
         let mut worst_is_foreign = false;
 
         for (i, fe) in cluster.iter().enumerate() {
-            // 証明/確定反証は保護
+            // 証明/反証は保護(depth-limited NM 含む)
             if fe.entry.pn == 0 { continue; }
-            if fe.entry.dn == 0 && fe.entry.remaining == REMAINING_INFINITE { continue; }
+            if fe.entry.dn == 0 { continue; }
 
             let is_foreign = fe.pos_key != pos_key;
             let score = if fe.entry.pn > fe.entry.dn {
