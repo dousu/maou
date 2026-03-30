@@ -332,6 +332,15 @@ impl TranspositionTable {
                 self.diag_remaining_dist[rem_idx] += 1;
                 return;
             }
+            // 空スロットなし — replace_weakest_for_disproof で
+            // foreign protected エントリも含めて置換を試みる
+            if self.replace_weakest_for_disproof(start, pos_key,
+                DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source })
+            {
+                self.diag_disproof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+                return;
+            }
             // 空スロットなし: depth-limited NM 同士で新エントリに支配される
             // 既存エントリを1つ置換する(クラスタ飽和防止)．
             // 同じ pos_key の depth-limited 反証で hand が新エントリを支配しない
@@ -454,6 +463,51 @@ impl TranspositionTable {
         }
         #[cfg(feature = "profile")]
         { self.overflow_no_victim_count += 1; }
+        false
+    }
+
+    /// 反証エントリ挿入用の置換: foreign protected エントリも対象にする．
+    ///
+    /// 通常の replace_weakest は proof(pn=0) と confirmed disproof(dn=0,
+    /// remaining=REMAINING_INFINITE) を保護するが，クラスタが全て foreign
+    /// protected で埋まっている場合に新規エントリが挿入不能になる．
+    /// 反証エントリの挿入では foreign の depth-limited disproof(remaining
+    /// != REMAINING_INFINITE) を優先的に置換し，それもなければ foreign の
+    /// confirmed disproof を犠牲にする．同じ pos_key のエントリは保護する．
+    fn replace_weakest_for_disproof(
+        &mut self,
+        start: usize,
+        pos_key: u64,
+        new_entry: DfPnEntry,
+    ) -> bool {
+        let cluster = &mut self.table[start..start + CLUSTER_SIZE];
+        // 1st pass: foreign depth-limited disproof を探す
+        for fe in cluster.iter_mut() {
+            if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
+            if fe.entry.dn == 0 && fe.entry.remaining != REMAINING_INFINITE {
+                fe.pos_key = pos_key;
+                fe.entry = new_entry;
+                return true;
+            }
+        }
+        // 2nd pass: foreign confirmed disproof を探す
+        for fe in cluster.iter_mut() {
+            if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
+            if fe.entry.dn == 0 {
+                fe.pos_key = pos_key;
+                fe.entry = new_entry;
+                return true;
+            }
+        }
+        // 3rd pass: foreign proof を探す(最終手段)
+        for fe in cluster.iter_mut() {
+            if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
+            if fe.entry.pn == 0 {
+                fe.pos_key = pos_key;
+                fe.entry = new_entry;
+                return true;
+            }
+        }
         false
     }
 
