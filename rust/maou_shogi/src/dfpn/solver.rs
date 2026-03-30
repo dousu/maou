@@ -2435,14 +2435,13 @@ impl DfPnSolver {
             );
             _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
 
-            // 子エントリの amount / min_depth を更新
+            // 子エントリの amount を更新
             {
                 let spent = (_prev_nodes_used as u64).min(u16::MAX as u64) as u16;
-                self.table.update_amount_and_depth(
+                self.table.update_amount(
                     children[best_idx].2,
                     &children[best_idx].3,
                     spent,
-                    (ply + 1) as u16,
                 );
             }
 

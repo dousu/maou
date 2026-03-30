@@ -13,7 +13,7 @@ use crate::types::HAND_KINDS;
 ///   深さ制限による不詰(`dn=0`)は `remaining` が有限値となり，
 ///   より深い探索で再評価可能になる．
 /// フィールド配置は `source`(u64) を先頭にし 8-byte アライメントの
-/// パディングを最小化する(40 bytes → 32 bytes)．
+/// パディングを最小化する．
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct DfPnEntry {
@@ -30,9 +30,6 @@ pub(super) struct DfPnEntry {
     /// 探索投資量メトリック(KomoringHeights の amount\_ に相当)．
     /// GC / 置換時に大きい amount のエントリを優先保持する．
     pub(super) amount: u16,
-    /// このエントリが利用された最小深度(ply)．
-    /// GC 時に min\_depth が深いエントリを優先的に除去する．
-    pub(super) min_depth: u16,
 }
 
 /// Best-First Proof Number Search (PNS) のノード．

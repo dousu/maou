@@ -75,7 +75,6 @@ impl TTFlatEntry {
             remaining: 0,
             best_move: 0,
             amount: 0,
-            min_depth: u16::MAX,
         },
     };
 
@@ -326,13 +325,13 @@ impl TranspositionTable {
             const PROOF_BONUS: u16 = 100;
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
                 slot.pos_key = pos_key;
-                slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, min_depth: u16::MAX, source };
+                slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, source };
                 self.diag_proof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
                 return;
             }
             // 空スロットなし → 異なる pos_key の最弱エントリを置換
-            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, min_depth: u16::MAX, source }) {
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, source }) {
                 self.diag_proof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
             }
@@ -360,7 +359,7 @@ impl TranspositionTable {
             let dp_amount = if remaining == REMAINING_INFINITE { DISPROOF_BONUS } else { DISPROOF_BONUS / 2 };
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
                 slot.pos_key = pos_key;
-                slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, min_depth: u16::MAX, source };
+                slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source };
                 self.diag_disproof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
                 return;
@@ -368,7 +367,7 @@ impl TranspositionTable {
             // 空スロットなし — replace_weakest_for_disproof で
             // foreign protected エントリも含めて置換を試みる
             if self.replace_weakest_for_disproof(start, pos_key,
-                DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, min_depth: u16::MAX, source })
+                DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source })
             {
                 self.diag_disproof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
@@ -387,14 +386,14 @@ impl TranspositionTable {
                     && !hand_gte_forward_chain(&e.hand, &hand)
                 {
                     // 既存 NM は新エントリの hand を支配しない → 置換
-                    fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, min_depth: u16::MAX, source };
+                    fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source };
                     self.diag_disproof_inserts += 1;
                     self.diag_remaining_dist[rem_idx] += 1;
                     return;
                 }
             }
             // それでも挿入できない場合は replace_weakest にフォールバック
-            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, min_depth: u16::MAX, source }) {
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source }) {
                 self.diag_disproof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
             }
@@ -433,7 +432,7 @@ impl TranspositionTable {
         // 新規エントリを追加
         if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
-            slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, min_depth: u16::MAX, source };
+            slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, source };
             self.diag_intermediate_new += 1;
             self.diag_remaining_dist[rem_idx] += 1;
             #[cfg(feature = "profile")]
@@ -447,21 +446,20 @@ impl TranspositionTable {
         } else {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; }
-            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, min_depth: u16::MAX, source }) {
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, source }) {
                 self.diag_intermediate_new += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
             }
         }
     }
 
-    /// 指定エントリの amount と min_depth を更新する．
-    /// mid() からの帰還時に呼ばれ，探索投資量と利用深度を記録する．
-    pub(super) fn update_amount_and_depth(
+    /// 指定エントリの amount を更新する．
+    /// mid() からの帰還時に呼ばれ，探索投資量を記録する．
+    pub(super) fn update_amount(
         &mut self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         nodes_spent: u16,
-        ply: u16,
     ) {
         let pos_key = Self::safe_key(pos_key);
         let start = self.cluster_start(pos_key);
@@ -470,9 +468,6 @@ impl TranspositionTable {
             if fe.pos_key != pos_key { continue; }
             if fe.entry.hand == *hand {
                 fe.entry.amount = fe.entry.amount.saturating_add(nodes_spent);
-                if ply < fe.entry.min_depth {
-                    fe.entry.min_depth = ply;
-                }
                 return;
             }
         }
@@ -730,7 +725,7 @@ impl TranspositionTable {
     /// amount ベースの GC: amount が小さいエントリを除去する．
     ///
     /// Phase 1: amount=0 の中間エントリを除去(一度も再訪されていない)
-    /// Phase 2: 全中間エントリの amount 中央値以下を除去
+    /// Phase 2: 全中間エントリを除去(retain_proofs)
     /// proof/disproof (dn=0 or pn=0) はボーナス付きなので生存しやすい．
     pub(super) fn gc_by_amount(&mut self, target_size: usize) -> usize {
         let initial = self.len();
@@ -748,19 +743,7 @@ impl TranspositionTable {
         if self.len() <= target_size {
             return initial - self.len();
         }
-        // Phase 2: min_depth が深い中間エントリを除去(浅い ply のエントリを保護)
-        let depth_threshold = 20u16; // ply > 20 の中間エントリを除去
-        for fe in self.table.iter_mut() {
-            if fe.pos_key == 0 { continue; }
-            if fe.entry.pn == 0 || fe.entry.dn == 0 { continue; }
-            if fe.entry.min_depth > depth_threshold {
-                fe.pos_key = 0;
-            }
-        }
-        if self.len() <= target_size {
-            return initial - self.len();
-        }
-        // Phase 3: 全中間エントリを除去
+        // Phase 2: 全中間エントリを除去
         self.retain_proofs();
         initial - self.len()
     }
