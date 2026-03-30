@@ -1048,6 +1048,7 @@ impl DfPnSolver {
         let _child_init_start = Instant::now();
         #[cfg(feature = "verbose")]
         let _init_start = Instant::now();
+        let is_at_depth_limit = ply + 1 >= self.depth;
         for m in &moves {
             #[cfg(feature = "profile")]
             let _domove_start = Instant::now();
@@ -1063,53 +1064,33 @@ impl DfPnSolver {
 
             let child_remaining = remaining.saturating_sub(1);
 
-            // === child_init 内訳プロファイル ===
-            #[cfg(feature = "profile")]
-            let _ci_fastpath_start = Instant::now();
+            // look_up_pn_dn (fastpath と統合: 1 回のみ実行)
+            let (mut cpn, mut cdn, _csrc) =
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
 
             // 深さ制限ファストパス: 子ノードが ply+1 >= depth で即座に
             // 深さ制限に到達する場合，mid() 呼び出しを省略して直接反証を記録する．
-            // これにより深さ制限 ply での nodes_searched++ が不要になり，
-            // 深い問題でノード削減効果がある．
-            // TT に証明が既にある場合はスキップ(PNS 等で蓄積済み)．
-            if ply + 1 >= self.depth {
-                let (dl_cpn, _, _) =
-                    self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-                if dl_cpn != 0 {
-                    // 未証明: 深さ制限反証を直接記録
-                    if !or_node {
-                        // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
-                        let checks = self.generate_check_moves(board);
-                        let dl_rem = if checks.is_empty() {
-                            REMAINING_INFINITE
-                        } else if self.all_checks_refutable_by_tt(board, &checks) {
-                            REMAINING_INFINITE
-                        } else {
-                            0
-                        };
-                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+            if is_at_depth_limit && cpn != 0 {
+                // 未証明: 深さ制限反証を直接記録
+                if !or_node {
+                    // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
+                    let checks = self.generate_check_moves(board);
+                    let dl_rem = if checks.is_empty() {
+                        REMAINING_INFINITE
+                    } else if self.all_checks_refutable_by_tt(board, &checks) {
+                        REMAINING_INFINITE
                     } else {
-                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                        self.store(child_pk, child_hand, INF, 0, 0, child_pk);
-                    }
+                        0
+                    };
+                    self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                } else {
+                    // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
+                    self.store(child_pk, child_hand, INF, 0, 0, child_pk);
                 }
-                // dl_cpn == 0: 証明済み → 通常フローへ fall through
-            }
-
-            #[cfg(feature = "profile")]
-            {
-                self.profile_stats.ci_fastpath_ns += _ci_fastpath_start.elapsed().as_nanos() as u64;
-                self.profile_stats.ci_fastpath_count += 1;
-            }
-
-            #[cfg(feature = "profile")]
-            let _ci_lookup_start = Instant::now();
-            let (cpn, cdn, _csrc) =
-                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-            #[cfg(feature = "profile")]
-            {
-                self.profile_stats.ci_lookup_ns += _ci_lookup_start.elapsed().as_nanos() as u64;
-                self.profile_stats.ci_lookup_count += 1;
+                // store 後の値を re-read
+                let (p, d, _) = self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+                cpn = p;
+                cdn = d;
             }
 
             #[cfg(feature = "profile")]

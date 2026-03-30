@@ -173,6 +173,10 @@ impl TranspositionTable {
     }
 
     /// 転置表を参照する(証明駒/反証駒の優越関係を利用)．
+    ///
+    /// 2-pass: proof (early return) → disproof + exact_match (統合 1-pass)．
+    /// proof は発見時に即座に return するため独立パスが有利．
+    /// disproof と exact_match は 1 パスに統合しクラスタスキャンを削減．
     #[inline(always)]
     pub(super) fn look_up(
         &self,
@@ -184,7 +188,7 @@ impl TranspositionTable {
         let cluster = self.cluster(pos_key);
         let mut exact_match: Option<(u32, u32, u64)> = None;
 
-        // 証明(pn=0)を反証(dn=0)より常に優先する．
+        // Pass 1: 証明(pn=0) — early return
         for fe in cluster {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -192,6 +196,7 @@ impl TranspositionTable {
                 return (0, e.dn, e.source);
             }
         }
+        // Pass 2: 反証(dn=0) + exact_match 統合
         for fe in cluster {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
