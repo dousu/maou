@@ -683,6 +683,11 @@ impl TranspositionTable {
         self.len()
     }
 
+    /// TT の総スロット数を返す．
+    pub(super) fn capacity(&self) -> usize {
+        self.table.len()
+    }
+
     /// 浅いエントリを除去する GC．
     pub(super) fn gc_shallow_entries(&mut self, remaining_threshold: u16) -> usize {
         let mut removed = 0usize;

@@ -1341,8 +1341,8 @@ impl DfPnSolver {
                     total_max_nodes.saturating_sub(self.nodes_searched);
                 // MID の最大予算は全体の 1/2(従来と同じ上限)
                 let mid_max_budget = remaining_budget / 2;
-                // チャンクサイズ: MID 最大予算の 1/4 (最低 50K)
-                let chunk_size = (mid_max_budget / 4).max(50_000);
+                // チャンクサイズ: 1M (TT 停滞の早期検出のため固定)
+                let chunk_size: u64 = 1_000_000;
                 let mid_deadline = self.nodes_searched.saturating_add(mid_max_budget);
                 let mut prev_tt_len = self.table.len();
 

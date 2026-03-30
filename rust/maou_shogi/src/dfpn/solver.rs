@@ -799,16 +799,17 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // === Periodic GC (ハードコード安全弁) ===
-        // TT が 50M/60M 位置を超えた場合に remaining の浅いエントリを除去する．
-        // tt_gc_threshold による GC (MID ループ内)とは独立した二段階目の安全弁で，
-        // OOM を防止する．tt_gc_threshold=0(デフォルト)でも動作する．
+        // === Periodic GC (TT 飽和防止) ===
+        // TT エントリ数が容量の 80%/90% を超えた場合に remaining の浅い
+        // エントリを除去する．TT クラスタが飽和すると新規エントリが
+        // 挿入不能になり探索が停滞するため，事前に空きを確保する．
         // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)．
         if self.nodes_searched % 1_000_000 == 0 {
             let tt_size = self.table.len();
-            let gc_threshold: Option<u16> = if tt_size > 60_000_000 {
+            let tt_capacity = self.table.capacity();
+            let gc_threshold: Option<u16> = if tt_size > tt_capacity * 9 / 10 {
                 Some(1) // remaining ≤ 1 を除去
-            } else if tt_size > 50_000_000 {
+            } else if tt_size > tt_capacity * 4 / 5 {
                 Some(0) // remaining = 0 のみ除去
             } else {
                 None
@@ -816,8 +817,8 @@ impl DfPnSolver {
             if let Some(threshold) = gc_threshold {
                 let removed = self.table.gc_shallow_entries(threshold);
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}",
-                        threshold, removed, self.table.len());
+                    verbose_eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}/{}",
+                        threshold, removed, self.table.len(), tt_capacity);
                 }
             }
         }
