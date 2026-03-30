@@ -1539,13 +1539,13 @@ impl DfPnSolver {
             }
             let (m, child_fh, child_pk, ref child_hand) = children[0];
             let mut _sc_iter: u64 = 0;
+            // 停滞検出: 子の pn/dn が変化しなければ mid() を呼んでも無駄．
+            let mut prev_cpn: u32 = 0;
+            let mut prev_cdn: u32 = 0;
+            let mut stagnation_count: u32 = 0;
+            const SC_STAGNATION_LIMIT: u32 = 4;
             loop {
                 _sc_iter += 1;
-                if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
-                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
-                        ply, or_node, _sc_iter, self.nodes_searched,
-                        self.start_time.elapsed().as_secs_f64(), m.to_usi());
-                }
                 // ノード制限・タイムアウトチェック
                 if self.nodes_searched >= self.max_nodes || self.timed_out {
                     break;
@@ -1624,6 +1624,32 @@ impl DfPnSolver {
                 self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
                 profile_timed!(self, undo_move_ns, undo_move_count,
                     board.undo_move(m, captured));
+
+                // 停滞検出: 子の pn/dn が mid() 前後で変化しない場合，
+                // 閾値不足で mid() が進捗できていない．
+                // SC_STAGNATION_LIMIT 回連続で無変化ならループを脱出し
+                // 親 MID に制御を戻す．
+                let (post_cpn, post_cdn, _) = if is_loop_child {
+                    (INF, 0, 0)
+                } else {
+                    self.look_up_pn_dn(
+                        child_pk, child_hand,
+                        remaining.saturating_sub(1),
+                    )
+                };
+                if post_cpn == prev_cpn && post_cdn == prev_cdn {
+                    stagnation_count += 1;
+                    if stagnation_count >= SC_STAGNATION_LIMIT {
+                        // 停滞: 現在の pn/dn を store して脱出
+                        self.store(pos_key, att_hand, post_cpn, post_cdn,
+                            remaining, pos_key);
+                        break;
+                    }
+                } else {
+                    stagnation_count = 0;
+                }
+                prev_cpn = post_cpn;
+                prev_cdn = post_cdn;
             }
             self.path.remove(&full_hash);
             #[cfg(feature = "tt_diag")]
