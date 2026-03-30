@@ -311,6 +311,7 @@ impl TranspositionTable {
 
         if dn == 0 {
             // === 反証済みエントリの挿入 ===
+            // 同じ pos_key の中間エントリと被支配反証を除去
             for fe in cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
                 let e = &fe.entry;
@@ -322,7 +323,6 @@ impl TranspositionTable {
                     }
                 }
                 // 中間エントリまたは被支配反証 → 除去
-                // (continue を通過した時点で除去条件を満たしている)
                 fe.pos_key = 0;
             }
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
@@ -332,6 +332,26 @@ impl TranspositionTable {
                 self.diag_remaining_dist[rem_idx] += 1;
                 return;
             }
+            // 空スロットなし: depth-limited NM 同士で新エントリに支配される
+            // 既存エントリを1つ置換する(クラスタ飽和防止)．
+            // 同じ pos_key の depth-limited 反証で hand が新エントリを支配しない
+            // ものを置換候補とし，クラスタが同種の NM で埋まる問題を防止する．
+            let cluster = &mut self.table[start..start + CLUSTER_SIZE];
+            for fe in cluster.iter_mut() {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.dn == 0
+                    && e.remaining != REMAINING_INFINITE
+                    && !hand_gte_forward_chain(&e.hand, &hand)
+                {
+                    // 既存 NM は新エントリの hand を支配しない → 置換
+                    fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source };
+                    self.diag_disproof_inserts += 1;
+                    self.diag_remaining_dist[rem_idx] += 1;
+                    return;
+                }
+            }
+            // それでも挿入できない場合は replace_weakest にフォールバック
             if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, source }) {
                 self.diag_disproof_inserts += 1;
                 self.diag_remaining_dist[rem_idx] += 1;
@@ -403,9 +423,9 @@ impl TranspositionTable {
         let mut worst_is_foreign = false;
 
         for (i, fe) in cluster.iter().enumerate() {
-            // 証明/反証は保護(depth-limited NM 含む)
+            // 証明/確定反証は保護
             if fe.entry.pn == 0 { continue; }
-            if fe.entry.dn == 0 { continue; }
+            if fe.entry.dn == 0 && fe.entry.remaining == REMAINING_INFINITE { continue; }
 
             let is_foreign = fe.pos_key != pos_key;
             let score = if fe.entry.pn > fe.entry.dn {

@@ -1541,13 +1541,10 @@ impl DfPnSolver {
             let mut _sc_iter: u64 = 0;
             loop {
                 _sc_iter += 1;
-                if _sc_iter == 100_000 && self.start_time.elapsed().as_secs_f64() > 3.0 {
-                    let child_rem = remaining.saturating_sub(1);
-                    let (dbg_pn, dbg_dn, _) = self.look_up_pn_dn(
-                        child_pk, child_hand, child_rem);
-                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} move={} lookup=({},{}) pn_th={} dn_th={}",
-                        ply, or_node, _sc_iter, m.to_usi(), dbg_pn, dbg_dn,
-                        pn_threshold, dn_threshold);
+                if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
+                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
+                        ply, or_node, _sc_iter, self.nodes_searched,
+                        self.start_time.elapsed().as_secs_f64(), m.to_usi());
                 }
                 // ノード制限・タイムアウトチェック
                 if self.nodes_searched >= self.max_nodes || self.timed_out {
