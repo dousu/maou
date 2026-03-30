@@ -481,26 +481,27 @@ impl TranspositionTable {
     /// クラスタ内の最弱エントリを amount ベースで置換する．
     ///
     /// 置換優先度: foreign > same_pk，amount 小 > amount 大．
-    /// amount ベースの置換により探索投資量の大きいエントリを保護する．
+    /// min_depth は GC (gc_by_amount) でのみ使用し，置換では amount のみ参照する．
+    /// amount と min_depth の複合スコア（乗算・加算）は proof/disproof の
+    /// amount ボーナスを弱めてしまい，重要なエントリの淘汰を招くため不採用．
     fn replace_weakest(&mut self, start: usize, pos_key: u64, new_entry: DfPnEntry) -> bool {
         let cluster = &mut self.table[start..start + CLUSTER_SIZE];
         let mut worst_idx: Option<usize> = None;
-        let mut worst_amount: u16 = u16::MAX;
+        let mut worst_score: u32 = u32::MAX;
         let mut worst_is_foreign = false;
 
         for (i, fe) in cluster.iter().enumerate() {
             if fe.pos_key == 0 { continue; }
             let is_foreign = fe.pos_key != pos_key;
-            let amt = fe.entry.amount;
+            let score = fe.entry.amount as u32;
 
-            // 異なる pos_key のエントリを優先的に置換
             let better = match (worst_is_foreign, is_foreign) {
                 (false, true) => true,
                 (true, false) => false,
-                _ => amt < worst_amount,
+                _ => score < worst_score,
             };
             if better {
-                worst_amount = amt;
+                worst_score = score;
                 worst_idx = Some(i);
                 worst_is_foreign = is_foreign;
             }
