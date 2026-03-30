@@ -2459,19 +2459,7 @@ impl DfPnSolver {
             // 停滞検出: 同じ子に同じ閾値で mid() を呼んで pn/dn が変化しなければ，
             // 再度呼んでも結果は同じ(TT にキャッシュ済み)．
             // 閾値が増えた場合のみ新たな探索が可能なため，そのケースはリセットする．
-            //
-            // 最適化: 子 mid() が 2+ ノード消費した場合は探索が進展した可能性が
-            // 高いため，stagnation check をスキップして look_up コストを回避する．
             {
-                let nodes_used = self.nodes_searched - _pre_mid_nodes;
-                if nodes_used > 1 {
-                    stagnation_count = 0;
-                    prev_best_idx = best_idx;
-                    prev_best_pn = 0;
-                    prev_best_dn = 0;
-                    prev_child_pn_th = child_pn_th;
-                    prev_child_dn_th = child_dn_th;
-                } else {
                 let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
                     children[best_idx].2,
                     &children[best_idx].3,
@@ -2518,7 +2506,7 @@ impl DfPnSolver {
                 prev_best_dn = cdn_after;
                 prev_child_pn_th = child_pn_th;
                 prev_child_dn_th = child_dn_th;
-            }}
+            }
 
             #[cfg(feature = "tt_diag")]
             if _diag_match {
