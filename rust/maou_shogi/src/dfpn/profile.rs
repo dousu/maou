@@ -99,6 +99,20 @@ pub struct ProfileStats {
     pub mid_total_count: u64,
     /// PNS フェーズのウォール時間(ナノ秒)．
     pub pns_total_ns: u64,
+    // === child_init 内訳 ===
+    /// child_init 内: 深さ制限ファストパスの累積時間(ナノ秒)．
+    pub ci_fastpath_ns: u64,
+    pub ci_fastpath_count: u64,
+    /// child_init 内: look_up_pn_dn の累積時間(ナノ秒)．
+    pub ci_lookup_ns: u64,
+    pub ci_lookup_count: u64,
+    /// child_init 内: TT ミス時のインライン判定(movegen + heuristic + store)の累積時間(ナノ秒)．
+    pub ci_inline_ns: u64,
+    pub ci_inline_count: u64,
+    /// child_init 内: 解決チェック(look_up + 証明/反証伝播)の累積時間(ナノ秒)．
+    pub ci_resolve_ns: u64,
+    pub ci_resolve_count: u64,
+
     /// TT エントリ溢れ(置換)の発生回数．
     pub tt_overflow_count: u64,
     /// TT エントリ溢れで置換対象が見つからなかった回数．
@@ -147,8 +161,12 @@ impl std::fmt::Display for ProfileStats {
             ("do_move", self.do_move_ns, self.do_move_count),
             ("undo_move", self.undo_move_ns, self.undo_move_count),
             ("child_init", self.child_init_ns, self.child_init_count),
-            ("  child_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
-            ("  init_early_domove", child_init_uncaptured, 0),
+            ("  ci_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
+            ("  ci_fastpath", self.ci_fastpath_ns, self.ci_fastpath_count),
+            ("  ci_lookup", self.ci_lookup_ns, self.ci_lookup_count),
+            ("  ci_inline", self.ci_inline_ns, self.ci_inline_count),
+            ("  ci_resolve", self.ci_resolve_ns, self.ci_resolve_count),
+            ("  ci_early_domove", child_init_uncaptured, 0),
             ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
             ("depth_limit_terminal", self.depth_limit_terminal_ns, self.depth_limit_terminal_count),
             ("nm_promotion_refut", self.nm_promotion_refutable_ns, self.nm_promotion_refutable_count),

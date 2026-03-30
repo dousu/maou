@@ -1063,6 +1063,10 @@ impl DfPnSolver {
 
             let child_remaining = remaining.saturating_sub(1);
 
+            // === child_init 内訳プロファイル ===
+            #[cfg(feature = "profile")]
+            let _ci_fastpath_start = Instant::now();
+
             // 深さ制限ファストパス: 子ノードが ply+1 >= depth で即座に
             // 深さ制限に到達する場合，mid() 呼び出しを省略して直接反証を記録する．
             // これにより深さ制限 ply での nodes_searched++ が不要になり，
@@ -1092,8 +1096,24 @@ impl DfPnSolver {
                 // dl_cpn == 0: 証明済み → 通常フローへ fall through
             }
 
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_fastpath_ns += _ci_fastpath_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_fastpath_count += 1;
+            }
+
+            #[cfg(feature = "profile")]
+            let _ci_lookup_start = Instant::now();
             let (cpn, cdn, _csrc) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_lookup_ns += _ci_lookup_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_lookup_count += 1;
+            }
+
+            #[cfg(feature = "profile")]
+            let _ci_inline_start = Instant::now();
             if cpn == PN_UNIT && cdn == PN_UNIT {
                 if or_node {
                     // インライン1手・3手詰め判定(AND 子ノード)
@@ -1180,6 +1200,11 @@ impl DfPnSolver {
                     }
                 }
             }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_inline_ns += _ci_inline_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_inline_count += 1;
+            }
 
             #[cfg(feature = "profile")]
             let _undomove_start = Instant::now();
@@ -1191,6 +1216,8 @@ impl DfPnSolver {
             }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
+            #[cfg(feature = "profile")]
+            let _ci_resolve_start = Instant::now();
             let (cpn_now, cdn_now, _) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if or_node && cpn_now == 0 {
@@ -1363,6 +1390,12 @@ impl DfPnSolver {
                 #[cfg(feature = "tt_diag")]
                 { self.diag_deferred_enqueued += 1; }
             }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_resolve_ns += _ci_resolve_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_resolve_count += 1;
+            }
+
             push_move(&mut children, (
                 *m,
                 child_full_hash,
