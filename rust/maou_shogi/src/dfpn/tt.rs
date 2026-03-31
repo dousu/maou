@@ -22,9 +22,9 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// サイズ 6 で hand バリアント + foreign 衝突に対応する．
 const CLUSTER_SIZE: usize = 6;
 
-/// デフォルトのクラスタ数(2^20 = 1M クラスタ)．
+/// デフォルトのクラスタ数(2^21 = 2M クラスタ)．
 ///
-/// 1M クラスタ × 6 エントリ × 40 bytes ≈ 240 MB．
+/// 2M クラスタ × 6 エントリ × 40 bytes ≈ 480 MB．
 /// 10M ノード探索では ~11M 局面が生成されるため，
 /// 11M / 1M ≈ 11 局面/クラスタの競合が発生する．
 /// フラットテーブルではクラスタ内の異なる pos_key のエントリが
@@ -404,14 +404,14 @@ impl TranspositionTable {
                     && !hand_gte_forward_chain(&e.hand, &hand)
                 {
                     // 既存 NM は新エントリの hand を支配しない → 置換
-                    fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source };
+                    fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source };
                     #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
                     #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                     return;
                 }
             }
             // それでも挿入できない場合は replace_weakest にフォールバック
-            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source }) {
+            if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source }) {
                 #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
                 #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
             }
@@ -564,6 +564,9 @@ impl TranspositionTable {
             }
         }
         // 3rd pass: foreign proof を探す(最終手段)
+        // foreign proof は別 pos_key の証明であり，evict しても現局面の
+        // 探索の正確性には影響しない．df-pn の TT はキャッシュであり，
+        // 喪失した proof は再探索時に再計算される．
         for fe in cluster.iter_mut() {
             if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
             if fe.entry.pn == 0 {

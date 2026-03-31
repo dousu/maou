@@ -1363,10 +1363,10 @@ impl DfPnSolver {
                     }
 
                     // TT 成長チェック: 新規エントリが生成されていなければ停滞．
-                    // NOTE: Periodic GC (solver.rs) が mid() 内部で発火し
-                    // エントリを削除した場合も curr_tt_len < prev_tt_len となるが，
-                    // GC 発火は TT 容量 80% 超過時のみであり，その状態で
-                    // Frontier に遷移することは合理的(TT 圧迫下での MID 継続は非効率)．
+                    // 意図的動作: Periodic GC (solver.rs) が mid() 内部で発火し
+                    // エントリを削除した場合も curr_tt_len < prev_tt_len となり
+                    // Frontier 遷移がトリガーされる．GC は TT 容量 80% 超過時
+                    // のみ発火するため，TT 圧迫下での Frontier 遷移は合理的．
                     let curr_tt_len = self.table.len();
                     if curr_tt_len <= prev_tt_len {
                         verbose_eprintln!("[ids] MID stagnation: TT {} → {}, shifting to Frontier",
