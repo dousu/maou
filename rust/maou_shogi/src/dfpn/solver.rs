@@ -1554,7 +1554,7 @@ impl DfPnSolver {
             let mut prev_cpn: u32 = 0;
             let mut prev_cdn: u32 = 0;
             let mut stagnation_count: u32 = 0;
-            const SC_STAGNATION_LIMIT: u32 = 4;
+            // single-child ループも MID ループと同じ STAGNATION_LIMIT を使用
             loop {
                 _sc_iter += 1;
                 // ノード制限・タイムアウトチェック
@@ -1638,7 +1638,7 @@ impl DfPnSolver {
 
                 // 停滞検出: 子の pn/dn が mid() 前後で変化しない場合，
                 // 閾値不足で mid() が進捗できていない．
-                // SC_STAGNATION_LIMIT 回連続で無変化ならループを脱出し
+                // STAGNATION_LIMIT 回連続で無変化ならループを脱出し
                 // 親 MID に制御を戻す．
                 let (post_cpn, post_cdn, _) = if is_loop_child {
                     (INF, 0, 0)
@@ -1650,7 +1650,7 @@ impl DfPnSolver {
                 };
                 if post_cpn == prev_cpn && post_cdn == prev_cdn {
                     stagnation_count += 1;
-                    if stagnation_count >= SC_STAGNATION_LIMIT {
+                    if stagnation_count >= STAGNATION_LIMIT {
                         // 停滞: 現在の pn/dn を store して脱出
                         self.store(pos_key, att_hand, post_cpn, post_cdn,
                             remaining, pos_key);
@@ -2258,8 +2258,8 @@ impl DfPnSolver {
             // 標準 df-pn の second_best + 1 では，best child の pn/dn が
             // 僅かに増加しただけで親に戻りスラッシングが発生する．
             // 乗算型 ε を使用し，pn/dn に比例した余裕を与える:
-            //   threshold = second_best + second_best/4 + 1
-            //             ≈ ceil(second_best * 5/4)
+            //   threshold = second_best + second_best/3 + PN_UNIT
+            //             ≈ ceil(second_best * 4/3)
             //
             // TCA 拡張: eff_*_th を使用し，ループ子存在時は
             // 子ノードにも拡張済み閾値を伝播する．
