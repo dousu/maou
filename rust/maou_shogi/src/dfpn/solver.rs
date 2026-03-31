@@ -2191,11 +2191,11 @@ impl DfPnSolver {
             let (eff_pn_th, eff_dn_th) = if loop_child_count > 0 {
                 (
                     pn_threshold
-                        .saturating_add(pn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
+                        .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                     dn_threshold
-                        .saturating_add(dn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
+                        .saturating_add(dn_threshold / TCA_EXTEND_DENOM)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                 )
