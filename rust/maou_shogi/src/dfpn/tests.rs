@@ -1007,6 +1007,13 @@ use crate::types::{Color, PieceType};
         #[cfg(feature = "verbose")]
         solver.table.dump_content_analysis();
 
+        // プロファイル統計
+        #[cfg(feature = "profile")]
+        {
+            solver.sync_tt_profile();
+            eprintln!("{}", solver.profile_stats);
+        }
+
         if root_pn != 0 {
             panic!("IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
         }

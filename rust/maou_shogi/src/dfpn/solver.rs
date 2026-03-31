@@ -799,25 +799,21 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // === Periodic GC (ハードコード安全弁) ===
-        // TT が 50M/60M 位置を超えた場合に remaining の浅いエントリを除去する．
-        // tt_gc_threshold による GC (MID ループ内)とは独立した二段階目の安全弁で，
-        // OOM を防止する．tt_gc_threshold=0(デフォルト)でも動作する．
-        // 1M ノード毎にチェック(GC はフルスキャンなので頻繁には実行しない)．
+        // === Periodic GC (amount ベース TT 飽和防止) ===
+        // TT エントリ数が容量の 80% を超えた場合に amount の小さい
+        // エントリを除去する．amount は探索投資量を反映し，
+        // 価値の低いエントリを優先的に除去することで TT の質を維持する．
         if self.nodes_searched % 1_000_000 == 0 {
             let tt_size = self.table.len();
-            let gc_threshold: Option<u16> = if tt_size > 60_000_000 {
-                Some(1) // remaining ≤ 1 を除去
-            } else if tt_size > 50_000_000 {
-                Some(0) // remaining = 0 のみ除去
-            } else {
-                None
-            };
-            if let Some(threshold) = gc_threshold {
-                let removed = self.table.gc_shallow_entries(threshold);
+            let tt_capacity = self.table.capacity();
+            if tt_size > tt_capacity * 4 / 5 {
+                // amount の小さいエントリ（中間値で探索投資が少ない）を除去
+                // 目標: 75% まで縮小
+                let target = tt_capacity * 3 / 4;
+                let removed = self.table.gc_by_amount(target);
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] threshold={} removed={} tt_positions={}",
-                        threshold, removed, self.table.len());
+                    verbose_eprintln!("[periodic_gc] amount-based removed={} tt={}/{}",
+                        removed, self.table.len(), tt_capacity);
                 }
             }
         }
@@ -932,9 +928,6 @@ impl DfPnSolver {
             #[cfg(feature = "profile")]
             let _depth_limit_start = Instant::now();
             if or_node {
-                // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
-                // 王手が0手の不詰は深さに依存しないため，IDS 間で再利用可能にする．
-                // TT ベースの高速判定のみ使用．
                 let checks = self.generate_check_moves(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
@@ -1055,6 +1048,7 @@ impl DfPnSolver {
         let _child_init_start = Instant::now();
         #[cfg(feature = "verbose")]
         let _init_start = Instant::now();
+        let is_at_depth_limit = ply + 1 >= self.depth;
         for m in &moves {
             #[cfg(feature = "profile")]
             let _domove_start = Instant::now();
@@ -1070,37 +1064,37 @@ impl DfPnSolver {
 
             let child_remaining = remaining.saturating_sub(1);
 
+            // look_up_pn_dn (fastpath と統合: 1 回のみ実行)
+            let (mut cpn, mut cdn, _csrc) =
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+
             // 深さ制限ファストパス: 子ノードが ply+1 >= depth で即座に
             // 深さ制限に到達する場合，mid() 呼び出しを省略して直接反証を記録する．
-            // これにより深さ制限 ply での nodes_searched++ が不要になり，
-            // 深い問題でノード削減効果がある．
-            // TT に証明が既にある場合はスキップ(PNS 等で蓄積済み)．
-            if ply + 1 >= self.depth {
-                let (dl_cpn, _, _) =
-                    self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-                if dl_cpn != 0 {
-                    // 未証明: 深さ制限反証を直接記録
-                    if !or_node {
-                        // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
-                        let checks = self.generate_check_moves(board);
-                        let dl_rem = if checks.is_empty() {
-                            REMAINING_INFINITE
-                        } else if self.all_checks_refutable_by_tt(board, &checks) {
-                            REMAINING_INFINITE
-                        } else {
-                            0
-                        };
-                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+            if is_at_depth_limit && cpn != 0 {
+                // 未証明: 深さ制限反証を直接記録
+                if !or_node {
+                    // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
+                    let checks = self.generate_check_moves(board);
+                    let dl_rem = if checks.is_empty() {
+                        REMAINING_INFINITE
+                    } else if self.all_checks_refutable_by_tt(board, &checks) {
+                        REMAINING_INFINITE
                     } else {
-                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                        self.store(child_pk, child_hand, INF, 0, 0, child_pk);
-                    }
+                        0
+                    };
+                    self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                } else {
+                    // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
+                    self.store(child_pk, child_hand, INF, 0, 0, child_pk);
                 }
-                // dl_cpn == 0: 証明済み → 通常フローへ fall through
+                // store 後の値を re-read
+                let (p, d, _) = self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+                cpn = p;
+                cdn = d;
             }
 
-            let (cpn, cdn, _csrc) =
-                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+            #[cfg(feature = "profile")]
+            let _ci_inline_start = Instant::now();
             if cpn == PN_UNIT && cdn == PN_UNIT {
                 if or_node {
                     // インライン1手・3手詰め判定(AND 子ノード)
@@ -1187,6 +1181,11 @@ impl DfPnSolver {
                     }
                 }
             }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_inline_ns += _ci_inline_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_inline_count += 1;
+            }
 
             #[cfg(feature = "profile")]
             let _undomove_start = Instant::now();
@@ -1198,6 +1197,8 @@ impl DfPnSolver {
             }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
+            #[cfg(feature = "profile")]
+            let _ci_resolve_start = Instant::now();
             let (cpn_now, cdn_now, _) =
                 self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
             if or_node && cpn_now == 0 {
@@ -1370,6 +1371,12 @@ impl DfPnSolver {
                 #[cfg(feature = "tt_diag")]
                 { self.diag_deferred_enqueued += 1; }
             }
+            #[cfg(feature = "profile")]
+            {
+                self.profile_stats.ci_resolve_ns += _ci_resolve_start.elapsed().as_nanos() as u64;
+                self.profile_stats.ci_resolve_count += 1;
+            }
+
             push_move(&mut children, (
                 *m,
                 child_full_hash,
@@ -1543,19 +1550,21 @@ impl DfPnSolver {
             }
             let (m, child_fh, child_pk, ref child_hand) = children[0];
             let mut _sc_iter: u64 = 0;
+            // 停滞検出: 子の pn/dn が変化しなければ mid() を呼んでも無駄．
+            let mut prev_cpn: u32 = 0;
+            let mut prev_cdn: u32 = 0;
+            let mut stagnation_count: u32 = 0;
+            // single-child ループも MID ループと同じ STAGNATION_LIMIT を使用
             loop {
                 _sc_iter += 1;
-                if _sc_iter % 100_000 == 0 && self.start_time.elapsed().as_secs_f64() > 3.0 {
-                    verbose_eprintln!("[sc_loop_hang] ply={} or={} iter={} nodes={} time={:.1}s move={}",
-                        ply, or_node, _sc_iter, self.nodes_searched,
-                        self.start_time.elapsed().as_secs_f64(), m.to_usi());
-                }
                 // ノード制限・タイムアウトチェック
                 if self.nodes_searched >= self.max_nodes || self.timed_out {
                     break;
                 }
 
-                // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
+                // ループ検出: 子がパス上にある場合は (INF, 0) として扱い，
+                // mid() を呼ばず即座にループ NM として処理する．
+                // GHI 対策: ループ子の NM は path_dependent として store される(下流)．
                 let is_loop_child = self.path.contains(&child_fh);
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
@@ -1628,6 +1637,32 @@ impl DfPnSolver {
                 self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
                 profile_timed!(self, undo_move_ns, undo_move_count,
                     board.undo_move(m, captured));
+
+                // 停滞検出: 子の pn/dn が mid() 前後で変化しない場合，
+                // 閾値不足で mid() が進捗できていない．
+                // STAGNATION_LIMIT 回連続で無変化ならループを脱出し
+                // 親 MID に制御を戻す．
+                let (post_cpn, post_cdn, _) = if is_loop_child {
+                    (INF, 0, 0)
+                } else {
+                    self.look_up_pn_dn(
+                        child_pk, child_hand,
+                        remaining.saturating_sub(1),
+                    )
+                };
+                if post_cpn == prev_cpn && post_cdn == prev_cdn {
+                    stagnation_count += 1;
+                    if stagnation_count >= STAGNATION_LIMIT {
+                        // 停滞: 現在の pn/dn を store して脱出
+                        self.store(pos_key, att_hand, post_cpn, post_cdn,
+                            remaining, pos_key);
+                        break;
+                    }
+                } else {
+                    stagnation_count = 0;
+                }
+                prev_cpn = post_cpn;
+                prev_cdn = post_cdn;
             }
             self.path.remove(&full_hash);
             #[cfg(feature = "tt_diag")]
@@ -2158,11 +2193,11 @@ impl DfPnSolver {
             let (eff_pn_th, eff_dn_th) = if loop_child_count > 0 {
                 (
                     pn_threshold
-                        .saturating_add(pn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
+                        .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                     dn_threshold
-                        .saturating_add(dn_threshold / PN_UNIT / TCA_EXTEND_DENOM * PN_UNIT)
+                        .saturating_add(dn_threshold / TCA_EXTEND_DENOM)
                         .saturating_add(PN_UNIT)
                         .min(INF - 1),
                 )
@@ -2225,8 +2260,8 @@ impl DfPnSolver {
             // 標準 df-pn の second_best + 1 では，best child の pn/dn が
             // 僅かに増加しただけで親に戻りスラッシングが発生する．
             // 乗算型 ε を使用し，pn/dn に比例した余裕を与える:
-            //   threshold = second_best + second_best/4 + 1
-            //             ≈ ceil(second_best * 5/4)
+            //   threshold = second_best + second_best/3 + PN_UNIT
+            //             ≈ ceil(second_best * 4/3)
             //
             // TCA 拡張: eff_*_th を使用し，ループ子存在時は
             // 子ノードにも拡張済み閾値を伝播する．
@@ -2248,7 +2283,10 @@ impl DfPnSolver {
                 //
                 // 子の pn 予算を sibling_based(second_best + ε)に制限し，
                 // 不正解手から正解手への切替を全 OR ノードで強制する．
-                let epsilon_or = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
+                // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
+                // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
+                let epsilon_or = second_best / 3 + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2278,10 +2316,15 @@ impl DfPnSolver {
                 // チェーン AND の子 OR に DN_FLOOR 以上の pn 予算を保証する．
                 // 標準の pn_floor = eff_pn_th / 2 では eff_pn_th=2〜5 のとき
                 // pn_floor=1〜2 となり，23応手への配分が不可能(閾値飢餓 §10.4)．
+                // 自然精度 pn_floor (§10.2 方針A): 除算の自然精度 + 比率 2/3．
+                // AND ノードの WPN カスケード縮退を緩和する．
+                // eff_pn_th の 2/3 を最低保証することで，各 AND レベルでの
+                // 閾値減衰を (1/2)^N → (2/3)^N に改善する．
+                // 6 AND レベルで (2/3)^6 ≈ 0.088 vs (1/2)^6 ≈ 0.016 → 5.6倍．
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max((eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT))
+                    DN_FLOOR.max((eff_pn_th * 2 / 3).max(PN_UNIT))
                 } else {
-                    (eff_pn_th / PN_UNIT / 2 * PN_UNIT).max(PN_UNIT)
+                    (eff_pn_th * 2 / 3).max(PN_UNIT)
                 };
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + PN_UNIT を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
@@ -2294,7 +2337,8 @@ impl DfPnSolver {
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                let epsilon = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく自然精度．
+                let epsilon = second_best / 3 + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
@@ -2406,6 +2450,17 @@ impl DfPnSolver {
                 !or_node,
             );
             _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
+
+            // 子エントリの amount を更新(ノード消費があった場合のみ)
+            if _prev_nodes_used > 0 {
+                let spent = (_prev_nodes_used as u64).min(u16::MAX as u64) as u16;
+                self.table.update_amount(
+                    children[best_idx].2,
+                    &children[best_idx].3,
+                    spent,
+                );
+            }
+
             // 零進捗検出: 子 mid() が 0 ノードしか消費しなかった場合，
             // 子は閾値チェックで即座に返っている．これが連続すると
             // dn_floor 由来の空転が発生するため，ZERO_PROGRESS_LIMIT 回
@@ -2427,25 +2482,19 @@ impl DfPnSolver {
 
             // 停滞検出: 同じ子に同じ閾値で mid() を呼んで pn/dn が変化しなければ，
             // 再度呼んでも結果は同じ(TT にキャッシュ済み)．
-            // 閾値が増えた場合のみ新たな探索が可能なため，そのケースはリセットする．
-            //
-            // 最適化: 子 mid() が 2+ ノード消費した場合は探索が進展した可能性が
-            // 高いため，stagnation check をスキップして look_up コストを回避する．
+            // 最適化: _prev_nodes_used == 0 なら mid() が即 return しており
+            // pn/dn は不変なので look_up を省略して前回値を再利用する．
             {
-                let nodes_used = self.nodes_searched - _pre_mid_nodes;
-                if nodes_used > 1 {
-                    stagnation_count = 0;
-                    prev_best_idx = best_idx;
-                    prev_best_pn = 0;
-                    prev_best_dn = 0;
-                    prev_child_pn_th = child_pn_th;
-                    prev_child_dn_th = child_dn_th;
+                let (cpn_after, cdn_after) = if _prev_nodes_used == 0 {
+                    (prev_best_pn, prev_best_dn)
                 } else {
-                let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
-                    children[best_idx].2,
-                    &children[best_idx].3,
-                    remaining.saturating_sub(1),
-                );
+                    let (p, d, _) = self.look_up_pn_dn(
+                        children[best_idx].2,
+                        &children[best_idx].3,
+                        remaining.saturating_sub(1),
+                    );
+                    (p, d)
+                };
                 if best_idx == prev_best_idx
                     && cpn_after == prev_best_pn
                     && cdn_after == prev_best_dn
@@ -2487,7 +2536,7 @@ impl DfPnSolver {
                 prev_best_dn = cdn_after;
                 prev_child_pn_th = child_pn_th;
                 prev_child_dn_th = child_dn_th;
-            }}
+            }
 
             #[cfg(feature = "tt_diag")]
             if _diag_match {
@@ -2591,17 +2640,17 @@ impl DfPnSolver {
         let danger = board.compute_king_danger(defender, king_sq);
         let safe_escapes = (king_moves & !our_occ & !danger).count();
 
-        // 逃げ場に基づく pn 調整
+        // 拡張 heuristic_and_pn: 逃げ場に基づく連続スケーリング．
+        // num_defenses ベースで既に大きな値(例: 5×S=80)になるため，
+        // 逃げ場による補正は控えめに保つ．
         let base = if safe_escapes == 0 {
-            // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい
-            (num_defenses * 2 / 3).max(1)
-        } else if safe_escapes >= 3 {
-            // 逃げ場が多い: 詰みにくい
-            num_defenses + safe_escapes / 2
+            // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい(2/3 に割引)
+            (num_defenses * 2 / 3).max(1) * PN_UNIT
         } else {
-            num_defenses
+            // 逃げ場あり: 応手数ベース + 逃げ場 × S/2
+            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
         };
-        base * PN_UNIT
+        base
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
@@ -2638,25 +2687,46 @@ impl DfPnSolver {
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
             // 玉周辺に攻め駒の利きが皆無の開放空間 → 非常に詰みにくい
-            return 3 * PN_UNIT;
+            return 8 * PN_UNIT;
         }
 
-        // 王手数が少なく逃げ場が多い → 追い詰めが困難
-        // 王手数が多く逃げ場がない → 包囲完成に近い
-        if num_checks <= 2 && safe_escapes >= 3 {
-            // 王手が少なく逃げ場が多い → 詰みにくい(上限3: 不詰証明遅延を抑制)
-            return (2 + safe_escapes / 2).min(3) * PN_UNIT;
-        }
-        if safe_escapes == 0 {
-            // 逃げ場なし → 詰みやすい(合駒のみで防御)
-            return PN_UNIT;
-        }
-        if safe_escapes >= 4 {
-            // 逃げ場が非常に多い → 追い詰めに手数を要する
-            return (1 + safe_escapes / 3) * PN_UNIT;
-        }
-        // 標準的な局面
-        PN_UNIT
+        // 拡張 heuristic_or_pn: S〜8S の範囲で num_checks と safe_escapes の
+        // 二次元スケーリング(KomoringHeights の pn=10-80 に相当)．
+        //
+        // 基本方針:
+        // - safe_escapes が多い → 追い詰めに手数を要する(pn↑)
+        // - num_checks が少ない → 選択肢が少なく詰みにくい(pn↑)
+        // - 両方が悪い場合は乗算的に大きくなる
+        //
+        // safe_escapes に基づくベース値(S〜4S):
+        let escape_base = if safe_escapes == 0 {
+            PN_UNIT // 逃げ場なし: 詰みやすい
+        } else if safe_escapes == 1 {
+            PN_UNIT + PN_UNIT / 2 // 1.5S
+        } else if safe_escapes == 2 {
+            2 * PN_UNIT // 2S
+        } else if safe_escapes == 3 {
+            3 * PN_UNIT // 3S
+        } else {
+            // safe_escapes >= 4: 4S ベース
+            4 * PN_UNIT
+        };
+
+        // num_checks に基づくスケーリング(escape_base の 1.0〜2.0 倍):
+        // 王手が少ないほど詰みにくい → pn を大きくする
+        let adjusted_pn = if num_checks >= 8 {
+            escape_base // ×1.0: 多数の王手 → ベースのまま
+        } else if num_checks >= 4 {
+            escape_base + escape_base / 4 // ×1.25
+        } else if num_checks >= 2 {
+            escape_base + escape_base / 2 // ×1.5
+        } else {
+            // num_checks == 1: 王手がたった1つ → ×2.0
+            escape_base * 2
+        };
+
+        // 上限 8S(128): 不詰証明遅延を抑制
+        adjusted_pn.min(8 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．

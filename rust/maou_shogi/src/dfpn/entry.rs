@@ -12,27 +12,24 @@ use crate::types::HAND_KINDS;
 ///   `REMAINING_INFINITE` は深さ制限なし(真の証明/反証)を示す．
 ///   深さ制限による不詰(`dn=0`)は `remaining` が有限値となり，
 ///   より深い探索で再評価可能になる．
+/// フィールド配置は `source`(u64) を先頭にし 8-byte アライメントの
+/// パディングを最小化する．
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub(super) struct DfPnEntry {
-    pub(super) hand: [u8; HAND_KINDS],
+    /// SNDA (Kishimoto 2010) のソースノードハッシュ．
+    pub(super) source: u64,
     pub(super) pn: u32,
     pub(super) dn: u32,
+    pub(super) hand: [u8; HAND_KINDS],
+    /// GHI (Graph History Interaction) 対策フラグ．
+    pub(super) path_dependent: bool,
     pub(super) remaining: u16,
     /// TT Best Move: この局面で最も有望だった手の Move16 エンコーディング．
-    /// 0 は「ベストムーブなし」を示す．
-    /// 動的手順改善(Dynamic Move Ordering)で TT ヒット時に
-    /// この手を先頭に移動させて探索効率を向上させる．
     pub(super) best_move: u16,
-    /// GHI (Graph History Interaction) 対策フラグ．
-    /// ループ検出に由来する反証は経路依存(path-dependent)であり，
-    /// 異なる探索経路では無効になる可能性がある．
-    /// `true` の場合，`remaining` が有限値に制限され，
-    /// より深い探索で自動的に再評価される．
-    pub(super) path_dependent: bool,
-    /// SNDA (Kishimoto 2010) のソースノードハッシュ．
-    /// この pn/dn の値を決定したリーフノードの局面ハッシュ．
-    /// DAG 合流による pn/dn の過大評価を検出するために使用する．
-    pub(super) source: u64,
+    /// 探索投資量メトリック(KomoringHeights の amount\_ に相当)．
+    /// GC / 置換時に大きい amount のエントリを優先保持する．
+    pub(super) amount: u16,
 }
 
 /// Best-First Proof Number Search (PNS) のノード．
