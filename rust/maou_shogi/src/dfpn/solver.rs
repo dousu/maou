@@ -1562,7 +1562,9 @@ impl DfPnSolver {
                     break;
                 }
 
-                // ループ検出: 子がパス上にある場合は (INF, 0) として扱う
+                // ループ検出: 子がパス上にある場合は (INF, 0) として扱い，
+                // mid() を呼ばず即座にループ NM として処理する．
+                // GHI 対策: ループ子の NM は path_dependent として store される(下流)．
                 let is_loop_child = self.path.contains(&child_fh);
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
@@ -2710,9 +2712,9 @@ impl DfPnSolver {
             4 * PN_UNIT
         };
 
-        // num_checks に基づく乗数(1.0〜2.0):
-        // 王手が少ないほど詰みにくい
-        let check_mult = if num_checks >= 8 {
+        // num_checks に基づくスケーリング(escape_base の 1.0〜2.0 倍):
+        // 王手が少ないほど詰みにくい → pn を大きくする
+        let adjusted_pn = if num_checks >= 8 {
             escape_base // ×1.0: 多数の王手 → ベースのまま
         } else if num_checks >= 4 {
             escape_base + escape_base / 4 // ×1.25
@@ -2724,7 +2726,7 @@ impl DfPnSolver {
         };
 
         // 上限 8S(128): 不詰証明遅延を抑制
-        check_mult.min(8 * PN_UNIT)
+        adjusted_pn.min(8 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．

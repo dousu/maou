@@ -100,12 +100,6 @@ pub struct ProfileStats {
     /// PNS フェーズのウォール時間(ナノ秒)．
     pub pns_total_ns: u64,
     // === child_init 内訳 ===
-    /// child_init 内: 深さ制限ファストパスの累積時間(ナノ秒)．
-    pub ci_fastpath_ns: u64,
-    pub ci_fastpath_count: u64,
-    /// child_init 内: look_up_pn_dn の累積時間(ナノ秒)．
-    pub ci_lookup_ns: u64,
-    pub ci_lookup_count: u64,
     /// child_init 内: TT ミス時のインライン判定(movegen + heuristic + store)の累積時間(ナノ秒)．
     pub ci_inline_ns: u64,
     pub ci_inline_count: u64,
@@ -162,8 +156,6 @@ impl std::fmt::Display for ProfileStats {
             ("undo_move", self.undo_move_ns, self.undo_move_count),
             ("child_init", self.child_init_ns, self.child_init_count),
             ("  ci_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
-            ("  ci_fastpath", self.ci_fastpath_ns, self.ci_fastpath_count),
-            ("  ci_lookup", self.ci_lookup_ns, self.ci_lookup_count),
             ("  ci_inline", self.ci_inline_ns, self.ci_inline_count),
             ("  ci_resolve", self.ci_resolve_ns, self.ci_resolve_count),
             ("  ci_early_domove", child_init_uncaptured, 0),
