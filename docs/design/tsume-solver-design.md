@@ -1141,6 +1141,46 @@ KomoringHeights はリニアプロービング + amount ベース置換を採用
 NPS が低い(~227K)ため，クラスタ方式の NPS 優位(~253K-868K)を維持しつつ
 クラスタ飽和を緩和する方向で改善を進めている(方針E §10.2)．
 
+#### 6.6.2 NPS 最適化の分析 (v0.22.0)
+
+29 手詰め no\_pns (74.2M ノード) のプロファイル結果:
+
+| 操作 | 時間割合 | 呼出回数 | 平均(ns) | 備考 |
+|------|---------|---------|---------|------|
+| **child\_init 合計** | **56.3%** | **73M** | **2604** | 子ノード初期化 |
+| └ ci\_lookup | 18.2% | 342M | 424 | TT クラスタスキャン |
+| └ ci\_fastpath | 11.4% | 342M | 266 | depth limit チェック + store |
+| └ ci\_do/undo\_move | 7.6% | 683M | 89 | 盤面状態変更 |
+| └ ci\_resolve | 2.5% | 233M | 86 | 初期化後の解決チェック |
+| └ ci\_inline | 2.0% | 342M | 45 | TT ミス時 heuristic 計算 |
+| **movegen\_check** | **16.1%** | **28M** | **1975** | 王手生成 |
+| **movegen\_defense** | **12.6%** | **46M** | **919** | 応手生成 |
+| **main\_loop\_collect** | **7.2%** | **93M** | **259** | MID ループの pn/dn 収集 |
+| tt\_store | 2.3% | 93M | 82 | TT 書き込み |
+| do\_move/undo\_move | 2.7% | 148M | 60 | MID ループの盤面操作 |
+| tt\_lookup | 1.3% | 74M | 60 | mid() エントリ時の TT 参照 |
+
+**ボトルネック:** `child_init` が全体の 56% を占める．内訳では `ci_lookup`
+(TT クラスタスキャン，424ns/回)と `ci_fastpath`(266ns/回)が支配的．
+各 mid() 呼び出しで平均 4.7 個の子ノードに対して do\_move → TT lookup →
+heuristic → undo\_move を実行する．
+
+**実施した最適化と結果:**
+
+| 最適化 | 時間 | 改善 | 採否 |
+|--------|------|------|------|
+| fastpath/lookup 重複排除 + depth limit フラグ化 | 287s | **-3%** | **採用** |
+| 1-pass lookup (proof/disproof/exact 統合) | 306s | +7% 悪化 | 不採用 |
+| child\_cache 差分更新 (main\_loop\_collect 削減) | >1350s | >4x 悪化 | 不採用 |
+
+1-pass lookup は proof の early return を喪失して悪化．
+child\_cache はスタック上の ArrayVec<593> が分岐予測を破壊し NPS が壊滅．
+
+**NPS 改善の限界:** `child_init` の主要コストは do\_move/undo\_move(盤面操作)と
+TT クラスタスキャン(hand 比較)であり，これらはアルゴリズムレベルの最適化では
+削減困難．大きな NPS 改善には手生成(movegen, 29%)やビットボード操作レベルの
+最適化が必要であり，TT 構造や df-pn アルゴリズムの改善とは直交する．
+
 ---
 
 ## 7. ループ・GHI 対策
