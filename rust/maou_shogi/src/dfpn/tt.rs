@@ -13,7 +13,6 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// 詰将棋 TT の実測データ(14M entries / 11M positions ≈ 1.27 entries/position)
 /// から，大半の局面は 1〜2 エントリで済む．
 /// 6 エントリあれば証明・反証・中間のパレートフロンティアを十分に保持できる．
-/// TT クラスタサイズ．
 ///
 /// 同一盤面に対する持ち駒バリアント(proof/disproof/intermediate)の
 /// 最大同時保持数を決定する．将棋の持ち駒は 7 種であり，
@@ -22,15 +21,9 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// サイズ 6 で hand バリアント + foreign 衝突に対応する．
 const CLUSTER_SIZE: usize = 6;
 
-/// デフォルトのクラスタ数(2^21 = 2M クラスタ)．
+/// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// 2M クラスタ × 6 エントリ × 40 bytes ≈ 480 MB．
-/// 10M ノード探索では ~11M 局面が生成されるため，
-/// 11M / 1M ≈ 11 局面/クラスタの競合が発生する．
-/// フラットテーブルではクラスタ内の異なる pos_key のエントリが
-/// 置換対象となるが，証明/反証エントリの保護ポリシーにより
-/// 重要なエントリは維持される．
-/// TT クラスタ数のデフォルト値．
 ///
 /// クラスタ数 N と格納局面数 n の関係(Poisson 近似，CLUSTER\_SIZE=6):
 /// - lambda = n / N (クラスタあたりの期待エントリ数)
@@ -859,9 +852,10 @@ impl TranspositionTable {
                 intermediate_count += 1;
                 let ri = if e.remaining == REMAINING_INFINITE { 32 } else { (e.remaining as usize).min(31) };
                 inter_rem[ri] += 1;
+                // バケット閾値は PN_UNIT=16 スケールに合わせる
                 let pb = match e.pn {
-                    1 => 0, 2..=5 => 1, 6..=20 => 2, 21..=100 => 3,
-                    101..=1000 => 4, 1001..=10000 => 5, 10001..=100000 => 6, _ => 7,
+                    0..=16 => 0, 17..=48 => 1, 49..=128 => 2, 129..=512 => 3,
+                    513..=2048 => 4, 2049..=16384 => 5, 16385..=131072 => 6, _ => 7,
                 };
                 inter_pn_buckets[pb] += 1;
                 let db = match e.dn {
@@ -884,7 +878,7 @@ impl TranspositionTable {
             .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
             .collect();
         verbose_eprintln!("intermediate remaining: [{}]", ir.join(", "));
-        let pn_labels = ["pn=1", "pn=2-5", "pn=6-20", "pn=21-100", "pn=101-1K", "pn=1K-10K", "pn=10K-100K", "pn=100K+"];
+        let pn_labels = ["pn≤S", "pn≤3S", "pn≤8S", "pn≤32S", "pn≤128S", "pn≤1KS", "pn≤8KS", "pn>8KS"];
         let pb: Vec<String> = inter_pn_buckets.iter().enumerate()
             .filter(|(_, &c)| c > 0)
             .map(|(i, &c)| format!("{}:{}", pn_labels[i], c))
