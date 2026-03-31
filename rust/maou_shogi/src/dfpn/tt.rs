@@ -107,12 +107,18 @@ pub(super) struct TranspositionTable {
     /// 1 クラスタあたりのエントリ数の最大値．
     #[cfg(feature = "profile")]
     pub(super) max_entries_per_position: usize,
-    // --- TT 増加診断カウンタ ---
+    // --- TT 増加診断カウンタ (verbose feature でのみ使用) ---
+    #[cfg(feature = "verbose")]
     pub(super) diag_proof_inserts: u64,
+    #[cfg(feature = "verbose")]
     pub(super) diag_disproof_inserts: u64,
+    #[cfg(feature = "verbose")]
     pub(super) diag_intermediate_new: u64,
+    #[cfg(feature = "verbose")]
     pub(super) diag_intermediate_update: u64,
+    #[cfg(feature = "verbose")]
     pub(super) diag_dominated_skip: u64,
+    #[cfg(feature = "verbose")]
     pub(super) diag_remaining_dist: [u64; 33],
 }
 
@@ -136,11 +142,17 @@ impl TranspositionTable {
             overflow_no_victim_count: 0,
             #[cfg(feature = "profile")]
             max_entries_per_position: 0,
+            #[cfg(feature = "verbose")]
             diag_proof_inserts: 0,
+            #[cfg(feature = "verbose")]
             diag_disproof_inserts: 0,
+            #[cfg(feature = "verbose")]
             diag_intermediate_new: 0,
+            #[cfg(feature = "verbose")]
             diag_intermediate_update: 0,
+            #[cfg(feature = "verbose")]
             diag_dominated_skip: 0,
+            #[cfg(feature = "verbose")]
             diag_remaining_dist: [0; 33],
         }
     }
@@ -292,6 +304,7 @@ impl TranspositionTable {
         best_move: u16,
     ) {
         let pos_key = Self::safe_key(pos_key);
+        #[cfg(feature = "verbose")]
         let rem_idx = if remaining == REMAINING_INFINITE { 32 } else { (remaining as usize).min(31) };
         let start = self.cluster_start(pos_key);
         let cluster = &mut self.table[start..start + CLUSTER_SIZE];
@@ -301,7 +314,7 @@ impl TranspositionTable {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.pn == 0 && hand_gte_forward_chain(&hand, &e.hand) {
-                self.diag_dominated_skip += 1;
+                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
                 return;
             }
             if e.dn == 0
@@ -310,7 +323,7 @@ impl TranspositionTable {
                 && hand_gte_forward_chain(&e.hand, &hand)
                 && e.remaining >= remaining
             {
-                self.diag_dominated_skip += 1;
+                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
                 return;
             }
         }
@@ -326,19 +339,19 @@ impl TranspositionTable {
                     fe.pos_key = 0; // 支配される → 除去
                 }
             }
-            // 空スロットに挿入 (proof ボーナス: amount=1000)
+            // 空スロットに挿入 (proof ボーナス: amount=PROOF_BONUS)
             const PROOF_BONUS: u16 = 100;
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
                 slot.pos_key = pos_key;
                 slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, source };
-                self.diag_proof_inserts += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_proof_inserts += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                 return;
             }
             // 空スロットなし → 異なる pos_key の最弱エントリを置換
             if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: PROOF_BONUS, source }) {
-                self.diag_proof_inserts += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_proof_inserts += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
             }
             return;
         }
@@ -365,8 +378,8 @@ impl TranspositionTable {
             if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
                 slot.pos_key = pos_key;
                 slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source };
-                self.diag_disproof_inserts += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                 return;
             }
             // 空スロットなし — replace_weakest_for_disproof で
@@ -374,8 +387,8 @@ impl TranspositionTable {
             if self.replace_weakest_for_disproof(start, pos_key,
                 DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: dp_amount, source })
             {
-                self.diag_disproof_inserts += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                 return;
             }
             // 空スロットなし: depth-limited NM 同士で新エントリに支配される
@@ -392,15 +405,15 @@ impl TranspositionTable {
                 {
                     // 既存 NM は新エントリの hand を支配しない → 置換
                     fe.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source };
-                    self.diag_disproof_inserts += 1;
-                    self.diag_remaining_dist[rem_idx] += 1;
+                    #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
+                    #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                     return;
                 }
             }
             // それでも挿入できない場合は replace_weakest にフォールバック
             if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent, amount: 0, source }) {
-                self.diag_disproof_inserts += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
             }
             return;
         }
@@ -428,8 +441,8 @@ impl TranspositionTable {
                 if best_move != 0 {
                     e.best_move = best_move;
                 }
-                self.diag_intermediate_update += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_intermediate_update += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
                 return;
             }
         }
@@ -438,8 +451,8 @@ impl TranspositionTable {
         if let Some(slot) = cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, source };
-            self.diag_intermediate_new += 1;
-            self.diag_remaining_dist[rem_idx] += 1;
+            #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; }
+            #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
             #[cfg(feature = "profile")]
             {
                 let count = self.table[start..start + CLUSTER_SIZE].iter()
@@ -452,8 +465,8 @@ impl TranspositionTable {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; }
             if self.replace_weakest(start, pos_key, DfPnEntry { hand, pn, dn, remaining, best_move, path_dependent: false, amount: 0, source }) {
-                self.diag_intermediate_new += 1;
-                self.diag_remaining_dist[rem_idx] += 1;
+                #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; }
+                #[cfg(feature = "verbose")] { self.diag_remaining_dist[rem_idx] += 1; }
             }
         }
     }
@@ -702,7 +715,10 @@ impl TranspositionTable {
         self.table.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
-    /// TT の全エントリ数を返す(`len()` と同一)．
+    /// TT の使用中エントリ数を返す(`len()` のエイリアス)．
+    ///
+    /// `capacity()` が全スロット数を返すのに対し，本関数は
+    /// 非空(pos\_key != 0)のエントリ数を返す．
     pub(super) fn total_entries(&self) -> usize {
         self.len()
     }
