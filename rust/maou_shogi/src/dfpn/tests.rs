@@ -1442,7 +1442,6 @@ use crate::types::{Color, PieceType};
     /// 先手が銀を持っている場合に7手で詰ませられることを確認する．
     /// 全体としては B*3c, g(2a→2b) + 7手 = 9手詰め．
     #[test]
-
     fn test_after_gold_interposition_with_silver() {
         let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
         let mut board = Board::empty();
@@ -1574,6 +1573,7 @@ use crate::types::{Color, PieceType};
         solver.max_ply = 0;
         solver.path_len = 0;
         solver.killer_table.clear();
+        solver.check_cache.clear();
         solver.start_time = Instant::now();
         solver.timed_out = false;
         solver.next_gc_check = 100_000;
@@ -2886,6 +2886,7 @@ use crate::types::{Color, PieceType};
             solver.max_ply = 0;
             solver.path_len = 0;
             solver.killer_table.clear();
+            solver.check_cache.clear();
             solver.start_time = Instant::now();
             solver.timed_out = false;
             solver.next_gc_check = 100_000;
@@ -4344,7 +4345,6 @@ use crate::types::{Color, PieceType};
     /// depth 制限由来の仮 NM を真の不詰に昇格しない設計の帰結である
     /// (39手詰め偽陽性防止のため)．
     #[test]
-
     fn test_all_checks_nm_but_solve_returns_unk() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let pv_setup = [
@@ -4581,6 +4581,7 @@ use crate::types::{Color, PieceType};
             s.max_ply = 0;
             s.path_len = 0;
             s.killer_table.clear();
+            s.check_cache.clear();
             s.start_time = Instant::now();
             s.timed_out = false;
             s.next_gc_check = 100_000;
@@ -4886,6 +4887,7 @@ use crate::types::{Color, PieceType};
             s.max_ply = 0;
             s.path_len = 0;
             s.killer_table.clear();
+            s.check_cache.clear();
             s.start_time = std::time::Instant::now();
             s.timed_out = false;
             s.attacker = or_board.turn;

@@ -22,6 +22,9 @@ use super::{
     REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
+/// path 配列の容量．depth の最大値(41) + マージン．
+const PATH_CAPACITY: usize = 48;
+
 /// 詰将棋の探索結果．
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsumeResult {
@@ -68,7 +71,9 @@ pub struct DfPnSolver {
     pub(super) diag_root_hand: [u8; HAND_KINDS],
     /// 探索中のパス(ループ検出用，フルハッシュ)．
     /// 固定長配列 + 長さによるスタック実装．LIFO 規律で insert/remove する．
-    pub(super) path: [u64; 48],
+    /// 容量は `PATH_CAPACITY`(48)で，`depth` の最大値(41) + マージン．
+    /// `depth >= PATH_CAPACITY` の場合は実行時にパニックする．
+    pub(super) path: [u64; PATH_CAPACITY],
     pub(super) path_len: usize,
     /// 探索開始時刻．
     pub(super) start_time: Instant,
@@ -212,7 +217,16 @@ impl DfPnSolver {
     }
 
     /// タイムアウト指定付きでソルバーを生成する．
+    ///
+    /// # Panics
+    ///
+    /// `depth >= PATH_CAPACITY`(48)の場合パニックする．
     pub fn with_timeout(depth: u32, max_nodes: u64, draw_ply: u32, timeout_secs: u64) -> Self {
+        assert!(
+            (depth as usize) < PATH_CAPACITY,
+            "depth {} exceeds path capacity {}",
+            depth, PATH_CAPACITY,
+        );
         DfPnSolver {
             depth,
             max_nodes,
@@ -235,7 +249,7 @@ impl DfPnSolver {
             ply_stag_penalties: [0; 64],
             diag_root_pk: 0,
             diag_root_hand: [0; HAND_KINDS],
-            path: [0u64; 48],
+            path: [0u64; PATH_CAPACITY],
             path_len: 0,
             start_time: Instant::now(),
             timed_out: false,
@@ -548,6 +562,7 @@ impl DfPnSolver {
         self.ply_nodes = [0; 64];
         self.path_len = 0;
         self.killer_table.clear();
+        self.check_cache.clear();
         self.refutable_check_failed.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
@@ -789,8 +804,6 @@ impl DfPnSolver {
         ply: u32,
         or_node: bool,
     ) {
-
-
         // ノード制限・タイムアウトチェック
         if self.nodes_searched >= self.max_nodes {
             #[cfg(feature = "tt_diag")]
@@ -1506,6 +1519,7 @@ impl DfPnSolver {
         }
 
         // パスに追加(フルハッシュ)
+        debug_assert!(self.path_len < PATH_CAPACITY, "path overflow at ply={}", ply);
         self.path[self.path_len] = full_hash;
         self.path_len += 1;
 
@@ -2799,14 +2813,11 @@ impl DfPnSolver {
         false
     }
 
-    /// キャッシュ付き王手生成．
-    ///
-    /// 局面ハッシュをキーとして `generate_check_moves` の結果をキャッシュし，
-    /// 同一局面への再計算を回避する(E2 最適化)．
     /// キャッシュ付き王手生成(E2 最適化)．
     ///
-    /// `&self` で呼び出し可能にするため，`CheckCache` は内部可変性(UnsafeCell)を使用．
-    /// これにより mid() のスタックフレーム最適化を阻害しない．
+    /// 局面ハッシュをキーとして `generate_check_moves` の結果をキャッシュし，
+    /// 同一局面への再計算を回避する．`CheckCache` は内部可変性(UnsafeCell)により
+    /// `&self` でアクセス可能にし，mid() のスタックフレーム最適化を阻害しない．
     #[inline]
     pub(super) fn generate_check_moves_cached(
         &self,

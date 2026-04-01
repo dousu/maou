@@ -1702,6 +1702,7 @@ impl DfPnSolver {
         let max_path = self.depth as usize + 2;
         let mut path: Vec<u32> = Vec::with_capacity(max_path);
         let mut captures: Vec<Piece> = Vec::with_capacity(max_path);
+        // PNS 選択ウォークの最大深さ．depth(最大 41) + deferred drops 活性化分の余裕．
         const ANCESTORS_CAP: usize = 65;
         let mut ancestors_buf = [0u64; ANCESTORS_CAP];
         let mut ancestors_len: usize;
@@ -1927,6 +1928,7 @@ impl DfPnSolver {
                             let cap = board.do_move(next_drop);
                             captures.push(cap);
                             path.push(child_idx);
+                            debug_assert!(ancestors_len < ANCESTORS_CAP, "ancestors overflow");
                             ancestors_buf[ancestors_len] = child_fh;
                             ancestors_len += 1;
                             current = child_idx;
@@ -1966,6 +1968,7 @@ impl DfPnSolver {
                 let captured = board.do_move(child_move);
                 captures.push(captured);
                 path.push(best_child);
+                debug_assert!(ancestors_len < ANCESTORS_CAP, "ancestors overflow");
                 ancestors_buf[ancestors_len] = arena[best_child as usize].full_hash;
                 ancestors_len += 1;
                 current = best_child;
