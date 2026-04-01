@@ -1571,8 +1571,9 @@ use crate::types::{Color, PieceType};
         solver.table.clear();
         solver.nodes_searched = 0;
         solver.max_ply = 0;
-        solver.path.clear();
+        solver.path_len = 0;
         solver.killer_table.clear();
+        solver.check_cache.clear();
         solver.start_time = Instant::now();
         solver.timed_out = false;
         solver.next_gc_check = 100_000;
@@ -2883,8 +2884,9 @@ use crate::types::{Color, PieceType};
             // solve() の内部を手動で再現(table.clear() をスキップ)
             solver.nodes_searched = 0;
             solver.max_ply = 0;
-            solver.path.clear();
+            solver.path_len = 0;
             solver.killer_table.clear();
+            solver.check_cache.clear();
             solver.start_time = Instant::now();
             solver.timed_out = false;
             solver.next_gc_check = 100_000;
@@ -4577,8 +4579,9 @@ use crate::types::{Color, PieceType};
             s.table.clear();
             s.nodes_searched = 0;
             s.max_ply = 0;
-            s.path.clear();
+            s.path_len = 0;
             s.killer_table.clear();
+            s.check_cache.clear();
             s.start_time = Instant::now();
             s.timed_out = false;
             s.next_gc_check = 100_000;
@@ -4882,8 +4885,9 @@ use crate::types::{Color, PieceType};
             s.table.clear();
             s.nodes_searched = 0;
             s.max_ply = 0;
-            s.path.clear();
+            s.path_len = 0;
             s.killer_table.clear();
+            s.check_cache.clear();
             s.start_time = std::time::Instant::now();
             s.timed_out = false;
             s.attacker = or_board.turn;
@@ -5422,4 +5426,85 @@ use crate::types::{Color, PieceType};
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// PNS NPS ベンチマーク: 3 問題を各 3 回実行し，PNS フェーズの NPS を計測する．
+    ///
+    /// 各最適化(P1-P7)の前後でこのテストを実行し，中央値を比較する．
+    /// 実行: `cargo test -p maou_shogi --release -- --ignored bench_pns_nps --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_pns_nps() {
+        use crate::board::Board;
+
+        struct BenchCase {
+            name: &'static str,
+            sfen: &'static str,
+            depth: u32,
+            max_nodes: u64,
+        }
+
+        let cases = [
+            BenchCase {
+                name: "9te",
+                sfen: "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
+                depth: 15,
+                max_nodes: 100_000,
+            },
+            BenchCase {
+                name: "29te",
+                sfen: "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",
+                depth: 31,
+                max_nodes: 2_000_000,
+            },
+            BenchCase {
+                name: "39te",
+                sfen: "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
+                depth: 41,
+                max_nodes: 10_000_000,
+            },
+        ];
+
+        const RUNS: usize = 3;
+
+        eprintln!("=== PNS NPS Benchmark ===");
+        eprintln!("{:<8} {:>6} {:>12} {:>10} {:>10}",
+            "problem", "run", "nodes", "time_ms", "NPS_K");
+
+        for case in &cases {
+            let mut times_ms = Vec::with_capacity(RUNS);
+            let mut nodes_list = Vec::with_capacity(RUNS);
+
+            for run in 0..RUNS {
+                let mut board = Board::new();
+                board.set_sfen(case.sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(case.depth, case.max_nodes, 32767, 120);
+                solver.set_find_shortest(false);
+                solver.attacker = board.turn;
+
+                let start = Instant::now();
+                let _pv = solver.pns_main(&mut board);
+                let elapsed = start.elapsed();
+
+                let nodes = solver.nodes_searched;
+                let ms = elapsed.as_secs_f64() * 1000.0;
+                let nps_k = nodes as f64 / elapsed.as_secs_f64() / 1000.0;
+
+                eprintln!("{:<8} {:>6} {:>12} {:>10.1} {:>10.1}",
+                    case.name, run + 1, nodes, ms, nps_k);
+
+                times_ms.push(ms);
+                nodes_list.push(nodes);
+            }
+
+            // 中央値
+            times_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median_ms = times_ms[RUNS / 2];
+            let median_nodes = nodes_list[RUNS / 2];
+            let median_nps_k = median_nodes as f64 / (median_ms / 1000.0) / 1000.0;
+
+            eprintln!("{:<8} MEDIAN {:>12} {:>10.1} {:>10.1}",
+                case.name, median_nodes, median_ms, median_nps_k);
+        }
+        eprintln!("=== END ===");
     }

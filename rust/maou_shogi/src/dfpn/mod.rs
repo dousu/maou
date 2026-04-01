@@ -398,3 +398,86 @@ fn adjust_hand_for_move(
     ph
 }
 
+// --- 王手生成キャッシュ (E2 最適化) ---
+
+/// 王手生成キャッシュのサイズ(2^13 = 8192 エントリ，direct-mapped)．
+const CHECK_CACHE_SIZE: usize = 8192;
+
+/// 1エントリあたりのキャッシュ容量(典型的な王手数は 3-15)．
+const CHECK_CACHE_CAPACITY: usize = 32;
+
+/// 王手生成キャッシュの1エントリ．
+struct CheckCacheEntry {
+    hash: u64,
+    moves: ArrayVec<Move, CHECK_CACHE_CAPACITY>,
+}
+
+impl Default for CheckCacheEntry {
+    fn default() -> Self {
+        Self {
+            hash: 0,
+            moves: ArrayVec::new(),
+        }
+    }
+}
+
+/// 局面ハッシュをキーとする王手リストのキャッシュ．
+///
+/// `generate_check_moves` の結果を direct-mapped テーブルに保存し，
+/// 同一局面への再計算を回避する．MID ループで同一局面が繰り返し
+/// 出現するため，キャッシュヒット率が高い．
+///
+/// 内部可変性(UnsafeCell)を使用して `&self` でアクセス可能にする．
+/// これにより `generate_check_moves_cached` を `&self` で呼び出せ，
+/// mid() のスタックフレーム最適化を阻害しない．
+pub(super) struct CheckCache {
+    table: std::cell::UnsafeCell<Vec<CheckCacheEntry>>,
+}
+
+impl CheckCache {
+    pub(super) fn new() -> Self {
+        let mut table = Vec::with_capacity(CHECK_CACHE_SIZE);
+        for _ in 0..CHECK_CACHE_SIZE {
+            table.push(CheckCacheEntry::default());
+        }
+        Self { table: std::cell::UnsafeCell::new(table) }
+    }
+
+    /// キャッシュをクリアする．
+    pub(super) fn clear(&self) {
+        let table = unsafe { &mut *self.table.get() };
+        for entry in table.iter_mut() {
+            entry.hash = 0;
+            entry.moves.clear();
+        }
+    }
+
+    /// キャッシュから王手リストを取得し，ヒットした場合はコピーを返す．
+    #[inline(always)]
+    pub(super) fn get(&self, hash: u64) -> Option<ArrayVec<Move, CHECK_CACHE_CAPACITY>> {
+        let table = unsafe { &*self.table.get() };
+        let idx = (hash as usize) & (CHECK_CACHE_SIZE - 1);
+        let entry = &table[idx];
+        if entry.hash == hash {
+            Some(entry.moves.clone())
+        } else {
+            None
+        }
+    }
+
+    /// 王手リストをキャッシュに格納する．
+    #[inline(always)]
+    pub(super) fn insert(&self, hash: u64, moves: &ArrayVec<Move, MAX_MOVES>) {
+        if moves.len() <= CHECK_CACHE_CAPACITY {
+            let table = unsafe { &mut *self.table.get() };
+            let idx = (hash as usize) & (CHECK_CACHE_SIZE - 1);
+            let entry = &mut table[idx];
+            entry.hash = hash;
+            entry.moves.clear();
+            for &m in moves.iter() {
+                entry.moves.push(m);
+            }
+        }
+    }
+}
+

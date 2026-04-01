@@ -1,5 +1,7 @@
 //! 手生成，PNS (Proof Number Search)，PV 復元，公開 API．
 
+use std::collections::VecDeque;
+
 use arrayvec::ArrayVec;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "profile")]
@@ -93,9 +95,9 @@ impl DfPnSolver {
             let captured_raw = captured_piece.0;
             let m = Move::new_move(king_sq, to, false, captured_raw, PieceType::King as u8);
             // 移動先が安全か(攻め方に利かれていないか)チェック
-            let captured = board.do_move(m);
-            let safe = !board.is_in_check(defender);
-            board.undo_move(m, captured);
+            // Movegen 最適化: do_move/undo_move を省略し，is_attacked_by_excluding で
+            // 玉の元マスを占有から除外して直接利き判定する．
+            let safe = !board.is_attacked_by_excluding(to, attacker, false, Some(king_sq));
             if safe {
                 push_move(&mut moves, m);
                 if early_exit {
@@ -1027,7 +1029,7 @@ impl DfPnSolver {
                 return Vec::new();
             }
 
-            let moves = self.generate_check_moves(board);
+            let moves = self.generate_check_moves_cached(board);
             if moves.is_empty() {
                 if diag {
                     verbose_eprintln!("[PV diag] ply={} OR node no check moves", ply);
@@ -1293,7 +1295,7 @@ impl DfPnSolver {
                 ids_depth = saved_depth;
             }
             self.depth = ids_depth;
-            self.path.clear();
+            self.path_len = 0;
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             verbose_eprintln!("[ids] depth={}/{} root_pn={} nodes={} time={:.1}s",
@@ -1505,7 +1507,7 @@ impl DfPnSolver {
                     verbose_eprintln!("[ids] NM INFINITE, break");
                     break;
                 }
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 let refutable = if checks.is_empty() {
                     true
                 } else {
@@ -1591,6 +1593,13 @@ impl DfPnSolver {
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
 
+        // アリーナを1回確保し，サイクル間で再利用する(方針C)．
+        // arena.clear() は内部の PnsNode を drop するが，外側 Vec の
+        // capacity は保持されるため再確保コストを回避できる．
+        let mut arena: Vec<PnsNode> = Vec::with_capacity(
+            PNS_MAX_ARENA_NODES.min(1024 * 1024),
+        );
+
         let mut frontier_iters = 0u32;
         const MAX_FRONTIER_ITERS: u32 = 50;
 
@@ -1607,7 +1616,7 @@ impl DfPnSolver {
             // PNS フェーズ: TT を更新しフロンティアを特定
             let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
             self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
-            let _pv = self.pns_main(board);
+            let _pv = self.pns_main_with_arena(board, &mut arena);
 
             let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn == 0 || r_dn == 0 {
@@ -1618,7 +1627,7 @@ impl DfPnSolver {
             let remaining_budget2 = total_max_nodes.saturating_sub(self.nodes_searched);
             let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
             self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
-            self.path.clear();
+            self.path_len = 0;
 
             let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn2 == 0 || r_dn2 == 0 {
@@ -1655,6 +1664,19 @@ impl DfPnSolver {
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
             PNS_MAX_ARENA_NODES.min(1024 * 1024),
         );
+        self.pns_main_with_arena(board, &mut arena)
+    }
+
+    /// Best-First PNS メインループ(アリーナ再利用版)．
+    ///
+    /// `frontier_variant()` から繰り返し呼ばれる際にアリーナの
+    /// 外側 Vec の再確保を回避し NPS を改善する．
+    pub(super) fn pns_main_with_arena(
+        &mut self,
+        board: &mut Board,
+        arena: &mut Vec<PnsNode>,
+    ) -> Option<Vec<Move>> {
+        arena.clear();
 
         // ルートノード生成
         let pk = position_key(board);
@@ -1671,16 +1693,20 @@ impl DfPnSolver {
             or_node: true,
             expanded: false,
             children: Vec::new(),
+            cached_best: u32::MAX,
             remaining: self.depth as u16,
-            deferred_drops: Vec::new(),
+            deferred_drops: VecDeque::new(),
         });
 
         // 再利用バッファ(ループ内のアロケーション回避)
         let max_path = self.depth as usize + 2;
         let mut path: Vec<u32> = Vec::with_capacity(max_path);
         let mut captures: Vec<Piece> = Vec::with_capacity(max_path);
-        let mut ancestors: FxHashSet<u64> =
-            FxHashSet::with_capacity_and_hasher(max_path, Default::default());
+        // PNS 選択ウォークの最大深さ．depth(最大 41) + deferred drops 活性化分の余裕．
+        const ANCESTORS_CAP: usize = 65;
+        let mut ancestors_buf = [0u64; ANCESTORS_CAP];
+        let mut ancestors_len: usize;
+
 
         // PNS メインループ
         let mut pns_iters: u64 = 0;
@@ -1690,6 +1716,11 @@ impl DfPnSolver {
         let mut best_root_pn: u32 = u32::MAX;
         let mut iters_since_improvement: u64 = 0;
         const PNS_STAGNATION_LIMIT: u64 = 500_000;
+        // P4: アリーナ成長率監視による適応的早期終了
+        const GROWTH_CHECK_INTERVAL: u64 = 10_000;
+        const GROWTH_STALL_LIMIT: u32 = 10; // 10回連続(100K反復)成長ゼロで打ち切り
+        let mut prev_arena_size: usize = 1; // ルートノード分
+        let mut growth_stall_count: u32 = 0;
         loop {
             pns_iters += 1;
             // 終了条件: ルート証明/反証
@@ -1704,7 +1735,7 @@ impl DfPnSolver {
             if arena.len() >= PNS_MAX_ARENA_NODES {
                 break;
             }
-            // 終了条件: PNS 収束停滞
+            // 終了条件: PNS 収束停滞(root_pn ベース)
             if arena[0].pn < best_root_pn {
                 best_root_pn = arena[0].pn;
                 iters_since_improvement = 0;
@@ -1717,6 +1748,22 @@ impl DfPnSolver {
                     break;
                 }
             }
+            // 終了条件: アリーナ成長停止(適応的打ち切り)
+            if pns_iters % GROWTH_CHECK_INTERVAL == 0 {
+                let current_size = arena.len();
+                if current_size == prev_arena_size {
+                    growth_stall_count += 1;
+                    if growth_stall_count >= GROWTH_STALL_LIMIT {
+                        #[cfg(feature = "tt_diag")]
+                        eprintln!("[pns_diag] arena growth stalled: size={} for {}K iters, stopping",
+                            current_size, growth_stall_count as u64 * GROWTH_CHECK_INTERVAL / 1000);
+                        break;
+                    }
+                } else {
+                    growth_stall_count = 0;
+                    prev_arena_size = current_size;
+                }
+            }
             // 定期タイムアウトチェック
             if pns_iters & 0xFF == 0 && self.is_timed_out() {
                 self.timed_out = true;
@@ -1726,9 +1773,9 @@ impl DfPnSolver {
             // Most-proving node 選択 + 盤面復元
             path.clear();
             captures.clear();
-            ancestors.clear();
             path.push(0);
-            ancestors.insert(arena[0].full_hash);
+            ancestors_buf[0] = arena[0].full_hash;
+            ancestors_len = 1;
             let mut current = 0u32;
 
             let mut skip_expand = false;
@@ -1761,7 +1808,7 @@ impl DfPnSolver {
 
                         let mut activated_unproven = false;
                         while !arena[ci].deferred_drops.is_empty() {
-                            let next_drop = arena[ci].deferred_drops.remove(0);
+                            let next_drop = arena[ci].deferred_drops.pop_front().unwrap();
                             #[cfg(feature = "tt_diag")]
                             { self.diag_pns_deferred_activations += 1; }
                             #[cfg(feature = "tt_diag")]
@@ -1814,8 +1861,9 @@ impl DfPnSolver {
                                         or_node: true,
                                         expanded: true,
                                         children: Vec::new(),
+                                        cached_best: u32::MAX,
                                         remaining: child_remaining_pf,
-                                        deferred_drops: Vec::new(),
+                                        deferred_drops: VecDeque::new(),
                                     });
                                     arena[ci].children.push(pf_idx);
                                     continue;
@@ -1829,7 +1877,7 @@ impl DfPnSolver {
                             let child_remaining =
                                 arena[ci].remaining.saturating_sub(1);
 
-                            let is_loop = ancestors.contains(&child_fh);
+                            let is_loop = ancestors_buf[..ancestors_len].contains(&child_fh);
                             let (cpn, cdn) = if is_loop {
                                 (INF, 0u32)
                             } else {
@@ -1863,8 +1911,9 @@ impl DfPnSolver {
                                 or_node: true,
                                 expanded: cpn == 0 || cdn == 0,
                                 children: Vec::new(),
+                                cached_best: u32::MAX,
                                 remaining: child_remaining,
-                                deferred_drops: Vec::new(),
+                                deferred_drops: VecDeque::new(),
                             });
                             arena[ci].children.push(child_idx);
 
@@ -1879,7 +1928,9 @@ impl DfPnSolver {
                             let cap = board.do_move(next_drop);
                             captures.push(cap);
                             path.push(child_idx);
-                            ancestors.insert(child_fh);
+                            debug_assert!(ancestors_len < ANCESTORS_CAP, "ancestors overflow");
+                            ancestors_buf[ancestors_len] = child_fh;
+                            ancestors_len += 1;
                             current = child_idx;
                             activated_unproven = true;
                             break;
@@ -1902,7 +1953,9 @@ impl DfPnSolver {
                     // 子ノードなし(展開済みだが全消去等) → リーフとして再展開
                     break;
                 }
-                let best_child = if arena[ci].or_node {
+                let best_child = if arena[ci].cached_best != u32::MAX {
+                    arena[ci].cached_best
+                } else if arena[ci].or_node {
                     *arena[ci].children.iter()
                         .min_by_key(|&&c| (arena[c as usize].pn, arena[c as usize].dn))
                         .expect("children non-empty (guarded above)")
@@ -1915,14 +1968,16 @@ impl DfPnSolver {
                 let captured = board.do_move(child_move);
                 captures.push(captured);
                 path.push(best_child);
-                ancestors.insert(arena[best_child as usize].full_hash);
+                debug_assert!(ancestors_len < ANCESTORS_CAP, "ancestors overflow");
+                ancestors_buf[ancestors_len] = arena[best_child as usize].full_hash;
+                ancestors_len += 1;
                 current = best_child;
             }
 
             // リーフ展開(逐次活性化で解決済みの場合はスキップ)
             if !skip_expand {
                 let ply = (path.len() - 1) as u32;
-                self.pns_expand(board, &mut arena, current, ply, &ancestors);
+                self.pns_expand(board, arena, current, ply, &ancestors_buf[..ancestors_len]);
             }
 
             // 盤面をルートに戻す
@@ -1932,7 +1987,7 @@ impl DfPnSolver {
             }
 
             // バックアップ: 展開ノードからルートまで pn/dn を更新
-            Self::pns_backup(&mut arena, current);
+            Self::pns_backup(arena, current);
         }
 
         // 診断: PNS 終了時の状態
@@ -1977,7 +2032,7 @@ impl DfPnSolver {
         arena: &mut Vec<PnsNode>,
         node_idx: u32,
         ply: u32,
-        ancestors: &FxHashSet<u64>,
+        ancestors: &[u64],
     ) {
         self.nodes_searched += 1;
         if ply > self.max_ply {
@@ -1997,7 +2052,7 @@ impl DfPnSolver {
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
                 // 王手がある場合: 2手延長で全王手が即座に反証可能かを確認．
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
@@ -2015,7 +2070,7 @@ impl DfPnSolver {
 
         // 合法手生成
         let moves = if or_node {
-            self.generate_check_moves(board)
+            self.generate_check_moves_cached(board)
         } else {
             self.generate_defense_moves(board)
         };
@@ -2069,7 +2124,7 @@ impl DfPnSolver {
             if cpn == PN_UNIT && cdn == PN_UNIT && !is_loop {
                 if child_or_node {
                     // 子は OR ノード(攻め方手番): 王手数ベース
-                    let checks = self.generate_check_moves(board);
+                    let checks = self.generate_check_moves_cached(board);
                     if checks.is_empty() {
                         cpn = INF;
                         cdn = 0;
@@ -2153,7 +2208,7 @@ impl DfPnSolver {
                         "[pns_seq] pns_expand: defer drop {} at AND node idx={}",
                         m.to_usi(), node_idx,
                     );
-                    arena[node_idx as usize].deferred_drops.push(*m);
+                    arena[node_idx as usize].deferred_drops.push_back(*m);
                     continue;
                 }
                 first_unproven_drop_added = true;
@@ -2171,8 +2226,9 @@ impl DfPnSolver {
                 or_node: child_or_node,
                 expanded: cpn == 0 || cdn == 0,
                 children: Vec::new(),
+                cached_best: u32::MAX,
                 remaining: child_remaining,
-                deferred_drops: Vec::new(),
+                deferred_drops: VecDeque::new(),
             });
             arena[node_idx as usize].children.push(child_idx);
         }
@@ -2185,7 +2241,7 @@ impl DfPnSolver {
             let mut prop_rem = propagate_nm_remaining(or_nm_min_remaining, remaining);
             // 2手延長による REMAINING_INFINITE 昇格
             if prop_rem != REMAINING_INFINITE {
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty()
                     || self.depth_limit_all_checks_refutable(board, &checks)
                 {
@@ -2232,28 +2288,41 @@ impl DfPnSolver {
             let old_pn = arena[ni].pn;
             let old_dn = arena[ni].dn;
 
-            let (new_pn, new_dn) = if arena[ni].or_node {
+            let (new_pn, new_dn, best) = if arena[ni].or_node {
                 // OR ノード: pn = min(child_pn), dn = sum(child_dn)
+                // best_child: min by (pn, dn)
                 let mut min_pn = INF;
                 let mut sum_dn: u64 = 0;
+                let mut best_idx = arena[ni].children[0];
+                let mut best_key = (u32::MAX, u32::MAX);
                 let num_children = arena[ni].children.len();
                 for i in 0..num_children {
-                    let ci = arena[ni].children[i] as usize;
+                    let child = arena[ni].children[i];
+                    let ci = child as usize;
+                    let key = (arena[ci].pn, arena[ci].dn);
+                    if key < best_key {
+                        best_key = key;
+                        best_idx = child;
+                    }
                     if arena[ci].pn < min_pn {
                         min_pn = arena[ci].pn;
                     }
                     sum_dn = sum_dn.saturating_add(arena[ci].dn as u64);
                 }
-                (min_pn, sum_dn.min(INF as u64) as u32)
+                (min_pn, sum_dn.min(INF as u64) as u32, best_idx)
             } else {
                 // AND ノード: WPN, dn = min(child_dn)
+                // best_child: min by (dn, pn) among unproven children
                 let mut max_pn: u32 = 0;
                 let mut min_dn = INF;
+                let mut best_idx = arena[ni].children[0];
+                let mut best_key = (u32::MAX, u32::MAX);
                 let mut unproven: u32 = 0;
                 let mut disproved = false;
                 let num_children = arena[ni].children.len();
                 for i in 0..num_children {
-                    let ci = arena[ni].children[i] as usize;
+                    let child = arena[ni].children[i];
+                    let ci = child as usize;
                     if arena[ci].dn == 0 {
                         disproved = true;
                         break;
@@ -2261,6 +2330,11 @@ impl DfPnSolver {
                     if arena[ci].pn == 0 {
                         // VPN: 証明済み子を pn 合計から除外
                         continue;
+                    }
+                    let key = (arena[ci].dn, arena[ci].pn);
+                    if key < best_key {
+                        best_key = key;
+                        best_idx = child;
                     }
                     if arena[ci].pn > max_pn {
                         max_pn = arena[ci].pn;
@@ -2271,24 +2345,25 @@ impl DfPnSolver {
                     unproven += 1;
                 }
                 if disproved {
-                    (INF, 0u32)
+                    (INF, 0u32, best_idx)
                 } else if unproven == 0 && arena[ni].deferred_drops.is_empty() {
                     // 全子証明済み + deferred なし → AND ノード証明
-                    (0u32, INF)
+                    (0u32, INF, best_idx)
                 } else if unproven == 0 {
                     // 全子証明済みだが deferred_drops 残り → 未完了
                     // MPN 選択時に次の合駒を活性化するため pn=1, dn=1 で保持
-                    (PN_UNIT, PN_UNIT)
+                    (PN_UNIT, PN_UNIT, best_idx)
                 } else {
                     let pn = (max_pn as u64)
                         .saturating_add((unproven as u64 - 1) * PN_UNIT as u64)
                         .min(INF as u64) as u32;
-                    (pn, min_dn)
+                    (pn, min_dn, best_idx)
                 }
             };
 
             arena[ni].pn = new_pn;
             arena[ni].dn = new_dn;
+            arena[ni].cached_best = best;
 
             // pn/dn が変化しなければ伝播打ち切り
             if new_pn == old_pn && new_dn == old_dn {
