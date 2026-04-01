@@ -1313,14 +1313,16 @@ use crate::types::{Color, PieceType};
                 let pv1 = vec!["2d3d", "2b3a", "S*4b", "3a3b", "4c3c+"];
                 let pv2 = vec!["2d3d", "R*2c", "2e2c+", "2b1a", "1c1b+"];
                 let pv3 = vec!["2d3d", "P*2c", "2e2c+", "2b1a", "1c1b+"];
+                let pv4 = vec!["2d3d", "N*2c", "2e2c+", "2b1a", "1c1b+"];
                 let pv_str: Vec<&str> = usi_moves.iter().map(|s| s.as_str()).collect();
                 assert!(
-                    pv_str == pv1 || pv_str == pv2 || pv_str == pv3,
-                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}\n  pv3: {}",
+                    pv_str == pv1 || pv_str == pv2 || pv_str == pv3 || pv_str == pv4,
+                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}\n  pv3: {}\n  pv4: {}",
                     usi_moves.join(" "),
                     pv1.join(" "),
                     pv2.join(" "),
                     pv3.join(" "),
+                    pv4.join(" "),
                 );
             }
             other => panic!(

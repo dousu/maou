@@ -49,6 +49,17 @@ const _: () = assert!(
 );
 
 impl DfPnEntry {
+    /// ゼロ初期化されたエントリ(EMPTY 定数用)．
+    pub(super) const ZERO: Self = DfPnEntry {
+        source: 0,
+        pn: 0,
+        dn: 0,
+        hand: [0; HAND_KINDS],
+        amount: 0,
+        remaining_flags: 0,
+        best_move: 0,
+    };
+
     /// remaining 値を取得する(ビット 0-14)．
     #[inline(always)]
     pub(super) fn remaining(&self) -> u16 {

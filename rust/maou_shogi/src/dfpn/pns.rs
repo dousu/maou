@@ -1518,7 +1518,7 @@ impl DfPnSolver {
                     verbose_eprintln!("[ids] NM promoted to INFINITE, break");
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
-                        pk, att_hand, INF, 0, REMAINING_INFINITE, pk,
+                        pk, att_hand, INF, 0, REMAINING_INFINITE, pk as u32,
                     );
                     break;
                 }
@@ -1798,7 +1798,7 @@ impl DfPnSolver {
                             if child.pn == 0 && child.or_node {
                                 self.store(
                                     child.pos_key, child.hand, 0, INF,
-                                    REMAINING_INFINITE, child.pos_key,
+                                    REMAINING_INFINITE, child.pos_key as u32,
                                 );
                             }
                         }
@@ -2055,15 +2055,15 @@ impl DfPnSolver {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
+                        REMAINING_INFINITE, pos_key as u32);
                 } else if self.depth_limit_all_checks_refutable(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
+                        REMAINING_INFINITE, pos_key as u32);
                 } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                    self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
             } else {
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
             }
             return;
         }
@@ -2080,12 +2080,12 @@ impl DfPnSolver {
                 // 王手手段なし → 不詰
                 arena[node_idx as usize].pn = INF;
                 arena[node_idx as usize].dn = 0;
-                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key);
+                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key as u32);
             } else {
                 // 応手なし → 詰み
                 arena[node_idx as usize].pn = 0;
                 arena[node_idx as usize].dn = INF;
-                self.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, pos_key);
+                self.store(pos_key, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, pos_key as u32);
             }
             arena[node_idx as usize].expanded = true;
             return;
@@ -2128,18 +2128,18 @@ impl DfPnSolver {
                     if checks.is_empty() {
                         cpn = INF;
                         cdn = 0;
-                        self.store(child_pk, child_hand, INF, 0, REMAINING_INFINITE, child_pk);
+                        self.store(child_pk, child_hand, INF, 0, REMAINING_INFINITE, child_pk as u32);
                     } else if self.has_mate_in_1_with(board, &checks) {
                         cpn = 0;
                         cdn = INF;
-                        self.store(child_pk, child_hand, 0, INF, REMAINING_INFINITE, child_pk);
+                        self.store(child_pk, child_hand, 0, INF, REMAINING_INFINITE, child_pk as u32);
                     } else {
                         let nc = checks.len() as u32;
                         cpn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
                         cdn = PN_UNIT;
-                        self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
+                        self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 } else {
                     // 子は AND ノード(玉方手番): 応手数ベース
@@ -2147,7 +2147,7 @@ impl DfPnSolver {
                     if defenses.is_empty() {
                         cpn = 0;
                         cdn = INF;
-                        self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, child_pk);
+                        self.store(child_pk, [0; HAND_KINDS], 0, INF, REMAINING_INFINITE, child_pk as u32);
                     } else {
                         let n = defenses.len() as u32;
                         cpn = self.heuristic_and_pn(board, n);
@@ -2155,7 +2155,7 @@ impl DfPnSolver {
                             cpn = cpn.saturating_add(edge_cost_or(*m, ksq));
                         }
                         cdn = PN_UNIT;
-                        self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk);
+                        self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 }
             }
@@ -2172,7 +2172,7 @@ impl DfPnSolver {
                 arena[node_idx as usize].pn = 0;
                 arena[node_idx as usize].dn = INF;
                 arena[node_idx as usize].expanded = true;
-                self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
+                self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
                 return;
             }
             // AND ノードで子が即座に反証 → 親を反証して終了
@@ -2185,7 +2185,7 @@ impl DfPnSolver {
                     child_pk, &child_hand, child_remaining,
                 ).map(|(r, _)| r).unwrap_or(0);
                 let prop_rem = propagate_nm_remaining(child_rem, remaining);
-                self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key);
+                self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key as u32);
                 return;
             }
             // OR ノードで子が反証済み → 子を追加せずスキップ
@@ -2248,7 +2248,7 @@ impl DfPnSolver {
                     prop_rem = REMAINING_INFINITE;
                 }
             }
-            self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key);
+            self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key as u32);
             return;
         }
 
@@ -2563,14 +2563,14 @@ impl DfPnSolver {
                         let best_move16 = arena[ci as usize].move_from_parent.to_move16();
                         self.store_with_best_move(
                             node.pos_key, node.hand, 0, INF,
-                            REMAINING_INFINITE, node.pos_key, best_move16,
+                            REMAINING_INFINITE, node.pos_key as u32, best_move16,
                         );
                     }
                 } else {
                     // AND 証明: 全子が証明済み
                     self.store(
                         node.pos_key, node.hand, 0, INF,
-                        REMAINING_INFINITE, node.pos_key,
+                        REMAINING_INFINITE, node.pos_key as u32,
                     );
                 }
             } else if node.dn == 0 && node.expanded {
