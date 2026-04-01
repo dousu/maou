@@ -221,6 +221,25 @@ impl TranspositionTable {
         exact_match.unwrap_or((PN_UNIT, PN_UNIT, 0))
     }
 
+    /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
+    ///
+    /// `look_up_pn_dn` の Pass 1 と同一ロジックだが，Pass 2/3 を省略する．
+    /// depth-limit ファストパスでの再 lookup 廃止に使用(E1 最適化)．
+    #[inline(always)]
+    pub(super) fn has_proof(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let cluster = self.cluster(pos_key);
+        for fe in cluster {
+            if fe.pos_key == pos_key
+                && fe.entry.pn == 0
+                && hand_gte_forward_chain(hand, &fe.entry.hand)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// TT Best Move を参照する．
     #[inline(always)]
     pub(super) fn look_up_best_move(

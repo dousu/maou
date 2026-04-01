@@ -1,5 +1,7 @@
 //! Df-Pn のデータ構造定義．
 
+use std::collections::VecDeque;
+
 use crate::moves::Move;
 use crate::types::HAND_KINDS;
 
@@ -61,11 +63,14 @@ pub(super) struct PnsNode {
     pub(super) expanded: bool,
     /// 子ノードのインデックス(アリーナ内)．
     pub(super) children: Vec<u32>,
+    /// 最善子ノードのキャッシュ(backup 時に更新)．
+    /// OR ノード: min(pn, dn) の子，AND ノード: min(dn, pn) の子．
+    pub(super) cached_best: u32,
     /// 残り探索深さ．
     pub(super) remaining: u16,
     /// AND ノード用: 逐次活性化待ちの合駒(drop)手．
     /// 弱い駒から順に1つずつ子ノードとして展開する．
-    pub(super) deferred_drops: Vec<Move>,
+    pub(super) deferred_drops: VecDeque<Move>,
 }
 
 /// PNS アリーナの最大ノード数(メモリ上限)．

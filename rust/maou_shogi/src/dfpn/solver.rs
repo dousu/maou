@@ -17,6 +17,7 @@ use super::profile::ProfileStats;
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
+    CheckCache,
     DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
     REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
@@ -66,7 +67,9 @@ pub struct DfPnSolver {
     pub(super) diag_root_pk: u64,
     pub(super) diag_root_hand: [u8; HAND_KINDS],
     /// 探索中のパス(ループ検出用，フルハッシュ)．
-    pub(super) path: FxHashSet<u64>,
+    /// 固定長配列 + 長さによるスタック実装．LIFO 規律で insert/remove する．
+    pub(super) path: [u64; 48],
+    pub(super) path_len: usize,
     /// 探索開始時刻．
     pub(super) start_time: Instant,
     /// タイムアウトしたかどうか．
@@ -95,6 +98,8 @@ pub struct DfPnSolver {
     /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
     /// 各 `mid()` 呼び出しで更新され，飛び駒の王手がない場合は空．
     pub(super) chain_bb_cache: Bitboard,
+    /// 王手生成キャッシュ(E2 最適化)．
+    pub(super) check_cache: CheckCache,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
     pub(super) prefilter_hits: u64,
     /// NM 昇格の反証判定キャッシュ: 判定が false だった局面キーの集合．
@@ -216,6 +221,7 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             chain_bb_cache: Bitboard::EMPTY,
+            check_cache: CheckCache::new(),
             prefilter_hits: 0,
             refutable_check_failed: FxHashSet::default(),
             tt_gc_threshold: 0,
@@ -229,7 +235,8 @@ impl DfPnSolver {
             ply_stag_penalties: [0; 64],
             diag_root_pk: 0,
             diag_root_hand: [0; HAND_KINDS],
-            path: FxHashSet::default(),
+            path: [0u64; 48],
+            path_len: 0,
             start_time: Instant::now(),
             timed_out: false,
             attacker: Color::Black,
@@ -539,7 +546,7 @@ impl DfPnSolver {
         self.nodes_searched = 0;
         self.max_ply = 0;
         self.ply_nodes = [0; 64];
-        self.path.clear();
+        self.path_len = 0;
         self.killer_table.clear();
         self.refutable_check_failed.clear();
         self.start_time = Instant::now();
@@ -740,7 +747,7 @@ impl DfPnSolver {
             let mut has_refuting_defense = false;
             for defense in &defenses {
                 let cap_d = board.do_move(*defense);
-                let next_checks = self.generate_check_moves(board);
+                let next_checks = self.generate_check_moves_cached(board);
                 if next_checks.is_empty() {
                     board.undo_move(*defense, cap_d);
                     has_refuting_defense = true;
@@ -782,6 +789,8 @@ impl DfPnSolver {
         ply: u32,
         or_node: bool,
     ) {
+
+
         // ノード制限・タイムアウトチェック
         if self.nodes_searched >= self.max_nodes {
             #[cfg(feature = "tt_diag")]
@@ -870,7 +879,7 @@ impl DfPnSolver {
 
         // ループ検出: フルハッシュで判定(持ち駒込みの完全一致)
         let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
-            self.path.contains(&full_hash));
+            self.path[..self.path_len].contains(&full_hash));
         if in_path {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
@@ -928,7 +937,7 @@ impl DfPnSolver {
             #[cfg(feature = "profile")]
             let _depth_limit_start = Instant::now();
             if or_node {
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key);
@@ -953,7 +962,7 @@ impl DfPnSolver {
         // 合法手生成
         let mut moves = if or_node {
             profile_timed!(self, movegen_check_ns, movegen_check_count,
-                self.generate_check_moves(board))
+                self.generate_check_moves_cached(board))
         } else {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
                 self.generate_defense_moves(board))
@@ -1071,26 +1080,31 @@ impl DfPnSolver {
             // 深さ制限ファストパス: 子ノードが ply+1 >= depth で即座に
             // 深さ制限に到達する場合，mid() 呼び出しを省略して直接反証を記録する．
             if is_at_depth_limit && cpn != 0 {
-                // 未証明: 深さ制限反証を直接記録
-                if !or_node {
-                    // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
-                    let checks = self.generate_check_moves(board);
-                    let dl_rem = if checks.is_empty() {
-                        REMAINING_INFINITE
-                    } else if self.all_checks_refutable_by_tt(board, &checks) {
-                        REMAINING_INFINITE
-                    } else {
-                        0
-                    };
-                    self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                // E1 最適化: proof の有無を先にチェックし，再 lookup を省略する．
+                // proof があれば子は証明済み(cpn=0)．なければ store 後の
+                // TT 状態は必ず disproof(dn=0)を含むため (cpn, cdn) = (INF, 0)．
+                if self.table.has_proof(child_pk, &child_hand) {
+                    cpn = 0;
+                    cdn = INF;
                 } else {
-                    // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                    self.store(child_pk, child_hand, INF, 0, 0, child_pk);
+                    if !or_node {
+                        // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
+                        let checks = self.generate_check_moves_cached(board);
+                        let dl_rem = if checks.is_empty() {
+                            REMAINING_INFINITE
+                        } else if self.all_checks_refutable_by_tt(board, &checks) {
+                            REMAINING_INFINITE
+                        } else {
+                            0
+                        };
+                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                    } else {
+                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
+                        self.store(child_pk, child_hand, INF, 0, 0, child_pk);
+                    }
+                    cpn = INF;
+                    cdn = 0;
                 }
-                // store 後の値を re-read
-                let (p, d, _) = self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
-                cpn = p;
-                cdn = d;
             }
 
             #[cfg(feature = "profile")]
@@ -1113,7 +1127,7 @@ impl DfPnSolver {
                             ) {
                                 false
                             } else {
-                                let checks = self.generate_check_moves(board);
+                                let checks = self.generate_check_moves_cached(board);
                                 if !checks.is_empty() {
                                     self.has_mate_in_1_with(board, &checks)
                                 } else {
@@ -1157,7 +1171,7 @@ impl DfPnSolver {
                     }
                 } else {
                     // インライン王手なし/1手詰め判定 + 取り後TT参照(OR 子ノード)
-                    let checks = self.generate_check_moves(board);
+                    let checks = self.generate_check_moves_cached(board);
                     if checks.is_empty() {
                         self.store(child_pk, child_hand, INF, 0,
                             REMAINING_INFINITE, child_pk);
@@ -1397,7 +1411,7 @@ impl DfPnSolver {
             // ホットパスでは使用しない(NPS が 1.5K まで低下する)．
             // 完全な昇格判定は IDS 外部ループでのみ実行する．
             if parent_nm_remaining != REMAINING_INFINITE {
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     parent_nm_remaining = REMAINING_INFINITE;
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
@@ -1492,7 +1506,8 @@ impl DfPnSolver {
         }
 
         // パスに追加(フルハッシュ)
-        self.path.insert(full_hash);
+        self.path[self.path_len] = full_hash;
+        self.path_len += 1;
 
         // --- チェーン合駒の DN バイアス用玉位置 ---
         // children 内のドロップ子がチェーンマスへのドロップなら，
@@ -1524,7 +1539,8 @@ impl DfPnSolver {
                 p[k] = p[k].min(att_hand[k]);
             }
             self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key);
-            self.path.remove(&full_hash);
+            debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+            self.path_len -= 1;
             return;
         }
 
@@ -1565,7 +1581,7 @@ impl DfPnSolver {
                 // ループ検出: 子がパス上にある場合は (INF, 0) として扱い，
                 // mid() を呼ばず即座にループ NM として処理する．
                 // GHI 対策: ループ子の NM は path_dependent として store される(下流)．
-                let is_loop_child = self.path.contains(&child_fh);
+                let is_loop_child = self.path[..self.path_len].contains(&child_fh);
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
                 } else {
@@ -1664,7 +1680,8 @@ impl DfPnSolver {
                 prev_cpn = post_cpn;
                 prev_cdn = post_cdn;
             }
-            self.path.remove(&full_hash);
+            debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+            self.path_len -= 1;
             #[cfg(feature = "tt_diag")]
             { self.diag_single_child_exits += 1; }
             return;
@@ -1793,7 +1810,7 @@ impl DfPnSolver {
                     children.iter().enumerate()
                 {
                     let (cpn, cdn, csrc) =
-                        if self.path.contains(&child_fh) {
+                        if self.path[..self.path_len].contains(&child_fh) {
                             loop_child_count += 1;
                             (INF, 0, 0)
                         } else {
@@ -1838,7 +1855,7 @@ impl DfPnSolver {
                         ).map(|(r, _)| r).unwrap_or(0);
                         or_nm_min_remaining = or_nm_min_remaining.min(child_nm_rem);
                         // GHI 伝播: 子の反証が経路依存なら親も経路依存
-                        if !self.path.contains(&child_fh)
+                        if !self.path[..self.path_len].contains(&child_fh)
                             && self.table.has_path_dependent_disproof(
                                 child_pk, child_hand,
                             )
@@ -1875,7 +1892,8 @@ impl DfPnSolver {
                 }
 
                 if proved_or_disproved {
-                    self.path.remove(&full_hash);
+                    debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.path_len -= 1;
                     return;
                 }
 
@@ -1887,7 +1905,7 @@ impl DfPnSolver {
                     // MID 内部での REMAINING_INFINITE 昇格(main loop):
                     // TT ベースの高速判定のみ(init フェーズと同様)
                     if parent_nm_remaining != REMAINING_INFINITE {
-                        let checks = self.generate_check_moves(board);
+                        let checks = self.generate_check_moves_cached(board);
                         if checks.is_empty() {
                             parent_nm_remaining = REMAINING_INFINITE;
                         } else if self.all_checks_refutable_by_tt(board, &checks)
@@ -1920,7 +1938,8 @@ impl DfPnSolver {
                             remaining, pos_key,
                         );
                     }
-                    self.path.remove(&full_hash);
+                    debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.path_len -= 1;
                     return;
                 }
 
@@ -1958,7 +1977,7 @@ impl DfPnSolver {
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
-                    let is_loop_child = self.path.contains(&child_fh);
+                    let is_loop_child = self.path[..self.path_len].contains(&child_fh);
                     let (cpn, cdn, csrc) =
                         if is_loop_child {
                             (INF, 0, 0)
@@ -2096,7 +2115,8 @@ impl DfPnSolver {
                 if proved_or_disproved {
                     #[cfg(feature = "tt_diag")]
                     { self.diag_loop_break_proved += 1; }
-                    self.path.remove(&full_hash);
+                    debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.path_len -= 1;
                     return;
                 }
 
@@ -2143,7 +2163,8 @@ impl DfPnSolver {
                         pos_key, and_proof, 0, INF,
                         REMAINING_INFINITE, pos_key,
                     );
-                    self.path.remove(&full_hash);
+                    debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.path_len -= 1;
                     return;
                 }
             }
@@ -2321,10 +2342,12 @@ impl DfPnSolver {
                 // eff_pn_th の 2/3 を最低保証することで，各 AND レベルでの
                 // 閾値減衰を (1/2)^N → (2/3)^N に改善する．
                 // 6 AND レベルで (2/3)^6 ≈ 0.088 vs (1/2)^6 ≈ 0.016 → 5.6倍．
+                // u64 に昇格して乗算オーバーフローを防止する．
+                let pn_floor_raw = ((eff_pn_th as u64 * 2 / 3) as u32).max(PN_UNIT);
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max((eff_pn_th * 2 / 3).max(PN_UNIT))
+                    DN_FLOOR.max(pn_floor_raw)
                 } else {
-                    (eff_pn_th * 2 / 3).max(PN_UNIT)
+                    pn_floor_raw
                 };
                 // 最低進捗保証: child_pn_th は最低でも best_child.pn + PN_UNIT を
                 // 保証する．これにより eff_pn_th ≈ current_pn のとき
@@ -2395,7 +2418,7 @@ impl DfPnSolver {
                 let _cap_tt_start = Instant::now();
                 #[cfg(feature = "tt_diag")]
                 { self.diag_capture_tt_calls += 1; }
-                let checks = self.generate_check_moves(board);
+                let checks = self.generate_check_moves_cached(board);
                 if self.try_capture_tt_proof(
                     board, &checks,
                     remaining.saturating_sub(1),
@@ -2613,7 +2636,8 @@ impl DfPnSolver {
         }
 
         // パスから除去
-        self.path.remove(&full_hash);
+        debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+        self.path_len -= 1;
     }
 
     /// 既に生成済みの王手リストを使って1手詰め判定する．
@@ -2773,6 +2797,32 @@ impl DfPnSolver {
             board.undo_move(*check, captured);
         }
         false
+    }
+
+    /// キャッシュ付き王手生成．
+    ///
+    /// 局面ハッシュをキーとして `generate_check_moves` の結果をキャッシュし，
+    /// 同一局面への再計算を回避する(E2 最適化)．
+    /// キャッシュ付き王手生成(E2 最適化)．
+    ///
+    /// `&self` で呼び出し可能にするため，`CheckCache` は内部可変性(UnsafeCell)を使用．
+    /// これにより mid() のスタックフレーム最適化を阻害しない．
+    #[inline]
+    pub(super) fn generate_check_moves_cached(
+        &self,
+        board: &mut Board,
+    ) -> ArrayVec<Move, MAX_MOVES> {
+        let hash = board.hash;
+        if let Some(cached) = self.check_cache.get(hash) {
+            let mut result = ArrayVec::new();
+            for &m in cached.iter() {
+                result.push(m);
+            }
+            return result;
+        }
+        let moves = self.generate_check_moves(board);
+        self.check_cache.insert(hash, &moves);
+        moves
     }
 
     /// ビットボード演算のみで詰み判定を行い，do_move/undo_move の
