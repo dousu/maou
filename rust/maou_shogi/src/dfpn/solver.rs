@@ -1778,7 +1778,7 @@ impl DfPnSolver {
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
                         for e in self.table.entries_iter(cpk) {
                             eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
-                                e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
+                                e.pn, e.dn, e.remaining(), e.path_dependent(), &e.hand);
                         }
                     }
                 }

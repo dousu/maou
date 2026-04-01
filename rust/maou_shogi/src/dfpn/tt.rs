@@ -13,9 +13,9 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
 /// proof(1-2) + confirmed disproof(1-2) で典型的に 2-4 エントリ．
-/// hand バリアント(合駒チェーン等)で 4 を超えるケースがあるため
-/// 6 エントリに設定し，PV 復元時の proof チェーン断絶を防止する．
-const PROVEN_CLUSTER_SIZE: usize = 6;
+/// `replace_weakest_proven` で confirmed disproof を proof より
+/// 優先的に evict するため，4 エントリで PV チェーンを維持できる．
+const PROVEN_CLUSTER_SIZE: usize = 4;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -27,9 +27,9 @@ const WORKING_CLUSTER_SIZE: usize = 6;
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// Dual TT メモリ配分:
-/// - ProvenTT:  2M × 6 × 32B = 384 MB
+/// - ProvenTT:  2M × 4 × 32B = 256 MB
 /// - WorkingTT: 2M × 6 × 32B = 384 MB
-/// - 合計: 768 MB
+/// - 合計: 640 MB
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
 /// フラットテーブルの 1 エントリ．
@@ -438,8 +438,8 @@ impl TranspositionTable {
             }
             return;
         }
-        // 満杯 → replace_weakest
-        if Self::replace_weakest_in(p_cluster, pos_key, new_entry) {
+        // 満杯 → ProvenTT 専用の replace (confirmed disproof を proof より優先 evict)
+        if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] {
                 if is_proof { self.diag_proof_inserts += 1; }
                 else { self.diag_disproof_inserts += 1; }
@@ -626,6 +626,50 @@ impl TranspositionTable {
             cluster[idx].entry = new_entry;
             return true;
         }
+        false
+    }
+
+    /// ProvenTT 専用の置換: confirmed disproof を proof より優先的に evict する．
+    ///
+    /// PV 復元の proof チェーンを保護するため，proof エントリ(pn=0)は
+    /// confirmed disproof(dn=0)より後に evict される．
+    ///
+    /// 優先順位(高い=先に evict):
+    /// 1. foreign confirmed disproof (PV に無関係かつ再計算容易)
+    /// 2. same-pk confirmed disproof (proof より価値が低い)
+    /// 3. foreign proof (lowest amount — 最終手段)
+    fn replace_weakest_proven(
+        cluster: &mut [TTFlatEntry],
+        pos_key: u64,
+        new_entry: DfPnEntry,
+    ) -> bool {
+        // Pass 1: foreign confirmed disproof を探す
+        let mut worst_idx: Option<usize> = None;
+        let mut worst_amount: u8 = u8::MAX;
+        for (i, fe) in cluster.iter().enumerate() {
+            if fe.pos_key == 0 || fe.pos_key == pos_key { continue; }
+            if fe.entry.dn == 0 && fe.entry.amount < worst_amount {
+                worst_amount = fe.entry.amount;
+                worst_idx = Some(i);
+            }
+        }
+        if let Some(idx) = worst_idx {
+            cluster[idx].pos_key = pos_key;
+            cluster[idx].entry = new_entry;
+            return true;
+        }
+        // Pass 2: same-pk confirmed disproof を探す
+        for (i, fe) in cluster.iter().enumerate() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.dn == 0 {
+                cluster[i].entry = new_entry;
+                return true;
+            }
+        }
+        // Pass 3 なし: foreign proof は evict しない．
+        // PV チェーンの proof エントリを保護するため，
+        // クラスタ全体が foreign proof で埋まっている場合は挿入を断念する．
+        // 断念した proof は再探索時に再証明される(TT はキャッシュ)．
         false
     }
 
