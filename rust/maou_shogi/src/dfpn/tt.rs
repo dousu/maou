@@ -13,8 +13,9 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
 /// proof(1-2) + confirmed disproof(1-2) で典型的に 2-4 エントリ．
-/// 4 エントリで十分カバーできる．
-const PROVEN_CLUSTER_SIZE: usize = 4;
+/// hand バリアント(合駒チェーン等)で 4 を超えるケースがあるため
+/// 6 エントリに設定し，PV 復元時の proof チェーン断絶を防止する．
+const PROVEN_CLUSTER_SIZE: usize = 6;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -26,9 +27,9 @@ const WORKING_CLUSTER_SIZE: usize = 6;
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// Dual TT メモリ配分:
-/// - ProvenTT:  2M × 4 × 32B = 256 MB
+/// - ProvenTT:  2M × 6 × 32B = 384 MB
 /// - WorkingTT: 2M × 6 × 32B = 384 MB
-/// - 合計: 640 MB
+/// - 合計: 768 MB
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
 /// フラットテーブルの 1 エントリ．
