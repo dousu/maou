@@ -371,6 +371,8 @@ impl DfPnSolver {
     #[cfg(feature = "profile")]
     pub fn sync_tt_profile(&mut self) {
         self.profile_stats.tt_overflow_count = self.table.overflow_count;
+        self.profile_stats.tt_proven_overflow_count = self.table.proven_overflow_count;
+        self.profile_stats.tt_working_overflow_count = self.table.working_overflow_count;
         self.profile_stats.tt_overflow_no_victim_count =
             self.table.overflow_no_victim_count;
         self.profile_stats.tt_max_entries_per_position =

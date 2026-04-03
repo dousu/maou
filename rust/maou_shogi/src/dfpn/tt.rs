@@ -94,6 +94,12 @@ pub(super) struct TranspositionTable {
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
+    /// ProvenTT での overflow 回数．
+    #[cfg(feature = "profile")]
+    pub(super) proven_overflow_count: u64,
+    /// WorkingTT での overflow 回数．
+    #[cfg(feature = "profile")]
+    pub(super) working_overflow_count: u64,
     /// TT エントリ溢れで置換対象が見つからなかった回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_no_victim_count: u64,
@@ -133,6 +139,10 @@ impl TranspositionTable {
             working_mask: num_clusters - 1,
             #[cfg(feature = "profile")]
             overflow_count: 0,
+            #[cfg(feature = "profile")]
+            proven_overflow_count: 0,
+            #[cfg(feature = "profile")]
+            working_overflow_count: 0,
             #[cfg(feature = "profile")]
             overflow_no_victim_count: 0,
             #[cfg(feature = "profile")]
@@ -443,6 +453,8 @@ impl TranspositionTable {
             return;
         }
         // 満杯 → ProvenTT 専用の replace
+        #[cfg(feature = "profile")]
+        { self.proven_overflow_count += 1; }
         if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] {
                 if is_proof { self.diag_proof_inserts += 1; }
@@ -573,7 +585,7 @@ impl TranspositionTable {
             }
         } else {
             #[cfg(feature = "profile")]
-            { self.overflow_count += 1; }
+            { self.overflow_count += 1; self.working_overflow_count += 1; }
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
                 #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
@@ -1064,6 +1076,8 @@ impl TranspositionTable {
     #[cfg(feature = "profile")]
     pub(super) fn reset_profile(&mut self) {
         self.overflow_count = 0;
+        self.proven_overflow_count = 0;
+        self.working_overflow_count = 0;
         self.overflow_no_victim_count = 0;
         self.max_entries_per_position = 0;
     }

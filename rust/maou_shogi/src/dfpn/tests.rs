@@ -1909,8 +1909,10 @@ use crate::types::{Color, PieceType};
                 let overflow_rate = if solver.nodes_searched > 0 {
                     solver.profile_stats.tt_overflow_count as f64 / solver.nodes_searched as f64 * 100.0
                 } else { 0.0 };
-                writeln!(out, "       overflow={} ({:.1}% of nodes) no_victim={} max_epp={}",
+                writeln!(out, "       overflow={} (proven={}, working={}, {:.1}% of nodes) no_victim={} max_epp={}",
                     solver.profile_stats.tt_overflow_count,
+                    solver.profile_stats.tt_proven_overflow_count,
+                    solver.profile_stats.tt_working_overflow_count,
                     overflow_rate,
                     solver.profile_stats.tt_overflow_no_victim_count,
                     solver.profile_stats.tt_max_entries_per_position).unwrap();
@@ -5360,8 +5362,10 @@ use crate::types::{Color, PieceType};
             #[cfg(feature = "profile")]
             {
                 solver.sync_tt_profile();
-                eprintln!("  overflow={} no_victim={} max_entries_per_pos={}",
+                eprintln!("  overflow={} (proven={}, working={}) no_victim={} max_epp={}",
                     solver.profile_stats.tt_overflow_count,
+                    solver.profile_stats.tt_proven_overflow_count,
+                    solver.profile_stats.tt_working_overflow_count,
                     solver.profile_stats.tt_overflow_no_victim_count,
                     solver.profile_stats.tt_max_entries_per_position);
             }
