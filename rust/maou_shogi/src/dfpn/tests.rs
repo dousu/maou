@@ -1903,6 +1903,19 @@ use crate::types::{Color, PieceType};
                 ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
                 solver.max_ply, solver.table.len(), result_str).unwrap();
 
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                let overflow_rate = if solver.nodes_searched > 0 {
+                    solver.profile_stats.tt_overflow_count as f64 / solver.nodes_searched as f64 * 100.0
+                } else { 0.0 };
+                writeln!(out, "       overflow={} ({:.1}% of nodes) no_victim={} max_epp={}",
+                    solver.profile_stats.tt_overflow_count,
+                    overflow_rate,
+                    solver.profile_stats.tt_overflow_no_victim_count,
+                    solver.profile_stats.tt_max_entries_per_position).unwrap();
+            }
+
             #[cfg(feature = "tt_diag")]
             {
                 let proven = solver.table.count_proven();
