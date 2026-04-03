@@ -1673,7 +1673,7 @@ use crate::types::{Color, PieceType};
                 verbose_eprintln!("  PV残り: {:?}", &pv_usi[*ply..]);
 
                 // 深さを大きくして再試行
-                for &d in &[25u32, 31, 41, 51] {
+                for &d in &[25u32, 31, 41, 47] {
                     let mut test_board2 = pos.clone();
                     let mut solver2 = DfPnSolver::with_timeout(
                         d, 50_000_000, 32767, 60,
