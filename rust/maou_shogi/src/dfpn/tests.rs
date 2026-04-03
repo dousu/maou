@@ -5344,6 +5344,14 @@ use crate::types::{Color, PieceType};
                 max_nodes / 1_000_000, status, solver.nodes_searched, tt_ent,
                 elapsed.as_secs_f64(),
                 solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0);
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                eprintln!("  overflow={} no_victim={} max_entries_per_pos={}",
+                    solver.profile_stats.tt_overflow_count,
+                    solver.profile_stats.tt_overflow_no_victim_count,
+                    solver.profile_stats.tt_max_entries_per_position);
+            }
         }
     }
 

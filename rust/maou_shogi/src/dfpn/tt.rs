@@ -27,8 +27,8 @@ const WORKING_CLUSTER_SIZE: usize = 6;
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// Dual TT メモリ配分:
-/// - ProvenTT:  2M × 4 × 32B = 256 MB
-/// - WorkingTT: 2M × 6 × 32B = 384 MB
+/// - ProvenTT:  2M × 4 × 32B = 256 MB (proof only)
+/// - WorkingTT: 2M × 6 × 32B = 384 MB (intermediate + all disproof)
 /// - 合計: 640 MB
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
@@ -64,9 +64,13 @@ impl TTFlatEntry {
 }
 
 /// エントリが ProvenTT に格納されるべきかを判定する．
+///
+/// ProvenTT には proof (pn=0) と confirmed disproof
+/// (dn=0, !path_dependent, remaining=INFINITE) を格納する．
+/// confirmed disproof は IDS depth 切り替え時に
+/// `clear_proven_disproofs()` で除去される(NoMate バグ対策)．
 #[inline(always)]
 fn is_proven_entry(pn: u32, dn: u32, remaining: u16, path_dependent: bool) -> bool {
-    // proof (pn=0) または confirmed disproof (dn=0, !path_dependent, remaining=INFINITE)
     pn == 0 || (dn == 0 && !path_dependent && remaining == REMAINING_INFINITE)
 }
 
@@ -438,7 +442,7 @@ impl TranspositionTable {
             }
             return;
         }
-        // 満杯 → ProvenTT 専用の replace (confirmed disproof を proof より優先 evict)
+        // 満杯 → ProvenTT 専用の replace
         if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] {
                 if is_proof { self.diag_proof_inserts += 1; }
@@ -631,45 +635,35 @@ impl TranspositionTable {
 
     /// ProvenTT 専用の置換: confirmed disproof を proof より優先的に evict する．
     ///
-    /// PV 復元の proof チェーンを保護するため，proof エントリ(pn=0)は
-    /// confirmed disproof(dn=0)より後に evict される．
-    ///
     /// 優先順位(高い=先に evict):
-    /// 1. foreign confirmed disproof (PV に無関係かつ再計算容易)
-    /// 2. same-pk confirmed disproof (proof より価値が低い)
-    /// 3. foreign proof (lowest amount — 最終手段)
+    /// 1. foreign confirmed disproof
+    /// 2. same-pk confirmed disproof
+    /// 3. foreign proof は evict しない(PV チェーン保護)
     fn replace_weakest_proven(
         cluster: &mut [TTFlatEntry],
         pos_key: u64,
         new_entry: DfPnEntry,
     ) -> bool {
-        // Pass 1: foreign confirmed disproof を探す
-        let mut worst_idx: Option<usize> = None;
-        let mut worst_amount: u8 = u8::MAX;
+        // Pass 1: foreign confirmed disproof
         for (i, fe) in cluster.iter().enumerate() {
             if fe.pos_key == 0 || fe.pos_key == pos_key { continue; }
-            if fe.entry.dn == 0 && fe.entry.amount < worst_amount {
-                worst_amount = fe.entry.amount;
-                worst_idx = Some(i);
-            }
-        }
-        if let Some(idx) = worst_idx {
-            cluster[idx].pos_key = pos_key;
-            cluster[idx].entry = new_entry;
-            return true;
-        }
-        // Pass 2: same-pk confirmed disproof を探す
-        for (i, fe) in cluster.iter().enumerate() {
-            if fe.pos_key != pos_key { continue; }
             if fe.entry.dn == 0 {
+                cluster[i].pos_key = pos_key;
                 cluster[i].entry = new_entry;
                 return true;
             }
         }
-        // Pass 3 なし: foreign proof は evict しない．
-        // PV チェーンの proof エントリを保護するため，
-        // クラスタ全体が foreign proof で埋まっている場合は挿入を断念する．
-        // 断念した proof は再探索時に再証明される(TT はキャッシュ)．
+        // Pass 2: same-pk confirmed disproof (proof を挿入する場合のみ有効)
+        if new_entry.pn == 0 {
+            for (i, fe) in cluster.iter().enumerate() {
+                if fe.pos_key != pos_key { continue; }
+                if fe.entry.dn == 0 {
+                    cluster[i].entry = new_entry;
+                    return true;
+                }
+            }
+        }
+        // foreign proof は evict しない
         false
     }
 
@@ -750,14 +744,13 @@ impl TranspositionTable {
     }
 
     /// 反証エントリの remaining を返す．
-    /// ProvenTT + WorkingTT 両方を検索する．
+    /// ProvenTT (confirmed disproof) + WorkingTT (depth-limited) 両方を検索する．
     pub(super) fn get_disproof_remaining(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
-        // ProvenTT (confirmed disproof)
         for fe in self.proven_cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -766,7 +759,6 @@ impl TranspositionTable {
                 return fe.entry.remaining();
             }
         }
-        // WorkingTT (depth-limited disproof)
         for fe in self.working_cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -787,7 +779,6 @@ impl TranspositionTable {
         remaining: u16,
     ) -> Option<(u16, bool)> {
         let pos_key = Self::safe_key(pos_key);
-        // ProvenTT (confirmed disproof: !path_dep, remaining=INFINITE)
         for fe in self.proven_cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -797,7 +788,6 @@ impl TranspositionTable {
                 return Some((fe.entry.remaining(), false));
             }
         }
-        // WorkingTT (depth-limited / path-dep disproof)
         for fe in self.working_cluster(pos_key) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
@@ -817,8 +807,7 @@ impl TranspositionTable {
     }
 
     /// 証明エントリ(pn=0)のみを保持する．
-    /// Dual TT: WorkingTT を全クリア(ProvenTT の proof はそのまま)．
-    /// ProvenTT の confirmed disproof も除去する．
+    /// Dual TT: WorkingTT を全クリア + ProvenTT の confirmed disproof を除去．
     pub(super) fn retain_proofs_only(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         for fe in self.proven.iter_mut() {
@@ -832,6 +821,19 @@ impl TranspositionTable {
     /// Dual TT: WorkingTT を全クリア(ProvenTT はそのまま)．
     pub(super) fn retain_proofs(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
+    }
+
+    /// ProvenTT の confirmed disproof を除去する．
+    ///
+    /// IDS depth 切り替え時に呼び出す．浅い IDS depth で REMAINING_INFINITE
+    /// として格納された confirmed disproof が，深い depth の探索を汚染する
+    /// のを防ぐ(NoMate バグ対策)．Proof (pn=0) は影響を受けない．
+    pub(super) fn clear_proven_disproofs(&mut self) {
+        for fe in self.proven.iter_mut() {
+            if fe.pos_key != 0 && fe.entry.dn == 0 {
+                fe.pos_key = 0;
+            }
+        }
     }
 
     /// 経路依存の反証エントリを除去する(WorkingTT のみ)．
@@ -978,7 +980,7 @@ impl TranspositionTable {
         self.proven.iter().filter(|fe| fe.pos_key != 0 && fe.entry.pn == 0).count()
     }
 
-    /// 反証済み(dn=0)のエントリ数を返す．
+    /// 反証済み(dn=0)のエントリ数を返す(ProvenTT + WorkingTT)．
     #[cfg(feature = "tt_diag")]
     pub(super) fn count_disproven(&self) -> usize {
         let p = self.proven.iter().filter(|fe| fe.pos_key != 0 && fe.entry.dn == 0).count();

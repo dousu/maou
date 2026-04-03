@@ -1550,8 +1550,12 @@ impl DfPnSolver {
             // IDS 反復間でのクリーンアップ:
             // 1. 経路依存の反証を除去(ループ由来，異なる深さでは無効)
             // 2. 浅い反復のスラッシング防止エントリと浅い反証を除去
+            // 3. ProvenTT の confirmed disproof を除去(NoMate バグ対策:
+            //    浅い depth で REMAINING_INFINITE として格納された confirmed
+            //    disproof が深い depth の探索を汚染するのを防ぐ)
             self.table.remove_path_dependent_disproofs();
             self.table.remove_stale_for_ids();
+            self.table.clear_proven_disproofs();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
