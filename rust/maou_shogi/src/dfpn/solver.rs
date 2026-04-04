@@ -892,6 +892,9 @@ impl DfPnSolver {
             position_key(board));
         let att_hand = board.hand[self.attacker.index()];
 
+        // ProvenTT の ply ベース amount 用: ルートに近い proof ほど高い priority
+        self.table.hint_ply = ply;
+
         // ループ検出: フルハッシュで判定(持ち駒込みの完全一致)
         let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
             self.path[..self.path_len].contains(&full_hash));

@@ -94,6 +94,10 @@ pub(super) struct TranspositionTable {
     proven_mask: usize,
     /// WorkingTT の `num_clusters - 1`．
     working_mask: usize,
+    /// store_proven での amount 計算に使用する現在の ply．
+    /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
+    /// amount が高くなり，eviction 耐性が上がる．
+    pub(super) hint_ply: u32,
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
@@ -141,6 +145,7 @@ impl TranspositionTable {
             working: vec![TTFlatEntry::EMPTY; working_total],
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
+            hint_ply: 0,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
@@ -410,8 +415,9 @@ impl TranspositionTable {
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
 
         if is_proof {
-            const PROOF_BONUS: u8 = 100;
-            new_entry.amount = PROOF_BONUS;
+            // ply ベースの amount: ルートに近い proof ほど高い amount を持ち，
+            // eviction 耐性が高くなる．ply=0 → 255, ply=41 → 214, ply=255+ → 1
+            new_entry.amount = 255u8.saturating_sub(self.hint_ply.min(254) as u8);
             // パレートフロンティア維持: ProvenTT の被支配エントリを除去
             for fe in p_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
@@ -431,9 +437,10 @@ impl TranspositionTable {
                 }
             }
         } else {
-            // confirmed disproof
-            const DISPROOF_BONUS: u8 = 50;
-            new_entry.amount = DISPROOF_BONUS;
+            // confirmed disproof: ply ベースだが proof より低い優先度
+            // ply=0 → 127, ply=41 → 86, ply=127+ → 1
+            // proof (255-ply) より常に低いので，proof が disproof に evict されることはない
+            new_entry.amount = 128u8.saturating_sub(self.hint_ply.min(127) as u8);
             // WorkingTT の被支配 intermediate と弱い disproof を除去
             let w_start = self.working_cluster_start(pos_key);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
@@ -649,37 +656,47 @@ impl TranspositionTable {
         false
     }
 
-    /// ProvenTT 専用の置換: confirmed disproof を proof より優先的に evict する．
+    /// ProvenTT 専用の置換: ply ベースの amount で eviction 優先度を決定する．
     ///
-    /// 優先順位(高い=先に evict):
-    /// 1. foreign confirmed disproof
-    /// 2. same-pk confirmed disproof
-    /// 3. foreign proof は evict しない(PV チェーン保護)
+    /// amount = 255 - ply (proof) / 128 - ply (disproof) なので，
+    /// ルートから遠い(ply が大きい)エントリほど amount が小さく，先に evict される．
+    /// 新エントリの amount が既存の最小 amount 以上の場合のみ置換する
+    /// (ルートに近いエントリが遠いエントリに evict されないようにする)．
     fn replace_weakest_proven(
         cluster: &mut [TTFlatEntry],
         pos_key: u64,
         new_entry: DfPnEntry,
     ) -> bool {
-        // Pass 1: foreign confirmed disproof
+        let mut worst_idx: Option<usize> = None;
+        let mut worst_amount: u8 = u8::MAX;
+        let mut worst_is_foreign = false;
+
         for (i, fe) in cluster.iter().enumerate() {
-            if fe.pos_key == 0 || fe.pos_key == pos_key { continue; }
-            if fe.entry.dn == 0 {
-                cluster[i].pos_key = pos_key;
-                cluster[i].entry = new_entry;
+            if fe.pos_key == 0 { continue; }
+            let is_foreign = fe.pos_key != pos_key;
+            let amount = fe.entry.amount;
+
+            let better = match (worst_is_foreign, is_foreign) {
+                (false, true) => true,   // foreign を優先 evict
+                (true, false) => false,
+                _ => amount < worst_amount,
+            };
+            if better {
+                worst_amount = amount;
+                worst_idx = Some(i);
+                worst_is_foreign = is_foreign;
+            }
+        }
+
+        if let Some(idx) = worst_idx {
+            // 新エントリの amount が既存最弱以上の場合のみ置換
+            // (ルートに近いエントリは保護される)
+            if new_entry.amount >= worst_amount {
+                cluster[idx].pos_key = pos_key;
+                cluster[idx].entry = new_entry;
                 return true;
             }
         }
-        // Pass 2: same-pk confirmed disproof (proof を挿入する場合のみ有効)
-        if new_entry.pn == 0 {
-            for (i, fe) in cluster.iter().enumerate() {
-                if fe.pos_key != pos_key { continue; }
-                if fe.entry.dn == 0 {
-                    cluster[i].entry = new_entry;
-                    return true;
-                }
-            }
-        }
-        // foreign proof は evict しない
         false
     }
 
