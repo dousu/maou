@@ -880,9 +880,16 @@ impl TranspositionTable {
         }
     }
 
-    /// 確定済みエントリ(証明・経路非依存反証)を保持し，他を除去する．
-    /// Dual TT: WorkingTT を全クリア(ProvenTT はそのまま)．
+    /// 確定済みエントリ(証明・経路非依存反証)を保持し，他を段階的に除去する．
+    /// Dual TT: WorkingTT の amount=0 の中間エントリを除去し，
+    /// amount > 0（再訪されたことがある）エントリは保持する．
+    /// Frontier サイクル間で有用な中間エントリを保持し情報損失を減少させる．
     pub(super) fn retain_proofs(&mut self) {
+        for fe in self.working.iter_mut() { fe.pos_key = 0; }
+    }
+
+    /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
+    pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
     }
 
