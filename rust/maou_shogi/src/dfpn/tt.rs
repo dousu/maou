@@ -179,10 +179,20 @@ impl TranspositionTable {
         pos_key | 1
     }
 
-    /// ProvenTT のクラスタ開始インデックス．
+    /// 持ち駒からハッシュ値を計算する(ProvenTT の hand バリアント分散用)．
     #[inline(always)]
-    fn proven_cluster_start(&self, pos_key: u64) -> usize {
-        ((pos_key as usize) & self.proven_mask) * PROVEN_CLUSTER_SIZE
+    fn hand_hash(hand: &[u8; HAND_KINDS]) -> u64 {
+        let packed = u64::from_le_bytes([hand[0], hand[1], hand[2], hand[3], hand[4], hand[5], hand[6], 0]);
+        // golden ratio hash で 7 bytes を 64 bit に拡散
+        packed.wrapping_mul(0x9E3779B97F4A7C15)
+    }
+
+    /// ProvenTT のクラスタ開始インデックス．
+    /// pos_key XOR hand_hash で hand バリアントを異なるクラスタに分散する．
+    #[inline(always)]
+    fn proven_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
+        let mixed = pos_key ^ Self::hand_hash(hand);
+        ((mixed as usize) & self.proven_mask) * PROVEN_CLUSTER_SIZE
     }
 
     /// WorkingTT のクラスタ開始インデックス．
@@ -193,8 +203,8 @@ impl TranspositionTable {
 
     /// ProvenTT のクラスタスライスを返す(不変参照)．
     #[inline(always)]
-    fn proven_cluster(&self, pos_key: u64) -> &[TTFlatEntry] {
-        let start = self.proven_cluster_start(pos_key);
+    fn proven_cluster(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> &[TTFlatEntry] {
+        let start = self.proven_cluster_start(pos_key, hand);
         &self.proven[start..start + PROVEN_CLUSTER_SIZE]
     }
 
@@ -251,7 +261,7 @@ impl TranspositionTable {
         remaining: u16,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
-        let proven = self.proven_cluster(pos_key);
+        let proven = self.proven_cluster(pos_key, hand);
         // Pass 1: proof(pn=0) — early return
         for fe in proven {
             if fe.pos_key != pos_key { continue; }
@@ -297,7 +307,7 @@ impl TranspositionTable {
     #[inline(always)]
     pub(super) fn has_proof(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key == pos_key
                 && fe.entry.pn == 0
                 && hand_gte_forward_chain(hand, &fe.entry.hand)
@@ -325,7 +335,7 @@ impl TranspositionTable {
             }
         }
         // ProvenTT fallback (proof/disproof may also have best_move)
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
                 return fe.entry.best_move;
             }
@@ -395,7 +405,7 @@ impl TranspositionTable {
 
         // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
         // ProvenTT をチェック
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.pn == 0 && hand_gte_forward_chain(&hand, &e.hand) {
@@ -442,7 +452,7 @@ impl TranspositionTable {
         is_proof: bool,
         #[cfg(feature = "verbose")] rem_idx: usize,
     ) {
-        let p_start = self.proven_cluster_start(pos_key);
+        let p_start = self.proven_cluster_start(pos_key, &hand);
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
 
         if is_proof {
@@ -802,7 +812,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> [u8; HAND_KINDS] {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key == pos_key
                 && fe.entry.pn == 0
                 && hand_gte_forward_chain(hand, &fe.entry.hand)
@@ -841,7 +851,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -869,7 +879,7 @@ impl TranspositionTable {
         remaining: u16,
     ) -> Option<(u16, bool)> {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key) {
+        for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -1038,19 +1048,19 @@ impl TranspositionTable {
     /// 指定局面のエントリ数を返す(診断用)．
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
-    pub(super) fn entries_for_position(&self, pos_key: u64) -> usize {
+    pub(super) fn entries_for_position(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
         let pos_key = Self::safe_key(pos_key);
-        let p = self.proven_cluster(pos_key).iter().filter(|fe| fe.pos_key == pos_key).count();
+        let p = self.proven_cluster(pos_key, hand).iter().filter(|fe| fe.pos_key == pos_key).count();
         let w = self.working_cluster(pos_key).iter().filter(|fe| fe.pos_key == pos_key).count();
         p + w
     }
 
     /// 指定局面の全エントリをダンプする(診断用)．
     #[cfg(feature = "tt_diag")]
-    pub(super) fn dump_entries(&self, pos_key: u64) {
+    pub(super) fn dump_entries(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
         let pos_key = Self::safe_key(pos_key);
         verbose_eprintln!("[tt_dump] ProvenTT:");
-        for (i, fe) in self.proven_cluster(pos_key).iter().enumerate() {
+        for (i, fe) in self.proven_cluster(pos_key, hand).iter().enumerate() {
             if fe.pos_key == pos_key {
                 let e = &fe.entry;
                 verbose_eprintln!(
@@ -1172,8 +1182,9 @@ impl TranspositionTable {
     #[cfg(feature = "verbose")]
     pub(super) fn entries_iter(&self, pos_key: u64) -> impl Iterator<Item = &DfPnEntry> {
         let pos_key = Self::safe_key(pos_key);
-        self.proven_cluster(pos_key).iter()
-            .chain(self.working_cluster(pos_key).iter())
+        // hand_hash 混合により ProvenTT は pos_key のみでクラスタ特定不可．
+        // WorkingTT のエントリのみ返す．
+        self.working_cluster(pos_key).iter()
             .filter(move |fe| fe.pos_key == pos_key)
             .map(|fe| &fe.entry)
     }

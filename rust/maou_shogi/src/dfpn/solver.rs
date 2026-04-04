@@ -977,14 +977,14 @@ impl DfPnSolver {
         {
             let visit_count = self.diag_ply_visits[ply as usize];
             if ply == self.diag_ply && (visit_count <= 5 || (visit_count % 1000000 == 0)) {
-                let entry_count = self.table.entries_for_position(pos_key);
+                let entry_count = self.table.entries_for_position(pos_key, &att_hand);
                 verbose_eprintln!(
                     "[tt_diag] ply={} non-terminal entry #{}: pos_key={:#x} tt_pn={} tt_dn={} \
                      remaining={} hand={:?} tt_entries_at_key={}",
                     ply, visit_count, pos_key, tt_pn, tt_dn,
                     remaining, &att_hand, entry_count);
                 if visit_count <= 3 || visit_count == 1000000 {
-                    self.table.dump_entries(pos_key);
+                    self.table.dump_entries(pos_key, &att_hand);
                 }
             }
         }
@@ -1380,7 +1380,7 @@ impl DfPnSolver {
                                 ply, visit_count, pos_key, &att_hand, is_path_dep,
                                 parent_nm_remaining, remaining, v_pn, v_dn
                             );
-                            self.table.dump_entries(pos_key);
+                            self.table.dump_entries(pos_key, &att_hand);
                         }
                     }
                 }
@@ -1544,7 +1544,7 @@ impl DfPnSolver {
                             ply, visit_count, pos_key, &att_hand, init_and_disproof_path_dep,
                             init_and_disproof_remaining, remaining, v_pn, v_dn
                         );
-                        self.table.dump_entries(pos_key);
+                        self.table.dump_entries(pos_key, &att_hand);
                     }
                 }
             }
