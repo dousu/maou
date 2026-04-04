@@ -15,7 +15,7 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// proof(1-2) + confirmed disproof(1-2) で典型的に 2-4 エントリ．
 /// `replace_weakest_proven` で confirmed disproof を proof より
 /// 優先的に evict するため，4 エントリで PV チェーンを維持できる．
-const PROVEN_CLUSTER_SIZE: usize = 6;
+const PROVEN_CLUSTER_SIZE: usize = 4;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -403,6 +403,10 @@ impl TranspositionTable {
     }
 
     /// ProvenTT に proof または confirmed disproof を挿入する．
+    ///
+    /// **積極的エントリ削減:** 同一 pos_key の proof/disproof で，新エントリより
+    /// ルートから遠い（amount が低い）ものを削除する．これにより ProvenTT を
+    /// 恒常的に小さく保ち，クラスタ飽和と WorkingTT への圧迫を防ぐ．
     fn store_proven(
         &mut self,
         pos_key: u64,
@@ -415,17 +419,31 @@ impl TranspositionTable {
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
 
         if is_proof {
-            // ply ベースの amount: ルートに近い proof ほど高い amount を持ち，
-            // eviction 耐性が高くなる．ply=0 → 255, ply=41 → 214, ply=255+ → 1
+            // ply ベースの amount: ルートに近い proof ほど高い amount
             new_entry.amount = 255u8.saturating_sub(self.hint_ply.min(254) as u8);
-            // パレートフロンティア維持: ProvenTT の被支配エントリを除去
+
+            // === 積極的削減: 同一 pos_key の proof を整理 ===
+            // hand_gte による被支配除去 + 同一 hand の ply 選別
             for fe in p_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
-                if fe.entry.dn == 0 { continue; } // 反証は保護
-                if hand_gte_forward_chain(&fe.entry.hand, &hand) {
-                    fe.pos_key = 0;
+                if fe.entry.pn == 0 {
+                    // 被支配 proof: hand が支配される → 除去
+                    if hand_gte_forward_chain(&fe.entry.hand, &hand) {
+                        fe.pos_key = 0;
+                        continue;
+                    }
+                    // 同一 hand の proof: ルートに近い方を残す
+                    if fe.entry.hand == hand {
+                        if new_entry.amount >= fe.entry.amount {
+                            fe.pos_key = 0;
+                        } else {
+                            return; // 既存の方がルートに近い → 挿入不要
+                        }
+                    }
+                    // 異なる hand で支配関係なし → 両方必要(独立した proof)
                 }
             }
+
             // WorkingTT の被支配 intermediate も除去
             let w_start = self.working_cluster_start(pos_key);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
@@ -438,9 +456,21 @@ impl TranspositionTable {
             }
         } else {
             // confirmed disproof: ply ベースだが proof より低い優先度
-            // ply=0 → 127, ply=41 → 86, ply=127+ → 1
-            // proof (255-ply) より常に低いので，proof が disproof に evict されることはない
             new_entry.amount = 128u8.saturating_sub(self.hint_ply.min(127) as u8);
+
+            // === 積極的削減: 同一 pos_key・同一 hand の confirmed disproof を整理 ===
+            let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+            for fe in p_cluster.iter_mut() {
+                if fe.pos_key != pos_key { continue; }
+                if fe.entry.dn == 0 && fe.entry.hand == hand {
+                    if new_entry.amount >= fe.entry.amount {
+                        fe.pos_key = 0;
+                    } else {
+                        return; // 既存の方がルートに近い
+                    }
+                }
+            }
+
             // WorkingTT の被支配 intermediate と弱い disproof を除去
             let w_start = self.working_cluster_start(pos_key);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
