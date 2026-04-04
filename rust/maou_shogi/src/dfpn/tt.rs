@@ -307,7 +307,7 @@ impl TranspositionTable {
     #[inline(always)]
     pub(super) fn has_proof(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key, &hand) {
+        for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.pn == 0
                 && hand_gte_forward_chain(hand, &fe.entry.hand)
@@ -335,7 +335,7 @@ impl TranspositionTable {
             }
         }
         // ProvenTT fallback (proof/disproof may also have best_move)
-        for fe in self.proven_cluster(pos_key, &hand) {
+        for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
                 return fe.entry.best_move;
             }
@@ -818,7 +818,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> [u8; HAND_KINDS] {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key, &hand) {
+        for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.pn == 0
                 && hand_gte_forward_chain(hand, &fe.entry.hand)
@@ -857,7 +857,7 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key, &hand) {
+        for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -885,7 +885,7 @@ impl TranspositionTable {
         remaining: u16,
     ) -> Option<(u16, bool)> {
         let pos_key = Self::safe_key(pos_key);
-        for fe in self.proven_cluster(pos_key, &hand) {
+        for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -923,10 +923,11 @@ impl TranspositionTable {
         }
     }
 
-    /// 確定済みエントリ(証明・経路非依存反証)を保持し，他を段階的に除去する．
-    /// Dual TT: WorkingTT の amount=0 の中間エントリを除去し，
-    /// amount > 0（再訪されたことがある）エントリは保持する．
-    /// Frontier サイクル間で有用な中間エントリを保持し情報損失を減少させる．
+    /// WorkingTT の confirmed disproof を保持し，他を除去する．
+    ///
+    /// Frontier サイクル間で呼ばれ，WorkingTT の confirmed disproof
+    /// (!path_dep, REMAINING_INFINITE) のみ保持する．
+    /// 中間エントリ・depth-limited disproof・path-dep disproof は全て除去．
     pub(super) fn retain_proofs(&mut self) {
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
