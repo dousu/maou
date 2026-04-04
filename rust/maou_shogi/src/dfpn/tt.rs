@@ -922,7 +922,14 @@ impl TranspositionTable {
     /// amount > 0（再訪されたことがある）エントリは保持する．
     /// Frontier サイクル間で有用な中間エントリを保持し情報損失を減少させる．
     pub(super) fn retain_proofs(&mut self) {
-        for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        for fe in self.working.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            // confirmed disproof (non-path-dep, REMAINING_INFINITE) は保持
+            if fe.entry.dn == 0 && !fe.entry.path_dependent()
+                && fe.entry.remaining() == REMAINING_INFINITE
+            { continue; }
+            fe.pos_key = 0;
+        }
     }
 
     /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
