@@ -205,42 +205,18 @@ impl TranspositionTable {
         &self.working[start..start + WORKING_CLUSTER_SIZE]
     }
 
-    /// 転置表を参照する(証明駒/反証駒の優越関係を利用)．
+    /// WorkingTT のみ検索: intermediate + depth-limited/path-dep disproof．
     ///
-    /// Dual TT 版: ProvenTT → WorkingTT の順でスキャン．
-    /// Pass 1: ProvenTT で proof(pn=0) — early return
-    /// Pass 2: ProvenTT で confirmed disproof(dn=0)
-    /// Pass 3: WorkingTT で depth-limited disproof + exact_match
+    /// WorkingTT は pos_key ベースで hand_gte を利用した検索を行う．
+    /// proof, confirmed disproof は含まれない（ProvenTT に格納）．
     #[inline(always)]
-    pub(super) fn look_up(
+    pub(super) fn look_up_working(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
-
-        // Pass 1: ProvenTT — proof(pn=0) early return
-        let proven = self.proven_cluster(pos_key);
-        for fe in proven {
-            if fe.pos_key != pos_key { continue; }
-            let e = &fe.entry;
-            if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
-                return (0, e.dn, e.source);
-            }
-        }
-        // Pass 2: ProvenTT — confirmed disproof(dn=0)
-        for fe in proven {
-            if fe.pos_key != pos_key { continue; }
-            let e = &fe.entry;
-            if e.dn == 0
-                && hand_gte_forward_chain(&e.hand, hand)
-                && e.remaining() >= remaining
-            {
-                return (e.pn, 0, e.source);
-            }
-        }
-        // Pass 3: WorkingTT — depth-limited disproof + exact_match
         let working = self.working_cluster(pos_key);
         let mut exact_match: Option<(u32, u32, u32)> = None;
         for fe in working {
@@ -260,8 +236,59 @@ impl TranspositionTable {
                 exact_match = Some((e.pn, e.dn, e.source));
             }
         }
-
         exact_match.unwrap_or((PN_UNIT, PN_UNIT, 0))
+    }
+
+    /// ProvenTT のみ検索: proof + confirmed disproof．
+    ///
+    /// ProvenTT は pos_key ベースで hand_gte を利用した検索を行う．
+    /// proof(pn=0) は early return で優先，confirmed disproof(dn=0) は 2nd pass．
+    #[inline(always)]
+    pub(super) fn look_up_proven(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> (u32, u32, u32) {
+        let pos_key = Self::safe_key(pos_key);
+        let proven = self.proven_cluster(pos_key);
+        // Pass 1: proof(pn=0) — early return
+        for fe in proven {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
+                return (0, e.dn, e.source);
+            }
+        }
+        // Pass 2: confirmed disproof(dn=0)
+        for fe in proven {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.dn == 0
+                && hand_gte_forward_chain(&e.hand, hand)
+                && e.remaining() >= remaining
+            {
+                return (e.pn, 0, e.source);
+            }
+        }
+        (PN_UNIT, PN_UNIT, 0)
+    }
+
+    /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
+    ///
+    /// 互換性のために残す．内部で look_up_proven → look_up_working を呼ぶ．
+    #[inline(always)]
+    pub(super) fn look_up(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> (u32, u32, u32) {
+        let proven = self.look_up_proven(pos_key, hand, remaining);
+        if proven.0 == 0 || proven.1 == 0 {
+            return proven; // proof or disproof found
+        }
+        self.look_up_working(pos_key, hand, remaining)
     }
 
     /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
