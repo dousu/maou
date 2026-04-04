@@ -1203,9 +1203,12 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                // 最短は 7手だが ProvenTT hand_hash 混合による探索順序変更で
+                // PV 復元が 9手のルートを先に見つけるケースがある．
+                // find_shortest=true の complete_or_proofs では不十分な場合の既知制約．
                 assert!(
-                    usi_moves.len() <= 9,
-                    "expected <=9-move checkmate, got {}: {:?}",
+                    usi_moves.len() == 7 || usi_moves.len() == 9,
+                    "expected 7 or 9-move checkmate, got {}: {:?}",
                     usi_moves.len(), usi_moves
                 );
                 // 初手は飛車不成(4a2a)でなければならない

@@ -508,12 +508,18 @@ impl TranspositionTable {
                 }
             }
 
-            // WorkingTT の被支配 intermediate と弱い disproof を除去
+            // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
+            // confirmed disproof は「この局面は不詰」を意味するため，
+            // 同一 pos_key の中間エントリや depth-limited disproof は
+            // confirmed disproof に包含される．hand バリアントが異なるものも
+            // 除去するのは意図的: confirmed disproof の hand_gte 優越により
+            // 「この hand 以上なら不詰」が保証されるため，それより弱い hand の
+            // 中間エントリは不要．WorkingTT のクラスタ圧迫を防ぐトレードオフ．
             let w_start = self.working_cluster_start(pos_key);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             for fe in w_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
-                if fe.entry.pn == 0 { continue; }
+                if fe.entry.pn == 0 { continue; } // proof は ProvenTT にあるが防衛的に保護
                 fe.pos_key = 0;
             }
         }

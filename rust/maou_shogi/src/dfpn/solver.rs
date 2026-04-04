@@ -446,9 +446,10 @@ impl DfPnSolver {
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
     ///
-    /// proof (pn=0) の場合，祖先に既に proof がある場合は ProvenTT への
-    /// 挿入をスキップする(祖先の証明に包含されるため)．
-    /// ただし WorkingTT への中間エントリ更新は正常に行われる．
+    /// proof (pn=0) の場合，祖先に既に proof がある場合は格納自体をスキップする
+    /// (祖先の証明に包含されるため)．table.store は pn==0 を store_proven に
+    /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
+    /// 副作用はない．
     #[inline]
     pub(super) fn store(
         &mut self,
