@@ -320,7 +320,10 @@ impl TranspositionTable {
 
     /// TT Best Move を参照する．
     ///
-    /// WorkingTT の intermediate エントリから取得する．
+    /// WorkingTT → ProvenTT の順で検索．ProvenTT は hand_hash 混合インデクシング
+    /// のため，異なる hand バリアントの best_move は別クラスタに格納されており
+    /// 検索されない．ただし best_move は pure hint（手順最適化用）であり
+    /// 正確性には影響しない．
     #[inline(always)]
     pub(super) fn look_up_best_move(
         &self,
@@ -525,6 +528,7 @@ impl TranspositionTable {
         }
 
         // ProvenTT に挿入
+        // (p_cluster は上記の WorkingTT mutable borrow で借用が切れるため再取得)
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
         if let Some(slot) = p_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
@@ -956,8 +960,6 @@ impl TranspositionTable {
             }
         }
     }
-
-
 
     /// TT の非空エントリ数を返す(ProvenTT + WorkingTT)．
     ///
