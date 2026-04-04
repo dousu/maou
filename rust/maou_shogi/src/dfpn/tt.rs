@@ -950,28 +950,7 @@ impl TranspositionTable {
         }
     }
 
-    /// 経路依存の反証エントリを除去する(WorkingTT のみ)．
-    pub(super) fn remove_path_dependent_disproofs(&mut self) {
-        for fe in self.working.iter_mut() {
-            if fe.pos_key != 0 && fe.entry.dn == 0 && fe.entry.path_dependent() {
-                fe.pos_key = 0;
-            }
-        }
-    }
 
-    /// 浅い反復のスラッシング防止エントリと浅い反証を除去する(WorkingTT のみ)．
-    pub(super) fn remove_stale_for_ids(&mut self) {
-        for fe in self.working.iter_mut() {
-            if fe.pos_key == 0 { continue; }
-            if fe.entry.pn >= INF - 1 && fe.entry.dn > 0 {
-                fe.pos_key = 0;
-                continue;
-            }
-            if fe.entry.dn == 0 && fe.entry.remaining() == 0 {
-                fe.pos_key = 0;
-            }
-        }
-    }
 
     /// TT の非空エントリ数を返す(ProvenTT + WorkingTT)．
     ///

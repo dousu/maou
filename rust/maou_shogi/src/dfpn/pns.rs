@@ -1548,12 +1548,8 @@ impl DfPnSolver {
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
             // IDS 反復間でのクリーンアップ:
-            // 1. WorkingTT を全クリア(構造的不詰エントリの汚染防止)
-            // 2. ProvenTT の confirmed disproof を除去(NoMate バグ対策:
-            //    浅い depth で REMAINING_INFINITE として格納された confirmed
-            //    disproof が深い depth の探索を汚染するのを防ぐ)
-            // 注: remove_path_dependent_disproofs と remove_stale_for_ids は
-            // clear_working に包含されるため不要．
+            // 1. WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
+            // 2. ProvenTT の confirmed disproof を除去(NoMate バグ対策 §6.6.3)
             self.table.clear_working();
             self.table.clear_proven_disproofs();
 
