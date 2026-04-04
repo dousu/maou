@@ -15,7 +15,7 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 /// proof(1-2) + confirmed disproof(1-2) で典型的に 2-4 エントリ．
 /// `replace_weakest_proven` で confirmed disproof を proof より
 /// 優先的に evict するため，4 エントリで PV チェーンを維持できる．
-const PROVEN_CLUSTER_SIZE: usize = 4;
+const PROVEN_CLUSTER_SIZE: usize = 6;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
