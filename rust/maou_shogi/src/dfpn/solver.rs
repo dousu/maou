@@ -74,6 +74,12 @@ pub struct DfPnSolver {
     /// 容量は `PATH_CAPACITY`(48)で，`depth` の最大値(41) + マージン．
     /// `depth >= PATH_CAPACITY` の場合は実行時にパニックする．
     pub(super) path: [u64; PATH_CAPACITY],
+    /// パスの各ノードの pos_key (盤面ハッシュ，持ち駒除外)．
+    /// ProvenTT の祖先チェックに使用する．
+    pub(super) path_pos_key: [u64; PATH_CAPACITY],
+    /// パスの各ノードの hand (攻め方持ち駒)．
+    /// ProvenTT の祖先チェックに使用する．
+    pub(super) path_hand: [[u8; HAND_KINDS]; PATH_CAPACITY],
     pub(super) path_len: usize,
     /// 探索開始時刻．
     pub(super) start_time: Instant,
@@ -250,6 +256,8 @@ impl DfPnSolver {
             diag_root_pk: 0,
             diag_root_hand: [0; HAND_KINDS],
             path: [0u64; PATH_CAPACITY],
+            path_pos_key: [0u64; PATH_CAPACITY],
+            path_hand: [[0u8; HAND_KINDS]; PATH_CAPACITY],
             path_len: 0,
             start_time: Instant::now(),
             timed_out: false,
@@ -418,7 +426,29 @@ impl DfPnSolver {
         }
     }
 
+    /// パス上の祖先に ProvenTT の proof が存在するかチェックする．
+    ///
+    /// 存在すれば，現在の proof は祖先の証明に包含されるため
+    /// ProvenTT への挿入は不要(探索の正確性には影響しない)．
+    /// PV 復元時には WorkingTT の intermediate エントリを使用する．
+    #[inline]
+    fn ancestor_has_proof(&self) -> bool {
+        // path[0..path_len-1] を逆順に遡る(直近の祖先から)
+        // path_len-1 は自分自身なので除外
+        if self.path_len < 2 { return false; }
+        for i in (0..self.path_len - 1).rev() {
+            if self.table.has_proof(self.path_pos_key[i], &self.path_hand[i]) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 転置表を更新する(位置キー＋持ち駒指定)．
+    ///
+    /// proof (pn=0) の場合，祖先に既に proof がある場合は ProvenTT への
+    /// 挿入をスキップする(祖先の証明に包含されるため)．
+    /// ただし WorkingTT への中間エントリ更新は正常に行われる．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -429,6 +459,10 @@ impl DfPnSolver {
         remaining: u16,
         source: u32,
     ) {
+        // proof で祖先に proof が既にある場合は ProvenTT をスキップ
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
         self.table.store(pos_key, hand, pn, dn, remaining, source);
     }
 
@@ -444,6 +478,9 @@ impl DfPnSolver {
         source: u32,
         best_move: u16,
     ) {
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
     }
 
@@ -529,6 +566,7 @@ impl DfPnSolver {
         remaining: u16,
         source: u32,
     ) {
+        if pn == 0 && self.ancestor_has_proof() { return; }
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
         self.table.store(pk, hand, pn, dn, remaining, source);
@@ -544,6 +582,7 @@ impl DfPnSolver {
         remaining: u16,
         source: u32,
     ) {
+        if pn == 0 && self.ancestor_has_proof() { return; }
         let pk = position_key(board);
         self.table.store(pk, *hand, pn, dn, remaining, source);
     }
@@ -1523,9 +1562,11 @@ impl DfPnSolver {
             self.profile_stats.child_init_count += 1;
         }
 
-        // パスに追加(フルハッシュ)
+        // パスに追加(フルハッシュ + pos_key + hand)
         debug_assert!(self.path_len < PATH_CAPACITY, "path overflow at ply={}", ply);
         self.path[self.path_len] = full_hash;
+        self.path_pos_key[self.path_len] = pos_key;
+        self.path_hand[self.path_len] = att_hand;
         self.path_len += 1;
 
         // --- チェーン合駒の DN バイアス用玉位置 ---
