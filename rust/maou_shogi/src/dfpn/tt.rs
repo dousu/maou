@@ -27,10 +27,13 @@ const WORKING_CLUSTER_SIZE: usize = 6;
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// Dual TT メモリ配分:
-/// - ProvenTT:  2M × 4 × 32B = 256 MB (proof only)
-/// - WorkingTT: 2M × 6 × 32B = 384 MB (intermediate + all disproof)
-/// - 合計: 640 MB
+/// - ProvenTT:  proven_num_clusters × 4 × 32B
+/// - WorkingTT: working_num_clusters × 6 × 32B
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
+
+/// ProvenTT のクラスタ数の倍率．
+/// 1 = WorkingTT と同数(2M)．
+const PROVEN_CLUSTER_MULTIPLIER: usize = 1;
 
 /// フラットテーブルの 1 エントリ．
 ///
@@ -129,14 +132,15 @@ impl TranspositionTable {
 
     /// 指定クラスタ数で転置表を生成する．
     fn with_clusters(num_clusters: usize) -> Self {
-        let num_clusters = num_clusters.next_power_of_two();
-        let proven_total = num_clusters * PROVEN_CLUSTER_SIZE;
-        let working_total = num_clusters * WORKING_CLUSTER_SIZE;
+        let working_clusters = num_clusters.next_power_of_two();
+        let proven_clusters = (num_clusters * PROVEN_CLUSTER_MULTIPLIER).next_power_of_two();
+        let proven_total = proven_clusters * PROVEN_CLUSTER_SIZE;
+        let working_total = working_clusters * WORKING_CLUSTER_SIZE;
         TranspositionTable {
             proven: vec![TTFlatEntry::EMPTY; proven_total],
             working: vec![TTFlatEntry::EMPTY; working_total],
-            proven_mask: num_clusters - 1,
-            working_mask: num_clusters - 1,
+            proven_mask: proven_clusters - 1,
+            working_mask: working_clusters - 1,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
