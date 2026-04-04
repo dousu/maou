@@ -130,7 +130,10 @@ const ZERO_PROGRESS_LIMIT: u32 = 16;
 const STAGNATION_LIMIT: u32 = 4;
 
 /// 深さ制限なし(真の証明/反証)を示す定数．
-const REMAINING_INFINITE: u16 = u16::MAX;
+///
+/// remaining_flags のビット 0-14 に格納されるため 15 ビットの最大値(0x7FFF)．
+/// 実用上の depth は 31〜127 であり 32767 は十分に大きい．
+const REMAINING_INFINITE: u16 = 0x7FFF;
 
 /// NM remaining 伝播: 子ノードの NM remaining から親ノードの remaining を計算する．
 ///
@@ -251,7 +254,7 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 ///
 /// `source == 0` のペアは独立ノード(TT ミス)としてスキップする．
 #[inline]
-fn snda_dedup(pairs: &mut [(u64, u32)], raw_sum: u32) -> u32 {
+fn snda_dedup(pairs: &mut [(u32, u32)], raw_sum: u32) -> u32 {
     pairs.sort_unstable_by_key(|&(s, _)| s);
     let mut deduction: u64 = 0;
     let mut i = 0;

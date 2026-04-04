@@ -109,6 +109,10 @@ pub struct ProfileStats {
 
     /// TT エントリ溢れ(置換)の発生回数．
     pub tt_overflow_count: u64,
+    /// ProvenTT での overflow 回数．
+    pub tt_proven_overflow_count: u64,
+    /// WorkingTT での overflow 回数．
+    pub tt_working_overflow_count: u64,
     /// TT エントリ溢れで置換対象が見つからなかった回数．
     pub tt_overflow_no_victim_count: u64,
     /// TT エントリ数の最大値(1局面あたり)．
@@ -181,8 +185,10 @@ impl std::fmt::Display for ProfileStats {
         writeln!(f, "{}", "-".repeat(65))?;
         writeln!(f, "{:<25} {:>12.1}", "Total measured", total_us)?;
         if self.tt_overflow_count > 0 || self.tt_max_entries_per_position > 0 {
-            writeln!(f, "  tt_overflow: {} (no_victim: {}), max_entries/pos: {}",
+            writeln!(f, "  tt_overflow: {} (proven: {}, working: {}, no_victim: {}), max_entries/pos: {}",
                 self.tt_overflow_count,
+                self.tt_proven_overflow_count,
+                self.tt_working_overflow_count,
                 self.tt_overflow_no_victim_count,
                 self.tt_max_entries_per_position)?;
         }

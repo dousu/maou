@@ -74,6 +74,12 @@ pub struct DfPnSolver {
     /// 容量は `PATH_CAPACITY`(48)で，`depth` の最大値(41) + マージン．
     /// `depth >= PATH_CAPACITY` の場合は実行時にパニックする．
     pub(super) path: [u64; PATH_CAPACITY],
+    /// パスの各ノードの pos_key (盤面ハッシュ，持ち駒除外)．
+    /// ProvenTT の祖先チェックに使用する．
+    pub(super) path_pos_key: [u64; PATH_CAPACITY],
+    /// パスの各ノードの hand (攻め方持ち駒)．
+    /// ProvenTT の祖先チェックに使用する．
+    pub(super) path_hand: [[u8; HAND_KINDS]; PATH_CAPACITY],
     pub(super) path_len: usize,
     /// 探索開始時刻．
     pub(super) start_time: Instant,
@@ -250,6 +256,8 @@ impl DfPnSolver {
             diag_root_pk: 0,
             diag_root_hand: [0; HAND_KINDS],
             path: [0u64; PATH_CAPACITY],
+            path_pos_key: [0u64; PATH_CAPACITY],
+            path_hand: [[0u8; HAND_KINDS]; PATH_CAPACITY],
             path_len: 0,
             start_time: Instant::now(),
             timed_out: false,
@@ -371,6 +379,8 @@ impl DfPnSolver {
     #[cfg(feature = "profile")]
     pub fn sync_tt_profile(&mut self) {
         self.profile_stats.tt_overflow_count = self.table.overflow_count;
+        self.profile_stats.tt_proven_overflow_count = self.table.proven_overflow_count;
+        self.profile_stats.tt_working_overflow_count = self.table.working_overflow_count;
         self.profile_stats.tt_overflow_no_victim_count =
             self.table.overflow_no_victim_count;
         self.profile_stats.tt_max_entries_per_position =
@@ -399,7 +409,7 @@ impl DfPnSolver {
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
-    ) -> (u32, u32, u64) {
+    ) -> (u32, u32, u32) {
         let result = self.table.look_up(pos_key, hand, remaining);
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
@@ -416,7 +426,30 @@ impl DfPnSolver {
         }
     }
 
+    /// パス上の祖先に ProvenTT の proof が存在するかチェックする．
+    ///
+    /// 存在すれば，現在の proof は祖先の証明に包含されるため
+    /// ProvenTT への挿入は不要(探索の正確性には影響しない)．
+    /// PV 復元時には WorkingTT の intermediate エントリを使用する．
+    #[inline]
+    fn ancestor_has_proof(&self) -> bool {
+        // path[0..path_len-1] を逆順に遡る(直近の祖先から)
+        // path_len-1 は自分自身なので除外
+        if self.path_len < 2 { return false; }
+        for i in (0..self.path_len - 1).rev() {
+            if self.table.has_proof(self.path_pos_key[i], &self.path_hand[i]) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 転置表を更新する(位置キー＋持ち駒指定)．
+    ///
+    /// proof (pn=0) の場合，祖先に既に proof がある場合は格納自体をスキップする
+    /// (祖先の証明に包含されるため)．table.store は pn==0 を store_proven に
+    /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
+    /// 副作用はない．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -425,8 +458,12 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
-        source: u64,
+        source: u32,
     ) {
+        // proof で祖先に proof が既にある場合は ProvenTT をスキップ
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
         self.table.store(pos_key, hand, pn, dn, remaining, source);
     }
 
@@ -439,9 +476,12 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
-        source: u64,
+        source: u32,
         best_move: u16,
     ) {
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
     }
 
@@ -495,7 +535,7 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
-        source: u64,
+        source: u32,
         path_dependent: bool,
     ) {
         self.table.store_path_dep(pos_key, hand, pn, dn, remaining, source, path_dependent);
@@ -525,8 +565,9 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
-        source: u64,
+        source: u32,
     ) {
+        if pn == 0 && self.ancestor_has_proof() { return; }
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
         self.table.store(pk, hand, pn, dn, remaining, source);
@@ -540,8 +581,9 @@ impl DfPnSolver {
         pn: u32,
         dn: u32,
         remaining: u16,
-        source: u64,
+        source: u32,
     ) {
+        if pn == 0 && self.ancestor_has_proof() { return; }
         let pk = position_key(board);
         self.table.store(pk, *hand, pn, dn, remaining, source);
     }
@@ -890,6 +932,9 @@ impl DfPnSolver {
             position_key(board));
         let att_hand = board.hand[self.attacker.index()];
 
+        // ProvenTT の ply ベース amount 用: ルートに近い proof ほど高い priority
+        self.table.hint_ply = ply;
+
         // ループ検出: フルハッシュで判定(持ち駒込みの完全一致)
         let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
             self.path[..self.path_len].contains(&full_hash));
@@ -933,14 +978,14 @@ impl DfPnSolver {
         {
             let visit_count = self.diag_ply_visits[ply as usize];
             if ply == self.diag_ply && (visit_count <= 5 || (visit_count % 1000000 == 0)) {
-                let entry_count = self.table.entries_for_position(pos_key);
+                let entry_count = self.table.entries_for_position(pos_key, &att_hand);
                 verbose_eprintln!(
                     "[tt_diag] ply={} non-terminal entry #{}: pos_key={:#x} tt_pn={} tt_dn={} \
                      remaining={} hand={:?} tt_entries_at_key={}",
                     ply, visit_count, pos_key, tt_pn, tt_dn,
                     remaining, &att_hand, entry_count);
                 if visit_count <= 3 || visit_count == 1000000 {
-                    self.table.dump_entries(pos_key);
+                    self.table.dump_entries(pos_key, &att_hand);
                 }
             }
         }
@@ -953,16 +998,16 @@ impl DfPnSolver {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
+                        REMAINING_INFINITE, pos_key as u32);
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key);
+                        REMAINING_INFINITE, pos_key as u32);
                 } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                    self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
             } else {
                 // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key);
+                self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
             }
             #[cfg(feature = "profile")]
             {
@@ -1023,7 +1068,7 @@ impl DfPnSolver {
                 // 持ち駒が増えれば打ち駒による新たな王手が生じうるため，
                 // PieceType::MAX_HAND_COUNT ではなく実際の持ち駒を使用する．
                 // 真の終端条件なので REMAINING_INFINITE を使用する．
-                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key);
+                self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key as u32);
             } else {
                 // 応手なし → 詰み(証明駒 = 空)
                 self.store(
@@ -1032,7 +1077,7 @@ impl DfPnSolver {
                     0,
                     INF,
                     REMAINING_INFINITE,
-                    pos_key,
+                    pos_key as u32,
                 );
             }
             return;
@@ -1110,10 +1155,10 @@ impl DfPnSolver {
                         } else {
                             0
                         };
-                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk);
+                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
                     } else {
                         // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                        self.store(child_pk, child_hand, INF, 0, 0, child_pk);
+                        self.store(child_pk, child_hand, INF, 0, 0, child_pk as u32);
                     }
                     cpn = INF;
                     cdn = 0;
@@ -1129,7 +1174,7 @@ impl DfPnSolver {
                     if defenses.is_empty() {
                         // 応手なし → 即詰み確定(budget=0 パスでの検出)
                         self.store(child_pk, [0; HAND_KINDS], 0, INF,
-                            REMAINING_INFINITE, child_pk);
+                            REMAINING_INFINITE, child_pk as u32);
                     } else if ply + 2 < self.depth {
                         // 3手詰め: 全応手に1手詰め判定
                         let mut all_mated = true;
@@ -1149,7 +1194,7 @@ impl DfPnSolver {
                             };
                             if mate {
                                 self.store_board(board, 0, INF,
-                                    REMAINING_INFINITE, child_pk);
+                                    REMAINING_INFINITE, child_pk as u32);
                             }
                             board.undo_move(*d, cap_d);
                             if !mate {
@@ -1159,7 +1204,7 @@ impl DfPnSolver {
                         }
                         if all_mated {
                             self.store(child_pk, child_hand, 0, INF,
-                                REMAINING_INFINITE, child_pk);
+                                REMAINING_INFINITE, child_pk as u32);
                         } else {
                             let n = defenses.len() as u32;
                             let mut pn = self.heuristic_and_pn(board, n);
@@ -1169,7 +1214,7 @@ impl DfPnSolver {
                             }
                             let dn = PN_UNIT;
                             self.store(child_pk, child_hand, pn, dn,
-                                child_remaining, child_pk);
+                                child_remaining, child_pk as u32);
                         }
                     } else {
                         // depth 制限超過: 応手生成なし → deep df-pn のみ適用
@@ -1180,19 +1225,19 @@ impl DfPnSolver {
                         }
                         let dn = PN_UNIT;
                         self.store(child_pk, child_hand, pn, dn,
-                            child_remaining, child_pk);
+                            child_remaining, child_pk as u32);
                     }
                 } else {
                     // インライン王手なし/1手詰め判定 + 取り後TT参照(OR 子ノード)
                     let checks = self.generate_check_moves_cached(board);
                     if checks.is_empty() {
                         self.store(child_pk, child_hand, INF, 0,
-                            REMAINING_INFINITE, child_pk);
+                            REMAINING_INFINITE, child_pk as u32);
                     } else if ply + 2 < self.depth
                         && self.has_mate_in_1_with(board, &checks)
                     {
                         self.store(child_pk, child_hand, 0, INF,
-                            REMAINING_INFINITE, child_pk);
+                            REMAINING_INFINITE, child_pk as u32);
                     } else if ply + 2 < self.depth
                         && self.try_capture_tt_proof(
                             board, &checks, child_remaining)
@@ -1204,7 +1249,7 @@ impl DfPnSolver {
                             .saturating_add(edge_cost_and(*m));
                         let dn = PN_UNIT;
                         self.store(child_pk, child_hand, pn,
-                            dn, child_remaining, child_pk);
+                            dn, child_remaining, child_pk as u32);
                     }
                 }
             }
@@ -1240,7 +1285,7 @@ impl DfPnSolver {
                     proof[k] = proof[k].min(att_hand[k]);
                 }
                 self.store(pos_key, proof, 0, INF,
-                    REMAINING_INFINITE, pos_key);
+                    REMAINING_INFINITE, pos_key as u32);
                 #[cfg(feature = "profile")]
                 {
                     self.profile_stats.child_init_ns += _child_init_start.elapsed().as_nanos() as u64;
@@ -1282,7 +1327,7 @@ impl DfPnSolver {
                         if ply == self.diag_ply && self.diag_in_path_exits < 10 {
                             verbose_eprintln!("[tt_diag] ply={} init AND disproof (deferred): move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
                                 ply, m.to_usi(), child_nm_rem, init_and_disproof_remaining, remaining,
-                                init_and_disproof_path_dep, pos_key);
+                                init_and_disproof_path_dep, pos_key as u32);
                             self.diag_in_path_exits += 1;
                         }
                     }
@@ -1306,17 +1351,17 @@ impl DfPnSolver {
                 #[cfg(feature = "tt_diag")]
                 if ply == self.diag_ply && self.diag_in_path_exits < 10 {
                     verbose_eprintln!("[tt_diag] ply={} init AND disproof: move={} child_rem={} parent_rem={} remaining={} path_dep={} pos_key={:#x}",
-                        ply, m.to_usi(), child_nm_rem, parent_nm_remaining, remaining, is_path_dep, pos_key);
+                        ply, m.to_usi(), child_nm_rem, parent_nm_remaining, remaining, is_path_dep, pos_key as u32);
                     self.diag_in_path_exits += 1;
                 }
                 if is_path_dep {
                     self.store_path_dep(
                         pos_key, att_hand, INF, 0,
-                        parent_nm_remaining, pos_key, true,
+                        parent_nm_remaining, pos_key as u32, true,
                     );
                 } else {
                     self.store(pos_key, att_hand, INF, 0,
-                        parent_nm_remaining, pos_key);
+                        parent_nm_remaining, pos_key as u32);
                 }
                 #[cfg(feature = "tt_diag")]
                 {
@@ -1336,7 +1381,7 @@ impl DfPnSolver {
                                 ply, visit_count, pos_key, &att_hand, is_path_dep,
                                 parent_nm_remaining, remaining, v_pn, v_dn
                             );
-                            self.table.dump_entries(pos_key);
+                            self.table.dump_entries(pos_key, &att_hand);
                         }
                     }
                 }
@@ -1439,12 +1484,12 @@ impl DfPnSolver {
             if init_or_path_dep {
                 self.store_path_dep(
                     pos_key, att_hand, INF, 0,
-                    parent_nm_remaining, pos_key, true,
+                    parent_nm_remaining, pos_key as u32, true,
                 );
             } else {
                 self.store(
                     pos_key, att_hand, INF, 0,
-                    parent_nm_remaining, pos_key,
+                    parent_nm_remaining, pos_key as u32,
                 );
             }
             // スラッシング防止: 反証の remaining が呼び出し元の remaining より低い場合，
@@ -1457,7 +1502,7 @@ impl DfPnSolver {
             if parent_nm_remaining < remaining {
                 self.store(
                     pos_key, att_hand, INF - 1, 1,
-                    remaining, pos_key,
+                    remaining, pos_key as u32,
                 );
             }
             #[cfg(feature = "profile")]
@@ -1476,11 +1521,11 @@ impl DfPnSolver {
             if init_and_disproof_path_dep {
                 self.store_path_dep(
                     pos_key, att_hand, INF, 0,
-                    init_and_disproof_remaining, pos_key, true,
+                    init_and_disproof_remaining, pos_key as u32, true,
                 );
             } else {
                 self.store(pos_key, att_hand, INF, 0,
-                    init_and_disproof_remaining, pos_key);
+                    init_and_disproof_remaining, pos_key as u32);
             }
             #[cfg(feature = "tt_diag")]
             {
@@ -1500,7 +1545,7 @@ impl DfPnSolver {
                             ply, visit_count, pos_key, &att_hand, init_and_disproof_path_dep,
                             init_and_disproof_remaining, remaining, v_pn, v_dn
                         );
-                        self.table.dump_entries(pos_key);
+                        self.table.dump_entries(pos_key, &att_hand);
                     }
                 }
             }
@@ -1518,9 +1563,11 @@ impl DfPnSolver {
             self.profile_stats.child_init_count += 1;
         }
 
-        // パスに追加(フルハッシュ)
+        // パスに追加(フルハッシュ + pos_key + hand)
         debug_assert!(self.path_len < PATH_CAPACITY, "path overflow at ply={}", ply);
         self.path[self.path_len] = full_hash;
+        self.path_pos_key[self.path_len] = pos_key;
+        self.path_hand[self.path_len] = att_hand;
         self.path_len += 1;
 
         // --- チェーン合駒の DN バイアス用玉位置 ---
@@ -1552,7 +1599,7 @@ impl DfPnSolver {
             for k in 0..HAND_KINDS {
                 p[k] = p[k].min(att_hand[k]);
             }
-            self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key);
+            self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key as u32);
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
             self.path_len -= 1;
             return;
@@ -1605,7 +1652,7 @@ impl DfPnSolver {
                     )
                 };
                 if cpn >= pn_threshold || cdn >= dn_threshold {
-                    self.store(pos_key, att_hand, cpn, cdn, remaining, pos_key);
+                    self.store(pos_key, att_hand, cpn, cdn, remaining, pos_key as u32);
                     break;
                 }
                 if cpn == 0 || cdn == 0 {
@@ -1617,7 +1664,7 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = proof[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
                         } else {
                             // cdn == 0: 唯一の子が反証 → OR 反証
                             // att_hand で保存(TT ヒット率最大化)
@@ -1628,10 +1675,10 @@ impl DfPnSolver {
                             if child_path_dep {
                                 self.store_path_dep(
                                     pos_key, att_hand, INF, 0,
-                                    remaining, pos_key, true,
+                                    remaining, pos_key as u32, true,
                                 );
                             } else {
-                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key);
+                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key as u32);
                             }
                         }
                     } else {
@@ -1644,10 +1691,10 @@ impl DfPnSolver {
                             if child_path_dep {
                                 self.store_path_dep(
                                     pos_key, att_hand, INF, 0,
-                                    remaining, if is_loop_child { 0 } else { pos_key }, true,
+                                    remaining, if is_loop_child { 0 } else { pos_key as u32 }, true,
                                 );
                             } else {
-                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key);
+                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key as u32);
                             }
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
@@ -1656,7 +1703,7 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = child_ph[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key);
+                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
                         }
                     }
                     break;
@@ -1685,7 +1732,7 @@ impl DfPnSolver {
                     if stagnation_count >= STAGNATION_LIMIT {
                         // 停滞: 現在の pn/dn を store して脱出
                         self.store(pos_key, att_hand, post_cpn, post_cdn,
-                            remaining, pos_key);
+                            remaining, pos_key as u32);
                         break;
                     }
                 } else {
@@ -1702,7 +1749,7 @@ impl DfPnSolver {
         }
 
         // SNDA 用の (source, value) ペアバッファ(ループ外で確保し再利用)
-        let mut snda_pairs: Vec<(u64, u32)> = Vec::new();
+        let mut snda_pairs: Vec<(u32, u32)> = Vec::new();
 
         // TT 診断: このノードが監視対象 ply かどうか + 反復カウンタ
         #[cfg(feature = "tt_diag")]
@@ -1778,7 +1825,7 @@ impl DfPnSolver {
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
                         for e in self.table.entries_iter(cpk) {
                             eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
-                                e.pn, e.dn, e.remaining, e.path_dependent, &e.hand);
+                                e.pn, e.dn, e.remaining(), e.path_dependent(), &e.hand);
                         }
                     }
                 }
@@ -1801,7 +1848,7 @@ impl DfPnSolver {
             let mut proved_or_disproved = false;
 
             // SNDA 用: best child の source を追跡
-            let mut best_source: u64 = 0;
+            let mut best_source: u32 = 0;
 
             // TCA: OR ノードでのループ子ノード数
             let mut loop_child_count: u32 = 0;
@@ -1936,20 +1983,20 @@ impl DfPnSolver {
                         self.store_path_dep(
                             pos_key, att_hand,
                             INF, 0,
-                            parent_nm_remaining, pos_key, true,
+                            parent_nm_remaining, pos_key as u32, true,
                         );
                     } else {
                         self.store(
                             pos_key, att_hand,
                             INF, 0,
-                            parent_nm_remaining, pos_key,
+                            parent_nm_remaining, pos_key as u32,
                         );
                     }
                     // スラッシング防止(main loop): init フェーズと同じ処理
                     if parent_nm_remaining < remaining {
                         self.store(
                             pos_key, att_hand, INF - 1, 1,
-                            remaining, pos_key,
+                            remaining, pos_key as u32,
                         );
                     }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
@@ -2175,7 +2222,7 @@ impl DfPnSolver {
                     }
                     self.store(
                         pos_key, and_proof, 0, INF,
-                        REMAINING_INFINITE, pos_key,
+                        REMAINING_INFINITE, pos_key as u32,
                     );
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.path_len -= 1;
@@ -2805,7 +2852,7 @@ impl DfPnSolver {
                 // board は子の局面を指すため，store_board_with_hand は
                 // 子の position_key で TT に保存する．
                 board.undo_move(*check, captured);
-                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE, cap_pk);
+                self.store_board_with_hand(board, &proof, 0, INF, REMAINING_INFINITE, cap_pk as u32);
                 return true;
             }
             board.undo_move(*check, captured);
@@ -2849,7 +2896,7 @@ impl DfPnSolver {
             let captured = board.do_move(mate_move);
             let pk = position_key(board);
             self.store(pk, [0; HAND_KINDS], 0, INF,
-                REMAINING_INFINITE, pk);
+                REMAINING_INFINITE, pk as u32);
             board.undo_move(mate_move, captured);
             return true;
         }
@@ -2933,7 +2980,7 @@ impl DfPnSolver {
                 // 子 TT に証明エントリを格納(後続の look_up で再利用)
                 self.table.store(
                     child_pk, or_ph, 0, INF,
-                    remaining.saturating_sub(1), child_pk,
+                    remaining.saturating_sub(1), child_pk as u32,
                 );
 
                 // AND 証明駒の更新
@@ -3075,7 +3122,7 @@ impl DfPnSolver {
                     // メイン TT に証明エントリを格納
                     self.table.store(
                         *child_pk_j, or_ph, 0, INF,
-                        remaining.saturating_sub(1), *child_pk_j,
+                        remaining.saturating_sub(1), *child_pk_j as u32,
                     );
                     #[cfg(feature = "tt_diag")]
                     { cross_count += 1; }
