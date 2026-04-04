@@ -1050,7 +1050,25 @@ impl DfPnSolver {
                 let captured = board.do_move(*m);
                 let (child_pn, _) = self.look_up_board(board);
 
-                if child_pn == 0 {
+                // TT で proof が見つからなくても，応手が存在しなければ
+                // 即詰み(leaf node)．ProvenTT の hand_hash 混合により
+                // 異なる持ち駒のクラスタにしか proof がない場合でも正しく
+                // PV を復元できるようにする．
+                let is_proven = if child_pn == 0 {
+                    true
+                } else {
+                    let defense = self.generate_defense_moves(board);
+                    let leaf_mate = defense.is_empty();
+                    if leaf_mate && diag {
+                        verbose_eprintln!(
+                            "[PV diag] ply={} OR child {} pn={} but no defense (leaf mate)",
+                            ply, m.to_usi(), child_pn
+                        );
+                    }
+                    leaf_mate
+                };
+
+                if is_proven {
                     visited.insert(full_hash);
                     let sub_pv =
                         self.extract_pv_recursive_inner(

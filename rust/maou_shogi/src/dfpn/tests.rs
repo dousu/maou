@@ -1203,20 +1203,20 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                // 最短は 7手だが ProvenTT hand_hash 混合による探索順序変更で
-                // PV 復元が 9手のルートを先に見つけるケースがある．
-                // find_shortest=true の complete_or_proofs では不十分な場合の既知制約．
-                assert!(
-                    usi_moves.len() == 7 || usi_moves.len() == 9,
-                    "expected 7 or 9-move checkmate, got {}: {:?}",
+                assert_eq!(
+                    usi_moves.len(), 7,
+                    "expected 7-move checkmate, got {}: {:?}",
                     usi_moves.len(), usi_moves
                 );
-                // 初手は飛車不成(4a2a)でなければならない
-                assert_eq!(
-                    usi_moves[0], "4a2a",
-                    "move 1 must be 4a2a (rook WITHOUT promotion), got: {}",
-                    usi_moves[0]
-                );
+                // 正解PV: 4a2a(21飛) 2b1b(12玉) P*1c(13歩) 1b1c(同玉)
+                //         P*1d(14歩) 1c1b(12玉) N*2d(24桂)
+                assert_eq!(usi_moves[0], "4a2a", "move 1: 21飛不成");
+                assert_eq!(usi_moves[1], "2b1b", "move 2: 12玉");
+                assert_eq!(usi_moves[2], "P*1c", "move 3: 13歩打");
+                assert_eq!(usi_moves[3], "1b1c", "move 4: 同玉");
+                assert_eq!(usi_moves[4], "P*1d", "move 5: 14歩打");
+                assert_eq!(usi_moves[5], "1c1b", "move 6: 12玉");
+                assert_eq!(usi_moves[6], "N*2d", "move 7: 24桂打");
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
