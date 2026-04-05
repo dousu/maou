@@ -883,21 +883,29 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // === Periodic GC (amount ベース TT 飽和防止) ===
-        // TT エントリ数が容量の 80% を超えた場合に amount の小さい
-        // エントリを除去する．amount は探索投資量を反映し，
-        // 価値の低いエントリを優先的に除去することで TT の質を維持する．
+        // === Periodic GC (ProvenTT / WorkingTT 独立) ===
+        // ProvenTT と WorkingTT をそれぞれの充填率に基づいて独立に GC する．
+        // ProvenTT: 充填率 80% 超で confirmed disproof → proof の順に除去
+        // WorkingTT: 充填率 80% 超で amount の低い intermediate から除去
         if self.nodes_searched % 1_000_000 == 0 {
-            let tt_size = self.table.len();
-            let tt_capacity = self.table.capacity();
-            if tt_size > tt_capacity * 4 / 5 {
-                // amount の小さいエントリ（中間値で探索投資が少ない）を除去
-                // 目標: 75% まで縮小
-                let target = tt_capacity * 3 / 4;
-                let removed = self.table.gc_by_amount(target);
+            // WorkingTT GC
+            let working_size = self.table.working_len();
+            let working_cap = self.table.working_capacity();
+            if working_size > working_cap * 4 / 5 {
+                let removed = self.table.gc_working();
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] amount-based removed={} tt={}/{}",
-                        removed, self.table.len(), tt_capacity);
+                    verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
+                        removed, self.table.working_len(), working_cap);
+                }
+            }
+            // ProvenTT GC
+            let proven_size = self.table.proven_len();
+            let proven_cap = self.table.proven_capacity();
+            if proven_size > proven_cap * 4 / 5 {
+                let removed = self.table.gc_proven();
+                if removed > 0 {
+                    verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
+                        removed, self.table.proven_len(), proven_cap);
                 }
             }
         }

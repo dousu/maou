@@ -1166,19 +1166,34 @@ impl TranspositionTable {
         }
     }
 
-    /// TT の非空エントリ数を返す(ProvenTT + WorkingTT)．
-    ///
-    /// GC 閾値(`tt_gc_threshold`)はこのエントリ数ベースで比較される．
-    /// Dual TT では WorkingTT のエントリ数のみを返す(GC 対象)．
+    /// WorkingTT の非空エントリ数を返す．
     pub(super) fn len(&self) -> usize {
         self.working.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
+    /// ProvenTT の非空エントリ数を返す．
+    pub(super) fn proven_len(&self) -> usize {
+        self.proven.iter().filter(|fe| fe.pos_key != 0).count()
+    }
+
+    /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
+    pub(super) fn working_len(&self) -> usize {
+        self.len()
+    }
+
     /// TT の使用中エントリ数を返す(ProvenTT + WorkingTT 合計)．
     pub(super) fn total_entries(&self) -> usize {
-        let proven = self.proven.iter().filter(|fe| fe.pos_key != 0).count();
-        let working = self.working.iter().filter(|fe| fe.pos_key != 0).count();
-        proven + working
+        self.proven_len() + self.working_len()
+    }
+
+    /// ProvenTT の総スロット数を返す．
+    pub(super) fn proven_capacity(&self) -> usize {
+        self.proven.len()
+    }
+
+    /// WorkingTT の総スロット数を返す．
+    pub(super) fn working_capacity(&self) -> usize {
+        self.working.len()
     }
 
     /// TT の総スロット数を返す(ProvenTT + WorkingTT)．
@@ -1334,6 +1349,108 @@ impl TranspositionTable {
         }
         // Phase 2: WorkingTT 全クリア
         self.retain_proofs();
+    }
+
+    // ---------------------------------------------------------------
+    // 独立 GC: ProvenTT と WorkingTT をそれぞれ個別に GC する
+    // ---------------------------------------------------------------
+
+    /// WorkingTT の独立 GC．
+    ///
+    /// WorkingTT の充填率に基づいて intermediate エントリを除去する．
+    /// Phase 1: amount が低い intermediate エントリを除去
+    /// Phase 2: 全 intermediate エントリを除去(disproof は保護)
+    /// Phase 3: WorkingTT 全クリア
+    ///
+    /// 返り値: 除去されたエントリ数．
+    pub(super) fn gc_working(&mut self) -> usize {
+        let capacity = self.working.len();
+        let initial = self.working_len();
+        let target = capacity * 3 / 4;
+        if initial <= target {
+            return 0;
+        }
+
+        // Phase 1: amount が低い intermediate エントリを除去
+        // amount の閾値を段階的に上げていく
+        for threshold in [0u8, 1, 2, 4, 8] {
+            for fe in self.working.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                if fe.entry.dn == 0 { continue; } // disproof は保護
+                if fe.entry.amount <= threshold {
+                    fe.pos_key = 0;
+                }
+            }
+            if self.working_len() <= target {
+                return initial - self.working_len();
+            }
+        }
+
+        // Phase 2: 全 intermediate を除去(disproof は保護)
+        for fe in self.working.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            if fe.entry.dn == 0 { continue; }
+            fe.pos_key = 0;
+        }
+        if self.working_len() <= target {
+            return initial - self.working_len();
+        }
+
+        // Phase 3: WorkingTT 全クリア
+        self.retain_proofs();
+        initial - self.working_len()
+    }
+
+    /// ProvenTT の独立 GC．
+    ///
+    /// ProvenTT の充填率に基づいてエントリを除去する．
+    /// confirmed disproof を優先的に除去し，proof は最後まで保護する．
+    /// Phase 1: confirmed disproof のうち amount が低いものから除去
+    /// Phase 2: 全 confirmed disproof を除去
+    /// Phase 3: proof のうち amount が低いものから除去
+    ///
+    /// 返り値: 除去されたエントリ数．
+    pub(super) fn gc_proven(&mut self) -> usize {
+        let capacity = self.proven.len();
+        let initial = self.proven_len();
+        let target = capacity * 3 / 4;
+        if initial <= target {
+            return 0;
+        }
+
+        // Phase 1: confirmed disproof のうち amount が低いものから除去
+        for threshold in [0u8, 16, 32, 64, 128] {
+            for fe in self.proven.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                if fe.entry.dn == 0 && fe.entry.amount <= threshold {
+                    fe.pos_key = 0;
+                }
+            }
+            if self.proven_len() <= target {
+                return initial - self.proven_len();
+            }
+        }
+
+        // Phase 2: 全 confirmed disproof を除去
+        self.clear_proven_disproofs();
+        if self.proven_len() <= target {
+            return initial - self.proven_len();
+        }
+
+        // Phase 3: proof のうち amount が低いものから除去
+        for threshold in [0u8, 16, 32, 64, 128, 192] {
+            for fe in self.proven.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                if fe.entry.pn == 0 && fe.entry.amount <= threshold {
+                    fe.pos_key = 0;
+                }
+            }
+            if self.proven_len() <= target {
+                return initial - self.proven_len();
+            }
+        }
+
+        initial - self.proven_len()
     }
 
     /// 指定局面のエントリ数を返す(診断用)．
