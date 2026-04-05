@@ -102,6 +102,8 @@ pub(super) struct TranspositionTable {
     /// store 時に空きスロットが見つからず eviction が発生するたびにインクリメント．
     /// `drain_working_overflow()` でリセットし，呼び出し側が GC 判断に使用する．
     working_overflow_since_gc: u64,
+    /// WorkingTT の1クラスタあたりピーク充填数（探索中の最大値）．
+    pub(super) working_peak_cluster_fill: usize,
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
@@ -151,6 +153,7 @@ impl TranspositionTable {
             working_mask: working_clusters - 1,
             hint_ply: 0,
             working_overflow_since_gc: 0,
+            working_peak_cluster_fill: 0,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
@@ -801,6 +804,12 @@ impl TranspositionTable {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            // ピーク充填数の追跡
+            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
+                .filter(|fe| fe.pos_key != 0).count();
+            if fill > self.working_peak_cluster_fill {
+                self.working_peak_cluster_fill = fill;
+            }
             return;
         }
         // クラスタ飽和 → overflow
@@ -875,6 +884,12 @@ impl TranspositionTable {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
             #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            // ピーク充填数の追跡
+            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
+                .filter(|fe| fe.pos_key != 0).count();
+            if fill > self.working_peak_cluster_fill {
+                self.working_peak_cluster_fill = fill;
+            }
             #[cfg(feature = "profile")]
             {
                 let count = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
@@ -1245,6 +1260,7 @@ impl TranspositionTable {
             eprintln!("Total overflow:   {}", self.overflow_count);
             eprintln!("Max entries/pos:  {}", self.max_entries_per_position);
         }
+        eprintln!("Working peak cluster fill: {}", self.working_peak_cluster_fill);
 
         // ProvenTT エントリ種別
         let mut proof_count = 0u64;
