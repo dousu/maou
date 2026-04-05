@@ -410,7 +410,28 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
-        let result = self.table.look_up(pos_key, hand, remaining);
+        self.look_up_pn_dn_impl(pos_key, hand, remaining, false)
+    }
+
+    /// 近傍クラスタ走査付き look_up_pn_dn（合駒チェーン時に使用）．
+    pub(super) fn look_up_pn_dn_neighbor(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> (u32, u32, u32) {
+        self.look_up_pn_dn_impl(pos_key, hand, remaining, true)
+    }
+
+    #[inline]
+    fn look_up_pn_dn_impl(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        let result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
@@ -553,7 +574,7 @@ impl DfPnSolver {
         // 仮反証(NM)を最終結果に採用しないようにする．
         // remaining=0 だと全ての NM エントリを受け入れてしまい，
         // PNS の深さ制限内での仮反証が最終判定を汚染する．
-        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16);
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16, false);
         (pn, dn)
     }
 
@@ -573,7 +594,7 @@ impl DfPnSolver {
             return (pn, dn);
         }
         // ProvenTT subset で見つからない場合は WorkingTT もチェック
-        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16);
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16, true);
         (pn, dn)
     }
 
@@ -782,7 +803,7 @@ impl DfPnSolver {
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
             // AND ノードが TT で REMAINING_INFINITE の不詰か確認
-            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE);
+            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {
                 // この王手後の局面が TT で不詰確定していない → 昇格不可
@@ -2999,7 +3020,7 @@ impl DfPnSolver {
             let pc_hand = board.hand[self.attacker.index()];
 
             // メイン TT で捕獲後局面の証明を参照
-            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining);
+            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining, false);
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明
                 let pc_ph = self.table.get_proof_hand(pc_pk, &pc_hand);
@@ -3154,7 +3175,7 @@ impl DfPnSolver {
                 hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
 
                 let pc_remaining = remaining.saturating_sub(2);
-                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining, false);
 
                 if ppn == 0 {
                     let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);

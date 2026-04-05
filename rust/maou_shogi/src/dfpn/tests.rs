@@ -1818,8 +1818,8 @@ use crate::types::{Color, PieceType};
                     }
 
                     // remaining=0 vs remaining=19 の look_up 結果
-                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0);
-                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19);
+                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0, false);
+                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19, false);
                     verbose_eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
                     verbose_eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
                 }

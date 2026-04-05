@@ -261,13 +261,15 @@ impl TranspositionTable {
 
     /// WorkingTT のみ検索: intermediate + depth-limited/path-dep disproof．
     ///
-    /// 自クラスタで exact match (intermediate) と disproof を検索し，
-    /// disproof が見つからなければ持ち駒1枚増の近傍クラスタも走査する．
+    /// `neighbor_scan=false`: 自クラスタのみ(探索ホットパス向け)．
+    /// `neighbor_scan=true`: 自クラスタ + 持ち駒±1近傍(合駒チェーン時)．
+    #[inline(always)]
     pub(super) fn look_up_working(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
+        neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
         let working = self.working_cluster(pos_key, hand);
@@ -293,13 +295,13 @@ impl TranspositionTable {
             return exact_match.unwrap();
         }
 
-        // 持ち駒1枚増の近傍クラスタで disproof を検索
-        let base_hh = Self::hand_hash(hand);
-        for k in 0..HAND_KINDS {
-            let max_k = PieceType::MAX_HAND_COUNT[k];
-            if hand[k] >= max_k { continue; }
-            for new_val in (hand[k] + 1)..=max_k {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
+        if neighbor_scan {
+            // 持ち駒+1の近傍クラスタで disproof を検索(±1限定)
+            let base_hh = Self::hand_hash(hand);
+            for k in 0..HAND_KINDS {
+                let max_k = PieceType::MAX_HAND_COUNT[k];
+                if hand[k] >= max_k { continue; }
+                let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
                 let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
                 let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
                 for fe in cluster {
@@ -320,18 +322,18 @@ impl TranspositionTable {
 
     /// ProvenTT のみ検索: proof + confirmed disproof．
     ///
-    /// 自クラスタに加え，持ち駒1枚減のクラスタ(proof 検索用)および
-    /// 持ち駒1枚増のクラスタ(disproof 検索用)を Zobrist 差分で走査する．
+    /// `neighbor_scan=false`: 自クラスタのみ(探索ホットパス向け)．
+    /// `neighbor_scan=true`: 自クラスタ + 持ち駒±1近傍(合駒チェーン時)．
     pub(super) fn look_up_proven(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
+        neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
-        let base_hh = Self::hand_hash(hand);
 
-        // --- Pass 1: proof(pn=0) — 自クラスタ + 持ち駒1枚減クラスタ ---
+        // --- Pass 1: proof(pn=0) ---
         let home = self.proven_cluster(pos_key, hand);
         for fe in home {
             if fe.pos_key != pos_key { continue; }
@@ -340,10 +342,12 @@ impl TranspositionTable {
                 return (0, e.dn, e.source);
             }
         }
-        for k in 0..HAND_KINDS {
-            if hand[k] == 0 { continue; }
-            for new_val in 0..hand[k] {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
+        if neighbor_scan {
+            let base_hh = Self::hand_hash(hand);
+            // 持ち駒-1の近傍(proof は e.hand ≤ hand)
+            for k in 0..HAND_KINDS {
+                if hand[k] == 0 { continue; }
+                let diff = Self::hand_hash_diff(k, hand[k], hand[k] - 1);
                 let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
                 let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
                 for fe in cluster {
@@ -356,7 +360,7 @@ impl TranspositionTable {
             }
         }
 
-        // --- Pass 2: confirmed disproof(dn=0) — 自クラスタ + 持ち駒1枚増クラスタ ---
+        // --- Pass 2: confirmed disproof(dn=0) ---
         for fe in home {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -367,11 +371,13 @@ impl TranspositionTable {
                 return (e.pn, 0, e.source);
             }
         }
-        for k in 0..HAND_KINDS {
-            let max_k = PieceType::MAX_HAND_COUNT[k];
-            if hand[k] >= max_k { continue; }
-            for new_val in (hand[k] + 1)..=max_k {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
+        if neighbor_scan {
+            let base_hh = Self::hand_hash(hand);
+            // 持ち駒+1の近傍(disproof は e.hand ≥ hand)
+            for k in 0..HAND_KINDS {
+                let max_k = PieceType::MAX_HAND_COUNT[k];
+                if hand[k] >= max_k { continue; }
+                let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
                 let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
                 let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
                 for fe in cluster {
@@ -416,7 +422,7 @@ impl TranspositionTable {
         remaining: u16,
     ) -> (u32, u32, u32) {
         // look_up_proven は自クラスタ+1枚差を既に走査済み
-        let normal = self.look_up_proven(pos_key, hand, remaining);
+        let normal = self.look_up_proven(pos_key, hand, remaining, true);
         if normal.0 == 0 || normal.1 == 0 {
             return normal;
         }
@@ -569,24 +575,27 @@ impl TranspositionTable {
 
     /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
     ///
-    /// 互換性のために残す．内部で look_up_proven → look_up_working を呼ぶ．
+    /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
+    ///
+    /// `neighbor_scan` フラグを ProvenTT/WorkingTT 両方に伝播する．
     #[inline(always)]
     pub(super) fn look_up(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
+        neighbor_scan: bool,
     ) -> (u32, u32, u32) {
-        let proven = self.look_up_proven(pos_key, hand, remaining);
+        let proven = self.look_up_proven(pos_key, hand, remaining, neighbor_scan);
         if proven.0 == 0 || proven.1 == 0 {
-            return proven; // proof or disproof found
+            return proven;
         }
-        self.look_up_working(pos_key, hand, remaining)
+        self.look_up_working(pos_key, hand, remaining, neighbor_scan)
     }
 
     /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
     ///
-    /// 自クラスタ + 持ち駒1枚減の近傍クラスタを走査する．
+    /// 自クラスタ + 持ち駒-1の近傍クラスタ(±1限定)を走査する．
     pub(super) fn has_proof(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
         let pos_key = Self::safe_key(pos_key);
         for fe in self.proven_cluster(pos_key, hand) {
@@ -600,17 +609,15 @@ impl TranspositionTable {
         let base_hh = Self::hand_hash(hand);
         for k in 0..HAND_KINDS {
             if hand[k] == 0 { continue; }
-            for new_val in 0..hand[k] {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
-                let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
-                for fe in cluster {
-                    if fe.pos_key == pos_key
-                        && fe.entry.pn == 0
-                        && hand_gte_forward_chain(hand, &fe.entry.hand)
-                    {
-                        return true;
-                    }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] - 1);
+            let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key == pos_key
+                    && fe.entry.pn == 0
+                    && hand_gte_forward_chain(hand, &fe.entry.hand)
+                {
+                    return true;
                 }
             }
         }
@@ -1128,7 +1135,7 @@ impl TranspositionTable {
         false
     }
 
-    /// 自クラスタ + 持ち駒1枚減の近傍クラスタを走査する．
+    /// 自クラスタ + 持ち駒-1の近傍クラスタ(±1限定)を走査する．
     pub(super) fn get_proof_hand(
         &self,
         pos_key: u64,
@@ -1146,17 +1153,15 @@ impl TranspositionTable {
         let base_hh = Self::hand_hash(hand);
         for k in 0..HAND_KINDS {
             if hand[k] == 0 { continue; }
-            for new_val in 0..hand[k] {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
-                let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
-                for fe in cluster {
-                    if fe.pos_key == pos_key
-                        && fe.entry.pn == 0
-                        && hand_gte_forward_chain(hand, &fe.entry.hand)
-                    {
-                        return fe.entry.hand;
-                    }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] - 1);
+            let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key == pos_key
+                    && fe.entry.pn == 0
+                    && hand_gte_forward_chain(hand, &fe.entry.hand)
+                {
+                    return fe.entry.hand;
                 }
             }
         }
@@ -1180,30 +1185,27 @@ impl TranspositionTable {
                 return fe.entry.path_dependent();
             }
         }
+        // 持ち駒+1の近傍(±1限定)
         let base_hh = Self::hand_hash(hand);
         for k in 0..HAND_KINDS {
             let max_k = PieceType::MAX_HAND_COUNT[k];
             if hand[k] >= max_k { continue; }
-            for new_val in (hand[k] + 1)..=max_k {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
-                let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
-                for fe in cluster {
-                    if fe.pos_key == pos_key
-                        && fe.entry.dn == 0
-                        && hand_gte_forward_chain(&fe.entry.hand, hand)
-                    {
-                        return fe.entry.path_dependent();
-                    }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
+            let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key == pos_key
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                {
+                    return fe.entry.path_dependent();
                 }
             }
         }
         false
     }
 
-    /// 反証エントリの remaining を返す．
-    /// ProvenTT (confirmed disproof) + WorkingTT (depth-limited) 両方を検索する．
-    /// 自クラスタ + 持ち駒1枚増の近傍クラスタを走査する．
+    /// 反証エントリの remaining を返す(±1近傍走査付き)．
     pub(super) fn get_disproof_remaining(
         &self,
         pos_key: u64,
@@ -1226,38 +1228,35 @@ impl TranspositionTable {
                 return fe.entry.remaining();
             }
         }
+        // 持ち駒+1の近傍(±1限定)
         let base_hh = Self::hand_hash(hand);
         for k in 0..HAND_KINDS {
             let max_k = PieceType::MAX_HAND_COUNT[k];
             if hand[k] >= max_k { continue; }
-            for new_val in (hand[k] + 1)..=max_k {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
-                let p_start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                for fe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
-                    if fe.pos_key == pos_key
-                        && fe.entry.dn == 0
-                        && hand_gte_forward_chain(&fe.entry.hand, hand)
-                    {
-                        return fe.entry.remaining();
-                    }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
+            let p_start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            for fe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                {
+                    return fe.entry.remaining();
                 }
-                let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
-                    if fe.pos_key == pos_key
-                        && fe.entry.dn == 0
-                        && hand_gte_forward_chain(&fe.entry.hand, hand)
-                    {
-                        return fe.entry.remaining();
-                    }
+            }
+            let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                {
+                    return fe.entry.remaining();
                 }
             }
         }
         0
     }
 
-    /// lookup が実際に使用する反証エントリの情報を返す．
-    /// ProvenTT + WorkingTT 両方を検索する．
-    /// 自クラスタ + 持ち駒1枚増の近傍クラスタを走査する．
+    /// lookup が実際に使用する反証エントリの情報を返す(±1近傍走査付き)．
     pub(super) fn get_effective_disproof_info(
         &self,
         pos_key: u64,
@@ -1283,31 +1282,30 @@ impl TranspositionTable {
                 return Some((fe.entry.remaining(), fe.entry.path_dependent()));
             }
         }
+        // 持ち駒+1の近傍(±1限定)
         let base_hh = Self::hand_hash(hand);
         for k in 0..HAND_KINDS {
             let max_k = PieceType::MAX_HAND_COUNT[k];
             if hand[k] >= max_k { continue; }
-            for new_val in (hand[k] + 1)..=max_k {
-                let diff = Self::hand_hash_diff(k, hand[k], new_val);
-                let p_start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                for fe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
-                    if fe.pos_key == pos_key
-                        && fe.entry.dn == 0
-                        && hand_gte_forward_chain(&fe.entry.hand, hand)
-                        && fe.entry.remaining() >= remaining
-                    {
-                        return Some((fe.entry.remaining(), false));
-                    }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
+            let p_start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            for fe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                    && fe.entry.remaining() >= remaining
+                {
+                    return Some((fe.entry.remaining(), false));
                 }
-                let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
-                    if fe.pos_key == pos_key
-                        && fe.entry.dn == 0
-                        && hand_gte_forward_chain(&fe.entry.hand, hand)
-                        && (fe.entry.remaining() >= remaining || fe.entry.path_dependent())
-                    {
-                        return Some((fe.entry.remaining(), fe.entry.path_dependent()));
-                    }
+            }
+            let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                    && (fe.entry.remaining() >= remaining || fe.entry.path_dependent())
+                {
+                    return Some((fe.entry.remaining(), fe.entry.path_dependent()));
                 }
             }
         }
