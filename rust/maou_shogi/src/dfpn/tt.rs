@@ -880,9 +880,10 @@ impl TranspositionTable {
         #[cfg(feature = "verbose")] rem_idx: usize,
     ) {
         let path_dependent = new_entry.path_dependent();
-        const DISPROOF_BONUS: u8 = 50;
-        let dp_amount = DISPROOF_BONUS / 2; // depth-limited は半額
-        new_entry.amount = dp_amount;
+        // depth-limited disproof の amount は 0 にして GC で優先除去する．
+        // WorkingTT のクラスタを disproof が支配して intermediate の
+        // 空きがなくなる問題(§6.6.1)を緩和する．
+        new_entry.amount = 0;
 
         let w_start = self.working_cluster_start(pos_key, &hand);
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
@@ -1615,71 +1616,85 @@ impl TranspositionTable {
     /// Phase 3: WorkingTT 全クリア
     ///
     /// 返り値: 除去されたエントリ数．
-    /// WorkingTT の GC．
-    ///
-    /// `force` = false: 充填率ベース．充填率が 75% 以下なら何もしない．
-    /// `force` = true: overflow ベース．充填率に関係なく低 amount エントリを
-    /// 1パスだけ除去してクラスタの空きを確保する．
+    /// GC サンプリング数．
+    const GC_SAMPLING_ENTRIES: usize = 10_000;
+
+    /// GC 除去率(サンプリングした中のこの割合以下の amount を除去)．
+    const GC_REMOVAL_RATIO: f64 = 0.5;
+
+    /// WorkingTT の GC（充填率ベーストリガ）．
     pub(super) fn gc_working(&mut self) -> usize {
-        self.gc_working_impl(false)
+        let capacity = self.working.len();
+        let fill = self.working_len();
+        if fill <= capacity * 3 / 4 {
+            return 0;
+        }
+        self.gc_working_sampling()
     }
 
-    /// overflow トリガの WorkingTT GC．
-    /// 充填率に関係なく低 amount の intermediate エントリを除去する．
+    /// WorkingTT の GC（overflow トリガ）．
+    ///
+    /// overflow が多発しているときに呼ばれる．
+    /// 充填率に関係なく，サンプリングベースで低 amount エントリを除去する．
     pub(super) fn gc_working_overflow(&mut self) -> usize {
-        self.gc_working_impl(true)
+        self.gc_working_sampling()
     }
 
-    fn gc_working_impl(&mut self, force: bool) -> usize {
+    /// サンプリングベースの WorkingTT GC (KomoringHeights 方式)．
+    ///
+    /// 1. サンプリング: ストライドで GC_SAMPLING_ENTRIES 個の amount を収集
+    /// 2. nth_element で除去閾値を決定(下位 GC_REMOVAL_RATIO を除去)
+    /// 3. 閾値以下の全エントリを除去(intermediate も disproof も対象)
+    /// 4. max_amount が大きい場合，生存エントリの amount を半減(CutAmount)
+    fn gc_working_sampling(&mut self) -> usize {
         self.working_overflow_since_gc = 0;
-        let initial = self.working_len();
+        let total = self.working.len();
+        if total == 0 { return 0; }
 
-        if force {
-            // Overflow トリガ: amount=0 の intermediate エントリのみ除去
-            // 全走査は重いので最小限の除去に留める
-            for fe in self.working.iter_mut() {
-                if fe.pos_key == 0 { continue; }
-                if fe.entry.dn == 0 { continue; } // disproof は保護
-                if fe.entry.amount == 0 {
-                    fe.pos_key = 0;
-                }
+        // Phase 1: サンプリングで amount 分布を収集
+        let stride = total / Self::GC_SAMPLING_ENTRIES;
+        let stride = stride.max(1);
+        let mut amounts: Vec<u8> = Vec::with_capacity(Self::GC_SAMPLING_ENTRIES);
+        let mut idx = 0usize;
+        while amounts.len() < Self::GC_SAMPLING_ENTRIES && idx < total {
+            if self.working[idx].pos_key != 0 {
+                amounts.push(self.working[idx].entry.amount);
             }
-            return initial - self.working_len();
+            idx += stride;
         }
 
-        let capacity = self.working.len();
-        let target = capacity * 3 / 4;
-        if initial <= target {
+        if amounts.is_empty() {
             return 0;
         }
 
-        // Phase 1: amount が低い intermediate エントリを除去
-        for threshold in [0u8, 1, 2, 4, 8] {
-            for fe in self.working.iter_mut() {
-                if fe.pos_key == 0 { continue; }
-                if fe.entry.dn == 0 { continue; }
-                if fe.entry.amount <= threshold {
-                    fe.pos_key = 0;
-                }
-            }
-            if self.working_len() <= target {
-                return initial - self.working_len();
-            }
-        }
+        // Phase 2: nth_element で除去閾値を決定
+        let pivot = ((amounts.len() as f64 * Self::GC_REMOVAL_RATIO) as usize)
+            .max(1)
+            .min(amounts.len() - 1);
+        amounts.select_nth_unstable(pivot);
+        let amount_threshold = amounts[pivot];
+        let max_amount = amounts.iter().copied().max().unwrap_or(0);
 
-        // Phase 2: 全 intermediate を除去(disproof は保護)
+        // Phase 3: 閾値以下のエントリを除去
+        let initial = self.working_len();
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
-            if fe.entry.dn == 0 { continue; }
-            fe.pos_key = 0;
+            if fe.entry.amount <= amount_threshold {
+                fe.pos_key = 0;
+            }
         }
-        if self.working_len() <= target {
-            return initial - self.working_len();
+        let removed = initial - self.working_len();
+
+        // Phase 4: CutAmount — 生存エントリの amount を半減
+        // max_amount が高い場合に amount のインフレを防止
+        if max_amount > 32 {
+            for fe in self.working.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                fe.entry.amount = (fe.entry.amount / 2).max(1);
+            }
         }
 
-        // Phase 3: WorkingTT 全クリア
-        self.retain_proofs();
-        initial - self.working_len()
+        removed
     }
 
     /// ProvenTT の独立 GC．
