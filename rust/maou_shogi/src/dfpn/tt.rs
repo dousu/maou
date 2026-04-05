@@ -284,6 +284,211 @@ impl TranspositionTable {
         (PN_UNIT, PN_UNIT, 0)
     }
 
+    // ---------------------------------------------------------------
+    // PV 復元用: 持ち駒の部分集合クラスタを走査する proof lookup
+    // ---------------------------------------------------------------
+    //
+    // ProvenTT は `pos_key ^ hand_hash(hand)` でクラスタを決定するため，
+    // 証明駒(proof hand)と検索時の持ち駒が異なるとクラスタが一致せず
+    // proof を発見できない．
+    //
+    // PV 復元時には性能制約が緩いため，持ち駒の全部分集合に対応する
+    // クラスタを走査して proof を漏れなく検出する．
+    // 部分集合数が `MAX_SUBSET_CLUSTERS` を超える場合はスキップする．
+
+    /// 部分集合クラスタ走査の上限．
+    ///
+    /// 各部分集合について1クラスタ(4エントリ)を走査するため，
+    /// 最大 128 × 4 = 512 エントリの比較が上限となる．
+    const MAX_SUBSET_CLUSTERS: usize = 128;
+
+    /// 持ち駒の全部分集合に対応するクラスタを走査して proof を検索する．
+    ///
+    /// 通常の `look_up_proven` が proof を見つけられなかった場合の
+    /// フォールバックとして使用する．探索本体では呼ばない．
+    pub(super) fn look_up_proven_subset(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> (u32, u32, u32) {
+        // まず通常の lookup を試行
+        let normal = self.look_up_proven(pos_key, hand, remaining);
+        if normal.0 == 0 || normal.1 == 0 {
+            return normal;
+        }
+
+        // 部分集合数を計算し，上限超過ならフォールバックなし
+        let subset_count: usize = hand.iter()
+            .map(|&h| (h as usize) + 1)
+            .product();
+        if subset_count > Self::MAX_SUBSET_CLUSTERS {
+            return normal;
+        }
+
+        let pos_key = Self::safe_key(pos_key);
+
+        // 重複クラスタを避けるために走査済みクラスタ開始位置を記録
+        // (異なる部分集合が同じクラスタにマップされることがある)
+        let normal_start = self.proven_cluster_start(pos_key, hand);
+        let mut visited_starts: arrayvec::ArrayVec<usize, { Self::MAX_SUBSET_CLUSTERS }> =
+            arrayvec::ArrayVec::new();
+        visited_starts.push(normal_start);
+
+        // proof 用: 最も支配的な(hand が最大の) proof を選択
+        let mut best_proof: Option<(u32, u32, u32)> = None;
+
+        // 部分集合を列挙
+        let mut sub_hand = [0u8; HAND_KINDS];
+        loop {
+            let start = self.proven_cluster_start(pos_key, &sub_hand);
+            if !visited_starts.contains(&start) {
+                visited_starts.push(start);
+                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+                for fe in cluster {
+                    if fe.pos_key != pos_key { continue; }
+                    let e = &fe.entry;
+                    // proof: hand >= e.hand (持ち駒が証明駒以上)
+                    if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
+                        best_proof = Some((0, e.dn, e.source));
+                        // proof は見つけた時点で即座に返してよい
+                        return best_proof.unwrap();
+                    }
+                    // disproof: e.hand >= hand (反証駒が持ち駒以上)
+                    if e.dn == 0
+                        && hand_gte_forward_chain(&e.hand, hand)
+                        && e.remaining() >= remaining
+                    {
+                        return (e.pn, 0, e.source);
+                    }
+                }
+            }
+
+            // 次の部分集合へ進める (odometer 方式)
+            if !Self::next_subset(&mut sub_hand, hand) {
+                break;
+            }
+        }
+
+        best_proof.unwrap_or((PN_UNIT, PN_UNIT, 0))
+    }
+
+    /// 持ち駒の全部分集合クラスタを走査して proof の有無を判定する．
+    pub(super) fn has_proof_subset(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        // 通常の has_proof で見つかれば即 true
+        if self.has_proof(pos_key, hand) {
+            return true;
+        }
+
+        let subset_count: usize = hand.iter()
+            .map(|&h| (h as usize) + 1)
+            .product();
+        if subset_count > Self::MAX_SUBSET_CLUSTERS {
+            return false;
+        }
+
+        let pos_key = Self::safe_key(pos_key);
+        let normal_start = self.proven_cluster_start(pos_key, hand);
+        let mut visited_starts: arrayvec::ArrayVec<usize, { Self::MAX_SUBSET_CLUSTERS }> =
+            arrayvec::ArrayVec::new();
+        visited_starts.push(normal_start);
+
+        let mut sub_hand = [0u8; HAND_KINDS];
+        loop {
+            let start = self.proven_cluster_start(pos_key, &sub_hand);
+            if !visited_starts.contains(&start) {
+                visited_starts.push(start);
+                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+                for fe in cluster {
+                    if fe.pos_key == pos_key
+                        && fe.entry.pn == 0
+                        && hand_gte_forward_chain(hand, &fe.entry.hand)
+                    {
+                        return true;
+                    }
+                }
+            }
+            if !Self::next_subset(&mut sub_hand, hand) {
+                break;
+            }
+        }
+        false
+    }
+
+    /// 持ち駒の全部分集合クラスタを走査して証明駒を返す．
+    pub(super) fn get_proof_hand_subset(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> [u8; HAND_KINDS] {
+        // 通常の get_proof_hand で見つかればそれを返す
+        {
+            let pos_key_safe = Self::safe_key(pos_key);
+            for fe in self.proven_cluster(pos_key_safe, hand) {
+                if fe.pos_key == pos_key_safe
+                    && fe.entry.pn == 0
+                    && hand_gte_forward_chain(hand, &fe.entry.hand)
+                {
+                    return fe.entry.hand;
+                }
+            }
+        }
+
+        let subset_count: usize = hand.iter()
+            .map(|&h| (h as usize) + 1)
+            .product();
+        if subset_count > Self::MAX_SUBSET_CLUSTERS {
+            return *hand;
+        }
+
+        let pos_key = Self::safe_key(pos_key);
+        let normal_start = self.proven_cluster_start(pos_key, hand);
+        let mut visited_starts: arrayvec::ArrayVec<usize, { Self::MAX_SUBSET_CLUSTERS }> =
+            arrayvec::ArrayVec::new();
+        visited_starts.push(normal_start);
+
+        let mut sub_hand = [0u8; HAND_KINDS];
+        loop {
+            let start = self.proven_cluster_start(pos_key, &sub_hand);
+            if !visited_starts.contains(&start) {
+                visited_starts.push(start);
+                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+                for fe in cluster {
+                    if fe.pos_key == pos_key
+                        && fe.entry.pn == 0
+                        && hand_gte_forward_chain(hand, &fe.entry.hand)
+                    {
+                        return fe.entry.hand;
+                    }
+                }
+            }
+            if !Self::next_subset(&mut sub_hand, hand) {
+                break;
+            }
+        }
+        *hand
+    }
+
+    /// 部分集合の列挙ヘルパー(odometer 方式)．
+    ///
+    /// `sub[k]` を 0..=`max[k]` の範囲で桁上がりさせながら次の部分集合に進める．
+    /// 全部分集合を列挙し終えたら `false` を返す．
+    #[inline]
+    fn next_subset(sub: &mut [u8; HAND_KINDS], max: &[u8; HAND_KINDS]) -> bool {
+        for k in 0..HAND_KINDS {
+            if sub[k] < max[k] {
+                sub[k] += 1;
+                return true;
+            }
+            sub[k] = 0;
+        }
+        false
+    }
+
     /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
     ///
     /// 互換性のために残す．内部で look_up_proven → look_up_working を呼ぶ．

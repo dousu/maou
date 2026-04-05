@@ -557,6 +557,26 @@ impl DfPnSolver {
         (pn, dn)
     }
 
+    /// PV 復元用: 部分集合クラスタ走査を含む proof lookup．
+    ///
+    /// 通常の `look_up_board` では ProvenTT の hand_hash クラスタリングにより
+    /// 証明駒と検索時の持ち駒が異なる場合に proof を見逃す．
+    /// この関数は持ち駒の全部分集合クラスタを走査して proof を検出する．
+    /// 探索本体では呼ばない(PV 復元のみ)．
+    #[inline]
+    pub(super) fn look_up_board_for_pv(&self, board: &Board) -> (u32, u32) {
+        let pk = position_key(board);
+        let hand = &board.hand[self.attacker.index()];
+        let (pn, dn, _source) =
+            self.table.look_up_proven_subset(pk, hand, self.depth as u16);
+        if pn == 0 || dn == 0 {
+            return (pn, dn);
+        }
+        // ProvenTT subset で見つからない場合は WorkingTT もチェック
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16);
+        (pn, dn)
+    }
+
     /// 転置表を更新する(盤面から自動計算)．
     #[inline]
     pub(super) fn store_board(

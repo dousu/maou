@@ -1019,7 +1019,7 @@ impl DfPnSolver {
             return Vec::new();
         }
 
-        let (node_pn, _node_dn) = self.look_up_board(board);
+        let (node_pn, _node_dn) = self.look_up_board_for_pv(board);
 
         if or_node {
             if node_pn != 0 {
@@ -1048,12 +1048,11 @@ impl DfPnSolver {
                     break;
                 }
                 let captured = board.do_move(*m);
-                let (child_pn, _) = self.look_up_board(board);
+                let (child_pn, _) = self.look_up_board_for_pv(board);
 
                 // TT で proof が見つからなくても，応手が存在しなければ
-                // 即詰み(leaf node)．ProvenTT の hand_hash 混合により
-                // 異なる持ち駒のクラスタにしか proof がない場合でも正しく
-                // PV を復元できるようにする．
+                // 即詰み(leaf node)．部分集合クラスタ走査でも proof を
+                // 見つけられないケースの安全策として残す．
                 let is_proven = if child_pn == 0 {
                     true
                 } else {
@@ -1159,7 +1158,7 @@ impl DfPnSolver {
                     break;
                 }
                 let captured = board.do_move(*m);
-                let (child_pn, _) = self.look_up_board(board);
+                let (child_pn, _) = self.look_up_board_for_pv(board);
 
                 if child_pn == 0 {
                     visited.insert(full_hash);

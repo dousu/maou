@@ -1203,13 +1203,17 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                // 正解PV(7手): 4a2a(21飛不成) 2b1b(12玉) P*1c(13歩打)
+                //   1b1c(同玉) P*1d(14歩打) 1c1b(12玉) N*2d(24桂打)
+                //
+                // 2一飛成(4a2a+)は龍の利きにより打歩詰めの反則が生じるため不詰．
+                // 2一飛不成(4a2a)なら飛車のまま利きが制限され，7手で詰みが成立する．
+                // 2手目12玉(2b1b)が受け方の最長抵抗．
                 assert_eq!(
                     usi_moves.len(), 7,
                     "expected 7-move checkmate, got {}: {:?}",
                     usi_moves.len(), usi_moves
                 );
-                // 正解PV: 4a2a(21飛) 2b1b(12玉) P*1c(13歩) 1b1c(同玉)
-                //         P*1d(14歩) 1c1b(12玉) N*2d(24桂)
                 assert_eq!(usi_moves[0], "4a2a", "move 1: 21飛不成");
                 assert_eq!(usi_moves[1], "2b1b", "move 2: 12玉");
                 assert_eq!(usi_moves[2], "P*1c", "move 3: 13歩打");
