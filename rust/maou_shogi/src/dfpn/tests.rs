@@ -1806,7 +1806,7 @@ use crate::types::{Color, PieceType};
                     #[cfg(feature = "verbose")]
                     {
                         let mut count = 0u32;
-                        for e in solver.table.entries_iter(pk) {
+                        for e in solver.table.entries_iter(pk, &att_hand22) {
                             verbose_eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
                                 count, e.pn, e.dn, e.remaining(), e.path_dependent(),
                                 e.hand, e.source);

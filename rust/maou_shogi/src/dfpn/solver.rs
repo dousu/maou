@@ -1867,7 +1867,7 @@ impl DfPnSolver {
                         if cpn == 0 { "PROVED" } else if cdn == 0 { "DISPROVED" } else { "" });
                     // Dump TT entries for stuck children (first diagnostic only)
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
-                        for e in self.table.entries_iter(cpk) {
+                        for e in self.table.entries_iter(cpk, ch) {
                             eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
                                 e.pn, e.dn, e.remaining(), e.path_dependent(), &e.hand);
                         }

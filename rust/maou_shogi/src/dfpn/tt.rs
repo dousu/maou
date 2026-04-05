@@ -204,9 +204,11 @@ impl TranspositionTable {
     }
 
     /// WorkingTT のクラスタ開始インデックス．
+    /// ProvenTT と同様に pos_key ^ hand_hash で持ち駒バリアントを分散する．
     #[inline(always)]
-    fn working_cluster_start(&self, pos_key: u64) -> usize {
-        ((pos_key as usize) & self.working_mask) * WORKING_CLUSTER_SIZE
+    fn working_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
+        let mixed = pos_key ^ Self::hand_hash(hand);
+        ((mixed as usize) & self.working_mask) * WORKING_CLUSTER_SIZE
     }
 
     /// ProvenTT のクラスタスライスを返す(不変参照)．
@@ -218,8 +220,8 @@ impl TranspositionTable {
 
     /// WorkingTT のクラスタスライスを返す(不変参照)．
     #[inline(always)]
-    fn working_cluster(&self, pos_key: u64) -> &[TTFlatEntry] {
-        let start = self.working_cluster_start(pos_key);
+    fn working_cluster(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> &[TTFlatEntry] {
+        let start = self.working_cluster_start(pos_key, hand);
         &self.working[start..start + WORKING_CLUSTER_SIZE]
     }
 
@@ -235,7 +237,7 @@ impl TranspositionTable {
         remaining: u16,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
-        let working = self.working_cluster(pos_key);
+        let working = self.working_cluster(pos_key, hand);
         let mut exact_match: Option<(u32, u32, u32)> = None;
         for fe in working {
             if fe.pos_key != pos_key { continue; }
@@ -545,7 +547,7 @@ impl TranspositionTable {
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
         // WorkingTT (intermediate entries have best_move)
-        for fe in self.working_cluster(pos_key) {
+        for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
                 return fe.entry.best_move;
             }
@@ -698,7 +700,7 @@ impl TranspositionTable {
             }
 
             // WorkingTT の被支配 intermediate も除去
-            let w_start = self.working_cluster_start(pos_key);
+            let w_start = self.working_cluster_start(pos_key, &hand);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             for fe in w_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
@@ -731,7 +733,7 @@ impl TranspositionTable {
             // 除去するのは意図的: confirmed disproof の hand_gte 優越により
             // 「この hand 以上なら不詰」が保証されるため，それより弱い hand の
             // 中間エントリは不要．WorkingTT のクラスタ圧迫を防ぐトレードオフ．
-            let w_start = self.working_cluster_start(pos_key);
+            let w_start = self.working_cluster_start(pos_key, &hand);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             for fe in w_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
@@ -779,7 +781,7 @@ impl TranspositionTable {
         let dp_amount = DISPROOF_BONUS / 2; // depth-limited は半額
         new_entry.amount = dp_amount;
 
-        let w_start = self.working_cluster_start(pos_key);
+        let w_start = self.working_cluster_start(pos_key, &hand);
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
 
         // 同じ pos_key の中間エントリと被支配反証を除去
@@ -851,7 +853,7 @@ impl TranspositionTable {
         best_move: u16,
         #[cfg(feature = "verbose")] rem_idx: usize,
     ) {
-        let w_start = self.working_cluster_start(pos_key);
+        let w_start = self.working_cluster_start(pos_key, &hand);
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
 
         // 同一持ち駒の既存エントリを更新
@@ -919,7 +921,7 @@ impl TranspositionTable {
         nodes_spent: u16,
     ) {
         let pos_key = Self::safe_key(pos_key);
-        let start = self.working_cluster_start(pos_key);
+        let start = self.working_cluster_start(pos_key, hand);
         let cluster = &mut self.working[start..start + WORKING_CLUSTER_SIZE];
         for fe in cluster.iter_mut() {
             if fe.pos_key != pos_key { continue; }
@@ -1070,7 +1072,7 @@ impl TranspositionTable {
     ) -> bool {
         let pos_key = Self::safe_key(pos_key);
         // WorkingTT (path-dep disproof はここに格納)
-        for fe in self.working_cluster(pos_key) {
+        for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -1097,7 +1099,7 @@ impl TranspositionTable {
                 return fe.entry.remaining();
             }
         }
-        for fe in self.working_cluster(pos_key) {
+        for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -1126,7 +1128,7 @@ impl TranspositionTable {
                 return Some((fe.entry.remaining(), false));
             }
         }
-        for fe in self.working_cluster(pos_key) {
+        for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
@@ -1525,7 +1527,7 @@ impl TranspositionTable {
     pub(super) fn entries_for_position(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
         let pos_key = Self::safe_key(pos_key);
         let p = self.proven_cluster(pos_key, hand).iter().filter(|fe| fe.pos_key == pos_key).count();
-        let w = self.working_cluster(pos_key).iter().filter(|fe| fe.pos_key == pos_key).count();
+        let w = self.working_cluster(pos_key, hand).iter().filter(|fe| fe.pos_key == pos_key).count();
         p + w
     }
 
@@ -1544,7 +1546,7 @@ impl TranspositionTable {
             }
         }
         verbose_eprintln!("[tt_dump] WorkingTT:");
-        for (i, fe) in self.working_cluster(pos_key).iter().enumerate() {
+        for (i, fe) in self.working_cluster(pos_key, hand).iter().enumerate() {
             if fe.pos_key == pos_key {
                 let e = &fe.entry;
                 verbose_eprintln!(
@@ -1654,11 +1656,9 @@ impl TranspositionTable {
     /// 指定 pos_key のエントリイテレータ(verbose 診断用)．
     /// ProvenTT + WorkingTT を chain して返す．
     #[cfg(feature = "verbose")]
-    pub(super) fn entries_iter(&self, pos_key: u64) -> impl Iterator<Item = &DfPnEntry> {
+    pub(super) fn entries_iter(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> impl Iterator<Item = &DfPnEntry> {
         let pos_key = Self::safe_key(pos_key);
-        // hand_hash 混合により ProvenTT は pos_key のみでクラスタ特定不可．
-        // WorkingTT のエントリのみ返す．
-        self.working_cluster(pos_key).iter()
+        self.working_cluster(pos_key, hand).iter()
             .filter(move |fe| fe.pos_key == pos_key)
             .map(|fe| &fe.entry)
     }
