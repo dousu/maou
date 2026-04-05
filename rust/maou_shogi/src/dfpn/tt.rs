@@ -98,6 +98,10 @@ pub(super) struct TranspositionTable {
     /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
     /// amount が高くなり，eviction 耐性が上がる．
     pub(super) hint_ply: u32,
+    /// WorkingTT のクラスタ overflow 累積カウンタ．
+    /// store 時に空きスロットが見つからず eviction が発生するたびにインクリメント．
+    /// `drain_working_overflow()` でリセットし，呼び出し側が GC 判断に使用する．
+    working_overflow_since_gc: u64,
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
@@ -146,6 +150,7 @@ impl TranspositionTable {
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
             hint_ply: 0,
+            working_overflow_since_gc: 0,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
@@ -798,6 +803,8 @@ impl TranspositionTable {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
             return;
         }
+        // クラスタ飽和 → overflow
+        self.working_overflow_since_gc += 1;
         // replace_weakest_for_disproof
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
@@ -879,6 +886,7 @@ impl TranspositionTable {
         } else {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; self.working_overflow_count += 1; }
+            self.working_overflow_since_gc += 1;
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
                 #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
@@ -1119,6 +1127,7 @@ impl TranspositionTable {
     pub(super) fn clear(&mut self) {
         for fe in self.proven.iter_mut() { fe.pos_key = 0; }
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        self.working_overflow_since_gc = 0;
     }
 
     /// 証明エントリ(pn=0)のみを保持する．
@@ -1151,6 +1160,18 @@ impl TranspositionTable {
     /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
     pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        self.working_overflow_since_gc = 0;
+    }
+
+    /// WorkingTT の overflow カウンタを取得しリセットする．
+    ///
+    /// 前回の drain/GC/clear 以降に発生したクラスタ overflow の累積回数を返す．
+    /// 呼び出し側はこの値をもとに GC の必要性を判断する．
+    #[inline]
+    pub(super) fn drain_working_overflow(&mut self) -> u64 {
+        let count = self.working_overflow_since_gc;
+        self.working_overflow_since_gc = 0;
+        count
     }
 
     /// ProvenTT の confirmed disproof を除去する．
@@ -1363,20 +1384,49 @@ impl TranspositionTable {
     /// Phase 3: WorkingTT 全クリア
     ///
     /// 返り値: 除去されたエントリ数．
+    /// WorkingTT の GC．
+    ///
+    /// `force` = false: 充填率ベース．充填率が 75% 以下なら何もしない．
+    /// `force` = true: overflow ベース．充填率に関係なく低 amount エントリを
+    /// 1パスだけ除去してクラスタの空きを確保する．
     pub(super) fn gc_working(&mut self) -> usize {
-        let capacity = self.working.len();
+        self.gc_working_impl(false)
+    }
+
+    /// overflow トリガの WorkingTT GC．
+    /// 充填率に関係なく低 amount の intermediate エントリを除去する．
+    pub(super) fn gc_working_overflow(&mut self) -> usize {
+        self.gc_working_impl(true)
+    }
+
+    fn gc_working_impl(&mut self, force: bool) -> usize {
+        self.working_overflow_since_gc = 0;
         let initial = self.working_len();
+
+        if force {
+            // Overflow トリガ: amount=0 の intermediate エントリのみ除去
+            // 全走査は重いので最小限の除去に留める
+            for fe in self.working.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                if fe.entry.dn == 0 { continue; } // disproof は保護
+                if fe.entry.amount == 0 {
+                    fe.pos_key = 0;
+                }
+            }
+            return initial - self.working_len();
+        }
+
+        let capacity = self.working.len();
         let target = capacity * 3 / 4;
         if initial <= target {
             return 0;
         }
 
         // Phase 1: amount が低い intermediate エントリを除去
-        // amount の閾値を段階的に上げていく
         for threshold in [0u8, 1, 2, 4, 8] {
             for fe in self.working.iter_mut() {
                 if fe.pos_key == 0 { continue; }
-                if fe.entry.dn == 0 { continue; } // disproof は保護
+                if fe.entry.dn == 0 { continue; }
                 if fe.entry.amount <= threshold {
                     fe.pos_key = 0;
                 }

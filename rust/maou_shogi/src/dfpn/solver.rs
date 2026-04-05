@@ -884,28 +884,44 @@ impl DfPnSolver {
             self.ply_nodes[ply as usize] += 1;
         }
         // === Periodic GC (ProvenTT / WorkingTT 独立) ===
-        // ProvenTT と WorkingTT をそれぞれの充填率に基づいて独立に GC する．
-        // ProvenTT: 充填率 80% 超で confirmed disproof → proof の順に除去
-        // WorkingTT: 充填率 80% 超で amount の低い intermediate から除去
-        if self.nodes_searched % 1_000_000 == 0 {
-            // WorkingTT GC
-            let working_size = self.table.working_len();
-            let working_cap = self.table.working_capacity();
-            if working_size > working_cap * 4 / 5 {
-                let removed = self.table.gc_working();
+        // 100K ノードごとに overflow ベースの WorkingTT GC をチェック．
+        // 1M ノードごとに充填率ベースの ProvenTT/WorkingTT GC をチェック．
+        if self.nodes_searched % 100_000 == 0 {
+            // WorkingTT overflow ベース GC:
+            // クラスタ飽和による eviction が多発している場合，
+            // 低 amount エントリを一括除去してクラスタの空きを確保する．
+            // 閾値: 100K ノードあたり 10K 回以上の overflow (10% 以上)
+            let overflow = self.table.drain_working_overflow();
+            if overflow > 10_000 {
+                let removed = self.table.gc_working_overflow();
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
-                        removed, self.table.working_len(), working_cap);
+                    verbose_eprintln!(
+                        "[overflow_gc] working overflow={} removed={} working={}",
+                        overflow, removed, self.table.working_len());
                 }
             }
-            // ProvenTT GC
-            let proven_size = self.table.proven_len();
-            let proven_cap = self.table.proven_capacity();
-            if proven_size > proven_cap * 4 / 5 {
-                let removed = self.table.gc_proven();
-                if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
-                        removed, self.table.proven_len(), proven_cap);
+
+            // 1M ノードごとの充填率ベース GC
+            if self.nodes_searched % 1_000_000 == 0 {
+                // WorkingTT 充填率 GC
+                let working_size = self.table.working_len();
+                let working_cap = self.table.working_capacity();
+                if working_size > working_cap * 4 / 5 {
+                    let removed = self.table.gc_working();
+                    if removed > 0 {
+                        verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
+                            removed, self.table.working_len(), working_cap);
+                    }
+                }
+                // ProvenTT 充填率 GC
+                let proven_size = self.table.proven_len();
+                let proven_cap = self.table.proven_capacity();
+                if proven_size > proven_cap * 4 / 5 {
+                    let removed = self.table.gc_proven();
+                    if removed > 0 {
+                        verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
+                            removed, self.table.proven_len(), proven_cap);
+                    }
                 }
             }
         }
