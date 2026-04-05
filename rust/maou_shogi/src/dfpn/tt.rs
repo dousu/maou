@@ -1186,6 +1186,97 @@ impl TranspositionTable {
         self.proven.len() + self.working.len()
     }
 
+    /// TT の詳細診断情報を出力する(テスト用)．
+    #[cfg(test)]
+    pub(super) fn dump_overflow_diag(&self) {
+        let proven_count = self.proven.iter().filter(|fe| fe.pos_key != 0).count();
+        let working_count = self.working.iter().filter(|fe| fe.pos_key != 0).count();
+        let proven_slots = self.proven.len();
+        let working_slots = self.working.len();
+
+        eprintln!("ProvenTT:  entries={} / {} slots ({:.1}% full)",
+            proven_count, proven_slots,
+            proven_count as f64 / proven_slots as f64 * 100.0);
+        eprintln!("WorkingTT: entries={} / {} slots ({:.1}% full)",
+            working_count, working_slots,
+            working_count as f64 / working_slots as f64 * 100.0);
+
+        #[cfg(feature = "profile")]
+        {
+            eprintln!("Proven overflow:  {}", self.proven_overflow_count);
+            eprintln!("Working overflow: {}", self.working_overflow_count);
+            eprintln!("No victim found:  {}", self.overflow_no_victim_count);
+            eprintln!("Total overflow:   {}", self.overflow_count);
+            eprintln!("Max entries/pos:  {}", self.max_entries_per_position);
+        }
+
+        // ProvenTT エントリ種別
+        let mut proof_count = 0u64;
+        let mut confirmed_disproof_count = 0u64;
+        for fe in &self.proven {
+            if fe.pos_key == 0 { continue; }
+            if fe.entry.pn == 0 {
+                proof_count += 1;
+            } else if fe.entry.dn == 0 {
+                confirmed_disproof_count += 1;
+            }
+        }
+        eprintln!("ProvenTT breakdown: proof={} confirmed_disproof={}", proof_count, confirmed_disproof_count);
+
+        // WorkingTT エントリ種別
+        let mut intermediate_count = 0u64;
+        let mut dl_disproof_count = 0u64;
+        let mut pd_disproof_count = 0u64;
+        for fe in &self.working {
+            if fe.pos_key == 0 { continue; }
+            if fe.entry.dn == 0 {
+                if fe.entry.path_dependent() {
+                    pd_disproof_count += 1;
+                } else {
+                    dl_disproof_count += 1;
+                }
+            } else {
+                intermediate_count += 1;
+            }
+        }
+        eprintln!("WorkingTT breakdown: intermediate={} depth_limited_disproof={} path_dep_disproof={}",
+            intermediate_count, dl_disproof_count, pd_disproof_count);
+
+        // ProvenTT クラスタ充填分布
+        let proven_clusters = proven_slots / PROVEN_CLUSTER_SIZE;
+        let mut cluster_fill = [0u64; 5]; // 0..4
+        for c in 0..proven_clusters {
+            let start = c * PROVEN_CLUSTER_SIZE;
+            let fill = self.proven[start..start + PROVEN_CLUSTER_SIZE].iter()
+                .filter(|fe| fe.pos_key != 0).count();
+            cluster_fill[fill] += 1;
+        }
+        eprintln!("ProvenTT cluster fill distribution:");
+        for i in 0..=4 {
+            if cluster_fill[i] > 0 {
+                eprintln!("  {} entries: {} clusters ({:.1}%)", i, cluster_fill[i],
+                    cluster_fill[i] as f64 / proven_clusters as f64 * 100.0);
+            }
+        }
+
+        // WorkingTT クラスタ充填分布
+        let working_clusters = working_slots / WORKING_CLUSTER_SIZE;
+        let mut wcluster_fill = [0u64; 7]; // 0..6
+        for c in 0..working_clusters {
+            let start = c * WORKING_CLUSTER_SIZE;
+            let fill = self.working[start..start + WORKING_CLUSTER_SIZE].iter()
+                .filter(|fe| fe.pos_key != 0).count();
+            wcluster_fill[fill] += 1;
+        }
+        eprintln!("WorkingTT cluster fill distribution:");
+        for i in 0..=6 {
+            if wcluster_fill[i] > 0 {
+                eprintln!("  {} entries: {} clusters ({:.1}%)", i, wcluster_fill[i],
+                    wcluster_fill[i] as f64 / working_clusters as f64 * 100.0);
+            }
+        }
+    }
+
     /// 浅いエントリを除去する GC(WorkingTT のみ)．
     pub(super) fn gc_shallow_entries(&mut self, remaining_threshold: u16) -> usize {
         let mut removed = 0usize;

@@ -5543,3 +5543,31 @@ use crate::types::{Color, PieceType};
         }
         eprintln!("=== END ===");
     }
+
+    /// 39手詰めのTT overflow診断テスト．
+    #[test]
+    #[ignore]
+    fn test_39te_tt_overflow_diag() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let elapsed = start.elapsed();
+
+        eprintln!("=== 39te TT overflow diagnosis ===");
+        eprintln!("nodes: {} time: {:.1}s", solver.nodes_searched, elapsed.as_secs_f64());
+        solver.table.dump_overflow_diag();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                eprintln!("Result: Checkmate in {} moves", moves.len());
+            }
+            other => {
+                eprintln!("Result: {:?}", other);
+            }
+        }
+    }
