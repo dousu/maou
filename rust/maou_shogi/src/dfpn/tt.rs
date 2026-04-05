@@ -187,12 +187,22 @@ impl TranspositionTable {
         pos_key | 1
     }
 
-    /// 持ち駒からハッシュ値を計算する(ProvenTT の hand バリアント分散用)．
+    /// 持ち駒からハッシュ値を計算する(Zobrist ベース)．
+    ///
+    /// Zobrist テーブルの持ち駒キー(color=0)を XOR して生成する．
+    /// Zobrist ベースのため:
+    /// - ランダムキーによる良好なハッシュ分散
+    /// - 持ち駒 1 枚の増減が XOR 差分で O(1) 計算可能
+    ///   → 部分集合クラスタの特定が高速
     #[inline(always)]
     fn hand_hash(hand: &[u8; HAND_KINDS]) -> u64 {
-        let packed = u64::from_le_bytes([hand[0], hand[1], hand[2], hand[3], hand[4], hand[5], hand[6], 0]);
-        // golden ratio hash で 7 bytes を 64 bit に拡散
-        packed.wrapping_mul(0x9E3779B97F4A7C15)
+        use crate::zobrist::ZOBRIST;
+        use crate::types::Color;
+        let mut h = 0u64;
+        for k in 0..HAND_KINDS {
+            h ^= ZOBRIST.hand_hash(Color::Black, k, hand[k] as usize);
+        }
+        h
     }
 
     /// ProvenTT のクラスタ開始インデックス．
