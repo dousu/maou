@@ -104,6 +104,14 @@ pub(super) struct TranspositionTable {
     working_overflow_since_gc: u64,
     /// WorkingTT の1クラスタあたりピーク充填数（探索中の最大値）．
     pub(super) working_peak_cluster_fill: usize,
+    /// Overflow 発生時のクラスタ内 distinct pos_key 数の累積(診断用)．
+    pub(super) overflow_distinct_keys_sum: u64,
+    /// Overflow 発生時のクラスタ内 intermediate エントリ数の累積(診断用)．
+    pub(super) overflow_intermediate_sum: u64,
+    /// Overflow 発生時のクラスタ内 disproof エントリ数の累積(診断用)．
+    pub(super) overflow_disproof_sum: u64,
+    /// Overflow サンプリング回数(診断用)．
+    pub(super) overflow_sample_count: u64,
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
@@ -154,6 +162,10 @@ impl TranspositionTable {
             hint_ply: 0,
             working_overflow_since_gc: 0,
             working_peak_cluster_fill: 0,
+            overflow_distinct_keys_sum: 0,
+            overflow_intermediate_sum: 0,
+            overflow_disproof_sum: 0,
+            overflow_sample_count: 0,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
@@ -907,6 +919,7 @@ impl TranspositionTable {
         }
         // クラスタ飽和 → overflow
         self.working_overflow_since_gc += 1;
+        // サンプリングは replace 後に実行(borrow 回避)
         // replace_weakest_for_disproof
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
@@ -995,6 +1008,25 @@ impl TranspositionTable {
             #[cfg(feature = "profile")]
             { self.overflow_count += 1; self.working_overflow_count += 1; }
             self.working_overflow_since_gc += 1;
+            // 100回に1回サンプリング
+            if self.working_overflow_since_gc % 100 == 1 {
+                let cluster = &self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
+                let mut keys = [0u64; WORKING_CLUSTER_SIZE];
+                let mut n_keys = 0usize;
+                let mut n_inter = 0u64;
+                let mut n_disp = 0u64;
+                for fe in cluster {
+                    if fe.pos_key == 0 { continue; }
+                    if !keys[..n_keys].contains(&fe.pos_key) {
+                        if n_keys < WORKING_CLUSTER_SIZE { keys[n_keys] = fe.pos_key; n_keys += 1; }
+                    }
+                    if fe.entry.dn == 0 { n_disp += 1; } else { n_inter += 1; }
+                }
+                self.overflow_distinct_keys_sum += n_keys as u64;
+                self.overflow_intermediate_sum += n_inter;
+                self.overflow_disproof_sum += n_disp;
+                self.overflow_sample_count += 1;
+            }
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
                 #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
@@ -1435,6 +1467,15 @@ impl TranspositionTable {
             eprintln!("Max entries/pos:  {}", self.max_entries_per_position);
         }
         eprintln!("Working peak cluster fill: {}", self.working_peak_cluster_fill);
+
+        // Overflow サンプリング結果
+        if self.overflow_sample_count > 0 {
+            let n = self.overflow_sample_count as f64;
+            eprintln!("Overflow sampling ({} samples):", self.overflow_sample_count);
+            eprintln!("  avg distinct pos_keys/cluster: {:.1}", self.overflow_distinct_keys_sum as f64 / n);
+            eprintln!("  avg intermediate entries/cluster: {:.1}", self.overflow_intermediate_sum as f64 / n);
+            eprintln!("  avg disproof entries/cluster:  {:.1}", self.overflow_disproof_sum as f64 / n);
+        }
 
         // ProvenTT エントリ種別
         let mut proof_count = 0u64;
