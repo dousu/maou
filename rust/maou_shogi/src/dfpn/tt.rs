@@ -12,10 +12,10 @@ use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
 
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
-/// proof(1-2) + confirmed disproof(1-2) で典型的に 2-4 エントリ．
-/// `replace_weakest_proven` で confirmed disproof を proof より
-/// 優先的に evict するため，4 エントリで PV チェーンを維持できる．
-const PROVEN_CLUSTER_SIZE: usize = 4;
+/// 持ち駒の種類数(7) + 1 = 8 エントリとすることで，同一盤面・異なる
+/// 持ち駒バリアントの proof/confirmed disproof が同一クラスタに
+/// 収まりやすくなり，hand_hash 混合による proof 見逃しを軽減する．
+const PROVEN_CLUSTER_SIZE: usize = 8;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -27,7 +27,7 @@ const WORKING_CLUSTER_SIZE: usize = 6;
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
 /// Dual TT メモリ配分:
-/// - ProvenTT:  proven_num_clusters × 4 × 32B
+/// - ProvenTT:  proven_num_clusters × 8 × 32B
 /// - WorkingTT: working_num_clusters × 6 × 32B
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
@@ -1244,7 +1244,7 @@ impl TranspositionTable {
 
         // ProvenTT クラスタ充填分布
         let proven_clusters = proven_slots / PROVEN_CLUSTER_SIZE;
-        let mut cluster_fill = [0u64; 5]; // 0..4
+        let mut cluster_fill = [0u64; PROVEN_CLUSTER_SIZE + 1];
         for c in 0..proven_clusters {
             let start = c * PROVEN_CLUSTER_SIZE;
             let fill = self.proven[start..start + PROVEN_CLUSTER_SIZE].iter()
@@ -1252,7 +1252,7 @@ impl TranspositionTable {
             cluster_fill[fill] += 1;
         }
         eprintln!("ProvenTT cluster fill distribution:");
-        for i in 0..=4 {
+        for i in 0..=PROVEN_CLUSTER_SIZE {
             if cluster_fill[i] > 0 {
                 eprintln!("  {} entries: {} clusters ({:.1}%)", i, cluster_fill[i],
                     cluster_fill[i] as f64 / proven_clusters as f64 * 100.0);
