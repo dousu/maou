@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::types::{HAND_KINDS, PieceType};
 
 use super::entry::DfPnEntry;
-use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
+use super::{hand_gte_forward_chain, PN_UNIT, REMAINING_INFINITE};
 
 /// 近傍クラスタ走査の診断用グローバルカウンタ．
 /// [0]: ProvenTT proof 近傍ヒット
@@ -499,104 +499,6 @@ impl TranspositionTable {
         (PN_UNIT, PN_UNIT, 0)
     }
 
-    /// 持ち駒の全部分集合クラスタを走査して proof の有無を判定する．
-    pub(super) fn has_proof_subset(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> bool {
-        if self.has_proof(pos_key, hand) {
-            return true;
-        }
-
-        let subset_count: usize = hand.iter()
-            .map(|&h| (h as usize) + 1)
-            .product();
-        if subset_count > Self::MAX_SUBSET_CLUSTERS {
-            return false;
-        }
-
-        let pos_key = Self::safe_key(pos_key);
-        let mut sub_hand = [0u8; HAND_KINDS];
-        let mut sub_hh = Self::hand_hash(&sub_hand);
-        loop {
-            let start = self.proven_cluster_start_from_hash(pos_key, sub_hh);
-            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
-            for fe in cluster {
-                if fe.pos_key == pos_key
-                    && fe.entry.pn == 0
-                    && hand_gte_forward_chain(hand, &fe.entry.hand)
-                {
-                    return true;
-                }
-            }
-            let mut advanced = false;
-            for k in 0..HAND_KINDS {
-                if sub_hand[k] < hand[k] {
-                    let old_val = sub_hand[k];
-                    sub_hand[k] += 1;
-                    sub_hh ^= Self::hand_hash_diff(k, old_val, sub_hand[k]);
-                    advanced = true;
-                    break;
-                }
-                let old_val = sub_hand[k];
-                sub_hand[k] = 0;
-                sub_hh ^= Self::hand_hash_diff(k, old_val, 0);
-            }
-            if !advanced { break; }
-        }
-        false
-    }
-
-    /// 持ち駒の全部分集合クラスタを走査して証明駒を返す．
-    pub(super) fn get_proof_hand_subset(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> [u8; HAND_KINDS] {
-        let result = self.get_proof_hand(pos_key, hand);
-        if result != *hand {
-            return result;
-        }
-
-        let subset_count: usize = hand.iter()
-            .map(|&h| (h as usize) + 1)
-            .product();
-        if subset_count > Self::MAX_SUBSET_CLUSTERS {
-            return *hand;
-        }
-
-        let pos_key = Self::safe_key(pos_key);
-        let mut sub_hand = [0u8; HAND_KINDS];
-        let mut sub_hh = Self::hand_hash(&sub_hand);
-        loop {
-            let start = self.proven_cluster_start_from_hash(pos_key, sub_hh);
-            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
-            for fe in cluster {
-                if fe.pos_key == pos_key
-                    && fe.entry.pn == 0
-                    && hand_gte_forward_chain(hand, &fe.entry.hand)
-                {
-                    return fe.entry.hand;
-                }
-            }
-            let mut advanced = false;
-            for k in 0..HAND_KINDS {
-                if sub_hand[k] < hand[k] {
-                    let old_val = sub_hand[k];
-                    sub_hand[k] += 1;
-                    sub_hh ^= Self::hand_hash_diff(k, old_val, sub_hand[k]);
-                    advanced = true;
-                    break;
-                }
-                let old_val = sub_hand[k];
-                sub_hand[k] = 0;
-                sub_hh ^= Self::hand_hash_diff(k, old_val, 0);
-            }
-            if !advanced { break; }
-        }
-        *hand
-    }
 
     /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
     ///
@@ -1472,6 +1374,8 @@ impl TranspositionTable {
     }
 
     /// TT の使用中エントリ数を返す(ProvenTT + WorkingTT 合計)．
+    /// verbose/profile feature での診断用．
+    #[allow(dead_code)]
     pub(super) fn total_entries(&self) -> usize {
         self.proven_len() + self.working_len()
     }
@@ -1479,16 +1383,6 @@ impl TranspositionTable {
     /// ProvenTT の総スロット数を返す．
     pub(super) fn proven_capacity(&self) -> usize {
         self.proven.len()
-    }
-
-    /// WorkingTT の総スロット数を返す．
-    pub(super) fn working_capacity(&self) -> usize {
-        self.working.len()
-    }
-
-    /// TT の総スロット数を返す(ProvenTT + WorkingTT)．
-    pub(super) fn capacity(&self) -> usize {
-        self.proven.len() + self.working.len()
     }
 
     /// TT の詳細診断情報を出力する(テスト用)．
@@ -1617,44 +1511,6 @@ impl TranspositionTable {
         }
     }
 
-    /// 浅いエントリを除去する GC(WorkingTT のみ)．
-    pub(super) fn gc_shallow_entries(&mut self, remaining_threshold: u16) -> usize {
-        let mut removed = 0usize;
-        for fe in self.working.iter_mut() {
-            if fe.pos_key == 0 { continue; }
-            if fe.entry.remaining() <= remaining_threshold {
-                fe.pos_key = 0;
-                removed += 1;
-            }
-        }
-        removed
-    }
-
-    /// amount ベースの GC(WorkingTT のみ)．
-    ///
-    /// Phase 1: amount=0 の中間エントリを除去
-    /// Phase 2: WorkingTT 全クリア(retain_proofs 相当)
-    pub(super) fn gc_by_amount(&mut self, target_size: usize) -> usize {
-        let initial = self.len();
-        if initial <= target_size {
-            return 0;
-        }
-        // Phase 1: amount=0 の中間エントリを除去
-        for fe in self.working.iter_mut() {
-            if fe.pos_key == 0 { continue; }
-            if fe.entry.dn == 0 { continue; } // disproof は保護
-            if fe.entry.amount == 0 {
-                fe.pos_key = 0;
-            }
-        }
-        if self.len() <= target_size {
-            return initial - self.len();
-        }
-        // Phase 2: WorkingTT 全クリア
-        self.retain_proofs();
-        initial - self.len()
-    }
-
     /// TT GC: メモリ使用量を抑制する(WorkingTT のみ)．
     pub(super) fn gc(&mut self, target_size: usize) {
         if self.len() <= target_size {
@@ -1693,17 +1549,6 @@ impl TranspositionTable {
 
     /// GC 除去率(サンプリングした中のこの割合以下の amount を除去)．
     const GC_REMOVAL_RATIO: f64 = 0.2;
-
-    /// WorkingTT の GC（充填率ベーストリガ）．
-    /// obsolete intermediate + disproof + CutAmount の全フェーズを実行．
-    pub(super) fn gc_working(&mut self) -> usize {
-        let capacity = self.working.len();
-        let fill = self.working_len();
-        if fill <= capacity * 6 / 10 {
-            return 0;
-        }
-        self.gc_working_sampling(true)
-    }
 
     /// WorkingTT の GC（overflow トリガ）．
     /// obsolete intermediate の除去のみ実行（disproof は保護）．

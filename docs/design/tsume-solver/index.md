@@ -31,13 +31,13 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 
 ### 実装ファイル
 
-`rust/maou_shogi/src/dfpn/` モジュールに全ての探索ロジックを実装(合計約 8,800 行，テスト除く)．
+`rust/maou_shogi/src/dfpn/` モジュールに全ての探索ロジックを実装(合計約 8,600 行，テスト除く)．
 
 | ファイル | 行数 | 内容 |
 |---------|------|------|
-| `solver.rs` | ~3,200 | `DfPnSolver` 構造体，`mid()` 関数，child init，MID ループ |
-| `pns.rs` | ~2,700 | 手生成，PNS メインループ，IDS-dfpn，Frontier Variant，PV 復元 |
-| `tt.rs` | ~2,000 | Dual フラットハッシュテーブル型転置表(ProvenTT + WorkingTT) |
+| `solver.rs` | ~3,230 | `DfPnSolver` 構造体，`mid()` 関数，child init，MID ループ |
+| `pns.rs` | ~2,680 | 手生成，PNS メインループ，IDS-dfpn，Frontier Variant，PV 復元 |
+| `tt.rs` | ~1,850 | Dual フラットハッシュテーブル型転置表(ProvenTT + WorkingTT) |
 | `mod.rs` | ~490 | 定数，ユーティリティ関数(SNDA, hand\_gte, DFPN-E 等) |
 | `entry.rs` | ~165 | `DfPnEntry`, `PnsNode` データ構造 |
 | `profile.rs` | ~210 | プロファイリングマクロ・統計 |
