@@ -132,8 +132,8 @@ uv run maou --help                         # CLI help
 ```
 
 ### Japanese Writing Rules (日本語記述規則)
-- 句点: `，` (全角コンマ)
-- 読点: `．` (全角ピリオド)
+- 読点: `，` (全角コンマ)
+- 句点: `．` (全角ピリオド)
 - 括弧: `()` (半角のみ)
 
 ## Documentation Links
@@ -145,7 +145,7 @@ uv run maou --help                         # CLI help
 | Code Quality | [docs/code-quality.md](docs/code-quality.md) |
 | Rust Backend | [docs/rust-backend.md](docs/rust-backend.md) |
 | maou_shogi 設計思想 | [docs/design/maou-shogi-concept.md](docs/design/maou-shogi-concept.md) |
-| 詰将棋ソルバー設計 | [docs/design/tsume-solver-design.md](docs/design/tsume-solver-design.md) |
+| 詰将棋ソルバー設計 | [docs/design/tsume-solver/](docs/design/tsume-solver/index.md) |
 | Performance | [docs/performance.md](docs/performance.md) |
 | LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |

@@ -123,6 +123,8 @@ pub struct DfPnSolver {
     ///
     /// 次に TT GC チェックを行うノード数．
     pub(super) next_gc_check: u64,
+    /// overflow GC のクールダウン(次に GC を許可するノード数)．
+    next_overflow_gc: u64,
     /// Killer Move テーブル(OR ノード用)．
     ///
     /// ply ごとに最大 2 つの killer move(Move16)を保持する．
@@ -246,6 +248,7 @@ impl DfPnSolver {
             refutable_check_failed: FxHashSet::default(),
             tt_gc_threshold: 0,
             next_gc_check: 0,
+            next_overflow_gc: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -402,7 +405,12 @@ impl DfPnSolver {
     /// Deep df-pn では深い ply(depth の後半)にのみバイアスを適用:
     /// `pn = 1 + (ply - depth/2) / R` (ply > depth/2 の場合)．
     /// 浅い ply は標準 df-pn と同じ `pn=1` を維持し，
-    /// 不詰検出など浅い探索の効率を損なわない．
+    /// 探索ホットパスでの TT 参照（自クラスタのみ）．
+    ///
+    /// 近傍クラスタ走査は行わない(NPS 優先)．
+    /// proof/disproof の hand\_gte 近傍走査は `has_proof`，`get_proof_hand` 等の
+    /// 補助メソッド(±1 限定走査)に任せる．これらは child init や
+    /// proof 伝播の際にのみ呼ばれるためホットパスへの影響が小さい．
     #[inline]
     pub(super) fn look_up_pn_dn(
         &self,
@@ -410,7 +418,27 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
-        let result = self.table.look_up(pos_key, hand, remaining);
+        self.look_up_pn_dn_impl(pos_key, hand, remaining, true)
+    }
+
+
+    #[inline]
+    fn look_up_pn_dn_impl(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        // remaining=0 (depth-limit 到達) で proof がなければ仮反証．
+        // rem=0 disproof は TT に store しないため，動的に判定する．
+        if remaining == 0 {
+            if self.table.has_proof(pos_key, hand) {
+                return (0, INF, 0);
+            }
+            return (INF, 0, 0);
+        }
+        let result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
@@ -442,6 +470,26 @@ impl DfPnSolver {
             }
         }
         false
+    }
+
+    /// GC 前に探索パス上のエントリを保護する．
+    ///
+    /// path 配列に記録されたルートからの全ノードの WorkingTT エントリの
+    /// amount を最大値に引き上げ，GC のサンプリング閾値で除去されないようにする．
+    fn mark_path_entries_for_gc_protection(&mut self) {
+        for i in 0..self.path_len {
+            self.table.protect_working_entry(
+                self.path_pos_key[i],
+                &self.path_hand[i],
+            );
+        }
+        // root 自体も保護(path には含まれない場合がある)
+        if self.path_len > 0 {
+            self.table.protect_working_entry(
+                self.diag_root_pk,
+                &self.diag_root_hand,
+            );
+        }
     }
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
@@ -553,7 +601,27 @@ impl DfPnSolver {
         // 仮反証(NM)を最終結果に採用しないようにする．
         // remaining=0 だと全ての NM エントリを受け入れてしまい，
         // PNS の深さ制限内での仮反証が最終判定を汚染する．
-        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16);
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16, false);
+        (pn, dn)
+    }
+
+    /// PV 復元用: 部分集合クラスタ走査を含む proof lookup．
+    ///
+    /// 通常の `look_up_board` では ProvenTT の hand_hash クラスタリングにより
+    /// 証明駒と検索時の持ち駒が異なる場合に proof を見逃す．
+    /// この関数は持ち駒の全部分集合クラスタを走査して proof を検出する．
+    /// 探索本体では呼ばない(PV 復元のみ)．
+    #[inline]
+    pub(super) fn look_up_board_for_pv(&self, board: &Board) -> (u32, u32) {
+        let pk = position_key(board);
+        let hand = &board.hand[self.attacker.index()];
+        let (pn, dn, _source) =
+            self.table.look_up_proven_subset(pk, hand, self.depth as u16);
+        if pn == 0 || dn == 0 {
+            return (pn, dn);
+        }
+        // ProvenTT subset で見つからない場合は WorkingTT もチェック
+        let (pn, dn, _source) = self.table.look_up(pk, hand, self.depth as u16, true);
         (pn, dn)
     }
 
@@ -762,7 +830,7 @@ impl DfPnSolver {
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
             // AND ノードが TT で REMAINING_INFINITE の不詰か確認
-            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE);
+            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {
                 // この王手後の局面が TT で不詰確定していない → 昇格不可
@@ -863,21 +931,35 @@ impl DfPnSolver {
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
-        // === Periodic GC (amount ベース TT 飽和防止) ===
-        // TT エントリ数が容量の 80% を超えた場合に amount の小さい
-        // エントリを除去する．amount は探索投資量を反映し，
-        // 価値の低いエントリを優先的に除去することで TT の質を維持する．
-        if self.nodes_searched % 1_000_000 == 0 {
-            let tt_size = self.table.len();
-            let tt_capacity = self.table.capacity();
-            if tt_size > tt_capacity * 4 / 5 {
-                // amount の小さいエントリ（中間値で探索投資が少ない）を除去
-                // 目標: 75% まで縮小
-                let target = tt_capacity * 3 / 4;
-                let removed = self.table.gc_by_amount(target);
+        // === Periodic GC (ProvenTT / WorkingTT 独立) ===
+        // overflow カウントベースで GC をトリガする(充填率の全走査を避ける)．
+        // intermediate 保護 + パス保護により，GC で探索が崩壊することはない．
+        if self.nodes_searched % 100_000 == 0 {
+            let overflow = self.table.drain_working_overflow();
+
+            // overflow が閾値を超え，かつ前回 GC から十分なノードが経過したら実行．
+            // 連続 GC を防ぐため，GC 後は 1M ノードのクールダウンを設ける．
+            if overflow > 10_000 && self.nodes_searched >= self.next_overflow_gc {
+                self.mark_path_entries_for_gc_protection();
+                let removed = self.table.gc_working_overflow();
+                self.next_overflow_gc = self.nodes_searched + 1_000_000;
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] amount-based removed={} tt={}/{}",
-                        removed, self.table.len(), tt_capacity);
+                    verbose_eprintln!(
+                        "[overflow_gc] overflow={} removed={} working={}",
+                        overflow, removed, self.table.working_len());
+                }
+            }
+
+            // 1M ノードごとに ProvenTT 充填率 GC
+            if self.nodes_searched % 1_000_000 == 0 {
+                let proven_size = self.table.proven_len();
+                let proven_cap = self.table.proven_capacity();
+                if proven_size > proven_cap * 7 / 10 {
+                    let removed = self.table.gc_proven();
+                    if removed > 0 {
+                        verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
+                            removed, self.table.proven_len(), proven_cap);
+                    }
                 }
             }
         }
@@ -1002,13 +1084,11 @@ impl DfPnSolver {
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
-                } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
-            } else {
-                // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
+                // else: rem=0 の仮反証は TT に store しない
+                // (クラスタの 64.7% を占め overflow の主因)
             }
+            // AND ノードの深さ制限: rem=0 は TT に store しない
             #[cfg(feature = "profile")]
             {
                 self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
@@ -1155,11 +1235,16 @@ impl DfPnSolver {
                         } else {
                             0
                         };
-                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
-                    } else {
-                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                        self.store(child_pk, child_hand, INF, 0, 0, child_pk as u32);
+                        // REMAINING_INFINITE(真の不詰)のみ store する．
+                        // rem=0 の仮反証は TT に store しない:
+                        // - 同じ IDS depth の同じ深さでしか参照されない
+                        // - クラスタの 64.7% を占め overflow の主因
+                        // - ローカル変数 cpn/cdn で解決チェック可能
+                        if dl_rem == REMAINING_INFINITE {
+                            self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
+                        }
                     }
+                    // rem=0 は TT に store せず，ローカル変数のみで処理
                     cpn = INF;
                     cdn = 0;
                 }
@@ -1269,10 +1354,19 @@ impl DfPnSolver {
             }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
+            // depth-limit fast path で rem=0 を TT に store しない場合，
+            // ローカル変数 cpn/cdn を直接使用する．
             #[cfg(feature = "profile")]
             let _ci_resolve_start = Instant::now();
-            let (cpn_now, cdn_now, _) =
-                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+            let (cpn_now, cdn_now, _) = if cpn == INF && cdn == 0 {
+                // depth-limit fast path で設定済み(TT に未 store の可能性)
+                (INF, 0, 0)
+            } else if cpn == 0 && cdn == INF {
+                // proof 発見済み
+                (0, INF, 0)
+            } else {
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining)
+            };
             if or_node && cpn_now == 0 {
                 // OR 証明: 子の証明駒から親の証明駒を計算
                 let child_ph = self
@@ -1823,7 +1917,7 @@ impl DfPnSolver {
                         if cpn == 0 { "PROVED" } else if cdn == 0 { "DISPROVED" } else { "" });
                     // Dump TT entries for stuck children (first diagnostic only)
                     if consumed < 1_100_000 && cpn != 0 && cdn != 0 {
-                        for e in self.table.entries_iter(cpk) {
+                        for e in self.table.entries_iter(cpk, ch) {
                             eprintln!("[tt_dump]     pn={} dn={} rem={} path_dep={} hand={:?}",
                                 e.pn, e.dn, e.remaining(), e.path_dependent(), &e.hand);
                         }
@@ -2955,7 +3049,7 @@ impl DfPnSolver {
             let pc_hand = board.hand[self.attacker.index()];
 
             // メイン TT で捕獲後局面の証明を参照
-            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining);
+            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining, false);
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明
                 let pc_ph = self.table.get_proof_hand(pc_pk, &pc_hand);
@@ -3110,7 +3204,7 @@ impl DfPnSolver {
                 hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
 
                 let pc_remaining = remaining.saturating_sub(2);
-                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining);
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining, false);
 
                 if ppn == 0 {
                     let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);

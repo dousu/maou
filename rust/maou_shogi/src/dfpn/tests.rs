@@ -1203,20 +1203,24 @@ use crate::types::{Color, PieceType};
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                // 最短は 7手だが ProvenTT hand_hash 混合による探索順序変更で
-                // PV 復元が 9手のルートを先に見つけるケースがある．
-                // find_shortest=true の complete_or_proofs では不十分な場合の既知制約．
-                assert!(
-                    usi_moves.len() == 7 || usi_moves.len() == 9,
-                    "expected 7 or 9-move checkmate, got {}: {:?}",
+                // 正解PV(7手): 4a2a(21飛不成) 2b1b(12玉) P*1c(13歩打)
+                //   1b1c(同玉) P*1d(14歩打) 1c1b(12玉) N*2d(24桂打)
+                //
+                // 2一飛成(4a2a+)は龍の利きにより打歩詰めの反則が生じるため不詰．
+                // 2一飛不成(4a2a)なら飛車のまま利きが制限され，7手で詰みが成立する．
+                // 2手目12玉(2b1b)が受け方の最長抵抗．
+                assert_eq!(
+                    usi_moves.len(), 7,
+                    "expected 7-move checkmate, got {}: {:?}",
                     usi_moves.len(), usi_moves
                 );
-                // 初手は飛車不成(4a2a)でなければならない
-                assert_eq!(
-                    usi_moves[0], "4a2a",
-                    "move 1 must be 4a2a (rook WITHOUT promotion), got: {}",
-                    usi_moves[0]
-                );
+                assert_eq!(usi_moves[0], "4a2a", "move 1: 21飛不成");
+                assert_eq!(usi_moves[1], "2b1b", "move 2: 12玉");
+                assert_eq!(usi_moves[2], "P*1c", "move 3: 13歩打");
+                assert_eq!(usi_moves[3], "1b1c", "move 4: 同玉");
+                assert_eq!(usi_moves[4], "P*1d", "move 5: 14歩打");
+                assert_eq!(usi_moves[5], "1c1b", "move 6: 12玉");
+                assert_eq!(usi_moves[6], "N*2d", "move 7: 24桂打");
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }
@@ -1495,7 +1499,7 @@ use crate::types::{Color, PieceType};
     /// 金・銀・飛・角のみが候補となる．
     /// 後手の最善応手(最長抵抗)でのみ39手詰めとなる．
     #[test]
-    #[ignore] // 約42万ノード / 5秒で解ける重量テスト．明示的に `cargo test -- --ignored` で実行．
+    #[ignore] // 現状 10M ノード / 60s では解けない高難度テスト．
     fn test_tsume_39te_aigoma() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let mut board = Board::new();
@@ -1802,7 +1806,7 @@ use crate::types::{Color, PieceType};
                     #[cfg(feature = "verbose")]
                     {
                         let mut count = 0u32;
-                        for e in solver.table.entries_iter(pk) {
+                        for e in solver.table.entries_iter(pk, &att_hand22) {
                             verbose_eprintln!("    [{}] pn={} dn={} remaining={} path_dep={} hand={:?} src={}",
                                 count, e.pn, e.dn, e.remaining(), e.path_dependent(),
                                 e.hand, e.source);
@@ -1814,8 +1818,8 @@ use crate::types::{Color, PieceType};
                     }
 
                     // remaining=0 vs remaining=19 の look_up 結果
-                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0);
-                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19);
+                    let (p0, d0, _) = solver.table.look_up(pk, &att_hand22, 0, false);
+                    let (p19, d19, _) = solver.table.look_up(pk, &att_hand22, 19, false);
                     verbose_eprintln!("  look_up(remaining=0):  pn={} dn={}", p0, d0);
                     verbose_eprintln!("  look_up(remaining=19): pn={} dn={}", p19, d19);
                 }
@@ -2013,6 +2017,23 @@ use crate::types::{Color, PieceType};
                     }
                 }
                 break; // 最初の未解決局面の分析後に停止
+            }
+        }
+
+        // 近傍走査診断
+        {
+            use super::tt::NEIGHBOR_DIAG;
+            use std::sync::atomic::Ordering;
+            let scans = NEIGHBOR_DIAG[3].load(Ordering::Relaxed);
+            let proof = NEIGHBOR_DIAG[0].load(Ordering::Relaxed);
+            let disp_p = NEIGHBOR_DIAG[1].load(Ordering::Relaxed);
+            let disp_w = NEIGHBOR_DIAG[2].load(Ordering::Relaxed);
+            writeln!(out, "\nNeighbor scan: calls={} proof_hits={} disproof_proven={} disproof_working={}",
+                scans, proof, disp_p, disp_w).unwrap();
+            if scans > 0 {
+                let total = proof + disp_p + disp_w;
+                writeln!(out, "  hit rate: {:.4}% ({}/{})",
+                    total as f64 / scans as f64 * 100.0, total, scans).unwrap();
             }
         }
 
@@ -5538,4 +5559,32 @@ use crate::types::{Color, PieceType};
                 case.name, median_nodes, median_ms, median_nps_k);
         }
         eprintln!("=== END ===");
+    }
+
+    /// 39手詰めのTT overflow診断テスト．
+    #[test]
+    #[ignore]
+    fn test_39te_tt_overflow_diag() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let elapsed = start.elapsed();
+
+        eprintln!("=== 39te TT overflow diagnosis ===");
+        eprintln!("nodes: {} time: {:.1}s", solver.nodes_searched, elapsed.as_secs_f64());
+        solver.table.dump_overflow_diag();
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                eprintln!("Result: Checkmate in {} moves", moves.len());
+            }
+            other => {
+                eprintln!("Result: {:?}", other);
+            }
+        }
     }
