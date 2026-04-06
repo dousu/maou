@@ -465,6 +465,26 @@ impl DfPnSolver {
         false
     }
 
+    /// GC 前に探索パス上のエントリを保護する．
+    ///
+    /// path 配列に記録されたルートからの全ノードの WorkingTT エントリの
+    /// amount を最大値に引き上げ，GC のサンプリング閾値で除去されないようにする．
+    fn mark_path_entries_for_gc_protection(&mut self) {
+        for i in 0..self.path_len {
+            self.table.protect_working_entry(
+                self.path_pos_key[i],
+                &self.path_hand[i],
+            );
+        }
+        // root 自体も保護(path には含まれない場合がある)
+        if self.path_len > 0 {
+            self.table.protect_working_entry(
+                self.diag_root_pk,
+                &self.diag_root_hand,
+            );
+        }
+    }
+
     /// 転置表を更新する(位置キー＋持ち駒指定)．
     ///
     /// proof (pn=0) の場合，祖先に既に proof がある場合は格納自体をスキップする
@@ -905,44 +925,31 @@ impl DfPnSolver {
             self.ply_nodes[ply as usize] += 1;
         }
         // === Periodic GC (ProvenTT / WorkingTT 独立) ===
-        // 100K ノードごとに overflow ベースの WorkingTT GC をチェック．
-        // 1M ノードごとに充填率ベースの ProvenTT/WorkingTT GC をチェック．
-        if self.nodes_searched % 100_000 == 0 {
-            // WorkingTT overflow ベース GC:
-            // クラスタ飽和による eviction が多発している場合，
-            // 低 amount エントリを一括除去してクラスタの空きを確保する．
-            // 閾値: 100K ノードあたり 10K 回以上の overflow (10% 以上)
-            let overflow = self.table.drain_working_overflow();
-            if overflow > 10_000 {
-                let removed = self.table.gc_working_overflow();
+        // 1M ノードごとに overflow とチェック．
+        // overflow が多発 かつ 充填率が十分高い場合にのみ GC を実行する．
+        if self.nodes_searched % 1_000_000 == 0 {
+            // WorkingTT overflow カウンタをリセット(GC 未実施でもリセットは必要)
+            let _overflow = self.table.drain_working_overflow();
+
+            // WorkingTT 充填率 GC (70% 超で発動)
+            let working_size = self.table.working_len();
+            let working_cap = self.table.working_capacity();
+            if working_size > working_cap * 7 / 10 {
+                self.mark_path_entries_for_gc_protection();
+                let removed = self.table.gc_working();
                 if removed > 0 {
-                    verbose_eprintln!(
-                        "[overflow_gc] working overflow={} removed={} working={}",
-                        overflow, removed, self.table.working_len());
+                    verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
+                        removed, self.table.working_len(), working_cap);
                 }
             }
-
-            // 1M ノードごとの充填率ベース GC
-            if self.nodes_searched % 1_000_000 == 0 {
-                // WorkingTT 充填率 GC
-                let working_size = self.table.working_len();
-                let working_cap = self.table.working_capacity();
-                if working_size > working_cap * 4 / 5 {
-                    let removed = self.table.gc_working();
-                    if removed > 0 {
-                        verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
-                            removed, self.table.working_len(), working_cap);
-                    }
-                }
-                // ProvenTT 充填率 GC
-                let proven_size = self.table.proven_len();
-                let proven_cap = self.table.proven_capacity();
-                if proven_size > proven_cap * 4 / 5 {
-                    let removed = self.table.gc_proven();
-                    if removed > 0 {
-                        verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
-                            removed, self.table.proven_len(), proven_cap);
-                    }
+            // ProvenTT 充填率 GC (70% 超で発動)
+            let proven_size = self.table.proven_len();
+            let proven_cap = self.table.proven_capacity();
+            if proven_size > proven_cap * 7 / 10 {
+                let removed = self.table.gc_proven();
+                if removed > 0 {
+                    verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
+                        removed, self.table.proven_len(), proven_cap);
                 }
             }
         }

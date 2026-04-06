@@ -1,6 +1,6 @@
 [package]
 name = "maou_shogi"
-version = "0.24.10"
+version = "0.24.11"
 edition = "2021"
 description = "Shogi (Japanese chess) engine library for the maou project"
 

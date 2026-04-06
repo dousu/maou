@@ -1037,6 +1037,26 @@ impl TranspositionTable {
     }
 
     /// 指定エントリの amount を更新する．
+    /// GC 前に指定局面の WorkingTT エントリの amount を最大値に引き上げる．
+    ///
+    /// 探索パス上のエントリを GC から保護するために使用する．
+    pub(super) fn protect_working_entry(
+        &mut self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) {
+        let pos_key = Self::safe_key(pos_key);
+        let start = self.working_cluster_start(pos_key, hand);
+        let cluster = &mut self.working[start..start + WORKING_CLUSTER_SIZE];
+        for fe in cluster.iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.hand == *hand {
+                fe.entry.amount = 255;
+                return;
+            }
+        }
+    }
+
     /// mid() からの帰還時に呼ばれ，探索投資量を記録する．
     /// WorkingTT のみスキャン(intermediate エントリ対象)．
     pub(super) fn update_amount(
@@ -1621,13 +1641,13 @@ impl TranspositionTable {
     const GC_SAMPLING_ENTRIES: usize = 10_000;
 
     /// GC 除去率(サンプリングした中のこの割合以下の amount を除去)．
-    const GC_REMOVAL_RATIO: f64 = 0.5;
+    const GC_REMOVAL_RATIO: f64 = 0.2;
 
     /// WorkingTT の GC（充填率ベーストリガ）．
     pub(super) fn gc_working(&mut self) -> usize {
         let capacity = self.working.len();
         let fill = self.working_len();
-        if fill <= capacity * 3 / 4 {
+        if fill <= capacity * 6 / 10 {
             return 0;
         }
         self.gc_working_sampling()
@@ -1676,10 +1696,13 @@ impl TranspositionTable {
         let amount_threshold = amounts[pivot];
         let max_amount = amounts.iter().copied().max().unwrap_or(0);
 
-        // Phase 3: 閾値以下のエントリを除去
+        // Phase 3: 閾値以下のエントリを除去(intermediate は保護)
+        // depth-limited disproof のみを対象とし，中間値(intermediate)は
+        // 探索の進捗に直結するため除去しない．
         let initial = self.working_len();
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
+            if fe.entry.pn != 0 && fe.entry.dn != 0 { continue; } // intermediate 保護
             if fe.entry.amount <= amount_threshold {
                 fe.pos_key = 0;
             }
@@ -1710,7 +1733,7 @@ impl TranspositionTable {
     pub(super) fn gc_proven(&mut self) -> usize {
         let capacity = self.proven.len();
         let initial = self.proven_len();
-        let target = capacity * 3 / 4;
+        let target = capacity * 6 / 10;
         if initial <= target {
             return 0;
         }
