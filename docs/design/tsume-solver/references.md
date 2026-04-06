@@ -1,0 +1,65 @@
+# 参考文献
+
+### 論文
+
+- Nagai & Imai, "df-pn Algorithm Application to Tsume-Shogi" (IPSJ Journal 43(6), 2002)
+- Nagai, "Df-pn Algorithm for Searching AND/OR Trees and Its Applications" (Ph.D. Dissertation, UTokyo, 2002)
+- Seo, Iida & Uiterwijk, "The PN*-search algorithm: Application to tsume-shogi" (AI 129, 2001)
+- Kishimoto & Müller, "A solution to the GHI problem for depth-first proof-number search" (IS 175.4, 2005)
+- Kishimoto & Müller, "About the Completeness of Depth-First Proof-Number Search" (2008)
+- Kishimoto, "Dealing with Infinite Loops, Underestimation, and Overestimation of Depth-First Proof-Number Search" (AAAI 2010)
+- Pawlewicz & Lew, "Improving Depth-First PN-Search: 1+ε Trick" (CG 2007)
+- Song Zhang et al., "Deep df-pn and Its Efficient Implementations" (CG 2017)
+- "Depth-First Proof-Number Search with Heuristic Edge Cost" (NeurIPS 2019)
+- Ueda, Hashimoto, Hashimoto & Iida, "Weak Proof-Number Search" (CG 2008)
+- Saito et al., "Virtual Proof Number" (2006)
+- Kishimoto, Winands, Müller & Saito, "Game-tree search using proof numbers: The first twenty years" (ICGA Journal 35, 2012)
+- Kaneko, "Parallel Depth First Proof Number Search" (AAAI 2010)
+- Pawlewicz & Hayward, "Scalable Parallel DFPN Search" (CG 2014)
+- Hoki, Kaneko, Kishimoto & Ito, "Parallel Dovetailing and its Application to Depth-First Proof-Number Search" (ICGA Journal 36, 2013)
+- Kaneko lab (UTokyo), "Initial pn/dn after expansion in df-pn for tsume-shogi" (GPW 2004)
+- Breuker, Uiterwijk & van den Herik, "Replacement Schemes for Transposition Tables" (1994)
+- Schaeffer, "The History Heuristic and Alpha-Beta Search Enhancements in Practice" (TCDE 14(4), 1989)
+- Allis, "Searching for Solutions in Games and Artificial Intelligence" (1994)
+
+### 既存ソルバー
+
+| ソルバー | 特徴 |
+|---------|------|
+| KomoringHeights | df-pn+, SNDA, 証明駒/反証駒, GHI 対策, 合駒遅延展開 |
+| shtsume | ミクロコスモス ~1分で解く最速ソルバー |
+| やねうら王 | TT GC 未実装(~3.5TB 必要で解けない) |
+
+### 日本語リソース
+
+- [やねうら王 - 詰将棋アルゴリズムdf-pnのすべて](https://yaneuraou.yaneu.com/2024/05/08/all-about-df-pn/)
+- [やねうら王 - ミクロコスモスは解けますか？](https://yaneuraou.yaneu.com/2020/12/30/yaneuraou-matesolver-microcosmos/)
+- [コウモリのちょーおんぱ - df-pnアルゴリズムの解説](https://komorinfo.com/blog/df-pn-basics/)
+- [コウモリのちょーおんぱ - KomoringHeightsを作った](https://komorinfo.com/blog/komoring-heights/)
+- [コウモリのちょーおんぱ - GHI問題対策](https://komorinfo.com/blog/and-or-tree-ghi-problem/)
+- [コウモリのちょーおんぱ - 証明駒／反証駒の活用方法](https://komorinfo.com/blog/proof-piece-and-disproof-piece/)
+- [コウモリのちょーおんぱ - KomoringHeights v0.4.0](https://komorinfo.com/blog/komoring-heights-v040/)
+- [コウモリのちょーおんぱ - KomoringHeights v0.5.0](https://komorinfo.com/blog/komoring-heights-v050/)
+- [すぎゃーんメモ - Rustでつくる詰将棋Solver](https://memo.sugyan.com/entry/2021/11/11/005132)
+- [Qhapaq - 高速な詰将棋アルゴリズムを完全に理解したい](https://qhapaq.hatenablog.com/entry/2020/07/19/233054)
+- [人工知能学会誌 - 詰将棋探索技術(PDF)](https://www.jstage.jst.go.jp/article/jjsai/26/4/26_392/_pdf)
+
+---
+
+## 変更履歴
+
+| 日付 | 版 | 内容 |
+|------|-----|------|
+| 2026-04-04 | v0.24.0 | §6.6.3 Dual TT(ProvenTT hand\_hash 混合 + WorkingTT pos\_key) + エントリ圧縮(40→32B) + 2段階検索 + 段階的 retain + NoMate バグ修正 + ply ベース amount + 祖先チェック．NPS +33%(50M: 183K→244K)，ProvenTT overflow -99.6%．WorkingTT 改善3案は NPS 低下で不採用．§9-b PV 復元．§10.2 構造的課題の最終状態(A: ProvenTT 解決/WorkingTT 残存，B: 部分解決，C: 残存) |
+| 2026-03-31 | v0.22.1 | §10.2 方針C 採用(PNS アリーナ再利用)，方針D 不採用(リニアプロービング: NPS 低下)．NPS +20% 改善(同条件比較) |
+| 2026-03-30 | v0.22.0 | §6.6 amount フィールド導入 + §6.6.1 クラスタ飽和問題の文書化．amount ベース replace\_weakest + GC．min\_depth は有用性なしで削除 |
+| 2026-03-30 | v0.21.1 | §6.6 TT 2M クラスタ化 + クラスタ飽和対策 + 停滞検出改善．29手詰め 59M nodes / 201s で解決．§3.1 epsilon 1/3，§5.1 heuristic S-8S，§3.3 pn\_floor 2/3 |
+| 2026-03-29 | v0.21.0 | §10.2 方針A+B 実装．PN\_UNIT=16 + 自然精度 epsilon(§3.1, §3.5) + heuristic 高解像度化(§5.1) + IDS 動的予算配分(§2.6)．N\*7g NoMate: 200K→82K，TT 成長 344K→628K |
+| 2026-03-29 | v0.20.36 | §3.5 PN\_UNIT 統一スケーリング + divide-at-unit-scale パターン．スケーリング漏れ4件特定・修正，PN\_UNIT=64 で完全等価性確認 |
+| 2026-03-29 | v0.20.35 | §3.3 チェーン AND pn\_floor boost．ply 24 サブ問題 1M Unknown → 397K Mate に改善 |
+| 2026-03-29 | v0.20.34 | §6.6 フラットハッシュテーブル化，§11.4 採用．NPS 3.83× |
+| 2026-03-29 | v0.20.33 | §11 最適化案の評価(§11.1-11.7)，§10.2 ベンチマーク追加，§11.7 Frontier Variant 採用 |
+| — | v0.20.0 | §4.2 CD-WPN，§6.2 前方チェーン補填，§8.7-8.8 チェーン順序最適化 |
+| — | v0.18.0 | §2.2 Best-First PNS，§8.5 同一マス証明転用，§9.2 Killer Move |
+| — | v0.16.0 | §2.3 IDS-dfpn，§6.5 TT Best Move，§7.2 NM Remaining 伝播 |
+| — | v0.1.0 | 初版: §2.1 Df-Pn，§6.1 持ち駒優越 |
