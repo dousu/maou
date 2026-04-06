@@ -1499,7 +1499,7 @@ use crate::types::{Color, PieceType};
     /// 金・銀・飛・角のみが候補となる．
     /// 後手の最善応手(最長抵抗)でのみ39手詰めとなる．
     #[test]
-    #[ignore] // 約42万ノード / 5秒で解ける重量テスト．明示的に `cargo test -- --ignored` で実行．
+    #[ignore] // 現状 10M ノード / 60s では解けない高難度テスト．
     fn test_tsume_39te_aigoma() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let mut board = Board::new();
