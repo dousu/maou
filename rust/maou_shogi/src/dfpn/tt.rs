@@ -1644,21 +1644,21 @@ impl TranspositionTable {
     const GC_REMOVAL_RATIO: f64 = 0.2;
 
     /// WorkingTT の GC（充填率ベーストリガ）．
+    /// obsolete intermediate + disproof + CutAmount の全フェーズを実行．
     pub(super) fn gc_working(&mut self) -> usize {
         let capacity = self.working.len();
         let fill = self.working_len();
         if fill <= capacity * 6 / 10 {
             return 0;
         }
-        self.gc_working_sampling()
+        self.gc_working_sampling(true)
     }
 
     /// WorkingTT の GC（overflow トリガ）．
-    ///
-    /// overflow が多発しているときに呼ばれる．
-    /// 充填率に関係なく，サンプリングベースで低 amount エントリを除去する．
+    /// obsolete intermediate の除去のみ実行（disproof は保護）．
+    /// disproof を除去すると再生成→再overflow→再GC のサイクルに陥るため．
     pub(super) fn gc_working_overflow(&mut self) -> usize {
-        self.gc_working_sampling()
+        self.gc_working_sampling(false)
     }
 
     /// サンプリングベースの WorkingTT GC (KomoringHeights 方式)．
@@ -1667,7 +1667,7 @@ impl TranspositionTable {
     /// 2. nth_element で除去閾値を決定(下位 GC_REMOVAL_RATIO を除去)
     /// 3. 閾値以下の全エントリを除去(intermediate も disproof も対象)
     /// 4. max_amount が大きい場合，生存エントリの amount を半減(CutAmount)
-    fn gc_working_sampling(&mut self) -> usize {
+    fn gc_working_sampling(&mut self, remove_disproof: bool) -> usize {
         self.working_overflow_since_gc = 0;
         let total = self.working.len();
         if total == 0 { return 0; }
@@ -1731,24 +1731,25 @@ impl TranspositionTable {
             }
         }
 
-        // Phase 4: 閾値以下の disproof を除去(intermediate は保護)
-        for fe in self.working.iter_mut() {
-            if fe.pos_key == 0 { continue; }
-            if fe.entry.pn != 0 && fe.entry.dn != 0 { continue; } // intermediate 保護
-            if fe.entry.amount <= amount_threshold {
-                fe.pos_key = 0;
+        if remove_disproof {
+            // Phase 4: 閾値以下の disproof を除去(intermediate は保護)
+            for fe in self.working.iter_mut() {
+                if fe.pos_key == 0 { continue; }
+                if fe.entry.pn != 0 && fe.entry.dn != 0 { continue; } // intermediate 保護
+                if fe.entry.amount <= amount_threshold {
+                    fe.pos_key = 0;
+                }
+            }
+
+            // Phase 5: CutAmount — 生存エントリの amount を半減
+            if max_amount > 32 {
+                for fe in self.working.iter_mut() {
+                    if fe.pos_key == 0 { continue; }
+                    fe.entry.amount = (fe.entry.amount / 2).max(1);
+                }
             }
         }
         let removed = initial - self.working_len();
-
-        // Phase 5: CutAmount — 生存エントリの amount を半減
-        // max_amount が高い場合に amount のインフレを防止
-        if max_amount > 32 {
-            for fe in self.working.iter_mut() {
-                if fe.pos_key == 0 { continue; }
-                fe.entry.amount = (fe.entry.amount / 2).max(1);
-            }
-        }
 
         removed
     }

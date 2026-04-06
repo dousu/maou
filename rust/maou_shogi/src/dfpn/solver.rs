@@ -123,6 +123,8 @@ pub struct DfPnSolver {
     ///
     /// 次に TT GC チェックを行うノード数．
     pub(super) next_gc_check: u64,
+    /// overflow GC のクールダウン(次に GC を許可するノード数)．
+    next_overflow_gc: u64,
     /// Killer Move テーブル(OR ノード用)．
     ///
     /// ply ごとに最大 2 つの killer move(Move16)を保持する．
@@ -246,6 +248,7 @@ impl DfPnSolver {
             refutable_check_failed: FxHashSet::default(),
             tt_gc_threshold: 0,
             next_gc_check: 0,
+            next_overflow_gc: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -925,31 +928,34 @@ impl DfPnSolver {
             self.ply_nodes[ply as usize] += 1;
         }
         // === Periodic GC (ProvenTT / WorkingTT 独立) ===
-        // 1M ノードごとに overflow とチェック．
-        // overflow が多発 かつ 充填率が十分高い場合にのみ GC を実行する．
-        if self.nodes_searched % 1_000_000 == 0 {
-            // WorkingTT overflow カウンタをリセット(GC 未実施でもリセットは必要)
-            let _overflow = self.table.drain_working_overflow();
+        // overflow カウントベースで GC をトリガする(充填率の全走査を避ける)．
+        // intermediate 保護 + パス保護により，GC で探索が崩壊することはない．
+        if self.nodes_searched % 100_000 == 0 {
+            let overflow = self.table.drain_working_overflow();
 
-            // WorkingTT 充填率 GC (70% 超で発動)
-            let working_size = self.table.working_len();
-            let working_cap = self.table.working_capacity();
-            if working_size > working_cap * 7 / 10 {
+            // overflow が閾値を超え，かつ前回 GC から十分なノードが経過したら実行．
+            // 連続 GC を防ぐため，GC 後は 1M ノードのクールダウンを設ける．
+            if overflow > 10_000 && self.nodes_searched >= self.next_overflow_gc {
                 self.mark_path_entries_for_gc_protection();
-                let removed = self.table.gc_working();
+                let removed = self.table.gc_working_overflow();
+                self.next_overflow_gc = self.nodes_searched + 1_000_000;
                 if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] working removed={} working={}/{}",
-                        removed, self.table.working_len(), working_cap);
+                    verbose_eprintln!(
+                        "[overflow_gc] overflow={} removed={} working={}",
+                        overflow, removed, self.table.working_len());
                 }
             }
-            // ProvenTT 充填率 GC (70% 超で発動)
-            let proven_size = self.table.proven_len();
-            let proven_cap = self.table.proven_capacity();
-            if proven_size > proven_cap * 7 / 10 {
-                let removed = self.table.gc_proven();
-                if removed > 0 {
-                    verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
-                        removed, self.table.proven_len(), proven_cap);
+
+            // 1M ノードごとに ProvenTT 充填率 GC
+            if self.nodes_searched % 1_000_000 == 0 {
+                let proven_size = self.table.proven_len();
+                let proven_cap = self.table.proven_capacity();
+                if proven_size > proven_cap * 7 / 10 {
+                    let removed = self.table.gc_proven();
+                    if removed > 0 {
+                        verbose_eprintln!("[periodic_gc] proven removed={} proven={}/{}",
+                            removed, self.table.proven_len(), proven_cap);
+                    }
                 }
             }
         }
