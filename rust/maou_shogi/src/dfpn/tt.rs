@@ -112,6 +112,11 @@ pub(super) struct TranspositionTable {
     pub(super) overflow_disproof_sum: u64,
     /// Overflow サンプリング回数(診断用)．
     pub(super) overflow_sample_count: u64,
+    /// Overflow 時のクラスタ内 disproof の remaining 分布(診断用)．
+    /// [0]: remaining=0, [1]: remaining=1..4, [2]: remaining=5..31, [3]: remaining=INFINITE
+    pub(super) overflow_disproof_remaining: [u64; 4],
+    /// Overflow 時のクラスタ内 path_dependent disproof の数(診断用)．
+    pub(super) overflow_disproof_path_dep: u64,
     /// TT エントリ溢れ(置換)の発生回数．
     #[cfg(feature = "profile")]
     pub(super) overflow_count: u64,
@@ -166,6 +171,8 @@ impl TranspositionTable {
             overflow_intermediate_sum: 0,
             overflow_disproof_sum: 0,
             overflow_sample_count: 0,
+            overflow_disproof_remaining: [0; 4],
+            overflow_disproof_path_dep: 0,
             #[cfg(feature = "profile")]
             overflow_count: 0,
             #[cfg(feature = "profile")]
@@ -1022,7 +1029,20 @@ impl TranspositionTable {
                     if !keys[..n_keys].contains(&fe.pos_key) {
                         if n_keys < WORKING_CLUSTER_SIZE { keys[n_keys] = fe.pos_key; n_keys += 1; }
                     }
-                    if fe.entry.dn == 0 { n_disp += 1; } else { n_inter += 1; }
+                    if fe.entry.dn == 0 {
+                        n_disp += 1;
+                        let rem = fe.entry.remaining();
+                        let bucket = if rem == 0 { 0 }
+                            else if rem <= 4 { 1 }
+                            else if rem < REMAINING_INFINITE { 2 }
+                            else { 3 };
+                        self.overflow_disproof_remaining[bucket] += 1;
+                        if fe.entry.path_dependent() {
+                            self.overflow_disproof_path_dep += 1;
+                        }
+                    } else {
+                        n_inter += 1;
+                    }
                 }
                 self.overflow_distinct_keys_sum += n_keys as u64;
                 self.overflow_intermediate_sum += n_inter;
@@ -1497,6 +1517,18 @@ impl TranspositionTable {
             eprintln!("  avg distinct pos_keys/cluster: {:.1}", self.overflow_distinct_keys_sum as f64 / n);
             eprintln!("  avg intermediate entries/cluster: {:.1}", self.overflow_intermediate_sum as f64 / n);
             eprintln!("  avg disproof entries/cluster:  {:.1}", self.overflow_disproof_sum as f64 / n);
+            let total_disp = self.overflow_disproof_sum.max(1) as f64;
+            eprintln!("  disproof remaining distribution:");
+            eprintln!("    rem=0:        {} ({:.1}%)", self.overflow_disproof_remaining[0],
+                self.overflow_disproof_remaining[0] as f64 / total_disp * 100.0);
+            eprintln!("    rem=1..4:     {} ({:.1}%)", self.overflow_disproof_remaining[1],
+                self.overflow_disproof_remaining[1] as f64 / total_disp * 100.0);
+            eprintln!("    rem=5..31:    {} ({:.1}%)", self.overflow_disproof_remaining[2],
+                self.overflow_disproof_remaining[2] as f64 / total_disp * 100.0);
+            eprintln!("    rem=INFINITE:  {} ({:.1}%)", self.overflow_disproof_remaining[3],
+                self.overflow_disproof_remaining[3] as f64 / total_disp * 100.0);
+            eprintln!("  path_dependent disproof: {} ({:.1}%)", self.overflow_disproof_path_dep,
+                self.overflow_disproof_path_dep as f64 / total_disp * 100.0);
         }
 
         // ProvenTT エントリ種別
