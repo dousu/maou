@@ -880,10 +880,11 @@ impl TranspositionTable {
         #[cfg(feature = "verbose")] rem_idx: usize,
     ) {
         let path_dependent = new_entry.path_dependent();
-        // depth-limited disproof の amount は 0 にして GC で優先除去する．
-        // WorkingTT のクラスタを disproof が支配して intermediate の
-        // 空きがなくなる問題(§6.6.1)を緩和する．
-        new_entry.amount = 0;
+        // depth-limited disproof の amount は低い値にして GC で
+        // intermediate より先に除去されやすくする．
+        // 0 にすると IDS-MID で不詰判定の情報が失われるため，
+        // 最低限の保護として 1 を設定する．
+        new_entry.amount = 1;
 
         let w_start = self.working_cluster_start(pos_key, &hand);
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
