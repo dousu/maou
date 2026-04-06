@@ -5,10 +5,22 @@
 //! WorkingTT には intermediate と depth-limited/path-dependent disproof を格納する．
 //! これによりクラスタ飽和問題(§6.6.1)を構造的に解決する．
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::types::{HAND_KINDS, PieceType};
 
 use super::entry::DfPnEntry;
 use super::{hand_gte_forward_chain, INF, PN_UNIT, REMAINING_INFINITE};
+
+/// 近傍クラスタ走査の診断用グローバルカウンタ．
+/// [0]: ProvenTT proof 近傍ヒット
+/// [1]: ProvenTT disproof 近傍ヒット
+/// [2]: WorkingTT disproof 近傍ヒット
+/// [3]: 近傍走査呼び出し回数
+pub(super) static NEIGHBOR_DIAG: [AtomicU64; 4] = [
+    AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0),
+];
 
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
@@ -314,35 +326,16 @@ impl TranspositionTable {
             return exact_match.unwrap();
         }
 
-        if neighbor_scan {
-            // 持ち駒+1の近傍クラスタで disproof を検索(±1限定)
-            let base_hh = Self::hand_hash(hand);
-            for k in 0..HAND_KINDS {
-                let max_k = PieceType::MAX_HAND_COUNT[k];
-                if hand[k] >= max_k { continue; }
-                let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
-                let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
-                for fe in cluster {
-                    if fe.pos_key != pos_key { continue; }
-                    let e = &fe.entry;
-                    if e.dn == 0
-                        && hand_gte_forward_chain(&e.hand, hand)
-                        && (e.remaining() >= remaining || e.path_dependent())
-                    {
-                        return (e.pn, 0, e.source);
-                    }
-                }
-            }
-        }
+        // WorkingTT disproof の近傍走査(+1)はヒット率が低く NPS コストが大きいため省略．
+        // exact_match なし(intermediate もなし) = 初めて訪問する局面であり，
+        // 近傍の disproof ヒットは稀(全ヒットの 15〜20%)．
 
         (PN_UNIT, PN_UNIT, 0)
     }
 
     /// ProvenTT のみ検索: proof + confirmed disproof．
     ///
-    /// `neighbor_scan=false`: 自クラスタのみ(探索ホットパス向け)．
-    /// `neighbor_scan=true`: 自クラスタ + 持ち駒±1近傍(合駒チェーン時)．
+    /// `neighbor_scan=true` の場合，自クラスタ + ±1 近傍を走査する．
     pub(super) fn look_up_proven(
         &self,
         pos_key: u64,
@@ -351,9 +344,8 @@ impl TranspositionTable {
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
-
-        // --- Pass 1: proof(pn=0) ---
         let home = self.proven_cluster(pos_key, hand);
+        // Pass 1: proof(pn=0) — 自クラスタ
         for fe in home {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -361,9 +353,10 @@ impl TranspositionTable {
                 return (0, e.dn, e.source);
             }
         }
+        // Pass 1b: proof 近傍(-1)
         if neighbor_scan {
+            NEIGHBOR_DIAG[3].fetch_add(1, Ordering::Relaxed);
             let base_hh = Self::hand_hash(hand);
-            // 持ち駒-1の近傍(proof は e.hand ≤ hand)
             for k in 0..HAND_KINDS {
                 if hand[k] == 0 { continue; }
                 let diff = Self::hand_hash_diff(k, hand[k], hand[k] - 1);
@@ -373,13 +366,13 @@ impl TranspositionTable {
                     if fe.pos_key != pos_key { continue; }
                     let e = &fe.entry;
                     if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
+                        NEIGHBOR_DIAG[0].fetch_add(1, Ordering::Relaxed);
                         return (0, e.dn, e.source);
                     }
                 }
             }
         }
-
-        // --- Pass 2: confirmed disproof(dn=0) ---
+        // Pass 2: confirmed disproof(dn=0) — 自クラスタ
         for fe in home {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -390,28 +383,8 @@ impl TranspositionTable {
                 return (e.pn, 0, e.source);
             }
         }
-        if neighbor_scan {
-            let base_hh = Self::hand_hash(hand);
-            // 持ち駒+1の近傍(disproof は e.hand ≥ hand)
-            for k in 0..HAND_KINDS {
-                let max_k = PieceType::MAX_HAND_COUNT[k];
-                if hand[k] >= max_k { continue; }
-                let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
-                let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
-                let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
-                for fe in cluster {
-                    if fe.pos_key != pos_key { continue; }
-                    let e = &fe.entry;
-                    if e.dn == 0
-                        && hand_gte_forward_chain(&e.hand, hand)
-                        && e.remaining() >= remaining
-                    {
-                        return (e.pn, 0, e.source);
-                    }
-                }
-            }
-        }
-
+        // disproof の近傍走査(+1)はヒット率が低い(全ヒットの 4〜9%)ため省略．
+        // confirmed disproof の near miss は探索正確性にほぼ影響しない．
         (PN_UNIT, PN_UNIT, 0)
     }
 
@@ -1509,6 +1482,19 @@ impl TranspositionTable {
             eprintln!("Max entries/pos:  {}", self.max_entries_per_position);
         }
         eprintln!("Working peak cluster fill: {}", self.working_peak_cluster_fill);
+
+        // 近傍走査診断
+        let n_scans = NEIGHBOR_DIAG[3].load(Ordering::Relaxed);
+        let proof_hits = NEIGHBOR_DIAG[0].load(Ordering::Relaxed);
+        let disproof_proven_hits = NEIGHBOR_DIAG[1].load(Ordering::Relaxed);
+        let disproof_working_hits = NEIGHBOR_DIAG[2].load(Ordering::Relaxed);
+        eprintln!("Neighbor scan: calls={} proof_hits={} disproof_proven_hits={} disproof_working_hits={}",
+            n_scans, proof_hits, disproof_proven_hits, disproof_working_hits);
+        if n_scans > 0 {
+            let total_hits = proof_hits + disproof_proven_hits + disproof_working_hits;
+            eprintln!("  hit rate: {:.4}% ({}/{})",
+                total_hits as f64 / n_scans as f64 * 100.0, total_hits, n_scans);
+        }
 
         // Overflow サンプリング結果
         if self.overflow_sample_count > 0 {

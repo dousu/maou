@@ -2020,6 +2020,23 @@ use crate::types::{Color, PieceType};
             }
         }
 
+        // 近傍走査診断
+        {
+            use super::tt::NEIGHBOR_DIAG;
+            use std::sync::atomic::Ordering;
+            let scans = NEIGHBOR_DIAG[3].load(Ordering::Relaxed);
+            let proof = NEIGHBOR_DIAG[0].load(Ordering::Relaxed);
+            let disp_p = NEIGHBOR_DIAG[1].load(Ordering::Relaxed);
+            let disp_w = NEIGHBOR_DIAG[2].load(Ordering::Relaxed);
+            writeln!(out, "\nNeighbor scan: calls={} proof_hits={} disproof_proven={} disproof_working={}",
+                scans, proof, disp_p, disp_w).unwrap();
+            if scans > 0 {
+                let total = proof + disp_p + disp_w;
+                writeln!(out, "  hit rate: {:.4}% ({}/{})",
+                    total as f64 / scans as f64 * 100.0, total, scans).unwrap();
+            }
+        }
+
         writeln!(out, "\n{}", "=".repeat(80)).unwrap();
         if let Some(ply) = first_unsolved_ply {
             writeln!(out, "境界: ply {} (残り{}手) で 1M ノードでは解けない",

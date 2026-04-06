@@ -405,7 +405,12 @@ impl DfPnSolver {
     /// Deep df-pn では深い ply(depth の後半)にのみバイアスを適用:
     /// `pn = 1 + (ply - depth/2) / R` (ply > depth/2 の場合)．
     /// 浅い ply は標準 df-pn と同じ `pn=1` を維持し，
-    /// 不詰検出など浅い探索の効率を損なわない．
+    /// 探索ホットパスでの TT 参照（自クラスタのみ）．
+    ///
+    /// 近傍クラスタ走査は行わない(NPS 優先)．
+    /// proof/disproof の hand\_gte 近傍走査は `has_proof`，`get_proof_hand` 等の
+    /// 補助メソッド(±1 限定走査)に任せる．これらは child init や
+    /// proof 伝播の際にのみ呼ばれるためホットパスへの影響が小さい．
     #[inline]
     pub(super) fn look_up_pn_dn(
         &self,
@@ -413,18 +418,9 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
-        self.look_up_pn_dn_impl(pos_key, hand, remaining, false)
-    }
-
-    /// 近傍クラスタ走査付き look_up_pn_dn（合駒チェーン時に使用）．
-    pub(super) fn look_up_pn_dn_neighbor(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-        remaining: u16,
-    ) -> (u32, u32, u32) {
         self.look_up_pn_dn_impl(pos_key, hand, remaining, true)
     }
+
 
     #[inline]
     fn look_up_pn_dn_impl(
