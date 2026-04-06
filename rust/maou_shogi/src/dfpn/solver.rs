@@ -434,6 +434,14 @@ impl DfPnSolver {
         remaining: u16,
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
+        // remaining=0 (depth-limit 到達) で proof がなければ仮反証．
+        // rem=0 disproof は TT に store しないため，動的に判定する．
+        if remaining == 0 {
+            if self.table.has_proof(pos_key, hand) {
+                return (0, INF, 0);
+            }
+            return (INF, 0, 0);
+        }
         let result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
@@ -1080,13 +1088,11 @@ impl DfPnSolver {
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
-                } else {
-                    self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
-            } else {
-                // AND ノードの深さ制限: 深さ制限付き NM(remaining=0)として記録．
-                self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
+                // else: rem=0 の仮反証は TT に store しない
+                // (クラスタの 64.7% を占め overflow の主因)
             }
+            // AND ノードの深さ制限: rem=0 は TT に store しない
             #[cfg(feature = "profile")]
             {
                 self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
@@ -1233,11 +1239,16 @@ impl DfPnSolver {
                         } else {
                             0
                         };
-                        self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
-                    } else {
-                        // OR 親の子 = AND 局面: 深さ制限反証(remaining=0)
-                        self.store(child_pk, child_hand, INF, 0, 0, child_pk as u32);
+                        // REMAINING_INFINITE(真の不詰)のみ store する．
+                        // rem=0 の仮反証は TT に store しない:
+                        // - 同じ IDS depth の同じ深さでしか参照されない
+                        // - クラスタの 64.7% を占め overflow の主因
+                        // - ローカル変数 cpn/cdn で解決チェック可能
+                        if dl_rem == REMAINING_INFINITE {
+                            self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
+                        }
                     }
+                    // rem=0 は TT に store せず，ローカル変数のみで処理
                     cpn = INF;
                     cdn = 0;
                 }
@@ -1347,10 +1358,19 @@ impl DfPnSolver {
             }
 
             // 即座に解決チェック(子ノード初期化時に証明/反証を検出)
+            // depth-limit fast path で rem=0 を TT に store しない場合，
+            // ローカル変数 cpn/cdn を直接使用する．
             #[cfg(feature = "profile")]
             let _ci_resolve_start = Instant::now();
-            let (cpn_now, cdn_now, _) =
-                self.look_up_pn_dn(child_pk, &child_hand, child_remaining);
+            let (cpn_now, cdn_now, _) = if cpn == INF && cdn == 0 {
+                // depth-limit fast path で設定済み(TT に未 store の可能性)
+                (INF, 0, 0)
+            } else if cpn == 0 && cdn == INF {
+                // proof 発見済み
+                (0, INF, 0)
+            } else {
+                self.look_up_pn_dn(child_pk, &child_hand, child_remaining)
+            };
             if or_node && cpn_now == 0 {
                 // OR 証明: 子の証明駒から親の証明駒を計算
                 let child_ph = self
