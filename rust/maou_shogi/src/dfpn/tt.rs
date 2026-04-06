@@ -212,7 +212,7 @@ impl TranspositionTable {
 
     // ---- ヘルパー ----
 
-    /// `pos_key == 0` をセンチネル(空スロット)と衝突させない変換．
+/// `pos_key == 0` をセンチネル(空スロット)と衝突させない変換．
     #[inline(always)]
     fn safe_key(pos_key: u64) -> u64 {
         pos_key | 1
