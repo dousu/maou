@@ -461,7 +461,6 @@ impl TranspositionTable {
         }
 
         let pos_key = Self::safe_key(pos_key);
-        let base_hh = Self::hand_hash(hand);
 
         // Zobrist diff で部分集合を列挙
         let mut sub_hand = [0u8; HAND_KINDS];
