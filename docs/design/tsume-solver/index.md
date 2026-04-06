@@ -103,3 +103,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 55 | rem=0 仮反証の TT store 廃止 | — | §6.6.4 | v0.24.14 |
 | 56 | GC 時の obsolete intermediate 除去 | — | §6.6.4 | v0.24.12 |
 | 57 | 探索パス保護 (GC 前 amount 引き上げ) | — | §6.6.4 | v0.24.11 |
+| 58 | proof(-1) + 歩disproof(+1) 近傍走査 | — | §6.6.4 | v0.24.16 |
