@@ -1696,10 +1696,42 @@ impl TranspositionTable {
         let amount_threshold = amounts[pivot];
         let max_amount = amounts.iter().copied().max().unwrap_or(0);
 
-        // Phase 3: 閾値以下のエントリを除去(intermediate は保護)
-        // depth-limited disproof のみを対象とし，中間値(intermediate)は
-        // 探索の進捗に直結するため除去しない．
+        // Phase 3: 証明/反証済み局面の obsolete intermediate を除去
+        //
+        // ProvenTT に proof(pn=0) または confirmed disproof(dn=0) がある局面の
+        // WorkingTT intermediate エントリは不要:
+        // - OR ノードで子が証明済み → 親も証明 → 他の子の intermediate は不要
+        // - AND ノードで子が反証済み → 親も反証 → 他の子の intermediate は不要
+        // ProvenTT クラスタの参照は O(1) なので，全エントリに適用しても軽量．
         let initial = self.working_len();
+        let proven_mask = self.proven_mask;
+        for fe in self.working.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            if fe.entry.pn == 0 || fe.entry.dn == 0 { continue; } // non-intermediate skip
+            if fe.entry.amount >= 255 { continue; } // パス保護エントリは除外
+            // ProvenTT に proof/disproof があれば obsolete
+            let pk = fe.pos_key;
+            let hand = fe.entry.hand;
+            let hh = Self::hand_hash(&hand);
+            let p_start = ((pk ^ hh) as usize & proven_mask) * PROVEN_CLUSTER_SIZE;
+            let mut is_resolved = false;
+            for pfe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
+                if pfe.pos_key != pk { continue; }
+                if pfe.entry.pn == 0 && hand_gte_forward_chain(&hand, &pfe.entry.hand) {
+                    is_resolved = true;
+                    break;
+                }
+                if pfe.entry.dn == 0 && hand_gte_forward_chain(&pfe.entry.hand, &hand) {
+                    is_resolved = true;
+                    break;
+                }
+            }
+            if is_resolved {
+                fe.pos_key = 0;
+            }
+        }
+
+        // Phase 4: 閾値以下の disproof を除去(intermediate は保護)
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
             if fe.entry.pn != 0 && fe.entry.dn != 0 { continue; } // intermediate 保護
@@ -1709,7 +1741,7 @@ impl TranspositionTable {
         }
         let removed = initial - self.working_len();
 
-        // Phase 4: CutAmount — 生存エントリの amount を半減
+        // Phase 5: CutAmount — 生存エントリの amount を半減
         // max_amount が高い場合に amount のインフレを防止
         if max_amount > 32 {
             for fe in self.working.iter_mut() {
