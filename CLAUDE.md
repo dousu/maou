@@ -132,8 +132,8 @@ uv run maou --help                         # CLI help
 ```
 
 ### Japanese Writing Rules (日本語記述規則)
-- 句点: `，` (全角コンマ)
-- 読点: `．` (全角ピリオド)
+- 読点: `，` (全角コンマ)
+- 句点: `．` (全角ピリオド)
 - 括弧: `()` (半角のみ)
 
 ## Documentation Links
