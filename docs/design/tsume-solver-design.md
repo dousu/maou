@@ -32,16 +32,16 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 
 ### 実装ファイル
 
-`rust/maou_shogi/src/dfpn/` モジュールに全ての探索ロジックを実装(合計約 6,800 行，テスト除く)．
+`rust/maou_shogi/src/dfpn/` モジュールに全ての探索ロジックを実装(合計約 8,800 行，テスト除く)．
 
 | ファイル | 行数 | 内容 |
 |---------|------|------|
-| `solver.rs` | ~2,950 | `DfPnSolver` 構造体，`mid()` 関数，child init，MID ループ |
-| `pns.rs` | ~2,540 | 手生成，PNS メインループ，IDS-dfpn，Frontier Variant，PV 復元 |
-| `tt.rs` | ~720 | フラットハッシュテーブル型転置表 |
-| `mod.rs` | ~380 | 定数，ユーティリティ関数(SNDA, hand\_gte, DFPN-E 等) |
-| `entry.rs` | ~80 | `DfPnEntry`, `PnsNode` データ構造 |
-| `profile.rs` | ~190 | プロファイリングマクロ・統計 |
+| `solver.rs` | ~3,200 | `DfPnSolver` 構造体，`mid()` 関数，child init，MID ループ |
+| `pns.rs` | ~2,700 | 手生成，PNS メインループ，IDS-dfpn，Frontier Variant，PV 復元 |
+| `tt.rs` | ~2,000 | Dual フラットハッシュテーブル型転置表(ProvenTT + WorkingTT) |
+| `mod.rs` | ~490 | 定数，ユーティリティ関数(SNDA, hand\_gte, DFPN-E 等) |
+| `entry.rs` | ~165 | `DfPnEntry`, `PnsNode` データ構造 |
+| `profile.rs` | ~210 | プロファイリングマクロ・統計 |
 
 ### 実装済み手法一覧
 
@@ -189,8 +189,9 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 - **予算配分**: 各浅い反復に `remaining_budget / (remaining_steps + 1)` を割り当て，
   最終反復にノードを温存
 - **反復間 TT 清掃**:
-  - `remove_path_dependent_disproofs()`: 経路依存の反証を除去
-  - `remove_stale_for_ids()`: 浅い深さの仮反証(remaining=0)を除去
+  - `clear_working()`: WorkingTT 全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
+  - `clear_proven_disproofs()`: ProvenTT の confirmed disproof を除去(NoMate バグ対策)
+  - rem=0 仮反証は TT に格納しないため，別途削除処理は不要(v0.24.14 以降，§6.6.4 参照)
 - **NM 昇格**: 反復終了後に `depth_limit_all_checks_refutable()` で全王手が
   反駁可能と確認できれば，NM を `REMAINING_INFINITE` に昇格
 
@@ -1061,7 +1062,11 @@ proof/confirmed disproof)で埋まっている場合，`replace_weakest_for_disp
 これは TT GC のように明示的に発動するのではなく，
 `store_impl` の通常動作として常に発生する．
 
-#### クラスタサイズの決定根拠 (v0.21.1)
+#### クラスタサイズの決定根拠 (v0.21.1, Historical)
+
+**注:** 以下は v0.21.1 時点の単一 TT (CLUSTER\_SIZE=6) の分析．
+v0.24.0 以降は Dual TT (ProvenTT: CLUSTER\_SIZE=8, WorkingTT: CLUSTER\_SIZE=6) に
+変更されている(§6.6.3, §6.6.4 参照)．
 
 **CLUSTER\_SIZE = 6 の理由:**
 
@@ -1228,6 +1233,10 @@ GC の計算量差異により NPS が大幅に低下し，不採用となった
 詳細は方針D(§10.2)を参照．
 
 #### 6.6.2 NPS 最適化の分析 (v0.22.0)
+
+**注:** 以下のプロファイルは v0.22.0 ベース．v0.24.0 以降の Dual TT 導入，
+v0.24.7 の Zobrist hand\_hash，v0.24.14 の rem=0 廃止により，
+メモリアクセスパターンと TT 操作のコスト構成が大幅に変化している．
 
 29 手詰め no\_pns (74.2M ノード) のプロファイル結果:
 
@@ -1447,6 +1456,11 @@ ProvenTT と WorkingTT を独立した検索メソッドに分離:
 | clear\_proven\_disproofs() | confirmed disproof 除去 | そのまま | IDS depth 切り替え |
 | gc\_by\_amount() | そのまま | amount ベース除去 | Periodic GC (1M ノード毎) |
 
+**注:** v0.24.10 以降，`gc_by_amount()` は KomoringHeights 方式の
+`gc_working_sampling()` に置き換えられた(§6.6.4)．
+v0.24.14 では rem=0 disproof が TT に格納されなくなったため，
+GC 対象の TT 構成が根本的に変化している．
+
 `retain_proofs()` は Frontier サイクルで呼ばれ，
 WorkingTT の confirmed disproof (!path\_dep, REMAINING\_INFINITE) を保持しつつ
 中間エントリを除去する(段階的クリア)．
@@ -1490,12 +1504,13 @@ IDS の浅い depth で格納された confirmed disproof が深い depth で
 | ProvenTT | 4M clusters | overflow -32〜40% | WorkingTT overflow +61〜69%, NPS -16% |
 | ProvenTT | full\_hash インデクシング | 多数テスト失敗 | look\_up 時に full\_hash が必要で API 変更が困難 |
 | WorkingTT | CLUSTER\_SIZE=8 | overflow 悪化(+19%) | 改善なし |
-| WorkingTT | hand\_hash 混合 | overflow 悪化(+33%) | hand\_gte disproof 再利用の喪失で NPS -17% |
+| WorkingTT | hand\_hash 混合 | overflow 悪化(+33%) | hand\_gte disproof 再利用の喪失で NPS -17%．**v0.24.6 で Zobrist 差分近傍走査と組み合わせて実装(§6.6.4)** |
 | WorkingTT | 2-way set associative | overflow -5〜15% | secondary スキャンで NPS -18〜21% |
 | GC | 段階 retain(クラスタ飽和残存時) | NPS -13% | 保持 disproof がクラスタ圧迫 |
 
-WorkingTT は pos\_key インデクシング(hand\_gte 再利用あり)のままが最適．
-hand\_gte による disproof 再利用の探索効率向上がクラスタ飽和のコストを上回る．
+**注:** v0.24.6 以降，WorkingTT も hand\_hash 混合インデクシングに変更された．
+Zobrist XOR 差分による近傍クラスタ走査(§6.6.4)により hand\_gte の機能を
+回復させたため，v0.24.0 時点で不採用だった hand\_hash 混合が実用的になった．
 
 #### 6.6.4 Zobrist hand\_hash + 近傍クラスタ走査 + GC 刷新 (v0.24.2〜v0.24.14)
 
@@ -1641,7 +1656,8 @@ maou_shogi では dual TT の代わりに経路依存フラグ方式を採用:
 1. **ループ検出**: `path: FxHashSet<u64>` で現在の探索パス上の全ノードハッシュを保持．
    子ノードが path 上に存在すれば循環と判定し，即座に `(INF, 0)` を返す
 2. **経路依存反証**: ループ検出に由来する反証を `path_dependent = true` で TT に保存
-3. **IDS 間清掃**: `remove_path_dependent_disproofs()` で経路依存反証を除去し，
+3. **IDS 間清掃**: `clear_working()` で WorkingTT 全クリア(経路依存反証を含む)し，
+   `clear_proven_disproofs()` で ProvenTT の confirmed disproof を除去．
    異なる深さの探索で自動的に再評価
 4. **Remaining 免除**: 経路依存エントリは remaining チェックをバイパス
    (`e.remaining >= remaining || e.path_dependent`)
