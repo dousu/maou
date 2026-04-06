@@ -326,9 +326,26 @@ impl TranspositionTable {
             return exact_match.unwrap();
         }
 
-        // WorkingTT disproof の近傍走査(+1)はヒット率が低く NPS コストが大きいため省略．
-        // exact_match なし(intermediate もなし) = 初めて訪問する局面であり，
-        // 近傍の disproof ヒットは稀(全ヒットの 15〜20%)．
+        // 歩(k=0)の+1のみ disproof 近傍走査．
+        // disproof 近傍ヒットの60%+が歩+1(合駒チェーンの歩合い排除)．
+        // 追加コストは1クラスタ(6エントリ)のみで極めて軽量．
+        if neighbor_scan && hand[0] < PieceType::MAX_HAND_COUNT[0] {
+            let base_hh = Self::hand_hash(hand);
+            let diff = Self::hand_hash_diff(0, hand[0], hand[0] + 1);
+            let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.dn == 0
+                    && hand_gte_forward_chain(&e.hand, hand)
+                    && (e.remaining() >= remaining || e.path_dependent())
+                {
+                    NEIGHBOR_DIAG[2].fetch_add(1, Ordering::Relaxed);
+                    return (e.pn, 0, e.source);
+                }
+            }
+        }
 
         (PN_UNIT, PN_UNIT, 0)
     }
@@ -383,8 +400,25 @@ impl TranspositionTable {
                 return (e.pn, 0, e.source);
             }
         }
-        // disproof の近傍走査(+1)はヒット率が低い(全ヒットの 4〜9%)ため省略．
-        // confirmed disproof の near miss は探索正確性にほぼ影響しない．
+        // 歩(k=0)の+1のみ disproof 近傍走査．
+        // confirmed disproof の歩+1ヒットは合駒チェーンの二歩排除に有効．
+        if neighbor_scan && hand[0] < PieceType::MAX_HAND_COUNT[0] {
+            let base_hh = Self::hand_hash(hand);
+            let diff = Self::hand_hash_diff(0, hand[0], hand[0] + 1);
+            let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.dn == 0
+                    && hand_gte_forward_chain(&e.hand, hand)
+                    && e.remaining() >= remaining
+                {
+                    NEIGHBOR_DIAG[1].fetch_add(1, Ordering::Relaxed);
+                    return (e.pn, 0, e.source);
+                }
+            }
+        }
         (PN_UNIT, PN_UNIT, 0)
     }
 
