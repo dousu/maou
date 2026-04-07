@@ -955,6 +955,48 @@ impl DfPnSolver {
         )
     }
 
+    /// PV 内の "無駄合 (useless interposition)" pair の数を数える．
+    ///
+    /// 無駄合 pair の定義: 連続する手列 (defender_drop, attacker_capture, [next_defender])
+    /// において:
+    /// - `defender_drop` は駒打ち (`is_drop()`)
+    /// - `attacker_capture` は **同じマス** での駒取り
+    /// - 次の defender 手は同じマスでの recapture **でない**
+    ///   (recapture なら犠牲交換 = 無駄合 ではない)
+    ///
+    /// この pair は機械的に詰みを 2 手延ばすだけで真の防御リソースを買っていない
+    /// ため，AND ノードでの最長抵抗比較から除外することで設計ドキュメント
+    /// (`docs/design/tsume-solver/aigoma-optimization.md`) の意図する
+    /// 「PV(最長) = 真の最長抵抗」を復元する．
+    ///
+    /// `pv[0]` が defender 手 (AND ノードが選ぶ手) であることを前提とする．
+    pub(super) fn count_useless_interpose_pairs(pv: &[Move]) -> usize {
+        let mut count = 0;
+        let mut i = 0;
+        while i + 1 < pv.len() {
+            let def = pv[i];
+            let att = pv[i + 1];
+            if def.is_drop()
+                && att.captured_piece_raw() != 0
+                && att.to_sq() == def.to_sq()
+            {
+                // defender の次の手 (i+2) が同じマスへの recapture か？
+                let recaptured = if i + 2 < pv.len() {
+                    let next_def = pv[i + 2];
+                    next_def.captured_piece_raw() != 0
+                        && next_def.to_sq() == def.to_sq()
+                } else {
+                    false
+                };
+                if !recaptured {
+                    count += 1;
+                }
+            }
+            i += 2;
+        }
+        count
+    }
+
     /// PV 復元の再帰実装．
     ///
     /// 各ノードで全候補手のサブPVを生成し，攻め方は最短，玉方は最長を選ぶ．
@@ -1152,6 +1194,10 @@ impl DfPnSolver {
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
             let mut best_is_drop = false;
+            // 効果長 = total_len - 2 * 無駄合 pair 数．
+            // 機械的に詰みを延ばすだけの 中合 chain (defender_drop +
+            // attacker_capture, recapture なし) を除外して比較する．
+            let mut best_effective_len: usize = 0;
 
             for m in &moves {
                 if *visits > max_visits {
@@ -1182,27 +1228,40 @@ impl DfPnSolver {
                         board.undo_move(*m, captured);
                         continue;
                     }
+                    // この候補手の full_pv = [m] ++ sub_pv
+                    // 無駄合 pair を数えて効果長を計算する
+                    let mut full_pv: Vec<Move> = Vec::with_capacity(total_len);
+                    full_pv.push(*m);
+                    full_pv.extend_from_slice(&sub_pv);
+                    let useless_pairs = Self::count_useless_interpose_pairs(&full_pv);
+                    let effective_len = total_len.saturating_sub(2 * useless_pairs);
+
                     let is_capture = m.captured_piece_raw() > 0;
                     let is_drop = m.is_drop();
                     let is_better = match &best_pv {
                         None => true,
                         Some(prev) => {
-                            if total_len > prev.len() {
+                            // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                            if effective_len > best_effective_len {
                                 true
-                            } else if total_len == prev.len()
-                                && is_capture
-                                && !best_is_capture
-                            {
+                            } else if effective_len < best_effective_len {
+                                false
+                            } else if total_len < prev.len() {
+                                // 効果長が同じなら chain pairs が少ない方
+                                // (= raw length が短い方) を選ぶ．
+                                // 同じ効果長ならば chain inflation が少ない
+                                // クリーンな PV を優先する．
                                 true
-                            } else if total_len == prev.len()
-                                && is_drop
+                            } else if total_len > prev.len() {
+                                false
+                            } else if is_capture && !best_is_capture {
+                                true
+                            } else if is_drop
                                 && !best_is_drop
                                 && is_capture == best_is_capture
                             {
                                 // 同率 & 駒取り状況も同じ場合，
                                 // 合駒(打ち駒)を優先する．
-                                // 打ち駒のサブツリーは探索で重点的に証明
-                                // されやすく，sub_pv が正確な傾向がある．
                                 true
                             } else {
                                 false
@@ -1212,22 +1271,17 @@ impl DfPnSolver {
 
                     if diag {
                         verbose_eprintln!(
-                            "[PV diag] ply={} AND candidate {} len={} capture={} drop={} better={}{}",
-                            ply, m.to_usi(), total_len, is_capture, is_drop, is_better,
-                            if let Some(prev) = &best_pv {
-                                format!(" (prev_best={} prev_cap={} prev_drop={})", prev.len(), best_is_capture, best_is_drop)
-                            } else {
-                                String::new()
-                            }
+                            "[PV diag] ply={} AND candidate {} len={} eff={} pairs={} capture={} drop={} better={}",
+                            ply, m.to_usi(), total_len, effective_len, useless_pairs,
+                            is_capture, is_drop, is_better,
                         );
                     }
 
                     if is_better {
-                        let mut pv = vec![*m];
-                        pv.extend(sub_pv);
-                        best_pv = Some(pv);
+                        best_pv = Some(full_pv);
                         best_is_capture = is_capture;
                         best_is_drop = is_drop;
+                        best_effective_len = effective_len;
                     }
                 } else if diag {
                     verbose_eprintln!(

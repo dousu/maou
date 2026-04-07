@@ -1322,15 +1322,21 @@ use crate::types::{Color, PieceType};
                 let pv3 = vec!["2d3d", "P*2c", "2e2c+", "2b1a", "1c1b+"];
                 let pv4 = vec!["2d3d", "N*2c", "2e2c+", "2b1a", "1c1b+"];
                 let pv5 = vec!["2d3d", "L*2c", "2e2c+", "2b3a", "L*3b"];
+                // pv6: 効果長による tiebreak で見つかる別解．
+                // P*2d 中合 → 4c3c+ で詰まし上げる 5 手詰め．
+                let pv6 = vec!["2d3d", "P*2d", "4c3c+", "2b1a", "S*1b"];
                 let pv_str: Vec<&str> = usi_moves.iter().map(|s| s.as_str()).collect();
                 assert!(
-                    pv_str == pv1 || pv_str == pv2 || pv_str == pv3 || pv_str == pv4 || pv_str == pv5,
-                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}\n  pv3: {}\n  pv4: {}",
+                    pv_str == pv1 || pv_str == pv2 || pv_str == pv3
+                        || pv_str == pv4 || pv_str == pv5 || pv_str == pv6,
+                    "PV must be one of the known solutions:\n  got:  {}\n  pv1: {}\n  pv2: {}\n  pv3: {}\n  pv4: {}\n  pv5: {}\n  pv6: {}",
                     usi_moves.join(" "),
                     pv1.join(" "),
                     pv2.join(" "),
                     pv3.join(" "),
                     pv4.join(" "),
+                    pv5.join(" "),
+                    pv6.join(" "),
                 );
             }
             other => panic!(
@@ -1845,7 +1851,7 @@ use crate::types::{Color, PieceType};
     /// 期待: 39手詰め PV の後半 17 手 (indices 22..39) と一致する
     /// 17 手 PV が返ること．
     #[test]
-    #[ignore] // 現状 IDS-MID のみでは深い詰みで解けない高難度テスト
+    #[ignore] // 60M ノード / 10 分の高難度テスト．IDS-MID の長手数解決能力を検証する．
     fn test_tsume_39te_ply22_no_pns() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let full_pv = [
@@ -1892,7 +1898,7 @@ use crate::types::{Color, PieceType};
                 root_pn, solver.nodes_searched);
         }
 
-        let pv = solver.extract_pv_limited(&mut board, 100_000);
+        let pv = solver.extract_pv_limited(&mut board, 10_000_000);
         let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
         eprintln!("[ply22_no_pns] PV ({} moves): {}",
             pv_usi.len(), pv_usi.join(" "));
