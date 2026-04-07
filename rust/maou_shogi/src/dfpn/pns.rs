@@ -2573,9 +2573,12 @@ impl DfPnSolver {
 
             best_pv.unwrap_or_default()
         } else {
-            // AND ノード: 全子が証明済み，最長 PV を選択(最長抵抗)
+            // AND ノード: 全子が証明済み，最長 PV を選択(最長抵抗)．
+            // 無駄合 chain による raw length 膨張を除外するため，
+            // extract_pv_recursive_inner と同じく effective length で比較する．
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
+            let mut best_effective_len: usize = 0;
 
             for &ci in &node.children {
                 let child = &arena[ci as usize];
@@ -2594,16 +2597,29 @@ impl DfPnSolver {
                 if total_len % 2 == 1 {
                     continue;
                 }
+                // full_pv = [child_move] ++ sub_pv で effective length を計算
+                let mut full_pv: Vec<Move> = Vec::with_capacity(total_len);
+                full_pv.push(child.move_from_parent);
+                full_pv.extend_from_slice(&sub_pv);
+                let useless_pairs = Self::count_useless_interpose_pairs(&full_pv);
+                let effective_len = total_len.saturating_sub(2 * useless_pairs);
+
                 let is_capture = child.move_from_parent.captured_piece_raw() > 0;
                 let is_better = match &best_pv {
                     None => true,
                     Some(prev) => {
-                        if total_len > prev.len() {
+                        // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                        if effective_len > best_effective_len {
                             true
-                        } else if total_len == prev.len()
-                            && is_capture
-                            && !best_is_capture
-                        {
+                        } else if effective_len < best_effective_len {
+                            false
+                        } else if total_len < prev.len() {
+                            // 効果長が同じなら chain pairs が少ない
+                            // (= raw length が短い) クリーンな PV を優先
+                            true
+                        } else if total_len > prev.len() {
+                            false
+                        } else if is_capture && !best_is_capture {
                             true
                         } else {
                             false
@@ -2611,10 +2627,9 @@ impl DfPnSolver {
                     }
                 };
                 if is_better {
-                    let mut pv = vec![child.move_from_parent];
-                    pv.extend(sub_pv);
-                    best_pv = Some(pv);
+                    best_pv = Some(full_pv);
                     best_is_capture = is_capture;
+                    best_effective_len = effective_len;
                 }
             }
 
