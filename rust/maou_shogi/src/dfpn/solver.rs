@@ -1687,6 +1687,24 @@ impl DfPnSolver {
                 None
             };
 
+        // 混合 AND ノード(非 drop 応手 + chain drop 両方あり)での
+        // chain drop 距離ベース bias 適用のため，玉位置を保持する．
+        //
+        // 既存の chain_king_sq は全 drop が chain の場合のみ設定されるが，
+        // 39te ply 22 の 5g6f 後の AND のように「玉逃げ + chain drop」が
+        // 混在するケースでは chain_king_sq = None となり，chain drop は
+        // 単純な INTERPOSE_DN_BIAS のみで距離ベース bias が適用されない．
+        // これが外側 chain drop への探索リソース浪費の原因となっている．
+        //
+        // `mixed_chain_king_sq` は混合 AND でも defender king 位置を
+        // 保持し，chain drop 子に対して距離ベース bias を適用する．
+        let mixed_chain_king_sq =
+            if chain_king_sq.is_none() && !or_node && saved_chain_bb.is_not_empty() {
+                board.king_square(board.turn)
+            } else {
+                None
+            };
+
         // プレフィルタで全合駒が証明済み(children が空になった場合)
         if !or_node && init_prefiltered_count > 0 && children.is_empty() {
             let mut p = init_and_proof;
@@ -2233,7 +2251,8 @@ impl DfPnSolver {
                     //   ドロップ(合駒)にバイアスを加算し，非合駒を優先する．
                     //   通常の AND ノードでは玉逃げの反証が速いため．
                     let effective_cdn = if let Some(ksq) = chain_king_sq {
-                        // チェーン AND: ドロップ優先，外側ほど後回し
+                        // チェーン AND(全 drop が chain): ドロップ優先，
+                        // 外側ほど後回し．
                         if m.is_drop() {
                             let to = m.to_sq();
                             let dr = (to.row() as i8 - ksq.row() as i8)
@@ -2247,6 +2266,31 @@ impl DfPnSolver {
                         } else {
                             // 非合駒: 大きなバイアスで後回し
                             cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        }
+                    } else if let Some(ksq) = mixed_chain_king_sq {
+                        // 混合 AND (非 drop 応手 + chain drop 両方あり):
+                        // 非 drop 応手を先に評価し，chain drop は距離ベースで
+                        // 後回しにする．無駄合 chain が PV を膨らませる
+                        // 問題の緩和 (非 drop 応手で反証/proof が速い場合，
+                        // chain drop の探索を最小限にする)．
+                        if m.is_drop() && saved_chain_bb.contains(m.to_sq()) {
+                            let to = m.to_sq();
+                            let dr = (to.row() as i8 - ksq.row() as i8)
+                                .unsigned_abs() as u32;
+                            let dc = (to.col() as i8 - ksq.col() as i8)
+                                .unsigned_abs() as u32;
+                            // chain drop: INTERPOSE_DN_BIAS + 距離比例加算．
+                            // 外側(d=5)は INTERPOSE_DN_BIAS + 4*PN_UNIT
+                            cdn.saturating_add(
+                                INTERPOSE_DN_BIAS
+                                    + dr.max(dc).saturating_sub(1) * PN_UNIT
+                            )
+                        } else if m.is_drop() {
+                            // 非 chain drop: 通常の INTERPOSE_DN_BIAS のみ
+                            cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        } else {
+                            // 非合駒: バイアスなし(優先)
+                            cdn
                         }
                     } else if m.is_drop() {
                         cdn.saturating_add(INTERPOSE_DN_BIAS)
