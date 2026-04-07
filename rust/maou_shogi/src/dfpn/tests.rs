@@ -1831,6 +1831,85 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("{}", "=".repeat(80));
     }
 
+    /// 39手詰め ply 22 IDS-MID ロバストネステスト: PNS なしで解き，
+    /// 正解 PV 17 手 (最長抵抗) と完全一致することを確認する．
+    ///
+    /// 背景: ply 22 ではデフォルト経路 (PNS 150K + MID) で PNS がアリーナ
+    /// 飽和により未証明のまま終わり，TT-based fallback 経由で最長抵抗を
+    /// 見逃した短い Mate(7) を返していた．PNS をスキップして IDS-MID のみで
+    /// 解くことで，MID 単体の正当性とロバストネスを評価する．
+    ///
+    /// 実装は `test_tsume_6_29te_no_pns` と同じ pattern (max_nodes=4 で
+    /// pns_main を実質空実行 → mid_fallback 直接呼び出し)．
+    ///
+    /// 期待: 39手詰め PV の後半 17 手 (indices 22..39) と一致する
+    /// 17 手 PV が返ること．
+    #[test]
+    #[ignore] // 現状 IDS-MID のみでは深い詰みで解けない高難度テスト
+    fn test_tsume_39te_ply22_no_pns() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let full_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f",
+            // ----- 以下が ply 22 からの期待 PV 17 手 -----
+            "P*1g", "1f1g", "5g6f", "1g1h", "2c2g", "1h1i",
+            "8g8i", "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+        let expected_pv: Vec<&str> = full_pv[22..].to_vec();
+        assert_eq!(expected_pv.len(), 17);
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &full_pv[..22] {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        verbose_eprintln!("[ply22_no_pns] SFEN: {}", board.sfen());
+
+        // test_tsume_6_29te_no_pns と同じ pattern:
+        // max_nodes=4 で pns_main を実質空実行 → mid_fallback 直接呼び出し
+        let mut solver = DfPnSolver::with_timeout(19, 120_000_000, 131_071, 1200);
+        solver.max_nodes = 4;
+        solver.attacker = board.turn;
+        solver.start_time = std::time::Instant::now();
+        let _ = solver.pns_main(&mut board);
+        solver.max_nodes = 120_000_000;
+
+        solver.mid_fallback(&mut board);
+
+        let pk = position_key(&board);
+        let att_hand = board.hand[solver.attacker.index()];
+        let (root_pn, _, _) = solver.look_up_pn_dn(pk, &att_hand, 19);
+        eprintln!("[ply22_no_pns] root_pn={} nodes={} time={:.1}s max_ply={}",
+            root_pn, solver.nodes_searched,
+            solver.start_time.elapsed().as_secs_f64(), solver.max_ply);
+
+        if root_pn != 0 {
+            panic!("IDS-MID only should prove ply 22 checkmate, got pn={} nodes={}",
+                root_pn, solver.nodes_searched);
+        }
+
+        let pv = solver.extract_pv_limited(&mut board, 100_000);
+        let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+        eprintln!("[ply22_no_pns] PV ({} moves): {}",
+            pv_usi.len(), pv_usi.join(" "));
+
+        assert_eq!(
+            pv_usi.len(), 17,
+            "expected 17-move PV (longest resistance), got {} moves: {}",
+            pv_usi.len(), pv_usi.join(" "),
+        );
+        let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            pv_refs, expected_pv,
+            "PV mismatch at ply 22 (IDS-MID only):\n  got:      {}\n  expected: {}",
+            pv_usi.join(" "), expected_pv.join(" "),
+        );
+    }
+
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
     /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
     /// 探索コスト内訳を報告する．
