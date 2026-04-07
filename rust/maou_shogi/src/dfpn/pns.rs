@@ -262,27 +262,18 @@ impl DfPnSolver {
             king_sq,
         );
         let mut futile = Bitboard::EMPTY;
-        // チェーン伝搬の anchor にできる「真の防御リソース」マス．
-        // 守備側のひも or 玉が王手駒を取って消去できるケース(escape ではなく
-        // 王手駒そのものを排除できる)のみが該当．
-        // 玉が王手駒を取られた後に逃げるだけ(escape_only)のマスは
-        // 機械的に詰みを延長するだけで真の防御ではないため anchor にしない．
-        let mut real_defense = Bitboard::EMPTY;
 
         for sq in *between {
             // 守備側(玉除く)がひもをつけている → 取り返せるので無駄合いではない
             if board.is_attacked_by_excluding(sq, defender, true, None) {
-                real_defense.set(sq);
                 continue;
             }
             if king_step.contains(sq) {
                 // 攻め方の他駒が利いていない → 玉が取り返せる → 無駄合いではない
                 if !board.is_attacked_by_excluding(sq, attacker, false, Some(checker_sq)) {
-                    real_defense.set(sq);
                     continue;
                 }
                 // 飛び駒が取り進んだ後に玉の逃げ道があれば無駄合いではない
-                // (ただし escape_only として anchor にはしない)
                 if self.king_can_escape_after_slider_capture(
                     board, sq, checker_sq, king_sq, &king_step, defender, attacker,
                 ) {
@@ -293,27 +284,24 @@ impl DfPnSolver {
         }
 
         // 中合いチェーン伝搬: 玉側からチェッカー方向へ走査し，
-        // 真の防御リソース(real_defense)より遠い(チェッカー側の)無駄合いマスを
-        // chain に移す．escape_only マス(玉が王手駒を取られた後に逃げるだけ)は
-        // anchor にしない: 機械的に詰みを延長するだけで真の防御ではないため，
-        // chain に昇格させると 無駄合 PV を生成してしまう．
+        // 非無駄合いマスより遠い(チェッカー側の)無駄合いマスを chain に移す．
         let mut chain = Bitboard::EMPTY;
-        if futile.is_not_empty() && real_defense.is_not_empty() {
+        if futile.is_not_empty() && futile != *between {
             let dc = (king_sq.col() as i32 - checker_sq.col() as i32).signum();
             let dr = (king_sq.row() as i32 - checker_sq.row() as i32).signum();
             let step_c = -dc;
             let step_r = -dr;
             let mut c = king_sq.col() as i32 + step_c;
             let mut r = king_sq.row() as i32 + step_r;
-            let mut has_anchor = false;
+            let mut has_non_futile = false;
             while c >= 0 && c < 9 && r >= 0 && r < 9 {
                 let sq = Square::new(c as u8, r as u8);
                 if !between.contains(sq) {
                     break;
                 }
-                if real_defense.contains(sq) {
-                    has_anchor = true;
-                } else if futile.contains(sq) && has_anchor {
+                if !futile.contains(sq) {
+                    has_non_futile = true;
+                } else if has_non_futile {
                     futile.clear(sq);
                     chain.set(sq);
                 }
